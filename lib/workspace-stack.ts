@@ -27,6 +27,10 @@ export class WorkspaceStack extends cdk.Stack {
         const db = new AWS.DynamoDB.DocumentClient();
         exports.handler = async (event) => {
           console.log("Request:", event);
+          return {
+            statusCode: 200,
+            body: JSON.stringify({ event })
+          };
           const TableName = process.env.TABLE_NAME;
           const result = await db.put({
             TableName,
