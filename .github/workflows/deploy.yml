@@ -33,6 +33,9 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::018159942401:role/c15r-workspace-github
           aws-region: us-east-1
-
+          
+      - name: Bootstrap CDK
+        run: npm run cdk -- bootstrap
+        
       - name: Deploy CDK
         run: npm run deploy
