@@ -3,7 +3,10 @@ import { useState } from 'react';
 import FunctionStatus from './FunctionStatus';
 import CommandPalette, { Command } from './CommandPalette';
 
-const apiUrl = import.meta.env.VITE_FUNCTION_URL as string;
+const apiUrl = (import.meta.env.VITE_FUNCTION_URL as string | undefined) ?? '';
+if (!apiUrl) {
+  console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
+}
 const mcpUrl = apiUrl.replace(/\/?$/, '') + '/mcp';
 
 const Container = styled.div`
