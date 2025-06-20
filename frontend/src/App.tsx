@@ -1,5 +1,6 @@
 import styled from 'styled-components';
 import { useEffect, useState } from 'react';
+import FunctionStatus from './FunctionStatus';
 
 const apiUrl = import.meta.env.VITE_FUNCTION_URL as string;
 
@@ -20,6 +21,7 @@ export default function App() {
   return (
     <Container>
       <h1>Hello from React</h1>
+      <FunctionStatus url={apiUrl} />
       {response && <pre>{response}</pre>}
     </Container>
   );
