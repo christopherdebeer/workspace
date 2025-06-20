@@ -1,8 +1,10 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as path from 'path';
 
 export class WorkspaceStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -13,10 +15,13 @@ export class WorkspaceStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT for production!
     });
 
-    new s3.Bucket(this, 'WorkspaceBucket', {
+    const websiteBucket = new s3.Bucket(this, 'WorkspaceBucket', {
       versioned: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      websiteIndexDocument: 'index.html',
+      websiteErrorDocument: 'index.html',
+      publicReadAccess: true,
     });
 
     const fn = new lambda.Function(this, 'WorkspaceFunction', {
@@ -52,12 +57,38 @@ export class WorkspaceStack extends cdk.Stack {
 
     table.grantReadWriteData(fn);
 
+    new s3deploy.BucketDeployment(this, 'DeployFrontend', {
+      sources: [
+        s3deploy.Source.asset(path.join(__dirname, '..', 'frontend'), {
+          bundling: {
+            image: cdk.DockerImage.fromRegistry('node:18'),
+            command: [
+              'bash',
+              '-c',
+              [
+                'npm ci',
+                'npm run build',
+                'cp -r dist/* /asset-output/'
+              ].join(' && ')
+            ],
+          },
+        }),
+      ],
+      destinationBucket: websiteBucket,
+      destinationKeyPrefix: 'webapp',
+    });
+
     const fnUrl = fn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
     });
 
     new cdk.CfnOutput(this, 'FunctionUrl', {
       value: fnUrl.url,
+    });
+
+    new cdk.CfnOutput(this, 'WebsiteUrl', {
+      value: websiteBucket.bucketWebsiteUrl,
+      exportName: 'WorkspaceWebsiteUrl',
     });
   }
 }

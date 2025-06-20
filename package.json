@@ -5,12 +5,14 @@
     "workspace": "bin/workspace.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:web && tsc",
+    "build:web": "npm --prefix frontend run build",
     "watch": "tsc -w",
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "cdk deploy --require-approval never",
-    "destroy": "cdk destroy"
+    "destroy": "cdk destroy",
+    "postinstall": "npm --prefix frontend install"
   },
   "dependencies": {
     "aws-cdk": "^2.136.0",
