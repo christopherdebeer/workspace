@@ -21,6 +21,12 @@ export class WorkspaceStack extends cdk.Stack {
       autoDeleteObjects: true,
       websiteIndexDocument: 'index.html',
       websiteErrorDocument: 'index.html',
+      blockPublicAccess: new s3.BlockPublicAccess({
+        blockPublicAcls: false,
+        blockPublicPolicy: false,
+        ignorePublicAcls: false,
+        restrictPublicBuckets: false,
+      }),
       publicReadAccess: true,
     });
 
