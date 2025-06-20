@@ -15,8 +15,10 @@ Run `npm install` in the repository root. The root `postinstall` script automati
 Run `npm run build` to build the frontend and compile the CDK TypeScript sources.
 
 ## Deploy
-Use `npm run deploy` to deploy the stack. After deployment, the SPA is available
-at the CloudFormation output `WorkspaceWebsiteUrl`.
+Use `npm run deploy` to deploy the stack. This command deploys the CDK stack,
+builds the frontend with the Lambda function URL injected as `VITE_FUNCTION_URL`
+and uploads the compiled assets to the website bucket. After deployment, the SPA
+is available at the CloudFormation output `WorkspaceWebsiteUrl`.
 
 GitHub Pages deployments are triggered automatically on pushes to `main` via the
 `Deploy Frontend to GitHub Pages` workflow.

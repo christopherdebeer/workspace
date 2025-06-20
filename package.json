@@ -10,18 +10,21 @@
     "watch": "tsc -w",
     "cdk": "cdk",
     "synth": "cdk synth",
-    "deploy": "cdk deploy --require-approval never",
+    "deploy": "node bin/deploy.js",
     "destroy": "cdk destroy",
     "postinstall": "npm --prefix frontend install"
   },
   "dependencies": {
     "aws-cdk": "^2.136.0",
     "aws-cdk-lib": "^2.136.0",
-    "constructs": "^10.3.0"
+    "aws-sdk": "^2.1692.0",
+    "constructs": "^10.3.0",
+    "mime-types": "^3.0.1"
   },
   "devDependencies": {
-    "typescript": "^5.3.3",
     "@types/node": "^20.11.0",
-    "ts-node": "^10.9.1"
+    "esbuild": "^0.25.5",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.3"
   }
 }
