@@ -33,7 +33,10 @@ export class WorkspaceStack extends cdk.Stack {
 
     const fn = new NodejsFunction(this, 'WorkspaceFunction', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: path.join(__dirname, '..', 'lambda', 'index.ts'),
+      // When executing the stack from the compiled JavaScript in "dist/lib",
+      // "__dirname" resolves to "dist/lib". Ascend two directories to reach
+      // the repository root so the Lambda source can be located correctly.
+      entry: path.join(__dirname, '..', '..', 'lambda', 'index.ts'),
       handler: 'handler',
       environment: {
         TABLE_NAME: table.tableName,
