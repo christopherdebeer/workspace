@@ -63,6 +63,39 @@ export default function App() {
       },
     },
     {
+      name: 'list-tools',
+      description: 'POST /mcp tools/list',
+      handler: async () => {
+        const r = await fetch(mcpUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        });
+        const data = await r.json();
+        return JSON.stringify(data, null, 2);
+      },
+    },
+    {
+      name: 'call-dynamo',
+      description: 'POST /mcp tools/call dynamodb <json>',
+      handler: async (args: string[]) => {
+        const bodyArgs = args.join(' ');
+        const params = bodyArgs ? JSON.parse(bodyArgs) : {};
+        const r = await fetch(mcpUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'dynamodb', arguments: params },
+          }),
+        });
+        const data = await r.json();
+        return JSON.stringify(data, null, 2);
+      },
+    },
+    {
       name: 'help',
       description: 'List commands',
       handler: async () =>
