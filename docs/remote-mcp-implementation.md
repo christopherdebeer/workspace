@@ -46,6 +46,14 @@ These details are summarized from `modelcontextprotocol.io/specification/2025-06
    - Add progress tracking, logging, and cancellation utilities as described by the MCP spec.
    - Explore additional MCP features such as sampling and roots for advanced workflows.
 
+## Tool Support
+
+The Lambda now implements the `tools/list` and `tools/call` methods defined in
+the [MCP schema](https://raw.githubusercontent.com/modelcontextprotocol/specification/main/schema/2025-06-18/schema.ts).
+The first tool provides simple DynamoDB access. Clients can invoke it with an
+`action` parameter of `get` or `put` along with the required `key` or `item`
+objects. Results are returned using the `CallToolResult` structure.
+
 ## References
 
 - [Model Context Protocol – Specification](https://modelcontextprotocol.io/specification/2025-06-18/index)
