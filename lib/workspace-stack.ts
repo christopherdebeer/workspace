@@ -65,7 +65,12 @@ export class WorkspaceStack extends cdk.Stack {
 
     new s3deploy.BucketDeployment(this, 'DeployFrontend', {
       sources: [
-        s3deploy.Source.asset(path.join(__dirname, '..', 'frontend'), {
+        // When the stack is executed from the compiled JavaScript in the "dist"
+        // directory, "__dirname" resolves to "dist/lib". The original path
+        // used ".." which results in "dist/frontend". The frontend assets live
+        // in the repository root under "frontend", so we need to go two levels
+        // up from the compiled directory to reach the correct location.
+        s3deploy.Source.asset(path.join(__dirname, '..', '..', 'frontend'), {
           bundling: {
             image: cdk.DockerImage.fromRegistry('node:18'),
             command: [
