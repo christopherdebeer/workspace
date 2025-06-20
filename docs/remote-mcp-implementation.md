@@ -26,6 +26,7 @@ These details are summarized from `modelcontextprotocol.io/specification/2025-06
    - Extend the existing Lambda handler to process MCP JSON-RPC requests.
    - Support server features such as `resources`, `prompts`, and `tools` as defined by the MCP specification.
    - Ensure that each request/response follows the MCP schema so that clients can negotiate capabilities and maintain stateful connections.
+   - The Lambda now exposes a `POST /mcp` endpoint that accepts JSON-RPC messages.
 
 2. **Expose an HTTP Endpoint**
    - Continue using the Lambda Function URL as the HTTP transport for MCP messages.
