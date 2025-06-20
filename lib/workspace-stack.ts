@@ -4,6 +4,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as path from 'path';
 
 export class WorkspaceStack extends cdk.Stack {
@@ -64,6 +65,10 @@ export class WorkspaceStack extends cdk.Stack {
                 'cp -r dist/* /asset-output/'
               ].join(' && ')
             ],
+            environment: {
+              HOME: '/tmp',
+              npm_config_cache: '/tmp/.npm',
+            },
           },
         }),
       ],
