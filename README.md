@@ -1,6 +1,6 @@
 # Workspace
 
-_work in progress_
+_work in progress._
 
 This project is an AWS CDK application with a React single page app (SPA) hosted
 in an S3 bucket. The frontend can also be published to GitHub Pages using the
