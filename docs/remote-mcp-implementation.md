@@ -17,7 +17,7 @@ These details are summarized from `modelcontextprotocol.io/specification/2025-06
 ## Current Architecture
 
 - The CDK stack defines a Lambda function (`WorkspaceFunction`) with a public Function URL.
-- The React frontend is deployed to an S3 bucket and can invoke this Lambda.
+- The React frontend is published to GitHub Pages and can invoke this Lambda.
 - The Lambda currently returns a simple payload.
 
 ## Implementation Plan

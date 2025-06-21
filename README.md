@@ -2,9 +2,8 @@
 
 _work in progress._
 
-This project is an AWS CDK application with a React single page app (SPA) hosted
-in an S3 bucket. The frontend can also be published to GitHub Pages using the
-provided workflow.
+This project is an AWS CDK application with a React single page app (SPA).
+The frontend is published to GitHub Pages using the provided workflow.
 
 ## Prerequisites
 - Node.js 18
@@ -18,10 +17,9 @@ Run `npm install` in the repository root. The root `postinstall` script automati
 Run `npm run build` to build the frontend and compile the CDK TypeScript sources.
 
 ## Deploy
-Use `npm run deploy` to deploy the stack. This command deploys the CDK stack,
-builds the frontend with the Lambda function URL injected as `VITE_FUNCTION_URL`
-and uploads the compiled assets to the website bucket. After deployment, the SPA
-is available at the CloudFormation output `WorkspaceWebsiteUrl`.
+Use `npm run deploy` to deploy the stack. This command deploys the CDK stack and
+builds the frontend with the Lambda function URL injected as `VITE_FUNCTION_URL`.
+The website assets are published separately by the GitHub Pages workflow.
 
 Before the first deploy you must bootstrap the environment so the CDK can
 create asset buckets and roles:
