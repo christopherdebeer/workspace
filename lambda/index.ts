@@ -1,5 +1,7 @@
 import { DynamoDB } from 'aws-sdk';
 import { tools, Tool } from './tools';
+import { Fido2Lib } from 'fido2-lib';
+import crypto from 'crypto';
 
 const db = new DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME ?? '';
@@ -43,6 +45,53 @@ const DYNAMO_TOOL: Tool = {
 };
 
 tools.set(DYNAMO_TOOL.name, DYNAMO_TOOL);
+
+const rpId = process.env.RP_ID ?? 'localhost';
+const origin = process.env.ORIGIN ?? `http://${rpId}`;
+const fido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
+
+interface StoredCredential {
+  credId: string;
+  publicKey: string;
+  counter: number;
+}
+
+interface UserRecord {
+  id: string;
+  username: string;
+  userId: string;
+  credentials: StoredCredential[];
+  challenge?: string;
+}
+
+function toBase64Url(buf: Buffer) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function fromBase64Url(str: string) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = str.length % 4;
+  if (pad) str += '='.repeat(4 - pad);
+  return Buffer.from(str, 'base64');
+}
+
+async function getUser(username: string): Promise<UserRecord> {
+  const id = `user#${username}`;
+  const { Item } = await db.get({ TableName: TABLE_NAME, Key: { id } }).promise();
+  if (Item) return Item as UserRecord;
+  const user: UserRecord = {
+    id,
+    username,
+    userId: toBase64Url(crypto.randomBytes(32)),
+    credentials: [],
+  };
+  await db.put({ TableName: TABLE_NAME, Item: user }).promise();
+  return user;
+}
+
+async function saveUser(user: UserRecord) {
+  await db.put({ TableName: TABLE_NAME, Item: user }).promise();
+}
 
 
 interface JsonRpcRequest {
@@ -166,6 +215,95 @@ export async function handler(event: any): Promise<any> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(response),
     };
+  }
+
+  if (path === '/webauthn/register/options' && method === 'POST') {
+    const { username } = JSON.parse(event.body ?? '{}');
+    if (!username) {
+      return { statusCode: 400, body: 'Missing username' };
+    }
+    const user = await getUser(username);
+    const opts = await fido.attestationOptions();
+    opts.user = {
+      id: fromBase64Url(user.userId),
+      name: username,
+      displayName: username,
+    };
+    const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
+    user.challenge = challenge;
+    await saveUser(user);
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...opts, challenge, user: { ...opts.user, id: user.userId } }),
+    };
+  }
+
+  if (path === '/webauthn/register/verify' && method === 'POST') {
+    const { username, attestation } = JSON.parse(event.body ?? '{}');
+    if (!username || !attestation) {
+      return { statusCode: 400, body: 'Missing parameters' };
+    }
+    const user = await getUser(username);
+    const expect = {
+      challenge: user.challenge ?? '',
+      origin,
+      factor: 'either' as const,
+      rpId,
+    };
+    const result = await fido.attestationResult(attestation, expect);
+    const credId = toBase64Url(Buffer.from(result.authnrData.get('credId')));
+    const publicKey = result.authnrData.get('credentialPublicKeyPem');
+    const counter = result.authnrData.get('counter');
+    user.credentials.push({ credId, publicKey, counter });
+    delete user.challenge;
+    await saveUser(user);
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  }
+
+  if (path === '/webauthn/login/options' && method === 'POST') {
+    const { username } = JSON.parse(event.body ?? '{}');
+    if (!username) {
+      return { statusCode: 400, body: 'Missing username' };
+    }
+    const user = await getUser(username);
+    const opts = await fido.assertionOptions();
+    opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId) }));
+    const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
+    user.challenge = challenge;
+    await saveUser(user);
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...opts, challenge }),
+    };
+  }
+
+  if (path === '/webauthn/login/verify' && method === 'POST') {
+    const { username, assertion } = JSON.parse(event.body ?? '{}');
+    if (!username || !assertion) {
+      return { statusCode: 400, body: 'Missing parameters' };
+    }
+    const user = await getUser(username);
+    const credId = toBase64Url(Buffer.from(assertion.rawId || assertion.id, 'base64')); // maybe base64
+    const cred = user.credentials.find((c) => c.credId === credId);
+    if (!cred) {
+      return { statusCode: 400, body: 'Unknown credential' };
+    }
+    const expect = {
+      challenge: user.challenge ?? '',
+      origin,
+      factor: 'either' as const,
+      rpId,
+      publicKey: cred.publicKey,
+      prevCounter: cred.counter,
+      userHandle: null,
+    };
+    const result = await fido.assertionResult(assertion, expect);
+    cred.counter = result.authnrData.get('counter');
+    delete user.challenge;
+    await saveUser(user);
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
   }
 
   await db

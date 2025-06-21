@@ -19,6 +19,7 @@
     "aws-cdk-lib": "^2.136.0",
     "aws-sdk": "^2.1692.0",
     "constructs": "^10.3.0",
+    "fido2-lib": "^3.5.3",
     "mime-types": "^3.0.1"
   },
   "devDependencies": {
