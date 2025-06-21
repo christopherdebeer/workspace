@@ -16,17 +16,18 @@ interface Props {
 const Wrapper = styled.div`
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   width: 100%;
 `;
 
 const Input = styled.input`
   width: 100%;
-  max-width: 500px;
   padding: 0.75rem 1rem;
-  font-size: 1.2rem;
+  font-size: 1rem;
   border: 1px solid #ccc;
-  border-radius: 4px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.05) inset;
 `;
 
 const List = styled.ul`
@@ -34,14 +35,18 @@ const List = styled.ul`
   margin: 0.5rem 0 0;
   padding: 0;
   width: 100%;
-  max-width: 500px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  overflow: hidden;
 `;
 
 const Item = styled.li<{ active: boolean }>`
   padding: 0.75rem 1rem;
   border: 1px solid #ccc;
   border-top: none;
-  background-color: ${({ active }) => (active ? '#eee' : '#fff')};
+  background-color: ${({ active }) => (active ? '#f0f0f0' : '#fff')};
+  cursor: pointer;
+  transition: background-color 0.2s;
 `;
 
 export default function CommandPalette({ commands, onResult }: Props) {
@@ -94,6 +99,7 @@ export default function CommandPalette({ commands, onResult }: Props) {
         ref={inputRef}
         type="text"
         placeholder="Enter command..."
+        autoFocus
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
