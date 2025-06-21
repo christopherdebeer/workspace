@@ -10,17 +10,18 @@ if (!apiUrl) {
 const mcpUrl = apiUrl.replace(/\/?$/, '') + '/mcp';
 
 const Container = styled.div`
-  padding: 2rem;
+  padding: 1rem;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
   gap: 1rem;
+  font-family: sans-serif;
 `;
 
 const Output = styled.pre`
-  max-width: 600px;
+  max-width: 90vw;
   white-space: pre-wrap;
   word-break: break-word;
 `;
