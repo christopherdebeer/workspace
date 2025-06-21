@@ -2,12 +2,11 @@ import styled from 'styled-components';
 import { useState } from 'react';
 import FunctionStatus from './FunctionStatus';
 import CommandPalette, { Command } from './CommandPalette';
+import { apiUrl, mcpRequest, callTool } from './mcpClient';
 
-const apiUrl = (import.meta.env.VITE_FUNCTION_URL as string | undefined) ?? '';
 if (!apiUrl) {
   console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
 }
-const mcpUrl = apiUrl.replace(/\/?$/, '') + '/mcp';
 
 const Container = styled.div`
   padding: 1rem;
@@ -43,12 +42,7 @@ export default function App() {
       name: 'capabilities',
       description: 'POST /mcp capabilities',
       handler: async () => {
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'capabilities' }),
-        });
-        const data = await r.json();
+        const data = await mcpRequest('capabilities');
         return JSON.stringify(data, null, 2);
       },
     },
@@ -57,12 +51,7 @@ export default function App() {
       description: 'POST /mcp echo <text>',
       handler: async (args: string[]) => {
         const message = args.join(' ');
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'echo', params: message }),
-        });
-        const data = await r.json();
+        const data = await mcpRequest('echo', message);
         return JSON.stringify(data, null, 2);
       },
     },
@@ -70,12 +59,7 @@ export default function App() {
       name: 'list-tools',
       description: 'POST /mcp tools/list',
       handler: async () => {
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-        });
-        const data = await r.json();
+        const data = await mcpRequest('tools/list');
         return JSON.stringify(data, null, 2);
       },
     },
@@ -85,17 +69,7 @@ export default function App() {
       handler: async (args: string[]) => {
         const bodyArgs = args.join(' ');
         const params = bodyArgs ? JSON.parse(bodyArgs) : {};
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'tools/call',
-            params: { name: 'dynamodb', arguments: params },
-          }),
-        });
-        const data = await r.json();
+        const data = await callTool('dynamodb', params);
         return JSON.stringify(data, null, 2);
       },
     },

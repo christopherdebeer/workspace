@@ -1,9 +1,10 @@
 import { DynamoDB } from 'aws-sdk';
+import { tools, Tool } from './tools';
 
 const db = new DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME ?? '';
 
-const DYNAMO_TOOL = {
+const DYNAMO_TOOL: Tool = {
   name: 'dynamodb',
   description: 'Get or put an item in the DynamoDB table',
   inputSchema: {
@@ -16,27 +17,33 @@ const DYNAMO_TOOL = {
     required: ['action'],
   },
   outputSchema: { type: 'object' },
+  async call(args: { action: string; key?: any; item?: any }) {
+    switch (args.action) {
+      case 'get': {
+        if (!args.key) {
+          return { content: [{ type: 'text', text: 'Missing key' }], isError: true };
+        }
+        const data = await db.get({ TableName: TABLE_NAME, Key: args.key }).promise();
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data.Item, null, 2) }],
+          structuredContent: data.Item ?? null,
+        };
+      }
+      case 'put': {
+        if (!args.item) {
+          return { content: [{ type: 'text', text: 'Missing item' }], isError: true };
+        }
+        await db.put({ TableName: TABLE_NAME, Item: args.item }).promise();
+        return { content: [{ type: 'text', text: 'OK' }], structuredContent: { ok: true } };
+      }
+      default:
+        return { content: [{ type: 'text', text: 'Unknown action' }], isError: true };
+    }
+  },
 };
 
-async function callDynamoTool(args: { action: string; key?: any; item?: any }) {
-  switch (args.action) {
-    case 'get': {
-      if (!args.key) return { content: [{ type: 'text', text: 'Missing key' }], isError: true };
-      const data = await db.get({ TableName: TABLE_NAME, Key: args.key }).promise();
-      return {
-        content: [{ type: 'text', text: JSON.stringify(data.Item, null, 2) }],
-        structuredContent: data.Item ?? null,
-      };
-    }
-    case 'put': {
-      if (!args.item) return { content: [{ type: 'text', text: 'Missing item' }], isError: true };
-      await db.put({ TableName: TABLE_NAME, Item: args.item }).promise();
-      return { content: [{ type: 'text', text: 'OK' }], structuredContent: { ok: true } };
-    }
-    default:
-      return { content: [{ type: 'text', text: 'Unknown action' }], isError: true };
-  }
-}
+tools.set(DYNAMO_TOOL.name, DYNAMO_TOOL);
+
 
 interface JsonRpcRequest {
   jsonrpc: string;
@@ -52,52 +59,81 @@ interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
-async function handleMcpRequest(req: JsonRpcRequest): Promise<JsonRpcResponse> {
-  if (req.jsonrpc !== '2.0' || typeof req.method !== 'string') {
+function isObject(value: any): value is Record<string, any> {
+  return typeof value === 'object' && value !== null;
+}
+
+function validateRequest(value: any): value is JsonRpcRequest {
+  return (
+    isObject(value) &&
+    value.jsonrpc === '2.0' &&
+    typeof value.method === 'string'
+  );
+}
+
+async function handleMcpRequest(req: unknown): Promise<JsonRpcResponse> {
+  if (!validateRequest(req)) {
     return {
       jsonrpc: '2.0',
-      id: req.id ?? null,
+      id: null,
       error: { code: -32600, message: 'Invalid Request' },
     };
   }
+  const validReq = req as JsonRpcRequest;
 
-  switch (req.method) {
+  switch (validReq.method) {
     case 'capabilities':
       return {
         jsonrpc: '2.0',
-        id: req.id ?? null,
+        id: validReq.id ?? null,
         result: { resources: true, prompts: true, tools: true },
       };
     case 'echo':
       return {
         jsonrpc: '2.0',
-        id: req.id ?? null,
-        result: req.params ?? null,
+        id: validReq.id ?? null,
+        result: validReq.params ?? null,
       };
     case 'tools/list':
       return {
         jsonrpc: '2.0',
-        id: req.id ?? null,
-        result: { tools: [DYNAMO_TOOL] },
+        id: validReq.id ?? null,
+        result: {
+          tools: Array.from(tools.values()).map(({ name, description, inputSchema, outputSchema }) => ({
+            name,
+            description,
+            inputSchema,
+            outputSchema,
+          })),
+        },
       };
     case 'tools/call':
-      if (!req.params || req.params.name !== DYNAMO_TOOL.name) {
+      if (!isObject(validReq.params) || typeof validReq.params.name !== 'string') {
         return {
           jsonrpc: '2.0',
-          id: req.id ?? null,
+          id: validReq.id ?? null,
+          error: { code: -32602, message: 'Invalid params' },
+        };
+      }
+      const tool = tools.get(validReq.params.name);
+      if (!tool) {
+        return {
+          jsonrpc: '2.0',
+          id: validReq.id ?? null,
           error: { code: -32601, message: 'Tool not found' },
         };
       }
-      const callResult = await callDynamoTool(req.params.arguments ?? {});
+      const callArgs = isObject(validReq.params.arguments) ? validReq.params.arguments : {};
+      const callResult = await tool.call(callArgs);
       return {
         jsonrpc: '2.0',
-        id: req.id ?? null,
+        id: validReq.id ?? null,
         result: callResult,
       };
     default:
       return {
         jsonrpc: '2.0',
-        id: req.id ?? null,
+        id: validReq.id ?? null,
         error: { code: -32601, message: 'Method not found' },
       };
   }

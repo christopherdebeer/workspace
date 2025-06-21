@@ -71,7 +71,11 @@ export default function CommandPalette({ commands, onResult }: Props) {
       const result = await cmd.handler(args);
       onResult(result);
     } catch (err) {
-      onResult(String(err));
+      if (err instanceof Error) {
+        onResult(err.message);
+      } else {
+        onResult(String(err));
+      }
     }
     setValue('');
   };
