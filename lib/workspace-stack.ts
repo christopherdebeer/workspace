@@ -6,6 +6,8 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as path from 'path';
+import * as fs from 'fs';
+import { execSync } from 'child_process';
 
 export class WorkspaceStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -59,6 +61,28 @@ export class WorkspaceStack extends cdk.Stack {
         s3deploy.Source.asset(path.join(__dirname, '..', '..', 'frontend'), {
           bundling: {
             image: cdk.DockerImage.fromRegistry('node:18'),
+            local: {
+              tryBundle(outputDir: string) {
+                try {
+                  execSync('npm ci', {
+                    cwd: path.join(__dirname, '..', '..', 'frontend'),
+                    stdio: 'inherit',
+                  });
+                  execSync('npm run build', {
+                    cwd: path.join(__dirname, '..', '..', 'frontend'),
+                    stdio: 'inherit',
+                  });
+                  fs.cpSync(
+                    path.join(__dirname, '..', '..', 'frontend', 'dist'),
+                    outputDir,
+                    { recursive: true }
+                  );
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
+            },
             command: [
               'bash',
               '-c',
