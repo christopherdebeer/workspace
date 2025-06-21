@@ -1,5 +1,6 @@
 import styled from 'styled-components';
 import { useState } from 'react';
+import GlobalStyle from './GlobalStyle';
 import FunctionStatus from './FunctionStatus';
 import CommandPalette, { Command } from './CommandPalette';
 import { apiUrl, mcpRequest, callTool } from './mcpClient';
@@ -9,20 +10,26 @@ if (!apiUrl) {
 }
 
 const Container = styled.div`
-  padding: 1rem;
+  padding: 2rem 1rem;
   min-height: 100vh;
+  max-width: 700px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 1rem;
-  font-family: sans-serif;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 1.5rem;
 `;
 
 const Output = styled.pre`
-  max-width: 90vw;
+  width: 100%;
+  padding: 1rem;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.1);
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-x: auto;
 `;
 
 export default function App() {
@@ -82,11 +89,14 @@ export default function App() {
   ];
 
   return (
-    <Container>
-      <h1>Hello from React</h1>
-      <FunctionStatus url={apiUrl} />
-      {output && <Output>{output}</Output>}
-      <CommandPalette commands={commands} onResult={setOutput} />
-    </Container>
+    <>
+      <GlobalStyle />
+      <Container>
+        <h1>Workspace</h1>
+        <FunctionStatus url={apiUrl} />
+        {output && <Output>{output}</Output>}
+        <CommandPalette commands={commands} onResult={setOutput} />
+      </Container>
+    </>
   );
 }
