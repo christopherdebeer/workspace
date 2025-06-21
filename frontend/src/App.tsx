@@ -1,13 +1,13 @@
 import styled from 'styled-components';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import FunctionStatus from './FunctionStatus';
 import CommandPalette, { Command } from './CommandPalette';
+import { McpClient } from './client/McpClient';
 
 const apiUrl = (import.meta.env.VITE_FUNCTION_URL as string | undefined) ?? '';
 if (!apiUrl) {
   console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
 }
-const mcpUrl = apiUrl.replace(/\/?$/, '') + '/mcp';
 
 const Container = styled.div`
   padding: 2rem;
@@ -27,84 +27,69 @@ const Output = styled.pre`
 
 export default function App() {
   const [output, setOutput] = useState('');
+  const [commands, setCommands] = useState<Command[]>([]);
 
-  const commands: Command[] = [
-    {
-      name: 'status',
-      description: 'GET /',
-      handler: async () => {
-        const r = await fetch(apiUrl);
-        const data = await r.json();
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'capabilities',
-      description: 'POST /mcp capabilities',
-      handler: async () => {
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'capabilities' }),
-        });
-        const data = await r.json();
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'echo',
-      description: 'POST /mcp echo <text>',
+  const client = new McpClient(apiUrl);
+
+  const buildCommands = (tools: any[]): Command[] => {
+    const dynamic = tools.map<Command>((tool) => ({
+      name: tool.name,
+      description: tool.description ?? '',
       handler: async (args: string[]) => {
-        const message = args.join(' ');
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'echo', params: message }),
-        });
-        const data = await r.json();
-        return JSON.stringify(data, null, 2);
+        const body = args.join(' ');
+        const params = body ? JSON.parse(body) : {};
+        const result = await client.callTool(tool.name, params);
+        return JSON.stringify(result, null, 2);
       },
-    },
-    {
-      name: 'list-tools',
-      description: 'POST /mcp tools/list',
-      handler: async () => {
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-        });
-        const data = await r.json();
-        return JSON.stringify(data, null, 2);
+    }));
+
+    const builtIns: Command[] = [
+      {
+        name: 'status',
+        description: 'GET /',
+        handler: async () => {
+          const r = await fetch(apiUrl);
+          const data = await r.json();
+          return JSON.stringify(data, null, 2);
+        },
       },
-    },
-    {
-      name: 'call-dynamo',
-      description: 'POST /mcp tools/call dynamodb <json>',
-      handler: async (args: string[]) => {
-        const bodyArgs = args.join(' ');
-        const params = bodyArgs ? JSON.parse(bodyArgs) : {};
-        const r = await fetch(mcpUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'tools/call',
-            params: { name: 'dynamodb', arguments: params },
-          }),
-        });
-        const data = await r.json();
-        return JSON.stringify(data, null, 2);
+      {
+        name: 'refresh-tools',
+        description: 'Refresh available tools',
+        handler: async () => {
+          const tools = await client.listTools();
+          setCommands(buildCommands(tools));
+          return `Loaded ${tools.length} tools`;
+        },
       },
-    },
-    {
-      name: 'help',
-      description: 'List commands',
-      handler: async () =>
-        commands.map((c) => `${c.name}: ${c.description}`).join('\n'),
-    },
-  ];
+      {
+        name: 'echo',
+        description: 'POST /mcp echo <text>',
+        handler: async (args: string[]) => {
+          const message = args.join(' ');
+          const res = await client.request('echo', message);
+          return JSON.stringify(res.result, null, 2);
+        },
+      },
+      {
+        name: 'help',
+        description: 'List commands',
+        handler: async () =>
+          [...builtIns, ...dynamic]
+            .map((c) => `${c.name}: ${c.description}`)
+            .join('\n'),
+      },
+    ];
+
+    return [...builtIns, ...dynamic];
+  };
+
+  useEffect(() => {
+    client.listTools().then((tools) => {
+      setCommands(buildCommands(tools));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Container>

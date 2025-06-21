@@ -33,9 +33,9 @@ These details are summarized from `modelcontextprotocol.io/specification/2025-06
    - Optionally add WebSocket support (via API Gateway) if persistent connections are required.
 
 3. **Update Frontend Client**
-   - Implement an MCP client in TypeScript that sends JSON-RPC requests to the Lambda endpoint.
-   - Manage connection state and capability negotiation in the browser.
-   - Provide UI components to display resources and prompt the user for consent before invoking tools or sharing data, following the security principles in the specification.
+   - An MCP client written in TypeScript now handles JSON-RPC communication with the Lambda endpoint and stores negotiated capabilities.
+   - The React app dynamically fetches available tools at startup and when the user runs `refresh-tools`.
+   - UI updates keep the command palette visible on mobile and add history/autocomplete for quick navigation.
 
 4. **Security Considerations**
    - Obtain explicit user consent before sharing data with the MCP server.

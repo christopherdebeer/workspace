@@ -24,3 +24,9 @@ is available at the CloudFormation output `WorkspaceWebsiteUrl`.
 
 GitHub Pages deployments are triggered automatically on pushes to `main` via the
 `Deploy Frontend to GitHub Pages` workflow.
+
+## Command Palette
+
+The SPA includes a mobile friendly command palette. Commands are discovered from
+the MCP server at runtime and you can refresh them with `refresh-tools`. Use the
+arrow keys to browse history and `Tab` to autocomplete command names.
