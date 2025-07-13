@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { WorkspaceStack } from '../lib/workspace-stack';
+import { InlineLambdaStack } from '../lib/inline-lambda-stack';
 
 const app = new cdk.App();
-new WorkspaceStack(app, 'WorkspaceStack');
+new InlineLambdaStack(app, 'InlineLambdaStack');
