@@ -18,8 +18,8 @@ Run `npm run build` to build the frontend and compile the CDK TypeScript sources
 
 ## Deploy
 Use `npm run deploy` to deploy the stack. This command deploys the CDK stack and
-builds the frontend with the Lambda function URL injected as `VITE_FUNCTION_URL`.
-The website assets are published separately by the GitHub Pages workflow.
+builds the frontend. The website assets are published separately by the GitHub
+Pages workflow.
 
 Before the first deploy you must bootstrap the environment so the CDK can
 create asset buckets and roles:
