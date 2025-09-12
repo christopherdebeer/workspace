@@ -2,6 +2,8 @@
 
 _work in progress._
 
+https://www.christopherdebeer.com/workspace/
+
 This project is an AWS CDK application with a React single page app (SPA).
 The frontend is published to GitHub Pages using the provided workflow.
 
