@@ -306,6 +306,27 @@ export async function handler(event: any): Promise<any> {
     return { statusCode: 200, body: JSON.stringify({ ok: true }) };
   }
 
+  if (path === '/config' && method === 'GET') {
+    // Extract the base URL from the event context
+    const host = event.headers?.host || event.requestContext?.domainName;
+    const protocol = event.headers?.['x-forwarded-proto'] || 'https';
+    const baseUrl = host ? `${protocol}://${host}` : '';
+    
+    return {
+      statusCode: 200,
+      headers: { 
+        'content-type': 'application/json',
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET, OPTIONS',
+        'access-control-allow-headers': 'Content-Type'
+      },
+      body: JSON.stringify({ 
+        apiUrl: baseUrl,
+        version: '1.0.0'
+      }),
+    };
+  }
+
   await db
     .put({
       TableName: TABLE_NAME,

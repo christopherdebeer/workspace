@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import styled from 'styled-components';
-import { apiUrl } from './mcpClient';
+import { getApiUrl } from './mcpClient';
 
 const Container = styled.div`
   padding: 1rem;
@@ -80,6 +80,12 @@ export default function WebAuthComponent() {
     try {
       setStatus('Starting registration...');
 
+      // Get API URL
+      const apiUrl = await getApiUrl();
+      if (!apiUrl) {
+        throw new Error('Backend URL not configured');
+      }
+
       // Get registration options
       const optionsRes = await fetch(`${apiUrl}/webauthn/register/options`, {
         method: 'POST',
@@ -155,6 +161,12 @@ export default function WebAuthComponent() {
     setIsLoading(true);
     try {
       setStatus('Starting login...');
+
+      // Get API URL
+      const apiUrl = await getApiUrl();
+      if (!apiUrl) {
+        throw new Error('Backend URL not configured');
+      }
 
       // Get login options
       const optionsRes = await fetch(`${apiUrl}/webauthn/login/options`, {

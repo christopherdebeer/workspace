@@ -1,14 +1,10 @@
 import styled from 'styled-components';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import GlobalStyle from './GlobalStyle';
 import FunctionStatus from './FunctionStatus';
 import CommandPalette, { Command } from './CommandPalette';
 import WebAuthComponent from './WebAuthComponent';
-import { apiUrl, mcpRequest, callTool } from './mcpClient';
-
-if (!apiUrl) {
-  console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
-}
+import { getApiUrl, initializeMcpClient, mcpRequest, callTool } from './mcpClient';
 
 const Container = styled.div`
   padding: 2rem 1rem;
@@ -35,13 +31,41 @@ const Output = styled.pre`
 
 export default function App() {
   const [output, setOutput] = useState('');
+  const [apiUrl, setApiUrl] = useState('');
+  const [configLoading, setConfigLoading] = useState(true);
+
+  useEffect(() => {
+    async function initializeApp() {
+      try {
+        await initializeMcpClient();
+        const url = await getApiUrl();
+        setApiUrl(url);
+        
+        if (!url) {
+          console.warn('Backend URL is not configured. API calls may fail.');
+          console.warn('For development: Set VITE_FUNCTION_URL in your .env file');
+          console.warn('For production: Ensure the backend URL is configured properly');
+        }
+      } catch (error) {
+        console.error('Failed to initialize configuration:', error);
+      } finally {
+        setConfigLoading(false);
+      }
+    }
+    
+    initializeApp();
+  }, []);
 
   const commands: Command[] = [
     {
       name: 'status',
       description: 'GET /',
       handler: async () => {
-        const r = await fetch(apiUrl);
+        const url = await getApiUrl();
+        if (!url) {
+          return 'Error: Backend URL not configured';
+        }
+        const r = await fetch(url);
         const data = await r.json();
         return JSON.stringify(data, null, 2);
       },
@@ -89,11 +113,28 @@ export default function App() {
     },
   ];
 
+  if (configLoading) {
+    return (
+      <>
+        <GlobalStyle />
+        <Container>
+          <h1>Workspace</h1>
+          <p>Loading configuration...</p>
+        </Container>
+      </>
+    );
+  }
+
   return (
     <>
       <GlobalStyle />
       <Container>
         <h1>Workspace</h1>
+        {!apiUrl && (
+          <p style={{ color: 'orange' }}>
+            ⚠️ Backend URL not configured. Some features may not work.
+          </p>
+        )}
         <FunctionStatus url={apiUrl} />
         <WebAuthComponent />
         {output && <Output>{output}</Output>}
