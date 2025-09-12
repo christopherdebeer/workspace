@@ -225,7 +225,7 @@ export async function handler(event: any): Promise<any> {
     const user = await getUser(username);
     const opts = await fido.attestationOptions();
     opts.user = {
-      id: fromBase64Url(user.userId),
+      id: fromBase64Url(user.userId).buffer,
       name: username,
       displayName: username,
     };
@@ -268,7 +268,7 @@ export async function handler(event: any): Promise<any> {
     }
     const user = await getUser(username);
     const opts = await fido.assertionOptions();
-    opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId) }));
+    opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId).buffer }));
     const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
     user.challenge = challenge;
     await saveUser(user);
