@@ -188,10 +188,25 @@ async function handleMcpRequest(req: unknown): Promise<JsonRpcResponse> {
   }
 }
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': 'https://www.christopherdebeer.com',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
 export async function handler(event: any): Promise<any> {
   console.log('Request:', event);
   const path = event.rawPath || event.path || '/';
   const method = event.requestContext?.http?.method || event.httpMethod;
+
+  // Handle OPTIONS preflight requests
+  if (method === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: CORS_HEADERS,
+      body: '',
+    };
+  }
 
   if (path === '/mcp' && method === 'POST') {
     let request: JsonRpcRequest;
@@ -200,7 +215,7 @@ export async function handler(event: any): Promise<any> {
     } catch {
       return {
         statusCode: 400,
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: null,
@@ -212,7 +227,7 @@ export async function handler(event: any): Promise<any> {
     const response = await handleMcpRequest(request);
     return {
       statusCode: 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
       body: JSON.stringify(response),
     };
   }
@@ -220,7 +235,11 @@ export async function handler(event: any): Promise<any> {
   if (path === '/webauthn/register/options' && method === 'POST') {
     const { username } = JSON.parse(event.body ?? '{}');
     if (!username) {
-      return { statusCode: 400, body: 'Missing username' };
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Missing username' }),
+      };
     }
     const user = await getUser(username);
     const opts = await fido.attestationOptions();
@@ -234,7 +253,7 @@ export async function handler(event: any): Promise<any> {
     await saveUser(user);
     return {
       statusCode: 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
       body: JSON.stringify({ ...opts, challenge, user: { ...opts.user, id: user.userId } }),
     };
   }
@@ -242,7 +261,11 @@ export async function handler(event: any): Promise<any> {
   if (path === '/webauthn/register/verify' && method === 'POST') {
     const { username, attestation } = JSON.parse(event.body ?? '{}');
     if (!username || !attestation) {
-      return { statusCode: 400, body: 'Missing parameters' };
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Missing parameters' }),
+      };
     }
     const user = await getUser(username);
     const expect = {
@@ -258,13 +281,21 @@ export async function handler(event: any): Promise<any> {
     user.credentials.push({ credId, publicKey, counter });
     delete user.challenge;
     await saveUser(user);
-    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+      body: JSON.stringify({ ok: true }),
+    };
   }
 
   if (path === '/webauthn/login/options' && method === 'POST') {
     const { username } = JSON.parse(event.body ?? '{}');
     if (!username) {
-      return { statusCode: 400, body: 'Missing username' };
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Missing username' }),
+      };
     }
     const user = await getUser(username);
     const opts = await fido.assertionOptions();
@@ -274,7 +305,7 @@ export async function handler(event: any): Promise<any> {
     await saveUser(user);
     return {
       statusCode: 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
       body: JSON.stringify({ ...opts, challenge }),
     };
   }
@@ -282,13 +313,21 @@ export async function handler(event: any): Promise<any> {
   if (path === '/webauthn/login/verify' && method === 'POST') {
     const { username, assertion } = JSON.parse(event.body ?? '{}');
     if (!username || !assertion) {
-      return { statusCode: 400, body: 'Missing parameters' };
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Missing parameters' }),
+      };
     }
     const user = await getUser(username);
     const credId = toBase64Url(Buffer.from(assertion.rawId || assertion.id, 'base64')); // maybe base64
     const cred = user.credentials.find((c) => c.credId === credId);
     if (!cred) {
-      return { statusCode: 400, body: 'Unknown credential' };
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Unknown credential' }),
+      };
     }
     const expect = {
       challenge: user.challenge ?? '',
@@ -303,7 +342,11 @@ export async function handler(event: any): Promise<any> {
     cred.counter = result.authnrData.get('counter');
     delete user.challenge;
     await saveUser(user);
-    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+      body: JSON.stringify({ ok: true }),
+    };
   }
 
   await db
@@ -317,6 +360,7 @@ export async function handler(event: any): Promise<any> {
     .promise();
   return {
     statusCode: 200,
+    headers: { 'content-type': 'application/json', ...CORS_HEADERS },
     body: JSON.stringify({ success: true, event }),
   };
 }
