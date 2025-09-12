@@ -68,11 +68,11 @@ function toBase64Url(buf: Buffer) {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function fromBase64Url(str: string) {
+function fromBase64Url(str: string): ArrayBuffer {
   str = str.replace(/-/g, '+').replace(/_/g, '/');
   const pad = str.length % 4;
   if (pad) str += '='.repeat(4 - pad);
-  return Buffer.from(str, 'base64');
+  return Buffer.from(str, 'base64').buffer;
 }
 
 async function getUser(username: string): Promise<UserRecord> {
