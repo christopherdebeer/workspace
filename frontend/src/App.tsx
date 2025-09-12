@@ -3,6 +3,7 @@ import { useState } from 'react';
 import GlobalStyle from './GlobalStyle';
 import FunctionStatus from './FunctionStatus';
 import CommandPalette, { Command } from './CommandPalette';
+import WebAuthComponent from './WebAuthComponent';
 import { apiUrl, mcpRequest, callTool } from './mcpClient';
 
 if (!apiUrl) {
@@ -94,6 +95,7 @@ export default function App() {
       <Container>
         <h1>Workspace</h1>
         <FunctionStatus url={apiUrl} />
+        <WebAuthComponent />
         {output && <Output>{output}</Output>}
         <CommandPalette commands={commands} onResult={setOutput} />
       </Container>
