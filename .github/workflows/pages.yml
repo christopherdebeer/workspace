@@ -30,6 +30,8 @@ jobs:
         run: npm install
 
       - name: Build frontend
+        env:
+          VITE_FUNCTION_URL: ${{ vars.VITE_FUNCTION_URL }}
         run: npm run build:web
 
       - name: Setup Pages
