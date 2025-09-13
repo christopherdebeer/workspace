@@ -46,9 +46,16 @@ const DYNAMO_TOOL: Tool = {
 
 tools.set(DYNAMO_TOOL.name, DYNAMO_TOOL);
 
-const rpId = process.env.RP_ID ?? 'localhost';
-const origin = process.env.ORIGIN ?? `http://${rpId}`;
-const fido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
+// Helper function to extract origin and rpId from request headers
+function getOriginFromEvent(event: any): { origin: string; rpId: string } {
+  const origin = event.headers?.origin || event.headers?.Origin || 'http://localhost:3000';
+  const url = new URL(origin);
+  const rpId = url.hostname;
+  return { origin, rpId };
+}
+
+// Create fido instance with default values (will be overridden per request)
+const fido = new Fido2Lib({ rpId: 'localhost', rpName: 'Workspace', challengeSize: 64 });
 
 interface StoredCredential {
   credId: string;
@@ -268,6 +275,7 @@ export async function handler(event: any): Promise<any> {
       };
     }
     const user = await getUser(username);
+    const { origin, rpId } = getOriginFromEvent(event);
     const expect = {
       challenge: user.challenge ?? '',
       origin,
@@ -329,6 +337,7 @@ export async function handler(event: any): Promise<any> {
         body: JSON.stringify({ error: 'Unknown credential' }),
       };
     }
+    const { origin, rpId } = getOriginFromEvent(event);
     const expect = {
       challenge: user.challenge ?? '',
       origin,
