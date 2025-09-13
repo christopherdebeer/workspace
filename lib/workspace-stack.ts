@@ -32,11 +32,21 @@ export class WorkspaceStack extends cdk.Stack {
 
     table.grantReadWriteData(fn);
 
-
-
     const fnUrl = fn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
     });
+
+    // Extract domain from Function URL for WebAuthn RPID
+    const urlParts = cdk.Fn.split('/', fnUrl.url);
+    const protocol = cdk.Fn.select(0, urlParts); // https:
+    const domain = cdk.Fn.select(2, urlParts); // xyz.lambda-url.region.on.aws
+    
+    // Update Lambda environment with WebAuthn configuration
+    fn.addEnvironment('RP_ID', domain);
+    fn.addEnvironment('ORIGIN', cdk.Fn.sub('${protocol}//${domain}', {
+      protocol: protocol,
+      domain: domain
+    }));
 
     new cdk.CfnOutput(this, 'FunctionUrl', {
       value: fnUrl.url,

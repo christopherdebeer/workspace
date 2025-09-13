@@ -47,7 +47,7 @@ const DYNAMO_TOOL: Tool = {
 tools.set(DYNAMO_TOOL.name, DYNAMO_TOOL);
 
 const rpId = process.env.RP_ID ?? 'localhost';
-const origin = process.env.ORIGIN ?? `http://${rpId}`;
+const origin = process.env.ORIGIN ?? (rpId === 'localhost' ? `http://${rpId}` : `https://${rpId}`);
 const fido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
 
 interface StoredCredential {
