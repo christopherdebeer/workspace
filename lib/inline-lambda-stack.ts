@@ -28,7 +28,8 @@ export class InlineLambdaStack extends cdk.Stack {
         TABLE_NAME: table.tableName,
       },
       bundling: {
-        externalModules: ['aws-sdk'],
+        // Remove aws-sdk from external modules to bundle it for Node.js 20
+        // externalModules: ['aws-sdk'],
       },
     });
 
