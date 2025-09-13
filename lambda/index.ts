@@ -284,7 +284,20 @@ export async function handler(event: any): Promise<any> {
       factor: 'either' as const,
       rpId,
     };
-    const result = await fido.attestationResult(attestation, expect);
+    
+    // Convert string fields back to ArrayBuffer for fido2-lib
+    const convertedAttestation = {
+      ...attestation,
+      id: fromBase64Url(attestation.id),
+      rawId: fromBase64Url(attestation.rawId),
+      response: {
+        ...attestation.response,
+        clientDataJSON: fromBase64Url(attestation.response.clientDataJSON),
+        attestationObject: fromBase64Url(attestation.response.attestationObject),
+      },
+    };
+    
+    const result = await fido.attestationResult(convertedAttestation, expect);
     const credId = toBase64Url(Buffer.from(result.authnrData.get('credId')));
     const publicKey = result.authnrData.get('credentialPublicKeyPem');
     const counter = result.authnrData.get('counter');
@@ -332,7 +345,7 @@ export async function handler(event: any): Promise<any> {
       };
     }
     const user = await getUser(username);
-    const credId = toBase64Url(Buffer.from(assertion.rawId || assertion.id, 'base64')); // maybe base64
+    const credId = assertion.id; // Use the id field directly as it's already a base64url string
     const cred = user.credentials.find((c) => c.credId === credId);
     if (!cred) {
       return {
@@ -351,7 +364,22 @@ export async function handler(event: any): Promise<any> {
       prevCounter: cred.counter,
       userHandle: null,
     };
-    const result = await fido.assertionResult(assertion, expect);
+    
+    // Convert string fields back to ArrayBuffer for fido2-lib
+    const convertedAssertion = {
+      ...assertion,
+      id: fromBase64Url(assertion.id),
+      rawId: fromBase64Url(assertion.rawId),
+      response: {
+        ...assertion.response,
+        clientDataJSON: fromBase64Url(assertion.response.clientDataJSON),
+        authenticatorData: fromBase64Url(assertion.response.authenticatorData),
+        signature: fromBase64Url(assertion.response.signature),
+        userHandle: assertion.response.userHandle ? fromBase64Url(assertion.response.userHandle) : null,
+      },
+    };
+    
+    const result = await fido.assertionResult(convertedAssertion, expect);
     cred.counter = result.authnrData.get('counter');
     delete user.challenge;
     await saveUser(user);
