@@ -240,154 +240,192 @@ export async function handler(event: any): Promise<any> {
   }
 
   if (path === '/webauthn/register/options' && method === 'POST') {
-    const { username } = JSON.parse(event.body ?? '{}');
-    if (!username) {
+    try {
+      const { username } = JSON.parse(event.body ?? '{}');
+      if (!username) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'Missing username' }),
+        };
+      }
+      const user = await getUser(username);
+      const { origin, rpId } = getOriginFromEvent(event);
+      const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
+      const opts = await dynamicFido.attestationOptions();
+      opts.user = {
+        id: fromBase64Url(user.userId),
+        name: username,
+        displayName: username,
+      };
+      const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
+      user.challenge = challenge;
+      await saveUser(user);
       return {
-        statusCode: 400,
+        statusCode: 200,
         headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-        body: JSON.stringify({ error: 'Missing username' }),
+        body: JSON.stringify({ ...opts, challenge, user: { ...opts.user, id: user.userId } }),
+      };
+    } catch (error) {
+      console.error('WebAuthn register options error:', error);
+      return {
+        statusCode: 500,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Failed to generate registration options', details: (error as Error).message }),
       };
     }
-    const user = await getUser(username);
-    const { origin, rpId } = getOriginFromEvent(event);
-    const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
-    const opts = await dynamicFido.attestationOptions();
-    opts.user = {
-      id: fromBase64Url(user.userId),
-      name: username,
-      displayName: username,
-    };
-    const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
-    user.challenge = challenge;
-    await saveUser(user);
-    return {
-      statusCode: 200,
-      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-      body: JSON.stringify({ ...opts, challenge, user: { ...opts.user, id: user.userId } }),
-    };
   }
 
   if (path === '/webauthn/register/verify' && method === 'POST') {
-    const { username, attestation } = JSON.parse(event.body ?? '{}');
-    if (!username || !attestation) {
+    try {
+      const { username, attestation } = JSON.parse(event.body ?? '{}');
+      if (!username || !attestation) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'Missing parameters' }),
+        };
+      }
+      const user = await getUser(username);
+      const { origin, rpId } = getOriginFromEvent(event);
+      const expect = {
+        challenge: user.challenge ?? '',
+        origin,
+        factor: 'either' as const,
+        rpId,
+      };
+      
+      // Convert string fields back to ArrayBuffer for fido2-lib
+      // Note: clientDataJSON should remain as base64url string for fido2-lib to parse internally
+      const convertedAttestation = {
+        ...attestation,
+        id: fromBase64Url(attestation.id),
+        rawId: fromBase64Url(attestation.rawId),
+        response: {
+          ...attestation.response,
+          clientDataJSON: attestation.response.clientDataJSON, // Keep as base64url string
+          attestationObject: fromBase64Url(attestation.response.attestationObject),
+        },
+      };
+      
+      const result = await fido.attestationResult(convertedAttestation, expect);
+      const credId = toBase64Url(Buffer.from(result.authnrData.get('credId')));
+      const publicKey = result.authnrData.get('credentialPublicKeyPem');
+      const counter = result.authnrData.get('counter');
+      user.credentials.push({ credId, publicKey, counter });
+      delete user.challenge;
+      await saveUser(user);
       return {
-        statusCode: 400,
+        statusCode: 200,
         headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-        body: JSON.stringify({ error: 'Missing parameters' }),
+        body: JSON.stringify({ ok: true }),
+      };
+    } catch (error) {
+      console.error('WebAuthn register verify error:', error);
+      return {
+        statusCode: 500,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Registration verification failed', details: (error as Error).message }),
       };
     }
-    const user = await getUser(username);
-    const { origin, rpId } = getOriginFromEvent(event);
-    const expect = {
-      challenge: user.challenge ?? '',
-      origin,
-      factor: 'either' as const,
-      rpId,
-    };
-    
-    // Convert string fields back to ArrayBuffer for fido2-lib
-    const convertedAttestation = {
-      ...attestation,
-      id: fromBase64Url(attestation.id),
-      rawId: fromBase64Url(attestation.rawId),
-      response: {
-        ...attestation.response,
-        clientDataJSON: fromBase64Url(attestation.response.clientDataJSON),
-        attestationObject: fromBase64Url(attestation.response.attestationObject),
-      },
-    };
-    
-    const result = await fido.attestationResult(convertedAttestation, expect);
-    const credId = toBase64Url(Buffer.from(result.authnrData.get('credId')));
-    const publicKey = result.authnrData.get('credentialPublicKeyPem');
-    const counter = result.authnrData.get('counter');
-    user.credentials.push({ credId, publicKey, counter });
-    delete user.challenge;
-    await saveUser(user);
-    return {
-      statusCode: 200,
-      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-      body: JSON.stringify({ ok: true }),
-    };
   }
 
   if (path === '/webauthn/login/options' && method === 'POST') {
-    const { username } = JSON.parse(event.body ?? '{}');
-    if (!username) {
+    try {
+      const { username } = JSON.parse(event.body ?? '{}');
+      if (!username) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'Missing username' }),
+        };
+      }
+      const user = await getUser(username);
+      const { origin, rpId } = getOriginFromEvent(event);
+      const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
+      const opts = await dynamicFido.assertionOptions();
+      opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId) }));
+      const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
+      user.challenge = challenge;
+      await saveUser(user);
       return {
-        statusCode: 400,
+        statusCode: 200,
         headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-        body: JSON.stringify({ error: 'Missing username' }),
+        body: JSON.stringify({ ...opts, challenge }),
+      };
+    } catch (error) {
+      console.error('WebAuthn login options error:', error);
+      return {
+        statusCode: 500,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Failed to generate login options', details: (error as Error).message }),
       };
     }
-    const user = await getUser(username);
-    const { origin, rpId } = getOriginFromEvent(event);
-    const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
-    const opts = await dynamicFido.assertionOptions();
-    opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId) }));
-    const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
-    user.challenge = challenge;
-    await saveUser(user);
-    return {
-      statusCode: 200,
-      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-      body: JSON.stringify({ ...opts, challenge }),
-    };
   }
 
   if (path === '/webauthn/login/verify' && method === 'POST') {
-    const { username, assertion } = JSON.parse(event.body ?? '{}');
-    if (!username || !assertion) {
+    try {
+      const { username, assertion } = JSON.parse(event.body ?? '{}');
+      if (!username || !assertion) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'Missing parameters' }),
+        };
+      }
+      const user = await getUser(username);
+      const credId = assertion.id; // Use the id field directly as it's already a base64url string
+      const cred = user.credentials.find((c) => c.credId === credId);
+      if (!cred) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'Unknown credential' }),
+        };
+      }
+      const { origin, rpId } = getOriginFromEvent(event);
+      const expect = {
+        challenge: user.challenge ?? '',
+        origin,
+        factor: 'either' as const,
+        rpId,
+        publicKey: cred.publicKey,
+        prevCounter: cred.counter,
+        userHandle: null,
+      };
+      
+      // Convert string fields back to ArrayBuffer for fido2-lib
+      // Note: clientDataJSON should remain as base64url string for fido2-lib to parse internally
+      const convertedAssertion = {
+        ...assertion,
+        id: fromBase64Url(assertion.id),
+        rawId: fromBase64Url(assertion.rawId),
+        response: {
+          ...assertion.response,
+          clientDataJSON: assertion.response.clientDataJSON, // Keep as base64url string
+          authenticatorData: fromBase64Url(assertion.response.authenticatorData),
+          signature: fromBase64Url(assertion.response.signature),
+          userHandle: assertion.response.userHandle ? fromBase64Url(assertion.response.userHandle) : null,
+        },
+      };
+      
+      const result = await fido.assertionResult(convertedAssertion, expect);
+      cred.counter = result.authnrData.get('counter');
+      delete user.challenge;
+      await saveUser(user);
       return {
-        statusCode: 400,
+        statusCode: 200,
         headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-        body: JSON.stringify({ error: 'Missing parameters' }),
+        body: JSON.stringify({ ok: true }),
+      };
+    } catch (error) {
+      console.error('WebAuthn login verify error:', error);
+      return {
+        statusCode: 500,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'Login verification failed', details: (error as Error).message }),
       };
     }
-    const user = await getUser(username);
-    const credId = assertion.id; // Use the id field directly as it's already a base64url string
-    const cred = user.credentials.find((c) => c.credId === credId);
-    if (!cred) {
-      return {
-        statusCode: 400,
-        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-        body: JSON.stringify({ error: 'Unknown credential' }),
-      };
-    }
-    const { origin, rpId } = getOriginFromEvent(event);
-    const expect = {
-      challenge: user.challenge ?? '',
-      origin,
-      factor: 'either' as const,
-      rpId,
-      publicKey: cred.publicKey,
-      prevCounter: cred.counter,
-      userHandle: null,
-    };
-    
-    // Convert string fields back to ArrayBuffer for fido2-lib
-    const convertedAssertion = {
-      ...assertion,
-      id: fromBase64Url(assertion.id),
-      rawId: fromBase64Url(assertion.rawId),
-      response: {
-        ...assertion.response,
-        clientDataJSON: fromBase64Url(assertion.response.clientDataJSON),
-        authenticatorData: fromBase64Url(assertion.response.authenticatorData),
-        signature: fromBase64Url(assertion.response.signature),
-        userHandle: assertion.response.userHandle ? fromBase64Url(assertion.response.userHandle) : null,
-      },
-    };
-    
-    const result = await fido.assertionResult(convertedAssertion, expect);
-    cred.counter = result.authnrData.get('counter');
-    delete user.challenge;
-    await saveUser(user);
-    return {
-      statusCode: 200,
-      headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-      body: JSON.stringify({ ok: true }),
-    };
   }
 
   await db
