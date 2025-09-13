@@ -296,14 +296,14 @@ export async function handler(event: any): Promise<any> {
       };
       
       // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON should remain as base64url string for fido2-lib to parse internally
+      // Both clientDataJSON and attestationObject need to be ArrayBuffers as per WebAuthn API format
       const convertedAttestation = {
         ...attestation,
         id: fromBase64Url(attestation.id),
         rawId: fromBase64Url(attestation.rawId),
         response: {
           ...attestation.response,
-          clientDataJSON: attestation.response.clientDataJSON, // Keep as base64url string
+          clientDataJSON: fromBase64Url(attestation.response.clientDataJSON), // Convert to ArrayBuffer
           attestationObject: fromBase64Url(attestation.response.attestationObject),
         },
       };
@@ -395,14 +395,14 @@ export async function handler(event: any): Promise<any> {
       };
       
       // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON should remain as base64url string for fido2-lib to parse internally
+      // Both clientDataJSON and other response fields need to be ArrayBuffers as per WebAuthn API format
       const convertedAssertion = {
         ...assertion,
         id: fromBase64Url(assertion.id),
         rawId: fromBase64Url(assertion.rawId),
         response: {
           ...assertion.response,
-          clientDataJSON: assertion.response.clientDataJSON, // Keep as base64url string
+          clientDataJSON: fromBase64Url(assertion.response.clientDataJSON), // Convert to ArrayBuffer
           authenticatorData: fromBase64Url(assertion.response.authenticatorData),
           signature: fromBase64Url(assertion.response.signature),
           userHandle: assertion.response.userHandle ? fromBase64Url(assertion.response.userHandle) : null,
