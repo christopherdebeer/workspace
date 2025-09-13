@@ -249,7 +249,9 @@ export async function handler(event: any): Promise<any> {
       };
     }
     const user = await getUser(username);
-    const opts = await fido.attestationOptions();
+    const { origin, rpId } = getOriginFromEvent(event);
+    const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
+    const opts = await dynamicFido.attestationOptions();
     opts.user = {
       id: fromBase64Url(user.userId),
       name: username,
@@ -306,7 +308,9 @@ export async function handler(event: any): Promise<any> {
       };
     }
     const user = await getUser(username);
-    const opts = await fido.assertionOptions();
+    const { origin, rpId } = getOriginFromEvent(event);
+    const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
+    const opts = await dynamicFido.assertionOptions();
     opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId) }));
     const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
     user.challenge = challenge;
