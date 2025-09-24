@@ -297,11 +297,11 @@ export async function handler(event: any): Promise<any> {
       };
       
       // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON and attestationObject should remain as base64url strings - fido2-lib handles decoding internally
+      // Note: clientDataJSON, attestationObject, id, and rawId should remain as base64url strings - fido2-lib handles decoding internally
       const convertedAttestation = {
         ...attestation,
-        id: fromBase64Url(attestation.id),
-        rawId: fromBase64Url(attestation.rawId),
+        id: attestation.id, // Keep as base64url string - fixes "id and credId were not the same" error
+        rawId: attestation.rawId, // Keep as base64url string - fixes "id and credId were not the same" error
         response: {
           ...attestation.response,
           clientDataJSON: attestation.response.clientDataJSON, // Keep as base64url string
