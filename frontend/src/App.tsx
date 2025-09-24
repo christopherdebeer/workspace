@@ -8,6 +8,11 @@ import { apiUrl } from './mcpClient';
 import { commandRegistry } from './commandRegistry';
 import { createDefaultCommands } from './defaultCommands';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
+import { pluginManager } from './commandPlugin';
+import { macroManager } from './commandMacro';
+import { templateManager, registerDefaultTemplates } from './commandTemplates';
+import { contextManager } from './commandContext';
+import { examplePlugins } from './examplePlugins';
 
 if (!apiUrl) {
   console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
@@ -42,34 +47,82 @@ export default function App() {
 
   // Initialize commands in the registry
   useEffect(() => {
-    const defaultCommands = createDefaultCommands();
-    defaultCommands.forEach(command => {
-      commandRegistry.register(command);
-    });
+    const initializeSystem = async () => {
+      // 1. Register default commands
+      const defaultCommands = createDefaultCommands();
+      defaultCommands.forEach(command => {
+        commandRegistry.register(command);
+      });
 
-    // Update the help command to list all registered commands
-    const helpCommand = commandRegistry.getCommand('system.help');
-    if (helpCommand) {
-      helpCommand.handler = async () => {
-        const allCommands = commandRegistry.getCommands();
-        const categories = commandRegistry.getCategories();
-        
-        if (categories.length > 0) {
-          let result = 'Available commands by category:\n\n';
-          for (const category of categories) {
-            result += `**${category}**\n`;
-            const categoryCommands = allCommands.filter(cmd => cmd.category === category);
-            for (const cmd of categoryCommands) {
-              result += `  ${cmd.name}: ${cmd.description}\n`;
+      // 2. Initialize context manager
+      contextManager.setConnectionStatus('connecting');
+      contextManager.setModule('api');
+
+      // 3. Register default templates
+      registerDefaultTemplates();
+
+      // 4. Load example plugins
+      for (const plugin of examplePlugins) {
+        await pluginManager.loadPlugin(plugin);
+      }
+
+      // 5. Update the help command to list all registered commands
+      const helpCommand = commandRegistry.getCommand('system.help');
+      if (helpCommand) {
+        helpCommand.handler = async () => {
+          const allCommands = commandRegistry.getCommands();
+          const categories = commandRegistry.getCategories();
+          const loadedPlugins = pluginManager.getLoadedPlugins();
+          const macros = macroManager.getMacros();
+          
+          let result = '=== Command Palette Help ===\n\n';
+          
+          if (categories.length > 0) {
+            result += '**Available Commands by Category:**\n';
+            for (const category of categories) {
+              result += `\n**${category}**\n`;
+              const categoryCommands = allCommands.filter(cmd => cmd.category === category);
+              for (const cmd of categoryCommands) {
+                result += `  ${cmd.name}: ${cmd.description}\n`;
+              }
             }
-            result += '\n';
           }
+          
+          if (macros.length > 0) {
+            result += '\n**Available Macros:**\n';
+            for (const macro of macros) {
+              result += `  ${macro.name}: ${macro.description} (${macro.steps.length} steps)\n`;
+            }
+          }
+          
+          if (loadedPlugins.length > 0) {
+            result += '\n**Loaded Plugins:**\n';
+            for (const plugin of loadedPlugins) {
+              result += `  ${plugin.name} v${plugin.version}: ${plugin.description}\n`;
+            }
+          }
+          
+          result += '\n**Features:**\n';
+          result += '  • Type-safe arguments with validation\n';
+          result += '  • Command categories and search\n';
+          result += '  • Command history and suggestions\n';
+          result += '  • Keyboard shortcuts (Cmd/Ctrl+K)\n';
+          result += '  • Plugin system and macros\n';
+          result += '  • Contextual commands\n';
+          
           return result;
-        } else {
-          return allCommands.map((c) => `${c.name}: ${c.description}`).join('\n');
-        }
-      };
-    }
+        };
+      }
+
+      // Set connection status to connected after initialization
+      contextManager.setConnectionStatus('connected');
+      console.log('Command palette system initialized successfully');
+    };
+
+    initializeSystem().catch(error => {
+      console.error('Failed to initialize command palette system:', error);
+      contextManager.setConnectionStatus('disconnected');
+    });
   }, []);
 
   // Keyboard shortcuts
