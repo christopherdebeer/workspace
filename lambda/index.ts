@@ -296,16 +296,20 @@ export async function handler(event: any): Promise<any> {
         rpId,
       };
       
-      // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON, attestationObject, id, and rawId should remain as base64url strings - fido2-lib handles decoding internally
+      // DEFINITIVE FIX: Convert data types according to fido2-lib TypeScript definitions
+      // AttestationResult interface requires:
+      // - id: ArrayBuffer (not string)
+      // - rawId: ArrayBuffer (not string) 
+      // - clientDataJSON: string (not ArrayBuffer)
+      // - attestationObject: string (not ArrayBuffer)
       const convertedAttestation = {
         ...attestation,
-        id: attestation.id, // Keep as base64url string - fixes "id and credId were not the same" error
-        rawId: attestation.rawId, // Keep as base64url string - fixes "id and credId were not the same" error
+        id: fromBase64Url(attestation.id),     // Convert to ArrayBuffer - required by AttestationResult interface
+        rawId: fromBase64Url(attestation.rawId), // Convert to ArrayBuffer - required by AttestationResult interface
         response: {
           ...attestation.response,
-          clientDataJSON: attestation.response.clientDataJSON, // Keep as base64url string
-          attestationObject: attestation.response.attestationObject, // Keep as base64url string - fixes CBOR parsing error
+          clientDataJSON: attestation.response.clientDataJSON,     // Keep as string - required by AttestationResult interface
+          attestationObject: attestation.response.attestationObject, // Keep as string - required by AttestationResult interface
         },
       };
       
@@ -396,17 +400,22 @@ export async function handler(event: any): Promise<any> {
         userHandle: null,
       };
       
-      // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON should remain as base64url string - fido2-lib handles decoding internally
+      // DEFINITIVE FIX: Convert data types according to fido2-lib TypeScript definitions
+      // AssertionResult interface requires:
+      // - id: ArrayBuffer (not string)
+      // - rawId: ArrayBuffer (not string)
+      // - clientDataJSON: string (not ArrayBuffer)
+      // - authenticatorData: ArrayBuffer (not string)
+      // - signature: string (not ArrayBuffer)
       const convertedAssertion = {
         ...assertion,
-        id: fromBase64Url(assertion.id),
-        rawId: fromBase64Url(assertion.rawId),
+        id: fromBase64Url(assertion.id),     // Convert to ArrayBuffer - required by AssertionResult interface
+        rawId: fromBase64Url(assertion.rawId), // Convert to ArrayBuffer - required by AssertionResult interface
         response: {
           ...assertion.response,
-          clientDataJSON: assertion.response.clientDataJSON, // Keep as base64url string
-          authenticatorData: fromBase64Url(assertion.response.authenticatorData),
-          signature: fromBase64Url(assertion.response.signature),
+          clientDataJSON: assertion.response.clientDataJSON,                      // Keep as string - required by AssertionResult interface
+          authenticatorData: fromBase64Url(assertion.response.authenticatorData), // Convert to ArrayBuffer - required by AssertionResult interface
+          signature: assertion.response.signature,                                // Keep as string - required by AssertionResult interface
           userHandle: assertion.response.userHandle ? fromBase64Url(assertion.response.userHandle) : null,
         },
       };
