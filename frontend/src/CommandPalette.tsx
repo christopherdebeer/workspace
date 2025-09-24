@@ -85,10 +85,10 @@ export default function CommandPalette({ commands, onResult }: Props) {
     setValue('');
   };
 
-  const handleRun = () => {
+  const handleRun = (commandIndex?: number) => {
     if (!suggestions.length) return;
     const [typedName, ...rest] = value.trim().split(/\s+/);
-    const selected = suggestions[active];
+    const selected = suggestions[commandIndex ?? active];
     const args = selected.name === typedName ? rest : [];
     runCommand(selected, args);
   };
@@ -124,7 +124,7 @@ export default function CommandPalette({ commands, onResult }: Props) {
               onMouseDown={(e) => {
                 e.preventDefault();
                 setActive(i);
-                handleRun();
+                handleRun(i);
               }}
             >
               <strong>{s.name}</strong> - {s.description}
