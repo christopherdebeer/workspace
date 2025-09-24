@@ -297,7 +297,7 @@ export async function handler(event: any): Promise<any> {
       };
       
       // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON should remain as base64url string - fido2-lib handles decoding internally
+      // Note: clientDataJSON and attestationObject should remain as base64url strings - fido2-lib handles decoding internally
       const convertedAttestation = {
         ...attestation,
         id: fromBase64Url(attestation.id),
@@ -305,7 +305,7 @@ export async function handler(event: any): Promise<any> {
         response: {
           ...attestation.response,
           clientDataJSON: attestation.response.clientDataJSON, // Keep as base64url string
-          attestationObject: fromBase64Url(attestation.response.attestationObject),
+          attestationObject: attestation.response.attestationObject, // Keep as base64url string - fixes CBOR parsing error
         },
       };
       

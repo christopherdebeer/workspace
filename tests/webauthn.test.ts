@@ -334,4 +334,69 @@ describe('WebAuthn Registration', () => {
       expect(decoded).not.toMatch(/^AWS4-HMAC-/);
     });
   });
+
+  describe('CBOR attestationObject handling', () => {
+    it('should handle attestationObject as base64url string to prevent CBOR parsing errors', async () => {
+      const mockUser = {
+        id: 'user#test@example.com',
+        username: 'test@example.com',
+        userId: 'mock-user-id',
+        credentials: [],
+        challenge: 'mock-challenge',
+      };
+
+      const realAttestationData = {
+        id: 'bPyj2QDp6dKmbjT2MUXQaeRPWgdO9fTQ7lF5ZeBIyYiHBhlzguABT8rkCe6iO03C',
+        rawId: 'bPyj2QDp6dKmbjT2MUXQaeRPWgdO9fTQ7lF5ZeBIyYiHBhlzguABT8rkCe6iO03C',
+        response: {
+          clientDataJSON: 'eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiMERsMlJqR0NKXzNOc2VDR3d0dDdOeFM2UTgwa2tsVVhFVEFNTzBWMmFqeXFyMnRWOWR1Q0M1bW5pblFkWTJUM3dJOTA1WTNSbzNrREhZeXNLOG9GenciLCJvcmlnaW4iOiJodHRwczovL3d3dy5jaHJpc3RvcGhlcmRlYmVlci5jb20iLCJjcm9zc09yaWdpbiI6ZmFsc2V9',
+          attestationObject: 'o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVi0IPY0oTzaow-pUFFvYO_k52yCk_2anMIMM20rFVgjwg5dAAAAALeKClVu-NJGoEK6D21VBQwAMGz8o9kA6enSpm409jFF0GnkT1oHTvX00O5ReWXgSMmIhwYZc4LgAU_K5AnuojtNwqUBAgMmIAEhWCBQB1j0VXOTqkkWhrm0BXI-Ch0Zu0YoODyZ5E1mpNvi2iJYIFhwFJ4PlqyyP-iPnMAuQPgzFuJgFO3lrPWKTSVFETrW',
+        },
+        type: 'public-key',
+      };
+
+      mockDb.get.mockReturnValue({
+        promise: () => Promise.resolve({ Item: mockUser }),
+      });
+
+      const mockResult = {
+        authnrData: new Map([
+          ['credId', Buffer.from('mock-cred-id')],
+          ['credentialPublicKeyPem', 'mock-public-key'],
+          ['counter', 0],
+        ]),
+      };
+      mockAttestationResult.mockResolvedValue(mockResult);
+
+      const event = {
+        rawPath: '/webauthn/register/verify',
+        requestContext: { http: { method: 'POST' } },
+        body: JSON.stringify({ 
+          username: 'test@example.com', 
+          attestation: realAttestationData 
+        }),
+        headers: { origin: 'https://www.christopherdebeer.com' },
+      };
+
+      const result = await handler(event);
+
+      expect(result.statusCode).toBe(200);
+      
+      // Verify that attestationObject was NOT converted to ArrayBuffer
+      // The fido2-lib library should receive it as a base64url string
+      expect(mockAttestationResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          response: expect.objectContaining({
+            clientDataJSON: realAttestationData.response.clientDataJSON, // Should remain as string
+            attestationObject: realAttestationData.response.attestationObject, // Should remain as string
+          }),
+        }),
+        expect.any(Object)
+      );
+
+      // If this test passes, it means we're not getting "couldn't parse attestationObject CBOR" error
+      const responseBody = JSON.parse(result.body);
+      expect(responseBody.ok).toBe(true);
+    });
+  });
 });
