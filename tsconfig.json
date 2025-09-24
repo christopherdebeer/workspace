@@ -6,10 +6,13 @@
     "types": ["node"],
     "strict": true,
     "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist"
   },
-  "include": ["bin", "lib", "lambda"]
+  "include": ["bin", "lib", "lambda"],
+  "exclude": ["**/*.test.ts", "tests/**/*"]
 }

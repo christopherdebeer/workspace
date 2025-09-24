@@ -46,8 +46,8 @@ const DYNAMO_TOOL: Tool = {
 
 tools.set(DYNAMO_TOOL.name, DYNAMO_TOOL);
 
-// Helper function to extract origin and rpId from request headers
-function getOriginFromEvent(event: any): { origin: string; rpId: string } {
+// Type-safe helper function to extract origin and rpId from request headers
+function getOriginFromEvent(event: { headers?: Record<string, string> }): { origin: string; rpId: string } {
   const origin = event.headers?.origin || event.headers?.Origin || 'http://localhost:3000';
   const url = new URL(origin);
   const rpId = url.hostname;
@@ -71,11 +71,40 @@ interface UserRecord {
   challenge?: string;
 }
 
-function toBase64Url(buf: Buffer) {
+// Type-safe interfaces for WebAuthn data
+interface WebAuthnRegistrationRequest {
+  username: string;
+  attestation: {
+    id: string;  // base64url string from client
+    rawId: string; // base64url string from client
+    response: {
+      clientDataJSON: string; // base64url string from client
+      attestationObject: string; // base64url string from client
+    };
+    type: 'public-key';
+  };
+}
+
+interface WebAuthnLoginRequest {
+  username: string;
+  assertion: {
+    id: string; // base64url string from client
+    rawId: string; // base64url string from client
+    response: {
+      clientDataJSON: string; // base64url string from client
+      authenticatorData: string; // base64url string from client
+      signature: string; // base64url string from client
+      userHandle?: string; // base64url string from client
+    };
+    type: 'public-key';
+  };
+}
+
+export function toBase64Url(buf: Buffer) {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function fromBase64Url(str: string): ArrayBuffer {
+export function fromBase64Url(str: string): ArrayBuffer {
   str = str.replace(/-/g, '+').replace(/_/g, '/');
   const pad = str.length % 4;
   if (pad) str += '='.repeat(4 - pad);
@@ -278,7 +307,8 @@ export async function handler(event: any): Promise<any> {
 
   if (path === '/webauthn/register/verify' && method === 'POST') {
     try {
-      const { username, attestation } = JSON.parse(event.body ?? '{}');
+      const requestData = JSON.parse(event.body ?? '{}') as WebAuthnRegistrationRequest;
+      const { username, attestation } = requestData;
       if (!username || !attestation) {
         return {
           statusCode: 400,
@@ -296,16 +326,14 @@ export async function handler(event: any): Promise<any> {
         rpId,
       };
       
-      // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON, attestationObject, id, and rawId should remain as base64url strings - fido2-lib handles decoding internally
+      // Convert client data to proper types for fido2-lib
+      // fido2-lib expects: id/rawId as ArrayBuffer, clientDataJSON/attestationObject as string
       const convertedAttestation = {
-        ...attestation,
-        id: attestation.id, // Keep as base64url string - fixes "id and credId were not the same" error
-        rawId: attestation.rawId, // Keep as base64url string - fixes "id and credId were not the same" error
+        id: fromBase64Url(attestation.id), // Convert to ArrayBuffer
+        rawId: fromBase64Url(attestation.rawId), // Convert to ArrayBuffer
         response: {
-          ...attestation.response,
-          clientDataJSON: attestation.response.clientDataJSON, // Keep as base64url string
-          attestationObject: attestation.response.attestationObject, // Keep as base64url string - fixes CBOR parsing error
+          clientDataJSON: attestation.response.clientDataJSON, // Keep as string
+          attestationObject: attestation.response.attestationObject, // Keep as string
         },
       };
       
@@ -366,7 +394,8 @@ export async function handler(event: any): Promise<any> {
 
   if (path === '/webauthn/login/verify' && method === 'POST') {
     try {
-      const { username, assertion } = JSON.parse(event.body ?? '{}');
+      const requestData = JSON.parse(event.body ?? '{}') as WebAuthnLoginRequest;
+      const { username, assertion } = requestData;
       if (!username || !assertion) {
         return {
           statusCode: 400,
@@ -396,18 +425,16 @@ export async function handler(event: any): Promise<any> {
         userHandle: null,
       };
       
-      // Convert string fields back to ArrayBuffer for fido2-lib
-      // Note: clientDataJSON should remain as base64url string - fido2-lib handles decoding internally
+      // Convert client data to proper types for fido2-lib
+      // fido2-lib expects: id/rawId as ArrayBuffer, clientDataJSON/signature as string, authenticatorData as ArrayBuffer
       const convertedAssertion = {
-        ...assertion,
-        id: fromBase64Url(assertion.id),
-        rawId: fromBase64Url(assertion.rawId),
+        id: fromBase64Url(assertion.id), // Convert to ArrayBuffer
+        rawId: fromBase64Url(assertion.rawId), // Convert to ArrayBuffer
         response: {
-          ...assertion.response,
-          clientDataJSON: assertion.response.clientDataJSON, // Keep as base64url string
-          authenticatorData: fromBase64Url(assertion.response.authenticatorData),
-          signature: fromBase64Url(assertion.response.signature),
-          userHandle: assertion.response.userHandle ? fromBase64Url(assertion.response.userHandle) : null,
+          clientDataJSON: assertion.response.clientDataJSON, // Keep as string
+          authenticatorData: fromBase64Url(assertion.response.authenticatorData), // Convert to ArrayBuffer
+          signature: assertion.response.signature, // Keep as string (base64url)
+          userHandle: assertion.response.userHandle, // Optional string as expected by fido2-lib
         },
       };
       
