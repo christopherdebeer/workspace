@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import Fuse from 'fuse.js';
-
-export interface Command {
-  name: string;
-  description: string;
-  handler: (args: string[]) => Promise<string>;
-}
+import { Command, CommandRegistry, commandRegistry } from './commandRegistry';
+import { commandHistory } from './commandHistory';
 
 interface Props {
-  commands: Command[];
+  registry?: CommandRegistry;
   onResult: (result: string) => void;
 }
 
@@ -49,14 +45,46 @@ const Item = styled.li<{ active: boolean }>`
   transition: background-color 0.2s;
 `;
 
-export default function CommandPalette({ commands, onResult }: Props) {
+const ItemContent = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+`;
+
+const ItemHeader = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+`;
+
+const Category = styled.span`
+  background: #e3f2fd;
+  color: #1565c0;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+`;
+
+const Description = styled.span`
+  color: #666;
+  font-size: 0.875rem;
+`;
+
+export default function CommandPalette({ registry = commandRegistry, onResult }: Props) {
   const [value, setValue] = useState('');
-  const [suggestions, setSuggestions] = useState<Command[]>(commands);
+  const [suggestions, setSuggestions] = useState<Command[]>([]);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const commands = useMemo(() => registry.getCommands(), [registry]);
+
   const fuse = useMemo(
-    () => new Fuse(commands, { keys: ['name', 'description'], threshold: 0.4 }),
+    () => new Fuse(commands, { 
+      keys: ['name', 'description', 'category', 'keywords'], 
+      threshold: 0.4,
+      includeScore: true
+    }),
     [commands]
   );
 
@@ -72,16 +100,19 @@ export default function CommandPalette({ commands, onResult }: Props) {
   }, [value, commands, fuse]);
 
   const runCommand = async (cmd: Command, args: string[]) => {
+    let result: string = '';
+    let error: string | undefined = undefined;
+    
     try {
-      const result = await cmd.handler(args);
+      result = await cmd.handler(args);
       onResult(result);
     } catch (err) {
-      if (err instanceof Error) {
-        onResult(err.message);
-      } else {
-        onResult(String(err));
-      }
+      error = err instanceof Error ? err.message : String(err);
+      onResult(error);
     }
+    
+    // Add to history
+    commandHistory.addEntry(cmd.name, args, result, error);
     setValue('');
   };
 
@@ -119,7 +150,7 @@ export default function CommandPalette({ commands, onResult }: Props) {
         <List>
           {suggestions.map((s, i) => (
             <Item
-              key={s.name}
+              key={s.id}
               active={i === active}
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -127,7 +158,13 @@ export default function CommandPalette({ commands, onResult }: Props) {
                 handleRun(i);
               }}
             >
-              <strong>{s.name}</strong> - {s.description}
+              <ItemContent>
+                <ItemHeader>
+                  <strong>{s.name}</strong>
+                  {s.category && <Category>{s.category}</Category>}
+                </ItemHeader>
+                <Description>{s.description}</Description>
+              </ItemContent>
             </Item>
           ))}
         </List>

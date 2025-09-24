@@ -1,10 +1,12 @@
 import styled from 'styled-components';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import GlobalStyle from './GlobalStyle';
 import FunctionStatus from './FunctionStatus';
-import CommandPalette, { Command } from './CommandPalette';
+import CommandPalette from './CommandPalette';
 import WebAuthComponent from './WebAuthComponent';
-import { apiUrl, mcpRequest, callTool } from './mcpClient';
+import { apiUrl } from './mcpClient';
+import { commandRegistry } from './commandRegistry';
+import { createDefaultCommands } from './defaultCommands';
 
 if (!apiUrl) {
   console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
@@ -36,58 +38,37 @@ const Output = styled.pre`
 export default function App() {
   const [output, setOutput] = useState('');
 
-  const commands: Command[] = [
-    {
-      name: 'status',
-      description: 'GET /',
-      handler: async () => {
-        const r = await fetch(apiUrl);
-        const data = await r.json();
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'capabilities',
-      description: 'POST /mcp capabilities',
-      handler: async () => {
-        const data = await mcpRequest('capabilities');
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'echo',
-      description: 'POST /mcp echo <text>',
-      handler: async (args: string[]) => {
-        const message = args.join(' ');
-        const data = await mcpRequest('echo', message);
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'list-tools',
-      description: 'POST /mcp tools/list',
-      handler: async () => {
-        const data = await mcpRequest('tools/list');
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'call-dynamo',
-      description: 'POST /mcp tools/call dynamodb <json>',
-      handler: async (args: string[]) => {
-        const bodyArgs = args.join(' ');
-        const params = bodyArgs ? JSON.parse(bodyArgs) : {};
-        const data = await callTool('dynamodb', params);
-        return JSON.stringify(data, null, 2);
-      },
-    },
-    {
-      name: 'help',
-      description: 'List commands',
-      handler: async () =>
-        commands.map((c) => `${c.name}: ${c.description}`).join('\n'),
-    },
-  ];
+  // Initialize commands in the registry
+  useEffect(() => {
+    const defaultCommands = createDefaultCommands();
+    defaultCommands.forEach(command => {
+      commandRegistry.register(command);
+    });
+
+    // Update the help command to list all registered commands
+    const helpCommand = commandRegistry.getCommand('system.help');
+    if (helpCommand) {
+      helpCommand.handler = async () => {
+        const allCommands = commandRegistry.getCommands();
+        const categories = commandRegistry.getCategories();
+        
+        if (categories.length > 0) {
+          let result = 'Available commands by category:\n\n';
+          for (const category of categories) {
+            result += `**${category}**\n`;
+            const categoryCommands = allCommands.filter(cmd => cmd.category === category);
+            for (const cmd of categoryCommands) {
+              result += `  ${cmd.name}: ${cmd.description}\n`;
+            }
+            result += '\n';
+          }
+          return result;
+        } else {
+          return allCommands.map((c) => `${c.name}: ${c.description}`).join('\n');
+        }
+      };
+    }
+  }, []);
 
   return (
     <>
@@ -97,7 +78,7 @@ export default function App() {
         <FunctionStatus url={apiUrl} />
         <WebAuthComponent />
         {output && <Output>{output}</Output>}
-        <CommandPalette commands={commands} onResult={setOutput} />
+        <CommandPalette onResult={setOutput} />
       </Container>
     </>
   );
