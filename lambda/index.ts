@@ -288,6 +288,7 @@ export async function handler(event: any): Promise<any> {
       }
       const user = await getUser(username);
       const { origin, rpId } = getOriginFromEvent(event);
+      const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
       const expect = {
         challenge: user.challenge ?? '',
         origin,
@@ -308,7 +309,7 @@ export async function handler(event: any): Promise<any> {
         },
       };
       
-      const result = await fido.attestationResult(convertedAttestation, expect);
+      const result = await dynamicFido.attestationResult(convertedAttestation, expect);
       const credId = toBase64Url(Buffer.from(result.authnrData.get('credId')));
       const publicKey = result.authnrData.get('credentialPublicKeyPem');
       const counter = result.authnrData.get('counter');
@@ -384,6 +385,7 @@ export async function handler(event: any): Promise<any> {
         };
       }
       const { origin, rpId } = getOriginFromEvent(event);
+      const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
       const expect = {
         challenge: user.challenge ?? '',
         origin,
@@ -409,7 +411,7 @@ export async function handler(event: any): Promise<any> {
         },
       };
       
-      const result = await fido.assertionResult(convertedAssertion, expect);
+      const result = await dynamicFido.assertionResult(convertedAssertion, expect);
       cred.counter = result.authnrData.get('counter');
       delete user.challenge;
       await saveUser(user);
