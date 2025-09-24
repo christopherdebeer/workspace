@@ -32,8 +32,18 @@ export const createDefaultCommands = (): Command[] => [
     description: 'POST /mcp echo <text> - Echo text through MCP server',
     category: 'MCP',
     keywords: ['test', 'message', 'debug'],
-    handler: async (args: string[]) => {
-      const message = args.join(' ');
+    args: [
+      {
+        name: 'message',
+        type: 'string',
+        required: true,
+        description: 'Text to echo through the MCP server'
+      }
+    ],
+    handler: async (args: any) => {
+      const message = typeof args === 'string' || Array.isArray(args) 
+        ? (Array.isArray(args) ? args.join(' ') : args)
+        : args.message || '';
       const data = await mcpRequest('echo', message);
       return JSON.stringify(data, null, 2);
     },
@@ -55,9 +65,24 @@ export const createDefaultCommands = (): Command[] => [
     description: 'POST /mcp tools/call dynamodb <json> - Call DynamoDB tool',
     category: 'Tools',
     keywords: ['dynamodb', 'database', 'aws'],
-    handler: async (args: string[]) => {
-      const bodyArgs = args.join(' ');
-      const params = bodyArgs ? JSON.parse(bodyArgs) : {};
+    args: [
+      {
+        name: 'params',
+        type: 'string',
+        required: false,
+        description: 'JSON parameters for the DynamoDB operation'
+      }
+    ],
+    handler: async (args: any) => {
+      let params = {};
+      if (typeof args === 'string') {
+        params = args ? JSON.parse(args) : {};
+      } else if (Array.isArray(args)) {
+        const bodyArgs = args.join(' ');
+        params = bodyArgs ? JSON.parse(bodyArgs) : {};
+      } else if (args && args.params) {
+        params = args.params ? JSON.parse(args.params) : {};
+      }
       const data = await callTool('dynamodb', params);
       return JSON.stringify(data, null, 2);
     },

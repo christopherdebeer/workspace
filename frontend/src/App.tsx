@@ -1,12 +1,13 @@
 import styled from 'styled-components';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import GlobalStyle from './GlobalStyle';
 import FunctionStatus from './FunctionStatus';
-import CommandPalette from './CommandPalette';
+import CommandPalette, { CommandPaletteRef } from './CommandPalette';
 import WebAuthComponent from './WebAuthComponent';
 import { apiUrl } from './mcpClient';
 import { commandRegistry } from './commandRegistry';
 import { createDefaultCommands } from './defaultCommands';
+import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
 if (!apiUrl) {
   console.warn('VITE_FUNCTION_URL is not defined, API calls may fail');
@@ -37,6 +38,7 @@ const Output = styled.pre`
 
 export default function App() {
   const [output, setOutput] = useState('');
+  const commandPaletteRef = useRef<CommandPaletteRef>(null);
 
   // Initialize commands in the registry
   useEffect(() => {
@@ -70,6 +72,24 @@ export default function App() {
     }
   }, []);
 
+  // Keyboard shortcuts
+  useKeyboardShortcuts([
+    {
+      key: 'k',
+      ctrlKey: true,
+      handler: () => {
+        commandPaletteRef.current?.focus();
+      }
+    },
+    {
+      key: 'k',
+      metaKey: true,
+      handler: () => {
+        commandPaletteRef.current?.focus();
+      }
+    }
+  ]);
+
   return (
     <>
       <GlobalStyle />
@@ -78,7 +98,7 @@ export default function App() {
         <FunctionStatus url={apiUrl} />
         <WebAuthComponent />
         {output && <Output>{output}</Output>}
-        <CommandPalette onResult={setOutput} />
+        <CommandPalette ref={commandPaletteRef} onResult={setOutput} />
       </Container>
     </>
   );
