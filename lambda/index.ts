@@ -79,7 +79,11 @@ function fromBase64Url(str: string): ArrayBuffer {
   str = str.replace(/-/g, '+').replace(/_/g, '/');
   const pad = str.length % 4;
   if (pad) str += '='.repeat(4 - pad);
-  return Buffer.from(str, 'base64').buffer;
+  const buffer = Buffer.from(str, 'base64');
+  // CRITICAL FIX: buffer.buffer returns the ENTIRE pooled ArrayBuffer (8192 bytes),
+  // but we only want the slice that contains our data. Without this, fido2-lib
+  // receives incorrect data and fails with "id and credId were not the same".
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
 async function getUser(username: string): Promise<UserRecord> {
