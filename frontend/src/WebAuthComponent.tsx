@@ -178,7 +178,7 @@ export default function WebAuthComponent({ onAuthSuccess }: WebAuthComponentProp
       const credentialOptions = {
         ...options,
         challenge: base64UrlToBuffer(options.challenge),
-        allowCredentials: options.allowCredentials?.map((cred: any) => ({
+        allowCredentials: options.allowCredentials?.map((cred: { id: string | ArrayBuffer; type: string; transports?: string[] }) => ({
           ...cred,
           id: typeof cred.id === 'string' ? base64UrlToBuffer(cred.id) : cred.id,
         })),

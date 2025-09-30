@@ -59,7 +59,7 @@ test.describe('WebAuthn Login Tests', () => {
   test('login options should return proper credential IDs not empty objects', async ({ page }) => {
     await page.goto('/workspace/');
 
-    let loginOptionsResponse: any = null;
+    let loginOptionsResponse: unknown = null;
 
     page.on('response', async (response) => {
       if (response.url().includes('/webauthn/login/options')) {

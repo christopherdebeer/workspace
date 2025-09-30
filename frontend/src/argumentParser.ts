@@ -60,7 +60,7 @@ export class ArgumentParser {
   }
 
   private parseArgument(tokens: string[], startIndex: number, schema: ArgumentSchema): {
-    value: any;
+    value: string | number | boolean | undefined;
     consumed: number;
     error?: string;
   } {

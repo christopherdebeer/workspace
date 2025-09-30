@@ -8,19 +8,19 @@ export interface ArgumentSchema {
 }
 
 export interface CommandContext {
-  state?: Record<string, any>;
+  state?: Record<string, unknown>;
   permissions?: string[];
   environment?: 'development' | 'production';
   activeModule?: string;
 }
 
 export interface ParsedArgs {
-  [key: string]: any;
+  [key: string]: string | number | boolean | string[] | undefined;
 }
 
 export interface CommandResult {
   success: boolean;
-  data?: any;
+  data?: unknown;
   error?: string;
 }
 

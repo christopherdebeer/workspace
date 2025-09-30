@@ -3,6 +3,7 @@ import { CommandPlugin, createPlugin } from './commandPlugin';
 import { contextManager } from './commandContext';
 import { macroManager, createMacro, createMacroStep } from './commandMacro';
 import { templateManager } from './commandTemplates';
+import { ParsedArgs } from './commandRegistry';
 
 // Utils Plugin - Common utility commands
 export const utilsPlugin: CommandPlugin = createPlugin({
@@ -26,7 +27,7 @@ export const utilsPlugin: CommandPlugin = createPlugin({
           description: 'Output format (default: human)'
         }
       ],
-      handler: async (args: any) => {
+      handler: async (args: ParsedArgs) => {
         const format = args?.format || 'human';
         const now = new Date();
         
@@ -72,7 +73,7 @@ export const utilsPlugin: CommandPlugin = createPlugin({
           description: 'Text to encode/decode'
         }
       ],
-      handler: async (args: any) => {
+      handler: async (args: ParsedArgs) => {
         const { action, text } = args;
         
         try {
@@ -141,7 +142,7 @@ export const contextPlugin: CommandPlugin = createPlugin({
           description: 'Module to activate'
         }
       ],
-      handler: async (args: any) => {
+      handler: async (args: ParsedArgs) => {
         contextManager.setModule(args.module);
         return `Active module set to: ${args.module}`;
       }
@@ -167,7 +168,7 @@ export const contextPlugin: CommandPlugin = createPlugin({
           description: 'Permission to add/remove (required for add/remove)'
         }
       ],
-      handler: async (args: any) => {
+      handler: async (args: ParsedArgs) => {
         const { action, permission } = args;
         
         switch (action) {

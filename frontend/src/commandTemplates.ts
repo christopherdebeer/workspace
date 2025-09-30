@@ -36,7 +36,7 @@ export class CommandTemplateManager {
     return Array.from(this.templates.values()).filter(t => t.category === category);
   }
 
-  renderTemplate(templateId: string, params: Record<string, any>): string {
+  renderTemplate(templateId: string, params: Record<string, string | number | boolean>): string {
     const template = this.templates.get(templateId);
     if (!template) {
       throw new Error(`Template ${templateId} not found`);
@@ -152,7 +152,7 @@ export const registerDefaultTemplates = () => {
 };
 
 // Macro templates - convert templates to macros
-export const createMacroFromTemplate = (templateId: string, params: Record<string, any>): CommandMacro => {
+export const createMacroFromTemplate = (templateId: string, params: Record<string, string | number | boolean>): CommandMacro => {
   const template = templateManager.getTemplate(templateId);
   if (!template) {
     throw new Error(`Template ${templateId} not found`);
@@ -190,7 +190,7 @@ export const generateCommandFromTemplate = (template: CommandTemplate): Command 
     category: template.category,
     keywords: [...(template.keywords || []), 'template'],
     args: template.args,
-    handler: async (args: any) => {
+    handler: async (args: Record<string, string | number | boolean>) => {
       try {
         const macro = createMacroFromTemplate(template.id, args);
         // This would execute the macro, but for now just return the pattern

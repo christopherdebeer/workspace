@@ -6,10 +6,10 @@ export interface AppState {
   userPermissions: string[];
   environment: 'development' | 'production';
   connectionStatus: 'connected' | 'disconnected' | 'connecting';
-  lastApiResponse?: any;
+  lastApiResponse?: unknown;
   selectedItems?: string[];
   activeTab?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export class CommandContextManager {
@@ -78,7 +78,7 @@ export class CommandContextManager {
     });
   }
 
-  setLastApiResponse(response: any): void {
+  setLastApiResponse(response: unknown): void {
     this.setState({ lastApiResponse: response });
   }
 
@@ -147,8 +147,8 @@ export class CommandContextManager {
 export const contextManager = new CommandContextManager();
 
 // Utility functions
-export const withContext = <T extends any[]>(
-  fn: (...args: T) => any,
+export const withContext = <T extends unknown[]>(
+  fn: (...args: T) => unknown,
   requiredPermissions?: string[],
   requiredModule?: string
 ) => {

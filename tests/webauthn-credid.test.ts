@@ -56,8 +56,8 @@ describe('WebAuthn Credential ID Mismatch Tests', () => {
       await fido.attestationResult(convertedAttestation, expect);
       // If we reach here, the error was not reproduced
       expect(false).toBe(true); // Force test failure
-    } catch (error: any) {
-      expect(error.message).toContain("id and credId were not the same");
+    } catch (error: unknown) {
+      expect((error as Error).message).toContain("id and credId were not the same");
       console.log('✅ Successfully reproduced the credential ID mismatch error');
     }
   });

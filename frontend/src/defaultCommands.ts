@@ -1,5 +1,5 @@
 // Default Commands - Core commands with categories and improved structure
-import { Command } from './commandRegistry';
+import { Command, ParsedArgs } from './commandRegistry';
 import { apiUrl, mcpRequest, callTool } from './mcpClient';
 
 export const createDefaultCommands = (): Command[] => [
@@ -40,10 +40,10 @@ export const createDefaultCommands = (): Command[] => [
         description: 'Text to echo through the MCP server'
       }
     ],
-    handler: async (args: any) => {
-      const message = typeof args === 'string' || Array.isArray(args) 
+    handler: async (args: ParsedArgs) => {
+      const message = typeof args === 'string' || Array.isArray(args)
         ? (Array.isArray(args) ? args.join(' ') : args)
-        : args.message || '';
+        : String(args.message || '');
       const data = await mcpRequest('echo', message);
       return JSON.stringify(data, null, 2);
     },
@@ -73,7 +73,7 @@ export const createDefaultCommands = (): Command[] => [
         description: 'JSON parameters for the DynamoDB operation'
       }
     ],
-    handler: async (args: any) => {
+    handler: async (args: ParsedArgs) => {
       let params = {};
       if (typeof args === 'string') {
         params = args ? JSON.parse(args) : {};

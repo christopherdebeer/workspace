@@ -22,7 +22,7 @@ const KV_STORE_TOOL: Tool = {
     required: ['action', 'key'],
   },
   outputSchema: { type: 'object' },
-  async call(args: { action: string; key?: string; value?: any }, username?: string) {
+  async call(args: { action: string; key?: string; value?: unknown }, username?: string) {
     if (!username) {
       return { content: [{ type: 'text', text: 'Unauthorized: No username provided' }], isError: true };
     }
@@ -69,8 +69,22 @@ const KV_STORE_TOOL: Tool = {
 
 tools.set(KV_STORE_TOOL.name, KV_STORE_TOOL);
 
+interface LambdaEvent {
+  headers?: Record<string, string>;
+  rawPath?: string;
+  path?: string;
+  requestContext?: {
+    http?: {
+      method?: string;
+    };
+  };
+  httpMethod?: string;
+  body?: string;
+  queryStringParameters?: Record<string, string>;
+}
+
 // Helper function to extract origin and rpId from request headers
-function getOriginFromEvent(event: any): { origin: string; rpId: string } {
+function getOriginFromEvent(event: LambdaEvent): { origin: string; rpId: string } {
   const origin = event.headers?.origin || event.headers?.Origin || 'http://localhost:3000';
   const url = new URL(origin);
   const rpId = url.hostname;
@@ -155,21 +169,21 @@ interface JsonRpcRequest {
   jsonrpc: string;
   id?: string | number | null;
   method: string;
-  params?: any;
+  params?: unknown;
 }
 
 interface JsonRpcResponse {
   jsonrpc: string;
   id: string | number | null;
-  result?: any;
+  result?: unknown;
   error?: { code: number; message: string };
 }
 
-function isObject(value: any): value is Record<string, any> {
+function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function validateRequest(value: any): value is JsonRpcRequest {
+function validateRequest(value: unknown): value is JsonRpcRequest {
   return (
     isObject(value) &&
     value.jsonrpc === '2.0' &&
@@ -256,7 +270,13 @@ function generateAuthorizationCode(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-export async function handler(event: any): Promise<any> {
+interface LambdaResponse {
+  statusCode: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export async function handler(event: LambdaEvent): Promise<LambdaResponse> {
   console.log('Request:', event);
   const path = event.rawPath || event.path || '/';
   const method = event.requestContext?.http?.method || event.httpMethod;
@@ -418,7 +438,7 @@ export async function handler(event: any): Promise<any> {
       const { origin, rpId } = getOriginFromEvent(event);
       const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
       const opts = await dynamicFido.assertionOptions();
-      opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: c.credId }));
+      opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key' as const, id: fromBase64Url(c.credId) }));
       const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
       user.challenge = challenge;
       await saveUser(user);
