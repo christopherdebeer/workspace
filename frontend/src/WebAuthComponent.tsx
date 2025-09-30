@@ -65,7 +65,11 @@ function base64UrlToBuffer(base64Url: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export default function WebAuthComponent() {
+interface WebAuthComponentProps {
+  onAuthSuccess?: () => void;
+}
+
+export default function WebAuthComponent({ onAuthSuccess }: WebAuthComponentProps = {}) {
   const [username, setUsername] = useState('');
   const [status, setStatus] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -222,8 +226,10 @@ export default function WebAuthComponent() {
         localStorage.setItem('authToken', result.token);
         localStorage.setItem('authUsername', username);
         setStatus(`✅ Login successful! Token stored.`);
+        onAuthSuccess?.();
       } else {
         setStatus('✅ Login successful!');
+        onAuthSuccess?.();
       }
     } catch (error) {
       setStatus(`❌ Login failed: ${error}`);
