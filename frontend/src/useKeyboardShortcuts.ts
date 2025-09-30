@@ -14,6 +14,7 @@ export interface ShortcutHandler {
 export function useKeyboardShortcuts(shortcuts: ShortcutHandler[], enabled: boolean = true) {
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
     if (!enabled) return;
+    if (!event.key) return;
 
     for (const shortcut of shortcuts) {
       const keyMatches = shortcut.key.toLowerCase() === event.key.toLowerCase();
