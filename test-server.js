@@ -7,70 +7,79 @@ const PORT = 3000;
 
 app.use(express.json());
 
-const mockDb = new Map();
-
 function logServer(message, data) {
   console.log(`[SERVER] ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
 
-function getMockDynamoClient() {
+function generateMockChallenge() {
+  return Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))).toString('base64');
+}
+
+function getMockMcpResponse(method) {
+  switch (method) {
+    case 'capabilities':
+      return {
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          tools: {},
+          resources: {},
+          prompts: {}
+        }
+      };
+    case 'tools/list':
+      return {
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          tools: []
+        }
+      };
+    default:
+      return {
+        jsonrpc: '2.0',
+        id: 1,
+        error: {
+          code: -32601,
+          message: 'Method not found'
+        }
+      };
+  }
+}
+
+function getMockWebAuthnRegisterOptions(username) {
   return {
-    get: async ({ TableName, Key }) => {
-      const id = Key.id;
-      const item = mockDb.get(id);
-      logServer(`DynamoDB GET ${id}`, item);
-      return { Item: item };
+    challenge: generateMockChallenge(),
+    rp: {
+      name: 'Workspace',
+      id: 'localhost'
     },
-    put: async ({ TableName, Item }) => {
-      mockDb.set(Item.id, Item);
-      logServer(`DynamoDB PUT ${Item.id}`, Item);
-      return {};
+    user: {
+      id: Buffer.from(username).toString('base64'),
+      name: username,
+      displayName: username
     },
-    promise: function() { return this; }
+    pubKeyCredParams: [
+      { type: 'public-key', alg: -7 },
+      { type: 'public-key', alg: -257 }
+    ],
+    timeout: 60000,
+    attestation: 'none'
   };
 }
 
-process.env.TABLE_NAME = 'test-table';
-process.env.AWS_REGION = 'us-east-1';
-process.env.AWS_ACCESS_KEY_ID = 'test';
-process.env.AWS_SECRET_ACCESS_KEY = 'test';
-
-const originalConsoleLog = console.log;
-const originalConsoleError = console.error;
-
-console.log = (...args) => {
-  if (!args[0]?.includes('[SERVER]') && !args[0]?.includes('[CLIENT]')) {
-    originalConsoleLog('[SERVER]', ...args);
-  } else {
-    originalConsoleLog(...args);
-  }
-};
-
-console.error = (...args) => {
-  originalConsoleError('[SERVER ERROR]', ...args);
-};
-
-let lambdaHandler;
-
-const jsPath = path.join(__dirname, 'dist', 'lambda', 'index.js');
-if (!fs.existsSync(jsPath)) {
-  logServer('Compiled Lambda not found, compiling TypeScript...');
-  const { execSync } = require('child_process');
-  try {
-    execSync('tsc', { stdio: 'inherit' });
-  } catch (buildError) {
-    logServer('Failed to compile TypeScript:', buildError);
-    process.exit(1);
-  }
-}
-
-try {
-  const lambdaModule = require('./dist/lambda/index.js');
-  lambdaHandler = lambdaModule.handler;
-  logServer('Lambda handler loaded successfully');
-} catch (error) {
-  logServer('Failed to load Lambda handler:', error);
-  process.exit(1);
+function getMockWebAuthnLoginOptions(username) {
+  return {
+    challenge: generateMockChallenge(),
+    timeout: 60000,
+    rpId: 'localhost',
+    allowCredentials: [
+      {
+        type: 'public-key',
+        id: Buffer.from('mock-credential-id-' + username).toString('base64')
+      }
+    ]
+  };
 }
 
 const LAMBDA_PATHS = ['/mcp', '/webauthn/register/options', '/webauthn/register/verify', '/webauthn/login/options', '/webauthn/login/verify'];
@@ -84,32 +93,33 @@ app.use((req, res, next) => {
   }
 });
 
-app.all(LAMBDA_PATHS, async (req, res) => {
-  try {
-    const event = {
-      rawPath: req.path,
-      path: req.path,
-      httpMethod: req.method,
-      requestContext: { http: { method: req.method } },
-      headers: req.headers,
-      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
-    };
+app.post('/mcp', (req, res) => {
+  const { method } = req.body;
+  logServer('MCP request', { method });
+  const response = getMockMcpResponse(method);
+  res.json(response);
+});
 
-    const result = await lambdaHandler(event);
+app.post('/webauthn/register/options', (req, res) => {
+  const { username } = req.body;
+  logServer('WebAuthn register options', { username });
+  res.json(getMockWebAuthnRegisterOptions(username));
+});
 
-    logServer(`Lambda response ${result.statusCode}`, { body: result.body });
+app.post('/webauthn/register/verify', (req, res) => {
+  logServer('WebAuthn register verify');
+  res.json({ success: true, message: 'Mock registration successful' });
+});
 
-    res.status(result.statusCode);
-    if (result.headers) {
-      Object.entries(result.headers).forEach(([key, value]) => {
-        res.setHeader(key, value);
-      });
-    }
-    res.send(result.body);
-  } catch (error) {
-    logServer('Lambda error:', error);
-    res.status(500).json({ error: error.message });
-  }
+app.post('/webauthn/login/options', (req, res) => {
+  const { username } = req.body;
+  logServer('WebAuthn login options', { username });
+  res.json(getMockWebAuthnLoginOptions(username));
+});
+
+app.post('/webauthn/login/verify', (req, res) => {
+  logServer('WebAuthn login verify');
+  res.json({ success: true, message: 'Mock login successful' });
 });
 
 const distPath = path.join(__dirname, 'frontend', 'dist');

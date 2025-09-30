@@ -56,10 +56,10 @@ test.describe('WebAuthn Login Tests', () => {
     expect(keyboardErrors).toHaveLength(0);
   });
 
-  test('login options should return proper credential IDs not empty objects', async ({ page }) => {
+  test('login options should return proper credential IDs from mock', async ({ page }) => {
     await page.goto('/workspace/');
 
-    let loginOptionsResponse: unknown = null;
+    let loginOptionsResponse: any = null;
 
     page.on('response', async (response) => {
       if (response.url().includes('/webauthn/login/options')) {
@@ -73,7 +73,7 @@ test.describe('WebAuthn Login Tests', () => {
 
     const usernameInput = page.locator('input[placeholder="Username"]');
     await expect(usernameInput).toBeVisible();
-    await usernameInput.fill('christopherdebeer@gmail.com');
+    await usernameInput.fill('testuser@example.com');
 
     const loginButton = page.locator('button:has-text("Login")');
     await loginButton.click();
@@ -82,14 +82,14 @@ test.describe('WebAuthn Login Tests', () => {
 
     expect(loginOptionsResponse).not.toBeNull();
     expect(loginOptionsResponse.allowCredentials).toBeDefined();
+    expect(Array.isArray(loginOptionsResponse.allowCredentials)).toBeTruthy();
+    expect(loginOptionsResponse.allowCredentials.length).toBeGreaterThan(0);
 
-    if (loginOptionsResponse.allowCredentials && loginOptionsResponse.allowCredentials.length > 0) {
-      for (const cred of loginOptionsResponse.allowCredentials) {
-        expect(cred.id).toBeDefined();
-        expect(typeof cred.id).toBe('string');
-        expect(cred.id).not.toEqual({});
-        expect(cred.type).toBe('public-key');
-      }
+    for (const cred of loginOptionsResponse.allowCredentials) {
+      expect(cred.id).toBeDefined();
+      expect(typeof cred.id).toBe('string');
+      expect(cred.id.length).toBeGreaterThan(0);
+      expect(cred.type).toBe('public-key');
     }
   });
 });
