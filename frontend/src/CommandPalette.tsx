@@ -169,6 +169,7 @@ const CommandPalette = forwardRef<CommandPaletteRef, Props>(({ registry = comman
   const [active, setActive] = useState(0);
   const [commandSuggestions, setCommandSuggestions] = useState<CommandSuggestion[]>([]);
   const [lastExecutedCommand, setLastExecutedCommand] = useState<Command | null>(null);
+  const [registryVersion, setRegistryVersion] = useState(registry.getVersion());
   const inputRef = useRef<HTMLInputElement>(null);
 
   useImperativeHandle(ref, () => ({
@@ -177,7 +178,17 @@ const CommandPalette = forwardRef<CommandPaletteRef, Props>(({ registry = comman
     }
   }));
 
-  const commands = useMemo(() => registry.getCommands(), [registry]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const currentVersion = registry.getVersion();
+      if (currentVersion !== registryVersion) {
+        setRegistryVersion(currentVersion);
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, [registry, registryVersion]);
+
+  const commands = useMemo(() => registry.getCommands(), [registry, registryVersion]);
 
   const fuse = useMemo(
     () => new Fuse(commands, { 

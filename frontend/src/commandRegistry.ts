@@ -38,18 +38,21 @@ export interface Command {
 export class CommandRegistry {
   private commands = new Map<string, Command>();
   private categories = new Set<string>();
+  private version = 0;
 
   register(command: Command): void {
     this.commands.set(command.id, command);
     if (command.category) {
       this.categories.add(command.category);
     }
+    this.version++;
   }
 
   unregister(id: string): void {
     const command = this.commands.get(id);
     if (command) {
       this.commands.delete(id);
+      this.version++;
       // Note: We don't remove categories as other commands might use them
     }
   }
@@ -93,6 +96,10 @@ export class CommandRegistry {
 
   getCommand(id: string): Command | undefined {
     return this.commands.get(id);
+  }
+
+  getVersion(): number {
+    return this.version;
   }
 
   searchCommands(query: string, context?: CommandContext): Command[] {
