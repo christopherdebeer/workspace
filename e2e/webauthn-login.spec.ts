@@ -59,26 +59,20 @@ test.describe('WebAuthn Login Tests', () => {
   test('login options should return proper credential IDs from mock', async ({ page }) => {
     await page.goto('/workspace/');
 
-    let loginOptionsResponse: any = null;
-
-    page.on('response', async (response) => {
-      if (response.url().includes('/webauthn/login/options')) {
-        try {
-          loginOptionsResponse = await response.json();
-        } catch (e) {
-          console.error('Failed to parse login options response', e);
-        }
-      }
-    });
-
     const usernameInput = page.locator('input[placeholder="Username"]');
     await expect(usernameInput).toBeVisible();
     await usernameInput.fill('testuser@example.com');
 
     const loginButton = page.locator('button:has-text("Login")');
+
+    const responsePromise = page.waitForResponse(
+      response => response.url().includes('/webauthn/login/options') && response.status() === 200
+    );
+
     await loginButton.click();
 
-    await page.waitForTimeout(2000);
+    const response = await responsePromise;
+    const loginOptionsResponse = await response.json();
 
     expect(loginOptionsResponse).not.toBeNull();
     expect(loginOptionsResponse.allowCredentials).toBeDefined();
