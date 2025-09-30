@@ -4,38 +4,61 @@ import { Fido2Lib } from 'fido2-lib';
 import crypto from 'crypto';
 
 const db = new DynamoDB.DocumentClient();
-const TABLE_NAME = process.env.TABLE_NAME ?? '';
+const TABLE_NAME = process.env.TABLE_NAME ?? ''; // Auth table for WebAuthn and tokens
+const KV_TABLE_NAME = process.env.KV_TABLE_NAME ?? ''; // User KV store table
 
-const DYNAMO_TOOL: Tool = {
-  name: 'dynamodb',
-  description: 'Get or put an item in the DynamoDB table',
+// KV Store Tool - exposed via MCP with per-user namespacing
+// This tool ONLY accesses the KV table, NOT the auth table
+const KV_STORE_TOOL: Tool = {
+  name: 'kvstore',
+  description: 'Get or put an item in your personal key-value store. Keys are automatically namespaced per user.',
   inputSchema: {
     type: 'object',
     properties: {
       action: { type: 'string', enum: ['get', 'put'] },
-      key: { type: 'object' },
-      item: { type: 'object' },
+      key: { type: 'string', description: 'Key for the item (will be automatically namespaced per user)' },
+      value: { type: 'object', description: 'Value to store (for put action)' },
     },
-    required: ['action'],
+    required: ['action', 'key'],
   },
   outputSchema: { type: 'object' },
-  async call(args: { action: string; key?: any; item?: any }) {
+  async call(args: { action: string; key?: string; value?: any }, username?: string) {
+    if (!username) {
+      return { content: [{ type: 'text', text: 'Unauthorized: No username provided' }], isError: true };
+    }
+
+    if (!args.key) {
+      return { content: [{ type: 'text', text: 'Missing key' }], isError: true };
+    }
+
+    // Enforce per-user namespacing: prefix all keys with username
+    const namespacedKey = `user:${username}:${args.key}`;
+
     switch (args.action) {
       case 'get': {
-        if (!args.key) {
-          return { content: [{ type: 'text', text: 'Missing key' }], isError: true };
-        }
-        const data = await db.get({ TableName: TABLE_NAME, Key: args.key }).promise();
+        const data = await db.get({
+          TableName: KV_TABLE_NAME,
+          Key: { id: namespacedKey }
+        }).promise();
         return {
-          content: [{ type: 'text', text: JSON.stringify(data.Item, null, 2) }],
-          structuredContent: data.Item ?? null,
+          content: [{ type: 'text', text: JSON.stringify(data.Item?.value ?? null, null, 2) }],
+          structuredContent: data.Item?.value ?? null,
         };
       }
       case 'put': {
-        if (!args.item) {
-          return { content: [{ type: 'text', text: 'Missing item' }], isError: true };
+        if (args.value === undefined) {
+          return { content: [{ type: 'text', text: 'Missing value' }], isError: true };
         }
-        await db.put({ TableName: TABLE_NAME, Item: args.item }).promise();
+        await db.put({
+          TableName: KV_TABLE_NAME,
+          Item: {
+            id: namespacedKey,
+            username,
+            key: args.key,
+            value: args.value,
+            updatedAt: Date.now()
+          }
+        }).promise();
         return { content: [{ type: 'text', text: 'OK' }], structuredContent: { ok: true } };
       }
       default:
@@ -44,7 +67,7 @@ const DYNAMO_TOOL: Tool = {
   },
 };
 
-tools.set(DYNAMO_TOOL.name, DYNAMO_TOOL);
+tools.set(KV_STORE_TOOL.name, KV_STORE_TOOL);
 
 // Helper function to extract origin and rpId from request headers
 function getOriginFromEvent(event: any): { origin: string; rpId: string } {
@@ -104,6 +127,29 @@ async function saveUser(user: UserRecord) {
   await db.put({ TableName: TABLE_NAME, Item: user }).promise();
 }
 
+// Token validation for protected endpoints
+async function validateBearerToken(authHeader: string | undefined): Promise<string | null> {
+  if (!authHeader?.startsWith('Bearer ')) return null;
+
+  const token = authHeader.substring(7);
+
+  try {
+    const { Item } = await db.get({
+      TableName: TABLE_NAME,
+      Key: { id: `token#${token}` }
+    }).promise();
+
+    if (!Item || Item.expiresAt < Date.now()) {
+      return null;
+    }
+
+    return Item.username;
+  } catch (error) {
+    console.error('Token validation error:', error);
+    return null;
+  }
+}
+
 
 interface JsonRpcRequest {
   jsonrpc: string;
@@ -131,7 +177,7 @@ function validateRequest(value: any): value is JsonRpcRequest {
   );
 }
 
-async function handleMcpRequest(req: unknown): Promise<JsonRpcResponse> {
+async function handleMcpRequest(req: unknown, username?: string): Promise<JsonRpcResponse> {
   if (!validateRequest(req)) {
     return {
       jsonrpc: '2.0',
@@ -184,7 +230,8 @@ async function handleMcpRequest(req: unknown): Promise<JsonRpcResponse> {
         };
       }
       const callArgs = isObject(validReq.params.arguments) ? validReq.params.arguments : {};
-      const callResult = await tool.call(callArgs);
+      // Pass username to tool for user namespacing
+      const callResult = await tool.call(callArgs, username);
       return {
         jsonrpc: '2.0',
         id: validReq.id ?? null,
@@ -202,7 +249,7 @@ async function handleMcpRequest(req: unknown): Promise<JsonRpcResponse> {
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': 'https://www.christopherdebeer.com',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
 export async function handler(event: any): Promise<any> {
@@ -220,6 +267,20 @@ export async function handler(event: any): Promise<any> {
   }
 
   if (path === '/mcp' && method === 'POST') {
+    // Validate bearer token for MCP endpoint
+    const username = await validateBearerToken(event.headers?.authorization || event.headers?.Authorization);
+    if (!username) {
+      return {
+        statusCode: 401,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32000, message: 'Unauthorized: Valid bearer token required' },
+        }),
+      };
+    }
+
     let request: JsonRpcRequest;
     try {
       request = JSON.parse(event.body ?? '{}');
@@ -235,7 +296,7 @@ export async function handler(event: any): Promise<any> {
       };
     }
 
-    const response = await handleMcpRequest(request);
+    const response = await handleMcpRequest(request, username);
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json', ...CORS_HEADERS },
@@ -428,10 +489,26 @@ export async function handler(event: any): Promise<any> {
       cred.counter = result.authnrData.get('counter');
       delete user.challenge;
       await saveUser(user);
+
+      // Generate bearer token
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 hours
+
+      // Store token in auth table
+      await db.put({
+        TableName: TABLE_NAME,
+        Item: {
+          id: `token#${token}`,
+          username: user.username,
+          expiresAt,
+          createdAt: Date.now()
+        }
+      }).promise();
+
       return {
         statusCode: 200,
         headers: { 'content-type': 'application/json', ...CORS_HEADERS },
-        body: JSON.stringify({ ok: true }),
+        body: JSON.stringify({ ok: true, token, expiresAt }),
       };
     } catch (error) {
       console.error('WebAuthn login verify error:', error);

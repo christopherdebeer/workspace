@@ -22,9 +22,19 @@ export async function mcpRequest(
   params?: any,
   id: number | string = 1
 ): Promise<JsonRpcResponse> {
+  const token = localStorage.getItem('authToken');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  // Include bearer token if available
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   return fetchJson(mcpUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
   });
 }
