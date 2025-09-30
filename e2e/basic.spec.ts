@@ -13,8 +13,8 @@ test.describe('Basic Frontend Tests', () => {
   });
 });
 
-test.describe('Lambda Endpoint Tests', () => {
-  test('should respond to MCP capabilities request', async ({ request }) => {
+test.describe('Mock API Tests', () => {
+  test('should respond to MCP capabilities request with mock data', async ({ request }) => {
     const response = await request.post('/mcp', {
       data: {
         jsonrpc: '2.0',
@@ -30,7 +30,7 @@ test.describe('Lambda Endpoint Tests', () => {
     expect(data.result).toHaveProperty('prompts');
   });
 
-  test('should list available MCP tools', async ({ request }) => {
+  test('should list available MCP tools with mock data', async ({ request }) => {
     const response = await request.post('/mcp', {
       data: {
         jsonrpc: '2.0',
@@ -45,7 +45,7 @@ test.describe('Lambda Endpoint Tests', () => {
     expect(Array.isArray(data.result.tools)).toBeTruthy();
   });
 
-  test.skip('should handle WebAuthn registration options request', async ({ request }) => {
+  test('should handle WebAuthn registration options with mock data', async ({ request }) => {
     const response = await request.post('/webauthn/register/options', {
       data: {
         username: 'testuser',
@@ -56,5 +56,6 @@ test.describe('Lambda Endpoint Tests', () => {
     const data = await response.json();
     expect(data).toHaveProperty('challenge');
     expect(data).toHaveProperty('user');
+    expect(data.user.name).toBe('testuser');
   });
 });
