@@ -3,7 +3,7 @@ import { Command, commandRegistry } from './commandRegistry';
 
 export interface MacroStep {
   commandId: string;
-  args?: Record<string, any>;
+  args?: Record<string, string | number | boolean>;
   condition?: 'always' | 'on-success' | 'on-failure';
   description?: string;
 }
@@ -184,7 +184,7 @@ export const createMacro = (config: CommandMacro): CommandMacro => config;
 
 export const createMacroStep = (
   commandId: string,
-  args?: Record<string, any>,
+  args?: Record<string, string | number | boolean>,
   options?: {
     condition?: MacroStep['condition'];
     description?: string;

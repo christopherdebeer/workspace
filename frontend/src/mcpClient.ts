@@ -13,13 +13,13 @@ async function fetchJson(url: string, options: RequestInit) {
 export interface JsonRpcResponse {
   jsonrpc: string;
   id: number | string | null;
-  result?: any;
+  result?: unknown;
   error?: { code: number; message: string };
 }
 
 export async function mcpRequest(
   method: string,
-  params?: any,
+  params?: unknown,
   id: number | string = 1
 ): Promise<JsonRpcResponse> {
   const token = localStorage.getItem('authToken');
@@ -39,7 +39,7 @@ export async function mcpRequest(
   });
 }
 
-export async function callTool(name: string, args?: any) {
+export async function callTool(name: string, args?: unknown) {
   return mcpRequest('tools/call', { name, arguments: args });
 }
 

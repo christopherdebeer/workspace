@@ -16,7 +16,11 @@ jest.mock('fido2-lib', () => ({
 }));
 
 describe('WebAuthn Registration', () => {
-  let mockDb: any;
+  let mockDb: {
+    get: jest.Mock;
+    put: jest.Mock;
+    delete: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();

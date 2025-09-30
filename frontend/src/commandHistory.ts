@@ -87,9 +87,9 @@ export class CommandHistory {
     try {
       const stored = localStorage.getItem('commandHistory');
       if (stored) {
-        const parsed = JSON.parse(stored);
+        const parsed = JSON.parse(stored) as Array<Omit<HistoryEntry, 'timestamp'> & { timestamp: string }>;
         // Convert timestamp strings back to Date objects
-        this.history = parsed.map((entry: any) => ({
+        this.history = parsed.map((entry) => ({
           ...entry,
           timestamp: new Date(entry.timestamp)
         }));
