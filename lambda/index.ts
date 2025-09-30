@@ -414,7 +414,7 @@ export async function handler(event: any): Promise<any> {
       const { origin, rpId } = getOriginFromEvent(event);
       const dynamicFido = new Fido2Lib({ rpId, rpName: 'Workspace', challengeSize: 64 });
       const opts = await dynamicFido.assertionOptions();
-      opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: fromBase64Url(c.credId) }));
+      opts.allowCredentials = user.credentials.map((c) => ({ type: 'public-key', id: c.credId }));
       const challenge = toBase64Url(Buffer.from(opts.challenge as ArrayBuffer));
       user.challenge = challenge;
       await saveUser(user);
