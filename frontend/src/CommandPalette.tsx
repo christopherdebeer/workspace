@@ -40,15 +40,24 @@ const List = styled.ul`
   border: 1px solid #ccc;
   border-radius: 8px;
   overflow: hidden;
+  max-height: 400px;
+  overflow-y: auto;
 `;
 
 const Item = styled.li<{ active: boolean }>`
-  padding: 0.75rem 1rem;
+  padding: 1rem 1rem;
   border: 1px solid #ccc;
   border-top: none;
   background-color: ${({ active }) => (active ? '#f0f0f0' : '#fff')};
   cursor: pointer;
   transition: background-color 0.2s;
+  min-height: 48px;
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: #f0f0f0;
+    }
+  }
 `;
 
 const ItemContent = styled.div`
@@ -132,9 +141,11 @@ const SuggestionName = styled.span`
   font-weight: 500;
   color: #0c4a6e;
   cursor: pointer;
-  
-  &:hover {
-    text-decoration: underline;
+
+  @media (hover: hover) {
+    &:hover {
+      text-decoration: underline;
+    }
   }
 `;
 
@@ -142,6 +153,14 @@ const SuggestionReason = styled.span`
   font-size: 0.75rem;
   color: #0369a1;
   font-style: italic;
+`;
+
+const NoResults = styled.div`
+  padding: 1rem;
+  text-align: center;
+  color: #666;
+  font-size: 0.875rem;
+  background: #f8f9fa;
 `;
 
 const CommandPalette = forwardRef<CommandPaletteRef, Props>(({ registry = commandRegistry, onResult }, ref) => {
@@ -178,11 +197,13 @@ const CommandPalette = forwardRef<CommandPaletteRef, Props>(({ registry = comman
     const results = fuse.search(value.trim());
     setSuggestions(results.map((r) => r.item));
     setActive(0);
-    // Clear command suggestions when user starts typing
-    if (commandSuggestions.length > 0) {
+  }, [value, commands, fuse]);
+
+  useEffect(() => {
+    if (value.trim() && commandSuggestions.length > 0) {
       setCommandSuggestions([]);
     }
-  }, [value, commands, fuse, commandSuggestions.length]);
+  }, [value, commandSuggestions.length]);
 
   const runCommand = async (cmd: Command, argsString: string) => {
     let result: string = '';
@@ -253,28 +274,37 @@ const CommandPalette = forwardRef<CommandPaletteRef, Props>(({ registry = comman
           }
         }}
       />
-      {suggestions.length > 0 && (
+      {(suggestions.length > 0 || value.trim()) && (
         <List>
-          {suggestions.map((s, i) => (
-            <Item
-              key={s.id}
-              active={i === active}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setActive(i);
-                handleRun(i);
-              }}
-              onMouseEnter={() => setActive(i)}
-            >
-              <ItemContent>
-                <ItemHeader>
-                  <strong>{s.name}</strong>
-                  {s.category && <Category>{s.category}</Category>}
-                </ItemHeader>
-                <Description>{s.description}</Description>
-              </ItemContent>
-            </Item>
-          ))}
+          {suggestions.length > 0 ? (
+            suggestions.map((s, i) => (
+              <Item
+                key={s.id}
+                active={i === active}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setActive(i);
+                  handleRun(i);
+                }}
+                onTouchEnd={(e) => {
+                  e.preventDefault();
+                  setActive(i);
+                  handleRun(i);
+                }}
+                onMouseEnter={() => setActive(i)}
+              >
+                <ItemContent>
+                  <ItemHeader>
+                    <strong>{s.name}</strong>
+                    {s.category && <Category>{s.category}</Category>}
+                  </ItemHeader>
+                  <Description>{s.description}</Description>
+                </ItemContent>
+              </Item>
+            ))
+          ) : (
+            <NoResults>No matching commands found. Try a different search term.</NoResults>
+          )}
         </List>
       )}
       
