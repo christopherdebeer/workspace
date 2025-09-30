@@ -3,7 +3,7 @@ export interface Tool {
   description: string;
   inputSchema: any;
   outputSchema: any;
-  call(args: any): Promise<any>;
+  call(args: any, username?: string): Promise<any>;
 }
 
 export const tools = new Map<string, Tool>();

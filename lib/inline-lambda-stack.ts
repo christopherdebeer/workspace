@@ -9,9 +9,16 @@ export class InlineLambdaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Update existing table to use 'id' partition key (Lambda requirement)
+    // Auth table for WebAuthn credentials and tokens
     // Keep same construct ID 'Table' for backward compatibility
-    const table = new dynamodb.Table(this, 'Table', {
+    const authTable = new dynamodb.Table(this, 'Table', {
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT for production
+    });
+
+    // User KV store table - separate from auth data for security
+    // This table is exposed via MCP with per-user namespacing
+    const kvTable = new dynamodb.Table(this, 'KVStoreTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       removalPolicy: cdk.RemovalPolicy.DESTROY, // NOT for production
     });
@@ -25,7 +32,8 @@ export class InlineLambdaStack extends cdk.Stack {
       entry: path.join(__dirname, '..', '..', 'lambda', 'index.ts'),
       handler: 'handler',
       environment: {
-        TABLE_NAME: table.tableName,
+        TABLE_NAME: authTable.tableName,
+        KV_TABLE_NAME: kvTable.tableName,
       },
       bundling: {
         // Remove aws-sdk from external modules to bundle it for Node.js 20
@@ -33,8 +41,9 @@ export class InlineLambdaStack extends cdk.Stack {
       },
     });
 
-    // Grant Lambda permissions to read/write DynamoDB table
-    table.grantReadWriteData(fn);
+    // Grant Lambda permissions to read/write both tables
+    authTable.grantReadWriteData(fn);
+    kvTable.grantReadWriteData(fn);
 
     // Add Function URL for HTTP access
     const fnUrl = fn.addFunctionUrl({

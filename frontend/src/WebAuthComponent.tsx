@@ -216,7 +216,15 @@ export default function WebAuthComponent() {
         throw new Error(`Login failed: ${verifyRes.status}`);
       }
 
-      setStatus('✅ Login successful!');
+      const result = await verifyRes.json();
+      if (result.ok && result.token) {
+        // Store token in localStorage for authenticated requests
+        localStorage.setItem('authToken', result.token);
+        localStorage.setItem('authUsername', username);
+        setStatus(`✅ Login successful! Token stored.`);
+      } else {
+        setStatus('✅ Login successful!');
+      }
     } catch (error) {
       setStatus(`❌ Login failed: ${error}`);
     } finally {
