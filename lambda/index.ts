@@ -252,6 +252,10 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+function generateAuthorizationCode(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
 export async function handler(event: any): Promise<any> {
   console.log('Request:', event);
   const path = event.rawPath || event.path || '/';
@@ -429,6 +433,137 @@ export async function handler(event: any): Promise<any> {
         statusCode: 500,
         headers: { 'content-type': 'application/json', ...CORS_HEADERS },
         body: JSON.stringify({ error: 'Failed to generate login options', details: (error as Error).message }),
+      };
+    }
+  }
+
+  if (path === '/oauth/authorize' && method === 'GET') {
+    const queryParams = event.queryStringParameters || {};
+    const clientId = queryParams.client_id;
+    const redirectUri = queryParams.redirect_uri;
+    const state = queryParams.state;
+    const username = queryParams.username;
+    const token = queryParams.token;
+
+    if (!clientId || !redirectUri) {
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'text/html', ...CORS_HEADERS },
+        body: '<html><body><h1>Error</h1><p>Missing client_id or redirect_uri</p></body></html>',
+      };
+    }
+
+    if (username && token) {
+      const validUsername = await validateBearerToken(`Bearer ${token}`);
+      if (validUsername === username) {
+        const authCode = generateAuthorizationCode();
+        const expiresAt = Date.now() + (10 * 60 * 1000);
+
+        await db.put({
+          TableName: TABLE_NAME,
+          Item: {
+            id: `authcode#${authCode}`,
+            username,
+            clientId,
+            redirectUri,
+            expiresAt,
+            createdAt: Date.now()
+          }
+        }).promise();
+
+        const redirectUrl = new URL(redirectUri);
+        redirectUrl.searchParams.set('code', authCode);
+        if (state) redirectUrl.searchParams.set('state', state);
+
+        return {
+          statusCode: 302,
+          headers: {
+            'Location': redirectUrl.toString(),
+            ...CORS_HEADERS
+          },
+          body: '',
+        };
+      }
+    }
+
+    const authPageUrl = `https://www.christopherdebeer.com/oauth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
+    return {
+      statusCode: 302,
+      headers: {
+        'Location': authPageUrl,
+        ...CORS_HEADERS
+      },
+      body: '',
+    };
+  }
+
+  if (path === '/oauth/token' && method === 'POST') {
+    try {
+      const body = JSON.parse(event.body ?? '{}');
+      const { code, client_id, redirect_uri, grant_type } = body;
+
+      if (grant_type !== 'authorization_code') {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'unsupported_grant_type' }),
+        };
+      }
+
+      if (!code || !client_id || !redirect_uri) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'invalid_request' }),
+        };
+      }
+
+      const { Item } = await db.get({
+        TableName: TABLE_NAME,
+        Key: { id: `authcode#${code}` }
+      }).promise();
+
+      if (!Item || Item.expiresAt < Date.now() || Item.clientId !== client_id || Item.redirectUri !== redirect_uri) {
+        return {
+          statusCode: 400,
+          headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+          body: JSON.stringify({ error: 'invalid_grant' }),
+        };
+      }
+
+      await db.delete({
+        TableName: TABLE_NAME,
+        Key: { id: `authcode#${code}` }
+      }).promise();
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = Date.now() + (24 * 60 * 60 * 1000);
+
+      await db.put({
+        TableName: TABLE_NAME,
+        Item: {
+          id: `token#${token}`,
+          username: Item.username,
+          expiresAt,
+          createdAt: Date.now()
+        }
+      }).promise();
+
+      return {
+        statusCode: 200,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({
+          access_token: token,
+          token_type: 'Bearer',
+          expires_in: 86400
+        }),
+      };
+    } catch (error) {
+      console.error('OAuth token error:', error);
+      return {
+        statusCode: 500,
+        headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+        body: JSON.stringify({ error: 'server_error' }),
       };
     }
   }
