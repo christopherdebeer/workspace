@@ -176,7 +176,7 @@ export default function WebAuthComponent() {
         challenge: base64UrlToBuffer(options.challenge),
         allowCredentials: options.allowCredentials?.map((cred: any) => ({
           ...cred,
-          id: base64UrlToBuffer(cred.id),
+          id: typeof cred.id === 'string' ? base64UrlToBuffer(cred.id) : cred.id,
         })),
       };
 
