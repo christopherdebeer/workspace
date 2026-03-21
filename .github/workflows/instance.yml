@@ -11,6 +11,9 @@ on:
           - status
           - start
           - stop
+          - reboot
+          - terminate
+          - logs
 
 permissions:
   id-token: write
@@ -38,11 +41,10 @@ jobs:
         run: |
           case "${{ inputs.action }}" in
             status)
-              aws ec2 describe-instance-status \
+              aws ec2 describe-instances \
                 --instance-ids ${{ steps.instance.outputs.id }} \
-                --include-all-instances \
-                --query 'InstanceStatuses[0].InstanceState.Name' \
-                --output text
+                --query 'Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,LaunchTime:LaunchTime,InstanceType:InstanceType}' \
+                --output table
               ;;
             start)
               aws ec2 start-instances --instance-ids ${{ steps.instance.outputs.id }}
@@ -51,5 +53,19 @@ jobs:
             stop)
               aws ec2 stop-instances --instance-ids ${{ steps.instance.outputs.id }}
               echo "Stopping instance."
+              ;;
+            reboot)
+              aws ec2 reboot-instances --instance-ids ${{ steps.instance.outputs.id }}
+              echo "Rebooting instance."
+              ;;
+            terminate)
+              aws ec2 terminate-instances --instance-ids ${{ steps.instance.outputs.id }}
+              echo "Instance terminated. Run 'Deploy CDK' workflow to provision a new one."
+              ;;
+            logs)
+              aws ec2 get-console-output \
+                --instance-id ${{ steps.instance.outputs.id }} \
+                --latest \
+                --query 'Output' --output text
               ;;
           esac

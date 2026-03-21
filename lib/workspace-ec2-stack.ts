@@ -95,5 +95,17 @@ export class WorkspaceEc2Stack extends cdk.Stack {
     new cdk.CfnOutput(this, 'InstanceId', {
       value: instance.instanceId,
     });
+    new cdk.CfnOutput(this, 'AvailabilityZone', {
+      value: instance.instanceAvailabilityZone,
+    });
+    new cdk.CfnOutput(this, 'SecurityGroupId', {
+      value: sg.securityGroupId,
+    });
+    new cdk.CfnOutput(this, 'RoleArn', {
+      value: role.roleArn,
+    });
+    new cdk.CfnOutput(this, 'DataVolumeId', {
+      value: dataVolume.volumeId,
+    });
   }
 }
