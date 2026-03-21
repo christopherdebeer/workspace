@@ -57,6 +57,15 @@ TS_AUTH_KEY=$(aws ssm get-parameter \
 tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace --ssh
 
 # ============================================================
+# SSH authorized key (@c15r)
+# ============================================================
+sudo -u ubuntu mkdir -p /home/ubuntu/.ssh
+chmod 700 /home/ubuntu/.ssh
+echo 'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBJlPZ/bLdWOIdsDHSTuOEhPcA0tlGZzjHAIeKK8C6o88I6LG10MsW3IOXly6leQxWDJZS6Va8XcYGcxuCkPN/94= #ssh.id - @c15r' >> /home/ubuntu/.ssh/authorized_keys
+chmod 600 /home/ubuntu/.ssh/authorized_keys
+chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+
+# ============================================================
 # Claude Code auth
 # ============================================================
 CLAUDE_TOKEN=$(aws ssm get-parameter \
