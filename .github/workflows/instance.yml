@@ -20,6 +20,10 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  STACK_NAME: WorkspaceEc2Stack
+  AWS_REGION: eu-west-2
+
 jobs:
   manage:
     runs-on: ubuntu-latest
@@ -30,45 +34,124 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::018159942401:role/c15r-workspace-github
-          aws-region: eu-west-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Get Instance ID
         id: instance
         run: |
           INSTANCE_ID=$(aws cloudformation describe-stacks \
-            --stack-name WorkspaceEc2Stack \
+            --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
             --output text)
           echo "id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
+      # ================================================================
+      # status — EC2 info + live diagnostics via SSM
+      # ================================================================
       - name: Status
         if: inputs.action == 'status'
         run: |
-          INFO=$(aws ec2 describe-instances \
-            --instance-ids ${{ steps.instance.outputs.id }} \
-            --query 'Reservations[0].Instances[0]' \
-            --output json)
+          IID="${{ steps.instance.outputs.id }}"
+          mkdir -p /tmp/status
+
+          # -- EC2 metadata --
+          INFO=$(aws ec2 describe-instances --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0]' --output json)
 
           STATE=$(echo "$INFO" | jq -r '.State.Name')
-          IP=$(echo "$INFO" | jq -r '.PublicIpAddress // "none"')
+          IP=$(echo "$INFO" | jq -r '.PublicIpAddress // "—"')
           TYPE=$(echo "$INFO" | jq -r '.InstanceType')
           LAUNCH=$(echo "$INFO" | jq -r '.LaunchTime')
           AZ=$(echo "$INFO" | jq -r '.Placement.AvailabilityZone')
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ## Workspace Instance Status
+          ## Workspace Instance
 
           | Property | Value |
           |----------|-------|
-          | **Instance ID** | \`${{ steps.instance.outputs.id }}\` |
-          | **State** | \`$STATE\` |
-          | **Public IP** | \`$IP\` |
-          | **Instance Type** | \`$TYPE\` |
-          | **Availability Zone** | \`$AZ\` |
-          | **Launch Time** | \`$LAUNCH\` |
-          | **Tailscale** | \`claude-workspace\` |
+          | Instance ID | \`$IID\` |
+          | State | \`$STATE\` |
+          | Public IP | \`$IP\` |
+          | Type | \`$TYPE\` |
+          | AZ | \`$AZ\` |
+          | Launched | \`$LAUNCH\` |
           EOF
 
+          echo "$INFO" > /tmp/status/ec2-describe.json
+
+          # -- Live diagnostics via SSM (only if running) --
+          if [ "$STATE" != "running" ]; then
+            echo "> Instance is **$STATE** — skipping live diagnostics." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          DIAG_SCRIPT='
+          echo "=== cloud-init ==="
+          cloud-init status --long 2>&1 || true
+          echo ""
+          echo "=== tailscale ==="
+          tailscale status 2>&1 || echo "tailscale: not running or not installed"
+          echo ""
+          echo "=== services ==="
+          for svc in workspace-boot tailscaled docker; do
+            printf "%-20s %s\n" "$svc" "$(systemctl is-active $svc 2>/dev/null || echo not-found)"
+          done
+          echo ""
+          echo "=== disk ==="
+          df -h /home/ubuntu/work 2>/dev/null || echo "/home/ubuntu/work not mounted"
+          echo ""
+          echo "=== uptime ==="
+          uptime
+          '
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$IID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[\"bash -c '$DIAG_SCRIPT'\"]" \
+            --timeout-seconds 30 \
+            --query 'Command.CommandId' --output text)
+
+          # Wait for result
+          for i in $(seq 1 12); do
+            S=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" --instance-id "$IID" \
+              --query 'Status' --output text 2>/dev/null || echo "Pending")
+            case "$S" in Success|Failed|TimedOut|Cancelled) break ;; esac
+            sleep 5
+          done
+
+          RESULT=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" --instance-id "$IID" --output json)
+
+          echo "$RESULT" | jq -r '.StandardOutputContent' > /tmp/status/diagnostics.txt
+          echo "$RESULT" | jq -r '.StandardErrorContent' > /tmp/status/diagnostics-stderr.txt
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Live Diagnostics" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/status/diagnostics.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -s /tmp/status/diagnostics-stderr.txt ]; then
+            echo '<details><summary>stderr</summary>' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/status/diagnostics-stderr.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo '</details>' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload status artifact
+        if: inputs.action == 'status' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instance-status
+          path: /tmp/status/
+          retention-days: 7
+
+      # ================================================================
+      # start
+      # ================================================================
       - name: Start
         if: inputs.action == 'start'
         run: |
@@ -77,19 +160,21 @@ jobs:
 
           IP=$(aws ec2 describe-instances \
             --instance-ids ${{ steps.instance.outputs.id }} \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Instance Started
 
           | Property | Value |
           |----------|-------|
-          | **Instance ID** | \`${{ steps.instance.outputs.id }}\` |
-          | **Public IP** | \`$IP\` |
-          | **Tailscale** | \`claude-workspace\` |
+          | Instance ID | \`${{ steps.instance.outputs.id }}\` |
+          | Public IP | \`$IP\` |
+          | Tailscale | \`claude-workspace\` |
           EOF
 
+      # ================================================================
+      # stop / reboot / terminate
+      # ================================================================
       - name: Stop
         if: inputs.action == 'stop'
         run: |
@@ -114,68 +199,148 @@ jobs:
           Run the **Deploy CDK** workflow to provision a new instance.
           EOF
 
+      # ================================================================
+      # logs — console output + cloud-init logs via SSM
+      # ================================================================
       - name: Logs
         if: inputs.action == 'logs'
         run: |
-          aws ec2 get-console-output \
-            --instance-id ${{ steps.instance.outputs.id }} \
-            --latest \
-            --query 'Output' --output text > /tmp/console.log
+          IID="${{ steps.instance.outputs.id }}"
+          mkdir -p /tmp/logs
 
-          # Summary: last 80 lines
-          echo "## Console Output (last 80 lines)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -80 /tmp/console.log >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # -- Serial console output --
+          aws ec2 get-console-output \
+            --instance-id "$IID" --latest \
+            --query 'Output' --output text > /tmp/logs/console.log
+
+          # -- Extract cloud-init errors from console --
+          echo "## Cloud-init Summary" >> "$GITHUB_STEP_SUMMARY"
+
+          if grep -q "Workspace provisioning complete" /tmp/logs/console.log; then
+            echo "> Provisioning completed successfully." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "> **Provisioning did NOT complete.** Check logs for errors." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Show errors/warnings
+          if grep -iE '(ERROR|FAIL|WARNING|fatal|Traceback)' /tmp/logs/console.log > /tmp/logs/errors.txt 2>/dev/null; then
+            echo "### Errors & Warnings" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/logs/errors.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Show user-data script output (lines after modules:final)
+          if sed -n '/modules:final/,$p' /tmp/logs/console.log > /tmp/logs/user-data-output.txt 2>/dev/null && [ -s /tmp/logs/user-data-output.txt ]; then
+            echo "### User-data Script Output" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/logs/user-data-output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Console (last 80 lines)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -80 /tmp/logs/console.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # -- Live cloud-init + tailscale logs via SSM (if reachable) --
+          STATE=$(aws ec2 describe-instances --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text)
+
+          if [ "$STATE" = "running" ]; then
+            LOG_SCRIPT='
+            echo "=== cloud-init status ==="
+            cloud-init status --long 2>&1 || true
+            echo ""
+            echo "=== /var/log/cloud-init-output.log (last 100 lines) ==="
+            tail -100 /var/log/cloud-init-output.log 2>/dev/null || echo "not found"
+            echo ""
+            echo "=== tailscale status ==="
+            tailscale status 2>&1 || echo "not running or not installed"
+            echo ""
+            echo "=== journalctl tailscaled (last 30 lines) ==="
+            journalctl -u tailscaled --no-pager -n 30 2>/dev/null || echo "no logs"
+            echo ""
+            echo "=== journalctl cloud-init (errors only) ==="
+            journalctl -u cloud-init --no-pager -p err 2>/dev/null || echo "no errors"
+            '
+
+            COMMAND_ID=$(aws ssm send-command \
+              --instance-ids "$IID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters "commands=[\"bash -c '$LOG_SCRIPT'\"]" \
+              --timeout-seconds 30 \
+              --query 'Command.CommandId' --output text 2>/dev/null) || true
+
+            if [ -n "$COMMAND_ID" ]; then
+              for i in $(seq 1 12); do
+                S=$(aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" --instance-id "$IID" \
+                  --query 'Status' --output text 2>/dev/null || echo "Pending")
+                case "$S" in Success|Failed|TimedOut|Cancelled) break ;; esac
+                sleep 5
+              done
+
+              RESULT=$(aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" --instance-id "$IID" --output json 2>/dev/null) || true
+
+              if [ -n "$RESULT" ]; then
+                echo "$RESULT" | jq -r '.StandardOutputContent' > /tmp/logs/ssm-diagnostics.txt
+                echo "$RESULT" | jq -r '.StandardErrorContent' > /tmp/logs/ssm-diagnostics-stderr.txt
+
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "### Live Instance Logs (via SSM)" >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+                cat /tmp/logs/ssm-diagnostics.txt >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          fi
 
       - name: Upload logs artifact
-        if: inputs.action == 'logs'
+        if: inputs.action == 'logs' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: console-log
-          path: /tmp/console.log
+          name: instance-logs
+          path: /tmp/logs/
           retention-days: 7
 
+      # ================================================================
+      # provision — re-run user-data.sh via SSM
+      # ================================================================
       - name: Provision
         if: inputs.action == 'provision'
         run: |
-          # Send user-data.sh to the running instance via SSM
+          IID="${{ steps.instance.outputs.id }}"
+          mkdir -p /tmp/provision
+
           COMMAND_ID=$(aws ssm send-command \
-            --instance-ids ${{ steps.instance.outputs.id }} \
+            --instance-ids "$IID" \
             --document-name "AWS-RunShellScript" \
             --parameters "{\"commands\":[$(jq -Rs '.' scripts/user-data.sh)]}" \
             --timeout-seconds 600 \
-            --query 'Command.CommandId' \
-            --output text)
+            --query 'Command.CommandId' --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
 
           # Poll for completion
           while true; do
             STATUS=$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id ${{ steps.instance.outputs.id }} \
+              --command-id "$COMMAND_ID" --instance-id "$IID" \
               --query 'Status' --output text 2>/dev/null || echo "Pending")
-
-            case "$STATUS" in
-              Success|Failed|TimedOut|Cancelled)
-                break
-                ;;
-            esac
+            case "$STATUS" in Success|Failed|TimedOut|Cancelled) break ;; esac
             sleep 5
           done
 
           # Capture output
           RESULT=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ steps.instance.outputs.id }} \
-            --output json)
+            --command-id "$COMMAND_ID" --instance-id "$IID" --output json)
 
-          STDOUT=$(echo "$RESULT" | jq -r '.StandardOutputContent')
-          STDERR=$(echo "$RESULT" | jq -r '.StandardErrorContent')
-
-          echo "$STDOUT" > /tmp/provision-stdout.log
-          echo "$STDERR" > /tmp/provision-stderr.log
+          echo "$RESULT" | jq -r '.StandardOutputContent' > /tmp/provision/stdout.log
+          echo "$RESULT" | jq -r '.StandardErrorContent' > /tmp/provision/stderr.log
 
           # Write summary
           if [ "$STATUS" = "Success" ]; then
@@ -184,16 +349,29 @@ jobs:
             echo "## Provision Failed (status: $STATUS)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          echo '### stdout (last 60 lines)' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Show errors first if any
+          if grep -iE '(ERROR|FAIL|fatal|Traceback)' /tmp/provision/stderr.log > /tmp/provision/errors.txt 2>/dev/null; then
+            echo "### Errors" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/provision/errors.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo '### Output (last 60 lines)' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -60 /tmp/provision-stdout.log >> "$GITHUB_STEP_SUMMARY"
+          tail -60 /tmp/provision/stdout.log >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -s /tmp/provision-stderr.log ]; then
-            echo '### stderr (last 30 lines)' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s /tmp/provision/stderr.log ]; then
+            echo '<details><summary>Full stderr</summary>' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            tail -30 /tmp/provision-stderr.log >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/provision/stderr.log >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo '</details>' >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # Fail the job if provision failed
@@ -204,5 +382,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: provision-logs
-          path: /tmp/provision-*.log
+          path: /tmp/provision/
           retention-days: 7
