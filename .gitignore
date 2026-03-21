@@ -138,3 +138,7 @@ dist
 .pnp.*
 cdk-outputs.json
 cdk.out/
+
+# Playwright
+test-results/
+playwright-report/

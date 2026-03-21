@@ -4,8 +4,8 @@
 AWS CDK infrastructure as code definitions. This folder contains all infrastructure stack definitions.
 
 ## Files
-- `workspace-stack.ts` - Main application stack with Lambda, DynamoDB, and API Gateway
-- `inline-lambda-stack.ts` - Stack for inline Lambda function deployments
+- `inline-lambda-stack.ts` - Serverless backend: Lambda + DynamoDB (auth & KV tables), Function URL
+- `workspace-ec2-stack.ts` - Compute: EC2 (t3.medium Ubuntu 24.04), 100GB data volume, Tailscale-only access
 
 ## Conventions
 - Use AWS CDK L2 constructs whenever possible
