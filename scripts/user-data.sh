@@ -14,8 +14,30 @@ apt-get install -y \
 # ============================================================
 # Mount data volume
 # ============================================================
-DATA_DEVICE="/dev/xvdf"
 DATA_MOUNT="/home/ubuntu/work"
+
+# On Nitro instances (t3, etc.) /dev/xvdf appears as /dev/nvme1n1
+# Wait up to 60s for the volume to be attached by CloudFormation
+echo "Waiting for data volume to appear..."
+TRIES=0
+DATA_DEVICE=""
+while [ $TRIES -lt 30 ]; do
+  for dev in /dev/xvdf /dev/nvme1n1; do
+    if [ -b "$dev" ]; then
+      DATA_DEVICE="$dev"
+      break 2
+    fi
+  done
+  TRIES=$((TRIES + 1))
+  sleep 2
+done
+
+if [ -z "$DATA_DEVICE" ]; then
+  echo "ERROR: Data volume never appeared" >&2
+  exit 1
+fi
+
+echo "Found data volume at $DATA_DEVICE"
 
 # Format only if not already formatted
 if ! blkid "$DATA_DEVICE"; then
@@ -107,7 +129,7 @@ set -euxo pipefail
 # Ensure Tailscale is up
 tailscale status || tailscale up --hostname=claude-workspace --ssh
 
-# Ensure data volume is mounted
+# Ensure data volume is mounted (handles both xvdf and NVMe naming)
 mountpoint -q /home/ubuntu/work || mount -a
 
 # Refresh Claude token from SSM (in case it was rotated)
