@@ -5,7 +5,7 @@
     "workspace": "bin/workspace.js"
   },
   "scripts": {
-    "build": "npm run build:web && tsc",
+    "build": "npm run build:web && tsc && cp -r scripts dist/scripts",
     "build:web": "npm --prefix frontend run build",
     "build:test": "npm run build && npm run test:e2e",
     "watch": "tsc -w",
