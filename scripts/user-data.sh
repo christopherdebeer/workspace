@@ -16,50 +16,64 @@ apt-get install -y \
 # ============================================================
 DATA_MOUNT="/home/ubuntu/work"
 
-# On Nitro instances (t3, etc.) /dev/xvdf appears as /dev/nvme1n1
-# Wait up to 60s for the volume to be attached by CloudFormation
-echo "Waiting for data volume to appear..."
-TRIES=0
-DATA_DEVICE=""
-while [ $TRIES -lt 30 ]; do
-  for dev in /dev/xvdf /dev/nvme1n1; do
-    if [ -b "$dev" ]; then
-      DATA_DEVICE="$dev"
-      break 2
-    fi
+if ! mountpoint -q "$DATA_MOUNT"; then
+  # On Nitro instances (t3, etc.) /dev/xvdf appears as /dev/nvme1n1
+  # Wait up to 60s for the volume to be attached by CloudFormation
+  echo "Waiting for data volume to appear..."
+  TRIES=0
+  DATA_DEVICE=""
+  while [ $TRIES -lt 30 ]; do
+    for dev in /dev/xvdf /dev/nvme1n1; do
+      if [ -b "$dev" ]; then
+        DATA_DEVICE="$dev"
+        break 2
+      fi
+    done
+    TRIES=$((TRIES + 1))
+    sleep 2
   done
-  TRIES=$((TRIES + 1))
-  sleep 2
-done
 
-if [ -z "$DATA_DEVICE" ]; then
-  echo "ERROR: Data volume never appeared" >&2
-  exit 1
+  if [ -z "$DATA_DEVICE" ]; then
+    echo "ERROR: Data volume never appeared" >&2
+    exit 1
+  fi
+
+  echo "Found data volume at $DATA_DEVICE"
+
+  # Format only if not already formatted
+  if ! blkid "$DATA_DEVICE"; then
+    mkfs.ext4 "$DATA_DEVICE"
+  fi
+
+  mkdir -p "$DATA_MOUNT"
+  # Add to fstab only if not already present
+  grep -q "$DATA_DEVICE" /etc/fstab || \
+    echo "$DATA_DEVICE $DATA_MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
+  mount -a
+  chown ubuntu:ubuntu "$DATA_MOUNT"
+else
+  echo "Data volume already mounted at $DATA_MOUNT"
 fi
-
-echo "Found data volume at $DATA_DEVICE"
-
-# Format only if not already formatted
-if ! blkid "$DATA_DEVICE"; then
-  mkfs.ext4 "$DATA_DEVICE"
-fi
-
-mkdir -p "$DATA_MOUNT"
-echo "$DATA_DEVICE $DATA_MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
-mount -a
-chown ubuntu:ubuntu "$DATA_MOUNT"
 
 # ============================================================
 # Node.js (LTS via NodeSource)
 # ============================================================
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
+if ! command -v node &>/dev/null; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  apt-get install -y nodejs
+else
+  echo "Node.js already installed: $(node --version)"
+fi
 
 # ============================================================
 # Docker
 # ============================================================
-curl -fsSL https://get.docker.com | sh
-usermod -aG docker ubuntu
+if ! command -v docker &>/dev/null; then
+  curl -fsSL https://get.docker.com | sh
+  usermod -aG docker ubuntu
+else
+  echo "Docker already installed: $(docker --version)"
+fi
 
 # ============================================================
 # Claude Code
@@ -69,7 +83,9 @@ npm install -g @anthropic-ai/claude-code
 # ============================================================
 # Tailscale
 # ============================================================
-curl -fsSL https://tailscale.com/install.sh | sh
+if ! command -v tailscale &>/dev/null; then
+  curl -fsSL https://tailscale.com/install.sh | sh
+fi
 
 TS_AUTH_KEY=$(aws ssm get-parameter \
   --name /workspace/tailscale-auth-key \
@@ -81,9 +97,11 @@ tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace --ssh
 # ============================================================
 # SSH authorized key (@c15r)
 # ============================================================
+SSH_KEY='ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBJlPZ/bLdWOIdsDHSTuOEhPcA0tlGZzjHAIeKK8C6o88I6LG10MsW3IOXly6leQxWDJZS6Va8XcYGcxuCkPN/94= #ssh.id - @c15r'
 sudo -u ubuntu mkdir -p /home/ubuntu/.ssh
 chmod 700 /home/ubuntu/.ssh
-echo 'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBJlPZ/bLdWOIdsDHSTuOEhPcA0tlGZzjHAIeKK8C6o88I6LG10MsW3IOXly6leQxWDJZS6Va8XcYGcxuCkPN/94= #ssh.id - @c15r' >> /home/ubuntu/.ssh/authorized_keys
+grep -qF "$SSH_KEY" /home/ubuntu/.ssh/authorized_keys 2>/dev/null || \
+  echo "$SSH_KEY" >> /home/ubuntu/.ssh/authorized_keys
 chmod 600 /home/ubuntu/.ssh/authorized_keys
 chown -R ubuntu:ubuntu /home/ubuntu/.ssh
 
@@ -95,7 +113,8 @@ CLAUDE_TOKEN=$(aws ssm get-parameter \
   --with-decryption --query Parameter.Value --output text \
   --region "$REGION")
 
-# Set for all sessions
+# Set for all sessions (replace if exists)
+sed -i '/CLAUDE_CODE_OAUTH_TOKEN/d' /etc/environment
 echo "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOKEN" >> /etc/environment
 
 # Skip onboarding wizard
