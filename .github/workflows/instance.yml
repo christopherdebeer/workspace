@@ -1,0 +1,55 @@
+name: Workspace Instance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::018159942401:role/c15r-workspace-github
+          aws-region: eu-west-2
+
+      - name: Get Instance ID
+        id: instance
+        run: |
+          INSTANCE_ID=$(aws cloudformation describe-stacks \
+            --stack-name WorkspaceEc2Stack \
+            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
+            --output text)
+          echo "id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Execute action
+        run: |
+          case "${{ inputs.action }}" in
+            status)
+              aws ec2 describe-instance-status \
+                --instance-ids ${{ steps.instance.outputs.id }} \
+                --include-all-instances \
+                --query 'InstanceStatuses[0].InstanceState.Name' \
+                --output text
+              ;;
+            start)
+              aws ec2 start-instances --instance-ids ${{ steps.instance.outputs.id }}
+              echo "Starting instance. Tailscale hostname: claude-workspace"
+              ;;
+            stop)
+              aws ec2 stop-instances --instance-ids ${{ steps.instance.outputs.id }}
+              echo "Stopping instance."
+              ;;
+          esac

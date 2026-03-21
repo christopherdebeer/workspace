@@ -9,4 +9,4 @@ execSync('npm run build', {
 });
 console.log('Frontend build complete');
 
-execSync('cdk deploy --require-approval never', { stdio: 'inherit' });
+execSync('cdk deploy --all --require-approval never', { stdio: 'inherit' });

@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'lib/**'
+      - 'bin/**'
+      - 'lambda/**'
+      - 'scripts/**'
+      - 'cdk.json'
+      - 'package.json'
+      - 'tsconfig.json'
   workflow_dispatch:
 
 jobs:
@@ -34,9 +42,12 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::018159942401:role/c15r-workspace-github
           aws-region: us-east-1
-          
-      - name: Bootstrap CDK
+
+      - name: Bootstrap CDK (us-east-1)
         run: npm run cdk -- bootstrap --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
-        
+
+      - name: Bootstrap CDK (eu-west-2)
+        run: CDK_DEFAULT_REGION=eu-west-2 npm run cdk -- bootstrap aws://018159942401/eu-west-2 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+
       - name: Deploy CDK
         run: npm run deploy
