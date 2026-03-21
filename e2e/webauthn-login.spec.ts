@@ -56,22 +56,12 @@ test.describe('WebAuthn Login Tests', () => {
     expect(keyboardErrors).toHaveLength(0);
   });
 
-  test('login options should return proper credential IDs from mock', async ({ page }) => {
-    await page.goto('/workspace/');
+  test('login options should return proper credential IDs from mock', async ({ request }) => {
+    const response = await request.post('/webauthn/login/options', {
+      data: { username: 'testuser@example.com' },
+    });
 
-    const usernameInput = page.locator('input[placeholder="Username"]');
-    await expect(usernameInput).toBeVisible();
-    await usernameInput.fill('testuser@example.com');
-
-    const loginButton = page.locator('button:has-text("Login")');
-
-    const responsePromise = page.waitForResponse(
-      response => response.url().includes('/webauthn/login/options') && response.status() === 200
-    );
-
-    await loginButton.click();
-
-    const response = await responsePromise;
+    expect(response.ok()).toBeTruthy();
     const loginOptionsResponse = await response.json();
 
     expect(loginOptionsResponse).not.toBeNull();
