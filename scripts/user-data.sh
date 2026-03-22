@@ -107,7 +107,7 @@ TS_AUTH_KEY=$(aws ssm get-parameter \
   --with-decryption --query Parameter.Value --output text \
   --region "$REGION")
 
-tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace
+tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace --reset
 
 # ============================================================
 # SSH authorized key (@c15r)
@@ -162,7 +162,7 @@ set -euxo pipefail
 export PATH="/usr/local/bin:/usr/bin:/bin:/snap/bin:$PATH"
 
 # Ensure Tailscale is up
-tailscale status || tailscale up --hostname=claude-workspace
+tailscale status || tailscale up --hostname=claude-workspace --reset
 
 # Ensure data volume is mounted (handles both xvdf and NVMe naming)
 mountpoint -q /home/ubuntu/work || mount -a
