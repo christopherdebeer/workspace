@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euxo pipefail
 
+# SSM runs with a minimal PATH — include common install locations
+export PATH="/usr/local/bin:/usr/bin:/bin:/snap/bin:$PATH"
+
 REGION="eu-west-2"
 
 # ============================================================
@@ -10,6 +13,18 @@ apt-get update
 apt-get install -y \
   build-essential git curl wget unzip jq htop tmux \
   apt-transport-https ca-certificates gnupg lsb-release
+
+# ============================================================
+# AWS CLI
+# ============================================================
+if ! command -v aws &>/dev/null; then
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
+  unzip -qo /tmp/awscli.zip -d /tmp
+  /tmp/aws/install
+  rm -rf /tmp/awscli.zip /tmp/aws
+else
+  echo "AWS CLI already installed: $(aws --version)"
+fi
 
 # ============================================================
 # Mount data volume
@@ -144,6 +159,7 @@ EOF
 cp /dev/stdin /usr/local/bin/workspace-boot.sh <<'BOOT'
 #!/bin/bash
 set -euxo pipefail
+export PATH="/usr/local/bin:/usr/bin:/bin:/snap/bin:$PATH"
 
 # Ensure Tailscale is up
 tailscale status || tailscale up --hostname=claude-workspace --ssh
