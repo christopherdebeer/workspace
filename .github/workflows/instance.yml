@@ -85,7 +85,7 @@ jobs:
             exit 0
           fi
 
-          DIAG_SCRIPT='
+          cat > /tmp/status/diag.sh <<'DIAG'
           echo "=== cloud-init ==="
           cloud-init status --long 2>&1 || true
           echo ""
@@ -102,12 +102,12 @@ jobs:
           echo ""
           echo "=== uptime ==="
           uptime
-          '
+          DIAG
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$IID" \
             --document-name "AWS-RunShellScript" \
-            --parameters "commands=[\"bash -c '$DIAG_SCRIPT'\"]" \
+            --parameters "{\"commands\":[$(jq -Rs '.' /tmp/status/diag.sh)]}" \
             --timeout-seconds 30 \
             --query 'Command.CommandId' --output text)
 
@@ -251,7 +251,7 @@ jobs:
             --query 'Reservations[0].Instances[0].State.Name' --output text)
 
           if [ "$STATE" = "running" ]; then
-            LOG_SCRIPT='
+            cat > /tmp/logs/diag.sh <<'LOGSCRIPT'
             echo "=== cloud-init status ==="
             cloud-init status --long 2>&1 || true
             echo ""
@@ -266,12 +266,12 @@ jobs:
             echo ""
             echo "=== journalctl cloud-init (errors only) ==="
             journalctl -u cloud-init --no-pager -p err 2>/dev/null || echo "no errors"
-            '
+            LOGSCRIPT
 
             COMMAND_ID=$(aws ssm send-command \
               --instance-ids "$IID" \
               --document-name "AWS-RunShellScript" \
-              --parameters "commands=[\"bash -c '$LOG_SCRIPT'\"]" \
+              --parameters "{\"commands\":[$(jq -Rs '.' /tmp/logs/diag.sh)]}" \
               --timeout-seconds 30 \
               --query 'Command.CommandId' --output text 2>/dev/null) || true
 
