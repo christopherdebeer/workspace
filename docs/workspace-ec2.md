@@ -142,7 +142,8 @@ The authorized key is in `scripts/user-data.sh`. To add or rotate keys:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `aws: command not found` during provision | SSM uses minimal PATH | Fixed — script exports PATH and installs AWS CLI v2 |
-| SSH "end of file" after auth methods | Tailscale SSH intercepting connection | Fixed — `--ssh` flag removed from `tailscale up` |
+| SSH "end of file" after auth methods | Tailscale SSH intercepting connection | Fixed — `--ssh` flag removed and `--reset` added to `tailscale up` |
+| `tailscale up` fails: "requires mentioning all non-default flags" | Previous config had different flags (e.g. `--ssh`) | Fixed — `--reset` flag clears prior settings cleanly |
 | Can't resolve `claude-workspace.*.ts.net` | Tailscale not running on your device | Start the Tailscale app |
 | SSH "Permission denied (publickey)" | Wrong user or key mismatch | Connect as `ubuntu`, verify key matches |
 | Data volume not mounted after replace | New instance, old volume in different AZ | Snapshot volume, create in new AZ, reattach |
