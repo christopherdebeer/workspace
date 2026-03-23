@@ -143,3 +143,4 @@ cdk.out/
 test-results/
 playwright-report/
 simcap/
+microgpt/input.txt
