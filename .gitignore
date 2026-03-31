@@ -142,3 +142,6 @@ cdk.out/
 # Playwright
 test-results/
 playwright-report/
+claude-code/
+claude-code/
+sync.parc.land/
