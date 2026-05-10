@@ -110,28 +110,52 @@ TS_AUTH_KEY=$(aws ssm get-parameter \
 tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace --reset
 
 # ============================================================
-# User: c15r (primary SSH user, home on persistent volume)
+# User: c15r (primary SSH user)
+# Home on root volume (sshd StrictModes requires this).
+# Persistent data symlinked from data volume.
 # ============================================================
-C15R_HOME="/home/ubuntu/work/home/c15r"
-mkdir -p "$C15R_HOME"
+PERSIST="/home/ubuntu/work/home/c15r"
+mkdir -p "$PERSIST"
 
 if ! id c15r &>/dev/null; then
-  useradd -s /bin/bash -G sudo,docker -d "$C15R_HOME" c15r
+  useradd -m -s /bin/bash -G sudo,docker c15r
   echo "c15r ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/c15r
-else
-  # Update home directory if user already exists (e.g. after reprovision)
-  usermod -d "$C15R_HOME" c15r
+  chmod 0440 /etc/sudoers.d/c15r
 fi
 
-chown c15r:c15r "$C15R_HOME"
-
+# SSH key (on root volume for sshd compatibility)
 SSH_KEY='ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBJlPZ/bLdWOIdsDHSTuOEhPcA0tlGZzjHAIeKK8C6o88I6LG10MsW3IOXly6leQxWDJZS6Va8XcYGcxuCkPN/94= #ssh.id - @c15r'
-mkdir -p "$C15R_HOME/.ssh"
-grep -qF "$SSH_KEY" "$C15R_HOME/.ssh/authorized_keys" 2>/dev/null || \
-  echo "$SSH_KEY" > "$C15R_HOME/.ssh/authorized_keys"
-chmod 700 "$C15R_HOME/.ssh"
-chmod 600 "$C15R_HOME/.ssh/authorized_keys"
-chown -R c15r:c15r "$C15R_HOME/.ssh"
+mkdir -p /home/c15r/.ssh
+grep -qF "$SSH_KEY" /home/c15r/.ssh/authorized_keys 2>/dev/null || \
+  echo "$SSH_KEY" > /home/c15r/.ssh/authorized_keys
+chmod 700 /home/c15r/.ssh
+chmod 600 /home/c15r/.ssh/authorized_keys
+chown -R c15r:c15r /home/c15r/.ssh
+
+# Symlink work directory
+ln -sfn /home/ubuntu/work /home/c15r/work
+
+# Symlink persistent dotfiles from data volume
+for dir in .claude .gitconfig .ssh/config; do
+  # Create parent on persistent volume if needed
+  mkdir -p "$PERSIST/$(dirname $dir)"
+  # If a real file/dir exists on root but not yet on persistent volume, move it
+  if [ -e "/home/c15r/$dir" ] && [ ! -L "/home/c15r/$dir" ] && [ ! -e "$PERSIST/$dir" ]; then
+    mv "/home/c15r/$dir" "$PERSIST/$dir"
+  fi
+  # Create empty target on persistent volume if it doesn't exist
+  if [ ! -e "$PERSIST/$dir" ]; then
+    if [[ "$dir" == *.* ]] || [[ "$dir" == *config* ]]; then
+      touch "$PERSIST/$dir"
+    else
+      mkdir -p "$PERSIST/$dir"
+    fi
+  fi
+  # Symlink from home to persistent volume
+  ln -sfn "$PERSIST/$dir" "/home/c15r/$dir"
+done
+
+chown -R c15r:c15r "$PERSIST"
 
 # ============================================================
 # Claude Code auth
@@ -145,10 +169,10 @@ CLAUDE_TOKEN=$(aws ssm get-parameter \
 sed -i '/CLAUDE_CODE_OAUTH_TOKEN/d' /etc/environment
 echo "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOKEN" >> /etc/environment
 
-# Skip onboarding wizard
-sudo -u ubuntu mkdir -p /home/ubuntu/.claude
-echo '{"completedOnboarding":true}' > /home/ubuntu/.claude/.claude.json
-chown -R ubuntu:ubuntu /home/ubuntu/.claude
+# Skip onboarding wizard (writes to persistent volume via symlink)
+sudo -u c15r mkdir -p /home/c15r/.claude
+echo '{"completedOnboarding":true}' > /home/c15r/.claude/.claude.json
+chown -R c15r:c15r /home/c15r/.claude
 
 # ============================================================
 # Per-boot systemd service

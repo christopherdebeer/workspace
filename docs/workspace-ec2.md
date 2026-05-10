@@ -99,11 +99,30 @@ Then: `ssh workspace`
 | `/workspace/tailscale-auth-key` | Joins instance to tailnet on first boot | Replace in SSM, then reprovision or run `tailscale up` manually |
 | `/workspace/claude-oauth-token` | Claude Code authentication | Refreshed automatically on each reboot by `workspace-boot.service` |
 
-## Data Volume
+## Data Volume & Persistence
 
-The 100 GB data volume at `/home/ubuntu/work` has `removalPolicy: RETAIN` — it survives stack destruction. This is where persistent work should live.
+The 100 GB data volume at `/home/ubuntu/work` has `removalPolicy: RETAIN` — it survives stack destruction.
 
-If the instance is replaced (e.g., instance type change), the volume must be manually reattached or a new volume created. The user-data script handles formatting (only if unformatted) and mounting automatically.
+The `c15r` home directory lives on the **root volume** (`/home/c15r`) because OpenSSH's `StrictModes` requires the home and `.ssh/` to be on a filesystem with proper ownership chains. Persistent data is symlinked from the data volume:
+
+```
+/home/c15r/
+├── .ssh/authorized_keys  ← root volume (sshd reads this)
+├── .ssh/config           → /home/ubuntu/work/home/c15r/.ssh/config
+├── .claude/              → /home/ubuntu/work/home/c15r/.claude/
+├── .gitconfig            → /home/ubuntu/work/home/c15r/.gitconfig
+└── work/                 → /home/ubuntu/work
+```
+
+What persists across instance replacement:
+- `~/work/` — all project files
+- `~/.claude/` — Claude Code config and credentials
+- `~/.gitconfig` — git identity
+- `~/.ssh/config` — SSH host aliases
+
+What gets recreated on each provision:
+- `~/.ssh/authorized_keys` — from user-data.sh
+- System packages, Docker, Node.js, Claude Code
 
 ## Per-Boot Service
 
