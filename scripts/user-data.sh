@@ -110,15 +110,23 @@ TS_AUTH_KEY=$(aws ssm get-parameter \
 tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace --reset
 
 # ============================================================
-# SSH authorized key (@c15r)
+# User: c15r (primary SSH user)
 # ============================================================
+if ! id c15r &>/dev/null; then
+  useradd -m -s /bin/bash -G sudo,docker c15r
+  echo "c15r ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/c15r
+fi
+
 SSH_KEY='ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBJlPZ/bLdWOIdsDHSTuOEhPcA0tlGZzjHAIeKK8C6o88I6LG10MsW3IOXly6leQxWDJZS6Va8XcYGcxuCkPN/94= #ssh.id - @c15r'
-sudo -u ubuntu mkdir -p /home/ubuntu/.ssh
-chmod 700 /home/ubuntu/.ssh
-grep -qF "$SSH_KEY" /home/ubuntu/.ssh/authorized_keys 2>/dev/null || \
-  echo "$SSH_KEY" >> /home/ubuntu/.ssh/authorized_keys
-chmod 600 /home/ubuntu/.ssh/authorized_keys
-chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+mkdir -p /home/c15r/.ssh
+grep -qF "$SSH_KEY" /home/c15r/.ssh/authorized_keys 2>/dev/null || \
+  echo "$SSH_KEY" > /home/c15r/.ssh/authorized_keys
+chmod 700 /home/c15r/.ssh
+chmod 600 /home/c15r/.ssh/authorized_keys
+chown -R c15r:c15r /home/c15r/.ssh
+
+# Symlink work directory for convenience
+ln -sfn /home/ubuntu/work /home/c15r/work
 
 # ============================================================
 # Claude Code auth
