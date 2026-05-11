@@ -49,5 +49,32 @@ jobs:
       - name: Bootstrap CDK (eu-west-2)
         run: CDK_DEFAULT_REGION=eu-west-2 npm run cdk -- bootstrap aws://018159942401/eu-west-2 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
 
+      - name: Stop workspace instance (graceful shutdown before deploy)
+        run: |
+          INSTANCE_ID=$(aws cloudformation describe-stacks \
+            --stack-name WorkspaceEc2Stack \
+            --region eu-west-2 \
+            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
+            --output text 2>/dev/null) || true
+
+          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+            STATE=$(aws ec2 describe-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region eu-west-2 \
+              --query 'Reservations[0].Instances[0].State.Name' \
+              --output text 2>/dev/null) || true
+
+            if [ "$STATE" = "running" ]; then
+              echo "Stopping instance $INSTANCE_ID (state: $STATE)..."
+              aws ec2 stop-instances --instance-ids "$INSTANCE_ID" --region eu-west-2
+              aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" --region eu-west-2
+              echo "Instance stopped."
+            else
+              echo "Instance $INSTANCE_ID is $STATE — no stop needed."
+            fi
+          else
+            echo "No existing workspace instance found — first deploy."
+          fi
+
       - name: Deploy CDK
         run: npm run deploy
