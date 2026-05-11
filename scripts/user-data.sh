@@ -102,12 +102,27 @@ if ! command -v tailscale &>/dev/null; then
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
 
+# Persist Tailscale state on data volume so replaced instances
+# rejoin as the same node (no new host key, no re-accept)
+TS_STATE="/home/ubuntu/work/.tailscale"
+mkdir -p "$TS_STATE"
+if [ -d "$TS_STATE" ] && [ "$(ls -A $TS_STATE 2>/dev/null)" ]; then
+  echo "Restoring Tailscale state from data volume..."
+  systemctl stop tailscaled 2>/dev/null || true
+  cp -a "$TS_STATE"/* /var/lib/tailscale/
+  systemctl start tailscaled
+  sleep 2
+fi
+
 TS_AUTH_KEY=$(aws ssm get-parameter \
   --name /workspace/tailscale-auth-key \
   --with-decryption --query Parameter.Value --output text \
   --region "$REGION")
 
 tailscale up --auth-key="$TS_AUTH_KEY" --hostname=claude-workspace --reset
+
+# Save state back to data volume for next provision
+cp -a /var/lib/tailscale/* "$TS_STATE/"
 
 # ============================================================
 # User: c15r (primary SSH user)
@@ -136,23 +151,26 @@ chown -R c15r:c15r /home/c15r/.ssh
 ln -sfn /home/ubuntu/work /home/c15r/work
 
 # Symlink persistent dotfiles from data volume
-for dir in .claude .gitconfig .ssh/config; do
-  # Create parent on persistent volume if needed
-  mkdir -p "$PERSIST/$(dirname $dir)"
-  # If a real file/dir exists on root but not yet on persistent volume, move it
-  if [ -e "/home/c15r/$dir" ] && [ ! -L "/home/c15r/$dir" ] && [ ! -e "$PERSIST/$dir" ]; then
-    mv "/home/c15r/$dir" "$PERSIST/$dir"
+# dirs: created as directories; files: created as empty files
+PERSIST_DIRS=".claude"
+PERSIST_FILES=".gitconfig .ssh/config"
+
+for item in $PERSIST_DIRS $PERSIST_FILES; do
+  mkdir -p "$PERSIST/$(dirname $item)"
+  # Move existing to persistent volume if not yet there
+  if [ -e "/home/c15r/$item" ] && [ ! -L "/home/c15r/$item" ] && [ ! -e "$PERSIST/$item" ]; then
+    mv "/home/c15r/$item" "$PERSIST/$item"
   fi
-  # Create empty target on persistent volume if it doesn't exist
-  if [ ! -e "$PERSIST/$dir" ]; then
-    if [[ "$dir" == *.* ]] || [[ "$dir" == *config* ]]; then
-      touch "$PERSIST/$dir"
-    else
-      mkdir -p "$PERSIST/$dir"
-    fi
-  fi
-  # Symlink from home to persistent volume
-  ln -sfn "$PERSIST/$dir" "/home/c15r/$dir"
+done
+
+for item in $PERSIST_DIRS; do
+  [ -d "$PERSIST/$item" ] || mkdir -p "$PERSIST/$item"
+  ln -sfn "$PERSIST/$item" "/home/c15r/$item"
+done
+
+for item in $PERSIST_FILES; do
+  [ -e "$PERSIST/$item" ] || touch "$PERSIST/$item"
+  ln -sfn "$PERSIST/$item" "/home/c15r/$item"
 done
 
 chown -R c15r:c15r "$PERSIST"
@@ -169,10 +187,8 @@ CLAUDE_TOKEN=$(aws ssm get-parameter \
 sed -i '/CLAUDE_CODE_OAUTH_TOKEN/d' /etc/environment
 echo "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOKEN" >> /etc/environment
 
-# Skip onboarding wizard (writes to persistent volume via symlink)
-sudo -u c15r mkdir -p /home/c15r/.claude
+# Skip onboarding wizard (symlink already points to persistent volume)
 echo '{"completedOnboarding":true}' > /home/c15r/.claude/.claude.json
-chown -R c15r:c15r /home/c15r/.claude
 
 # ============================================================
 # Per-boot systemd service
@@ -198,11 +214,14 @@ cp /dev/stdin /usr/local/bin/workspace-boot.sh <<'BOOT'
 set -euxo pipefail
 export PATH="/usr/local/bin:/usr/bin:/bin:/snap/bin:$PATH"
 
+# Ensure data volume is mounted (handles both xvdf and NVMe naming)
+mountpoint -q /home/ubuntu/work || mount -a
+
 # Ensure Tailscale is up
 tailscale status || tailscale up --hostname=claude-workspace --reset
 
-# Ensure data volume is mounted (handles both xvdf and NVMe naming)
-mountpoint -q /home/ubuntu/work || mount -a
+# Sync Tailscale state to data volume
+cp -a /var/lib/tailscale/* /home/ubuntu/work/.tailscale/ 2>/dev/null || true
 
 # Refresh Claude token from SSM (in case it was rotated)
 CLAUDE_TOKEN=$(aws ssm get-parameter \
