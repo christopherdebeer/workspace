@@ -219,4 +219,41 @@ BOOT
 chmod +x /usr/local/bin/workspace-boot.sh
 systemctl enable workspace-boot.service
 
+# ============================================================
+# Graceful shutdown service
+# ============================================================
+cat > /etc/systemd/system/workspace-shutdown.service <<'EOF'
+[Unit]
+Description=Workspace graceful shutdown
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/workspace-shutdown.sh
+TimeoutStartSec=90
+
+[Install]
+WantedBy=halt.target reboot.target shutdown.target
+EOF
+
+cat > /usr/local/bin/workspace-shutdown.sh <<'SHUTDOWN'
+#!/bin/bash
+logger -t workspace "Graceful shutdown starting..."
+
+# Warn active SSH sessions
+wall "Workspace instance shutting down in 10 seconds. Save your work." 2>/dev/null || true
+
+# Give active processes a moment to respond to the wall message
+sleep 5
+
+# Sync all filesystems (ensure data volume writes are flushed)
+sync
+
+logger -t workspace "Graceful shutdown complete."
+SHUTDOWN
+
+chmod +x /usr/local/bin/workspace-shutdown.sh
+systemctl enable workspace-shutdown.service
+
 echo "=== Workspace provisioning complete ==="
