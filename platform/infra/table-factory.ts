@@ -20,6 +20,12 @@ export interface PlatformTableProps {
   retain?: boolean;
   /** Enable DynamoDB Streams (e.g. for event sourcing fan-out). */
   stream?: boolean;
+  /**
+   * Enable TTL on the `ttl` attribute (epoch seconds). Items with a `ttl` in
+   * the past are auto-deleted — used for challenges, auth codes, sessions, and
+   * expiring tokens.
+   */
+  ttl?: boolean;
 }
 
 export class TableFactory {
@@ -30,6 +36,7 @@ export class TableFactory {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: props.retain ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
       stream: props.stream ? dynamodb.StreamViewType.NEW_AND_OLD_IMAGES : undefined,
+      timeToLiveAttribute: props.ttl ? 'ttl' : undefined,
     });
     cdk.Tags.of(table).add('platform:service', props.serviceName);
     return table;

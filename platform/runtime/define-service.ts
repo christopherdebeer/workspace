@@ -27,6 +27,9 @@ import type {
   FunctionUrlEvent,
   FunctionUrlResponse,
   CommandResult,
+  HttpRoute,
+  ServiceHttpRequest,
+  ServiceHttpResponse,
 } from './types';
 
 function isCommandEnvelope(event: unknown): event is CommandEnvelope {
@@ -48,10 +51,18 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
 
 export function defineService(definition: ServiceDefinition) {
   const version = definition.version ?? '1.0.0';
+  // Distinct route prefixes owned by raw HTTP handlers, e.g. "/oauth/*".
+  const httpPrefixes = Array.from(
+    new Set(
+      (definition.http ?? []).map((r) =>
+        r.path.endsWith('*') ? r.path : `${r.path.replace(/\/$/, '')}`,
+      ),
+    ),
+  );
   const manifest: ServiceManifest = {
     name: definition.name,
     version,
-    routes: [`/${definition.name}/*`],
+    routes: [`/${definition.name}/*`, ...httpPrefixes],
     commands: Object.keys(definition.commands),
     events: { emits: definition.events?.emits ?? [] },
   };
@@ -130,6 +141,28 @@ export function defineService(definition: ServiceDefinition) {
     const identity = identityFromHeaders(httpEvent.headers);
     const ctx = buildContext({ correlationId, traceId, identity });
 
+    const rawBody = httpEvent.body
+      ? httpEvent.isBase64Encoded
+        ? Buffer.from(httpEvent.body, 'base64').toString('utf8')
+        : httpEvent.body
+      : undefined;
+
+    // ---- Raw HTTP routes (OAuth, .well-known, redirects, …) -------------
+    const route = matchRoute(definition.http, method, path);
+    if (route) {
+      try {
+        const req = buildHttpRequest(httpEvent, method, path, rawBody);
+        const res = (await route.handler(req, ctx)) ?? {};
+        return renderHttp(res, correlationId);
+      } catch (err) {
+        if (err instanceof ServiceAuthError) {
+          return json(401, { error: err.message }, correlationId);
+        }
+        ctx.logger.error('http route failed', { method, path, error: (err as Error).message });
+        return json(500, { error: 'Internal error' }, correlationId);
+      }
+    }
+
     const prefix = `/${definition.name}/`;
     const tail = path.startsWith(prefix) ? path.slice(prefix.length) : '';
 
@@ -147,12 +180,9 @@ export function defineService(definition: ServiceDefinition) {
     }
 
     let input: unknown = {};
-    if (httpEvent.body) {
-      const raw = httpEvent.isBase64Encoded
-        ? Buffer.from(httpEvent.body, 'base64').toString('utf8')
-        : httpEvent.body;
+    if (rawBody) {
       try {
-        input = JSON.parse(raw);
+        input = JSON.parse(rawBody);
       } catch {
         return json(400, { ok: false, error: 'Invalid JSON body' }, correlationId);
       }
@@ -184,6 +214,62 @@ function json(statusCode: number, body: unknown, correlationId: string): Functio
     statusCode,
     headers: { ...JSON_HEADERS, 'x-correlation-id': correlationId },
     body: JSON.stringify(body),
+  };
+}
+
+function matchRoute(routes: HttpRoute[] | undefined, method: string, path: string): HttpRoute | undefined {
+  if (!routes) return undefined;
+  return routes.find((r) => {
+    if (r.method.toUpperCase() !== method.toUpperCase()) return false;
+    if (r.path.endsWith('*')) return path.startsWith(r.path.slice(0, -1));
+    return r.path === path;
+  });
+}
+
+function buildHttpRequest(
+  event: FunctionUrlEvent,
+  method: string,
+  path: string,
+  rawBody: string | undefined,
+): ServiceHttpRequest {
+  const query = event.queryStringParameters ?? {};
+  // Prefer an explicit public base (stable across the CloudFront/OAC hop where
+  // the viewer Host is stripped); fall back to the request Host header.
+  const base =
+    process.env.PUBLIC_BASE_URL ??
+    `https://${headerOf(event.headers, 'x-forwarded-host') ?? headerOf(event.headers, 'host') ?? 'localhost'}`;
+  const qs = event.rawQueryString
+    ? `?${event.rawQueryString}`
+    : Object.keys(query).length
+      ? `?${new URLSearchParams(query).toString()}`
+      : '';
+  return {
+    method,
+    path,
+    headers: event.headers ?? {},
+    query,
+    rawBody,
+    url: `${base.replace(/\/$/, '')}${path}${qs}`,
+    json<T = unknown>(): T {
+      return JSON.parse(rawBody ?? '{}') as T;
+    },
+    text(): string {
+      return rawBody ?? '';
+    },
+  };
+}
+
+function renderHttp(res: ServiceHttpResponse, correlationId: string): FunctionUrlResponse {
+  const isString = typeof res.body === 'string';
+  const headers: Record<string, string> = {
+    'x-correlation-id': correlationId,
+    ...(isString ? {} : JSON_HEADERS),
+    ...res.headers,
+  };
+  return {
+    statusCode: res.statusCode ?? 200,
+    headers,
+    body: res.body === undefined ? '' : isString ? (res.body as string) : JSON.stringify(res.body),
   };
 }
 

@@ -44,6 +44,50 @@ export interface ServiceDefinition {
   /** Synchronous commands, callable over HTTP and via direct invoke. */
   commands: Record<string, RegisteredCommand>;
   events?: { emits?: string[] };
+  /**
+   * Raw HTTP routes for paths that don't fit the `/<service>/<command>` shape
+   * (e.g. OAuth endpoints, `.well-known` documents, redirect/consent pages).
+   * Matched before command dispatch. A `path` ending in `*` matches by prefix.
+   */
+  http?: HttpRoute[];
+}
+
+/** A parsed HTTP request handed to raw `http` route handlers. */
+export interface ServiceHttpRequest {
+  method: string;
+  /** Full request path, e.g. "/oauth/token". */
+  path: string;
+  headers: Record<string, string | undefined>;
+  query: Record<string, string>;
+  /** Decoded request body, if any. */
+  rawBody?: string;
+  /**
+   * Absolute request URL using the public base (PUBLIC_BASE_URL env when set,
+   * else the request Host). Use this to derive OAuth issuer/endpoint URLs.
+   */
+  url: string;
+  json<T = unknown>(): T;
+  text(): string;
+}
+
+/** Response returned from a raw `http` route handler. */
+export interface ServiceHttpResponse {
+  statusCode?: number;
+  headers?: Record<string, string>;
+  /** Object bodies are JSON-encoded; string bodies are sent verbatim. */
+  body?: unknown;
+}
+
+export type HttpHandler = (
+  req: ServiceHttpRequest,
+  ctx: ServiceContext,
+) => Promise<ServiceHttpResponse | void> | ServiceHttpResponse | void;
+
+export interface HttpRoute {
+  method: string;
+  /** Exact path, or a prefix ending in `*` (e.g. "/oauth/*"). */
+  path: string;
+  handler: HttpHandler;
 }
 
 /** Lambda Function URL request (payload format 2.0), trimmed to what we use. */

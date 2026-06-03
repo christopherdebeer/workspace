@@ -22,6 +22,27 @@ export class PlatformStack extends cdk.Stack {
 
     const eventBus = new PlatformEventBus(this, 'EventBus', { busName: 'platform-bus' });
 
+    // Auth primitive: WebAuthn passkeys + OAuth 2.1 + scoped tokens (ported from
+    // c15r/mcp-auth). Owns the auth_* data; peers consume it via tokens, never
+    // by reading its table. PUBLIC_BASE_URL keeps OAuth issuer/rpId stable
+    // across the CloudFront/OAC hop (set to the platform's public domain).
+    const auth = new HttpServiceCell(this, 'AuthService', {
+      name: 'auth',
+      entry: serviceEntry('auth'),
+      routes: ['/auth/*', '/oauth/*', '/webauthn/*', '/.well-known/*'],
+      persistence: { dynamo: true, dynamoTtl: true },
+      commands: ['validateToken', 'mintToken', 'listTokens', 'revokeToken'],
+      emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'],
+      eventBus,
+      environment: {
+        AUTH_SERVER_NAME: 'workspace',
+        // PUBLIC_BASE_URL / WEBAUTHN_RP_ID should be set to the deployed domain.
+        ...(process.env.PLATFORM_PUBLIC_BASE_URL
+          ? { PUBLIC_BASE_URL: process.env.PLATFORM_PUBLIC_BASE_URL }
+          : {}),
+      },
+    });
+
     const render = new HttpServiceCell(this, 'RenderService', {
       name: 'render',
       entry: serviceEntry('render'),
@@ -42,10 +63,13 @@ export class PlatformStack extends cdk.Stack {
 
     // Least-privilege: documents may invoke render, but not vice versa.
     documents.allow(render);
+    // Any cell may ask the auth service to validate a token (the in-cell
+    // alternative to edge validation).
+    documents.allow(auth);
 
     // Single public entrypoint, behaviours generated from manifests.
     new ServiceRouter(this, 'Router', {
-      cells: [documents, render],
+      cells: [auth, documents, render],
       defaultCell: documents,
     });
   }

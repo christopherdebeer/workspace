@@ -191,20 +191,26 @@ cell's tokens. This is the natural next construct to add to `platform/runtime`.
 
 ---
 
-## 7. Recommended next steps
+## 7. Status / next steps
 
-1. **Scaffold the `auth` cell** by porting `mcp-auth/{db,oauth,webauthn}.ts`
-   onto Turso, exposing `validateToken` / `mintToken` + the `/oauth`,
-   `/webauthn`, `/.well-known` routes; wire edge token-normalisation so
-   `identityFromHeaders` gets real data.
-2. **Add `defineMcpService`** to `platform/runtime` so cells expose their
-   commands as MCP tools with auth-cell-backed tokens.
-3. **Add a Turso client helper** to `platform/runtime` (build from
-   `ctx.config.turso`) and a libSQL `TableFactory` analogue, so `workspace`/
-   `sync` `db.ts` files port with minimal edits.
-4. **Port `workspace`** (smaller surface) first as the reference cell, then
+1. **`auth` cell — DONE.** `services/auth` ports `mcp-auth/{db,oauth,webauthn}.ts`:
+   WebAuthn passkeys, OAuth 2.1 (DCR, PKCE, refresh, device grant), unified
+   scoped tokens. It exposes a `validateToken` command (the edge/peer bridge to
+   `identityFromHeaders`) and `/oauth`, `/webauthn`, `/.well-known`, `/auth/device`
+   routes via the new `defineService({ http })` capability. Storage is a
+   `AuthStore` interface with DynamoDB (TTL) + in-memory implementations.
+   > Storage note: the port uses **DynamoDB**, not Turso — auth access is all
+   > point-lookups (by token hash, username, credential id), which single-table
+   > DynamoDB serves directly. Turso remains the target for the relational
+   > `workspace`/`sync` cells.
+2. **Edge token normalisation** — wire a CloudFront Function/Lambda@Edge (or an
+   authorizer) that calls `auth.validateToken` and injects `x-auth-user` /
+   `x-auth-scopes`. The runtime already consumes these.
+3. **`defineMcpService`** — wrap `defineService` to expose commands as MCP tools
+   with auth-cell-backed tokens.
+4. **Turso client helper** in `platform/runtime` (from `ctx.config.turso`) so
+   `workspace`/`sync` `db.ts` files port with minimal edits.
+5. **Port `workspace`** (smaller surface) as the reference relational cell, then
    `sync`.
-5. **Retire `lambda/index.ts` auth** once the `auth` cell is live.
-
-I can start on (1)–(3) next; they are additive to the platform package and do
-not disturb the existing stacks.
+6. **Retire `lambda/index.ts` auth** once the `auth` cell is wired to the
+   frontend.

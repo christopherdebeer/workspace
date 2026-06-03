@@ -6,6 +6,13 @@ owns its Lambda code, persistence, commands, and event contracts. Services never
 read another service's database — they call its commands or react to its events.
 
 ## Layout
+- `auth/` - Auth primitive (ported from c15r/mcp-auth): WebAuthn passkeys + OAuth 2.1 + scoped tokens
+  - `service.ts` - `defineService` entry: commands (validateToken/mintToken/listTokens/revokeToken) + raw `http` routes (`/oauth/*`, `/webauthn/*`, `/.well-known/*`, `/auth/device*`)
+  - `store.ts` - `AuthStore` interface, entity types, crypto helpers
+  - `dynamo-store.ts` / `memory-store.ts` - storage implementations (prod / tests+local)
+  - `oauth.ts` - OAuth 2.1 handlers (DCR, consent, token, PKCE, refresh, device)
+  - `webauthn.ts` - passkey register/authenticate (uses `@simplewebauthn/server`; kept out of unit tests)
+  - `ui.ts` - passkey authorize/device-approval HTML page
 - `documents/` - Example cell with DynamoDB persistence; calls `render` and emits `document.created`
   - `service.ts` - `defineService({ name, commands, events })` entry (exports `handler`)
   - `handlers.ts` - Command implementations
