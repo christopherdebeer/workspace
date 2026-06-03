@@ -1,0 +1,41 @@
+name: CI
+
+# Pre-merge gate: compile, unit-test, and synthesize CloudFormation. No AWS
+# credentials and no deploy — synth uses a dummy account so the offline VPC
+# lookup in WorkspaceEc2Stack resolves.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-synth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: CDK synth (all stacks)
+        env:
+          # Dummy account/region so WorkspaceEc2Stack's VPC lookup resolves
+          # during synth without real credentials.
+          CDK_DEFAULT_ACCOUNT: '111111111111'
+          CDK_DEFAULT_REGION: eu-west-2
+        run: npm run cdk -- synth
