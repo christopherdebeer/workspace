@@ -48,6 +48,7 @@ platform/
     config.ts              Environment-backed config
 
 services/
+  auth/                  Auth primitive: WebAuthn passkeys + OAuth 2.1 + tokens
   documents/             Example cell: DynamoDB + Turso flag, calls render, emits
   render/                Example peer: a single synchronous command
 
@@ -79,6 +80,43 @@ invocation styles:
 Each command receives a `ServiceContext` with `logger`, `events`,
 `serviceClient`, `config`, and the normalised `identity` — so handlers never
 touch the AWS SDK or `process.env` directly.
+
+### Raw HTTP routes
+
+Some services own paths that don't fit `/<service>/<command>` (OAuth endpoints,
+`.well-known` documents, redirects, HTML pages). `defineService` accepts an
+optional `http` array of `{ method, path, handler }`; a `path` ending in `*`
+matches by prefix, and these are tried before command dispatch:
+
+```ts
+defineService({
+  name: 'auth',
+  commands: { validateToken, mintToken },
+  http: [
+    { method: 'GET',  path: '/.well-known/oauth-authorization-server', handler: asMetadata },
+    { method: 'POST', path: '/oauth/token', handler: tokenEndpoint },
+    { method: 'GET',  path: '/oauth/authorize', handler: consentPage }, // returns HTML
+  ],
+});
+```
+
+Handlers get a parsed `ServiceHttpRequest` (with `.json()`, `.text()`, headers,
+query, and a `url` built from `PUBLIC_BASE_URL`) and return a
+`ServiceHttpResponse` (object bodies are JSON-encoded; string bodies sent
+verbatim). Because the CloudFront/OAC hop strips the viewer `Host`, set
+`PUBLIC_BASE_URL` on any cell that derives absolute URLs (e.g. OAuth issuer).
+
+### Auth primitive service
+
+`services/auth` is a port of `c15r/mcp-auth`: WebAuthn passkeys
+(`@simplewebauthn/server`) + OAuth 2.1 (DCR, PKCE S256, refresh, device grant) +
+a unified scoped-token model, on a storage-agnostic `AuthStore` (DynamoDB in
+prod with TTL auto-expiry; in-memory for tests/local). It exposes a
+`validateToken` command — the bridge an edge authorizer (or a peer via
+`serviceClient`) uses to turn a bearer token into the `x-auth-user` /
+`x-auth-scopes` headers the runtime's `identityFromHeaders` already reads.
+`requireScope(identity, 'rooms:my-room:write')` enforces scopes (wildcards
+supported). See [`valtown-mapping.md`](valtown-mapping.md).
 
 ## Communication modes
 

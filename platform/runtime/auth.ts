@@ -47,6 +47,24 @@ export function requireUser(identity: Identity): string {
   return identity.user;
 }
 
+/**
+ * Enforce that the identity carries `scope` (or a broader wildcard parent).
+ * A held scope `a:b:*` satisfies a required `a:b:c`; an exact match always
+ * satisfies. Returns the authenticated user.
+ */
+export function requireScope(identity: Identity, scope: string): string {
+  const user = requireUser(identity);
+  const ok = identity.scopes.some((held) => {
+    if (held === scope) return true;
+    if (held.endsWith(':*')) return scope.startsWith(held.slice(0, -1));
+    return false;
+  });
+  if (!ok) {
+    throw new ServiceAuthError(`Missing required scope: ${scope}`);
+  }
+  return user;
+}
+
 export class ServiceAuthError extends Error {
   readonly statusCode = 401;
   constructor(message: string) {

@@ -11,6 +11,8 @@ import type { ServiceManifest } from '../manifest';
 export interface CellPersistence {
   /** Provision a standard DynamoDB table owned by this cell. */
   dynamo?: boolean;
+  /** Enable TTL (the `ttl` attribute) on the DynamoDB table. */
+  dynamoTtl?: boolean;
   /**
    * Mark the cell as using Turso/libSQL for relational data. The connection
    * string and auth token are expected via `environment` (typically sourced
@@ -85,7 +87,10 @@ export class HttpServiceCell extends Construct {
     }
 
     if (props.persistence?.dynamo) {
-      this.table = TableFactory.standardTable(this, 'Table', { serviceName: props.name });
+      this.table = TableFactory.standardTable(this, 'Table', {
+        serviceName: props.name,
+        ttl: props.persistence.dynamoTtl,
+      });
       environment.TABLE_NAME = this.table.tableName;
     }
 

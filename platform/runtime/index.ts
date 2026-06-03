@@ -9,7 +9,7 @@ export { createLogger } from './logger';
 export type { Logger, LogLevel, LogRecord, LogContext } from './logger';
 export { loadConfig, getString, getOptional } from './config';
 export type { PlatformConfig } from './config';
-export { identityFromHeaders, requireUser, ServiceAuthError } from './auth';
+export { identityFromHeaders, requireUser, requireScope, ServiceAuthError } from './auth';
 export type { Identity } from './auth';
 export { createEvents, __setEventBridge } from './events';
 export type { Events } from './events';
@@ -26,5 +26,9 @@ export type {
   CommandResult,
   FunctionUrlEvent,
   FunctionUrlResponse,
+  HttpRoute,
+  HttpHandler,
+  ServiceHttpRequest,
+  ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
