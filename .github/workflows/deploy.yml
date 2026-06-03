@@ -8,6 +8,8 @@ on:
       - 'lib/**'
       - 'bin/**'
       - 'lambda/**'
+      - 'platform/**'
+      - 'services/**'
       - 'scripts/**'
       - 'cdk.json'
       - 'package.json'
