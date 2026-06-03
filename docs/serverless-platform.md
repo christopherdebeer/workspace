@@ -191,6 +191,30 @@ npx cdk deploy PlatformStack
 The stack output `Router/DistributionDomain` is the public entrypoint; each
 cell also outputs its manifest and Function URL.
 
+### Environments
+
+The platform stack is parameterised by environment (`bin/workspace.ts`):
+
+- **production** (default) → stack `PlatformStack`, event bus `platform-bus`.
+- any other value → an independent copy, e.g. `-c env=staging` gives stack
+  `PlatformStack-staging` and bus `platform-bus-staging` (its own CloudFront +
+  tables), so it can coexist with prod.
+
+```bash
+npx cdk deploy PlatformStack-staging -c env=staging   # shared staging
+```
+
+### CI / CD
+
+- **`.github/workflows/ci.yml`** (pre-merge, on `pull_request`): `build` +
+  `test` + `cdk synth` with a dummy account. No AWS creds, no deploy — purely a
+  gate.
+- **`.github/workflows/deploy-staging.yml`** (on push to `staging` or manual):
+  deploys **only** `PlatformStack-staging` (never the singleton
+  `InlineLambdaStack` / stateful `WorkspaceEc2Stack`).
+- **`.github/workflows/deploy.yml`** (on push to `main`): `cdk deploy --all`,
+  which includes the production `PlatformStack`.
+
 ## Security posture (current vs. production)
 
 - Function URLs default to `authType: AWS_IAM`. CloudFront reaches them through

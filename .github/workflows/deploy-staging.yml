@@ -1,0 +1,60 @@
+name: Deploy Staging
+
+# Long-lived shared staging environment: an independent PlatformStack-staging
+# (namespaced event bus, its own CloudFront + tables) for smoke-testing before
+# prod. Deploys ONLY the platform stack — never the singleton InlineLambdaStack
+# or the stateful WorkspaceEc2Stack.
+on:
+  push:
+    branches:
+      - staging
+    paths:
+      - 'lib/**'
+      - 'bin/**'
+      - 'platform/**'
+      - 'services/**'
+      - 'scripts/**'
+      - 'cdk.json'
+      - 'package.json'
+      - 'tsconfig.json'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::018159942401:role/c15r-workspace-github
+          aws-region: eu-west-2
+
+      - name: Bootstrap CDK (eu-west-2)
+        run: CDK_DEFAULT_REGION=eu-west-2 npm run cdk -- bootstrap aws://018159942401/eu-west-2 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+
+      - name: Deploy PlatformStack-staging
+        run: npm run cdk -- deploy PlatformStack-staging -c env=staging --require-approval never --outputs-file staging-outputs.json
+
+      - name: Show staging outputs
+        run: cat staging-outputs.json

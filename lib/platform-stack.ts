@@ -3,6 +3,15 @@ import { Construct } from 'constructs';
 import * as path from 'path';
 import { HttpServiceCell, ServiceRouter, PlatformEventBus } from '../platform/infra';
 
+export interface PlatformStackProps extends cdk.StackProps {
+  /**
+   * Deployment environment, e.g. "production" or "staging". Namespaces the
+   * resources that must be account/region-unique (currently the event bus) so
+   * multiple environments can coexist. Defaults to "production".
+   */
+  envName?: string;
+}
+
 /**
  * Serverless multi-project platform stack.
  *
@@ -12,15 +21,20 @@ import { HttpServiceCell, ServiceRouter, PlatformEventBus } from '../platform/in
  * `HttpServiceCell` instantiation.
  */
 export class PlatformStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: PlatformStackProps) {
     super(scope, id, props);
+
+    const envName = props?.envName ?? 'production';
+    cdk.Tags.of(this).add('platform:env', envName);
 
     // When running from compiled JS in dist/lib, ascend two dirs to repo root
     // (matches the convention in inline-lambda-stack.ts) to locate service code.
     const serviceEntry = (name: string): string =>
       path.join(__dirname, '..', '..', 'services', name, 'service.ts');
 
-    const eventBus = new PlatformEventBus(this, 'EventBus', { busName: 'platform-bus' });
+    // The bus name must be unique per account/region, so suffix non-prod envs.
+    const busName = envName === 'production' ? 'platform-bus' : `platform-bus-${envName}`;
+    const eventBus = new PlatformEventBus(this, 'EventBus', { busName });
 
     // Auth primitive: WebAuthn passkeys + OAuth 2.1 + scoped tokens (ported from
     // c15r/mcp-auth). Owns the auth_* data; peers consume it via tokens, never
