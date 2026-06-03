@@ -2,46 +2,40 @@
 
 _work in progress._
 
-https://www.christopherdebeer.com/workspace/
+This project is an AWS CDK application built around a **serverless multi-project
+platform**: a shared library (`platform/`) of CDK constructs and an in-Lambda
+runtime that host many independent service cells behind a single CloudFront
+router. See [`docs/serverless-platform.md`](docs/serverless-platform.md). Service
+cells live in `services/` (e.g. the `auth` primitive — passkeys + OAuth 2.1),
+are wired together in `lib/platform-stack.ts`, and deploy as the independent
+`PlatformStack`. User-facing UI is owned per-cell rather than by a single SPA;
+see [`docs/valtown-mapping.md`](docs/valtown-mapping.md).
 
-This project is an AWS CDK application with a React single page app (SPA).
-The frontend is published to GitHub Pages using the provided workflow.
-
-It also includes a **serverless multi-project platform**: a shared library
-(`platform/`) of CDK constructs and an in-Lambda runtime that host many
-independent service cells behind a single CloudFront router. See
-[`docs/serverless-platform.md`](docs/serverless-platform.md). Example services
-live in `services/`, wired together in `lib/platform-stack.ts` and deployed as
-the independent `PlatformStack`.
+Other stacks: `InlineLambdaStack` (an MCP/auth Lambda + DynamoDB) and
+`WorkspaceEc2Stack` (a persistent dev instance).
 
 ## Prerequisites
-- Node.js 18
+- Node.js 20
 - npm
 - AWS CLI
 
 ## Install
-Run `npm install` in the repository root. The root `postinstall` script automatically installs the frontend dependencies under `frontend/`.
+Run `npm install` in the repository root.
 
-## Build
-Run `npm run build` to build the frontend and compile the CDK TypeScript sources.
+## Build & test
+- `npm run build` — compile the CDK TypeScript sources.
+- `npm test` — run the unit tests (jest).
+- `npm run synth` — synthesize CloudFormation.
 
 ## Deploy
-Use `npm run deploy` to deploy the stack. This command deploys the CDK stack and
-builds the frontend. The website assets are published separately by the GitHub
-Pages workflow.
+Use `npm run deploy` to deploy the stacks (`cdk deploy --all`). Post-merge
+deploys to `main` run via the `Deploy CDK` GitHub Actions workflow.
 
-Before the first deploy you must bootstrap the environment so the CDK can
-create asset buckets and roles:
+Before the first deploy you must bootstrap the environment:
 
 ```bash
 npm run cdk -- bootstrap --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
 ```
-
-If this step is skipped the deployment fails when creating the AWS CLI layer
-with an `AccessDenied` error.
-
-GitHub Pages deployments are triggered automatically on pushes to `main` via the
-`Deploy Frontend to GitHub Pages` workflow.
 
 ## AWS Credentials
 The CDK commands require AWS credentials. Set the following environment variables
