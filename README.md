@@ -7,6 +7,13 @@ https://www.christopherdebeer.com/workspace/
 This project is an AWS CDK application with a React single page app (SPA).
 The frontend is published to GitHub Pages using the provided workflow.
 
+It also includes a **serverless multi-project platform**: a shared library
+(`platform/`) of CDK constructs and an in-Lambda runtime that host many
+independent service cells behind a single CloudFront router. See
+[`docs/serverless-platform.md`](docs/serverless-platform.md). Example services
+live in `services/`, wired together in `lib/platform-stack.ts` and deployed as
+the independent `PlatformStack`.
+
 ## Prerequisites
 - Node.js 18
 - npm
