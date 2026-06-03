@@ -141,3 +141,6 @@ cdk.out/
 # Playwright
 test-results/
 playwright-report/
+
+# CDK context cache (lookup results; should not be committed)
+cdk.context.json
