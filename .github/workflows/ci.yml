@@ -32,10 +32,13 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: CDK synth (all stacks)
+      - name: CDK synth (platform)
         env:
-          # Dummy account/region so WorkspaceEc2Stack's VPC lookup resolves
-          # during synth without real credentials.
           CDK_DEFAULT_ACCOUNT: '111111111111'
           CDK_DEFAULT_REGION: eu-west-2
-        run: npm run cdk -- synth
+        # Synthesize only PlatformStack (+ staging variant). WorkspaceEc2Stack is
+        # intentionally excluded: its VPC fromLookup needs real AWS creds, and CDK
+        # only runs a stack's lookups when that stack is selected.
+        run: |
+          npm run cdk -- synth PlatformStack
+          npm run cdk -- synth PlatformStack-staging -c env=staging
