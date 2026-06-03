@@ -4,5 +4,5 @@
     "types": ["node", "jest"],
     "isolatedModules": true
   },
-  "include": ["tests", "platform", "services", "lambda"]
+  "include": ["tests", "platform", "services"]
 }

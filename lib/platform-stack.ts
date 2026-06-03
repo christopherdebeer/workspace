@@ -27,8 +27,8 @@ export class PlatformStack extends cdk.Stack {
     const envName = props?.envName ?? 'production';
     cdk.Tags.of(this).add('platform:env', envName);
 
-    // When running from compiled JS in dist/lib, ascend two dirs to repo root
-    // (matches the convention in inline-lambda-stack.ts) to locate service code.
+    // When running from compiled JS in dist/lib, ascend two dirs to the repo
+    // root to locate the (TypeScript) service entry code for bundling.
     const serviceEntry = (name: string): string =>
       path.join(__dirname, '..', '..', 'services', name, 'service.ts');
 

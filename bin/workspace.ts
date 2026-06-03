@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { InlineLambdaStack } from '../lib/inline-lambda-stack';
 import { WorkspaceEc2Stack } from '../lib/workspace-ec2-stack';
 import { PlatformStack } from '../lib/platform-stack';
 
 const app = new cdk.App();
-new InlineLambdaStack(app, 'InlineLambdaStack');
 
 // Deployment environment for the platform. `production` keeps the canonical
 // stack/resource names; any other value (e.g. `staging`) gets a namespaced,

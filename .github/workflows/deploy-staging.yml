@@ -2,8 +2,7 @@ name: Deploy Staging
 
 # Long-lived shared staging environment: an independent PlatformStack-staging
 # (namespaced event bus, its own CloudFront + tables) for smoke-testing before
-# prod. Deploys ONLY the platform stack — never the singleton InlineLambdaStack
-# or the stateful WorkspaceEc2Stack.
+# prod. Deploys ONLY the platform stack — never the stateful WorkspaceEc2Stack.
 on:
   push:
     branches:

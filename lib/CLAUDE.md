@@ -4,9 +4,8 @@
 AWS CDK infrastructure as code definitions. This folder contains all infrastructure stack definitions.
 
 ## Files
-- `inline-lambda-stack.ts` - Serverless backend: Lambda + DynamoDB (auth & KV tables), Function URL
+- `platform-stack.ts` - Serverless multi-project platform: service cells (`services/*`) behind a CloudFront `ServiceRouter`, sharing a `PlatformEventBus`. Built on the `platform/` library. Env-parameterized (production / staging). See `docs/serverless-platform.md`.
 - `workspace-ec2-stack.ts` - Compute: EC2 (t3.medium Ubuntu 24.04), 100GB data volume, Tailscale-only access
-- `platform-stack.ts` - Serverless multi-project platform: example service cells (`services/*`) behind a CloudFront `ServiceRouter`, sharing a `PlatformEventBus`. Built on the `platform/` library. See `docs/serverless-platform.md`.
 
 ## Conventions
 - Use AWS CDK L2 constructs whenever possible

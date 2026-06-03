@@ -11,8 +11,7 @@ are wired together in `lib/platform-stack.ts`, and deploy as the independent
 `PlatformStack`. User-facing UI is owned per-cell rather than by a single SPA;
 see [`docs/valtown-mapping.md`](docs/valtown-mapping.md).
 
-Other stacks: `InlineLambdaStack` (an MCP/auth Lambda + DynamoDB) and
-`WorkspaceEc2Stack` (a persistent dev instance).
+Other stacks: `WorkspaceEc2Stack` (a persistent dev instance).
 
 ## Prerequisites
 - Node.js 20
