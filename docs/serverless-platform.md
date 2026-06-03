@@ -155,9 +155,20 @@ cell also outputs its manifest and Function URL.
 
 ## Security posture (current vs. production)
 
-- Function URLs are `authType: NONE` and fronted by CloudFront. They are
-  reachable directly but unadvertised. Production hardening would restrict
-  origin access (OAC/IAM) so only CloudFront can reach a cell.
+- Function URLs default to `authType: AWS_IAM`. CloudFront reaches them through
+  an Origin Access Control that signs every origin request with SigV4, and CDK
+  auto-adds a `lambda:InvokeFunctionUrl` permission for `cloudfront.amazonaws.com`
+  scoped to the distribution — so the raw URLs are not publicly invokable.
+  A cell can opt back into public access with `publicFunctionUrl: true` (e.g.
+  for local/dev or deliberately public endpoints).
 - DynamoDB tables use `RemovalPolicy.DESTROY` to match the repo's existing
   non-production posture; flip `retain` in `TableFactory` for production.
 - Inter-service permissions are explicit and least-privilege via `cell.allow()`.
+  Note `allow()` grants `lambda:InvokeFunction` (the Invoke API used by
+  `serviceClient`), which is independent of the Function URL's IAM auth.
+
+## Related
+
+- [`valtown-mapping.md`](valtown-mapping.md) — how the `mcp-auth`, `workspace`,
+  and `sync` Val Town projects map onto this architecture, including adopting
+  `mcp-auth` as a shared **auth primitive service**.

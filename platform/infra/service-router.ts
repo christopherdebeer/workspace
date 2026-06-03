@@ -32,15 +32,29 @@ export class ServiceRouter extends Construct {
     }
     const defaultCell = props.defaultCell ?? props.cells[0];
 
-    const originFor = (cell: HttpServiceCell): origins.HttpOrigin =>
-      new origins.HttpOrigin(cell.functionUrlDomain, {
-        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-      });
+    // One shared Origin Access Control: CloudFront signs every origin request
+    // with SigV4 so the IAM-protected Function URLs accept it. CDK auto-adds the
+    // matching `lambda:InvokeFunctionUrl` permission, scoped to this distribution.
+    const oac = new cloudfront.FunctionUrlOriginAccessControl(this, 'Oac', {
+      signing: cloudfront.Signing.SIGV4_ALWAYS,
+    });
 
-    // Function URL origins must not receive the viewer Host header, so forward
-    // everything except Host. Dynamic APIs are not cached.
+    // Build one origin per cell and reuse it across that cell's behaviours, so a
+    // cell that owns several routes does not get duplicate origins/permissions.
+    const originByCell = new Map<HttpServiceCell, cloudfront.IOrigin>(
+      props.cells.map((cell) => [
+        cell,
+        origins.FunctionUrlOrigin.withOriginAccessControl(cell.functionUrl, {
+          originAccessControl: oac,
+        }),
+      ]),
+    );
+
+    // Function URL origins must not receive the viewer Host header (SigV4 signs
+    // the origin host), so forward everything except Host. Dynamic APIs are not
+    // cached.
     const behaviorFor = (cell: HttpServiceCell): cloudfront.BehaviorOptions => ({
-      origin: originFor(cell),
+      origin: originByCell.get(cell)!,
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,

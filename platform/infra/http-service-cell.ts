@@ -42,6 +42,14 @@ export interface HttpServiceCellProps {
   memorySize?: number;
   /** Timeout in seconds (default 15). */
   timeoutSeconds?: number;
+  /**
+   * Make the Function URL publicly invokable (`authType: NONE`) instead of the
+   * default IAM auth. The default cell is reachable only via CloudFront, which
+   * signs requests with SigV4 through Origin Access Control. Set this to true
+   * only for local/dev or deliberately public endpoints.
+   * @default false
+   */
+  publicFunctionUrl?: boolean;
 }
 
 /**
@@ -99,16 +107,23 @@ export class HttpServiceCell extends Construct {
     this.table?.grantReadWriteData(this.fn);
     props.eventBus?.grantPutEvents(this.fn);
 
-    // Function URL is intentionally public-auth-NONE: the only public ingress
-    // is CloudFront, which fronts every cell. Direct URL access is possible but
-    // unadvertised; production hardening would restrict this via OAC/IAM.
+    // By default the Function URL requires IAM auth: the only way in is through
+    // CloudFront, which signs requests with SigV4 via Origin Access Control
+    // (wired in ServiceRouter). This closes off direct public access to the
+    // raw URL. `publicFunctionUrl` opts a cell back into unauthenticated access.
     this.functionUrl = this.fn.addFunctionUrl({
-      authType: lambda.FunctionUrlAuthType.NONE,
-      cors: {
-        allowedOrigins: ['*'],
-        allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.POST],
-        allowedHeaders: ['content-type', 'authorization', 'x-correlation-id'],
-      },
+      authType: props.publicFunctionUrl
+        ? lambda.FunctionUrlAuthType.NONE
+        : lambda.FunctionUrlAuthType.AWS_IAM,
+      // CORS only applies to direct browser calls; behind CloudFront the browser
+      // talks to the distribution, not the URL. Harmless to keep for dev use.
+      cors: props.publicFunctionUrl
+        ? {
+            allowedOrigins: ['*'],
+            allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.POST],
+            allowedHeaders: ['content-type', 'authorization', 'x-correlation-id'],
+          }
+        : undefined,
     });
 
     this.manifest = {
@@ -127,11 +142,6 @@ export class HttpServiceCell extends Construct {
       value: this.functionUrl.url,
       description: `Function URL for ${props.name}`,
     });
-  }
-
-  /** The bare domain name of this cell's Function URL (no scheme/path). */
-  get functionUrlDomain(): string {
-    return cdk.Fn.select(2, cdk.Fn.split('/', this.functionUrl.url));
   }
 
   /**
