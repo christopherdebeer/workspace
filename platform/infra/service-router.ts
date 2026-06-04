@@ -2,8 +2,37 @@ import { Construct } from 'constructs';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { HttpServiceCell } from './http-service-cell';
+
+/**
+ * Lambda@Edge (origin-request) source. CloudFront OAC signs origin requests with
+ * SigV4, but for an IAM-protected Function URL it does NOT hash the request body
+ * for POST/PUT/PATCH — it expects an `x-amz-content-sha256` header, and Lambda
+ * rejects unsigned payloads. So every POST 403s. This runs just before OAC
+ * signing, hashes the (unmodified) body, and sets that header so the signature
+ * covers the payload. GET/HEAD/etc. pass through (OAC already signs empty
+ * bodies). Note: origin-request includeBody caps the body at 1 MB.
+ */
+const ORIGIN_SIGNER_SRC = `'use strict';
+const crypto = require('crypto');
+exports.handler = (event, _ctx, callback) => {
+  const request = event.Records[0].cf.request;
+  const m = request.method;
+  if (m !== 'POST' && m !== 'PUT' && m !== 'PATCH' && m !== 'DELETE') {
+    return callback(null, request);
+  }
+  const body = request.body || {};
+  const buf = body.data
+    ? Buffer.from(body.data, body.encoding === 'base64' ? 'base64' : 'utf8')
+    : Buffer.alloc(0);
+  const hash = crypto.createHash('sha256').update(buf).digest('hex');
+  request.headers['x-amz-content-sha256'] = [{ key: 'x-amz-content-sha256', value: hash }];
+  callback(null, request);
+};
+`;
 
 export interface ServiceRouterProps {
   /** All cells to expose. Their manifest routes become CloudFront behaviours. */
@@ -58,15 +87,44 @@ export class ServiceRouter extends Construct {
       ]),
     );
 
+    // Origin-request Lambda@Edge that injects `x-amz-content-sha256` so OAC's
+    // SigV4 signature covers the body (without it, every POST/PUT 403s). Lives in
+    // us-east-1 (this stack), so a plain Function + version suffices — no
+    // cross-region EdgeFunction needed. Edge functions take no env vars and must
+    // be assumable by both the Lambda and Lambda@Edge service principals.
+    const originSigner = new lambda.Function(this, 'OriginSigner', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(ORIGIN_SIGNER_SRC),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      role: new iam.Role(this, 'OriginSignerRole', {
+        assumedBy: new iam.CompositePrincipal(
+          new iam.ServicePrincipal('lambda.amazonaws.com'),
+          new iam.ServicePrincipal('edgelambda.amazonaws.com'),
+        ),
+        managedPolicies: [
+          iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+        ],
+      }),
+    });
+
     // Function URL origins must not receive the viewer Host header (SigV4 signs
     // the origin host), so forward everything except Host. Dynamic APIs are not
-    // cached.
+    // cached. The edge signer runs on every behaviour so POST works platform-wide.
     const behaviorFor = (cell: HttpServiceCell): cloudfront.BehaviorOptions => ({
       origin: originByCell.get(cell)!,
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      edgeLambdas: [
+        {
+          functionVersion: originSigner.currentVersion,
+          eventType: cloudfront.LambdaEdgeEventType.ORIGIN_REQUEST,
+          includeBody: true,
+        },
+      ],
     });
 
     const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
