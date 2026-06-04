@@ -101,4 +101,11 @@ jobs:
           fi
 
       - name: Deploy CDK
+        env:
+          # Custom-domain config (set these as repo Variables to enable a custom
+          # domain; empty/unset = CloudFront default domain). PLATFORM_DOMAINS is
+          # comma-separated, e.g. "parc.land,www.parc.land".
+          PLATFORM_DOMAINS: ${{ vars.PLATFORM_DOMAINS }}
+          PLATFORM_PUBLIC_BASE_URL: ${{ vars.PLATFORM_PUBLIC_BASE_URL }}
+          PLATFORM_CERT_ARN: ${{ vars.PLATFORM_CERT_ARN }}
         run: npm run deploy
