@@ -2,6 +2,7 @@ import { Construct } from 'constructs';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { HttpServiceCell } from './http-service-cell';
 
 export interface ServiceRouterProps {
@@ -12,6 +13,13 @@ export interface ServiceRouterProps {
    * deployment this would be a static-site/frontend origin.
    */
   defaultCell?: HttpServiceCell;
+  /**
+   * Custom alternate domain names (CNAMEs) for the distribution, e.g.
+   * ["app.parc.land"]. Requires `certificate`.
+   */
+  domainNames?: string[];
+  /** ACM certificate (must be in us-east-1) covering `domainNames`. */
+  certificate?: acm.ICertificate;
 }
 
 /**
@@ -72,6 +80,8 @@ export class ServiceRouter extends Construct {
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       defaultBehavior: behaviorFor(defaultCell),
       additionalBehaviors,
+      domainNames: props.domainNames,
+      certificate: props.certificate,
       comment: 'Serverless multi-project platform router',
     });
 

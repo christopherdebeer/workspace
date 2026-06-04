@@ -15,11 +15,20 @@ new InlineLambdaStack(app, 'InlineLambdaStack');
 // independently-deployable copy. Select with `-c env=staging` or PLATFORM_ENV.
 const platformEnv = (app.node.tryGetContext('env') as string | undefined) ?? process.env.PLATFORM_ENV ?? 'production';
 const platformStackId = platformEnv === 'production' ? 'PlatformStack' : `PlatformStack-${platformEnv}`;
+
+const ctx = (k: string): string | undefined => (app.node.tryGetContext(k) as string | undefined) || undefined;
+const domains = ctx('domains') ?? process.env.PLATFORM_DOMAINS;
+
 new PlatformStack(app, platformStackId, {
   envName: platformEnv,
+  publicBaseUrl: ctx('publicBaseUrl') ?? process.env.PLATFORM_PUBLIC_BASE_URL,
+  domainNames: domains ? domains.split(',').map((d) => d.trim()).filter(Boolean) : undefined,
+  certificateArn: ctx('certArn') ?? process.env.PLATFORM_CERT_ARN,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION ?? 'eu-west-2',
+    // Platform (and its CloudFront/ACM) live in us-east-1; pin it so a differing
+    // CDK_DEFAULT_REGION can't create a duplicate stack in another region.
+    region: 'us-east-1',
   },
 });
 new WorkspaceEc2Stack(app, 'WorkspaceEc2Stack', {

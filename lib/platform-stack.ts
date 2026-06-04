@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as path from 'path';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { HttpServiceCell, ServiceRouter, PlatformEventBus } from '../platform/infra';
 
 export interface PlatformStackProps extends cdk.StackProps {
@@ -10,6 +11,17 @@ export interface PlatformStackProps extends cdk.StackProps {
    * multiple environments can coexist. Defaults to "production".
    */
   envName?: string;
+  /**
+   * Public base URL the platform is served from, e.g. "https://app.parc.land".
+   * Sets the auth cell's OAuth issuer + WebAuthn RP id so they stay correct
+   * across the CloudFront/OAC hop. Defaults to the CloudFront distribution's
+   * own domain when omitted.
+   */
+  publicBaseUrl?: string;
+  /** CloudFront alternate domain names (CNAMEs), e.g. ["app.parc.land"]. */
+  domainNames?: string[];
+  /** ARN of an ACM certificate in us-east-1 covering `domainNames`. */
+  certificateArn?: string;
 }
 
 /**
@@ -48,13 +60,9 @@ export class PlatformStack extends cdk.Stack {
       commands: ['validateToken', 'mintToken', 'listTokens', 'revokeToken'],
       emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'],
       eventBus,
-      environment: {
-        AUTH_SERVER_NAME: 'workspace',
-        // PUBLIC_BASE_URL / WEBAUTHN_RP_ID should be set to the deployed domain.
-        ...(process.env.PLATFORM_PUBLIC_BASE_URL
-          ? { PUBLIC_BASE_URL: process.env.PLATFORM_PUBLIC_BASE_URL }
-          : {}),
-      },
+      environment: { AUTH_SERVER_NAME: 'workspace' },
+      // PUBLIC_BASE_URL / WEBAUTHN_RP_ID are set below, once the router (and thus
+      // the public domain) exists.
     });
 
     const render = new HttpServiceCell(this, 'RenderService', {
@@ -81,10 +89,45 @@ export class PlatformStack extends cdk.Stack {
     // alternative to edge validation).
     documents.allow(auth);
 
-    // Single public entrypoint, behaviours generated from manifests.
-    new ServiceRouter(this, 'Router', {
+    // Single public entrypoint, behaviours generated from manifests. Optionally
+    // fronted by a custom domain (CloudFront alias + ACM cert in us-east-1).
+    let certificate: acm.ICertificate | undefined;
+    if (props?.certificateArn) {
+      certificate = acm.Certificate.fromCertificateArn(this, 'RouterCert', props.certificateArn);
+    } else if (props?.domainNames && props.domainNames.length > 0) {
+      // CDK-managed, DNS-validated cert. With external DNS (Namecheap) you must
+      // add the ACM validation CNAME(s) manually; the deploy waits until the
+      // cert is ISSUED, so roll a domain out via workflow_dispatch/local (not an
+      // unattended merge) and add the CNAME promptly.
+      certificate = new acm.Certificate(this, 'RouterCert', {
+        domainName: props.domainNames[0],
+        subjectAlternativeNames: props.domainNames.slice(1),
+        validation: acm.CertificateValidation.fromDns(),
+      });
+    }
+
+    const router = new ServiceRouter(this, 'Router', {
       cells: [auth, documents, render],
       defaultCell: documents,
+      domainNames: props?.domainNames,
+      certificate,
     });
+
+    // Make the auth cell self-consistent with the public origin: prefer an
+    // explicit public base URL (custom domain), else the distribution's own
+    // domain. Without this the cell derives URLs from the (OAC-rewritten) Host
+    // and advertises the IAM-protected Function URL as the OAuth issuer.
+    let publicBaseUrl: string;
+    let webauthnRpId: string;
+    if (props?.publicBaseUrl) {
+      publicBaseUrl = props.publicBaseUrl;
+      webauthnRpId = new URL(props.publicBaseUrl).hostname;
+    } else {
+      const domain = router.distribution.distributionDomainName;
+      publicBaseUrl = `https://${domain}`;
+      webauthnRpId = domain;
+    }
+    auth.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
+    auth.fn.addEnvironment('WEBAUTHN_RP_ID', webauthnRpId);
   }
 }

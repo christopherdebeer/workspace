@@ -47,10 +47,11 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::018159942401:role/c15r-workspace-github
-          aws-region: eu-west-2
+          # us-east-1 to match prod PlatformStack (and CloudFront ACM certs).
+          aws-region: us-east-1
 
-      - name: Bootstrap CDK (eu-west-2)
-        run: CDK_DEFAULT_REGION=eu-west-2 npm run cdk -- bootstrap aws://018159942401/eu-west-2 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+      - name: Bootstrap CDK (us-east-1)
+        run: npm run cdk -- bootstrap aws://018159942401/us-east-1 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
 
       - name: Deploy PlatformStack-staging
         run: npm run cdk -- deploy PlatformStack-staging -c env=staging --require-approval never --outputs-file staging-outputs.json
