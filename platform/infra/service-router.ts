@@ -107,8 +107,10 @@ export class ServiceRouter extends Construct {
     );
 
     // Shared role for the edge functions: assumable by both Lambda and
-    // Lambda@Edge, basic execution (logs) only.
-    const edgeRole = new iam.Role(this, 'EdgeFnRole', {
+    // Lambda@Edge, basic execution (logs) only. Keeps the original construct id
+    // ('OriginSignerRole') so it isn't replaced/deleted — the existing replicated
+    // body-signer still references it, and Lambda@Edge replicas linger for hours.
+    const edgeRole = new iam.Role(this, 'OriginSignerRole', {
       assumedBy: new iam.CompositePrincipal(
         new iam.ServicePrincipal('lambda.amazonaws.com'),
         new iam.ServicePrincipal('edgelambda.amazonaws.com'),
@@ -136,8 +138,10 @@ export class ServiceRouter extends Construct {
     // `x-amzn-remapped-` — including `WWW-Authenticate` — and RFC 9728 / MCP
     // clients read the literal header to discover the auth server from a 401.
     // A CloudFront Function can't do this (that header is read-only there), so
-    // it must be Lambda@Edge.
-    const wwwAuthFix = new lambda.Function(this, 'RestoreWwwAuthenticate', {
+    // it must be Lambda@Edge. (New construct id: the previous attempt used a
+    // CloudFront Function under id 'RestoreWwwAuthenticate'; CFN can't change a
+    // resource's type in place, so this gets a distinct id.)
+    const wwwAuthFix = new lambda.Function(this, 'WwwAuthEdge', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(WWW_AUTH_FIX_SRC),
