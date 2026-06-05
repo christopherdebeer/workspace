@@ -83,6 +83,17 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
     });
 
+    // Self-documenting front-end: a mobile-first React SPA served at `/` (the
+    // router default). Its browser bundle is built from client/main.tsx by
+    // esbuild at deploy time and shipped in the Lambda asset.
+    const home = new HttpServiceCell(this, 'HomeService', {
+      name: 'home',
+      entry: serviceEntry('home'),
+      clientEntry: path.join(__dirname, '..', '..', 'services', 'home', 'client', 'main.tsx'),
+      routes: [],
+      eventBus,
+    });
+
     // Protected resource server: owns `/mcp/*`, the resource the auth cell
     // advertises in its protected-resource metadata. Exercises auth end-to-end
     // (validated bearer -> identity, 401 + WWW-Authenticate challenge).
@@ -118,8 +129,8 @@ export class PlatformStack extends cdk.Stack {
     }
 
     const router = new ServiceRouter(this, 'Router', {
-      cells: [auth, documents, render, resource],
-      defaultCell: documents,
+      cells: [home, auth, documents, render, resource],
+      defaultCell: home,
       domainNames: props?.domainNames,
       certificate,
     });
@@ -143,5 +154,12 @@ export class PlatformStack extends cdk.Stack {
     // The resource cell derives its metadata/challenge URLs from req.url, which
     // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
     resource.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
+    home.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
+
+    // Self-documenting catalog: inject the live cell manifests (this wiring is
+    // the single source of truth) so the home SPA renders the service list from
+    // real data rather than a hardcoded copy. Served at GET /_catalog.
+    const catalog = [home, auth, resource, documents, render].map((c) => c.manifest);
+    home.fn.addEnvironment('PLATFORM_CATALOG', JSON.stringify(catalog));
   }
 }
