@@ -100,7 +100,9 @@ export class PlatformStack extends cdk.Stack {
     const resource = new HttpServiceCell(this, 'ResourceService', {
       name: 'resource',
       entry: serviceEntry('resource'),
-      routes: ['/mcp/*'],
+      // Both the bare resource identifier (`/mcp`, advertised in the PRM) and its
+      // sub-paths. CloudFront's `/mcp/*` pattern does not match the bare `/mcp`.
+      routes: ['/mcp', '/mcp/*'],
       eventBus,
     });
 
