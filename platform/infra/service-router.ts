@@ -87,6 +87,23 @@ export class ServiceRouter extends Construct {
       ]),
     );
 
+    // Lambda Function URLs remap a denylist of response headers by prefixing
+    // `x-amzn-remapped-` — including `WWW-Authenticate`. RFC 9728 / MCP clients
+    // look for the literal header to discover the auth server from a 401, so a
+    // cheap viewer-response CloudFront Function renames it back.
+    const wwwAuthFix = new cloudfront.Function(this, 'RestoreWwwAuthenticate', {
+      comment: 'Restore WWW-Authenticate from the Function URL x-amzn-remapped header',
+      code: cloudfront.FunctionCode.fromInline(`function handler(event) {
+  var h = event.response.headers;
+  var remapped = h['x-amzn-remapped-www-authenticate'];
+  if (remapped) {
+    h['www-authenticate'] = { value: remapped.value };
+    delete h['x-amzn-remapped-www-authenticate'];
+  }
+  return event.response;
+}`),
+    });
+
     // Origin-request Lambda@Edge that injects `x-amz-content-sha256` so OAC's
     // SigV4 signature covers the body (without it, every POST/PUT 403s). Lives in
     // us-east-1 (this stack), so a plain Function + version suffices — no
@@ -124,6 +141,9 @@ export class ServiceRouter extends Construct {
           eventType: cloudfront.LambdaEdgeEventType.ORIGIN_REQUEST,
           includeBody: true,
         },
+      ],
+      functionAssociations: [
+        { function: wwwAuthFix, eventType: cloudfront.FunctionEventType.VIEWER_RESPONSE },
       ],
     });
 
