@@ -34,6 +34,25 @@ exports.handler = (event, _ctx, callback) => {
 };
 `;
 
+/**
+ * Lambda@Edge (origin-response) source. Lambda Function URLs remap
+ * `WWW-Authenticate` to `x-amzn-remapped-www-authenticate`; this renames it back
+ * so RFC 9728 / MCP clients see the literal header on a 401. (A CloudFront
+ * Function can't — that response header is read-only there.)
+ */
+const WWW_AUTH_FIX_SRC = `'use strict';
+exports.handler = (event, _ctx, callback) => {
+  const response = event.Records[0].cf.response;
+  const h = response.headers;
+  const remapped = h['x-amzn-remapped-www-authenticate'];
+  if (remapped && remapped.length) {
+    h['www-authenticate'] = [{ key: 'WWW-Authenticate', value: remapped[0].value }];
+    delete h['x-amzn-remapped-www-authenticate'];
+  }
+  callback(null, response);
+};
+`;
+
 export interface ServiceRouterProps {
   /** All cells to expose. Their manifest routes become CloudFront behaviours. */
   cells: HttpServiceCell[];
@@ -87,48 +106,50 @@ export class ServiceRouter extends Construct {
       ]),
     );
 
-    // Lambda Function URLs remap a denylist of response headers by prefixing
-    // `x-amzn-remapped-` — including `WWW-Authenticate`. RFC 9728 / MCP clients
-    // look for the literal header to discover the auth server from a 401, so a
-    // cheap viewer-response CloudFront Function renames it back.
-    const wwwAuthFix = new cloudfront.Function(this, 'RestoreWwwAuthenticate', {
-      comment: 'Restore WWW-Authenticate from the Function URL x-amzn-remapped header',
-      code: cloudfront.FunctionCode.fromInline(`function handler(event) {
-  var h = event.response.headers;
-  var remapped = h['x-amzn-remapped-www-authenticate'];
-  if (remapped) {
-    h['www-authenticate'] = { value: remapped.value };
-    delete h['x-amzn-remapped-www-authenticate'];
-  }
-  return event.response;
-}`),
+    // Shared role for the edge functions: assumable by both Lambda and
+    // Lambda@Edge, basic execution (logs) only.
+    const edgeRole = new iam.Role(this, 'EdgeFnRole', {
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('lambda.amazonaws.com'),
+        new iam.ServicePrincipal('edgelambda.amazonaws.com'),
+      ),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
     });
 
     // Origin-request Lambda@Edge that injects `x-amz-content-sha256` so OAC's
     // SigV4 signature covers the body (without it, every POST/PUT 403s). Lives in
     // us-east-1 (this stack), so a plain Function + version suffices — no
-    // cross-region EdgeFunction needed. Edge functions take no env vars and must
-    // be assumable by both the Lambda and Lambda@Edge service principals.
+    // cross-region EdgeFunction needed.
     const originSigner = new lambda.Function(this, 'OriginSigner', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(ORIGIN_SIGNER_SRC),
       timeout: cdk.Duration.seconds(5),
       memorySize: 128,
-      role: new iam.Role(this, 'OriginSignerRole', {
-        assumedBy: new iam.CompositePrincipal(
-          new iam.ServicePrincipal('lambda.amazonaws.com'),
-          new iam.ServicePrincipal('edgelambda.amazonaws.com'),
-        ),
-        managedPolicies: [
-          iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-        ],
-      }),
+      role: edgeRole,
+    });
+
+    // Origin-response Lambda@Edge that restores the `WWW-Authenticate` header.
+    // Lambda Function URLs remap a denylist of response headers by prefixing
+    // `x-amzn-remapped-` — including `WWW-Authenticate` — and RFC 9728 / MCP
+    // clients read the literal header to discover the auth server from a 401.
+    // A CloudFront Function can't do this (that header is read-only there), so
+    // it must be Lambda@Edge.
+    const wwwAuthFix = new lambda.Function(this, 'RestoreWwwAuthenticate', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(WWW_AUTH_FIX_SRC),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      role: edgeRole,
     });
 
     // Function URL origins must not receive the viewer Host header (SigV4 signs
     // the origin host), so forward everything except Host. Dynamic APIs are not
-    // cached. The edge signer runs on every behaviour so POST works platform-wide.
+    // cached. The edge functions run on every behaviour so POST signing and the
+    // WWW-Authenticate fix apply platform-wide.
     const behaviorFor = (cell: HttpServiceCell): cloudfront.BehaviorOptions => ({
       origin: originByCell.get(cell)!,
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -141,9 +162,10 @@ export class ServiceRouter extends Construct {
           eventType: cloudfront.LambdaEdgeEventType.ORIGIN_REQUEST,
           includeBody: true,
         },
-      ],
-      functionAssociations: [
-        { function: wwwAuthFix, eventType: cloudfront.FunctionEventType.VIEWER_RESPONSE },
+        {
+          functionVersion: wwwAuthFix.currentVersion,
+          eventType: cloudfront.LambdaEdgeEventType.ORIGIN_RESPONSE,
+        },
       ],
     });
 
