@@ -19,7 +19,7 @@ import { createLogger } from './logger';
 import { createEvents } from './events';
 import { createServiceClient, CommandEnvelope } from './service-client';
 import { loadConfig } from './config';
-import { identityFromHeaders, ServiceAuthError, Identity } from './auth';
+import { ServiceAuthError, Identity } from './auth';
 import type { ServiceManifest } from '../manifest';
 import type {
   ServiceDefinition,
@@ -48,6 +48,55 @@ function headerOf(headers: Record<string, string | undefined> | undefined, name:
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+
+const ANONYMOUS: Identity = { user: undefined, scopes: [] };
+
+/** Shape returned by the auth cell's `validateToken` command. */
+interface ValidatedToken {
+  userId: string;
+  scope: string;
+  clientId: string | null;
+}
+
+/**
+ * Establish the request identity for an HTTP call. Identity is derived ONLY
+ * from a validated `Authorization: Bearer` token — never from client-supplied
+ * `x-auth-*` headers (which would be trivially forgeable, since CloudFront
+ * forwards all viewer headers). The opaque token is validated by invoking the
+ * auth cell's `validateToken` command; the cell must list `auth` in `allow[]`
+ * for the registry entry to exist. The auth cell itself can't self-validate, so
+ * its own HTTP routes resolve anonymous (its OAuth endpoints don't need this).
+ */
+async function resolveHttpIdentity(
+  headers: Record<string, string | undefined> | undefined,
+  serviceName: string,
+): Promise<Identity> {
+  const authHeader = headerOf(headers, 'authorization');
+  const token = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  if (!token) return ANONYMOUS;
+
+  const authService = process.env.AUTH_SERVICE_NAME ?? 'auth';
+  if (serviceName === authService) return ANONYMOUS;
+
+  const config = loadConfig();
+  if (!config.registry[authService]) return ANONYMOUS;
+
+  try {
+    const client = createServiceClient({ registry: config.registry });
+    const validated = await client(authService).command<ValidatedToken | null>('validateToken', {
+      token,
+    });
+    if (!validated) return ANONYMOUS;
+    return {
+      user: validated.userId,
+      scopes: validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [],
+    };
+  } catch {
+    // A validation failure (revoked/expired/unknown token, or auth unavailable)
+    // is treated as anonymous; handlers enforce auth via requireUser/requireScope.
+    return ANONYMOUS;
+  }
+}
 
 export function defineService(definition: ServiceDefinition) {
   const version = definition.version ?? '1.0.0';
@@ -138,7 +187,7 @@ export function defineService(definition: ServiceDefinition) {
     const path = httpEvent.rawPath ?? httpEvent.requestContext?.http?.path ?? '/';
     const correlationId = headerOf(httpEvent.headers, 'x-correlation-id') ?? randomUUID();
     const traceId = headerOf(httpEvent.headers, 'x-amzn-trace-id') ?? correlationId;
-    const identity = identityFromHeaders(httpEvent.headers);
+    const identity = await resolveHttpIdentity(httpEvent.headers, definition.name);
     const ctx = buildContext({ correlationId, traceId, identity });
 
     const rawBody = httpEvent.body

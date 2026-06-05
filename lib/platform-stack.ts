@@ -83,11 +83,22 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
     });
 
+    // Protected resource server: owns `/mcp/*`, the resource the auth cell
+    // advertises in its protected-resource metadata. Exercises auth end-to-end
+    // (validated bearer -> identity, 401 + WWW-Authenticate challenge).
+    const resource = new HttpServiceCell(this, 'ResourceService', {
+      name: 'resource',
+      entry: serviceEntry('resource'),
+      routes: ['/mcp/*'],
+      eventBus,
+    });
+
     // Least-privilege: documents may invoke render, but not vice versa.
     documents.allow(render);
-    // Any cell may ask the auth service to validate a token (the in-cell
-    // alternative to edge validation).
+    // Any cell that protects routes asks the auth service to validate the
+    // bearer token (the in-cell alternative to edge validation).
     documents.allow(auth);
+    resource.allow(auth);
 
     // Single public entrypoint, behaviours generated from manifests. Optionally
     // fronted by a custom domain (CloudFront alias + ACM cert in us-east-1).
@@ -107,7 +118,7 @@ export class PlatformStack extends cdk.Stack {
     }
 
     const router = new ServiceRouter(this, 'Router', {
-      cells: [auth, documents, render],
+      cells: [auth, documents, render, resource],
       defaultCell: documents,
       domainNames: props?.domainNames,
       certificate,
@@ -129,5 +140,8 @@ export class PlatformStack extends cdk.Stack {
     }
     auth.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
     auth.fn.addEnvironment('WEBAUTHN_RP_ID', webauthnRpId);
+    // The resource cell derives its metadata/challenge URLs from req.url, which
+    // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
+    resource.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
   }
 }
