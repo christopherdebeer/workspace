@@ -1,0 +1,17 @@
+{
+  "// purpose": "Type-check browser-side React (*.tsx): shared components in platform/ui and each cell's client/ entry. esbuild does the actual bundling at deploy.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["react", "react-dom", "node"],
+    "noEmit": true
+  },
+  "include": ["platform/ui", "services/**/client"]
+}

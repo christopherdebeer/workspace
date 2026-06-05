@@ -27,6 +27,13 @@ export interface HttpServiceCellProps {
   name: string;
   /** Absolute path to the service's runtime entry module (exports `handler`). */
   entry: string;
+  /**
+   * Absolute path to a browser client entry (e.g. `client/main.tsx`). When set,
+   * esbuild bundles it to `app.js` in the Lambda asset at deploy time so the
+   * handler can serve it — letting a cell ship a self-contained SPA with no
+   * separate build pipeline.
+   */
+  clientEntry?: string;
   /** CloudFront path patterns owned by the service, e.g. ["/documents/*"]. */
   routes: string[];
   /** Commands advertised in the manifest. */
@@ -106,6 +113,18 @@ export class HttpServiceCell extends Construct {
         // Bundle the AWS SDK (v2) used by the runtime; it is not present in the
         // Node.js 20 Lambda image by default.
         externalModules: [],
+        // When a client entry is provided, esbuild it into `app.js` next to the
+        // handler so the cell can serve a browser bundle. Runs in the same local
+        // esbuild environment NodejsFunction already uses for the handler.
+        commandHooks: props.clientEntry
+          ? {
+              beforeBundling: () => [],
+              beforeInstall: () => [],
+              afterBundling: (_inputDir: string, outputDir: string): string[] => [
+                `node -e "require('esbuild').buildSync({entryPoints:['${props.clientEntry}'],bundle:true,minify:true,format:'iife',target:['es2020'],loader:{'.tsx':'tsx','.ts':'ts'},jsx:'automatic',define:{'process.env.NODE_ENV':'\\"production\\"'},outfile:'${outputDir}/app.js'})"`,
+              ],
+            }
+          : undefined,
       },
     });
 
