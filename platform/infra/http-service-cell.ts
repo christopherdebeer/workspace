@@ -52,6 +52,13 @@ export interface HttpServiceCellProps {
   /** Timeout in seconds (default 15). */
   timeoutSeconds?: number;
   /**
+   * npm modules to install into the Lambda asset rather than bundle inline.
+   * Use for packages that ship non-JS assets (e.g. `esbuild-wasm`'s `.wasm`),
+   * which esbuild can't inline. They are marked external and `npm install`ed
+   * into the bundle at deploy time.
+   */
+  bundlingNodeModules?: string[];
+  /**
    * Make the Function URL publicly invokable (`authType: NONE`) instead of the
    * default IAM auth. The default cell is reachable only via CloudFront, which
    * signs requests with SigV4 through Origin Access Control. Set this to true
@@ -113,6 +120,9 @@ export class HttpServiceCell extends Construct {
         // Bundle the AWS SDK (v2) used by the runtime; it is not present in the
         // Node.js 20 Lambda image by default.
         externalModules: [],
+        // Packages with non-JS assets are installed into the asset instead of
+        // being bundled (esbuild can't inline a `.wasm`).
+        nodeModules: props.bundlingNodeModules,
         // When a client entry is provided, esbuild it into `app.js` next to the
         // handler so the cell can serve a browser bundle. Runs in the same local
         // esbuild environment NodejsFunction already uses for the handler.

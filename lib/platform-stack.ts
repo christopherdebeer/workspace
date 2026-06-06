@@ -2,7 +2,12 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
-import { HttpServiceCell, ServiceRouter, PlatformEventBus } from '../platform/infra';
+import {
+  HttpServiceCell,
+  ServiceRouter,
+  PlatformEventBus,
+  DynamicCellControlPlane,
+} from '../platform/infra';
 
 export interface PlatformStackProps extends cdk.StackProps {
   /**
@@ -106,12 +111,47 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
     });
 
+    // ── Reflexive control plane (dynamic cells, tier 2) ──────────────
+    // `forge` is the inward MCP API: it provisions user-owned dynamic cells at
+    // runtime (each its own Lambda + table + permission-bounded role) and invokes
+    // them. `dispatch` is the single `/@*` ingress that routes `/@<owner>/<cell>`
+    // to forge. See docs/dynamic-cells.md.
+    const controlPlane = new DynamicCellControlPlane(this, 'DynamicCells', { eventBus });
+
+    const forge = new HttpServiceCell(this, 'ForgeService', {
+      name: 'forge',
+      entry: serviceEntry('forge'),
+      routes: ['/forge/*'],
+      persistence: { dynamo: true },
+      commands: ['createCell', 'listCells', 'getCell', 'callCell', 'grantCapability', 'deleteCell'],
+      emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested'],
+      eventBus,
+      // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
+      // it so its .wasm ships in the asset.
+      bundlingNodeModules: ['esbuild-wasm'],
+      memorySize: 512,
+      timeoutSeconds: 60,
+    });
+    controlPlane.grantControlPlane(forge);
+
+    const dispatch = new HttpServiceCell(this, 'DispatchService', {
+      name: 'dispatch',
+      entry: serviceEntry('dispatch'),
+      routes: ['/@*'],
+      eventBus,
+    });
+
     // Least-privilege: documents may invoke render, but not vice versa.
     documents.allow(render);
     // Any cell that protects routes asks the auth service to validate the
     // bearer token (the in-cell alternative to edge validation).
     documents.allow(auth);
     resource.allow(auth);
+    forge.allow(auth);
+    dispatch.allow(auth);
+    // dispatch proxies cell invocations through forge (which holds the registry
+    // and the invoke permission), so it never reads another cell's data.
+    dispatch.allow(forge);
 
     // Single public entrypoint, behaviours generated from manifests. Optionally
     // fronted by a custom domain (CloudFront alias + ACM cert in us-east-1).
@@ -131,7 +171,7 @@ export class PlatformStack extends cdk.Stack {
     }
 
     const router = new ServiceRouter(this, 'Router', {
-      cells: [home, auth, documents, render, resource],
+      cells: [home, auth, documents, render, resource, forge, dispatch],
       defaultCell: home,
       domainNames: props?.domainNames,
       certificate,
@@ -157,11 +197,13 @@ export class PlatformStack extends cdk.Stack {
     // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
     resource.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
     home.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
+    // forge derives the cell address base + (future) OAuth metadata from this.
+    forge.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
 
     // Self-documenting catalog: inject the live cell manifests (this wiring is
     // the single source of truth) so the home SPA renders the service list from
     // real data rather than a hardcoded copy. Served at GET /_catalog.
-    const catalog = [home, auth, resource, documents, render].map((c) => c.manifest);
+    const catalog = [home, auth, resource, documents, render, forge, dispatch].map((c) => c.manifest);
     home.fn.addEnvironment('PLATFORM_CATALOG', JSON.stringify(catalog));
   }
 }
