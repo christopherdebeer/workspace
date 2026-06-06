@@ -12,13 +12,13 @@
  */
 import { randomUUID, createHash } from 'node:crypto';
 import {
-  defineMcpService,
-  requireScope,
+  defineService,
   requireUser,
   getString,
   getOptional,
   ServiceAuthError,
   ServiceContext,
+  RegisteredCommand,
 } from '../../platform/runtime';
 import { createRegistry, CellRecord } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
@@ -107,9 +107,11 @@ interface CreateCellInput {
 }
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
-  const owner = requireScope(ctx.identity, CREATE_SCOPE);
+  // Scope (platform:cells:create) is enforced at the /mcp gateway; forge is a
+  // backend reachable only via allow-listed invokes, and authorizes by ownership.
+  const owner = requireUser(ctx.identity);
   if (!input?.name?.trim()) throw new Error('A cell `name` is required');
-  if (!input?.code?.trim()) throw new Error('Cell `code` (an index.js exporting `handler`) is required');
+  if (!input?.code?.trim()) throw new Error('Cell `code` (a TypeScript module exporting `handler`) is required');
 
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
@@ -336,85 +338,121 @@ async function deleteCell(input: DeleteInput, ctx: ServiceContext): Promise<unkn
   return { cellId: record.cellId, status: 'DELETING' };
 }
 
-export const handler = defineMcpService({
-  name: 'forge',
-  // resource cell owns `/mcp`; forge's MCP endpoint lives under its own prefix.
-  mcpPath: '/forge/mcp',
-  serverInfo: { name: 'workspace-forge', version: '1.0.0' },
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested'] },
-  tools: {
-    createCell: {
-      description:
-        'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE.',
-      scope: CREATE_SCOPE,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Human name for the cell' },
-          code: { type: 'string', description: 'TypeScript source exporting `handler`' },
-          description: { type: 'string' },
-          share: { type: 'array', items: { type: 'string' }, description: 'Principals to share with' },
-        },
-        required: ['name', 'code'],
-        additionalProperties: false,
+/**
+ * forge is a **backend tool-provider**, not a public MCP endpoint. The `/mcp`
+ * gateway (the `resource` cell) aggregates these tools, enforces their scopes
+ * against the caller, and forwards `tools/call` to the matching command here.
+ * `describeTools` is how the gateway discovers them.
+ */
+interface ToolSpec {
+  description: string;
+  inputSchema: Record<string, unknown>;
+  /** Scope the gateway enforces before forwarding (null = any authenticated user). */
+  scope: string | null;
+  handler: RegisteredCommand;
+}
+
+const TOOLS: Record<string, ToolSpec> = {
+  createCell: {
+    description:
+      'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE.',
+    scope: CREATE_SCOPE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Human name for the cell' },
+        code: { type: 'string', description: 'TypeScript source exporting `handler`' },
+        description: { type: 'string' },
+        share: { type: 'array', items: { type: 'string' }, description: 'Principals to share with' },
       },
-      handler: createCell,
+      required: ['name', 'code'],
+      additionalProperties: false,
     },
-    listCells: {
-      description: 'List the dynamic cells you own.',
-      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: listCells,
-    },
-    getCell: {
-      description: 'Get one dynamic cell, refreshing its provisioning status.',
-      inputSchema: {
-        type: 'object',
-        properties: { cellId: { type: 'string' } },
-        required: ['cellId'],
-        additionalProperties: false,
-      },
-      handler: getCell,
-    },
-    callCell: {
-      description:
-        'Invoke a dynamic cell you own or were granted, over this same connection. Optionally pass method, path, and a JSON body.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          cellId: { type: 'string' },
-          owner: { type: 'string' },
-          name: { type: 'string' },
-          method: { type: 'string' },
-          path: { type: 'string' },
-          body: {},
-        },
-        additionalProperties: false,
-      },
-      handler: callCell,
-    },
-    grantCapability: {
-      description: 'Share a cell you own with another principal (expand permissions).',
-      inputSchema: {
-        type: 'object',
-        properties: { cellId: { type: 'string' }, principal: { type: 'string' } },
-        required: ['cellId', 'principal'],
-        additionalProperties: false,
-      },
-      handler: grantCapability,
-    },
-    deleteCell: {
-      description: 'Delete a cell you own (tears down its stack).',
-      inputSchema: {
-        type: 'object',
-        properties: { cellId: { type: 'string' } },
-        required: ['cellId'],
-        additionalProperties: false,
-      },
-      handler: deleteCell,
-    },
+    handler: createCell as RegisteredCommand,
   },
-  // Non-tool command for the dispatch cell.
-  commands: { resolveCell },
+  listCells: {
+    description: 'List the dynamic cells you own.',
+    scope: null,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: listCells as RegisteredCommand,
+  },
+  getCell: {
+    description: 'Get one dynamic cell, refreshing its provisioning status.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' } },
+      required: ['cellId'],
+      additionalProperties: false,
+    },
+    handler: getCell as RegisteredCommand,
+  },
+  callCell: {
+    description:
+      'Invoke a dynamic cell you own or were granted, over this same connection. Optionally pass method, path, and a JSON body.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        method: { type: 'string' },
+        path: { type: 'string' },
+        body: {},
+      },
+      additionalProperties: false,
+    },
+    handler: callCell as RegisteredCommand,
+  },
+  grantCapability: {
+    description: 'Share a cell you own with another principal (expand permissions).',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' }, principal: { type: 'string' } },
+      required: ['cellId', 'principal'],
+      additionalProperties: false,
+    },
+    handler: grantCapability as RegisteredCommand,
+  },
+  deleteCell: {
+    description: 'Delete a cell you own (tears down its stack).',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' } },
+      required: ['cellId'],
+      additionalProperties: false,
+    },
+    handler: deleteCell as RegisteredCommand,
+  },
+};
+
+/** Tool manifest for the gateway: name, schema, and the scope it should enforce. */
+function describeTools(): { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; scope: string | null }> } {
+  return {
+    tools: Object.entries(TOOLS).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+      scope: t.scope,
+    })),
+  };
+}
+
+const commands: Record<string, RegisteredCommand> = {
+  resolveCell: resolveCell as RegisteredCommand,
+  describeTools: (() => describeTools()) as RegisteredCommand,
+};
+for (const [name, spec] of Object.entries(TOOLS)) {
+  commands[name] = spec.handler;
+}
+
+export const handler = defineService({
+  name: 'forge',
+  commands,
+  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested'] },
 });
 
 export default handler;

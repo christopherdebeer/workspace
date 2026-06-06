@@ -125,28 +125,42 @@ clean teardown, tags carry ownership, and a failed create rolls back.
                                      │
                                      ▼
                             CloudFront Router
-                    ┌────────────────┼─────────────────────┐
-        tier-1 behaviours            │              /@*  (one behaviour)
-        (auth, documents, …)         │                      │
-                                     ▼                      ▼
-                                  forge  ◄── MCP ──►   dispatch cell
-                            (control plane)         (/@<owner>/<cell> →
-                                     │               forge.callCell)
-              ┌──────────────────────┼──────────┐            │
-              ▼                       ▼          ▼            ▼
-        CreateStack            Registry table   S3      per-cell Lambda
-     (per-cell template)     (the self-model)  (code)   + per-cell table
-              │                                          (under permission
-              ▼                                            boundary)
-      Lambda + Table + Role
-      (the dynamic cell)
+          ┌──────────────┬───────────┼─────────────────┐
+   tier-1 behaviours  /mcp (gateway)  │            /@*  (one behaviour)
+   (auth, docs, …)        │           │                 │
+                          ▼           │                 ▼
+              MCP gateway (resource)  │           dispatch cell
+              aggregates + scope-     │          (/@<owner>/<cell>)
+              filters + forwards      │                 │
+                          └─────────┐ │ ┌───────────────┘
+                                    ▼ ▼ ▼
+                                   forge  (backend, no public route)
+                              (control plane)
+              ┌──────────────────────┼──────────┐
+              ▼                       ▼          ▼
+        CreateStack            Registry table   S3
+     (per-cell template)     (the self-model)  (code)
+              │
+              ▼
+      Lambda + Table + Role   (the dynamic cell, under the boundary)
 ```
 
 ### Components
 
-**`forge` — the control plane (tier-1 cell, MCP)**
-A normal `HttpServiceCell` whose handler is a `defineMcpService`. It is the
-*inward* API — the reflexive seam. Tools:
+**`/mcp` gateway (the `resource` cell)**
+The single authenticated MCP surface (and the OAuth-protected resource the auth
+cell advertises). It is a `defineMcpService` whose tool list is **aggregated per
+request** from provider cells: it calls each provider's `describeTools`,
+advertises only the tools the caller is entitled to (scope filtering), enforces
+each tool's scope, and **forwards `tools/call`** to the owning cell. So `/mcp`
+exposes all cells' tools governed by auth + ownership + scopes — and a new
+dynamic cell's tools can appear there with no gateway change. It is the **policy
+enforcement point**: scopes are checked here (the backend receives only the
+caller's `user` and authorises by ownership).
+
+**`forge` — the control plane (backend tool-provider, no public route)**
+Reachable only via allow-listed invokes (from the gateway and `dispatch`). It
+exposes `describeTools` (so the gateway can discover its tools) plus the handlers:
 
 - `createCell(name, code)` — **transpile** the submitted TypeScript (`esbuild-wasm`),
   zip + upload to S3, write the registry row, `CreateStack` from the cell
@@ -154,7 +168,7 @@ A normal `HttpServiceCell` whose handler is a `defineMcpService`. It is the
 - `getCell` / `listCells` / `deleteCell`.
 - `callCell({ cellId | owner+name, method, path, body })` — invoke the cell over
   the *same* MCP connection (no second session); also the target `dispatch`
-  proxies to.
+  proxies to. Authorised by ownership/grant on the caller's `user`.
 - `grantCapability(cellId, principal)` — sharing (expand permissions).
 - `resolveCell(cellId)` — internal command for `dispatch` (not an MCP tool).
 - `promote(cellId)` — (planned) open a PR that codifies the cell into tier-1 CDK.
@@ -273,29 +287,33 @@ mutation log.
 ## First vertical slice (implemented)
 
 The slice that proves the whole loop end-to-end is built (`services/forge`,
-`services/dispatch`, `platform/infra/dynamic-cell-control-plane.ts`, wired in
-`lib/platform-stack.ts`, unit-tested in `tests/forge-cell.test.ts` +
+`services/dispatch`, the `/mcp` gateway in `services/resource`,
+`platform/infra/dynamic-cell-control-plane.ts`, wired in `lib/platform-stack.ts`,
+unit-tested in `tests/forge-cell.test.ts` / `tests/resource-cell.test.ts` /
 `tests/dispatch-cell.test.ts`):
 
 1. **Permission boundary + code bucket** (`DynamicCellControlPlane`) and the
    scoped grant to `forge`.
 2. **Cell template** (`cell-template.ts`) — the per-cell CFN stack.
-3. **`forge` cell** (MCP): `createCell` / `getCell` / `listCells` / `callCell` /
-   `grantCapability` / `deleteCell`, authoring cells in TypeScript.
-4. **`dispatch` cell** on `/@*`.
+3. **`forge`** backend provider: `createCell` / `getCell` / `listCells` /
+   `callCell` / `grantCapability` / `deleteCell` / `describeTools`, authoring
+   cells in TypeScript.
+4. **`/mcp` gateway** (`resource`) aggregating + scope-filtering + forwarding.
+5. **`dispatch` cell** on `/@*`.
 
-Result: an MCP `tools/call` to `forge.createCell` → a `CreateStack` → a
-capability-scoped, owner-isolated cell live at `/@<owner>/<cell>` and invocable
-via `forge.callCell` over the same MCP connection. The reflexive loop, with
-isolation provided by Lambda + IAM rather than a sandbox.
+Result: an MCP `tools/call` to `createCell` at `/mcp` → scope-checked at the
+gateway → forwarded to `forge` → a `CreateStack` → an owner-isolated cell live at
+`/@<owner>/<cell>` and invocable via `callCell` over the same connection. The
+reflexive loop, with isolation provided by Lambda + IAM rather than a sandbox.
 
 ### End-to-end validation (acceptance test)
 
-The deployed acceptance test: connect an MCP client to
-`https://parc.land/forge/mcp`, authorised (via the auth cell's OAuth) with a
-token carrying `platform:cells:create`; call `forge.createCell` to provision a
-cell; poll `getCell` until `ACTIVE`; then `forge.callCell` it over the **same**
-connection — and/or `GET https://parc.land/@<owner>/<cell>`.
+The deployed acceptance test: connect an MCP client to **`https://parc.land/mcp`**,
+authorised as `@c15r` (passkey → the auth cell's OAuth) with a token carrying
+`platform:cells:create`. `tools/list` then shows the forge tools (filtered to
+your scopes); call `createCell` to provision a cell; poll `getCell` until
+`ACTIVE`; then `callCell` it over the **same** connection — and/or
+`GET https://parc.land/@c15r/<cell>`.
 
 ## Open questions / future work
 
