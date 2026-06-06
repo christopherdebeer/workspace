@@ -1,11 +1,17 @@
 /**
- * Authentication normalisation.
+ * Authentication.
  *
- * CloudFront (and the inline auth Lambda in front of it) is responsible for
- * verifying credentials and normalising them into trusted headers before a
- * request reaches a service cell. The runtime simply reads those headers; it
- * never re-implements credential verification. For direct service-to-service
- * invokes the caller's identity is carried on the command envelope.
+ * For HTTP requests the runtime derives identity from a validated
+ * `Authorization: Bearer` token: `define-service` invokes the `auth` cell's
+ * `validateToken` command and populates `ctx.identity` (see
+ * `resolveHttpIdentity`). Client-supplied `x-auth-*` headers are NOT trusted —
+ * CloudFront forwards all viewer headers, so trusting them would let any caller
+ * spoof identity. For direct service-to-service invokes the caller's identity is
+ * carried on the command envelope.
+ *
+ * `identityFromHeaders` remains for a future trusted-edge authorizer (one that
+ * validates the bearer and injects these headers before the cell), but it is not
+ * on the HTTP path today.
  */
 
 export interface Identity {

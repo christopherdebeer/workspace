@@ -5,6 +5,8 @@
  * SDK directly. The infrastructure layer lives in `platform/infra`.
  */
 export { defineService, UnknownCommandError } from './define-service';
+export { defineMcpService } from './define-mcp-service';
+export type { McpServiceDefinition, McpToolDefinition } from './define-mcp-service';
 export { createLogger } from './logger';
 export type { Logger, LogLevel, LogRecord, LogContext } from './logger';
 export { loadConfig, getString, getOptional } from './config';

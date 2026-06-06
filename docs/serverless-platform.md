@@ -12,20 +12,22 @@ repository.
 ## High-level architecture
 
 ```
-                         app.example.com
+                         parc.land
                                 │
                                 ▼
                        CloudFront Router          (platform/infra/service-router.ts)
+              (edge: origin-request body signer +
+               origin-response WWW-Authenticate fix)
                                 │
-                ┌───────────────┼───────────────┐
-                ▼               ▼               ▼
-           documents          render          ...           (services/*, HttpServiceCell)
-          Lambda URL        Lambda URL
-                │               │
-                ▼               ▼
-            DynamoDB         (stateless)
-                └───────────────┬───────────────┘
-                                ▼
+        ┌──────────┬───────────┼───────────┬──────────┐
+        ▼          ▼           ▼           ▼          ▼
+      home       auth      resource    documents    render   (services/*, HttpServiceCell)
+      SPA /    /oauth/*    MCP /mcp    /documents/* Lambda URL
+              /webauthn/*                  │
+                │            │             ▼
+            DynamoDB     (stateless)    DynamoDB
+                └──────────┴─────────────┬─────────────┘
+                                         ▼
                           EventBridge bus          (platform/infra/event-bus.ts)
 ```
 
@@ -41,18 +43,22 @@ platform/
     table-factory.ts       Standardised DynamoDB tables (pk/sk, on-demand)
   runtime/               In-Lambda library (the "Runtime Layer")
     define-service.ts      Wraps commands into one Lambda handler (HTTP + invoke)
+    define-mcp-service.ts  Wraps a cell as an MCP tool server (JSON-RPC over HTTP)
     service-client.ts      Mode 1: synchronous command invocation
     events.ts              Mode 2: emit domain events
     logger.ts              Structured, correlation-aware logging
-    auth.ts                Edge-normalised identity
+    auth.ts                Bearer-validated identity (validateToken)
     config.ts              Environment-backed config
+  ui/                    Shared, composable React components for cell front-ends
 
 services/
+  home/                  Self-documenting React SPA at `/` (router default)
   auth/                  Auth primitive: WebAuthn passkeys + OAuth 2.1 + tokens
+  resource/              MCP server / OAuth-protected resource (`/mcp`)
   documents/             Example cell: DynamoDB + Turso flag, calls render, emits
   render/                Example peer: a single synchronous command
 
-lib/platform-stack.ts    Wires the example services + router (< 50 lines)
+lib/platform-stack.ts    Wires the services + router (< 60 lines)
 ```
 
 ## Runtime model
@@ -112,11 +118,21 @@ verbatim). Because the CloudFront/OAC hop strips the viewer `Host`, set
 (`@simplewebauthn/server`) + OAuth 2.1 (DCR, PKCE S256, refresh, device grant) +
 a unified scoped-token model, on a storage-agnostic `AuthStore` (DynamoDB in
 prod with TTL auto-expiry; in-memory for tests/local). It exposes a
-`validateToken` command — the bridge an edge authorizer (or a peer via
-`serviceClient`) uses to turn a bearer token into the `x-auth-user` /
-`x-auth-scopes` headers the runtime's `identityFromHeaders` already reads.
-`requireScope(identity, 'rooms:my-room:write')` enforces scopes (wildcards
-supported). See [`valtown-mapping.md`](valtown-mapping.md).
+`validateToken` command — the bridge the runtime uses to turn a bearer token
+into `ctx.identity` (`{ user, scopes }`). On the HTTP path the runtime calls
+this per request (cells that protect routes list `auth` in `allow[]`); forged
+`x-auth-*` request headers are ignored. `requireScope(identity, 'rooms:my-room:write')`
+enforces scopes (wildcards supported). See [`valtown-mapping.md`](valtown-mapping.md).
+
+### MCP servers
+
+`defineMcpService` wraps `defineService` to expose a cell's capabilities as MCP
+tools over the Streamable HTTP transport: it adds a JSON-RPC endpoint
+(`POST /mcp`) handling `initialize` / `tools/list` / `tools/call`, generates the
+tool list from the declared tools and their JSON schemas, and reuses the
+runtime's bearer-validated `ctx.identity` (unauthenticated calls get
+`401 + WWW-Authenticate`). `services/resource` is the reference MCP cell. Tools
+are also registered as normal commands, so peers can invoke them directly.
 
 ## Communication modes
 
@@ -228,6 +244,14 @@ npx cdk deploy PlatformStack-staging -c env=staging   # shared staging
 - Inter-service permissions are explicit and least-privilege via `cell.allow()`.
   Note `allow()` grants `lambda:InvokeFunction` (the Invoke API used by
   `serviceClient`), which is independent of the Function URL's IAM auth.
+- HTTP identity is derived only from a validated bearer token (the runtime calls
+  `auth.validateToken`); the runtime does not trust client-supplied `x-auth-*`
+  headers. Protected routes return `401 + WWW-Authenticate` (RFC 9728).
+- Two origin Lambda@Edge functions keep the IAM/OAC posture working end to end:
+  an **origin-request** body signer sets `x-amz-content-sha256` so OAC's SigV4
+  covers POST/PUT bodies (else Lambda rejects them), and an **origin-response**
+  function restores the `WWW-Authenticate` header that Function URLs remap to
+  `x-amzn-remapped-www-authenticate`.
 
 ## Related
 
