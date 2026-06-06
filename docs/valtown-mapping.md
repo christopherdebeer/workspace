@@ -203,14 +203,21 @@ cell's tokens. This is the natural next construct to add to `platform/runtime`.
    > point-lookups (by token hash, username, credential id), which single-table
    > DynamoDB serves directly. Turso remains the target for the relational
    > `workspace`/`sync` cells.
-2. **Edge token normalisation** — wire a CloudFront Function/Lambda@Edge (or an
-   authorizer) that calls `auth.validateToken` and injects `x-auth-user` /
-   `x-auth-scopes`. The runtime already consumes these.
-3. **`defineMcpService`** — wrap `defineService` to expose commands as MCP tools
-   with auth-cell-backed tokens.
+2. **Token validation — DONE (in-cell, not edge).** The runtime validates the
+   `Authorization: Bearer` per HTTP request via `auth.validateToken` and builds
+   `ctx.identity`; forged `x-auth-*` headers are ignored. A trusted edge
+   authorizer remains a future optimisation for the hot path (`identityFromHeaders`
+   is kept for it), but the in-cell path is the chosen baseline.
+3. **`defineMcpService` — DONE.** `platform/runtime/define-mcp-service.ts` wraps
+   `defineService` to expose tools over MCP Streamable HTTP (`POST /mcp`:
+   initialize / tools/list / tools/call), auth-gated by the runtime's bearer
+   identity. `services/resource` is the reference MCP cell (`whoami`, `echo`).
 4. **Turso client helper** in `platform/runtime` (from `ctx.config.turso`) so
-   `workspace`/`sync` `db.ts` files port with minimal edits.
+   `workspace`/`sync` `db.ts` files port with minimal edits. — *not started.*
 5. **Port `workspace`** (smaller surface) as the reference relational cell, then
-   `sync`.
-6. **Retire `lambda/index.ts` auth** once the `auth` cell is wired to the
-   frontend.
+   `sync`. — *not started.*
+6. **Retire `lambda/index.ts` auth** — DONE; the legacy inline Lambda stack was
+   removed.
+
+Also live but not in the original plan: a **`home`** cell (self-documenting
+React SPA at `/`, built from `platform/ui`) and a **`resource`** MCP cell.

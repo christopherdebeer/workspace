@@ -14,9 +14,11 @@ new service needs minimal boilerplate. See `docs/serverless-platform.md`.
   - `table-factory.ts` - `TableFactory`: standardised DynamoDB tables (pk/sk, on-demand)
 - `runtime/` - In-Lambda library ("Runtime Layer")
   - `define-service.ts` - `defineService`: one handler for HTTP + direct invoke
+  - `define-mcp-service.ts` - `defineMcpService`: expose a cell as an MCP tool server
   - `service-client.ts` - Mode 1 synchronous commands
   - `events.ts` - Mode 2 event emission
   - `logger.ts`, `auth.ts`, `config.ts`, `types.ts`
+- `ui/` - Shared composable React components for cell front-ends (`platform/ui`)
 
 ## Conventions
 - No `any` types; define interfaces for all props and contracts.
