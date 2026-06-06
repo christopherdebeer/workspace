@@ -255,6 +255,10 @@ npx cdk deploy PlatformStack-staging -c env=staging   # shared staging
 
 ## Related
 
+- [`dynamic-cells.md`](dynamic-cells.md) — how this architecture extends into a
+  reflexive two-tier platform: runtime-provisioned, user-owned **dynamic cells**
+  (tier 2) built from the same primitives, isolated by Lambda + IAM, and
+  promotable into reviewed CDK infrastructure (tier 1).
 - [`valtown-mapping.md`](valtown-mapping.md) — how the `mcp-auth`, `workspace`,
   and `sync` Val Town projects map onto this architecture, including adopting
   `mcp-auth` as a shared **auth primitive service**.
