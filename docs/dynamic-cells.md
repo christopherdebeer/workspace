@@ -65,7 +65,7 @@ shares.
 
 | Primitive      | Tier-1 today (build-time)                    | Tier-2 form (runtime)                                                   |
 | -------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
-| Routing        | one CloudFront behavior per cell route       | a single `/d/*` behavior → a **dispatcher** that routes by `cellId`     |
+| Routing        | one CloudFront behavior per cell route       | a single `/@*` behavior → a **dispatcher** that routes `/@<owner>/<cell>` |
 | Execution      | a bundled Lambda per cell                    | a **per-cell Lambda**, provisioned at runtime by the control plane      |
 | Isolation      | one IAM role per cell                        | one IAM role per cell **under a permission boundary** (the safety cap)  |
 | Persistence    | one DynamoDB table per cell                  | one DynamoDB table per cell (same; see "Cell state")                    |
@@ -121,17 +121,17 @@ clean teardown, tags carry ownership, and a failed create rolls back.
 ## Architecture
 
 ```
-                              app.example.com
+                                  parc.land
                                      │
                                      ▼
                             CloudFront Router
                     ┌────────────────┼─────────────────────┐
-        tier-1 behaviours            │                 /d/*  (one behaviour)
+        tier-1 behaviours            │              /@*  (one behaviour)
         (auth, documents, …)         │                      │
                                      ▼                      ▼
                                   forge  ◄── MCP ──►   dispatch cell
-                            (control plane)            (resolve cellId,
-                                     │                  scope check, invoke)
+                            (control plane)         (/@<owner>/<cell> →
+                                     │               forge.callCell)
               ┌──────────────────────┼──────────┐            │
               ▼                       ▼          ▼            ▼
         CreateStack            Registry table   S3      per-cell Lambda
@@ -148,23 +148,30 @@ clean teardown, tags carry ownership, and a failed create rolls back.
 A normal `HttpServiceCell` whose handler is a `defineMcpService`. It is the
 *inward* API — the reflexive seam. Tools:
 
-- `createCell(name, code, manifest, requiredScopes)` — upload `code` to S3, write
-  the registry row, `CreateStack` from the cell template. Live when the stack
-  reaches `CREATE_COMPLETE`.
-- `updateCell` / `getCell` / `listCells` / `deleteCell`.
-- `grantCapability(cellId, principal | scope)` — sharing (expand permissions).
-- `promote(cellId)` — open a PR that codifies the cell into tier-1 CDK.
+- `createCell(name, code)` — **transpile** the submitted TypeScript (`esbuild-wasm`),
+  zip + upload to S3, write the registry row, `CreateStack` from the cell
+  template. Live when the stack reaches `CREATE_COMPLETE`.
+- `getCell` / `listCells` / `deleteCell`.
+- `callCell({ cellId | owner+name, method, path, body })` — invoke the cell over
+  the *same* MCP connection (no second session); also the target `dispatch`
+  proxies to.
+- `grantCapability(cellId, principal)` — sharing (expand permissions).
+- `resolveCell(cellId)` — internal command for `dispatch` (not an MCP tool).
+- `promote(cellId)` — (planned) open a PR that codifies the cell into tier-1 CDK.
+
+Cells are authored in **TypeScript** (so a cell is written the same way as a
+tier-1 cell, making promotion a copy rather than a port); `forge` transpiles with
+`esbuild-wasm` — portable WASM shipped in its Lambda asset — before packaging.
 
 `forge` holds the *only* IAM permissions in the platform that can provision: it
-can `cloudformation:*` on cell-tagged stacks, `s3:PutObject` to the code bucket,
-write the registry table, and `iam:CreateRole` **only with the permission
-boundary attached** (the condition that makes the blast radius provable). Every
-mutation is appended to an audit log.
+can manage `cloudformation` `cell-*` stacks, read/write the code bucket, write
+the registry table, and `iam:CreateRole` **only with the permission boundary
+attached** (the condition that makes the blast radius provable).
 
-**The cell template (tier-1 CDK construct → parameterized CFN template)**
+**The cell template (`services/forge/cell-template.ts`)**
 Defines one dynamic cell: a Lambda (code from S3), a DynamoDB table, and an
-execution role with the permission boundary. Authored once; instantiated per
-cell at runtime.
+execution role with the permission boundary — emitted as a CloudFormation
+template, authored once and instantiated per cell at runtime via `CreateStack`.
 
 **The permission boundary (tier-1 managed policy) — the security crux**
 Attached to every dynamic-cell role. It caps what *any* cell can ever do,
@@ -179,20 +186,20 @@ Because `forge` may only create roles that carry this boundary, "the control
 plane can only ever make a constrained Lambda + table" is an enforced property,
 not a convention.
 
-**The registry table (tier-1 DynamoDB) — the self-model**
-`cellId → { owner, functionName, tableName, routes, requiredScopes, grants[],
-status }`. The runtime, data-backed half of the platform's self-description. The
-catalog (`/_catalog`) merges these rows with the static tier-1 manifests, so both
-tiers are described uniformly.
+**The registry table (`forge`'s own DynamoDB table) — the self-model**
+`cellId → { owner, name, functionName, stackName, grants[], status, … }`. The
+runtime, data-backed half of the platform's self-description. Other cells never
+read it directly — they ask `forge` (`resolveCell`), preserving the cell
+boundary. (Merging it into `/_catalog` is a planned follow-up.)
 
-**`dispatch` — userland routing (tier-1 cell)**
-Owns a single route, `['/d/*']`, so it slots into the existing `ServiceRouter`
+**`dispatch` — userland routing (`services/dispatch`)**
+Owns a single route, `['/@*']`, so it slots into the existing `ServiceRouter`
 with no router changes (the router generates one behavior from its manifest).
-For `/d/<cellId>/...` it resolves `cellId` in the registry, checks the caller's
-token scopes (`ctx.identity.scopes`) against the cell's `requiredScopes + grants`
-using the existing auth path, invokes the cell's Lambda, and returns the
-response. Userland routing is therefore **one behavior plus data dispatch** —
-not one behavior per cell (which would be build-time infrastructure).
+For `/@<owner>/<cell>/<rest>` it requires a bearer identity, then proxies to
+`forge.callCell` (Mode 1 command) — which holds the registry and the invoke
+permission — rather than reading another cell's table or invoking the cell
+itself. Userland routing is therefore **one behavior plus data dispatch** — not
+one behavior per cell (which would be build-time infrastructure).
 
 ### Reused unchanged
 
@@ -200,7 +207,7 @@ not one behavior per cell (which would be build-time infrastructure).
   as in `define-service.ts`; scopes live in the token's `scope` string.
 - **Events** — a dynamic cell emits to the shared bus with `source = cellId`.
 - **MCP** — a dynamic cell can itself be a `defineMcpService`, reachable at
-  `/d/<cellId>/mcp`.
+  `/@<owner>/<cell>/mcp`.
 - **The runtime library** — a dynamic cell is authored with the *same*
   `defineService` / `defineMcpService` as a tier-1 cell.
 
@@ -209,13 +216,15 @@ not one behavior per cell (which would be build-time infrastructure).
 Define the userland scope namespace now, because tokens encode it and sharing
 depends on it; retrofitting addressing is painful.
 
-- Kernel scopes: `platform:*` (e.g. `platform:cells:create`).
-- Userland scopes: `cell:<owner>:<name>:<verb>` (e.g.
-  `cell:alice:notes:invoke`).
-- **Sharing = granting scopes.** A cell starts private to its owner. The owner
-  calls `grantCapability` to add a principal or scope to the cell's `grants[]`;
-  `dispatch` enforces caller scopes against `requiredScopes + grants` on every
-  invocation. This is the "permission-expandable to more users" property.
+- Kernel scopes: `platform:*`. **Creating** a cell requires
+  `platform:cells:create` (enforced on `createCell`).
+- **Sharing = granting principals.** A cell starts private to its owner
+  (`grants = [owner]`). The owner calls `grantCapability(cellId, principal)` to
+  add a user to `grants[]`; `callCell`/`dispatch` authorise the caller's identity
+  (`ctx.identity.user`) against owner-or-`grants` on every invocation. This works
+  over both the MCP path and a direct invoke (where only the user, not scopes,
+  propagates). Per-cell *scope* grammar (`cell:<owner>:<name>:<verb>`) is the
+  planned next step for finer-grained, scope-based sharing.
 
 ## Promotion: from userland to kernel
 
@@ -261,20 +270,32 @@ Isolation between tenants is the Lambda/account boundary; capability scoping is
 the boundary policy plus the dispatcher's scope check; auditing is the `forge`
 mutation log.
 
-## First vertical slice (proposed build order)
+## First vertical slice (implemented)
 
-The smallest change set that proves the whole loop end-to-end:
+The slice that proves the whole loop end-to-end is built (`services/forge`,
+`services/dispatch`, `platform/infra/dynamic-cell-control-plane.ts`, wired in
+`lib/platform-stack.ts`, unit-tested in `tests/forge-cell.test.ts` +
+`tests/dispatch-cell.test.ts`):
 
-1. **Registry table + permission boundary** (CDK, in `PlatformStack`).
-2. **Cell template** — CDK construct emitted as a parameterized CFN template.
-3. **`forge` cell** with `createCell` / `getCell` / `listCells` (MCP).
-4. **`dispatch` cell** on `/d/*`.
-5. **Catalog merge** — `/_catalog` shows dynamic cells alongside tier-1 ones.
+1. **Permission boundary + code bucket** (`DynamicCellControlPlane`) and the
+   scoped grant to `forge`.
+2. **Cell template** (`cell-template.ts`) — the per-cell CFN stack.
+3. **`forge` cell** (MCP): `createCell` / `getCell` / `listCells` / `callCell` /
+   `grantCapability` / `deleteCell`, authoring cells in TypeScript.
+4. **`dispatch` cell** on `/@*`.
 
 Result: an MCP `tools/call` to `forge.createCell` → a `CreateStack` → a
-capability-scoped, owner-isolated cell live at `/d/<id>/mcp` → visible in the
-catalog → promotable to CDK. The reflexive loop, with isolation provided by
-Lambda + IAM rather than a sandbox.
+capability-scoped, owner-isolated cell live at `/@<owner>/<cell>` and invocable
+via `forge.callCell` over the same MCP connection. The reflexive loop, with
+isolation provided by Lambda + IAM rather than a sandbox.
+
+### End-to-end validation (acceptance test)
+
+The deployed acceptance test: connect an MCP client to
+`https://parc.land/forge/mcp`, authorised (via the auth cell's OAuth) with a
+token carrying `platform:cells:create`; call `forge.createCell` to provision a
+cell; poll `getCell` until `ACTIVE`; then `forge.callCell` it over the **same**
+connection — and/or `GET https://parc.land/@<owner>/<cell>`.
 
 ## Open questions / future work
 
@@ -284,8 +305,12 @@ Lambda + IAM rather than a sandbox.
 - **Quotas** — Lambda count (soft, raisable), CloudFormation stacks (~2000/region),
   DynamoDB tables (~2500/region). Fine at small scale; revisit before high
   cell-count owners.
-- **Code delivery & validation** — how user code is supplied (zip/module), and
-  what static checks run before `CreateStack`.
+- **Bundled imports** — v1 transpiles a single self-contained TS module; bundling
+  imported modules (so cells can `import` the platform runtime via a layer or a
+  virtual module) is the next step toward full authoring parity with tier-1 cells.
+- **Catalog merge** — surface registry cells in `/_catalog` alongside the static
+  tier-1 manifests.
+- **Promotion** — implement `forge.promote` (open the CDK PR).
 - **Orphan cleanup** — reconciling the registry against actual stacks; deleting
   cells whose owner is gone.
 - **Declarative cells** — a higher-level "composition of existing primitives"

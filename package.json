@@ -20,7 +20,8 @@
     "aws-cdk": "^2.136.0",
     "aws-cdk-lib": "^2.136.0",
     "aws-sdk": "^2.1692.0",
-    "constructs": "^10.3.0"
+    "constructs": "^10.3.0",
+    "esbuild-wasm": "^0.25.12"
   },
   "devDependencies": {
     "@types/jest": "^29.5.5",
