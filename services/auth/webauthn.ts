@@ -137,18 +137,25 @@ export async function handleAuthVerify(
   config: WebAuthnConfig,
 ): Promise<ServiceHttpResponse> {
   const { challengeId, response } = req.json<{ challengeId: string; response: { id: string } }>();
+  const rpId = rpIdOf(req, config);
+  const origin = originOf(req);
   const challenge = await store.getChallenge(challengeId);
   if (!challenge || challenge.type !== 'authentication') return json({ error: 'Invalid or expired challenge' }, 400);
 
   const credential = await store.getCredentialById(response.id);
-  if (!credential) return json({ error: 'Unknown credential' }, 400);
+  if (!credential) {
+    // Most often: the credential was registered against a different RP id /
+    // origin (or the table was replaced), so the server has no record of it.
+    console.warn('[webauthn] auth: unknown credential', { credentialId: response.id, rpId, origin });
+    return json({ error: 'Unknown credential' }, 400);
+  }
 
   try {
     const verification = await verifyAuthenticationResponse({
       response: response as never,
       expectedChallenge: challenge.challenge,
-      expectedOrigin: originOf(req),
-      expectedRPID: rpIdOf(req, config),
+      expectedOrigin: origin,
+      expectedRPID: rpId,
       credential: {
         id: credential.id,
         // simplewebauthn wants an ArrayBuffer-backed view; copy to satisfy the
@@ -158,12 +165,16 @@ export async function handleAuthVerify(
         transports: credential.transports as AuthenticatorTransportFuture[] | undefined,
       },
     });
-    if (!verification.verified) return json({ error: 'Authentication failed' }, 400);
+    if (!verification.verified) {
+      console.warn('[webauthn] auth: not verified', { credentialId: credential.id, credentialRpId: credential.rpId, rpId, origin });
+      return json({ error: 'Authentication failed' }, 400);
+    }
     await store.updateCredentialCounter(credential.id, verification.authenticationInfo.newCounter);
     await store.deleteChallenge(challengeId);
     const sessionId = await store.createSession(credential.userId);
     return json({ verified: true, sessionId });
   } catch (err) {
+    console.warn('[webauthn] auth: error', { error: (err as Error).message, credentialRpId: credential.rpId, rpId, origin });
     return json({ error: `Auth failed: ${(err as Error).message}` }, 400);
   }
 }

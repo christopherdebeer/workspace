@@ -60,7 +60,7 @@ window.doAuth=async function(){
     if(opts.error)throw new Error(opts.error);
     const resp=await startAuthentication({optionsJSON:opts.options});
     const v=await postJson('/webauthn/authenticate/verify',{challengeId:opts.challengeId,response:resp});
-    if(!v.verified)throw new Error('Verification failed');
+    if(!v.verified)throw new Error(v.error||'Verification failed');
     await complete(v.sessionId);
   }catch(e){document.getElementById('err-msg').textContent=e.message;show('s-err')}
 };
@@ -73,7 +73,7 @@ window.doRegister=async function(){
     if(opts.error)throw new Error(opts.error);
     const resp=await startRegistration({optionsJSON:opts.options});
     const v=await postJson('/webauthn/register/verify',{challengeId:opts.challengeId,userId:opts.userId,username:opts.username,response:resp});
-    if(!v.verified)throw new Error('Registration failed');
+    if(!v.verified)throw new Error(v.error||'Registration failed');
     await complete(v.sessionId);
   }catch(e){document.getElementById('err-msg').textContent=e.message;show('s-err')}
 };
