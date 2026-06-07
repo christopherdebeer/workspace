@@ -8,8 +8,97 @@
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../../../platform/ui';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, getTokens } from './auth';
 
 const { useState, useEffect } = React;
+
+interface Session {
+  ready: boolean;
+  user: string | null;
+  scopes: string[];
+  error: string | null;
+}
+
+/**
+ * First-party sign-in state. On mount, completes an OAuth redirect if returning,
+ * then resolves the signed-in identity from the same `/mcp/whoami` an agent sees
+ * — the human and the agent reading one identity (the substrate's "UI and API
+ * converge"). Returns helpers so the header can offer sign in / sign out.
+ */
+function useAuth(): Session & { signIn: () => void; signOut: () => void } {
+  const [s, setS] = useState<Session>({ ready: false, user: null, scopes: [], error: null });
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      let error: string | null = null;
+      try {
+        await completeLoginIfReturning();
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      if (isAuthed()) {
+        try {
+          const res = await authFetch('/mcp/whoami');
+          if (res.ok) {
+            const b = (await res.json()) as { user?: string; userId?: string; scopes?: string[] };
+            if (live) setS({ ready: true, user: b.user ?? b.userId ?? 'signed in', scopes: b.scopes ?? [], error });
+            return;
+          }
+        } catch (e) {
+          error = error ?? (e as Error).message;
+        }
+      }
+      if (live) setS({ ready: true, user: null, scopes: [], error });
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return {
+    ...s,
+    signIn: () => {
+      void login();
+    },
+    signOut: () => {
+      void logout().then(() => window.location.reload());
+    },
+  };
+}
+
+function Account({ session }: { session: Session & { signIn: () => void; signOut: () => void } }): React.JSX.Element {
+  return (
+    <Card>
+      <Heading sub="Sign in with a passkey to drive the platform as yourself — the same identity an agent gets over MCP.">
+        Account
+      </Heading>
+      {!session.ready ? (
+        <p style={{ color: theme.dim }}>…</p>
+      ) : session.user ? (
+        <div style={{ display: 'grid', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <Badge tone="accent">signed in</Badge>
+            <strong>{session.user}</strong>
+          </div>
+          {session.scopes.length ? (
+            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+              {session.scopes.map((s) => (
+                <Badge key={s} tone="dim">{s}</Badge>
+              ))}
+            </div>
+          ) : null}
+          <Button kind="secondary" onClick={session.signOut}>Sign out</Button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.5rem' }}>
+          {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
+          <Button onClick={session.signIn}>Sign in with passkey</Button>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 interface Manifest {
   name: string;
@@ -84,6 +173,77 @@ function Catalog(): React.JSX.Element {
   );
 }
 
+interface CatalogCell {
+  name: string;
+  owner: string;
+  address: string;
+  status: string;
+  description: string | null;
+  shared: boolean;
+}
+
+function statusTone(status: string): 'accent' | 'dim' | 'danger' {
+  if (status === 'ACTIVE') return 'accent';
+  if (status === 'FAILED') return 'danger';
+  return 'dim';
+}
+
+/**
+ * The signed-in user's tier-2 cells, merged into `/_catalog` by the home cell
+ * from forge. Loads from the session bearer once signed in — the human seeing
+ * exactly the cells their agent would, through the same endpoint.
+ */
+function MyCells({ authed }: { authed: boolean }): React.JSX.Element {
+  const [cells, setCells] = useState<CatalogCell[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authed) {
+      setCells(null);
+      setErr(null);
+      return;
+    }
+    authFetch('/_catalog')
+      .then(async (r) =>
+        r.status === 200
+          ? setCells(((await r.json()) as { cells?: CatalogCell[] }).cells ?? [])
+          : setErr(`HTTP ${r.status}`),
+      )
+      .catch((e) => setErr(String(e)));
+  }, [authed]);
+
+  return (
+    <Card>
+      <Heading sub="Cells you own or were granted, provisioned at runtime through forge — the human view of what your agent sees.">
+        Your dynamic cells
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {!authed ? (
+        <p style={{ color: theme.dim }}>Sign in above to load the cells you can reach.</p>
+      ) : null}
+      {authed && !cells && !err ? <p style={{ color: theme.dim }}>Loading…</p> : null}
+      {authed && cells && cells.length === 0 ? (
+        <p style={{ color: theme.dim }}>No dynamic cells yet — create one via the forge MCP tools.</p>
+      ) : null}
+      <div style={{ display: 'grid', gap: '0.9rem', marginTop: '0.5rem' }}>
+        {(cells ?? []).map((c) => (
+          <div key={c.address} style={{ display: 'grid', gap: '0.3rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <strong>{c.name}</strong>
+              <Badge tone={statusTone(c.status)}>{c.status}</Badge>
+              {c.shared ? <Badge tone="dim">shared</Badge> : null}
+            </div>
+            <Badge tone="accent">{c.address}</Badge>
+            {c.description ? (
+              <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{c.description}</span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function Discovery(): React.JSX.Element {
   const [meta, setMeta] = useState<Record<string, unknown> | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -108,7 +268,8 @@ function Discovery(): React.JSX.Element {
 }
 
 function ResourceProbe(): React.JSX.Element {
-  const [token, setToken] = useState('');
+  // Defaults to the signed-in session token; still editable as a debug tool.
+  const [token, setToken] = useState(() => getTokens()?.access_token ?? '');
   const [result, setResult] = useState<{ status: number; body: unknown } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -160,12 +321,15 @@ function ResourceProbe(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
+  const session = useAuth();
   return (
     <Page>
       <Heading sub="A personal productivity workspace — serverless, AWS-native, MCP-native cells behind one CloudFront router.">
         workspace <span style={{ color: theme.dim, fontWeight: 400 }}>· platform</span>
       </Heading>
 
+      <Account session={session} />
+      <MyCells authed={!!session.user} />
       <Catalog />
       <Discovery />
       <ResourceProbe />

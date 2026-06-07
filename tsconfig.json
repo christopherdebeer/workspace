@@ -12,6 +12,6 @@
     "outDir": "dist"
   },
   "include": ["bin", "lib", "platform", "services"],
-  "// exclude": "Client-side React (*.tsx) is type-checked by tsconfig.client.json and bundled by esbuild; keep it out of the server (no-DOM/no-JSX) compile.",
-  "exclude": ["node_modules", "dist", "cdk.out", "**/*.tsx"]
+  "// exclude": "Client-side browser code (services/**/client, *.tsx) is type-checked by tsconfig.client.json and bundled by esbuild; keep it out of the server (no-DOM/no-JSX) compile.",
+  "exclude": ["node_modules", "dist", "cdk.out", "**/*.tsx", "services/**/client/**"]
 }

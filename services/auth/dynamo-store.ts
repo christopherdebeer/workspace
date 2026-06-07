@@ -35,6 +35,7 @@ import {
   CODE_TTL_MS,
   SESSION_TTL_MS,
   DEVICE_TTL_MS,
+  REFRESH_TTL_MS,
 } from './store';
 
 const SK = 'A'; // single sort key for "profile" items
@@ -255,7 +256,22 @@ export function createDynamoStore(tableName: string): AuthStore {
       await put({ pk: `TOKEN#${tokenHash}`, sk: SK, ...base, refreshHash, ttl: ttlOf(expiresAt) });
       await put({ pk: `USERTOK#${params.userId}`, sk: id, ...base, ttl: ttlOf(expiresAt) });
       if (refreshHash) {
-        await put({ pk: `REFRESH#${refreshHash}`, sk: SK, tokenHash, ttl: ttlOf(expiresAt) });
+        // The refresh row is self-contained and carries its OWN, longer expiry —
+        // it must outlive the access token (and survive that row's TTL deletion),
+        // so `refreshUnifiedToken` can mint a new pair without the access row.
+        const refreshExpiresAt = isoIn((params.refreshExpiresInSec ?? REFRESH_TTL_MS / 1000) * 1000);
+        await put({
+          pk: `REFRESH#${refreshHash}`,
+          sk: SK,
+          tokenId: id,
+          tokenHash,
+          mintedBy: params.userId,
+          scope: params.scope,
+          clientId: params.clientId ?? null,
+          revoked: false,
+          expiresAt: refreshExpiresAt,
+          ttl: ttlOf(refreshExpiresAt),
+        });
       }
       return { id, token, refreshToken, expiresAt };
     },
@@ -272,18 +288,23 @@ export function createDynamoStore(tableName: string): AuthStore {
         createdAt: i.createdAt,
       };
     },
-    async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600): Promise<RefreshResult | null> {
+    async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600, newRefreshExpiresInSec): Promise<RefreshResult | null> {
+      // Validate the REFRESH row on its OWN terms — an expired access token is
+      // precisely when a refresh is needed, so we must not gate on it (and the
+      // access row may already be gone via TTL).
       const ref = await get(`REFRESH#${oldRefreshHash}`);
-      if (!ref) return null;
-      const tok = await get(`TOKEN#${ref.tokenHash}`);
-      if (!tok || tok.revoked || isExpired(tok.expiresAt)) return null;
-      await this.revokeToken(tok.id, tok.mintedBy);
+      if (!ref || ref.revoked || isExpired(ref.expiresAt)) return null;
+      // Rotate: invalidate the old access token (best-effort; may be TTL-gone)
+      // and consume the old refresh row so it cannot be replayed.
+      await this.revokeToken(String(ref.tokenId), String(ref.mintedBy));
+      await del(`REFRESH#${oldRefreshHash}`);
       const minted = await this.mintToken({
-        userId: tok.mintedBy,
-        scope: tok.scope,
-        clientId: tok.clientId ?? undefined,
+        userId: ref.mintedBy,
+        scope: ref.scope,
+        clientId: ref.clientId ?? undefined,
         expiresInSec: newExpiresInSec,
         withRefresh: true,
+        refreshExpiresInSec: newRefreshExpiresInSec,
       });
       return { id: minted.id, token: minted.token, refreshToken: minted.refreshToken!, expiresAt: minted.expiresAt! };
     },
@@ -306,7 +327,26 @@ export function createDynamoStore(tableName: string): AuthStore {
           ExpressionAttributeValues: { ':t': true },
         })
         .promise();
+      // Cascade to the paired refresh token, so a revoked access token can't be
+      // resurrected by a refresh.
+      const tok = await get(`TOKEN#${idx.tokenHash}`);
+      if (tok?.refreshHash) await del(`REFRESH#${tok.refreshHash}`);
       return true;
+    },
+    async revokeByTokenValue(token): Promise<void> {
+      const hash = sha256(token);
+      // The value may be an access token …
+      const access = await get(`TOKEN#${hash}`);
+      if (access) {
+        await this.revokeToken(String(access.id), String(access.mintedBy));
+        return;
+      }
+      // … or a refresh token: drop the refresh row and revoke its access token.
+      const ref = await get(`REFRESH#${hash}`);
+      if (ref) {
+        await del(`REFRESH#${hash}`);
+        await this.revokeToken(String(ref.tokenId), String(ref.mintedBy));
+      }
     },
     async listUserTokens(userId): Promise<TokenSummary[]> {
       const res = await db

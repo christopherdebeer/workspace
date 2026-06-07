@@ -27,6 +27,7 @@ import {
   CODE_TTL_MS,
   SESSION_TTL_MS,
   DEVICE_TTL_MS,
+  REFRESH_TTL_MS,
 } from './store';
 
 interface TokenRow {
@@ -42,6 +43,15 @@ interface TokenRow {
   createdAt: string;
 }
 
+interface RefreshRow {
+  tokenId: string;
+  tokenHash: string;
+  mintedBy: string;
+  scope: string;
+  clientId: string | null;
+  expiresAt: string;
+}
+
 export function createMemoryStore(): AuthStore {
   const users = new Map<string, User>();
   const usersByName = new Map<string, string>();
@@ -51,7 +61,8 @@ export function createMemoryStore(): AuthStore {
   const codes = new Map<string, AuthCode & { expiresAt: string; used: boolean }>();
   const sessions = new Map<string, SessionInfo & { expiresAt: string }>();
   const tokens = new Map<string, TokenRow>(); // keyed by tokenHash
-  const refreshIndex = new Map<string, string>(); // refreshHash -> tokenHash
+  // refreshHash -> self-contained refresh row (its own expiry, outlives access)
+  const refreshRows = new Map<string, RefreshRow>();
   const deviceCodes = new Map<string, DeviceCode & { clientId: string | null }>();
   const deviceByUserCode = new Map<string, string>();
 
@@ -176,7 +187,17 @@ export function createMemoryStore(): AuthStore {
         expiresAt,
         createdAt: new Date().toISOString(),
       });
-      if (refreshHash) refreshIndex.set(refreshHash, tokenHash);
+      if (refreshHash) {
+        // Self-contained, independently-expiring refresh row (mirrors Dynamo).
+        refreshRows.set(refreshHash, {
+          tokenId: id,
+          tokenHash,
+          mintedBy: params.userId,
+          scope: params.scope,
+          clientId: params.clientId ?? null,
+          expiresAt: isoIn((params.refreshExpiresInSec ?? REFRESH_TTL_MS / 1000) * 1000),
+        });
+      }
       return { id, token, refreshToken, expiresAt };
     },
     async validateTokenByHash(hash): Promise<TokenInfo | null> {
@@ -192,17 +213,21 @@ export function createMemoryStore(): AuthStore {
         createdAt: t.createdAt,
       };
     },
-    async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600): Promise<RefreshResult | null> {
-      const tokenHash = refreshIndex.get(oldRefreshHash);
-      const old = tokenHash ? tokens.get(tokenHash) : undefined;
-      if (!old || old.revoked || isExpired(old.expiresAt)) return null;
-      old.revoked = true;
+    async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600, newRefreshExpiresInSec): Promise<RefreshResult | null> {
+      // Validate the refresh row on its own (longer) expiry — not the access
+      // token's, which is expected to be expired/gone when refreshing.
+      const ref = refreshRows.get(oldRefreshHash);
+      if (!ref || isExpired(ref.expiresAt)) return null;
+      const old = tokens.get(ref.tokenHash);
+      if (old) old.revoked = true;
+      refreshRows.delete(oldRefreshHash); // rotate: consume the old refresh
       const minted = await this.mintToken({
-        userId: old.mintedBy,
-        scope: old.scope,
-        clientId: old.clientId ?? undefined,
+        userId: ref.mintedBy,
+        scope: ref.scope,
+        clientId: ref.clientId ?? undefined,
         expiresInSec: newExpiresInSec,
         withRefresh: true,
+        refreshExpiresInSec: newRefreshExpiresInSec,
       });
       return { id: minted.id, token: minted.token, refreshToken: minted.refreshToken!, expiresAt: minted.expiresAt! };
     },
@@ -210,10 +235,27 @@ export function createMemoryStore(): AuthStore {
       for (const t of tokens.values()) {
         if (t.id === tokenId && t.mintedBy === userId) {
           t.revoked = true;
+          // Cascade: invalidate the paired refresh token too.
+          if (t.refreshHash) refreshRows.delete(t.refreshHash);
           return true;
         }
       }
       return false;
+    },
+    async revokeByTokenValue(token): Promise<void> {
+      const hash = sha256(token);
+      const access = tokens.get(hash);
+      if (access) {
+        access.revoked = true;
+        if (access.refreshHash) refreshRows.delete(access.refreshHash);
+        return;
+      }
+      const ref = refreshRows.get(hash);
+      if (ref) {
+        refreshRows.delete(hash);
+        const t = tokens.get(ref.tokenHash);
+        if (t) t.revoked = true;
+      }
     },
     async listUserTokens(userId): Promise<TokenSummary[]> {
       return [...tokens.values()]

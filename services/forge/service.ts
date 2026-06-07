@@ -203,6 +203,30 @@ async function listCells(_input: unknown, ctx: ServiceContext): Promise<unknown>
   };
 }
 
+/**
+ * Internal command backing the `home` cell's `/_catalog` merge: the dynamic
+ * cells the caller can access (owns or was granted), shaped for the catalog.
+ * Not an MCP tool — `home` reaches it via an allow-listed invoke, and the
+ * caller's identity propagates as `user`, so the registry filters to that
+ * principal (never leaking other owners' private cells).
+ */
+async function catalogCells(_input: unknown, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cells = await registry.listAccessibleBy(user);
+  return {
+    cells: cells.map((c) => ({
+      name: c.name,
+      owner: c.owner,
+      address: cellAddress(c.owner, c.name),
+      status: c.status,
+      description: c.description,
+      shared: c.owner !== user,
+    })),
+  };
+}
+
 interface CellRefInput {
   cellId: string;
 }
@@ -503,6 +527,7 @@ function describeTools(): { tools: Array<{ name: string; description: string; in
 
 const commands: Record<string, RegisteredCommand> = {
   resolveCell: resolveCell as RegisteredCommand,
+  catalogCells: catalogCells as RegisteredCommand,
   describeTools: (() => describeTools()) as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {

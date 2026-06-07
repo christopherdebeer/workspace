@@ -4,6 +4,7 @@ import {
   handleDCR,
   handleConsent,
   handleToken,
+  handleRevoke,
   handleDeviceInit,
   handleDeviceApprove,
   validateBearer,
@@ -170,6 +171,57 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     );
     expect(res.statusCode).toBe(400);
     expect((res.body as { error: string }).error).toBe('invalid_grant');
+  });
+});
+
+describe('refresh-token lifetime + revocation (hardening)', () => {
+  it('refreshes after the access token has expired (refresh has its own, longer life)', async () => {
+    const store = createMemoryStore();
+    // Access token already expired (negative window), refresh valid for 1h.
+    const minted = await store.mintToken({
+      userId: 'u1', scope: 's', expiresInSec: -1, withRefresh: true, refreshExpiresInSec: 3600,
+    });
+    expect(await store.validateTokenByHash(sha256(minted.token))).toBeNull(); // access dead
+    const refreshed = await store.refreshUnifiedToken(sha256(minted.refreshToken!), 3600, 3600);
+    expect(refreshed).not.toBeNull(); // refresh still works — the bug this fixes
+    expect(await store.validateTokenByHash(sha256(refreshed!.token))).toMatchObject({ scope: 's' });
+  });
+
+  it('rotates: the old refresh token cannot be replayed', async () => {
+    const store = createMemoryStore();
+    const minted = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
+    expect(await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60, 3600)).not.toBeNull();
+    expect(await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60, 3600)).toBeNull();
+  });
+
+  it('revoking an access token cascades to its refresh token', async () => {
+    const store = createMemoryStore();
+    const m = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
+    expect(await store.revokeToken(m.id, 'u1')).toBe(true);
+    expect(await store.refreshUnifiedToken(sha256(m.refreshToken!), 60, 3600)).toBeNull();
+  });
+
+  it('revokeByTokenValue accepts an access OR a refresh token and kills the pair', async () => {
+    const store = createMemoryStore();
+    const m = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
+    await store.revokeByTokenValue(m.token); // by access value
+    expect(await store.validateTokenByHash(sha256(m.token))).toBeNull();
+    expect(await store.refreshUnifiedToken(sha256(m.refreshToken!), 60, 3600)).toBeNull();
+
+    const m2 = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
+    await store.revokeByTokenValue(m2.refreshToken!); // by refresh value
+    expect(await store.refreshUnifiedToken(sha256(m2.refreshToken!), 60, 3600)).toBeNull();
+    expect(await store.validateTokenByHash(sha256(m2.token))).toBeNull();
+  });
+
+  it('RFC 7009 /oauth/revoke returns 200 and invalidates the token', async () => {
+    const store = createMemoryStore();
+    const minted = await store.mintToken({ userId: 'u1', scope: 'workspace:read', expiresInSec: 60, withRefresh: true });
+    const res = await handleRevoke(makeReq({ path: '/oauth/revoke', body: { token: minted.token } }), store);
+    expect(res.statusCode).toBe(200);
+    expect(await validateBearer(minted.token, store)).toBeNull();
+    // 200 even for an unknown token (no probing).
+    expect((await handleRevoke(makeReq({ path: '/oauth/revoke', body: { token: 'nope' } }), store)).statusCode).toBe(200);
   });
 });
 
