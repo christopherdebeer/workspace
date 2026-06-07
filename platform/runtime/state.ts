@@ -46,7 +46,9 @@ export interface EntryMeta {
   updatedAt: string;
   /** Distinct principals who have ever written it. */
   writers: string[];
-  /** Successor key if this entry has been superseded, else null. */
+  /** True once retired (hidden from default reads); a fresh write revives it. */
+  superseded: boolean;
+  /** Successor key when retired *toward* one, else null. */
   supersededBy: string | null;
   /** Salience score in [0,1], computed at read time from the trajectory. */
   score: number;
@@ -92,6 +94,7 @@ export interface StateRecord {
   createdAt: string;
   updatedAt: string;
   writers: string[];
+  superseded: boolean;
   supersededBy: string | null;
 }
 
@@ -227,6 +230,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         createdAt: rec.createdAt,
         updatedAt: rec.updatedAt,
         writers: rec.writers,
+        superseded: rec.superseded,
         supersededBy: rec.supersededBy,
         score,
         velocity: windowMin > 0 ? writes / windowMin : 0,
@@ -263,6 +267,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         updatedAt: nowIso,
         writers,
         // a fresh write to a superseded key revives it
+        superseded: false,
         supersededBy: null,
       };
       await store.put(record);
@@ -292,7 +297,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const counts = { focus: 0, peripheral: 0, elided: 0, total: 0 };
 
       for (const rec of records) {
-        if (rec.supersededBy && !opts?.includeSuperseded) continue;
+        if (rec.superseded && !opts?.includeSuperseded) continue;
         const entry = await wrap(rec, nowMs, traj);
         let tier = tierFor(entry._meta.score, { ...s, focusThreshold, elideThreshold });
         if (expand.has(rec.key)) tier = 'focus';
@@ -323,6 +328,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const seq = await store.nextSeq(scope);
       const updated: StateRecord = {
         ...rec,
+        superseded: true,
         supersededBy: by,
         writer: identity?.user ?? rec.writer,
         updatedAt: nowIso,

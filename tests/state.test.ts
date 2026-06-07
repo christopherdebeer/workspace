@@ -55,6 +55,7 @@ describe('observed state: supersede, not delete', () => {
     await state.put({ scope: 'r', key: 'old', value: 1 }, alice);
     await state.put({ scope: 'r', key: 'new', value: 2 }, alice);
     const sup = await state.supersede('r', 'old', 'new', alice);
+    expect(sup?._meta.superseded).toBe(true);
     expect(sup?._meta.supersededBy).toBe('new');
 
     const def = await state.read('r', { elision: 'none' });
@@ -66,13 +67,19 @@ describe('observed state: supersede, not delete', () => {
     expect((await state.get('r', 'old'))?.value).toBe(1);
   });
 
-  it('a fresh write revives a superseded key', async () => {
+  it('retires with no successor (forget) and a fresh write revives', async () => {
     const state = createObservedState(createMemoryStateStore());
     await state.put({ scope: 'r', key: 'k', value: 1 }, alice);
-    await state.supersede('r', 'k', null, alice);
+    const retired = await state.supersede('r', 'k', null, alice);
+    expect(retired?._meta.superseded).toBe(true);
+    expect(retired?._meta.supersededBy).toBeNull();
+    // hidden from the default view even without a successor
+    expect((await state.read('r', { elision: 'none' })).entries.k).toBeUndefined();
+
     const revived = await state.put({ scope: 'r', key: 'k', value: 2 }, alice);
-    expect(revived._meta.supersededBy).toBeNull();
+    expect(revived._meta.superseded).toBe(false);
     expect(revived._meta.revision).toBe(2);
+    expect((await state.read('r', { elision: 'none' })).entries.k?.value).toBe(2);
   });
 });
 
