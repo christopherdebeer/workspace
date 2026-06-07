@@ -5,7 +5,7 @@
  * `ServiceHttpRequest` and a storage-agnostic `AuthStore`.
  */
 import type { ServiceHttpRequest, ServiceHttpResponse } from '../../platform/runtime';
-import { AuthStore, generateToken, sha256, DEVICE_TTL_MS } from './store';
+import { AuthStore, generateToken, sha256, DEVICE_TTL_MS, REFRESH_TTL_MS } from './store';
 
 export interface OAuthConfig {
   serverName: string;
@@ -14,6 +14,12 @@ export interface OAuthConfig {
   scopesSupported: string[];
   /** positive = lifetime seconds; 0/negative = non-expiring (no refresh). */
   tokenExpirySecs?: number;
+  /**
+   * Refresh-token lifetime (seconds). Independent of (and longer than) the
+   * access token's — short access + long refresh is how MCP clients stay
+   * connected. Defaults to `REFRESH_TTL_MS`.
+   */
+  refreshExpirySecs?: number;
   /** Usernames allowed to be granted admin-scoped permissions. */
   adminUsernames?: string[];
   /** Scope prefixes (e.g. "platform:") grantable only to `adminUsernames`. */
@@ -32,6 +38,7 @@ export function grantableScopes(config: OAuthConfig, username: string): string[]
 }
 
 const DEFAULT_EXPIRY = 3600;
+const DEFAULT_REFRESH_EXPIRY = REFRESH_TTL_MS / 1000;
 const NO_STORE = { 'cache-control': 'no-store' };
 
 function originOf(req: ServiceHttpRequest): string {
@@ -68,6 +75,7 @@ export function handleASMetadata(req: ServiceHttpRequest, config: OAuthConfig): 
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
     scopes_supported: config.scopesSupported,
     device_authorization_endpoint: `${origin}/auth/device`,
+    revocation_endpoint: `${origin}/oauth/revoke`,
   });
 }
 
@@ -170,6 +178,7 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
   const body = parseTokenBody(req);
   console.log('[oauth] token: request', { grant_type: body.grant_type, hasVerifier: !!body.code_verifier, hasSecret: !!body.client_secret });
   const configuredExpiry = config.tokenExpirySecs ?? DEFAULT_EXPIRY;
+  const refreshExpiry = config.refreshExpirySecs ?? DEFAULT_REFRESH_EXPIRY;
   const neverExpires = configuredExpiry <= 0;
   const mintExpiry = neverExpires ? undefined : configuredExpiry;
 
@@ -204,6 +213,7 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       clientId: authCode.clientId,
       expiresInSec: mintExpiry,
       withRefresh: !neverExpires,
+      refreshExpiresInSec: refreshExpiry,
     });
     console.log('[oauth] token: issued', { clientId: authCode.clientId, scope, resource: authCode.resource });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope };
@@ -217,7 +227,7 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
   if (body.grant_type === 'refresh_token') {
     if (!body.refresh_token) return ok({ error: 'invalid_request' }, 400);
     if (neverExpires) return ok({ error: 'unsupported_grant_type', error_description: 'Tokens are non-expiring' }, 400);
-    const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry);
+    const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry, refreshExpiry);
     if (!result) return ok({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
     return ok({ access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken });
   }
@@ -236,6 +246,7 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       label: 'device',
       expiresInSec: mintExpiry,
       withRefresh: !neverExpires,
+      refreshExpiresInSec: refreshExpiry,
     });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: consumed.scope };
     if (!neverExpires) {
@@ -246,6 +257,20 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
   }
 
   return ok({ error: 'unsupported_grant_type' }, 400);
+}
+
+// ─── Revocation (RFC 7009) ───────────────────────────────────────
+
+/**
+ * RFC 7009 token revocation. The presented token is itself the credential, so
+ * this needs no separate auth; per spec it returns 200 regardless of whether
+ * the token existed (so callers can't probe validity). Accepts either an access
+ * or a refresh token; revoking one invalidates its pair.
+ */
+export async function handleRevoke(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
+  const body = parseTokenBody(req);
+  if (body.token) await store.revokeByTokenValue(body.token);
+  return ok({});
 }
 
 // ─── Device authorization grant ──────────────────────────────────

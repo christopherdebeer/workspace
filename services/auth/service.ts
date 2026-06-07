@@ -22,6 +22,7 @@ import {
   handleConsent,
   handleGrantableScopes,
   handleToken,
+  handleRevoke,
   handleDeviceInit,
   handleDeviceApprove,
   validateBearer,
@@ -53,6 +54,11 @@ const OAUTH_CONFIG: OAuthConfig = {
   tokenExpirySecs: getOptional('AUTH_TOKEN_EXPIRY_SECS')
     ? Number(getOptional('AUTH_TOKEN_EXPIRY_SECS'))
     : 3600,
+  // Refresh tokens outlive access tokens (short access + long refresh keeps MCP
+  // clients connected without re-consent). Default 30d.
+  refreshExpirySecs: getOptional('AUTH_REFRESH_EXPIRY_SECS')
+    ? Number(getOptional('AUTH_REFRESH_EXPIRY_SECS'))
+    : undefined,
   // Admin-gated scopes (default `platform:`) may only be granted to these users.
   adminUsernames: (getOptional('AUTH_ADMIN_USERNAMES') ?? '').split(/[\s,]+/).filter(Boolean),
   adminScopePrefixes: (getOptional('AUTH_ADMIN_SCOPE_PREFIXES') ?? 'platform:').split(/[\s,]+/).filter(Boolean),
@@ -152,6 +158,7 @@ export const handler = defineService({
     { method: 'POST', path: '/oauth/register', handler: (req) => handleDCR(req, store) },
     { method: 'POST', path: '/oauth/consent', handler: (req) => handleConsent(req, store, OAUTH_CONFIG) },
     { method: 'POST', path: '/oauth/token', handler: (req) => handleToken(req, store, OAUTH_CONFIG) },
+    { method: 'POST', path: '/oauth/revoke', handler: (req) => handleRevoke(req, store) },
     { method: 'POST', path: '/auth/grantable', handler: (req) => handleGrantableScopes(req, store, OAUTH_CONFIG) },
 
     { method: 'POST', path: '/webauthn/register/options', handler: (req) => handleRegisterOptions(req, store, WEBAUTHN_CONFIG) },

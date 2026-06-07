@@ -88,6 +88,13 @@ export interface MintTokenParams {
   clientId?: string;
   expiresInSec?: number;
   withRefresh?: boolean;
+  /**
+   * Lifetime of the issued refresh token, independent of the access token's.
+   * Refresh tokens are meant to outlive the access token they renew (that is the
+   * point of refresh), so this defaults to `REFRESH_TTL_MS` rather than tracking
+   * `expiresInSec`. Only meaningful when `withRefresh` is set.
+   */
+  refreshExpiresInSec?: number;
 }
 
 export interface MintedToken {
@@ -186,8 +193,18 @@ export interface AuthStore {
   // tokens
   mintToken(params: MintTokenParams): Promise<MintedToken>;
   validateTokenByHash(hash: string): Promise<TokenInfo | null>;
-  refreshUnifiedToken(oldRefreshHash: string, newExpiresInSec?: number): Promise<RefreshResult | null>;
+  refreshUnifiedToken(
+    oldRefreshHash: string,
+    newExpiresInSec?: number,
+    newRefreshExpiresInSec?: number,
+  ): Promise<RefreshResult | null>;
   revokeToken(tokenId: string, userId: string): Promise<boolean>;
+  /**
+   * Revoke whichever token a raw value denotes — access or refresh — for the
+   * RFC 7009 revocation endpoint. Idempotent; revoking an access token also
+   * invalidates its paired refresh token and vice-versa.
+   */
+  revokeByTokenValue(token: string): Promise<void>;
   listUserTokens(userId: string): Promise<TokenSummary[]>;
   // device codes
   createDeviceCode(scope: string, clientId?: string): Promise<{ deviceCode: string; userCode: string; expiresAt: string }>;
@@ -203,6 +220,8 @@ export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const SESSION_TTL_MS = 15 * 60 * 1000;
 export const DEVICE_TTL_MS = 15 * 60 * 1000;
+/** Default refresh-token lifetime (30 days) — outlives the access token. */
+export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function isoIn(ms: number): string {
   return new Date(Date.now() + ms).toISOString();
