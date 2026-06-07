@@ -198,6 +198,12 @@ export interface ObservedState {
   put(input: WriteInput, identity?: Identity): Promise<Entry>;
   get(scope: string, key: string, identity?: Identity): Promise<Entry | null>;
   read(scope: string, opts?: ReadOptions, identity?: Identity): Promise<ReadResult>;
+  /**
+   * Apply salience tiering + elision to an already-scored set of entries. Lets a
+   * caller assemble a view from several scopes (e.g. own slice + granted subsets)
+   * and shape the whole thing *once*. Pure: does not mutate its input.
+   */
+  shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult;
   /** Retire `key` by pointing it at successor `by` (or just marking it). */
   supersede(scope: string, key: string, by: string | null, identity?: Identity): Promise<Entry | null>;
 }
@@ -237,6 +243,29 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         elided: false,
       },
     };
+  }
+
+  /** Pure salience shaping over an already-scored set (own + granted, merged). */
+  function shapeEntries(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
+    const elision = opts?.elision ?? 'auto';
+    const focusThreshold = opts?.focusThreshold ?? s.focusThreshold;
+    const elideThreshold = opts?.elideThreshold ?? s.elideThreshold;
+    const expand = new Set(opts?.expand ?? []);
+    const out: Record<string, Entry> = {};
+    const counts = { focus: 0, peripheral: 0, elided: 0, total: 0 };
+    for (const [key, src] of Object.entries(entries)) {
+      const entry: Entry = { value: src.value, _meta: { ...src._meta, elided: false } };
+      let tier = tierFor(entry._meta.score, { ...s, focusThreshold, elideThreshold });
+      if (expand.has(key)) tier = 'focus';
+      counts[tier]++;
+      counts.total++;
+      if (tier === 'elided' && elision === 'auto') {
+        entry.value = null;
+        entry._meta.elided = true;
+      }
+      out[key] = entry;
+    }
+    return { entries: out, _shaping: { focusThreshold, elideThreshold, elision, counts } };
   }
 
   return {
@@ -284,40 +313,27 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return wrap(rec, now.getTime());
     },
 
-    async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
-      const elision = opts?.elision ?? 'auto';
-      const focusThreshold = opts?.focusThreshold ?? s.focusThreshold;
-      const elideThreshold = opts?.elideThreshold ?? s.elideThreshold;
-      const expand = new Set(opts?.expand ?? []);
-      const nowMs = Date.now();
+    shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
+      return shapeEntries(entries, opts);
+    },
 
+    async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
+      const nowMs = Date.now();
       const records = await store.list(scope);
       const traj = await store.recentTrajectory(scope, nowMs - s.windowMs);
-      const entries: Record<string, Entry> = {};
-      const counts = { focus: 0, peripheral: 0, elided: 0, total: 0 };
 
+      // Score every live entry (no elision yet); shape in one pass below.
+      const scored: Record<string, Entry> = {};
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
-        const entry = await wrap(rec, nowMs, traj);
-        let tier = tierFor(entry._meta.score, { ...s, focusThreshold, elideThreshold });
-        if (expand.has(rec.key)) tier = 'focus';
-        counts[tier]++;
-        counts.total++;
-        if (tier === 'elided' && elision === 'auto') {
-          entry.value = null;
-          entry._meta.elided = true;
-        }
-        entries[rec.key] = entry;
+        scored[rec.key] = await wrap(rec, nowMs, traj);
       }
 
       // Reading the scope is itself attention on every surfaced key.
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'read', scope, key: null, at: new Date(nowMs).toISOString(), seq });
 
-      return {
-        entries,
-        _shaping: { focusThreshold, elideThreshold, elision, counts },
-      };
+      return shapeEntries(scored, opts);
     },
 
     async supersede(scope: string, key: string, by: string | null, identity?: Identity): Promise<Entry | null> {

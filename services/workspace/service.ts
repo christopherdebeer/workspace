@@ -7,15 +7,15 @@
  * the DynamoDB `StateStore`. See `handlers.ts` and `docs/substrate.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, dynamoStateBuilder } from './handlers';
+import { createWorkspaceCommands, dynamoDeps } from './handlers';
 
-const commands = createWorkspaceCommands(dynamoStateBuilder);
+const commands = createWorkspaceCommands(dynamoDeps);
 
 export const handler = defineService({
   name: 'workspace',
   commands,
   events: {
-    emits: ['workspace.fact.written'],
+    emits: ['workspace.fact.written', 'workspace.shared'],
   },
 });
 

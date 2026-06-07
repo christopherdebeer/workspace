@@ -211,9 +211,13 @@ the fix belongs in the core.
    provenance, supersede-not-delete (a `superseded` flag distinct from the
    `supersededBy` successor), trajectory-driven salience, shaped reads — plus a
    DynamoDB-backed `StateStore` (`dynamo-state-store.ts`) and the first flagship
-   room, the `workspace` cell (`remember`/`recall`/`peek`/`supersede`), scoped to
-   the caller's slice. Next: sharing — exposing subsets of one slice into another
-   user's view — and a scheduled `tend`.)*
+   room, the `workspace` cell, scoped to the caller's slice. **Sharing built too**:
+   `share`/`unshare`/`shared` expose subsets (a key, or `*` for the whole slice)
+   of one user's slice into another's view, and `recall` assembles own ∪ granted
+   into one salience-shaped view (granted facts namespaced `<owner>/<key>`) — the
+   "one Substrate, per-user view" made real, additively, with no primitive change
+   (only a pure `shape()` helper extracted so a merged view is shaped once). Next:
+   a scheduled `tend`, and write-through grants.)*
 4. **Declared vocabulary + surfaces** — actions/views as runtime data, CEL
    predicates, one surface → MCP + UI; and the living, tended self-model. Proven
    by `sync`.

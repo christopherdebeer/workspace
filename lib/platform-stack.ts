@@ -105,8 +105,8 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
       persistence: { dynamo: true, dynamoTtl: true },
-      commands: ['remember', 'recall', 'peek', 'supersede'],
-      emits: ['workspace.fact.written'],
+      commands: ['remember', 'recall', 'peek', 'supersede', 'share', 'unshare', 'shared'],
+      emits: ['workspace.fact.written', 'workspace.shared'],
       eventBus,
     });
 

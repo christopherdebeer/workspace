@@ -7,6 +7,7 @@
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
 import { createWorkspaceCommands } from '../services/workspace/handlers';
+import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
 
@@ -23,9 +24,12 @@ function ctxFor(user: string | null): { ctx: ServiceContext; emitted: Array<{ ty
 }
 
 describe('workspace cell', () => {
-  // One shared store across callers — the "one Substrate"; slices are by scope.
+  // One shared substrate + one grant store across callers — the "one Substrate";
+  // slices are by scope, views are assembled per caller.
   const store = createMemoryStateStore();
-  const cmds = createWorkspaceCommands(() => createObservedState(store));
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
 
   it('remembers a fact in the caller slice and announces it', async () => {
     const { ctx, emitted } = ctxFor('alice');
@@ -73,5 +77,63 @@ describe('workspace cell', () => {
   it('rejects unauthenticated callers', async () => {
     const { ctx } = ctxFor(null);
     await expect(cmds.remember({ key: 'x', value: 1 }, ctx)).rejects.toThrow();
+  });
+});
+
+describe('workspace sharing / view layer', () => {
+  // One Substrate; recall assembles each caller's view (own slice ∪ granted).
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'roadmap', value: 'Q3 plan' }, ctxFor('alice').ctx);
+    await cmds.remember({ key: 'secret', value: 'private' }, ctxFor('alice').ctx);
+    await cmds.remember({ key: 'mine', value: 'bob stuff' }, ctxFor('bob').ctx);
+  });
+
+  it('shares a single key into the grantee view, namespaced by owner, and announces it', async () => {
+    const { ctx: alice, emitted } = ctxFor('alice');
+    const g = await cmds.share({ to: 'bob', key: 'roadmap' }, alice);
+    expect(g).toMatchObject({ owner: 'alice', grantee: 'bob', key: 'roadmap' });
+    expect(emitted).toContainEqual({
+      type: 'workspace.shared',
+      payload: { owner: 'alice', grantee: 'bob', key: 'roadmap' },
+    });
+
+    const bobView = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
+    expect(bobView.entries['mine'].value).toBe('bob stuff'); // own slice
+    expect(bobView.entries['alice/roadmap'].value).toBe('Q3 plan'); // granted subset
+    expect(bobView.entries['alice/secret']).toBeUndefined(); // not granted
+  });
+
+  it('leaves the owner view unchanged (alice never sees bob)', async () => {
+    const aliceView = await cmds.recall({ elision: 'none' }, ctxFor('alice').ctx);
+    expect(Object.keys(aliceView.entries).sort()).toEqual(['roadmap', 'secret']);
+  });
+
+  it('unshare revokes visibility', async () => {
+    await cmds.unshare({ to: 'bob', key: 'roadmap' }, ctxFor('alice').ctx);
+    const bobView = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
+    expect(bobView.entries['alice/roadmap']).toBeUndefined();
+    expect(bobView.entries['mine'].value).toBe('bob stuff');
+  });
+
+  it('whole-slice share exposes every non-superseded fact of the owner', async () => {
+    await cmds.share({ to: 'bob' }, ctxFor('alice').ctx); // no key → whole slice
+    const bobView = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
+    expect(bobView.entries['alice/roadmap'].value).toBe('Q3 plan');
+    expect(bobView.entries['alice/secret'].value).toBe('private');
+  });
+
+  it('shared() reports outgoing and incoming grants', async () => {
+    const aliceShared = await cmds.shared(undefined, ctxFor('alice').ctx);
+    expect(aliceShared.shared.some((g) => g.grantee === 'bob' && g.key === '*')).toBe(true);
+    expect(aliceShared.receiving).toEqual([]);
+
+    const bobShared = await cmds.shared(undefined, ctxFor('bob').ctx);
+    expect(bobShared.receiving.some((g) => g.owner === 'alice' && g.key === '*')).toBe(true);
+    expect(bobShared.shared).toEqual([]);
   });
 });
