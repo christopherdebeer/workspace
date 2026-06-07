@@ -14,7 +14,7 @@
  * validation itself is handled upstream by the runtime (`ctx.identity`).
  */
 import { defineService } from './define-service';
-import { requireScope } from './auth';
+import { requireScope, hasScope } from './auth';
 import type {
   ServiceContext,
   ServiceHttpRequest,
@@ -57,6 +57,14 @@ export interface McpServiceDefinition {
    */
   requireAuth?: boolean;
   tools: Record<string, McpToolDefinition>;
+  /**
+   * Per-request dynamic tools, merged over the static `tools` for each call.
+   * Lets a cell act as an MCP **gateway**, aggregating tools from other cells
+   * (resolved with the caller's identity, e.g. only the cells they own). The
+   * returned tools are subject to the same scope filtering/enforcement as static
+   * ones. Called once per `tools/list` and once per `tools/call`.
+   */
+  resolveTools?: (ctx: ServiceContext) => Promise<Record<string, McpToolDefinition>>;
   /** Extra raw HTTP routes (e.g. a human-readable GET on the same path). */
   http?: HttpRoute[];
   /** Extra non-tool commands. */
@@ -87,9 +95,11 @@ function rpcError(
 }
 
 /** 401 challenge so MCP/RFC 9728 clients can find the authorization server. */
-function unauthorized(req: ServiceHttpRequest): ServiceHttpResponse {
+function unauthorized(req: ServiceHttpRequest, resourcePath: string): ServiceHttpResponse {
   const u = new URL(req.url);
-  const metadata = `${u.protocol}//${u.host}/.well-known/oauth-protected-resource`;
+  // RFC 9728: the PRM URL inserts the well-known path before the resource path,
+  // e.g. resource `…/mcp` → `…/.well-known/oauth-protected-resource/mcp`.
+  const metadata = `${u.protocol}//${u.host}/.well-known/oauth-protected-resource${resourcePath}`;
   return {
     statusCode: 401,
     headers: { ...NO_STORE, 'www-authenticate': `Bearer resource_metadata="${metadata}"` },
@@ -107,7 +117,17 @@ export function defineMcpService(def: McpServiceDefinition) {
   const mcpPath = def.mcpPath ?? '/mcp';
   const requireAuth = def.requireAuth ?? true;
   const serverInfo = def.serverInfo ?? { name: def.name, version: def.version ?? '1.0.0' };
-  const toolNames = Object.keys(def.tools);
+
+  /** Static tools plus any per-request dynamic (gateway) tools. */
+  async function allTools(ctx: ServiceContext): Promise<Record<string, McpToolDefinition>> {
+    if (!def.resolveTools) return def.tools;
+    return { ...def.tools, ...(await def.resolveTools(ctx)) };
+  }
+
+  /** A tool is advertised only if the caller can actually use it. */
+  function entitled(tool: McpToolDefinition, ctx: ServiceContext): boolean {
+    return !tool.scope || hasScope(ctx.identity, tool.scope);
+  }
 
   async function dispatch(rpc: JsonRpcRequest, ctx: ServiceContext): Promise<ServiceHttpResponse | undefined> {
     const id = (rpc.id ?? null) as string | number | null;
@@ -129,17 +149,21 @@ export function defineMcpService(def: McpServiceDefinition) {
         });
       case 'ping':
         return rpcResult(id, {});
-      case 'tools/list':
+      case 'tools/list': {
+        const tools = await allTools(ctx);
         return rpcResult(id, {
-          tools: toolNames.map((name) => ({
-            name,
-            description: def.tools[name].description,
-            inputSchema: def.tools[name].inputSchema ?? { type: 'object' },
-          })),
+          tools: Object.keys(tools)
+            .filter((name) => entitled(tools[name], ctx))
+            .map((name) => ({
+              name,
+              description: tools[name].description,
+              inputSchema: tools[name].inputSchema ?? { type: 'object' },
+            })),
         });
+      }
       case 'tools/call': {
         const name = typeof params.name === 'string' ? params.name : '';
-        const tool = def.tools[name];
+        const tool = (await allTools(ctx))[name];
         if (!tool) return rpcError(id, -32602, `Unknown tool: ${name}`);
         try {
           if (tool.scope) requireScope(ctx.identity, tool.scope);
@@ -158,7 +182,16 @@ export function defineMcpService(def: McpServiceDefinition) {
   }
 
   async function endpoint(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
-    if (requireAuth && !ctx.identity.user) return unauthorized(req);
+    if (requireAuth && !ctx.identity.user) {
+      const authz = req.headers['authorization'] ?? req.headers['Authorization'] ?? '';
+      const fwd = req.headers['x-forwarded-authorization'] ?? '';
+      console.warn('[mcp] 401 unauthorized', {
+        path: req.path,
+        hadBearer: /^Bearer\s/i.test(authz),
+        hadFwdBearer: /^Bearer\s/i.test(fwd),
+      });
+      return unauthorized(req, mcpPath);
+    }
 
     let payload: unknown;
     try {
@@ -182,9 +215,10 @@ export function defineMcpService(def: McpServiceDefinition) {
     return res ?? { statusCode: 202, headers: NO_STORE, body: '' };
   }
 
-  // Tools double as directly-invocable commands.
+  // Static tools double as directly-invocable commands (dynamic gateway tools
+  // are resolved per request and forwarded, not registered here).
   const commands: Record<string, RegisteredCommand> = { ...def.commands };
-  for (const name of toolNames) {
+  for (const name of Object.keys(def.tools)) {
     commands[name] = def.tools[name].handler as RegisteredCommand;
   }
 

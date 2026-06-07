@@ -20,6 +20,15 @@ const ORIGIN_SIGNER_SRC = `'use strict';
 const crypto = require('crypto');
 exports.handler = (event, _ctx, callback) => {
   const request = event.Records[0].cf.request;
+  // OAC SigV4-signs the origin request and OVERWRITES the viewer's Authorization
+  // header with its signature — clobbering bearer tokens (MCP/OAuth resources).
+  // Preserve the viewer's Authorization in a side header the origin reads instead.
+  const auth = request.headers['authorization'];
+  if (auth && auth.length) {
+    request.headers['x-forwarded-authorization'] = [
+      { key: 'X-Forwarded-Authorization', value: auth[0].value },
+    ];
+  }
   const m = request.method;
   if (m !== 'POST' && m !== 'PUT' && m !== 'PATCH' && m !== 'DELETE') {
     return callback(null, request);

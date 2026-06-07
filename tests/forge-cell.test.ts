@@ -1,12 +1,13 @@
 /**
- * forge cell — the dynamic-cell control plane.
+ * forge cell — the dynamic-cell control plane (a backend tool-provider).
  *
  * Exercises the pure building blocks (zip framing, the CloudFormation cell
- * template, the registry) and the real `forge` MCP handler end-to-end with AWS
- * (CloudFormation/S3/DynamoDB/Lambda) and the esbuild transpiler stubbed —
- * asserting create requires the `platform:cells:create` scope, provisions a
- * `cell-*` stack, records the cell, and that `callCell` invokes only for
- * authorised principals.
+ * template, the registry) and the real `forge` handler invoked the way the
+ * gateway/dispatch reach it — via command envelopes — with AWS
+ * (CloudFormation/S3/DynamoDB/Lambda) and the esbuild transpiler stubbed.
+ * Asserts create transpiles + provisions a `cell-*` stack + records the cell,
+ * that `callCell` invokes only for authorised principals, and that
+ * `describeTools` advertises the create scope for the gateway to enforce.
  */
 import { handler as forge } from '../services/forge/service';
 import { crc32, zipStore } from '../services/forge/zip';
@@ -17,9 +18,8 @@ import {
   __setCloudFormation,
   __setS3,
   __setLambda as __setProvisionerLambda,
+  __setCloudWatchLogs,
 } from '../services/forge/provisioner';
-import { __setLambda as __setPeerLambda } from '../platform/runtime/service-client';
-import type { FunctionUrlEvent, FunctionUrlResponse } from '../platform/runtime';
 
 // ── in-memory AWS stubs ────────────────────────────────────────────
 
@@ -71,9 +71,8 @@ const cfnCalls: Array<{ StackName: string; TemplateBody: string }> = [];
 const s3Calls: Array<{ Bucket: string; Key: string }> = [];
 let lambdaResponse: unknown = { statusCode: 200, body: JSON.stringify({ ok: true }) };
 
-function installAwsStubs(): Map<string, Item> {
-  const doc = memoryDocClient();
-  __setDocumentClient(doc as unknown as Parameters<typeof __setDocumentClient>[0]);
+function installAwsStubs(): void {
+  __setDocumentClient(memoryDocClient() as unknown as Parameters<typeof __setDocumentClient>[0]);
   __setS3({
     putObject: (p: { Bucket: string; Key: string }) => {
       s3Calls.push({ Bucket: p.Bucket, Key: p.Key });
@@ -93,51 +92,31 @@ function installAwsStubs(): Map<string, Item> {
   __setProvisionerLambda({
     invoke: () => ({ promise: async () => ({ Payload: JSON.stringify(lambdaResponse) }) }),
   } as unknown as Parameters<typeof __setProvisionerLambda>[0]);
+  __setCloudWatchLogs({
+    filterLogEvents: (p: { logGroupName: string }) => ({
+      promise: async () => ({
+        events:
+          p.logGroupName.startsWith('/aws/lambda/cell-')
+            ? [{ timestamp: 1_700_000_000_000, message: 'hello from cell\n' }]
+            : [],
+      }),
+    }),
+  } as unknown as Parameters<typeof __setCloudWatchLogs>[0]);
   __setEsbuild({
     initialize: async () => undefined,
     transform: async (code: string) => ({ code: `/*compiled*/ ${code}`, warnings: [], map: '' }),
   } as unknown as Parameters<typeof __setEsbuild>[0]);
-  return doc.store;
 }
 
-// auth.validateToken stub (supplies identity + scopes over the MCP HTTP path)
-interface ValidatedToken {
-  userId: string;
-  scope: string;
-  clientId: string | null;
+// forge is reached the way the gateway/dispatch reach it: a command envelope
+// carrying the (already-validated) caller as `user`.
+interface CommandResult<T = unknown> {
+  ok: boolean;
+  result?: T;
+  error?: string;
 }
-function stubAuth(tokens: Record<string, ValidatedToken>): void {
-  __setPeerLambda({
-    invoke: (params: Record<string, unknown>) => {
-      const env = JSON.parse(params.Payload as string) as { __command: string; payload: { token: string } };
-      const result = env.__command === 'validateToken' ? (tokens[env.payload.token] ?? null) : null;
-      return { promise: async () => ({ Payload: JSON.stringify({ ok: true, result }) }) };
-    },
-  } as unknown as Parameters<typeof __setPeerLambda>[0]);
-}
-
-function httpEvent(method: string, path: string, headers: Record<string, string>, body: unknown): FunctionUrlEvent {
-  return {
-    rawPath: path,
-    requestContext: { http: { method, path } },
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    isBase64Encoded: false,
-  };
-}
-const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
-const toolCall = (name: string, args: unknown) => ({
-  jsonrpc: '2.0',
-  id: 1,
-  method: 'tools/call',
-  params: { name, arguments: args },
-});
-
-async function callForge(token: string | null, name: string, args: unknown): Promise<unknown> {
-  const headers = token ? bearer(token) : {};
-  const res = (await forge(httpEvent('POST', '/forge/mcp', headers, toolCall(name, args)))) as FunctionUrlResponse;
-  const body = JSON.parse(res.body) as { result?: { content: Array<{ text: string }>; isError?: boolean }; error?: unknown };
-  return body;
+async function call<T = unknown>(user: string | undefined, command: string, payload: unknown): Promise<CommandResult<T>> {
+  return (await forge({ __command: command, payload, user })) as CommandResult<T>;
 }
 
 describe('forge: zip framing', () => {
@@ -146,8 +125,8 @@ describe('forge: zip framing', () => {
   });
   it('zipStore frames a local header + EOCD signature', () => {
     const zip = zipStore([{ name: 'index.js', content: 'exports.x=1' }]);
-    expect(zip.readUInt32LE(0)).toBe(0x04034b50); // local file header
-    expect(zip.readUInt32LE(zip.length - 22)).toBe(0x06054b50); // end of central directory
+    expect(zip.readUInt32LE(0)).toBe(0x04034b50);
+    expect(zip.readUInt32LE(zip.length - 22)).toBe(0x06054b50);
   });
 });
 
@@ -190,13 +169,13 @@ describe('forge: registry', () => {
     expect((await reg.get('notes-abc'))?.status).toBe('ACTIVE');
     const granted = await reg.addGrant('notes-abc', 'bob');
     expect(granted?.grants).toContain('bob');
+    __setDocumentClient(undefined);
   });
 });
 
-describe('forge: MCP control plane', () => {
+describe('forge: backend commands', () => {
   beforeEach(() => {
     process.env.SERVICE_NAME = 'forge';
-    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn' });
     process.env.TABLE_NAME = 'forge-table';
     process.env.CELL_CODE_BUCKET = 'code-bucket';
     process.env.CELL_PERMISSION_BOUNDARY_ARN = 'arn:aws:iam::111:policy/boundary';
@@ -208,77 +187,83 @@ describe('forge: MCP control plane', () => {
     s3Calls.length = 0;
     lambdaResponse = { statusCode: 200, body: JSON.stringify({ ok: true }) };
     installAwsStubs();
-    stubAuth({
-      creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
-      plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
-    });
   });
   afterEach(() => {
     __setDocumentClient(undefined);
     __setS3(undefined);
     __setCloudFormation(undefined);
     __setProvisionerLambda(undefined);
+    __setCloudWatchLogs(undefined);
     __setEsbuild(undefined);
-    __setPeerLambda(undefined);
     for (const k of [
-      'SERVICE_REGISTRY', 'TABLE_NAME', 'CELL_CODE_BUCKET', 'CELL_PERMISSION_BOUNDARY_ARN',
+      'TABLE_NAME', 'CELL_CODE_BUCKET', 'CELL_PERMISSION_BOUNDARY_ARN',
       'CELL_EVENT_BUS_NAME', 'CELL_EVENT_BUS_ARN', 'CELL_ACCOUNT_ID', 'CELL_REGION',
     ]) delete process.env[k];
   });
 
   const cellCode = 'export const handler = async () => ({ statusCode: 200, body: "{}" });';
 
-  it('createCell requires the platform:cells:create scope', async () => {
-    const denied = (await callForge('plain', 'createCell', { name: 'notes', code: cellCode })) as {
-      result: { isError?: boolean; content: Array<{ text: string }> };
-    };
-    expect(denied.result.isError).toBe(true);
-    expect(denied.result.content[0].text).toMatch(/scope/i);
-    expect(cfnCalls).toHaveLength(0);
+  it('describeTools advertises createCell with the create scope (for the gateway)', async () => {
+    const res = await call<{ tools: Array<{ name: string; scope: string | null }> }>('alice', 'describeTools', {});
+    expect(res.ok).toBe(true);
+    const create = res.result!.tools.find((t) => t.name === 'createCell');
+    expect(create?.scope).toBe('platform:cells:create');
+    // callCell is ownership-gated, not scoped
+    expect(res.result!.tools.find((t) => t.name === 'callCell')?.scope).toBeNull();
   });
 
   it('createCell transpiles, uploads, deploys a cell-* stack, and records it', async () => {
-    const ok = (await callForge('creator', 'createCell', { name: 'My Notes', code: cellCode })) as {
-      result: { content: Array<{ text: string }> };
-    };
-    const out = JSON.parse(ok.result.content[0].text) as { cellId: string; address: string; status: string };
-    expect(out.status).toBe('CREATING');
-    expect(out.address).toBe('/@alice/my-notes');
-    expect(out.cellId).toMatch(/^my-notes-[0-9a-f]{8}$/);
+    const res = await call<{ cellId: string; address: string; status: string }>('alice', 'createCell', {
+      name: 'My Notes',
+      code: cellCode,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.result!.status).toBe('CREATING');
+    expect(res.result!.address).toBe('/@alice/my-notes');
+    expect(res.result!.cellId).toMatch(/^my-notes-[0-9a-f]{8}$/);
     expect(s3Calls).toHaveLength(1);
     expect(cfnCalls).toHaveLength(1);
-    expect(cfnCalls[0].StackName).toBe(`cell-${out.cellId}`);
-    // the deployed template carries the boundary
+    expect(cfnCalls[0].StackName).toBe(`cell-${res.result!.cellId}`);
     expect(cfnCalls[0].TemplateBody).toContain('arn:aws:iam::111:policy/boundary');
   });
 
   it('callCell invokes the cell for the owner and returns its parsed body', async () => {
     lambdaResponse = { statusCode: 200, body: JSON.stringify({ greeting: 'hi' }) };
-    await callForge('creator', 'createCell', { name: 'notes', code: cellCode });
-    // mark ACTIVE (provisioning would do this; getCell refresh also would)
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
 
-    const res = (await callForge('creator', 'callCell', { cellId: cell.cellId, body: { name: 'x' } })) as {
-      result: { content: Array<{ text: string }> };
-    };
-    const out = JSON.parse(res.result.content[0].text) as { statusCode: number; body: { greeting: string } };
-    expect(out.statusCode).toBe(200);
-    expect(out.body).toEqual({ greeting: 'hi' });
+    const res = await call<{ statusCode: number; body: { greeting: string } }>('alice', 'callCell', {
+      cellId: cell.cellId,
+      body: { name: 'x' },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.result!.statusCode).toBe(200);
+    expect(res.result!.body).toEqual({ greeting: 'hi' });
+  });
+
+  it('cellLogs returns the cell logs for the owner', async () => {
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    const res = await call<{ count: number; events: Array<{ message: string }> }>('alice', 'cellLogs', {
+      cellId: cell.cellId,
+      since: '1h',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.result!.count).toBe(1);
+    expect(res.result!.events[0].message).toBe('hello from cell');
   });
 
   it('callCell denies a principal who is neither owner nor grantee', async () => {
-    await callForge('creator', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
 
-    // bob ('plain') is authenticated but not owner/grantee
-    const res = (await callForge('plain', 'callCell', { cellId: cell.cellId })) as {
-      result: { isError?: boolean; content: Array<{ text: string }> };
-    };
-    expect(res.result.isError).toBe(true);
-    expect(res.result.content[0].text).toMatch(/not authorised/i);
+    const res = await call('bob', 'callCell', { cellId: cell.cellId });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/not authorised/i);
   });
 });

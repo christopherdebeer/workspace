@@ -146,6 +146,86 @@ export function Anchor({ href, children }: { href: string; children: React.React
   );
 }
 
+export function TextInput({
+  value,
+  onChange,
+  placeholder,
+  autoComplete,
+  onEnter,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoComplete?: string;
+  onEnter?: () => void;
+}): React.JSX.Element {
+  return (
+    <input
+      value={value}
+      placeholder={placeholder}
+      autoComplete={autoComplete}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && onEnter) onEnter();
+      }}
+      style={{
+        width: '100%',
+        padding: '0.6rem',
+        background: '#0d0d0d',
+        border: `1px solid ${theme.border}`,
+        borderRadius: 6,
+        color: theme.text,
+        fontSize: '0.95rem',
+        fontFamily: 'inherit',
+        boxSizing: 'border-box',
+      }}
+    />
+  );
+}
+
+/** A labelled checkbox row with optional hint — used for scope selection. */
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+  hint,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: React.ReactNode;
+  hint?: React.ReactNode;
+  disabled?: boolean;
+}): React.JSX.Element {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        gap: '0.6rem',
+        alignItems: 'flex-start',
+        padding: '0.6rem 0.7rem',
+        border: `1px solid ${theme.border}`,
+        borderRadius: 8,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        background: checked ? 'rgba(63,185,80,0.06)' : 'transparent',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ marginTop: '0.15rem', accentColor: theme.accent }}
+      />
+      <span style={{ display: 'grid', gap: '0.15rem' }}>
+        <span style={{ fontFamily: theme.mono, fontSize: '0.85rem' }}>{label}</span>
+        {hint ? <span style={{ color: theme.dim, fontSize: '0.78rem' }}>{hint}</span> : null}
+      </span>
+    </label>
+  );
+}
+
 export function CodeBlock({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <pre

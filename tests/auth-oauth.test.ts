@@ -108,6 +108,7 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
         },
       }),
       store,
+      CONFIG,
     );
     const redirect = (consent.body as { redirect: string }).redirect;
     const code = new URL(redirect).searchParams.get('code')!;
@@ -149,6 +150,7 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
         body: { sessionId, clientId: 'cl', redirectUri: 'https://app/cb', codeChallenge: sha256('right'), codeChallengeMethod: 'S256', scope: 'workspace:read' },
       }),
       store,
+      CONFIG,
     );
     // grab the code by consuming a fresh consent
     const sid2 = await store.createSession('u1');
@@ -158,6 +160,7 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
         body: { sessionId: sid2, clientId: 'cl', redirectUri: 'https://app/cb', codeChallenge: sha256('right'), codeChallengeMethod: 'S256' },
       }),
       store,
+      CONFIG,
     );
     const code = new URL((consent.body as { redirect: string }).redirect).searchParams.get('code')!;
     const res = await handleToken(

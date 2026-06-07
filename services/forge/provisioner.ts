@@ -6,12 +6,13 @@
  * invoke the cell's Lambda, and tear it down. Clients are created lazily and are
  * injectable so the control-plane logic is unit-testable without AWS.
  */
-import type { CloudFormation, S3, Lambda } from 'aws-sdk';
+import type { CloudFormation, S3, Lambda, CloudWatchLogs } from 'aws-sdk';
 import { zipStore } from './zip';
 
 let cfnClient: CloudFormation | undefined;
 let s3Client: S3 | undefined;
 let lambdaClient: Lambda | undefined;
+let logsClient: CloudWatchLogs | undefined;
 
 export function __setCloudFormation(stub: CloudFormation | undefined): void {
   cfnClient = stub;
@@ -21,6 +22,9 @@ export function __setS3(stub: S3 | undefined): void {
 }
 export function __setLambda(stub: Lambda | undefined): void {
   lambdaClient = stub;
+}
+export function __setCloudWatchLogs(stub: CloudWatchLogs | undefined): void {
+  logsClient = stub;
 }
 
 function aws(): typeof import('aws-sdk') {
@@ -37,6 +41,10 @@ function s3(): S3 {
 function lambda(): Lambda {
   if (!lambdaClient) lambdaClient = new (aws().Lambda)();
   return lambdaClient;
+}
+function cwLogs(): CloudWatchLogs {
+  if (!logsClient) logsClient = new (aws().CloudWatchLogs)();
+  return logsClient;
 }
 
 export interface UploadCodeParams {
@@ -140,4 +148,42 @@ export async function invokeCell(p: InvokeCellParams): Promise<InvokeCellResult>
     }
   }
   return { statusCode: parsed.statusCode ?? 200, body };
+}
+
+export interface CellLogEvent {
+  timestamp: number;
+  message: string;
+}
+
+export interface GetCellLogsParams {
+  /** Cell function name; its log group is `/aws/lambda/<functionName>`. */
+  functionName: string;
+  /** Lower time bound (epoch ms). Defaults to 15 minutes ago. */
+  startTimeMs?: number;
+  /** Max events to return. Defaults to 100. */
+  limit?: number;
+  /** Optional CloudWatch Logs filter pattern. */
+  filterPattern?: string;
+}
+
+/** Tail a cell's Lambda logs via CloudWatch (observability as a tool). */
+export async function getCellLogs(p: GetCellLogsParams): Promise<CellLogEvent[]> {
+  const logGroupName = `/aws/lambda/${p.functionName}`;
+  try {
+    const res = await cwLogs()
+      .filterLogEvents({
+        logGroupName,
+        startTime: p.startTimeMs ?? Date.now() - 15 * 60 * 1000,
+        limit: p.limit ?? 100,
+        filterPattern: p.filterPattern,
+      })
+      .promise();
+    return (res.events ?? [])
+      .map((e) => ({ timestamp: e.timestamp ?? 0, message: (e.message ?? '').replace(/\s+$/, '') }))
+      .filter((e) => e.message.length > 0);
+  } catch (err) {
+    // No log group yet (cell never invoked) → no logs, not an error.
+    if ((err as { code?: string }).code === 'ResourceNotFoundException') return [];
+    throw err;
+  }
 }

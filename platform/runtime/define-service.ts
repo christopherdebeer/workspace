@@ -71,8 +71,14 @@ async function resolveHttpIdentity(
   headers: Record<string, string | undefined> | undefined,
   serviceName: string,
 ): Promise<Identity> {
+  // Prefer the standard Authorization header, but fall back to the
+  // `x-forwarded-authorization` header that the edge preserves the viewer's
+  // bearer in — CloudFront OAC overwrites Authorization with its SigV4 signature.
   const authHeader = headerOf(headers, 'authorization');
-  const token = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const fwdHeader = headerOf(headers, 'x-forwarded-authorization');
+  const token =
+    authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ??
+    fwdHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token) return ANONYMOUS;
 
   const authService = process.env.AUTH_SERVICE_NAME ?? 'auth';
@@ -86,14 +92,18 @@ async function resolveHttpIdentity(
     const validated = await client(authService).command<ValidatedToken | null>('validateToken', {
       token,
     });
-    if (!validated) return ANONYMOUS;
+    if (!validated) {
+      console.warn('[auth] bearer present but rejected by validateToken', { service: serviceName });
+      return ANONYMOUS;
+    }
     return {
       user: validated.userId,
       scopes: validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [],
     };
-  } catch {
+  } catch (err) {
     // A validation failure (revoked/expired/unknown token, or auth unavailable)
     // is treated as anonymous; handlers enforce auth via requireUser/requireScope.
+    console.warn('[auth] validateToken errored', { service: serviceName, error: (err as Error).message });
     return ANONYMOUS;
   }
 }

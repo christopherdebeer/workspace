@@ -14,6 +14,21 @@ export interface OAuthConfig {
   scopesSupported: string[];
   /** positive = lifetime seconds; 0/negative = non-expiring (no refresh). */
   tokenExpirySecs?: number;
+  /** Usernames allowed to be granted admin-scoped permissions. */
+  adminUsernames?: string[];
+  /** Scope prefixes (e.g. "platform:") grantable only to `adminUsernames`. */
+  adminScopePrefixes?: string[];
+}
+
+function isAdminScope(scope: string, prefixes: string[]): boolean {
+  return prefixes.some((p) => scope === p || scope.startsWith(p));
+}
+
+/** Scopes a given user is permitted to grant (admin scopes gated to admins). */
+export function grantableScopes(config: OAuthConfig, username: string): string[] {
+  const isAdmin = (config.adminUsernames ?? []).includes(username);
+  const prefixes = config.adminScopePrefixes ?? [];
+  return config.scopesSupported.filter((s) => isAdmin || !isAdminScope(s, prefixes));
 }
 
 const DEFAULT_EXPIRY = 3600;
@@ -92,11 +107,22 @@ interface ConsentBody {
   resource?: string;
 }
 
-export async function handleConsent(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
+export async function handleConsent(
+  req: ServiceHttpRequest,
+  store: AuthStore,
+  config: OAuthConfig,
+): Promise<ServiceHttpResponse> {
   const b = req.json<ConsentBody>();
   const session = await store.validateSession(b.sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   if (session.scope !== 'consent') return ok({ error: 'Session not authorized for consent' }, 403);
+
+  // Authoritative scope gating: keep only scopes this user may actually grant
+  // (admin scopes require an admin username), regardless of what the page sent.
+  const user = await store.getUserById(session.userId);
+  const allowed = new Set(grantableScopes(config, user?.username ?? ''));
+  const requested = (b.scope ?? '').split(/\s+/).filter(Boolean);
+  const granted = requested.filter((s) => allowed.has(s)).join(' ');
 
   const code = generateToken('authz');
   await store.saveAuthCode({
@@ -106,7 +132,7 @@ export async function handleConsent(req: ServiceHttpRequest, store: AuthStore): 
     redirectUri: b.redirectUri,
     codeChallenge: b.codeChallenge,
     codeChallengeMethod: b.codeChallengeMethod ?? 'S256',
-    scope: b.scope,
+    scope: granted || undefined,
     resource: b.resource,
   });
   await store.deleteSession(b.sessionId);
@@ -115,6 +141,19 @@ export async function handleConsent(req: ServiceHttpRequest, store: AuthStore): 
   redirect.searchParams.set('code', code);
   if (b.state) redirect.searchParams.set('state', b.state);
   return ok({ redirect: redirect.toString() });
+}
+
+/** After sign-in, the consent UI asks which scopes this user may grant. */
+export async function handleGrantableScopes(
+  req: ServiceHttpRequest,
+  store: AuthStore,
+  config: OAuthConfig,
+): Promise<ServiceHttpResponse> {
+  const { sessionId } = req.json<{ sessionId: string }>();
+  const session = await store.validateSession(sessionId);
+  if (!session) return ok({ error: 'Invalid or expired session' }, 401);
+  const user = await store.getUserById(session.userId);
+  return ok({ username: user?.username ?? null, scopes: grantableScopes(config, user?.username ?? '') });
 }
 
 // ─── Token endpoint ──────────────────────────────────────────────
@@ -129,6 +168,7 @@ function parseTokenBody(req: ServiceHttpRequest): Record<string, string> {
 
 export async function handleToken(req: ServiceHttpRequest, store: AuthStore, config: OAuthConfig): Promise<ServiceHttpResponse> {
   const body = parseTokenBody(req);
+  console.log('[oauth] token: request', { grant_type: body.grant_type, hasVerifier: !!body.code_verifier, hasSecret: !!body.client_secret });
   const configuredExpiry = config.tokenExpirySecs ?? DEFAULT_EXPIRY;
   const neverExpires = configuredExpiry <= 0;
   const mintExpiry = neverExpires ? undefined : configuredExpiry;
@@ -139,10 +179,20 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       return ok({ error: 'invalid_request', error_description: 'code, redirect_uri, code_verifier required' }, 400);
     }
     const authCode = await store.consumeAuthCode(code);
-    if (!authCode) return ok({ error: 'invalid_grant', error_description: 'Invalid, expired, or already-used code' }, 400);
-    if (authCode.redirectUri !== redirect_uri) return ok({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
-    if (client_id && authCode.clientId !== client_id) return ok({ error: 'invalid_grant', error_description: 'client_id mismatch' }, 400);
+    if (!authCode) {
+      console.warn('[oauth] token: invalid/expired/used code');
+      return ok({ error: 'invalid_grant', error_description: 'Invalid, expired, or already-used code' }, 400);
+    }
+    if (authCode.redirectUri !== redirect_uri) {
+      console.warn('[oauth] token: redirect_uri mismatch', { codeRedirect: authCode.redirectUri, given: redirect_uri });
+      return ok({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
+    }
+    if (client_id && authCode.clientId !== client_id) {
+      console.warn('[oauth] token: client_id mismatch', { codeClient: authCode.clientId, given: client_id });
+      return ok({ error: 'invalid_grant', error_description: 'client_id mismatch' }, 400);
+    }
     if (sha256(code_verifier) !== authCode.codeChallenge) {
+      console.warn('[oauth] token: PKCE verification failed');
       return ok({ error: 'invalid_grant', error_description: 'PKCE verification failed' }, 400);
     }
 
@@ -155,6 +205,7 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       expiresInSec: mintExpiry,
       withRefresh: !neverExpires,
     });
+    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope, resource: authCode.resource });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope };
     if (!neverExpires) {
       response.expires_in = configuredExpiry;

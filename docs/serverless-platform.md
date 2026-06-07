@@ -248,10 +248,14 @@ npx cdk deploy PlatformStack-staging -c env=staging   # shared staging
   `auth.validateToken`); the runtime does not trust client-supplied `x-auth-*`
   headers. Protected routes return `401 + WWW-Authenticate` (RFC 9728).
 - Two origin Lambda@Edge functions keep the IAM/OAC posture working end to end:
-  an **origin-request** body signer sets `x-amz-content-sha256` so OAC's SigV4
-  covers POST/PUT bodies (else Lambda rejects them), and an **origin-response**
-  function restores the `WWW-Authenticate` header that Function URLs remap to
-  `x-amzn-remapped-www-authenticate`.
+  an **origin-request** function and an **origin-response** function.
+  - The origin-request function sets `x-amz-content-sha256` so OAC's SigV4 covers
+    POST/PUT bodies (else Lambda rejects them), **and** copies the viewer's
+    `Authorization` into `x-forwarded-authorization` — because OAC overwrites
+    `Authorization` with its own SigV4 signature, which would otherwise clobber
+    bearer tokens (MCP/OAuth). The runtime reads the bearer from either header.
+  - The origin-response function restores the `WWW-Authenticate` header that
+    Function URLs remap to `x-amzn-remapped-www-authenticate`.
 
 ## Related
 
