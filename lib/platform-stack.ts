@@ -60,12 +60,20 @@ export class PlatformStack extends cdk.Stack {
     const auth = new HttpServiceCell(this, 'AuthService', {
       name: 'auth',
       entry: serviceEntry('auth'),
+      // The authorize/consent page is a React SPA bundled from client/main.tsx.
+      clientEntry: path.join(__dirname, '..', '..', 'services', 'auth', 'client', 'main.tsx'),
       routes: ['/auth/*', '/oauth/*', '/webauthn/*', '/.well-known/*'],
       persistence: { dynamo: true, dynamoTtl: true },
       commands: ['validateToken', 'mintToken', 'listTokens', 'revokeToken'],
       emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'],
       eventBus,
-      environment: { AUTH_SERVER_NAME: 'workspace' },
+      environment: {
+        AUTH_SERVER_NAME: 'workspace',
+        // Advertised scopes; `platform:*` are admin-gated to AUTH_ADMIN_USERNAMES,
+        // enforced at consent. The picker shows each user only what they may grant.
+        AUTH_SCOPES: 'workspace:read workspace:write workspace:admin platform:cells:create platform:*',
+        AUTH_ADMIN_USERNAMES: 'c15r',
+      },
       // PUBLIC_BASE_URL / WEBAUTHN_RP_ID are set below, once the router (and thus
       // the public domain) exists.
     });
