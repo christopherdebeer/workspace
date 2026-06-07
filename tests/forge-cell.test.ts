@@ -64,6 +64,16 @@ function memoryDocClient(): { store: Map<string, Item> } & Record<string, unknow
         Items: [...store.values()].filter((i) => i.pk === ExpressionAttributeValues[':pk']),
       }),
     }),
+    scan: ({ ExpressionAttributeValues }: { ExpressionAttributeValues: Record<string, unknown> }) => ({
+      promise: async () => ({
+        Items: [...store.values()].filter(
+          (i) =>
+            i.sk === ExpressionAttributeValues[':a'] &&
+            Array.isArray(i.grants) &&
+            (i.grants as string[]).includes(ExpressionAttributeValues[':p'] as string),
+        ),
+      }),
+    }),
   };
 }
 
@@ -169,6 +179,10 @@ describe('forge: registry', () => {
     expect((await reg.get('notes-abc'))?.status).toBe('ACTIVE');
     const granted = await reg.addGrant('notes-abc', 'bob');
     expect(granted?.grants).toContain('bob');
+    // listAccessibleBy returns cells the principal owns or was granted.
+    expect((await reg.listAccessibleBy('alice')).map((c) => c.cellId)).toEqual(['notes-abc']);
+    expect((await reg.listAccessibleBy('bob')).map((c) => c.cellId)).toEqual(['notes-abc']);
+    expect(await reg.listAccessibleBy('carol')).toEqual([]);
     __setDocumentClient(undefined);
   });
 });
@@ -254,6 +268,30 @@ describe('forge: backend commands', () => {
     expect(res.ok).toBe(true);
     expect(res.result!.count).toBe(1);
     expect(res.result!.events[0].message).toBe('hello from cell');
+  });
+
+  it('catalogCells returns the caller-accessible cells (own + granted), scoped per caller', async () => {
+    await call('alice', 'createCell', { name: 'notes', code: cellCode, share: ['bob'] });
+    await call('alice', 'createCell', { name: 'private', code: cellCode });
+
+    const mine = await call<{ cells: Array<{ name: string; address: string; shared: boolean }> }>(
+      'alice',
+      'catalogCells',
+      {},
+    );
+    expect(mine.ok).toBe(true);
+    expect(mine.result!.cells.map((c) => c.name).sort()).toEqual(['notes', 'private']);
+    expect(mine.result!.cells.every((c) => c.shared === false)).toBe(true);
+
+    // bob sees only the cell shared with him, marked shared (not owned).
+    const bobs = await call<{ cells: Array<{ name: string; shared: boolean }> }>('bob', 'catalogCells', {});
+    expect(bobs.ok).toBe(true);
+    expect(bobs.result!.cells.map((c) => c.name)).toEqual(['notes']);
+    expect(bobs.result!.cells[0].shared).toBe(true);
+
+    // an unrelated principal sees nothing.
+    const carols = await call<{ cells: unknown[] }>('carol', 'catalogCells', {});
+    expect(carols.result!.cells).toEqual([]);
   });
 
   it('callCell denies a principal who is neither owner nor grantee', async () => {

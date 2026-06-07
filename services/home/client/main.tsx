@@ -84,6 +84,77 @@ function Catalog(): React.JSX.Element {
   );
 }
 
+interface CatalogCell {
+  name: string;
+  owner: string;
+  address: string;
+  status: string;
+  description: string | null;
+  shared: boolean;
+}
+
+function statusTone(status: string): 'accent' | 'dim' | 'danger' {
+  if (status === 'ACTIVE') return 'accent';
+  if (status === 'FAILED') return 'danger';
+  return 'dim';
+}
+
+/**
+ * The caller's tier-2 cells, merged into `/_catalog` by the home cell from
+ * forge. Anonymous requests get none, so this loads only once a token is pasted
+ * into the probe below (state is lifted to App and shared).
+ */
+function MyCells({ token }: { token: string }): React.JSX.Element {
+  const [cells, setCells] = useState<CatalogCell[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) {
+      setCells(null);
+      setErr(null);
+      return;
+    }
+    getJson('/_catalog', { headers: { authorization: `Bearer ${token}` } })
+      .then((r) =>
+        r.status === 200
+          ? setCells((r.body as { cells?: CatalogCell[] }).cells ?? [])
+          : setErr(`HTTP ${r.status}`),
+      )
+      .catch((e) => setErr(String(e)));
+  }, [token]);
+
+  return (
+    <Card>
+      <Heading sub="Cells you own or were granted, provisioned at runtime through forge — loaded with the access token from the probe above.">
+        Your dynamic cells
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {!token ? (
+        <p style={{ color: theme.dim }}>Paste an access token in the probe above to load the cells you can reach.</p>
+      ) : null}
+      {token && !cells && !err ? <p style={{ color: theme.dim }}>Loading…</p> : null}
+      {token && cells && cells.length === 0 ? (
+        <p style={{ color: theme.dim }}>No dynamic cells yet — create one via the forge MCP tools.</p>
+      ) : null}
+      <div style={{ display: 'grid', gap: '0.9rem', marginTop: '0.5rem' }}>
+        {(cells ?? []).map((c) => (
+          <div key={c.address} style={{ display: 'grid', gap: '0.3rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <strong>{c.name}</strong>
+              <Badge tone={statusTone(c.status)}>{c.status}</Badge>
+              {c.shared ? <Badge tone="dim">shared</Badge> : null}
+            </div>
+            <Badge tone="accent">{c.address}</Badge>
+            {c.description ? (
+              <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{c.description}</span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function Discovery(): React.JSX.Element {
   const [meta, setMeta] = useState<Record<string, unknown> | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -107,8 +178,13 @@ function Discovery(): React.JSX.Element {
   );
 }
 
-function ResourceProbe(): React.JSX.Element {
-  const [token, setToken] = useState('');
+function ResourceProbe({
+  token,
+  setToken,
+}: {
+  token: string;
+  setToken: (t: string) => void;
+}): React.JSX.Element {
   const [result, setResult] = useState<{ status: number; body: unknown } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -160,6 +236,7 @@ function ResourceProbe(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
+  const [token, setToken] = useState('');
   return (
     <Page>
       <Heading sub="A personal productivity workspace — serverless, AWS-native, MCP-native cells behind one CloudFront router.">
@@ -168,7 +245,8 @@ function App(): React.JSX.Element {
 
       <Catalog />
       <Discovery />
-      <ResourceProbe />
+      <ResourceProbe token={token} setToken={setToken} />
+      <MyCells token={token} />
 
       <Card>
         <Heading>Get a token</Heading>

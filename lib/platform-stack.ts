@@ -134,7 +134,7 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('forge'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['createCell', 'listCells', 'getCell', 'callCell', 'grantCapability', 'deleteCell', 'cellLogs', 'describeTools'],
+      commands: ['createCell', 'listCells', 'getCell', 'callCell', 'grantCapability', 'deleteCell', 'cellLogs', 'describeTools', 'catalogCells'],
       emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
@@ -164,6 +164,11 @@ export class PlatformStack extends cdk.Stack {
     // permission). Neither reads forge's table directly.
     resource.allow(forge);
     dispatch.allow(forge);
+    // The home cell's `/_catalog` resolves the caller's bearer (auth) and merges
+    // in the dynamic cells they own or were granted (forge.catalogCells), so the
+    // self-model surfaces tier-2 cells beside the static tier-1 manifests.
+    home.allow(auth);
+    home.allow(forge);
 
     // Single public entrypoint, behaviours generated from manifests. Optionally
     // fronted by a custom domain (CloudFront alias + ACM cert in us-east-1).

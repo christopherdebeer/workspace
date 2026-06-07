@@ -65,6 +65,8 @@ export interface CellRegistry {
   put(record: CellRecord): Promise<void>;
   get(cellId: string): Promise<CellRecord | null>;
   listByOwner(owner: string): Promise<CellRecord[]>;
+  /** Cells the principal can access: those they own or were granted. */
+  listAccessibleBy(principal: string): Promise<CellRecord[]>;
   setStatus(cellId: string, status: CellStatus): Promise<void>;
   addGrant(cellId: string, principal: string): Promise<CellRecord | null>;
 }
@@ -103,6 +105,29 @@ export function createRegistry(tableName: string): CellRegistry {
       const ids = (idx.Items ?? []).map((i) => String(i.cellId));
       const records = await Promise.all(ids.map((id) => this.get(id)));
       return records.filter((r): r is CellRecord => r !== null);
+    },
+
+    async listAccessibleBy(principal: string): Promise<CellRecord[]> {
+      // Backed by a Scan of the profile rows (sk = "A"), filtered server-side on
+      // the grants list (which always includes the owner). The registry is
+      // small — bounded by the per-region cell quota — and there is no
+      // grant-by-principal index, so a Scan is the right trade-off here; revisit
+      // with a secondary index if cell counts grow large. Pages to completion.
+      const records: CellRecord[] = [];
+      let startKey: DynamoDB.DocumentClient.Key | undefined;
+      do {
+        const res = await db
+          .scan({
+            TableName: tableName,
+            FilterExpression: 'sk = :a AND contains(grants, :p)',
+            ExpressionAttributeValues: { ':a': PROFILE_SK, ':p': principal },
+            ExclusiveStartKey: startKey,
+          })
+          .promise();
+        for (const item of res.Items ?? []) records.push(toRecord(item));
+        startKey = res.LastEvaluatedKey;
+      } while (startKey);
+      return records;
     },
 
     async setStatus(cellId: string, status: CellStatus): Promise<void> {

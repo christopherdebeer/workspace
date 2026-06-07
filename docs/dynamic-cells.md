@@ -206,8 +206,10 @@ not a convention.
 **The registry table (`forge`'s own DynamoDB table) — the self-model**
 `cellId → { owner, name, functionName, stackName, grants[], status, … }`. The
 runtime, data-backed half of the platform's self-description. Other cells never
-read it directly — they ask `forge` (`resolveCell`), preserving the cell
-boundary. (Merging it into `/_catalog` is a planned follow-up.)
+read it directly — they ask `forge`, preserving the cell boundary: `dispatch`
+asks via `resolveCell`, and the `home` cell merges the caller's cells into
+`/_catalog` via `forge.catalogCells` (scoped to cells the caller owns or was
+granted, so it never leaks other owners' private cells).
 
 **`dispatch` — userland routing (`services/dispatch`)**
 Owns a single route, `['/@*']`, so it slots into the existing `ServiceRouter`
@@ -309,13 +311,15 @@ gateway → forwarded to `forge` → a `CreateStack` → an owner-isolated cell 
 `/@<owner>/<cell>` and invocable via `callCell` over the same connection. The
 reflexive loop, with isolation provided by Lambda + IAM rather than a sandbox.
 
-### End-to-end validation — deployed & connected ✓
+### End-to-end validation — round-trip proven live ✓
 
-`https://parc.land/mcp` is live and an MCP client (Claude.ai) **successfully
-connects and authenticates** as `@c15r`, with `tools/list` showing the forge
-tools filtered to the granted scopes. Remaining to exercise live: an actual
-`createCell` → `getCell` (ACTIVE) → `callCell` round-trip and
-`GET /@c15r/<cell>` (the next session's first task; use `cellLogs` to debug).
+`https://parc.land/mcp` is live and an MCP client **connects, authenticates**,
+and has now exercised the full reflexive loop over MCP: `createCell`
+(`hello-parc`) → `getCell` polled to `ACTIVE` → `callCell` returned the cell's
+JSON `{ hello, cell }` from its own isolated Lambda+table → `cellLogs` read that
+invocation's CloudWatch logs back through MCP. The `/@<owner>/<cell>` dispatch
+route is wired and enforces the bearer (an unauthenticated `GET` returns `401`).
+**A cell created via MCP returned a response via MCP** — the loop is closed.
 
 ### Connecting an MCP client — the auth path (hard-won; don't re-derive)
 
@@ -355,10 +359,14 @@ in place across the token endpoint, gateway, and identity resolver.
 - **Done:** the aggregating `/mcp` gateway, routeless `forge` backend, `/@*`
   dispatch, permission boundary + code bucket, the cell template, the React
   authorize page + scope picker, the four connect fixes above, and `cellLogs`.
-- **Next:** run the live `createCell`/`callCell` round-trip from an MCP-connected
-  session (this session's `/mcp` config pointed at `sync.parc.land`, a *different*
-  host — a new session needs `https://parc.land/mcp` in its MCP servers); then
-  implement `forge.promote` and the `/_catalog` merge.
+- **Done since:** the live `createCell`/`getCell`/`callCell`/`cellLogs` round-trip
+  (validated against `https://parc.land/mcp`), and the **`/_catalog` merge** —
+  `home` now surfaces the caller's own + granted dynamic cells beside the static
+  tier-1 manifests (`forge.catalogCells`, scoped per caller).
+- **Next:** implement `forge.promote` (open the CDK PR). The remaining design
+  decision is how `forge` authenticates to GitHub from the runtime Lambda
+  (favoured approach: emit a promotion event + repo GitHub Action, keeping
+  repo-write credentials out of the cell runtime).
 
 ## Open questions / future work
 
@@ -371,8 +379,9 @@ in place across the token endpoint, gateway, and identity resolver.
 - **Bundled imports** — v1 transpiles a single self-contained TS module; bundling
   imported modules (so cells can `import` the platform runtime via a layer or a
   virtual module) is the next step toward full authoring parity with tier-1 cells.
-- **Catalog merge** — surface registry cells in `/_catalog` alongside the static
-  tier-1 manifests.
+- **Catalog merge** — ✓ done. `home`'s `/_catalog` merges the caller's own +
+  granted dynamic cells (`forge.catalogCells`) beside the static tier-1
+  manifests.
 - **Promotion** — implement `forge.promote` (open the CDK PR).
 - **Orphan cleanup** — reconciling the registry against actual stacks; deleting
   cells whose owner is gone.
