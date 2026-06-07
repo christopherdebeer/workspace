@@ -181,6 +181,20 @@ export class DynamicCellControlPlane extends Construct {
       }),
     );
 
+    // Read cell logs (the `cellLogs` tool — observability as a tool).
+    const cellLogGroup = `arn:aws:logs:${region}:${account}:log-group:/aws/lambda/cell-*`;
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ReadCellLogs',
+        actions: [
+          'logs:FilterLogEvents',
+          'logs:GetLogEvents',
+          'logs:DescribeLogStreams',
+        ],
+        resources: [cellLogGroup, `${cellLogGroup}:*`],
+      }),
+    );
+
     forge.fn.addEnvironment('CELL_CODE_BUCKET', this.codeBucket.bucketName);
     forge.fn.addEnvironment('CELL_PERMISSION_BOUNDARY_ARN', this.permissionBoundary.managedPolicyArn);
     forge.fn.addEnvironment('CELL_EVENT_BUS_NAME', this.eventBus.bus.eventBusName);

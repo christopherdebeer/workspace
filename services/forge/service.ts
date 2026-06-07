@@ -29,7 +29,17 @@ import {
   describeStack,
   deleteStack,
   invokeCell,
+  getCellLogs,
 } from './provisioner';
+
+/** Parse a relative window like "15m", "2h", "1d" into milliseconds. */
+function sinceToMs(since: string | undefined): number {
+  const m = (since ?? '15m').trim().match(/^(\d+)\s*([smhd])$/i);
+  if (!m) return 15 * 60 * 1000;
+  const n = Number(m[1]);
+  const unit = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2].toLowerCase() as 's' | 'm' | 'h' | 'd'];
+  return n * unit;
+}
 
 const CREATE_SCOPE = 'platform:cells:create';
 
@@ -338,6 +348,38 @@ async function deleteCell(input: DeleteInput, ctx: ServiceContext): Promise<unkn
   return { cellId: record.cellId, status: 'DELETING' };
 }
 
+interface CellLogsInput {
+  cellId?: string;
+  owner?: string;
+  name?: string;
+  /** Relative window, e.g. "15m", "2h", "1d". Default 15m. */
+  since?: string;
+  limit?: number;
+  /** Optional CloudWatch Logs filter pattern. */
+  filter?: string;
+}
+async function cellLogs(input: CellLogsInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cellId = resolveCellId(input);
+  const record = await registry.get(cellId);
+  if (!record) throw new Error(`Unknown cell "${cellId}"`);
+  authorizeAccess(record, user);
+
+  const events = await getCellLogs({
+    functionName: record.functionName,
+    startTimeMs: Date.now() - sinceToMs(input.since),
+    limit: input.limit ?? 100,
+    filterPattern: input.filter,
+  });
+  return {
+    cellId,
+    count: events.length,
+    events: events.map((e) => ({ time: new Date(e.timestamp).toISOString(), message: e.message })),
+  };
+}
+
 /**
  * forge is a **backend tool-provider**, not a public MCP endpoint. The `/mcp`
  * gateway (the `resource` cell) aggregates these tools, enforces their scopes
@@ -426,6 +468,24 @@ const TOOLS: Record<string, ToolSpec> = {
       additionalProperties: false,
     },
     handler: deleteCell as RegisteredCommand,
+  },
+  cellLogs: {
+    description:
+      "Fetch a cell's recent CloudWatch logs (observability). Identify the cell by cellId or owner+name; optional `since` (e.g. 15m, 2h), `limit`, and `filter` (CloudWatch filter pattern).",
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        since: { type: 'string', description: 'Relative window, e.g. 15m, 2h, 1d' },
+        limit: { type: 'number' },
+        filter: { type: 'string', description: 'CloudWatch Logs filter pattern' },
+      },
+      additionalProperties: false,
+    },
+    handler: cellLogs as RegisteredCommand,
   },
 };
 

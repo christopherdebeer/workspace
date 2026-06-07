@@ -170,6 +170,9 @@ exposes `describeTools` (so the gateway can discover its tools) plus the handler
   the *same* MCP connection (no second session); also the target `dispatch`
   proxies to. Authorised by ownership/grant on the caller's `user`.
 - `grantCapability(cellId, principal)` — sharing (expand permissions).
+- `cellLogs({ cellId | owner+name, since?, limit?, filter? })` — tail the cell's
+  CloudWatch logs (observability as a tool; forge has scoped read on
+  `/aws/lambda/cell-*`).
 - `resolveCell(cellId)` — internal command for `dispatch` (not an MCP tool).
 - `promote(cellId)` — (planned) open a PR that codifies the cell into tier-1 CDK.
 
@@ -306,14 +309,56 @@ gateway → forwarded to `forge` → a `CreateStack` → an owner-isolated cell 
 `/@<owner>/<cell>` and invocable via `callCell` over the same connection. The
 reflexive loop, with isolation provided by Lambda + IAM rather than a sandbox.
 
-### End-to-end validation (acceptance test)
+### End-to-end validation — deployed & connected ✓
 
-The deployed acceptance test: connect an MCP client to **`https://parc.land/mcp`**,
-authorised as `@c15r` (passkey → the auth cell's OAuth) with a token carrying
-`platform:cells:create`. `tools/list` then shows the forge tools (filtered to
-your scopes); call `createCell` to provision a cell; poll `getCell` until
-`ACTIVE`; then `callCell` it over the **same** connection — and/or
-`GET https://parc.land/@c15r/<cell>`.
+`https://parc.land/mcp` is live and an MCP client (Claude.ai) **successfully
+connects and authenticates** as `@c15r`, with `tools/list` showing the forge
+tools filtered to the granted scopes. Remaining to exercise live: an actual
+`createCell` → `getCell` (ACTIVE) → `callCell` round-trip and
+`GET /@c15r/<cell>` (the next session's first task; use `cellLogs` to debug).
+
+### Connecting an MCP client — the auth path (hard-won; don't re-derive)
+
+Getting a strict MCP client (Claude.ai) to connect required four fixes beyond
+the basic OAuth/passkey flow. All are in the code now; documented so the next
+session doesn't rediscover them:
+
+1. **RFC 9728 path-suffixed PRM.** Clients fetch protected-resource metadata at
+   `/.well-known/oauth-protected-resource/mcp` (well-known path *before* the
+   resource path), not just the bare path. The auth cell serves both
+   (`services/auth/service.ts`), and the `401 WWW-Authenticate` points at the
+   suffixed URL.
+2. **CloudFront OAC clobbers `Authorization`.** OAC SigV4-signs the origin
+   request and **overwrites the viewer's `Authorization` header** with its
+   signature — so bearer tokens never reach the cell. The origin-request
+   Lambda@Edge (`platform/infra/service-router.ts`) copies the viewer bearer into
+   `x-forwarded-authorization` before OAC runs, and the runtime
+   (`define-service.ts`) reads the bearer from either header. **This is the bug
+   that made every `/mcp` call 401 with a valid token** (`hadBearer:false`).
+3. **Scope picker + admin gating.** Claude.ai's OAuth never requests custom
+   scopes, so the React consent screen (`services/auth/client/main.tsx`) lets the
+   user pick scopes. `platform:*` is admin-gated (`AUTH_ADMIN_USERNAMES=c15r`),
+   enforced at consent (`oauth.ts grantableScopes`) — so only `c15r` can grant
+   `platform:cells:create`.
+4. **Passkey recovery.** A credential registered under older code / a different
+   RP can't be matched (`Unknown credential`); recovery is to delete the
+   `UNAME#<user>` item and re-register. WebAuthn verify errors now self-describe
+   (`webauthn.ts` logs + returns expected RP/origin).
+
+End-to-end tracing logs (`[oauth] token:`, `[mcp] 401 …`, `[auth] bearer …`) are
+in place across the token endpoint, gateway, and identity resolver.
+
+## Status / handoff (for the next session)
+
+- **Deployed & green** on `parc.land` (account `018159942401`, us-east-1) via the
+  `Deploy CDK` GitHub workflow; branch work is on PR #112 → `main`.
+- **Done:** the aggregating `/mcp` gateway, routeless `forge` backend, `/@*`
+  dispatch, permission boundary + code bucket, the cell template, the React
+  authorize page + scope picker, the four connect fixes above, and `cellLogs`.
+- **Next:** run the live `createCell`/`callCell` round-trip from an MCP-connected
+  session (this session's `/mcp` config pointed at `sync.parc.land`, a *different*
+  host — a new session needs `https://parc.land/mcp` in its MCP servers); then
+  implement `forge.promote` and the `/_catalog` merge.
 
 ## Open questions / future work
 

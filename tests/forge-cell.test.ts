@@ -18,6 +18,7 @@ import {
   __setCloudFormation,
   __setS3,
   __setLambda as __setProvisionerLambda,
+  __setCloudWatchLogs,
 } from '../services/forge/provisioner';
 
 // ── in-memory AWS stubs ────────────────────────────────────────────
@@ -91,6 +92,16 @@ function installAwsStubs(): void {
   __setProvisionerLambda({
     invoke: () => ({ promise: async () => ({ Payload: JSON.stringify(lambdaResponse) }) }),
   } as unknown as Parameters<typeof __setProvisionerLambda>[0]);
+  __setCloudWatchLogs({
+    filterLogEvents: (p: { logGroupName: string }) => ({
+      promise: async () => ({
+        events:
+          p.logGroupName.startsWith('/aws/lambda/cell-')
+            ? [{ timestamp: 1_700_000_000_000, message: 'hello from cell\n' }]
+            : [],
+      }),
+    }),
+  } as unknown as Parameters<typeof __setCloudWatchLogs>[0]);
   __setEsbuild({
     initialize: async () => undefined,
     transform: async (code: string) => ({ code: `/*compiled*/ ${code}`, warnings: [], map: '' }),
@@ -182,6 +193,7 @@ describe('forge: backend commands', () => {
     __setS3(undefined);
     __setCloudFormation(undefined);
     __setProvisionerLambda(undefined);
+    __setCloudWatchLogs(undefined);
     __setEsbuild(undefined);
     for (const k of [
       'TABLE_NAME', 'CELL_CODE_BUCKET', 'CELL_PERMISSION_BOUNDARY_ARN',
@@ -229,6 +241,19 @@ describe('forge: backend commands', () => {
     expect(res.ok).toBe(true);
     expect(res.result!.statusCode).toBe(200);
     expect(res.result!.body).toEqual({ greeting: 'hi' });
+  });
+
+  it('cellLogs returns the cell logs for the owner', async () => {
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    const res = await call<{ count: number; events: Array<{ message: string }> }>('alice', 'cellLogs', {
+      cellId: cell.cellId,
+      since: '1h',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.result!.count).toBe(1);
+    expect(res.result!.events[0].message).toBe('hello from cell');
   });
 
   it('callCell denies a principal who is neither owner nor grantee', async () => {
