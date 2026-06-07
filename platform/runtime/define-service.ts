@@ -86,14 +86,18 @@ async function resolveHttpIdentity(
     const validated = await client(authService).command<ValidatedToken | null>('validateToken', {
       token,
     });
-    if (!validated) return ANONYMOUS;
+    if (!validated) {
+      console.warn('[auth] bearer present but rejected by validateToken', { service: serviceName });
+      return ANONYMOUS;
+    }
     return {
       user: validated.userId,
       scopes: validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [],
     };
-  } catch {
+  } catch (err) {
     // A validation failure (revoked/expired/unknown token, or auth unavailable)
     // is treated as anonymous; handlers enforce auth via requireUser/requireScope.
+    console.warn('[auth] validateToken errored', { service: serviceName, error: (err as Error).message });
     return ANONYMOUS;
   }
 }

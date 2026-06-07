@@ -182,7 +182,11 @@ export function defineMcpService(def: McpServiceDefinition) {
   }
 
   async function endpoint(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
-    if (requireAuth && !ctx.identity.user) return unauthorized(req, mcpPath);
+    if (requireAuth && !ctx.identity.user) {
+      const hasBearer = /^Bearer\s/i.test(req.headers['authorization'] ?? req.headers['Authorization'] ?? '');
+      console.warn('[mcp] 401 unauthorized', { path: req.path, hadBearer: hasBearer });
+      return unauthorized(req, mcpPath);
+    }
 
     let payload: unknown;
     try {

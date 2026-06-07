@@ -168,6 +168,7 @@ function parseTokenBody(req: ServiceHttpRequest): Record<string, string> {
 
 export async function handleToken(req: ServiceHttpRequest, store: AuthStore, config: OAuthConfig): Promise<ServiceHttpResponse> {
   const body = parseTokenBody(req);
+  console.log('[oauth] token: request', { grant_type: body.grant_type, hasVerifier: !!body.code_verifier, hasSecret: !!body.client_secret });
   const configuredExpiry = config.tokenExpirySecs ?? DEFAULT_EXPIRY;
   const neverExpires = configuredExpiry <= 0;
   const mintExpiry = neverExpires ? undefined : configuredExpiry;
@@ -204,6 +205,7 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       expiresInSec: mintExpiry,
       withRefresh: !neverExpires,
     });
+    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope, resource: authCode.resource });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope };
     if (!neverExpires) {
       response.expires_in = configuredExpiry;
