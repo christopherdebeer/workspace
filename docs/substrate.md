@@ -22,6 +22,46 @@ It builds on this repo's [`dynamic-cells.md`](./dynamic-cells.md) and
 [`sync-as-cells.md`](./sync-as-cells.md) is the detailed enabler catalogue; this
 document is the *why*.
 
+## The working definition (in plain terms)
+
+This is the anchor. Everything below is rationale; this is the model we build to,
+so we stop re-deriving it each conversation.
+
+> A **cell** = a **room** (a scope of shared state) + a **vocabulary** (the kinds
+> of facts and actions it biases toward) + **code** (real commands — not CEL-only
+> — so it can go further: richer queries, real computation).
+
+The **platform** is the small set of core primitives and infrastructure that lets
+a cell (e.g. `workspace`) be created and run. A cell is the platform's equivalent
+of a **room** in sync's substrate sense — but because a cell is actual code, it
+can do more than sync's CEL predicates allow.
+
+An **agent** (like Claude, on your behalf or autonomously) operates *within* the
+platform by following the substrate loop: **read granted state, then act** —
+calling actions from an already-declared vocabulary, or adding new actions. What
+it can see and do is set by **grants on state/scope** (not on cells); actions are
+the verbs over that state.
+
+The primitives this implies, and where each stands:
+
+| Primitive | What it is | Status |
+| --- | --- | --- |
+| **State** | observed facts in a scope: `{ value, _meta }`, provenance, salience | ✅ runtime (`platform/runtime/state.ts`) |
+| **Room / scope** | a named slice of state + who is granted it | ◑ scope exists; grants still coarse (auth scopes, not per-room) |
+| **Vocabulary** | the declared shape a room biases toward (fact kinds + actions) | ❌ implicit in TypeScript today — the next seam |
+| **Action** | code that reads state → writes facts, guarded by capability | ◑ cells have commands; `forge` mints them |
+| **Surface** | one declaration rendered as both an MCP tool *and* a UI element | ◑ partial; MCP and UI still separate |
+
+The goal — **evolve without revisiting the core** — has a concrete test:
+
+- a new **room type** → *create a cell* (`forge`), no platform edit;
+- a new **action** → *add to a cell's vocabulary*, no platform edit;
+- a new **fact kind** → *a vocabulary entry*, no platform edit.
+
+If any of these forces a change to the platform core, we picked the wrong
+primitive. This is nascent — the work is finding primitives sharp enough that the
+system keeps extending *itself*.
+
 ## The thesis (faithfully)
 
 > **Software is a shared substrate of truth observed by self-activating
@@ -184,10 +224,12 @@ scope-grammar maturity) are catalogued in [`sync-as-cells.md`](./sync-as-cells.m
 
 ## Open questions
 
-- **Runtime primitive vs cell.** Does `{ value, _meta }` + salience live in
-  `platform/runtime` (every cell inherits the substrate — the foundational
-  reading) or in a `state`/`rooms` cell others build on (easier to iterate)?
-  Decide deliberately; the thesis points at the former.
+- **Runtime primitive vs cell.** *Decided:* the primitive lives in
+  `platform/runtime` as a library, so any cell can hold salient, provenanced
+  state cheaply — **and** `workspace` is the first flagship room that uses it.
+  Grants are on **state/scope**, not on cells; the cell carries the vocabulary,
+  the scope is what's shared. (The thesis pointed at the runtime reading; the
+  hybrid keeps it reusable without forcing a central service.)
 - **What is the single surface declaration** that yields both an MCP tool and a
   `platform/ui` component? Define it against `platform/ui` before building cells
   that assume it (sync's view + render-hint is one answer).
