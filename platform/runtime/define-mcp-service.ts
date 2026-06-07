@@ -95,9 +95,11 @@ function rpcError(
 }
 
 /** 401 challenge so MCP/RFC 9728 clients can find the authorization server. */
-function unauthorized(req: ServiceHttpRequest): ServiceHttpResponse {
+function unauthorized(req: ServiceHttpRequest, resourcePath: string): ServiceHttpResponse {
   const u = new URL(req.url);
-  const metadata = `${u.protocol}//${u.host}/.well-known/oauth-protected-resource`;
+  // RFC 9728: the PRM URL inserts the well-known path before the resource path,
+  // e.g. resource `…/mcp` → `…/.well-known/oauth-protected-resource/mcp`.
+  const metadata = `${u.protocol}//${u.host}/.well-known/oauth-protected-resource${resourcePath}`;
   return {
     statusCode: 401,
     headers: { ...NO_STORE, 'www-authenticate': `Bearer resource_metadata="${metadata}"` },
@@ -180,7 +182,7 @@ export function defineMcpService(def: McpServiceDefinition) {
   }
 
   async function endpoint(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
-    if (requireAuth && !ctx.identity.user) return unauthorized(req);
+    if (requireAuth && !ctx.identity.user) return unauthorized(req, mcpPath);
 
     let payload: unknown;
     try {

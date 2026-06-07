@@ -139,10 +139,20 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       return ok({ error: 'invalid_request', error_description: 'code, redirect_uri, code_verifier required' }, 400);
     }
     const authCode = await store.consumeAuthCode(code);
-    if (!authCode) return ok({ error: 'invalid_grant', error_description: 'Invalid, expired, or already-used code' }, 400);
-    if (authCode.redirectUri !== redirect_uri) return ok({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
-    if (client_id && authCode.clientId !== client_id) return ok({ error: 'invalid_grant', error_description: 'client_id mismatch' }, 400);
+    if (!authCode) {
+      console.warn('[oauth] token: invalid/expired/used code');
+      return ok({ error: 'invalid_grant', error_description: 'Invalid, expired, or already-used code' }, 400);
+    }
+    if (authCode.redirectUri !== redirect_uri) {
+      console.warn('[oauth] token: redirect_uri mismatch', { codeRedirect: authCode.redirectUri, given: redirect_uri });
+      return ok({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }, 400);
+    }
+    if (client_id && authCode.clientId !== client_id) {
+      console.warn('[oauth] token: client_id mismatch', { codeClient: authCode.clientId, given: client_id });
+      return ok({ error: 'invalid_grant', error_description: 'client_id mismatch' }, 400);
+    }
     if (sha256(code_verifier) !== authCode.codeChallenge) {
+      console.warn('[oauth] token: PKCE verification failed');
       return ok({ error: 'invalid_grant', error_description: 'PKCE verification failed' }, 400);
     }
 

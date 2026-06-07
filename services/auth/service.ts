@@ -107,6 +107,11 @@ export const handler = defineService({
   events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'] },
   http: [
     { method: 'GET', path: '/.well-known/oauth-protected-resource', handler: (req) => handlePRM(req, OAUTH_CONFIG) },
+    // RFC 9728 / MCP 2025-06-18: clients construct the PRM URL by inserting the
+    // well-known path before the resource path (resource `…/mcp` →
+    // `…/.well-known/oauth-protected-resource/mcp`). Serve those too, not just
+    // the bare path, or strict clients (Claude.ai) 404 on discovery.
+    { method: 'GET', path: '/.well-known/oauth-protected-resource/*', handler: (req) => handlePRM(req, OAUTH_CONFIG) },
     { method: 'GET', path: '/.well-known/oauth-authorization-server', handler: (req) => handleASMetadata(req, OAUTH_CONFIG) },
 
     { method: 'POST', path: '/oauth/register', handler: (req) => handleDCR(req, store) },

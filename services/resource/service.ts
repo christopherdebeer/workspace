@@ -41,7 +41,8 @@ function baseUrl(req: ServiceHttpRequest): string {
 }
 
 function unauthorized(req: ServiceHttpRequest, error: string): ServiceHttpResponse {
-  const metadata = `${baseUrl(req)}/.well-known/oauth-protected-resource`;
+  // RFC 9728 path-suffixed PRM location for the `/mcp` resource.
+  const metadata = `${baseUrl(req)}/.well-known/oauth-protected-resource/mcp`;
   return {
     statusCode: 401,
     headers: { ...NO_STORE, 'www-authenticate': `Bearer resource_metadata="${metadata}", error="${error}"` },

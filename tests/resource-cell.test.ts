@@ -128,6 +128,6 @@ describe('resource cell (MCP gateway)', () => {
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {
     const res = (await gateway(httpEvent('POST', '/mcp', { body: rpc('tools/list') }))) as FunctionUrlResponse;
     expect(res.statusCode).toBe(401);
-    expect(res.headers['www-authenticate']).toContain('resource_metadata="https://parc.land/.well-known/oauth-protected-resource"');
+    expect(res.headers['www-authenticate']).toContain('resource_metadata="https://parc.land/.well-known/oauth-protected-resource/mcp"');
   });
 });
