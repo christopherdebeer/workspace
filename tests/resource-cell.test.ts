@@ -125,6 +125,19 @@ describe('resource cell (MCP gateway)', () => {
     expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
   });
 
+  it('resolves identity from x-forwarded-authorization (edge preserves bearer past OAC)', async () => {
+    // CloudFront OAC overwrites Authorization with its SigV4 signature; the edge
+    // copies the viewer bearer into x-forwarded-authorization for the origin.
+    const res = (await gateway(
+      httpEvent('POST', '/mcp', {
+        headers: { 'x-forwarded-authorization': 'Bearer creator' },
+        body: rpc('tools/call', { name: 'whoami', arguments: {} }),
+      }),
+    )) as FunctionUrlResponse;
+    const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
+    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
+  });
+
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {
     const res = (await gateway(httpEvent('POST', '/mcp', { body: rpc('tools/list') }))) as FunctionUrlResponse;
     expect(res.statusCode).toBe(401);

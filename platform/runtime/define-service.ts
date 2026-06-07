@@ -71,8 +71,14 @@ async function resolveHttpIdentity(
   headers: Record<string, string | undefined> | undefined,
   serviceName: string,
 ): Promise<Identity> {
+  // Prefer the standard Authorization header, but fall back to the
+  // `x-forwarded-authorization` header that the edge preserves the viewer's
+  // bearer in — CloudFront OAC overwrites Authorization with its SigV4 signature.
   const authHeader = headerOf(headers, 'authorization');
-  const token = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const fwdHeader = headerOf(headers, 'x-forwarded-authorization');
+  const token =
+    authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ??
+    fwdHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token) return ANONYMOUS;
 
   const authService = process.env.AUTH_SERVICE_NAME ?? 'auth';
