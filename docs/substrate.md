@@ -160,8 +160,11 @@ the fix belongs in the core.
    with real revocation. *(Done: refresh-lifetime decoupled + RFC 7009 —
    `services/auth`.)*
 2. **The human projection** — a first-party signed-in UI, so the substrate is
-   driven by people as well as agents (the UI half of surface duality). Concrete
-   and foundational.
+   driven by people as well as agents (the UI half of surface duality).
+   *(Done: the home SPA is a public OAuth/PKCE client — passkey sign-in, session
+   bearer, transparent refresh, sign-out revoke — `services/home/client/auth.ts`.
+   The "Your dynamic cells" card now loads from the signed-in session via the same
+   `/_catalog` an agent reads.)*
 3. **Observed state** — `{ value, _meta }` + provenance + salience as a reusable
    core shape, proven by the smallest case (`workspace`).
 4. **Declared vocabulary + surfaces** — actions/views as runtime data, CEL
