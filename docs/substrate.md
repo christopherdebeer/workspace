@@ -166,7 +166,11 @@ the fix belongs in the core.
    The "Your dynamic cells" card now loads from the signed-in session via the same
    `/_catalog` an agent reads.)*
 3. **Observed state** — `{ value, _meta }` + provenance + salience as a reusable
-   core shape, proven by the smallest case (`workspace`).
+   core shape, proven by the smallest case (`workspace`). *(In progress: the
+   runtime semantics are built — `platform/runtime/state.ts`: wrapped entries,
+   server-stamped provenance, supersede-not-delete, trajectory-driven salience,
+   shaped reads, with an in-memory store. Next: a DynamoDB-backed `StateStore`
+   and wiring it into a cell.)*
 4. **Declared vocabulary + surfaces** — actions/views as runtime data, CEL
    predicates, one surface → MCP + UI; and the living, tended self-model. Proven
    by `sync`.
