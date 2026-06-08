@@ -136,4 +136,17 @@ describe('workspace sharing / view layer', () => {
     expect(bobShared.receiving.some((g) => g.owner === 'alice' && g.key === '*')).toBe(true);
     expect(bobShared.shared).toEqual([]);
   });
+
+  it('describeTools advertises the whole vocabulary for the /mcp gateway', async () => {
+    const { tools } = await cmds.describeTools(undefined, ctxFor('alice').ctx);
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual(['peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare'].sort());
+    // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
+    // to any authenticated principal.
+    expect(tools.every((t) => t.scope === null)).toBe(true);
+    // Every tool ships a JSON Schema the gateway can surface to clients.
+    expect(tools.every((t) => (t.inputSchema as { type?: string }).type === 'object')).toBe(true);
+    const remember = tools.find((t) => t.name === 'remember')!;
+    expect(remember.inputSchema).toMatchObject({ required: ['key', 'value'] });
+  });
 });

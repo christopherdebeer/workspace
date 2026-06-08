@@ -26,7 +26,7 @@ import {
 const NO_STORE = { 'cache-control': 'no-store' };
 
 /** Cells that contribute tools to the gateway (each exposes `describeTools`). */
-const PROVIDERS = ['forge'] as const;
+const PROVIDERS = ['forge', 'workspace'] as const;
 
 interface ToolDescriptor {
   name: string;
