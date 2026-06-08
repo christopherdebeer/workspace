@@ -148,7 +148,7 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('forge'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['createCell', 'listCells', 'getCell', 'callCell', 'grantCapability', 'deleteCell', 'cellLogs', 'describeTools', 'catalogCells'],
+      commands: ['createCell', 'listCells', 'getCell', 'callCell', 'grantCapability', 'deleteCell', 'cellLogs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool'],
       emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)

@@ -31,6 +31,7 @@ import {
   invokeCell,
   getCellLogs,
 } from './provisioner';
+import type { InvokeCellResult } from './provisioner';
 
 /** Parse a relative window like "15m", "2h", "1d" into milliseconds. */
 function sinceToMs(since: string | undefined): number {
@@ -404,6 +405,112 @@ async function cellLogs(input: CellLogsInput, ctx: ServiceContext): Promise<unkn
   };
 }
 
+// ─── registry-driven cell tools ──────────────────────────────────
+//
+// Beyond forge's own control-plane tools, the /mcp gateway also surfaces the
+// tools that the caller's *dynamic cells* advertise — so a cell created at
+// runtime can contribute tools to /mcp with no gateway change and no deploy.
+//
+// The convention is deliberately tiny so any cell author can opt in:
+//   • GET  /_tools           → { tools: [{ name, description, inputSchema, scope? }] }
+//   • POST /_tools/<name>     → (body = arguments) → the tool's result
+// A cell that doesn't answer /_tools simply contributes nothing.
+
+const TOOLS_PATH = '/_tools';
+/** Cap how many cells we probe per discovery, to bound tools/list cost. */
+const MAX_TOOL_CELLS = 25;
+const SAFE_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+
+interface CellToolDescriptor {
+  /** Gateway-facing name, namespaced by cellId so it never collides. */
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  scope: string | null;
+  cellId: string;
+  /** The cell's own (un-namespaced) tool name, used to route the call. */
+  tool: string;
+}
+
+/**
+ * Ask each accessible ACTIVE cell what tools it advertises. Best-effort and
+ * registry-driven: enumeration is scoped to the caller's own/granted cells
+ * (`listAccessibleBy`), and a cell that errors or advertises nothing is simply
+ * skipped. The gateway forwards calls to these tools via `callCellTool`.
+ */
+async function describeCellTools(_input: unknown, ctx: ServiceContext): Promise<{ tools: CellToolDescriptor[] }> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cells = (await registry.listAccessibleBy(user))
+    .filter((c) => c.status === 'ACTIVE')
+    .slice(0, MAX_TOOL_CELLS);
+
+  const out: CellToolDescriptor[] = [];
+  await Promise.all(
+    cells.map(async (cell) => {
+      try {
+        const res = await invokeCell({
+          functionName: cell.functionName,
+          event: {
+            version: '2.0',
+            rawPath: TOOLS_PATH,
+            rawQueryString: '',
+            headers: { 'content-type': 'application/json', 'x-cell-caller': user },
+            requestContext: { http: { method: 'GET', path: TOOLS_PATH } },
+            isBase64Encoded: false,
+          },
+        });
+        if (res.statusCode !== 200) return;
+        const body = res.body as { tools?: Array<Record<string, unknown>> } | undefined;
+        if (!body || !Array.isArray(body.tools)) return;
+        for (const t of body.tools) {
+          const tool = typeof t.name === 'string' ? t.name : '';
+          if (!SAFE_TOOL_NAME.test(tool)) continue;
+          out.push({
+            name: `${cell.cellId}__${tool}`,
+            description: typeof t.description === 'string' ? t.description : `${cell.name} · ${tool}`,
+            inputSchema:
+              t.inputSchema && typeof t.inputSchema === 'object'
+                ? (t.inputSchema as Record<string, unknown>)
+                : { type: 'object', additionalProperties: true },
+            scope: typeof t.scope === 'string' ? t.scope : null,
+            cellId: cell.cellId,
+            tool,
+          });
+        }
+      } catch (err) {
+        ctx.logger.warn('cell tool discovery failed', { cellId: cell.cellId, error: (err as Error).message });
+      }
+    }),
+  );
+  return { tools: out };
+}
+
+interface CallCellToolInput {
+  cellId: string;
+  tool: string;
+  args?: unknown;
+}
+
+/**
+ * Forward a gateway `tools/call` to a dynamic cell's tool (`POST /_tools/<tool>`).
+ * Reuses `callCell`, so ownership/grant authorisation and the ACTIVE check apply
+ * unchanged; non-2xx from the cell surfaces as an error.
+ */
+async function callCellTool(input: CallCellToolInput, ctx: ServiceContext): Promise<unknown> {
+  if (!input?.cellId) throw new Error('cellId is required');
+  if (!input?.tool || !SAFE_TOOL_NAME.test(input.tool)) throw new Error('a valid tool name is required');
+  const res = (await callCell(
+    { cellId: input.cellId, method: 'POST', path: `${TOOLS_PATH}/${input.tool}`, body: input.args ?? {} },
+    ctx,
+  )) as InvokeCellResult;
+  if (typeof res?.statusCode === 'number' && res.statusCode >= 400) {
+    throw new Error(`Cell tool "${input.tool}" failed (status ${res.statusCode})`);
+  }
+  return res?.body;
+}
+
 /**
  * forge is a **backend tool-provider**, not a public MCP endpoint. The `/mcp`
  * gateway (the `resource` cell) aggregates these tools, enforces their scopes
@@ -529,6 +636,10 @@ const commands: Record<string, RegisteredCommand> = {
   resolveCell: resolveCell as RegisteredCommand,
   catalogCells: catalogCells as RegisteredCommand,
   describeTools: (() => describeTools()) as RegisteredCommand,
+  // Registry-driven dynamic-cell tools (internal: the gateway aggregates and
+  // forwards these; they are not themselves advertised as forge MCP tools).
+  describeCellTools: describeCellTools as RegisteredCommand,
+  callCellTool: callCellTool as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {
   commands[name] = spec.handler;

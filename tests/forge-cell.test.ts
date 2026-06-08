@@ -304,4 +304,52 @@ describe('forge: backend commands', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/not authorised/i);
   });
+
+  it('describeCellTools advertises an active cell’s tools, namespaced by cellId', async () => {
+    // The cell answers GET /_tools with its tool manifest.
+    lambdaResponse = {
+      statusCode: 200,
+      body: JSON.stringify({
+        tools: [{ name: 'add', description: 'Add a note.', inputSchema: { type: 'object' }, scope: null }],
+      }),
+    };
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    await reg.setStatus(cell.cellId, 'ACTIVE');
+
+    const res = await call<{ tools: Array<{ name: string; cellId: string; tool: string; scope: string | null }> }>(
+      'alice',
+      'describeCellTools',
+      {},
+    );
+    expect(res.ok).toBe(true);
+    expect(res.result!.tools).toEqual([
+      expect.objectContaining({ name: `${cell.cellId}__add`, cellId: cell.cellId, tool: 'add', scope: null }),
+    ]);
+  });
+
+  it('describeCellTools skips cells that are not ACTIVE', async () => {
+    lambdaResponse = { statusCode: 200, body: JSON.stringify({ tools: [{ name: 'add' }] }) };
+    await call('alice', 'createCell', { name: 'notes', code: cellCode }); // stays CREATING
+    const res = await call<{ tools: unknown[] }>('alice', 'describeCellTools', {});
+    expect(res.result!.tools).toEqual([]);
+  });
+
+  it('callCellTool forwards to the cell tool and returns its body, ownership-gated', async () => {
+    lambdaResponse = { statusCode: 200, body: JSON.stringify({ added: true }) };
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    await reg.setStatus(cell.cellId, 'ACTIVE');
+
+    const ok = await call<{ added: boolean }>('alice', 'callCellTool', { cellId: cell.cellId, tool: 'add', args: { text: 'hi' } });
+    expect(ok.ok).toBe(true);
+    expect(ok.result).toEqual({ added: true });
+
+    // Same ownership gate as callCell.
+    const denied = await call('bob', 'callCellTool', { cellId: cell.cellId, tool: 'add', args: {} });
+    expect(denied.ok).toBe(false);
+    expect(denied.error).toMatch(/not authorised/i);
+  });
 });

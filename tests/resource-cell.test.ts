@@ -34,6 +34,8 @@ const FORGE_TOOLS = [
 ];
 
 let lastForgeCall: { command: string; payload: unknown } | undefined;
+/** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
+let cellTools: Array<Record<string, unknown>> = [];
 
 function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
@@ -45,6 +47,9 @@ function stub(tokens: Record<string, ValidatedToken>): void {
       } else if (params.FunctionName === 'forge-fn') {
         if (env.__command === 'describeTools') {
           result = { tools: FORGE_TOOLS };
+        } else if (env.__command === 'describeCellTools') {
+          // Registry-driven dynamic-cell tools; empty unless a test sets them.
+          result = { tools: cellTools };
         } else {
           lastForgeCall = { command: env.__command, payload: env.payload };
           result = { cellId: 'notes-abc12345', address: '/@alice/notes', status: 'CREATING' };
@@ -79,6 +84,7 @@ describe('resource cell (MCP gateway)', () => {
     process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn' });
     process.env.PUBLIC_BASE_URL = 'https://parc.land';
     lastForgeCall = undefined;
+    cellTools = [];
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
@@ -136,6 +142,41 @@ describe('resource cell (MCP gateway)', () => {
     )) as FunctionUrlResponse;
     const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
     expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
+  });
+
+  it('tools/list folds in dynamic-cell tools discovered from the registry', async () => {
+    cellTools = [
+      {
+        name: 'notes-abc12345__add',
+        description: 'Add a note.',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
+        scope: null,
+        cellId: 'notes-abc12345',
+        tool: 'add',
+      },
+    ];
+    const list = await mcp('creator', 'tools/list');
+    const names = (list.result!.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    expect(names).toContain('notes-abc12345__add');
+    // kernel tools remain present
+    expect(names).toContain('createCell');
+  });
+
+  it('tools/call on a dynamic-cell tool forwards through forge.callCellTool', async () => {
+    cellTools = [
+      {
+        name: 'notes-abc12345__add',
+        description: 'Add a note.',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
+        scope: null,
+        cellId: 'notes-abc12345',
+        tool: 'add',
+      },
+    ];
+    const res = await mcp('creator', 'tools/call', { name: 'notes-abc12345__add', arguments: { text: 'hi' } });
+    expect(res.result!.isError).toBeUndefined();
+    expect(lastForgeCall?.command).toBe('callCellTool');
+    expect(lastForgeCall?.payload).toEqual({ cellId: 'notes-abc12345', tool: 'add', args: { text: 'hi' } });
   });
 
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {
