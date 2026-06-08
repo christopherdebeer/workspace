@@ -96,6 +96,20 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
     });
 
+    // The first flagship room over the observed-state substrate: each user's
+    // workspace is their slice of the one Substrate ({ value, _meta } facts with
+    // provenance + salience). dynamoTtl backs the trajectory log used to compute
+    // salience (facts themselves are durable). See docs/substrate.md.
+    const workspace = new HttpServiceCell(this, 'WorkspaceService', {
+      name: 'workspace',
+      entry: serviceEntry('workspace'),
+      routes: ['/workspace/*'],
+      persistence: { dynamo: true, dynamoTtl: true },
+      commands: ['remember', 'recall', 'peek', 'supersede', 'share', 'unshare', 'shared'],
+      emits: ['workspace.fact.written', 'workspace.shared'],
+      eventBus,
+    });
+
     // Self-documenting front-end: a mobile-first React SPA served at `/` (the
     // router default). Its browser bundle is built from client/main.tsx by
     // esbuild at deploy time and shipped in the Lambda asset.
@@ -157,6 +171,7 @@ export class PlatformStack extends cdk.Stack {
     // Any cell that protects routes asks the auth service to validate the
     // bearer token (the in-cell alternative to edge validation).
     documents.allow(auth);
+    workspace.allow(auth);
     resource.allow(auth);
     dispatch.allow(auth);
     // The /mcp gateway aggregates + forwards forge's tools; dispatch proxies
@@ -189,7 +204,7 @@ export class PlatformStack extends cdk.Stack {
 
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.
-      cells: [home, auth, documents, render, resource, dispatch],
+      cells: [home, auth, documents, workspace, render, resource, dispatch],
       defaultCell: home,
       domainNames: props?.domainNames,
       certificate,
@@ -220,7 +235,7 @@ export class PlatformStack extends cdk.Stack {
     // the single source of truth) so the home SPA renders the service list from
     // real data rather than a hardcoded copy. Served at GET /_catalog. (forge is
     // a routeless backend, surfaced through the /mcp gateway, not listed here.)
-    const catalog = [home, auth, resource, documents, render, dispatch].map((c) => c.manifest);
+    const catalog = [home, auth, resource, documents, workspace, render, dispatch].map((c) => c.manifest);
     home.fn.addEnvironment('PLATFORM_CATALOG', JSON.stringify(catalog));
   }
 }

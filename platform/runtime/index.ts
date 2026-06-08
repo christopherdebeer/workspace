@@ -35,3 +35,18 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
+export { createObservedState, createMemoryStateStore, computeScore } from './state';
+export type {
+  ObservedState,
+  StateStore,
+  StateRecord,
+  TrajectoryEvent,
+  Entry,
+  EntryMeta,
+  Tier,
+  ReadResult,
+  ShapingSummary,
+  ReadOptions,
+  WriteInput,
+  SalienceOptions,
+} from './state';
