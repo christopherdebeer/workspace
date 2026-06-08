@@ -158,6 +158,29 @@ dynamic cell's tools can appear there with no gateway change. It is the **policy
 enforcement point**: scopes are checked here (the backend receives only the
 caller's `user` and authorises by ownership).
 
+Two aggregation paths feed the gateway's tool list:
+
+- **Tier-1 providers** are an explicit, reviewed list (`PROVIDERS = ['forge',
+  'workspace', …]`). Kernel cells are few and reached by name over an allow-listed
+  invoke, so naming them in the gateway is honest — but it does mean a *new tier-1
+  provider* is a code change. (That is the right trade for the reviewed core.)
+- **Tier-2 (dynamic) cell tools are registry-driven.** `resolveTools` also calls
+  `forge.describeCellTools`, which enumerates the caller's accessible ACTIVE cells
+  (`listAccessibleBy`) and asks each — best-effort — what tools it advertises. So a
+  cell **created at runtime contributes tools to `/mcp` with no gateway change and
+  no `cdk deploy`**. Calls forward through `forge.callCellTool`, which authorises by
+  ownership exactly like `callCell`.
+
+  **The cell-tool convention** (deliberately tiny, opt-in):
+  - `GET  /_tools`        → `{ tools: [{ name, description, inputSchema, scope? }] }`
+  - `POST /_tools/<name>` → (JSON body = arguments) → the tool's result
+
+  Gateway-facing tool names are namespaced `&lt;cellId&gt;__&lt;tool&gt;` so they never
+  collide with kernel tools or across cells; a cell that doesn't answer `/_tools`
+  simply contributes nothing. Discovery is capped (`MAX_TOOL_CELLS`) and probes
+  cells live per `tools/list`; caching each cell's manifest in the registry is the
+  obvious next optimisation.
+
 **`forge` — the control plane (backend tool-provider, no public route)**
 Reachable only via allow-listed invokes (from the gateway and `dispatch`). It
 exposes `describeTools` (so the gateway can discover its tools) plus the handlers:

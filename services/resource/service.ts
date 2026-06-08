@@ -25,7 +25,13 @@ import {
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
-/** Cells that contribute tools to the gateway (each exposes `describeTools`). */
+/**
+ * Tier-1 (kernel) cells that contribute tools to the gateway. These are few,
+ * reviewed, and reached by name over an allow-listed invoke — so they stay an
+ * explicit list. Tier-2 *dynamic* cells' tools are discovered at runtime from
+ * the registry (see `resolveTools` → `forge.describeCellTools`), so adding those
+ * never touches this gateway.
+ */
 const PROVIDERS = ['forge', 'workspace'] as const;
 
 interface ToolDescriptor {
@@ -33,6 +39,12 @@ interface ToolDescriptor {
   description: string;
   inputSchema: Record<string, unknown>;
   scope: string | null;
+}
+
+/** A dynamic-cell tool descriptor carries the routing forge needs to forward it. */
+interface CellToolDescriptor extends ToolDescriptor {
+  cellId: string;
+  tool: string;
 }
 
 function baseUrl(req: ServiceHttpRequest): string {
@@ -75,7 +87,7 @@ async function resolveTools(ctx: ServiceContext): Promise<Record<string, McpTool
       continue;
     }
     for (const d of descriptors) {
-      // On collision, first provider wins (forge is the only one for now).
+      // On collision, first (kernel) provider wins.
       if (tools[d.name]) continue;
       tools[d.name] = {
         description: d.description,
@@ -85,6 +97,27 @@ async function resolveTools(ctx: ServiceContext): Promise<Record<string, McpTool
       };
     }
   }
+
+  // Registry-driven: fold in the tools the caller's dynamic cells advertise.
+  // forge enumerates the caller's accessible cells and probes each, so a cell
+  // created at runtime appears here with no gateway change. Calls are forwarded
+  // through `forge.callCellTool`, which authorises by ownership.
+  try {
+    const res = await ctx.serviceClient('forge').command<{ tools: CellToolDescriptor[] }>('describeCellTools', {});
+    for (const d of res?.tools ?? []) {
+      if (tools[d.name]) continue; // kernel tools win on collision
+      tools[d.name] = {
+        description: d.description,
+        inputSchema: d.inputSchema,
+        scope: d.scope ?? undefined,
+        handler: (args: unknown, c: ServiceContext) =>
+          c.serviceClient('forge').command('callCellTool', { cellId: d.cellId, tool: d.tool, args: args ?? {} }),
+      };
+    }
+  } catch (err) {
+    ctx.logger.warn('dynamic cell tools aggregation failed', { error: (err as Error).message });
+  }
+
   return tools;
 }
 
