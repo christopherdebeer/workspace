@@ -13,7 +13,7 @@
 
 ---
 
-## TL;DR — what shipped (3 PRs, all deployed)
+## TL;DR — what shipped (4 PRs, all deployed)
 
 1. **#114 — Observed-state substrate + workspace room + sharing.**
    `platform/runtime/state.ts` (the primitive), `services/workspace` (the room:
@@ -43,8 +43,13 @@
   use. So **#114 and #115 are proven live.**
 - `listCells` → ACTIVE dynamic cells (`hello-parc-e6badc9b`, plus the
   `tools-demo-a7f8a39e` validation cell below).
-- **#116 validated live** ✓ — see next section. The registry-driven gateway
-  discovered a runtime-created cell's tool with no deploy.
+- **#116 validated live** ✓ — the registry-driven gateway discovered a
+  runtime-created cell's tool with no deploy.
+- **#119 (read/act) verified live** ✓ — the named-tool calls above were made
+  *before* #119; the surface is now `whoami`/`read`/`act`. Post-#119, confirmed
+  server-side without a reconnect: `GET /mcp` → `"tools":["whoami","read","act"]`;
+  `whoami` resolves; the removed named tool `recall` returns `-32602 Unknown tool`.
+  Calling `read`/`act` end-to-end needs a fresh client (see the validation recipe).
 
 ---
 
@@ -80,15 +85,19 @@ dynamism in the *arguments*, not the tool list — see the contrast note below.)
 
 ```
 parc.land/mcp  (resource cell = the MCP gateway, defineMcpService)
-   tool list aggregated per request from two paths:
-     1. TIER-1 PROVIDERS = ['forge','workspace']   (explicit; kernel; need IAM grants)
-          → forward tools/call via serviceClient(provider).command(name,args)
-     2. TIER-2 dynamic cells (registry-driven, NO deploy to add):
-          gateway → forge.describeCellTools
-             → forge enumerates caller's accessible ACTIVE cells (registry)
-             → probes each cell:  GET /_tools   (best-effort, capped)
-          gateway → forge.callCellTool  → forge.callCell → POST /_tools/<name>
-   scope-filtered + ownership-authorised at the gateway; forge authorises by owner.
+   STABLE 3-tool surface: whoami, read, act   (capability lives in the arguments)
+     read({target?,input?})  observe; target "$catalog"/omitted → the menu, as data
+     act ({target,input?})   mutate
+   target is a dotted address, resolved per request from one capability registry:
+     1. <cell>.<command>        TIER-1 kernel cells (PROVIDERS=['workspace','forge'])
+          → forward via serviceClient(cell).command(command, input)
+     2. @<owner>/<cell>.<tool>  TIER-2 dynamic cells (registry-driven, NO deploy)
+          → forge.describeCellTools (catalog: all accessible ACTIVE cells, probing
+            GET /_tools; or one cell via owner+name selector)
+          → forge.callCellTool → forge.callCell → POST /_tools/<tool>
+   per-target scope checked at the gateway; read/act refuse to cross the kind
+   boundary; forge authorises dynamic calls by ownership. Tool list never changes,
+   so new capability is callable with no reconnect.
 ```
 
 - **Substrate primitive** (`platform/runtime/state.ts`): `put`/`get`/`read`/`shape`/
@@ -107,31 +116,51 @@ parc.land/mcp  (resource cell = the MCP gateway, defineMcpService)
 
 A dynamic cell contributes tools to `/mcp` by answering:
 
-- `GET  /_tools`        → `{ tools: [{ name, description, inputSchema, scope? }] }`
+- `GET  /_tools`        → `{ tools: [{ name, description, inputSchema, scope?, kind? }] }`
 - `POST /_tools/<name>` → (JSON body = arguments) → the tool's result
 
-Gateway-facing names are namespaced `<cellId>__<tool>`. A cell that ignores
-`/_tools` contributes nothing.
+The gateway surfaces each as the `act`/`read` target `@<owner>/<cell>.<tool>`. A
+cell that ignores `/_tools` contributes nothing.
 
 ---
 
-## Validation recipe (DONE 2026-06-08 — kept so it's reproducible)
+## Validate the read/act surface (for a fresh session) — START HERE
 
-Goal: prove a runtime-created cell's tools appear at `parc.land/mcp` with no
-deploy. Ran successfully this session (see "DONE — #116 validated live" above);
-reproduce it like so:
+A freshly-connected client sees exactly **three** tools: `whoami`, `read`, `act`
+(an already-open client may still show the old named tools from its connect-time
+cache — reconnect to clear it). Validate end-to-end:
 
-1. `createCell` with `name: "tools-demo"` and the code below.
-2. Poll `getCell` until `status: "ACTIVE"` (tens of seconds).
-3. Confirm the cell serves the convention:
-   `callCell { cellId, method: "GET", path: "/_tools" }` → expect the manifest.
-4. Re-list MCP tools (fresh `tools/list`): a tool named `tools-demo-<hash>__echo`
-   should now appear — **that is the proof.** Call it:
-   `<cellId>__echo` with `{ "message": "hi" }` → `{ echoed: "hi", … }`.
-   (Or directly: `callCell { cellId, method:"POST", path:"/_tools/echo", body:{message:"hi"} }`.)
-5. Clean up with `deleteCell` if desired.
+1. **Catalog.** `read({ target: "$catalog" })` → `{ capabilities: [...] }`. Confirm
+   it lists tier-1 targets (`workspace.recall`, `workspace.remember`,
+   `forge.listCells`, and `forge.createCell` if you hold `platform:cells:create`)
+   and any dynamic-cell targets (`@<owner>/tools-demo.echo` — the demo cell left
+   ACTIVE this session). Each entry carries `{ target, kind, description,
+   inputSchema, scope }`. (Omitting `target` returns the same menu.)
+2. **Read a read-kind capability.**
+   `read({ target: "workspace.recall", input: { elision: "none" } })` → your slice.
+3. **Act on an act-kind capability, then read it back.**
+   `act({ target: "workspace.remember", input: { key: "probe", value: 1, via: "readact-validate" } })`,
+   then `read({ target: "workspace.recall" })` → confirm `probe` is present.
+4. **Dynamic-cell tool through `act`** (no deploy, no reconnect — the headline):
+   `act({ target: "@<owner>/tools-demo.echo", input: { message: "hi" } })` →
+   `{ echoed: "hi", at }`. Use the exact `@owner/...` target from step 1's catalog.
+5. **Boundary checks** (both should be tool errors, not transport errors):
+   - `read({ target: "workspace.remember" })` → "may mutate — invoke with act".
+   - `act({ target: "workspace.recall" })` → "read-only — invoke with read".
+6. **Unknown target.** `act({ target: "workspace.nope" })` → "Unknown capability".
 
-Ready-to-paste cell code (a valid Lambda Function-URL handler):
+Already confirmed live this session (server-side, without a reconnect):
+`GET https://parc.land/mcp` → `"tools":["whoami","read","act"]`; `whoami` resolves;
+and calling the *removed* named tool `recall` returns `MCP error -32602: Unknown
+tool: recall` — proving the surface flipped from named tools to read/act.
+
+### Making your own dynamic tool (if `tools-demo` was deleted)
+
+`act({ target: "forge.createCell", input: { name: "tools-demo", code: "<below>" } })`,
+poll `read({ target: "forge.getCell", input: { cellId } })` until ACTIVE, then it
+appears in `read("$catalog")` as `@<owner>/tools-demo.echo` — callable via `act`,
+no `tools/list` change, no reconnect. Ready-to-paste cell (a Lambda Function-URL
+handler that serves the `/_tools` convention):
 
 ```ts
 export const handler = async (event) => {
@@ -149,6 +178,7 @@ export const handler = async (event) => {
         {
           name: 'echo',
           description: 'Echo a message back (dynamic-cell tool demo).',
+          kind: 'act',
           inputSchema: {
             type: 'object',
             properties: { message: { type: 'string' } },
@@ -168,8 +198,8 @@ export const handler = async (event) => {
 };
 ```
 
-Expected outcome: `tools-demo-<hash>__echo` shows up in `tools/list` and returns
-the echo — closing the loop that #116 makes possible without a `cdk deploy`.
+> The convention now also reads an optional `kind: 'read' | 'act'` per tool
+> (default `act`), so the gateway can route it via `read` or `act`.
 
 ---
 
@@ -235,11 +265,14 @@ the instant it exists (no reconnect).
 
 ## Driving `parc.land/mcp` from a fresh session
 
-The tools are gated behind OAuth (passkey). A fresh session must authenticate to
-the `f5bbef8d` MCP server (`parc.land/mcp`) before `whoami`/`createCell`/`recall`
-etc. become available; complete the flow with the localhost callback URL. Once
-authed, the workspace tools (`remember`/`recall`/…) and the cell control plane
-(`createCell`/`callCell`/…) are live, plus any dynamic-cell tools.
+The surface is gated behind OAuth (passkey). A fresh session must authenticate to
+the `f5bbef8d` MCP server (`parc.land/mcp`) before the tools become available;
+complete the flow with the localhost callback URL. Once authed, the client sees
+exactly **`whoami` / `read` / `act`** — all workspace operations and the cell
+control plane are reached through `read`/`act` by `target` (e.g.
+`act({target:"workspace.remember", input:{…}})`, `read({target:"forge.listCells"})`,
+`read({target:"$catalog"})` to list everything). The old per-capability named tools
+are gone (#119).
 
 ## File map
 
@@ -248,7 +281,7 @@ authed, the workspace tools (`remember`/`recall`/…) and the cell control plane
 | Substrate primitive | `platform/runtime/state.ts` |
 | Workspace room | `services/workspace/{service,handlers}.ts` |
 | Sharing/grants | `services/workspace/grants.ts` |
-| MCP gateway (aggregation) | `services/resource/service.ts` |
+| MCP gateway (whoami/read/act) | `services/resource/service.ts` |
 | Dynamic-cell control plane + tool discovery | `services/forge/service.ts` |
 | Cell registry | `services/forge/registry.ts` |
 | Stack wiring | `lib/platform-stack.ts` |
