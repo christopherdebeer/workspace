@@ -1,12 +1,12 @@
 /**
- * resource cell — the platform MCP **gateway** at `/mcp`.
+ * resource cell — the platform MCP **gateway** at `/mcp`, read/act surface.
  *
- * Drives the real gateway handler through the runtime HTTP path with the
- * peer-invoke Lambda stubbed for `auth.validateToken` (identity + scopes) and
- * for `forge.describeTools` / `forge.createCell` (the aggregated provider).
- * Asserts: `tools/list` aggregates forge's tools and the built-in `whoami`,
- * filtered by the caller's scopes; `tools/call` enforces the tool scope and
- * forwards to forge; and unauthenticated calls get 401 + WWW-Authenticate.
+ * Drives the real gateway handler through the runtime HTTP path with peer-invoke
+ * stubbed for `auth.validateToken` and for the providers (`workspace`, `forge`).
+ * Asserts the stable three-tool surface (whoami/read/act); that `read("$catalog")`
+ * aggregates + scope-filters the capability menu; that `read`/`act` forward to the
+ * owning cell, enforce per-target scope, and refuse to cross the read/act boundary;
+ * and that dynamic-cell tools dispatch through `forge.callCellTool`.
  */
 import { handler as gateway } from '../services/resource/service';
 import { __setLambda } from '../platform/runtime/service-client';
@@ -18,22 +18,16 @@ interface ValidatedToken {
   clientId: string | null;
 }
 
+const WORKSPACE_TOOLS = [
+  { name: 'recall', description: 'Your view.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
+  { name: 'remember', description: 'Write a fact.', inputSchema: { type: 'object' }, scope: null, kind: 'act' },
+];
 const FORGE_TOOLS = [
-  {
-    name: 'createCell',
-    description: 'Provision a dynamic cell.',
-    inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
-    scope: 'platform:cells:create',
-  },
-  {
-    name: 'listCells',
-    description: 'List your cells.',
-    inputSchema: { type: 'object', properties: {} },
-    scope: null,
-  },
+  { name: 'createCell', description: 'Provision a cell.', inputSchema: { type: 'object' }, scope: 'platform:cells:create', kind: 'act' },
+  { name: 'listCells', description: 'List your cells.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
 ];
 
-let lastForgeCall: { command: string; payload: unknown } | undefined;
+let lastCall: { fn: string; command: string; payload: unknown } | undefined;
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
 
@@ -41,18 +35,22 @@ function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
     invoke: (params: { FunctionName: string; Payload: string }) => {
       const env = JSON.parse(params.Payload) as { __command: string; payload: Record<string, unknown> };
+      const fn = params.FunctionName;
       let result: unknown = null;
-      if (params.FunctionName === 'auth-fn' && env.__command === 'validateToken') {
+      if (fn === 'auth-fn' && env.__command === 'validateToken') {
         result = tokens[env.payload.token as string] ?? null;
-      } else if (params.FunctionName === 'forge-fn') {
-        if (env.__command === 'describeTools') {
-          result = { tools: FORGE_TOOLS };
-        } else if (env.__command === 'describeCellTools') {
-          // Registry-driven dynamic-cell tools; empty unless a test sets them.
-          result = { tools: cellTools };
-        } else {
-          lastForgeCall = { command: env.__command, payload: env.payload };
-          result = { cellId: 'notes-abc12345', address: '/@alice/notes', status: 'CREATING' };
+      } else if (fn === 'workspace-fn') {
+        if (env.__command === 'describeTools') result = { tools: WORKSPACE_TOOLS };
+        else {
+          lastCall = { fn: 'workspace', command: env.__command, payload: env.payload };
+          result = { echoed: env.payload };
+        }
+      } else if (fn === 'forge-fn') {
+        if (env.__command === 'describeTools') result = { tools: FORGE_TOOLS };
+        else if (env.__command === 'describeCellTools') result = { tools: cellTools };
+        else {
+          lastCall = { fn: 'forge', command: env.__command, payload: env.payload };
+          result = { echoed: env.payload };
         }
       }
       return { promise: async () => ({ Payload: JSON.stringify({ ok: true, result }) }) };
@@ -78,12 +76,25 @@ async function mcp(token: string | null, method: string, params?: unknown): Prom
   return JSON.parse(res.body);
 }
 
-describe('resource cell (MCP gateway)', () => {
+/** Run a tool and return its parsed JSON content (or the raw result for errors). */
+async function callTool(token: string, name: string, args: unknown): Promise<{ isError?: boolean; parsed?: unknown; text: string }> {
+  const res = await mcp(token, 'tools/call', { name, arguments: args });
+  const text = (res.result!.content as Array<{ text: string }>)[0].text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  return { isError: res.result!.isError as boolean | undefined, parsed, text };
+}
+
+describe('resource cell (MCP gateway, read/act)', () => {
   beforeEach(() => {
     process.env.SERVICE_NAME = 'resource';
-    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn' });
+    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn', workspace: 'workspace-fn' });
     process.env.PUBLIC_BASE_URL = 'https://parc.land';
-    lastForgeCall = undefined;
+    lastCall = undefined;
     cellTools = [];
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
@@ -96,44 +107,93 @@ describe('resource cell (MCP gateway)', () => {
     delete process.env.PUBLIC_BASE_URL;
   });
 
-  it('tools/list aggregates forge tools + whoami, scoped to the caller', async () => {
-    const withScope = await mcp('creator', 'tools/list');
-    const names = (withScope.result!.tools as Array<{ name: string }>).map((t) => t.name).sort();
-    expect(names).toEqual(['createCell', 'listCells', 'whoami']);
+  it('exposes a stable three-tool surface: whoami, read, act', async () => {
+    const list = await mcp('creator', 'tools/list');
+    const names = (list.result!.tools as Array<{ name: string }>).map((t) => t.name).sort();
+    expect(names).toEqual(['act', 'read', 'whoami']);
   });
 
-  it('hides scoped tools the caller lacks (createCell needs platform:cells:create)', async () => {
-    const noScope = await mcp('plain', 'tools/list');
-    const names = (noScope.result!.tools as Array<{ name: string }>).map((t) => t.name).sort();
-    expect(names).toEqual(['listCells', 'whoami']);
-    expect(names).not.toContain('createCell');
+  it('read("$catalog") aggregates tier-1 + dynamic capabilities, scope-filtered', async () => {
+    cellTools = [
+      { name: 'x__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const cat = await callTool('creator', 'read', { target: '$catalog' });
+    const targets = ((cat.parsed as { capabilities: Array<{ target: string }> }).capabilities).map((c) => c.target).sort();
+    expect(targets).toEqual(['@alice/tools-demo.echo', 'forge.createCell', 'forge.listCells', 'workspace.recall', 'workspace.remember']);
+
+    // bob lacks platform:cells:create, so forge.createCell is filtered out.
+    const bobCat = await callTool('plain', 'read', { target: '$catalog' });
+    const bobTargets = ((bobCat.parsed as { capabilities: Array<{ target: string }> }).capabilities).map((c) => c.target);
+    expect(bobTargets).not.toContain('forge.createCell');
+    expect(bobTargets).toContain('workspace.recall');
   });
 
-  it('tools/call createCell enforces the scope and forwards to forge', async () => {
-    const ok = await mcp('creator', 'tools/call', { name: 'createCell', arguments: { name: 'notes', code: 'x' } });
-    expect(ok.result!.isError).toBeUndefined();
-    expect(lastForgeCall?.command).toBe('createCell');
-    expect(lastForgeCall?.payload).toEqual({ name: 'notes', code: 'x' });
-    const content = (ok.result!.content as Array<{ text: string }>)[0];
-    expect(JSON.parse(content.text)).toMatchObject({ address: '/@alice/notes', status: 'CREATING' });
+  it('read omitting target also returns the catalog', async () => {
+    const cat = await callTool('creator', 'read', {});
+    expect((cat.parsed as { capabilities: unknown[] }).capabilities.length).toBeGreaterThan(0);
   });
 
-  it('tools/call createCell without the scope is a tool error, and does not reach forge', async () => {
-    const denied = await mcp('plain', 'tools/call', { name: 'createCell', arguments: { name: 'x', code: 'y' } });
-    expect(denied.result!.isError).toBe(true);
-    expect((denied.result!.content as Array<{ text: string }>)[0].text).toMatch(/scope/i);
-    expect(lastForgeCall).toBeUndefined();
+  it('read forwards a read-kind capability to its cell', async () => {
+    const res = await callTool('creator', 'read', { target: 'workspace.recall', input: { elision: 'none' } });
+    expect(res.isError).toBeUndefined();
+    expect(lastCall).toEqual({ fn: 'workspace', command: 'recall', payload: { elision: 'none' } });
   });
 
-  it('tools/call whoami returns the identity (built-in tool)', async () => {
-    const res = await mcp('creator', 'tools/call', { name: 'whoami', arguments: {} });
-    const content = (res.result!.content as Array<{ text: string }>)[0];
-    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
+  it('act forwards an act-kind capability to its cell', async () => {
+    const res = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k', value: 1 } });
+    expect(res.isError).toBeUndefined();
+    expect(lastCall).toEqual({ fn: 'workspace', command: 'remember', payload: { key: 'k', value: 1 } });
+  });
+
+  it('act enforces the per-target scope (createCell needs platform:cells:create)', async () => {
+    const ok = await callTool('creator', 'act', { target: 'forge.createCell', input: { name: 'n', code: 'c' } });
+    expect(ok.isError).toBeUndefined();
+    expect(lastCall).toEqual({ fn: 'forge', command: 'createCell', payload: { name: 'n', code: 'c' } });
+
+    lastCall = undefined;
+    const denied = await callTool('plain', 'act', { target: 'forge.createCell', input: { name: 'n', code: 'c' } });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toMatch(/scope/i);
+    expect(lastCall).toBeUndefined(); // never forwarded
+  });
+
+  it('refuses to cross the read/act boundary', async () => {
+    const readAct = await callTool('creator', 'read', { target: 'workspace.remember' });
+    expect(readAct.isError).toBe(true);
+    expect(readAct.text).toMatch(/act/i);
+    expect(lastCall).toBeUndefined();
+
+    const actRead = await callTool('creator', 'act', { target: 'workspace.recall' });
+    expect(actRead.isError).toBe(true);
+    expect(actRead.text).toMatch(/read/i);
+    expect(lastCall).toBeUndefined();
+  });
+
+  it('act dispatches a dynamic-cell tool through forge.callCellTool', async () => {
+    cellTools = [
+      { name: 'x__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const res = await callTool('creator', 'act', { target: '@alice/tools-demo.echo', input: { message: 'hi' } });
+    expect(res.isError).toBeUndefined();
+    expect(lastCall).toEqual({
+      fn: 'forge',
+      command: 'callCellTool',
+      payload: { owner: 'alice', name: 'tools-demo', tool: 'echo', args: { message: 'hi' } },
+    });
+  });
+
+  it('unknown target is a tool error, not a transport error', async () => {
+    const res = await callTool('creator', 'act', { target: 'workspace.nope' });
+    expect(res.isError).toBe(true);
+    expect(res.text).toMatch(/unknown capability/i);
+  });
+
+  it('whoami returns the identity (built-in tool)', async () => {
+    const res = await callTool('creator', 'whoami', {});
+    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
   });
 
   it('resolves identity from x-forwarded-authorization (edge preserves bearer past OAC)', async () => {
-    // CloudFront OAC overwrites Authorization with its SigV4 signature; the edge
-    // copies the viewer bearer into x-forwarded-authorization for the origin.
     const res = (await gateway(
       httpEvent('POST', '/mcp', {
         headers: { 'x-forwarded-authorization': 'Bearer creator' },
@@ -142,41 +202,6 @@ describe('resource cell (MCP gateway)', () => {
     )) as FunctionUrlResponse;
     const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
     expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
-  });
-
-  it('tools/list folds in dynamic-cell tools discovered from the registry', async () => {
-    cellTools = [
-      {
-        name: 'notes-abc12345__add',
-        description: 'Add a note.',
-        inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
-        scope: null,
-        cellId: 'notes-abc12345',
-        tool: 'add',
-      },
-    ];
-    const list = await mcp('creator', 'tools/list');
-    const names = (list.result!.tools as Array<{ name: string }>).map((t) => t.name).sort();
-    expect(names).toContain('notes-abc12345__add');
-    // kernel tools remain present
-    expect(names).toContain('createCell');
-  });
-
-  it('tools/call on a dynamic-cell tool forwards through forge.callCellTool', async () => {
-    cellTools = [
-      {
-        name: 'notes-abc12345__add',
-        description: 'Add a note.',
-        inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
-        scope: null,
-        cellId: 'notes-abc12345',
-        tool: 'add',
-      },
-    ];
-    const res = await mcp('creator', 'tools/call', { name: 'notes-abc12345__add', arguments: { text: 'hi' } });
-    expect(res.result!.isError).toBeUndefined();
-    expect(lastForgeCall?.command).toBe('callCellTool');
-    expect(lastForgeCall?.payload).toEqual({ cellId: 'notes-abc12345', tool: 'add', args: { text: 'hi' } });
   });
 
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {

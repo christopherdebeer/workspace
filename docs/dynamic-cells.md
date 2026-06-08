@@ -149,37 +149,54 @@ clean teardown, tags carry ownership, and a failed create rolls back.
 
 **`/mcp` gateway (the `resource` cell)**
 The single authenticated MCP surface (and the OAuth-protected resource the auth
-cell advertises). It is a `defineMcpService` whose tool list is **aggregated per
-request** from provider cells: it calls each provider's `describeTools`,
-advertises only the tools the caller is entitled to (scope filtering), enforces
-each tool's scope, and **forwards `tools/call`** to the owning cell. So `/mcp`
-exposes all cells' tools governed by auth + ownership + scopes — and a new
-dynamic cell's tools can appear there with no gateway change. It is the **policy
-enforcement point**: scopes are checked here (the backend receives only the
-caller's `user` and authorises by ownership).
+cell advertises). It is a `defineMcpService` exposing a deliberately tiny,
+**stable** tool list — `whoami`, `read`, `act` — where all capability lives in the
+*arguments*, not the tool names. It is the **policy enforcement point**: each
+capability's scope is checked here against the caller before forwarding, and the
+backend receives only the caller's `user` and authorises by ownership.
 
-Two aggregation paths feed the gateway's tool list:
+**Why `read`/`act` instead of one named tool per capability.** Named MCP tools are
+cached by clients at connect, so a newly added capability (a new cell, a new
+command) does not appear until the client *reconnects*. A stable two-verb surface
+sidesteps that entirely: the tool list never changes, so a capability is callable
+the instant it exists — **true dynamism, no reconnect**. It also mirrors the
+substrate's own read/put duality, lifted to the whole platform: `read` observes,
+`act` effects.
 
-- **Tier-1 providers** are an explicit, reviewed list (`PROVIDERS = ['forge',
-  'workspace', …]`). Kernel cells are few and reached by name over an allow-listed
-  invoke, so naming them in the gateway is honest — but it does mean a *new tier-1
-  provider* is a code change. (That is the right trade for the reviewed core.)
-- **Tier-2 (dynamic) cell tools are registry-driven.** `resolveTools` also calls
-  `forge.describeCellTools`, which enumerates the caller's accessible ACTIVE cells
-  (`listAccessibleBy`) and asks each — best-effort — what tools it advertises. So a
-  cell **created at runtime contributes tools to `/mcp` with no gateway change and
-  no `cdk deploy`**. Calls forward through `forge.callCellTool`, which authorises by
-  ownership exactly like `callCell`.
+```
+read({ target?, input? })   // side-effect-free. target "$catalog" (or omitted)
+                            //   → the capability menu, as data, always current
+act ({ target, input? })    // may mutate
+```
 
-  **The cell-tool convention** (deliberately tiny, opt-in):
-  - `GET  /_tools`        → `{ tools: [{ name, description, inputSchema, scope? }] }`
+A `target` is a **dotted address**, resolved per request from one capability
+registry:
+
+- `<cell>.<command>` — **tier-1** kernel cells, an explicit reviewed allow-list
+  (`PROVIDERS = ['workspace','forge']`), reached by name over an allow-listed
+  invoke. e.g. `workspace.recall`, `forge.createCell`.
+- `@<owner>/<cell>.<tool>` — **tier-2** dynamic cells, **registry-driven**: the
+  gateway resolves via `forge.describeCellTools` (which enumerates the caller's
+  accessible ACTIVE cells, or one cell given an owner+name selector) and forwards
+  via `forge.callCellTool`, authorised by ownership. So a cell **created at runtime
+  is callable through `act`/`read` with no gateway change and no `cdk deploy`** —
+  and, because the tool list is fixed, with no reconnect either.
+
+Each capability declares `kind: 'read' | 'act'`; the gateway routes `read` to
+read-kind targets (plus the `$catalog`) and `act` to act-kind targets, refusing to
+cross the boundary. `read("$catalog")` returns the menu scope-filtered to what the
+caller may use.
+
+**The cell-tool convention** (deliberately tiny, opt-in — how a dynamic cell joins
+the surface):
+  - `GET  /_tools`        → `{ tools: [{ name, description, inputSchema, scope?, kind? }] }`
   - `POST /_tools/<name>` → (JSON body = arguments) → the tool's result
 
-  Gateway-facing tool names are namespaced `&lt;cellId&gt;__&lt;tool&gt;` so they never
-  collide with kernel tools or across cells; a cell that doesn't answer `/_tools`
-  simply contributes nothing. Discovery is capped (`MAX_TOOL_CELLS`) and probes
-  cells live per `tools/list`; caching each cell's manifest in the registry is the
-  obvious next optimisation.
+A cell that doesn't answer `/_tools` simply contributes nothing. Discovery is
+capped (`MAX_TOOL_CELLS`) and, for the catalog, probes cells live; caching each
+cell's manifest in the registry is the obvious next optimisation. (`callCell`
+remains the lower-level generic invoke; `act` is the policy-enforced, registry-
+addressed surface over it.)
 
 **`forge` — the control plane (backend tool-provider, no public route)**
 Reachable only via allow-listed invokes (from the gateway and `dispatch`). It

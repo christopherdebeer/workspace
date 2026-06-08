@@ -318,15 +318,40 @@ describe('forge: backend commands', () => {
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
 
-    const res = await call<{ tools: Array<{ name: string; cellId: string; tool: string; scope: string | null }> }>(
+    const res = await call<{ tools: Array<{ name: string; address: string; cellId: string; tool: string; scope: string | null; kind: string }> }>(
       'alice',
       'describeCellTools',
       {},
     );
     expect(res.ok).toBe(true);
     expect(res.result!.tools).toEqual([
-      expect.objectContaining({ name: `${cell.cellId}__add`, cellId: cell.cellId, tool: 'add', scope: null }),
+      expect.objectContaining({
+        name: `${cell.cellId}__add`,
+        address: '@alice/notes',
+        cellId: cell.cellId,
+        tool: 'add',
+        scope: null,
+        kind: 'act', // default when the manifest omits kind
+      }),
     ]);
+  });
+
+  it('describeCellTools resolves a single cell when given an owner+name selector', async () => {
+    lambdaResponse = {
+      statusCode: 200,
+      body: JSON.stringify({ tools: [{ name: 'add', description: 'Add.', inputSchema: { type: 'object' }, kind: 'read' }] }),
+    };
+    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    await reg.setStatus(cell.cellId, 'ACTIVE');
+
+    const hit = await call<{ tools: Array<{ tool: string; kind: string }> }>('alice', 'describeCellTools', { owner: 'alice', name: 'notes' });
+    expect(hit.result!.tools).toEqual([expect.objectContaining({ tool: 'add', kind: 'read' })]);
+
+    // A selector that doesn't resolve to an accessible ACTIVE cell yields nothing.
+    const miss = await call<{ tools: unknown[] }>('alice', 'describeCellTools', { owner: 'alice', name: 'ghost' });
+    expect(miss.result!.tools).toEqual([]);
   });
 
   it('describeCellTools skips cells that are not ACTIVE', async () => {

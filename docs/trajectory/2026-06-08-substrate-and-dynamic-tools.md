@@ -24,6 +24,14 @@
 3. **#116 — Registry-driven gateway: dynamic cells contribute tools, no deploy.**
    `forge.describeCellTools` / `forge.callCellTool`; the gateway folds dynamic
    cells' tools into `tools/list`. Adding tool surface no longer needs a deploy.
+4. **#119 — read/act gateway surface (replaces named-tool aggregation).** The
+   `/mcp` gateway now exposes just `whoami`/`read`/`act`; capability lives in the
+   *arguments* (`target` = `workspace.recall` or `@owner/cell.tool`), discovered
+   via `read("$catalog")`. The tool list is fixed, so new capability is callable
+   with **no reconnect** — true dynamism. Each capability declares `kind:read|act`;
+   the gateway enforces per-target scope and the read/act boundary. **Behaviour
+   change:** named tools (`remember`/`recall`/`createCell`/…) are no longer
+   advertised individually — call them via `read`/`act`.
 
 ## Verified live this session
 
@@ -209,9 +217,9 @@ The platform already has the same escape hatch: **`callCell` is the generic
 it worked instantly with no new tool appearing; the namespaced
 `tools-demo-…__echo` is just discoverability sugar that needs a reconnect.
 **Takeaway:** prefer a generic `act`/`read` dispatch as the dynamic surface, and
-treat aggregated named tools as an optional, cache-bound convenience. A natural
-follow-up is a gateway `act`/`read` pair so userland capability is callable the
-instant it exists.
+treat aggregated named tools as an optional, cache-bound convenience. **Done in
+#119** — the gateway is now `whoami`/`read`/`act`; userland capability is callable
+the instant it exists (no reconnect).
 
 ## Open threads (after validation)
 

@@ -109,6 +109,8 @@ interface ToolDescriptor {
   inputSchema: Record<string, unknown>;
   /** Scope the gateway enforces before forwarding (null = any authenticated user). */
   scope: string | null;
+  /** `read` = side-effect-free (observe); `act` = may mutate. Routes read/act dispatch. */
+  kind: 'read' | 'act';
 }
 
 /**
@@ -122,6 +124,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'remember',
     description: 'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost.',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
@@ -138,6 +141,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       'Your workspace view: your own slice plus everything shared with you, salience-shaped into focus/peripheral/elided. Granted facts appear under `<owner>/<key>`.',
     scope: null,
+    kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
@@ -152,6 +156,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'peek',
     description: 'Read one fact by key from your slice (no salience shaping).',
     scope: null,
+    kind: 'read',
     inputSchema: {
       type: 'object',
       properties: { key: { type: 'string', description: 'Fact key to read' } },
@@ -163,6 +168,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'supersede',
     description: 'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key.',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
@@ -177,6 +183,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'share',
     description: 'Expose a fact (or your whole slice, if `key` is omitted) to another user, so it appears in their recall.',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
@@ -191,6 +198,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'unshare',
     description: 'Revoke a share previously made with `share`.',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,6 +213,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'shared',
     description: 'List what you have shared with others and what others have shared with you.',
     scope: null,
+    kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ];

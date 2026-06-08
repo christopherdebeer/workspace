@@ -1,15 +1,29 @@
 /**
  * The platform MCP **gateway** — owns `/mcp`, the single authenticated MCP
- * surface and the resource the auth cell advertises in its protected-resource
- * metadata.
+ * surface (and the OAuth-protected resource the auth cell advertises).
  *
- * It is a `defineMcpService` whose tool list is aggregated, per request, from
- * the platform's tool-provider cells (currently `forge`): it calls each
- * provider's `describeTools`, advertises only the tools the caller is entitled
- * to (scope filtering), enforces the tool's scope, and forwards `tools/call` to
- * the owning cell — which authorises by ownership. So `/mcp` exposes all cells'
- * tools governed by auth + ownership + scopes, and a newly-created dynamic cell's
- * tools can appear here with no gateway change.
+ * It exposes a deliberately tiny, **stable** tool surface: `whoami`, `read`, and
+ * `act`. All platform capability lives in their *arguments*, not the tool list —
+ * so a new cell, command, or dynamic-cell tool becomes callable the instant it
+ * exists, with no `tools/list` change and no client reconnect. This is the "true
+ * dynamism" the named-tool aggregation could not give (named tools are cached by
+ * clients at connect). It mirrors the substrate's own read/put duality, lifted to
+ * the whole platform: `read` observes, `act` effects.
+ *
+ *   read({ target?, input? })   — observe; side-effect-free. target "$catalog"
+ *                                 (or omitted) returns the capability menu *as
+ *                                 data*, always current.
+ *   act ({ target, input? })    — invoke a mutating capability.
+ *
+ * A `target` is a dotted address:
+ *   - `<cell>.<command>`        for tier-1 kernel cells (`workspace.recall`, …)
+ *   - `@<owner>/<cell>.<tool>`  for tier-2 dynamic cells (`@alice/notes.add`)
+ *
+ * One capability registry, resolved per request from the same providers the cells
+ * already describe (`describeTools` for tier-1, `describeCellTools` for tier-2);
+ * `read`/`act` are two projections of it. The gateway is the policy enforcement
+ * point: each capability's scope is checked against the caller before forwarding,
+ * and `read`/`act` refuse to cross the read/act boundary.
  *
  * Identity arrives already validated (this cell lists `auth` in `allow[]`);
  * unauthenticated calls get `401 + WWW-Authenticate` so clients can discover the
@@ -17,6 +31,8 @@
  */
 import {
   defineMcpService,
+  hasScope,
+  requireScope,
   McpToolDefinition,
   ServiceContext,
   ServiceHttpRequest,
@@ -25,26 +41,50 @@ import {
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
-/**
- * Tier-1 (kernel) cells that contribute tools to the gateway. These are few,
- * reviewed, and reached by name over an allow-listed invoke — so they stay an
- * explicit list. Tier-2 *dynamic* cells' tools are discovered at runtime from
- * the registry (see `resolveTools` → `forge.describeCellTools`), so adding those
- * never touches this gateway.
- */
-const PROVIDERS = ['forge', 'workspace'] as const;
+/** Tier-1 (kernel) cells whose commands are dispatchable. Few, reviewed, IAM-granted. */
+const PROVIDERS = ['workspace', 'forge'] as const;
 
-interface ToolDescriptor {
+/** Sentinel target for the capability menu. */
+const CATALOG = '$catalog';
+
+/** A tier-1 tool as returned by a provider's `describeTools`. */
+interface ProviderTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
   scope: string | null;
+  kind: 'read' | 'act';
 }
 
-/** A dynamic-cell tool descriptor carries the routing forge needs to forward it. */
-interface CellToolDescriptor extends ToolDescriptor {
+/** A tier-2 dynamic-cell tool as returned by `forge.describeCellTools`. */
+interface CellTool {
+  name: string;
+  address: string; // `@<owner>/<slug>`
+  description: string;
+  inputSchema: Record<string, unknown>;
+  scope: string | null;
+  kind: 'read' | 'act';
   cellId: string;
   tool: string;
+}
+
+/** A resolved, dispatchable capability. */
+interface Capability {
+  target: string;
+  kind: 'read' | 'act';
+  description: string;
+  inputSchema: Record<string, unknown>;
+  scope: string | null;
+  forward: (input: unknown, ctx: ServiceContext) => Promise<unknown>;
+}
+
+/** One entry in the `read("$catalog")` menu. */
+interface CatalogEntry {
+  target: string;
+  kind: 'read' | 'act';
+  description: string;
+  inputSchema: Record<string, unknown>;
+  scope: string | null;
 }
 
 function baseUrl(req: ServiceHttpRequest): string {
@@ -53,7 +93,6 @@ function baseUrl(req: ServiceHttpRequest): string {
 }
 
 function unauthorized(req: ServiceHttpRequest, error: string): ServiceHttpResponse {
-  // RFC 9728 path-suffixed PRM location for the `/mcp` resource.
   const metadata = `${baseUrl(req)}/.well-known/oauth-protected-resource/mcp`;
   return {
     statusCode: 401,
@@ -62,64 +101,159 @@ function unauthorized(req: ServiceHttpRequest, error: string): ServiceHttpRespon
   };
 }
 
-// ─── built-in tool ───────────────────────────────────────────────
-
-function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[] } {
-  return { user: ctx.identity.user ?? 'anonymous', scopes: ctx.identity.scopes };
-}
-
-// ─── aggregation ─────────────────────────────────────────────────
+// ─── resolution ───────────────────────────────────────────────────
 
 /**
- * Ask each provider for its tools and turn them into gateway tools whose handler
- * forwards `tools/call` to that provider (carrying the caller's identity). The
- * gateway enforces each tool's scope; the provider authorises by ownership.
+ * Resolve a concrete `target` to a dispatchable capability, fetching only what
+ * that target needs (its provider's describe, not the whole registry). Returns
+ * `null` for an unknown/unaddressable target.
  */
-async function resolveTools(ctx: ServiceContext): Promise<Record<string, McpToolDefinition>> {
-  const tools: Record<string, McpToolDefinition> = {};
-  for (const provider of PROVIDERS) {
-    let descriptors: ToolDescriptor[];
+async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capability | null> {
+  if (target.startsWith('@')) {
+    // @<owner>/<slug>.<tool>
+    const slash = target.indexOf('/');
+    const dot = target.lastIndexOf('.');
+    if (slash < 0 || dot < slash + 1) return null;
+    const owner = target.slice(1, slash);
+    const name = target.slice(slash + 1, dot);
+    const tool = target.slice(dot + 1);
+    if (!owner || !name || !tool) return null;
+    const res = await ctx
+      .serviceClient('forge')
+      .command<{ tools: CellTool[] }>('describeCellTools', { owner, name });
+    const d = res?.tools?.find((t) => t.tool === tool);
+    if (!d) return null;
+    return {
+      target,
+      kind: d.kind,
+      description: d.description,
+      inputSchema: d.inputSchema,
+      scope: d.scope,
+      forward: (input, c) => c.serviceClient('forge').command('callCellTool', { owner, name, tool, args: input ?? {} }),
+    };
+  }
+
+  // <cell>.<command>
+  const dot = target.indexOf('.');
+  if (dot < 1) return null;
+  const cell = target.slice(0, dot);
+  const command = target.slice(dot + 1);
+  if (!(PROVIDERS as readonly string[]).includes(cell) || !command) return null;
+  const res = await ctx.serviceClient(cell).command<{ tools: ProviderTool[] }>('describeTools', {});
+  const d = res?.tools?.find((t) => t.name === command);
+  if (!d) return null;
+  return {
+    target,
+    kind: d.kind,
+    description: d.description,
+    inputSchema: d.inputSchema,
+    scope: d.scope,
+    forward: (input, c) => c.serviceClient(cell).command(command, input ?? {}),
+  };
+}
+
+/** The capability menu, aggregated from all providers and filtered to the caller's scopes. */
+async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
+  const caps: CatalogEntry[] = [];
+
+  for (const cell of PROVIDERS) {
     try {
-      const res = await ctx.serviceClient(provider).command<{ tools: ToolDescriptor[] }>('describeTools', {});
-      descriptors = res?.tools ?? [];
+      const res = await ctx.serviceClient(cell).command<{ tools: ProviderTool[] }>('describeTools', {});
+      for (const t of res?.tools ?? []) {
+        caps.push({ target: `${cell}.${t.name}`, kind: t.kind, description: t.description, inputSchema: t.inputSchema, scope: t.scope ?? null });
+      }
     } catch (err) {
-      ctx.logger.warn('provider describeTools failed', { provider, error: (err as Error).message });
-      continue;
-    }
-    for (const d of descriptors) {
-      // On collision, first (kernel) provider wins.
-      if (tools[d.name]) continue;
-      tools[d.name] = {
-        description: d.description,
-        inputSchema: d.inputSchema,
-        scope: d.scope ?? undefined,
-        handler: (args: unknown, c: ServiceContext) => c.serviceClient(provider).command(d.name, args ?? {}),
-      };
+      ctx.logger.warn('provider describeTools failed', { cell, error: (err as Error).message });
     }
   }
 
-  // Registry-driven: fold in the tools the caller's dynamic cells advertise.
-  // forge enumerates the caller's accessible cells and probes each, so a cell
-  // created at runtime appears here with no gateway change. Calls are forwarded
-  // through `forge.callCellTool`, which authorises by ownership.
   try {
-    const res = await ctx.serviceClient('forge').command<{ tools: CellToolDescriptor[] }>('describeCellTools', {});
-    for (const d of res?.tools ?? []) {
-      if (tools[d.name]) continue; // kernel tools win on collision
-      tools[d.name] = {
-        description: d.description,
-        inputSchema: d.inputSchema,
-        scope: d.scope ?? undefined,
-        handler: (args: unknown, c: ServiceContext) =>
-          c.serviceClient('forge').command('callCellTool', { cellId: d.cellId, tool: d.tool, args: args ?? {} }),
-      };
+    const res = await ctx.serviceClient('forge').command<{ tools: CellTool[] }>('describeCellTools', {});
+    for (const t of res?.tools ?? []) {
+      caps.push({ target: `${t.address}.${t.tool}`, kind: t.kind, description: t.description, inputSchema: t.inputSchema, scope: t.scope ?? null });
     }
   } catch (err) {
     ctx.logger.warn('dynamic cell tools aggregation failed', { error: (err as Error).message });
   }
 
-  return tools;
+  // Advertise only what the caller is entitled to use.
+  return caps.filter((c) => !c.scope || hasScope(ctx.identity, c.scope));
 }
+
+// ─── the two tools ────────────────────────────────────────────────
+
+interface DispatchInput {
+  target?: string;
+  input?: unknown;
+}
+
+async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
+  const target = (input?.target ?? '').trim();
+  if (!target || target === CATALOG) {
+    return { capabilities: await buildCatalog(ctx) };
+  }
+  const cap = await resolveTarget(ctx, target);
+  if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
+  if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
+  if (cap.scope) requireScope(ctx.identity, cap.scope);
+  return cap.forward(input?.input, ctx);
+}
+
+async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
+  const target = (input?.target ?? '').trim();
+  if (!target) throw new Error(`act requires a \`target\`. Use read("${CATALOG}") to list capabilities.`);
+  const cap = await resolveTarget(ctx, target);
+  if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
+  if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
+  if (cap.scope) requireScope(ctx.identity, cap.scope);
+  return cap.forward(input?.input, ctx);
+}
+
+function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[] } {
+  return { user: ctx.identity.user ?? 'anonymous', scopes: ctx.identity.scopes };
+}
+
+const TARGET_PROP = {
+  type: 'string',
+  description:
+    'Dotted capability address: "<cell>.<command>" (e.g. workspace.recall) or "@<owner>/<cell>.<tool>" (e.g. @alice/notes.add).',
+};
+const INPUT_PROP = { type: 'object', description: 'Arguments for the capability.', additionalProperties: true };
+
+const READ_SCHEMA = {
+  type: 'object',
+  properties: {
+    target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
+    input: INPUT_PROP,
+  },
+  additionalProperties: false,
+};
+const ACT_SCHEMA = {
+  type: 'object',
+  properties: { target: TARGET_PROP, input: INPUT_PROP },
+  required: ['target'],
+  additionalProperties: false,
+};
+
+const tools: Record<string, McpToolDefinition> = {
+  whoami: {
+    description: 'Return the authenticated principal and granted scopes.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: whoamiTool,
+  },
+  read: {
+    description:
+      'Observe a platform capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect.',
+    inputSchema: READ_SCHEMA,
+    handler: read as McpToolDefinition['handler'],
+  },
+  act: {
+    description:
+      'Invoke a platform capability that may mutate (e.g. workspace.remember, forge.createCell, @owner/cell.tool). Discover targets with read("$catalog").',
+    inputSchema: ACT_SCHEMA,
+    handler: act as McpToolDefinition['handler'],
+  },
+};
 
 // ─── human/browser discovery ─────────────────────────────────────
 
@@ -138,7 +272,8 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
       authorization_servers: [origin],
       transport: 'streamable-http',
       mcp_endpoint: `${origin}/mcp`,
-      note: 'Tool list is aggregated from platform cells and filtered by your scopes; call tools/list with a bearer.',
+      tools: ['whoami', 'read', 'act'],
+      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer to list what you can do.',
     },
   };
 }
@@ -147,14 +282,7 @@ export const handler = defineMcpService({
   name: 'resource',
   mcpPath: '/mcp',
   serverInfo: { name: 'workspace', version: '1.0.0' },
-  tools: {
-    whoami: {
-      description: 'Return the authenticated principal and granted scopes.',
-      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: whoamiTool,
-    },
-  },
-  resolveTools,
+  tools,
   http: [
     { method: 'GET', path: '/mcp', handler: info },
     { method: 'GET', path: '/mcp/whoami', handler: whoamiHttp },

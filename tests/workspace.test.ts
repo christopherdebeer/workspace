@@ -148,5 +148,9 @@ describe('workspace sharing / view layer', () => {
     expect(tools.every((t) => (t.inputSchema as { type?: string }).type === 'object')).toBe(true);
     const remember = tools.find((t) => t.name === 'remember')!;
     expect(remember.inputSchema).toMatchObject({ required: ['key', 'value'] });
+    // Each tool declares read/act so the gateway can route read vs act dispatch.
+    expect(remember.kind).toBe('act');
+    expect(tools.find((t) => t.name === 'recall')!.kind).toBe('read');
+    expect(new Set(tools.map((t) => t.kind))).toEqual(new Set(['read', 'act']));
   });
 });
