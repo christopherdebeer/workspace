@@ -105,7 +105,7 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
       persistence: { dynamo: true, dynamoTtl: true },
-      commands: ['remember', 'recall', 'peek', 'supersede', 'share', 'unshare', 'shared'],
+      commands: ['remember', 'recall', 'peek', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared'],
       eventBus,
     });
@@ -179,6 +179,9 @@ export class PlatformStack extends cdk.Stack {
     // permission). Neither reads forge's table directly.
     resource.allow(forge);
     dispatch.allow(forge);
+    // The gateway also aggregates the workspace cell's tools (remember/recall/
+    // share/…): it calls workspace.describeTools and forwards tools/call to it.
+    resource.allow(workspace);
     // The home cell's `/_catalog` resolves the caller's bearer (auth) and merges
     // in the dynamic cells they own or were granted (forge.catalogCells), so the
     // self-model surfaces tier-2 cells beside the static tier-1 manifests.

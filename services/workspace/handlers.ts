@@ -99,7 +99,115 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
   shared: CommandHandler<undefined, SharedResult>;
+  describeTools: CommandHandler<undefined, { tools: ToolDescriptor[] }>;
 }
+
+/** How the `/mcp` gateway discovers and advertises a cell's tools. */
+interface ToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  /** Scope the gateway enforces before forwarding (null = any authenticated user). */
+  scope: string | null;
+}
+
+/**
+ * The workspace vocabulary as MCP tool descriptors. Every command operates on the
+ * caller's own slice (or subsets explicitly granted to them), so ownership — not a
+ * scope — is the gate: `scope: null` means any authenticated principal, isolated to
+ * their own data, exactly as forge treats its per-owner commands.
+ */
+const TOOL_DESCRIPTORS: ToolDescriptor[] = [
+  {
+    name: 'remember',
+    description: 'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Fact key within your slice' },
+        value: { description: 'Any JSON value to remember' },
+        via: { type: 'string', description: 'Optional label for how this was written (e.g. an action name)' },
+      },
+      required: ['key', 'value'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'recall',
+    description:
+      'Your workspace view: your own slice plus everything shared with you, salience-shaped into focus/peripheral/elided. Granted facts appear under `<owner>/<key>`.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elision: { type: 'string', enum: ['auto', 'none'], description: "'auto' hides elided values; 'none' returns everything" },
+        expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
+        includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'peek',
+    description: 'Read one fact by key from your slice (no salience shaping).',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'Fact key to read' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'supersede',
+    description: 'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Fact key to retire' },
+        by: { type: 'string', description: 'Optional successor key' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'share',
+    description: 'Expose a fact (or your whole slice, if `key` is omitted) to another user, so it appears in their recall.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'The user to share with' },
+        key: { type: 'string', description: 'A specific fact key, or omit to share your whole slice' },
+      },
+      required: ['to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'unshare',
+    description: 'Revoke a share previously made with `share`.',
+    scope: null,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'The user to revoke' },
+        key: { type: 'string', description: 'The fact key, or omit for the whole-slice share' },
+      },
+      required: ['to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'shared',
+    description: 'List what you have shared with others and what others have shared with you.',
+    scope: null,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+];
 
 /** Build the workspace vocabulary over a given way of constructing its deps. */
 export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
@@ -183,6 +291,11 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { grants } = build(ctx);
       const [shared, receiving] = await Promise.all([grants.listByOwner(me), grants.listForGrantee(me)]);
       return { shared, receiving };
+    },
+
+    // How the `/mcp` gateway discovers this cell's tools (mirrors forge.describeTools).
+    async describeTools() {
+      return { tools: TOOL_DESCRIPTORS };
     },
   };
 }
