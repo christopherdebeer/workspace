@@ -33,9 +33,38 @@
   already holds a **`substrate-on-cells`** knowledge graph (keys `e:*` entries,
   `l:*` links, a `meta:schema` decision) — i.e. the primitives are already in real
   use. So **#114 and #115 are proven live.**
-- `listCells` → one ACTIVE dynamic cell, `hello-parc-e6badc9b` (the original E2E
-  smoke cell). #116's dynamic-tool path is **unit-tested + deployed but not yet
-  exercised live** — that's the next step below.
+- `listCells` → ACTIVE dynamic cells (`hello-parc-e6badc9b`, plus the
+  `tools-demo-a7f8a39e` validation cell below).
+- **#116 validated live** ✓ — see next section. The registry-driven gateway
+  discovered a runtime-created cell's tool with no deploy.
+
+---
+
+## DONE — #116 validated live (2026-06-08)
+
+Proven end-to-end against `parc.land`, no `cdk deploy`:
+
+1. `createCell name=tools-demo` (the `/_tools` echo cell) → `tools-demo-a7f8a39e`,
+   polled `getCell` → `ACTIVE`.
+2. `callCell GET /_tools` → returned the `echo` manifest; `callCell POST
+   /_tools/echo {message}` → `{ echoed, at }`. Convention works.
+3. **Gateway aggregation confirmed from the cell's own logs.** Only
+   `forge.invokeCell` ever calls a cell's handler (via `callCell` *or*
+   `describeCellTools`); `getCell`/`createCell` touch CloudFormation, not the
+   handler. The logs showed **4 invocations** but only **2** were my manual
+   `callCell`s — the **2 extra**, firing right after ACTIVE and before my calls,
+   are the gateway's `describeCellTools` discovery probes (`GET /_tools`) during
+   `tools/list`, returning 200. So the cell's `echo` was folded into the gateway
+   tool list as `tools-demo-a7f8a39e__echo` with no deploy.
+
+Caveat (not a defect): an already-connected MCP client caches `tools/list` at
+connect, so the namespaced tool only shows in its palette after a reconnect /
+fresh session. A fresh session will see `tools-demo-a7f8a39e__echo` directly.
+(The sync server sidesteps this entirely with a two-tool **read/act** surface —
+dynamism in the *arguments*, not the tool list — see the contrast note below.)
+
+> The `tools-demo-a7f8a39e` cell was left ACTIVE as living proof; `deleteCell` it
+> when no longer needed.
 
 ---
 
@@ -78,9 +107,11 @@ Gateway-facing names are namespaced `<cellId>__<tool>`. A cell that ignores
 
 ---
 
-## NEXT STEP — live end-to-end validation of #116 (not yet done)
+## Validation recipe (DONE 2026-06-08 — kept so it's reproducible)
 
-Goal: prove a runtime-created cell's tools appear at `parc.land/mcp` with no deploy.
+Goal: prove a runtime-created cell's tools appear at `parc.land/mcp` with no
+deploy. Ran successfully this session (see "DONE — #116 validated live" above);
+reproduce it like so:
 
 1. `createCell` with `name: "tools-demo"` and the code below.
 2. Poll `getCell` until `status: "ACTIVE"` (tens of seconds).
@@ -133,6 +164,54 @@ Expected outcome: `tools-demo-<hash>__echo` shows up in `tools/list` and returns
 the echo — closing the loop that #116 makes possible without a `cdk deploy`.
 
 ---
+
+## Contrast — legacy substrate (cb2166bd) vs new platform workspace (f5bbef8d)
+
+Both are connected and usable in-session; I exercised each (legacy: `stats` +
+`search`; new: `whoami` + `recall` + `createCell`/`callCell`/`cellLogs`).
+
+**Legacy `workspace_*` (sync's substrate, server `cb2166bd`) — the tended garden.**
+A mature knowledge product: 386 typed entries, 834 links, 76 runs. Model = typed
+entries (knowledge/project/decision/todo/audit/…) + first-class links (a real
+graph) + tags + *stored* salience + routines/runs/**protocols** (an execution
+loop) + autonomous **tending** — a daily cron-fired protocol that walks source
+surfaces, audits tag-shape/salience, dispatches specialists, and self-registers
+(observed live: a v4 tending run + audit written this morning). ~15 specific
+tools. Opinionated, batteries-included; it performs the *active-curation* half
+itself.
+
+**New platform `workspace` (this repo, server `f5bbef8d`) — the substrate primitive.**
+A minimal observed-state floor: flat `key → {value,_meta}` facts, revisions,
+server-stamped provenance, **read-time** salience shaping, supersede, per-user
+sharing/views. 7 tools. Unopinionated: no types, no native links, no routines, no
+tending — those are *conventions on top*. Exactly what the live slice shows: a
+`substrate-on-cells` project reifying entries as `e:` facts and links as `l:`
+facts — **re-deriving the legacy model atop the new primitives.**
+
+So: legacy is the proven incumbent that already does active curation; the new
+platform is a more primitive, multi-tenant, AWS-native re-foundation **plus** a
+reflexive cell platform onto which those capabilities are being rebuilt (typed
+graph via conventions; the `tend` loop via a dynamic cell — the
+`gap-execution-needs-cells` todo already sitting in the live slice).
+
+### The "two-tool" dynamism note (the important one)
+
+Named MCP tools are cached by clients at connect, so adding a capability needs a
+reconnect to appear — the caveat I hit with #116's `<cellId>__tool` names.
+
+Sync's answer (server `a103e063`) is **two stable tools — `read` and `act`** —
+where the capability lives in the *arguments*, not the tool name. The tool list
+never changes, so a brand-new capability is callable *immediately*, no reconnect.
+True dynamism.
+
+The platform already has the same escape hatch: **`callCell` is the generic
+`act`.** Proven this session — I invoked the new cell's `echo` via `callCell` and
+it worked instantly with no new tool appearing; the namespaced
+`tools-demo-…__echo` is just discoverability sugar that needs a reconnect.
+**Takeaway:** prefer a generic `act`/`read` dispatch as the dynamic surface, and
+treat aggregated named tools as an optional, cache-bound convenience. A natural
+follow-up is a gateway `act`/`read` pair so userland capability is callable the
+instant it exists.
 
 ## Open threads (after validation)
 
