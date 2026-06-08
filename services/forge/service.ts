@@ -424,31 +424,49 @@ const SAFE_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 interface CellToolDescriptor {
   /** Gateway-facing name, namespaced by cellId so it never collides. */
   name: string;
+  /** Dotted target the gateway advertises: `@<owner>/<slug>.<tool>`. */
+  address: string;
   description: string;
   inputSchema: Record<string, unknown>;
   scope: string | null;
+  /** `read` = side-effect-free; `act` = may mutate. From the cell's manifest (default act). */
+  kind: 'read' | 'act';
   cellId: string;
   /** The cell's own (un-namespaced) tool name, used to route the call. */
   tool: string;
 }
 
+/** Selector: omit to enumerate all accessible cells (catalog); give one to resolve a single target. */
+interface DescribeCellToolsInput {
+  cellId?: string;
+  owner?: string;
+  name?: string;
+}
+
 /**
- * Ask each accessible ACTIVE cell what tools it advertises. Best-effort and
- * registry-driven: enumeration is scoped to the caller's own/granted cells
- * (`listAccessibleBy`), and a cell that errors or advertises nothing is simply
- * skipped. The gateway forwards calls to these tools via `callCellTool`.
+ * Ask cells what tools they advertise. Registry-driven and best-effort: with no
+ * selector it enumerates the caller's own/granted ACTIVE cells (`listAccessibleBy`)
+ * for the gateway's `read("$catalog")`; with a selector it resolves a single cell
+ * (cheap path for a concrete `read`/`act` target). A cell that errors or advertises
+ * nothing is skipped. The gateway forwards calls via `callCellTool`.
  */
-async function describeCellTools(_input: unknown, ctx: ServiceContext): Promise<{ tools: CellToolDescriptor[] }> {
+async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx: ServiceContext): Promise<{ tools: CellToolDescriptor[] }> {
   const user = requireUser(ctx.identity);
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
-  const cells = (await registry.listAccessibleBy(user))
-    .filter((c) => c.status === 'ACTIVE')
-    .slice(0, MAX_TOOL_CELLS);
+
+  let cells: CellRecord[];
+  if (input?.cellId || (input?.owner && input?.name)) {
+    const rec = await registry.get(resolveCellId(input));
+    cells = rec && rec.grants.includes(user) && rec.status === 'ACTIVE' ? [rec] : [];
+  } else {
+    cells = (await registry.listAccessibleBy(user)).filter((c) => c.status === 'ACTIVE').slice(0, MAX_TOOL_CELLS);
+  }
 
   const out: CellToolDescriptor[] = [];
   await Promise.all(
     cells.map(async (cell) => {
+      const address = cellAddress(cell.owner, cell.name).slice(1); // `@<owner>/<slug>`
       try {
         const res = await invokeCell({
           functionName: cell.functionName,
@@ -469,12 +487,14 @@ async function describeCellTools(_input: unknown, ctx: ServiceContext): Promise<
           if (!SAFE_TOOL_NAME.test(tool)) continue;
           out.push({
             name: `${cell.cellId}__${tool}`,
+            address,
             description: typeof t.description === 'string' ? t.description : `${cell.name} · ${tool}`,
             inputSchema:
               t.inputSchema && typeof t.inputSchema === 'object'
                 ? (t.inputSchema as Record<string, unknown>)
                 : { type: 'object', additionalProperties: true },
             scope: typeof t.scope === 'string' ? t.scope : null,
+            kind: t.kind === 'read' ? 'read' : 'act',
             cellId: cell.cellId,
             tool,
           });
@@ -488,21 +508,30 @@ async function describeCellTools(_input: unknown, ctx: ServiceContext): Promise<
 }
 
 interface CallCellToolInput {
-  cellId: string;
+  /** Target the cell by id, or by owner + name (the `@owner/name` address form). */
+  cellId?: string;
+  owner?: string;
+  name?: string;
   tool: string;
   args?: unknown;
 }
 
 /**
- * Forward a gateway `tools/call` to a dynamic cell's tool (`POST /_tools/<tool>`).
+ * Forward a gateway `read`/`act` to a dynamic cell's tool (`POST /_tools/<tool>`).
  * Reuses `callCell`, so ownership/grant authorisation and the ACTIVE check apply
  * unchanged; non-2xx from the cell surfaces as an error.
  */
 async function callCellTool(input: CallCellToolInput, ctx: ServiceContext): Promise<unknown> {
-  if (!input?.cellId) throw new Error('cellId is required');
   if (!input?.tool || !SAFE_TOOL_NAME.test(input.tool)) throw new Error('a valid tool name is required');
   const res = (await callCell(
-    { cellId: input.cellId, method: 'POST', path: `${TOOLS_PATH}/${input.tool}`, body: input.args ?? {} },
+    {
+      cellId: input.cellId,
+      owner: input.owner,
+      name: input.name,
+      method: 'POST',
+      path: `${TOOLS_PATH}/${input.tool}`,
+      body: input.args ?? {},
+    },
     ctx,
   )) as InvokeCellResult;
   if (typeof res?.statusCode === 'number' && res.statusCode >= 400) {
@@ -522,6 +551,8 @@ interface ToolSpec {
   inputSchema: Record<string, unknown>;
   /** Scope the gateway enforces before forwarding (null = any authenticated user). */
   scope: string | null;
+  /** `read` = side-effect-free; `act` = may mutate. Routes the gateway's read/act dispatch. */
+  kind: 'read' | 'act';
   handler: RegisteredCommand;
 }
 
@@ -530,6 +561,7 @@ const TOOLS: Record<string, ToolSpec> = {
     description:
       'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE.',
     scope: CREATE_SCOPE,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
@@ -546,12 +578,14 @@ const TOOLS: Record<string, ToolSpec> = {
   listCells: {
     description: 'List the dynamic cells you own.',
     scope: null,
+    kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: listCells as RegisteredCommand,
   },
   getCell: {
     description: 'Get one dynamic cell, refreshing its provisioning status.',
     scope: null,
+    kind: 'read',
     inputSchema: {
       type: 'object',
       properties: { cellId: { type: 'string' } },
@@ -564,6 +598,7 @@ const TOOLS: Record<string, ToolSpec> = {
     description:
       'Invoke a dynamic cell you own or were granted, over this same connection. Optionally pass method, path, and a JSON body.',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
@@ -581,6 +616,7 @@ const TOOLS: Record<string, ToolSpec> = {
   grantCapability: {
     description: 'Share a cell you own with another principal (expand permissions).',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: { cellId: { type: 'string' }, principal: { type: 'string' } },
@@ -592,6 +628,7 @@ const TOOLS: Record<string, ToolSpec> = {
   deleteCell: {
     description: 'Delete a cell you own (tears down its stack).',
     scope: null,
+    kind: 'act',
     inputSchema: {
       type: 'object',
       properties: { cellId: { type: 'string' } },
@@ -604,6 +641,7 @@ const TOOLS: Record<string, ToolSpec> = {
     description:
       "Fetch a cell's recent CloudWatch logs (observability). Identify the cell by cellId or owner+name; optional `since` (e.g. 15m, 2h), `limit`, and `filter` (CloudWatch filter pattern).",
     scope: null,
+    kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
@@ -621,13 +659,14 @@ const TOOLS: Record<string, ToolSpec> = {
 };
 
 /** Tool manifest for the gateway: name, schema, and the scope it should enforce. */
-function describeTools(): { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; scope: string | null }> } {
+function describeTools(): { tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; scope: string | null; kind: 'read' | 'act' }> } {
   return {
     tools: Object.entries(TOOLS).map(([name, t]) => ({
       name,
       description: t.description,
       inputSchema: t.inputSchema,
       scope: t.scope,
+      kind: t.kind,
     })),
   };
 }
