@@ -100,14 +100,6 @@ function Account({ session }: { session: Session & { signIn: () => void; signOut
   );
 }
 
-interface Manifest {
-  name: string;
-  version?: string;
-  routes: string[];
-  commands: string[];
-  events?: { emits?: string[] };
-}
-
 async function getJson(path: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
   const res = await fetch(path, init);
   let body: unknown;
@@ -117,131 +109,6 @@ async function getJson(path: string, init?: RequestInit): Promise<{ status: numb
     body = await res.text();
   }
   return { status: res.status, body };
-}
-
-function Catalog(): React.JSX.Element {
-  const [services, setServices] = useState<Manifest[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    getJson('/_catalog')
-      .then((r) =>
-        r.status === 200
-          ? setServices((r.body as { services: Manifest[] }).services)
-          : setErr(`HTTP ${r.status}`),
-      )
-      .catch((e) => setErr(String(e)));
-  }, []);
-
-  return (
-    <Card>
-      <Heading sub="Live cell manifests, injected at deploy time from the platform wiring.">
-        Service cells
-      </Heading>
-      {err ? <Badge tone="danger">{err}</Badge> : null}
-      {!services && !err ? <p style={{ color: theme.dim }}>Loading…</p> : null}
-      <div style={{ display: 'grid', gap: '0.9rem', marginTop: '0.5rem' }}>
-        {(services ?? []).map((s) => (
-          <div key={s.name} style={{ display: 'grid', gap: '0.3rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <strong>{s.name}</strong>
-              {s.version ? <Badge tone="dim">v{s.version}</Badge> : null}
-            </div>
-            {s.routes.length ? (
-              <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-                {s.routes.map((r) => (
-                  <Badge key={r} tone="accent">{r}</Badge>
-                ))}
-              </div>
-            ) : (
-              <Badge tone="dim">/ (default)</Badge>
-            )}
-            {s.commands.length ? (
-              <span style={{ color: theme.dim, fontSize: '0.8rem' }}>
-                commands: {s.commands.join(', ')}
-              </span>
-            ) : null}
-            {s.events?.emits?.length ? (
-              <span style={{ color: theme.dim, fontSize: '0.8rem' }}>
-                emits: {s.events.emits.join(', ')}
-              </span>
-            ) : null}
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-interface CatalogCell {
-  name: string;
-  owner: string;
-  address: string;
-  status: string;
-  description: string | null;
-  shared: boolean;
-}
-
-function statusTone(status: string): 'accent' | 'dim' | 'danger' {
-  if (status === 'ACTIVE') return 'accent';
-  if (status === 'FAILED') return 'danger';
-  return 'dim';
-}
-
-/**
- * The signed-in user's tier-2 cells, merged into `/_catalog` by the home cell
- * from forge. Loads from the session bearer once signed in — the human seeing
- * exactly the cells their agent would, through the same endpoint.
- */
-function MyCells({ authed }: { authed: boolean }): React.JSX.Element {
-  const [cells, setCells] = useState<CatalogCell[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!authed) {
-      setCells(null);
-      setErr(null);
-      return;
-    }
-    authFetch('/_catalog')
-      .then(async (r) =>
-        r.status === 200
-          ? setCells(((await r.json()) as { cells?: CatalogCell[] }).cells ?? [])
-          : setErr(`HTTP ${r.status}`),
-      )
-      .catch((e) => setErr(String(e)));
-  }, [authed]);
-
-  return (
-    <Card>
-      <Heading sub="Cells you own or were granted, provisioned at runtime through forge — the human view of what your agent sees.">
-        Your dynamic cells
-      </Heading>
-      {err ? <Badge tone="danger">{err}</Badge> : null}
-      {!authed ? (
-        <p style={{ color: theme.dim }}>Sign in above to load the cells you can reach.</p>
-      ) : null}
-      {authed && !cells && !err ? <p style={{ color: theme.dim }}>Loading…</p> : null}
-      {authed && cells && cells.length === 0 ? (
-        <p style={{ color: theme.dim }}>No dynamic cells yet — create one via the forge MCP tools.</p>
-      ) : null}
-      <div style={{ display: 'grid', gap: '0.9rem', marginTop: '0.5rem' }}>
-        {(cells ?? []).map((c) => (
-          <div key={c.address} style={{ display: 'grid', gap: '0.3rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <strong>{c.name}</strong>
-              <Badge tone={statusTone(c.status)}>{c.status}</Badge>
-              {c.shared ? <Badge tone="dim">shared</Badge> : null}
-            </div>
-            <Badge tone="accent">{c.address}</Badge>
-            {c.description ? (
-              <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{c.description}</span>
-            ) : null}
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
 }
 
 function Discovery(): React.JSX.Element {
@@ -515,8 +382,6 @@ function App(): React.JSX.Element {
 
       <Account session={session} />
       <Capabilities authed={!!session.user} />
-      <MyCells authed={!!session.user} />
-      <Catalog />
       <Discovery />
       <ResourceProbe />
 

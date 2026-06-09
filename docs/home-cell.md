@@ -72,11 +72,15 @@ phase it, shipping value before that lands:
   vocabulary the agent does. This generalises the planned "workspace window"
   (`read("workspace.recall")` is just one row) and seeds the cells console
   (`act("cells.writeFile" / "cells.deploy" / …)`).
+- **`/_catalog` retired (shipped).** The bespoke `Catalog`/`MyCells` cards, the
+  server `/_catalog` route, the `PLATFORM_CATALOG` injection, and home's
+  `allow(auth)`/`allow(cells)` grants are all gone — the console (capabilities +
+  `read("cells.list")` for owned-cell status) subsumes the directory. home's
+  server is now just the shell + `app.js`; `cells.catalogCells` is kept as the
+  uncalled "accessible cells (own+granted)" primitive for a future surface.
 - **Phase 2 — purpose-built surfaces.** Above the generic console, dedicated
   views: the workspace window (recall rendered as focus/peripheral/elided tiers),
-  the cells console (file tree + editor + deploy + logs). Retiring `/_catalog`
-  (`Catalog`/`MyCells`) folds in here — the console already subsumes the cell
-  directory.
+  the cells console (file tree + editor + deploy + logs).
 - **Phase 3 — the generic view renderer.** Once registered views + render hints
   exist, draw any view by its hint; dashboards/surfaces come from the registry,
   not code. This is where `home` stops being hand-written screens.

@@ -215,11 +215,13 @@ async function listCells(_input: unknown, ctx: ServiceContext): Promise<unknown>
 }
 
 /**
- * Internal command backing the `home` cell's `/_catalog` merge: the dynamic
- * cells the caller can access (owns or was granted), shaped for the catalog.
- * Not an MCP tool — `home` reaches it via an allow-listed invoke, and the
- * caller's identity propagates as `user`, so the registry filters to that
- * principal (never leaking other owners' private cells).
+ * The dynamic cells the caller can access — owns **or was granted** — shaped for a
+ * directory view. (`cells.list` is owned-only; this adds granted cells.) Internal,
+ * not an MCP tool. Currently uncalled since the home `/_catalog` retired in favour
+ * of the read/act console; kept as the natural "accessible cells" primitive to
+ * expose as a tool (e.g. `cells.accessible`) when a surface needs it. The caller's
+ * identity propagates as `user`, so the registry filters to that principal (never
+ * leaking other owners' private cells).
  */
 async function catalogCells(_input: unknown, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
