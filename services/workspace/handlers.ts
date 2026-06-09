@@ -28,6 +28,11 @@ import {
   type ObservedState,
   type Entry,
   type ReadResult,
+  type QueryResult,
+  type NeighborsResult,
+  type ChangesResult,
+  type AttentionResult,
+  type EdgeRecord,
   type CommandHandler,
   type RegisteredCommand,
 } from '../../platform/runtime';
@@ -64,6 +69,14 @@ export interface RememberInput {
   value: unknown;
   /** Optional label for how the write happened (e.g. an action name). */
   via?: string;
+  /** Optional indexable fact type (e.g. "decision", "todo"). */
+  type?: string;
+  /** Optional tags. */
+  tags?: string[];
+  /** CAS: require the stored revision to equal this (0 = must not exist). */
+  ifRevision?: number;
+  /** CAS: require the key not to exist. */
+  ifAbsent?: boolean;
 }
 export interface RecallInput {
   elision?: 'auto' | 'none';
@@ -73,10 +86,41 @@ export interface RecallInput {
 export interface PeekInput {
   key: string;
 }
+export interface QueryInput {
+  type?: string;
+  tag?: string;
+  prefix?: string;
+  rankBy?: 'salience' | 'recency';
+  limit?: number;
+  includeSuperseded?: boolean;
+}
+export interface LinkInput {
+  from: string;
+  rel: string;
+  to: string;
+  strength?: number;
+}
+export type UnlinkInput = Omit<LinkInput, 'strength'>;
+export interface NeighborsInput {
+  key: string;
+  dir?: 'in' | 'out' | 'both';
+  rel?: string;
+}
+export interface ChangesInput {
+  sinceSeq?: number;
+  limit?: number;
+}
+export interface AttentionInput {
+  /** Age (ms) beyond which a live fact counts as stale. Default 14 days. */
+  staleMs?: number;
+  limit?: number;
+}
 export interface SupersedeInput {
   key: string;
   /** Successor key, or omitted to simply retire the fact. */
   by?: string;
+  /** Re-point the fact's edges at the successor (requires `by`). */
+  migrateLinks?: boolean;
 }
 export interface ShareInput {
   /** The user to share with. */
@@ -98,6 +142,12 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   remember: CommandHandler<RememberInput, Entry>;
   recall: CommandHandler<RecallInput | undefined, ReadResult>;
   peek: CommandHandler<PeekInput, Entry | null>;
+  query: CommandHandler<QueryInput | undefined, QueryResult>;
+  link: CommandHandler<LinkInput, EdgeRecord>;
+  unlink: CommandHandler<UnlinkInput, { ok: true }>;
+  neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
+  changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
+  attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
@@ -125,7 +175,8 @@ interface ToolDescriptor {
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'remember',
-    description: 'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost.',
+    description:
+      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold).',
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -134,6 +185,10 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         key: { type: 'string', description: 'Fact key within your slice' },
         value: { description: 'Any JSON value to remember' },
         via: { type: 'string', description: 'Optional label for how this was written (e.g. an action name)' },
+        type: { type: 'string', description: 'Optional indexable fact type (e.g. "decision", "todo")' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags (filterable in query)' },
+        ifRevision: { type: 'number', description: 'Only write if the stored revision equals this (0 = key must not exist)' },
+        ifAbsent: { type: 'boolean', description: 'Only write if the key does not exist' },
       },
       required: ['key', 'value'],
       additionalProperties: false,
@@ -168,8 +223,106 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'query',
+    description:
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit. Use this instead of recall when you want a targeted subset.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Only facts of this type' },
+        tag: { type: 'string', description: 'Only facts carrying this tag' },
+        prefix: { type: 'string', description: 'Only keys with this prefix' },
+        rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
+        limit: { type: 'number', description: 'Max entries to return' },
+        includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'link',
+    description: 'Add a typed, directed edge `from --rel--> to` between two fact keys in your slice (e.g. rel: "grounds", "refines", "relates").',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Source fact key' },
+        rel: { type: 'string', description: 'Edge type (a verb, e.g. "grounds")' },
+        to: { type: 'string', description: 'Target fact key' },
+        strength: { type: 'number', description: 'Optional edge strength' },
+      },
+      required: ['from', 'rel', 'to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'unlink',
+    description: 'Remove an edge previously added with `link`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string' },
+        rel: { type: 'string' },
+        to: { type: 'string' },
+      },
+      required: ['from', 'rel', 'to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'neighbors',
+    description: 'The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'The fact key to look around' },
+        dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'Direction (default both)' },
+        rel: { type: 'string', description: 'Only edges of this type' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'changes',
+    description: 'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. The change feed.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sinceSeq: { type: 'number', description: 'Return events with seq greater than this (default 0)' },
+        limit: { type: 'number', description: 'Max events' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'attention',
+    description:
+      'What needs tending, as a derived read: stale facts, unlinked facts, and dangling edges. The just-in-time cron — read it at session start and act on what surfaces.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        staleMs: { type: 'number', description: 'Staleness threshold in ms (default 14 days)' },
+        limit: { type: 'number', description: 'Max items per category (default 25)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'supersede',
-    description: 'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key.',
+    description:
+      'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot.',
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -177,6 +330,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         key: { type: 'string', description: 'Fact key to retire' },
         by: { type: 'string', description: 'Optional successor key' },
+        migrateLinks: { type: 'boolean', description: 'Re-point edges at the successor (requires `by`)' },
       },
       required: ['key'],
       additionalProperties: false,
@@ -228,7 +382,19 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      const entry = await state.put({ scope, key: input.key, value: input.value, via: input.via }, ctx.identity);
+      const entry = await state.put(
+        {
+          scope,
+          key: input.key,
+          value: input.value,
+          via: input.via,
+          type: input.type,
+          tags: input.tags,
+          ifRevision: input.ifRevision,
+          ifAbsent: input.ifAbsent,
+        },
+        ctx.identity,
+      );
       await ctx.events.emit('workspace.fact.written', { scope, key: input.key, revision: entry._meta.revision });
       ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision });
       return entry;
@@ -266,11 +432,63 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       return state.get(scope, input.key, ctx.identity);
     },
 
+    async query(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return state.query(
+        scope,
+        {
+          type: input?.type,
+          tag: input?.tag,
+          prefix: input?.prefix,
+          rankBy: input?.rankBy,
+          limit: input?.limit,
+          includeSuperseded: input?.includeSuperseded,
+        },
+        ctx.identity,
+      );
+    },
+
+    async link(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.from || !input?.rel || !input?.to) throw new Error('from, rel, and to are required');
+      const { state } = build(ctx);
+      const edge = await state.link(scope, input.from, input.rel, input.to, input.strength ?? null, ctx.identity);
+      ctx.logger.info('workspace edge linked', { scope, from: edge.from, rel: edge.rel, to: edge.to });
+      return edge;
+    },
+
+    async unlink(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.from || !input?.rel || !input?.to) throw new Error('from, rel, and to are required');
+      const { state } = build(ctx);
+      return state.unlink(scope, input.from, input.rel, input.to, ctx.identity);
+    },
+
+    async neighbors(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.key) throw new Error('key is required');
+      const { state } = build(ctx);
+      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel }, ctx.identity);
+    },
+
+    async changes(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return state.changes(scope, input?.sinceSeq ?? 0, input?.limit);
+    },
+
+    async attention(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return state.attention(scope, { staleMs: input?.staleMs, limit: input?.limit });
+    },
+
     async supersede(input, ctx) {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.supersede(scope, input.key, input.by ?? null, ctx.identity);
+      return state.supersede(scope, input.key, input.by ?? null, ctx.identity, { migrateLinks: input.migrateLinks });
     },
 
     async share(input, ctx) {
