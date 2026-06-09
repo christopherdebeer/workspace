@@ -166,11 +166,8 @@ export class PlatformStack extends cdk.Stack {
     // The gateway also aggregates the workspace cell's tools (remember/recall/
     // share/…): it calls workspace.describeTools and forwards tools/call to it.
     gateway.allow(workspace);
-    // The home cell's `/_catalog` resolves the caller's bearer (auth) and merges
-    // in the dynamic cells they own or were granted (forge.catalogCells), so the
-    // self-model surfaces tier-2 cells beside the static tier-1 manifests.
-    home.allow(auth);
-    home.allow(cells);
+    // (home no longer validates tokens or reads the registry server-side — its SPA
+    // is a read/act client over /mcp — so it needs no allow() grants.)
 
     // Single public entrypoint, behaviours generated from manifests. Optionally
     // fronted by a custom domain (CloudFront alias + ACM cert in us-east-1).
@@ -217,12 +214,5 @@ export class PlatformStack extends cdk.Stack {
     // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
     gateway.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
     home.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
-
-    // Self-documenting catalog: inject the live cell manifests (this wiring is
-    // the single source of truth) so the home SPA renders the service list from
-    // real data rather than a hardcoded copy. Served at GET /_catalog. (forge is
-    // a routeless backend, surfaced through the /mcp gateway, not listed here.)
-    const catalog = [home, auth, gateway, workspace, dispatch].map((c) => c.manifest);
-    home.fn.addEnvironment('PLATFORM_CATALOG', JSON.stringify(catalog));
   }
 }
