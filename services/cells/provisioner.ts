@@ -62,6 +62,21 @@ export async function uploadCode(p: UploadCodeParams): Promise<void> {
     .promise();
 }
 
+export interface UploadPackageParams {
+  bucket: string;
+  key: string;
+  /** Files for the deployment package (handler + client bundle + static assets). */
+  files: Array<{ name: string; content: string }>;
+}
+
+/** Upload a multi-file deployment package (the tier-2 mirror of home's asset). */
+export async function uploadPackage(p: UploadPackageParams): Promise<void> {
+  const body = zipStore(p.files);
+  await s3()
+    .putObject({ Bucket: p.bucket, Key: p.key, Body: body, ContentType: 'application/zip' })
+    .promise();
+}
+
 /** Create the per-cell CloudFormation stack from a template. */
 export async function deployStack(stackName: string, template: Record<string, unknown>): Promise<void> {
   await cfn()

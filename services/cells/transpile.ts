@@ -56,10 +56,93 @@ function resolveRelative(importer: string, spec: string): string {
 
 /** Pick the on-disk key for a resolved path, trying `.ts`/`.js`/`/index.ts`. */
 function resolveKey(files: Record<string, string>, base: string): string | null {
-  for (const cand of [base, `${base}.ts`, `${base}.js`, `${base}/index.ts`, `${base}/index.js`]) {
+  for (const cand of [
+    base,
+    `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.jsx`,
+    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`,
+  ]) {
     if (files[cand] !== undefined) return cand;
   }
   return null;
+}
+
+function loaderFor(path: string): 'ts' | 'tsx' | 'js' | 'jsx' {
+  if (path.endsWith('.tsx')) return 'tsx';
+  if (path.endsWith('.jsx')) return 'jsx';
+  if (path.endsWith('.js')) return 'js';
+  return 'ts';
+}
+
+/**
+ * Resolve a bare (npm) import for the **browser** bundle to an esm.sh URL —
+ * the Val Town model: dependencies are fetched as native ES modules at load
+ * time, so the cloud build never needs node_modules. An optional import map
+ * (`client/imports.json`) pins versions or overrides URLs:
+ *
+ *   { "yjs": "13.6.27", "xstate": "https://esm.sh/xstate@4.38.3" }
+ */
+export function resolveBareImport(spec: string, imports?: Record<string, string>): string {
+  if (/^https?:\/\//.test(spec)) return spec;
+  // Package name = first segment ("@scope/name" counts as one); rest is a subpath.
+  const segs = spec.split('/');
+  const pkgLen = spec.startsWith('@') ? 2 : 1;
+  const pkg = segs.slice(0, pkgLen).join('/');
+  const sub = segs.slice(pkgLen).join('/');
+  const mapped = imports?.[pkg];
+  let base: string;
+  if (mapped && /^https?:\/\//.test(mapped)) base = mapped.replace(/\/$/, '');
+  else if (mapped) base = `https://esm.sh/${pkg}@${mapped}`;
+  else base = `https://esm.sh/${pkg}`;
+  return sub ? `${base}/${sub}` : base;
+}
+
+/**
+ * Bundle a cell's **browser** client (the tier-2 mirror of home's
+ * `clientEntry`): relative imports resolve against the src tree, bare imports
+ * become esm.sh externals (the browser fetches them as native ES modules), and
+ * the output is one ESM `app.js` the cell's handler serves from its package.
+ */
+export async function bundleClientFiles(
+  files: Record<string, string>,
+  entry: string,
+  imports?: Record<string, string>,
+): Promise<string> {
+  const eb = await ensureEsbuild();
+  if (files[entry] === undefined) {
+    const found = resolveKey(files, entry);
+    if (!found) throw new Error(`client entry "${entry}" not found in cell source`);
+    entry = found;
+  }
+  const result = await eb.build({
+    entryPoints: [entry],
+    bundle: true,
+    format: 'esm',
+    target: 'es2020',
+    platform: 'browser',
+    jsx: 'automatic',
+    write: false,
+    plugins: [
+      {
+        name: 'cell-client-vfs',
+        setup(build) {
+          build.onResolve({ filter: /.*/ }, (args) => {
+            if (args.kind === 'entry-point') return { path: args.path, namespace: 'vfs' };
+            if (args.path.startsWith('.')) {
+              const key = resolveKey(files, resolveRelative(args.importer, args.path));
+              if (!key) return { errors: [{ text: `cannot resolve "${args.path}" from "${args.importer}"` }] };
+              return { path: key, namespace: 'vfs' };
+            }
+            return { path: resolveBareImport(args.path, imports), external: true };
+          });
+          build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => ({
+            contents: files[args.path] ?? '',
+            loader: loaderFor(args.path),
+          }));
+        },
+      },
+    ],
+  });
+  return result.outputFiles?.[0]?.text ?? '';
 }
 
 /**
