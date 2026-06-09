@@ -22,7 +22,7 @@ import {
 } from '../../platform/runtime';
 import { createRegistry, CellRecord } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
-import { transpileCell } from './transpile';
+import { transpileCell, bundleFiles } from './transpile';
 import {
   uploadCode,
   deployStack,
@@ -30,8 +30,14 @@ import {
   deleteStack,
   invokeCell,
   getCellLogs,
+  putObject,
+  getObject,
+  listObjects,
+  deleteObject,
+  updateFunctionCode,
 } from './provisioner';
 import type { InvokeCellResult } from './provisioner';
+import { srcKey, srcPrefix, buildKey, dataKey, dataPrefix, cleanPath } from './cell-files';
 
 /** Parse a relative window like "15m", "2h", "1d" into milliseconds. */
 function sinceToMs(since: string | undefined): number {
@@ -145,6 +151,10 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
 
   const codeKey = `cells/${cellId}/${randomUUID()}.zip`;
   await uploadCode({ bucket: env.codeBucket, key: codeKey, code: js });
+
+  // Seed the editable source tree so the cell is immediately editable + multi-file:
+  // writeFile/readFile/listFiles/deploy operate on cells/<cellId>/src/.
+  await putObject(env.codeBucket, srcKey(cellId, 'index.ts'), input.code, 'text/plain');
 
   const template = buildCellTemplate({
     cellId,
@@ -405,6 +415,157 @@ async function cellLogs(input: CellLogsInput, ctx: ServiceContext): Promise<unkn
   };
 }
 
+// ─── cell common layer (S3: source files + per-user blob data) ─────
+// All cell S3 access is brokered by forge (it holds the bucket grant), authorized
+// by ownership exactly like callCell. See docs/cell-storage-s3.md.
+
+interface CellRef {
+  cellId?: string;
+  owner?: string;
+  name?: string;
+}
+
+/** Resolve the target cell and authorize the caller (owner or grantee). */
+async function resolveAuthorized(input: CellRef, user: string): Promise<{ record: CellRecord; bucket: string; env: ForgeEnv }> {
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cellId = resolveCellId(input);
+  const record = await registry.get(cellId);
+  if (!record) throw new Error(`Unknown cell "${cellId}"`);
+  authorizeAccess(record, user);
+  return { record, bucket: env.codeBucket, env };
+}
+
+interface WriteFileInput extends CellRef {
+  path: string;
+  content: string;
+  deploy?: boolean;
+}
+async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.path) throw new Error('path is required');
+  if (typeof input?.content !== 'string') throw new Error('content (string) is required');
+  const { record, bucket, env } = await resolveAuthorized(input, user);
+  await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
+  ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
+  if (input.deploy) return deployCell(record, env, ctx);
+  return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
+}
+
+interface ReadFileInput extends CellRef {
+  path: string;
+}
+async function readFile(input: ReadFileInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.path) throw new Error('path is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const content = await getObject(bucket, srcKey(record.cellId, input.path));
+  if (content === null) throw new Error(`file not found: ${cleanPath(input.path)}`);
+  return { cellId: record.cellId, path: cleanPath(input.path), content };
+}
+
+async function listFiles(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const prefix = srcPrefix(record.cellId);
+  const keys = await listObjects(bucket, prefix);
+  return { cellId: record.cellId, files: keys.map((k) => k.slice(prefix.length)).filter(Boolean) };
+}
+
+interface DeleteFileInput extends CellRef {
+  path: string;
+}
+async function deleteFile(input: DeleteFileInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.path) throw new Error('path is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+  await deleteObject(bucket, srcKey(record.cellId, input.path));
+  return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
+}
+
+/** Bundle the cell's src/ tree and point its Lambda at the new code (deploy-on-update). */
+async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext): Promise<unknown> {
+  const prefix = srcPrefix(record.cellId);
+  const keys = await listObjects(env.codeBucket, prefix);
+  const files: Record<string, string> = {};
+  for (const k of keys) {
+    const rel = k.slice(prefix.length);
+    if (!rel) continue;
+    const content = await getObject(env.codeBucket, k);
+    if (content !== null) files[rel] = content;
+  }
+  if (Object.keys(files).length === 0) throw new Error('no source files to deploy (write to src/ first)');
+  const entry = files['index.ts'] !== undefined ? 'index.ts' : files['index.js'] !== undefined ? 'index.js' : Object.keys(files)[0];
+
+  let js: string;
+  try {
+    js = await bundleFiles(files, entry);
+  } catch (err) {
+    throw new Error(`Cell source failed to bundle: ${(err as Error).message}`);
+  }
+
+  const version = `${Date.now()}`;
+  const codeKey = buildKey(record.cellId, version);
+  await uploadCode({ bucket: env.codeBucket, key: codeKey, code: js });
+  await updateFunctionCode(record.functionName, env.codeBucket, codeKey);
+  await createRegistry(env.registryTable).put({ ...record, updatedAt: new Date().toISOString() });
+
+  ctx.logger.info('cell deployed', { cellId: record.cellId, version, files: Object.keys(files).length });
+  await ctx.events.emit('cell.deployed', { cellId: record.cellId, version });
+  return { deployed: true, cellId: record.cellId, version, entry, files: Object.keys(files) };
+}
+
+async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const { record, env } = await resolveAuthorized(input, user);
+  return deployCell(record, env, ctx);
+}
+
+interface PutDataInput extends CellRef {
+  key: string;
+  content: string;
+}
+async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.key) throw new Error('key is required');
+  if (typeof input?.content !== 'string') throw new Error('content (string) is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+  await putObject(bucket, dataKey(record.cellId, user, input.key), input.content);
+  return { ok: true, cellId: record.cellId, user, key: cleanPath(input.key) };
+}
+
+interface DataRefInput extends CellRef {
+  key?: string;
+  user?: string;
+}
+/** Blob owner: your own space by default; another user's only if you own the cell. */
+function targetDataUser(input: DataRefInput, caller: string, record: CellRecord): string {
+  const target = input.user ?? caller;
+  if (target !== caller && record.owner !== caller) {
+    throw new ServiceAuthError(`only the cell owner may access another user's data`);
+  }
+  return target;
+}
+
+async function getData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.key) throw new Error('key is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const target = targetDataUser(input, user, record);
+  const content = await getObject(bucket, dataKey(record.cellId, target, input.key));
+  if (content === null) throw new Error(`data not found: ${cleanPath(input.key)}`);
+  return { cellId: record.cellId, user: target, key: cleanPath(input.key), content };
+}
+
+async function listData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const target = targetDataUser(input, user, record);
+  const prefix = dataPrefix(record.cellId, target);
+  const keys = await listObjects(bucket, prefix);
+  return { cellId: record.cellId, user: target, keys: keys.map((k) => k.slice(prefix.length)).filter(Boolean) };
+}
+
 // ─── registry-driven cell tools ──────────────────────────────────
 //
 // Beyond forge's own control-plane tools, the /mcp gateway also surfaces the
@@ -656,6 +817,129 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: cellLogs as RegisteredCommand,
   },
+  writeFile: {
+    description:
+      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to bundle + redeploy immediately, else call deploy.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        path: { type: 'string', description: 'Relative path under src/, e.g. index.ts or lib/util.ts' },
+        content: { type: 'string' },
+        deploy: { type: 'boolean', description: 'Bundle + redeploy after writing' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+    handler: writeFile as RegisteredCommand,
+  },
+  readFile: {
+    description: "Read one source file from a cell's src/ tree.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        path: { type: 'string' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    handler: readFile as RegisteredCommand,
+  },
+  listFiles: {
+    description: "List a cell's source files (its src/ tree).",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' } },
+      additionalProperties: false,
+    },
+    handler: listFiles as RegisteredCommand,
+  },
+  deleteFile: {
+    description: "Delete one source file from a cell's src/ tree (redeploy to take effect).",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' }, path: { type: 'string' } },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    handler: deleteFile as RegisteredCommand,
+  },
+  deploy: {
+    description: "Bundle a cell's src/ tree (resolving relative imports) and point its Lambda at the new build — no cdk deploy.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { cellId: { type: 'string' }, owner: { type: 'string' }, name: { type: 'string' } },
+      additionalProperties: false,
+    },
+    handler: deploy as RegisteredCommand,
+  },
+  putData: {
+    description: "Store a blob in a cell's per-caller data space (cells/<id>/data/<you>/<key>) — for content too big/binary for the substrate.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        key: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['key', 'content'],
+      additionalProperties: false,
+    },
+    handler: putData as RegisteredCommand,
+  },
+  getData: {
+    description: "Read a blob from a cell's data space (your own by default; another user's only if you own the cell).",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        key: { type: 'string' },
+        user: { type: 'string', description: "Whose data (owner-only for others); defaults to you" },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    handler: getData as RegisteredCommand,
+  },
+  listData: {
+    description: "List blob keys in a cell's data space (your own by default; another user's only if you own the cell).",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        user: { type: 'string', description: "Whose data (owner-only for others); defaults to you" },
+      },
+      additionalProperties: false,
+    },
+    handler: listData as RegisteredCommand,
+  },
 };
 
 /** Tool manifest for the gateway: name, schema, and the scope it should enforce. */
@@ -687,7 +971,7 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'forge',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested'] },
+  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed'] },
 });
 
 export default handler;

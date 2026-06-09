@@ -42,3 +42,66 @@ export async function transpileCell(source: string): Promise<string> {
   });
   return out.code;
 }
+
+/** Resolve a relative import (`./util.ts`) against the importer's directory. */
+function resolveRelative(importer: string, spec: string): string {
+  const dir = importer.includes('/') ? importer.slice(0, importer.lastIndexOf('/')) : '';
+  const stack: string[] = [];
+  for (const seg of `${dir ? dir + '/' : ''}${spec}`.split('/')) {
+    if (seg === '..') stack.pop();
+    else if (seg && seg !== '.') stack.push(seg);
+  }
+  return stack.join('/');
+}
+
+/** Pick the on-disk key for a resolved path, trying `.ts`/`.js`/`/index.ts`. */
+function resolveKey(files: Record<string, string>, base: string): string | null {
+  for (const cand of [base, `${base}.ts`, `${base}.js`, `${base}/index.ts`, `${base}/index.js`]) {
+    if (files[cand] !== undefined) return cand;
+  }
+  return null;
+}
+
+/**
+ * Bundle a multi-file TypeScript cell (`files`: relative path → source) into one
+ * CommonJS module, resolving relative imports against the in-memory tree via an
+ * esbuild virtual-FS plugin. Bare/npm imports stay external (provided by the
+ * Lambda runtime/layers), exactly as the single-module path leaves them.
+ */
+export async function bundleFiles(files: Record<string, string>, entry = 'index.ts'): Promise<string> {
+  const eb = await ensureEsbuild();
+  if (files[entry] === undefined) {
+    const found = resolveKey(files, entry);
+    if (!found) throw new Error(`entry "${entry}" not found in cell source`);
+    entry = found;
+  }
+  const result = await eb.build({
+    entryPoints: [entry],
+    bundle: true,
+    format: 'cjs',
+    target: 'es2020',
+    platform: 'node',
+    write: false,
+    plugins: [
+      {
+        name: 'cell-vfs',
+        setup(build) {
+          build.onResolve({ filter: /.*/ }, (args) => {
+            if (args.kind === 'entry-point') return { path: args.path, namespace: 'vfs' };
+            if (args.path.startsWith('.')) {
+              const key = resolveKey(files, resolveRelative(args.importer, args.path));
+              if (!key) return { errors: [{ text: `cannot resolve "${args.path}" from "${args.importer}"` }] };
+              return { path: key, namespace: 'vfs' };
+            }
+            return { path: args.path, external: true }; // npm / runtime-provided
+          });
+          build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => ({
+            contents: files[args.path] ?? '',
+            loader: args.path.endsWith('.js') ? 'js' : 'ts',
+          }));
+        },
+      },
+    ],
+  });
+  return result.outputFiles?.[0]?.text ?? '';
+}
