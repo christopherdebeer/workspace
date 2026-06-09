@@ -150,6 +150,32 @@ Migration cost: near-zero *right now* — the production slice is empty (the
 UUID→username principal change stranded only dummy data). This is the moment
 to move the floor.
 
+## Status — phase 1 shipped
+
+The storage move is implemented (this branch):
+
+- **`SubstrateTable`** (`platform/infra/substrate-table.ts`): stack-level
+  table (peer of the event bus) with `gsi-in` / `gsi-type` (key conventions
+  documented on the construct), Streams (`NEW_AND_OLD_IMAGES`), TTL.
+- **Workspace is now the room provider, not the storage owner**: its private
+  table is gone; facts, trajectory, and grants live on the substrate table
+  (`SUBSTRATE_TABLE` → `ctx.config.substrateTableName`). The store's key
+  layout is unchanged (`STATE#`/`TRAJ#`/`SEQ#`/`GRANT#`).
+- **Organs can observe the reef**: the permission boundary gained a
+  `SubstrateRead` cap, and each dynamic cell's role carries a
+  `dynamodb:LeadingKeys` condition scoping reads to its owner's partitions
+  (`STATE#<owner>`, `TRAJ#<owner>`, `SEQ#<owner>`, `IN#<owner>#*`,
+  `TYPE#<owner>#*`) — table and GSIs alike. Cells get `SUBSTRATE_TABLE` in
+  their environment. Writes stay mediated (reads-direct/writes-mediated, as
+  recommended above).
+- Existing dynamic cells pick up substrate access when their stack is next
+  created/updated; the GSIs carry no items until the link/query primitives
+  land on the documented key conventions.
+
+Not yet: edge/link items + `neighbors`, typed/tag projections over
+`gsi-type`, `ifRevision` CAS, the Streams-backed change feed, and a
+substrate *write* path for organs.
+
 ## Verdict
 
 The platform's organ half (per-cell tables, IAM boundaries) is not the

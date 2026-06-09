@@ -12,6 +12,7 @@ new service needs minimal boilerplate. See `docs/serverless-platform.md`.
   - `service-router.ts` - `ServiceRouter`: one CloudFront distribution, behaviours generated from manifests
   - `event-bus.ts` - `PlatformEventBus`: shared EventBridge bus
   - `table-factory.ts` - `TableFactory`: standardised DynamoDB tables (pk/sk, on-demand)
+  - `substrate-table.ts` - `SubstrateTable`: the shared observed-state store (the "blackboard") — scope-partitioned, GSI'd for inbound edges + typed reads, Streams on; see `docs/substrate-storage.md`
 - `runtime/` - In-Lambda library ("Runtime Layer")
   - `define-service.ts` - `defineService`: one handler for HTTP + direct invoke
   - `define-mcp-service.ts` - `defineMcpService`: expose a cell as an MCP tool server

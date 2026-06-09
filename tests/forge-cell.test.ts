@@ -161,6 +161,67 @@ describe('cells: cell template', () => {
   it('attaches the permission boundary to the cell role', () => {
     expect(tpl.Resources.CellRole.Properties.PermissionsBoundary).toBe('arn:aws:iam::111:policy/boundary');
   });
+
+  it('grants no substrate access when no substrate table is configured', () => {
+    const role = tpl.Resources.CellRole.Properties as {
+      Policies: Array<{ PolicyDocument: { Statement: Array<{ Sid: string }> } }>;
+    };
+    const sids = role.Policies[0].PolicyDocument.Statement.map((s) => s.Sid);
+    expect(sids).not.toContain('SubstrateOwnScopeRead');
+    const env = tpl.Resources.CellFunction.Properties.Environment as { Variables: Record<string, string> };
+    expect(env.Variables.SUBSTRATE_TABLE).toBeUndefined();
+  });
+});
+
+describe('cells: cell template substrate access', () => {
+  const substrateArn = 'arn:aws:dynamodb:us-east-1:111:table/substrate';
+  const tpl = buildCellTemplate({
+    cellId: 'notes-abc12345',
+    owner: 'alice',
+    codeBucket: 'bucket',
+    codeKey: 'cells/notes/x.zip',
+    boundaryArn: 'arn:aws:iam::111:policy/boundary',
+    eventBusName: 'platform-bus',
+    eventBusArn: 'arn:aws:events:us-east-1:111:event-bus/platform-bus',
+    region: 'us-east-1',
+    accountId: '111',
+    substrateTable: { name: 'substrate', arn: substrateArn },
+  }) as { Resources: Record<string, { Type: string; Properties: Record<string, unknown> }> };
+
+  interface PolicyStatement {
+    Sid: string;
+    Action: string[];
+    Resource: string[];
+    Condition?: Record<string, Record<string, string[]>>;
+  }
+  const statements = (
+    tpl.Resources.CellRole.Properties as {
+      Policies: Array<{ PolicyDocument: { Statement: PolicyStatement[] } }>;
+    }
+  ).Policies[0].PolicyDocument.Statement;
+
+  it('grants read-only substrate access scoped to the owner via LeadingKeys', () => {
+    const stmt = statements.find((s) => s.Sid === 'SubstrateOwnScopeRead');
+    expect(stmt).toBeDefined();
+    // Read-only: an organ observes the reef; writes stay mediated.
+    expect(stmt!.Action.sort()).toEqual(['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:Query']);
+    expect(stmt!.Resource).toEqual([substrateArn, `${substrateArn}/index/*`]);
+    // The condition is the authority boundary: only the owner's partitions,
+    // on the table and (scope-prefixed) GSIs alike.
+    const leading = stmt!.Condition?.['ForAllValues:StringLike']?.['dynamodb:LeadingKeys'];
+    expect(leading).toEqual([
+      'STATE#alice',
+      'TRAJ#alice',
+      'SEQ#alice',
+      'IN#alice#*',
+      'TYPE#alice#*',
+    ]);
+  });
+
+  it('injects SUBSTRATE_TABLE into the cell environment', () => {
+    const env = tpl.Resources.CellFunction.Properties.Environment as { Variables: Record<string, string> };
+    expect(env.Variables.SUBSTRATE_TABLE).toBe('substrate');
+  });
 });
 
 describe('cells: registry', () => {
