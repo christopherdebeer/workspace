@@ -168,6 +168,34 @@ describe('defineService dispatch', () => {
     });
   });
 
+  it('dispatches an EventBridge event to its events.handles handler', async () => {
+    const seen: Array<{ detail: Record<string, unknown>; source: string; detailType: string }> = [];
+    const eventful = defineService({
+      name: 'echo',
+      commands: {},
+      events: {
+        emits: [],
+        handles: {
+          'thing.happened': (detail, _ctx, meta) => {
+            seen.push({ detail, source: meta.source, detailType: meta.detailType });
+          },
+        },
+      },
+    });
+    await eventful({
+      'detail-type': 'thing.happened',
+      source: 'cell-abc',
+      detail: { key: 'k', value: 1 },
+    } as unknown as Parameters<typeof eventful>[0]);
+    expect(seen).toEqual([
+      { detail: { key: 'k', value: 1 }, source: 'cell-abc', detailType: 'thing.happened' },
+    ]);
+    // An unhandled detail-type is swallowed (logged), not an error.
+    await expect(
+      eventful({ 'detail-type': 'other.event', source: 's', detail: {} } as unknown as Parameters<typeof eventful>[0]),
+    ).resolves.toBeUndefined();
+  });
+
   it('dispatches an HTTP command and returns ok:true', async () => {
     const res = (await handler(httpEvent('POST', '/echo/ping', { a: 1 }))) as FunctionUrlResponse;
     expect(res.statusCode).toBe(200);

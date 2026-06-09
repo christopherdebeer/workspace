@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -17,6 +17,12 @@ export const handler = defineService({
   commands,
   events: {
     emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked'],
+    // The organ-to-reef write path: dynamic cells emit substrate.write.requested
+    // (source IAM-pinned to cell-<id>); the workspace applies it as a fact in
+    // the owner's slice. Wired via PlatformEventBus.routeTo in the stack.
+    handles: {
+      'substrate.write.requested': createSubstrateWriteHandler(dynamoDeps),
+    },
   },
 });
 

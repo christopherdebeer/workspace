@@ -26,6 +26,7 @@ export type {
   ServiceDefinition,
   CommandHandler,
   RegisteredCommand,
+  EventBridgeHandler,
   CommandResult,
   FunctionUrlEvent,
   FunctionUrlResponse,

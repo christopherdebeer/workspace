@@ -100,11 +100,15 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'changes', 'attention', 'registerAction', 'actions', 'deleteAction', 'invoke', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
+      commands: ['remember', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'changes', 'attention', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked'],
       eventBus,
     });
     substrate.grantReadWrite(workspace);
+    // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
+    // cell-<id>) emit substrate.write.requested; the workspace applies the
+    // fact in the owner's slice. See docs/substrate-storage.md.
+    eventBus.routeTo('SubstrateWriteRoute', workspace.fn, ['substrate.write.requested'], 'cell-');
 
     // Self-documenting front-end: a mobile-first React SPA served at `/` (the
     // router default). Its browser bundle is built from client/main.tsx by
@@ -168,6 +172,9 @@ export class PlatformStack extends cdk.Stack {
     // Any cell that protects routes asks the auth service to validate the
     // bearer token (the in-cell alternative to edge validation).
     workspace.allow(auth);
+    // The substrate-write handler resolves an emitting cell's owner through
+    // the registry (cells.resolveCell) — never from the event body.
+    workspace.allow(cells);
     gateway.allow(auth);
     dispatch.allow(auth);
     // The /mcp gateway aggregates + forwards forge's tools; dispatch proxies
