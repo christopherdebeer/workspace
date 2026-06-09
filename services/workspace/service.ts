@@ -2,9 +2,10 @@
  * Workspace service runtime entry point.
  *
  * The first flagship *room* over the observed-state substrate: each user's
- * workspace is their slice of the one Substrate. Declares the small vocabulary
- * (remember/recall/peek/supersede) over observed state, backed in production by
- * the DynamoDB `StateStore`. See `handlers.ts` and `docs/substrate.md`.
+ * workspace is their slice of the one Substrate. Declares the vocabulary
+ * (remember/recall/peek/query/link/neighbors/changes/attention/supersede +
+ * sharing) over observed state, backed in production by the shared substrate
+ * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
 import { createWorkspaceCommands, dynamoDeps } from './handlers';

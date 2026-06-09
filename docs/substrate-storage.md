@@ -172,9 +172,30 @@ The storage move is implemented (this branch):
   created/updated; the GSIs carry no items until the link/query primitives
   land on the documented key conventions.
 
-Not yet: edge/link items + `neighbors`, typed/tag projections over
-`gsi-type`, `ifRevision` CAS, the Streams-backed change feed, and a
-substrate *write* path for organs.
+## Status — phase 2 shipped (the primitives)
+
+The gap-analysis primitives now live on the shared table and are exposed as
+workspace read/act targets:
+
+- **Gap 1 — query + indexable attributes**: `remember` takes `type`/`tags`
+  (preserved on untyped rewrites, surfaced in `_meta`); `query` filters by
+  type (GSI-served via `gsi-type`), tag, and key prefix, ranked by read-time
+  salience (default) or recency, with a limit.
+- **Gap 3 — CAS**: `remember` takes `ifRevision`/`ifAbsent`, enforced
+  fail-fast in the primitive *and* atomically at the store
+  (`ConditionExpression`); failures throw `precondition_failed`.
+- **Gap 2 — links**: first-class typed edges (`link`/`unlink`), `neighbors`
+  (outbound via the partition, inbound via `gsi-in`, with neighbor entries),
+  and `supersede({ migrateLinks })` carrying edges to the successor.
+- **Gap 4 — change feed**: `changes(sinceSeq)` tails the (TTL-bounded)
+  trajectory and reports the head seq to resume from.
+- **Gap 5 — attention**: a derived read of stale / unlinked / dangling —
+  the just-in-time cron, as a read.
+
+Not yet: a substrate *write* path for organs (needs an identity-propagation
+design first), Streams→EventBridge fan-out (the feed is poll-based today),
+per-entry timers/leases, and the declarative actions/views/CEL tier
+(`docs/declarative-actions-vs-code-cells.md`).
 
 ## Verdict
 

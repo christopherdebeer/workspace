@@ -140,7 +140,12 @@ describe('workspace sharing / view layer', () => {
   it('describeTools advertises the whole vocabulary for the /mcp gateway', async () => {
     const { tools } = await cmds.describeTools(undefined, ctxFor('alice').ctx);
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare'].sort());
+    expect(names).toEqual(
+      [
+        'peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare',
+        'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
+      ].sort(),
+    );
     // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
     // to any authenticated principal.
     expect(tools.every((t) => t.scope === null)).toBe(true);
@@ -152,5 +157,118 @@ describe('workspace sharing / view layer', () => {
     expect(remember.kind).toBe('act');
     expect(tools.find((t) => t.name === 'recall')!.kind).toBe('read');
     expect(new Set(tools.map((t) => t.kind))).toEqual(new Set(['read', 'act']));
+  });
+});
+
+describe('workspace substrate primitives (query / CAS / links / changes / attention)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const alice = (): ServiceContext => ctxFor('alice').ctx;
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'd1', value: 'choose dynamo', type: 'decision', tags: ['storage', 'substrate'] }, alice());
+    await cmds.remember({ key: 'd2', value: 'one table', type: 'decision', tags: ['storage'] }, alice());
+    await cmds.remember({ key: 't1', value: 'wire links', type: 'todo', tags: ['substrate'] }, alice());
+    await cmds.remember({ key: 'note', value: 'untyped' }, alice());
+  });
+
+  it('query filters by type, tag, and prefix, with a limit', async () => {
+    const decisions = await cmds.query({ type: 'decision' }, alice());
+    expect(decisions.entries.map((e) => e.key).sort()).toEqual(['d1', 'd2']);
+
+    const tagged = await cmds.query({ tag: 'substrate' }, alice());
+    expect(tagged.entries.map((e) => e.key).sort()).toEqual(['d1', 't1']);
+
+    const both = await cmds.query({ type: 'decision', tag: 'substrate' }, alice());
+    expect(both.entries.map((e) => e.key)).toEqual(['d1']);
+
+    const prefixed = await cmds.query({ prefix: 'd' }, alice());
+    expect(prefixed.entries.map((e) => e.key).sort()).toEqual(['d1', 'd2']);
+
+    const limited = await cmds.query({ rankBy: 'recency', limit: 1 }, alice());
+    expect(limited.count).toBe(1); // ranking ties same-ms writes arbitrarily; limit is the contract
+  });
+
+  it('query rankBy recency puts a fresh write first', async () => {
+    // A distinct, later timestamp: stub Date.now via a real later write.
+    await new Promise((r) => setTimeout(r, 5));
+    await cmds.remember({ key: 'freshest', value: 'now' }, alice());
+    const ranked = await cmds.query({ rankBy: 'recency' }, alice());
+    expect(ranked.entries[0].key).toBe('freshest');
+  });
+
+  it('type and tags surface in _meta and are preserved on an untyped rewrite', async () => {
+    const e = await cmds.remember({ key: 'd1', value: 'choose dynamo (v2)' }, alice());
+    expect(e._meta.type).toBe('decision');
+    expect(e._meta.tags).toEqual(['storage', 'substrate']);
+    expect(e._meta.revision).toBe(2);
+  });
+
+  it('conditional writes: ifAbsent and ifRevision enforce CAS', async () => {
+    await expect(cmds.remember({ key: 'd1', value: 'x', ifAbsent: true }, alice())).rejects.toThrow(/precondition_failed/);
+    await expect(cmds.remember({ key: 'd1', value: 'x', ifRevision: 1 }, alice())).rejects.toThrow(/precondition_failed/);
+    // The happy paths: correct revision, and 0 for "must not exist".
+    const ok = await cmds.remember({ key: 'd1', value: 'claimed', ifRevision: 2 }, alice());
+    expect(ok._meta.revision).toBe(3);
+    const fresh = await cmds.remember({ key: 'claim-slot', value: 'me', ifRevision: 0 }, alice());
+    expect(fresh._meta.revision).toBe(1);
+  });
+
+  it('link/neighbors traverse typed edges in both directions', async () => {
+    await cmds.link({ from: 't1', rel: 'grounds', to: 'd1' }, alice());
+    await cmds.link({ from: 'd2', rel: 'refines', to: 'd1' }, alice());
+
+    const around = await cmds.neighbors({ key: 'd1' }, alice());
+    expect(around.inbound.map((e) => `${e.from}-${e.rel}`).sort()).toEqual(['d2-refines', 't1-grounds']);
+    expect(around.outbound).toEqual([]);
+    expect(Object.keys(around.entries).sort()).toEqual(['d2', 't1']); // neighbor entries included
+
+    const onlyGrounds = await cmds.neighbors({ key: 'd1', dir: 'in', rel: 'grounds' }, alice());
+    expect(onlyGrounds.inbound.map((e) => e.from)).toEqual(['t1']);
+
+    await cmds.unlink({ from: 'd2', rel: 'refines', to: 'd1' }, alice());
+    expect((await cmds.neighbors({ key: 'd1' }, alice())).inbound.map((e) => e.from)).toEqual(['t1']);
+  });
+
+  it('supersede migrateLinks carries edges to the successor', async () => {
+    await cmds.remember({ key: 'd1v2', value: 'successor decision', type: 'decision' }, alice());
+    await cmds.supersede({ key: 'd1', by: 'd1v2', migrateLinks: true }, alice());
+
+    const successor = await cmds.neighbors({ key: 'd1v2' }, alice());
+    expect(successor.inbound.map((e) => `${e.from}-${e.rel}`)).toEqual(['t1-grounds']);
+    expect((await cmds.neighbors({ key: 'd1' }, alice())).inbound).toEqual([]); // old edges gone
+  });
+
+  it('changes tails the trajectory from a seq and reports the head', async () => {
+    const all = await cmds.changes(undefined, alice());
+    expect(all.seq).toBeGreaterThan(0);
+    expect(all.events.length).toBeGreaterThan(0);
+    expect(all.events.some((e) => e.op === 'link')).toBe(true);
+
+    const tail = await cmds.changes({ sinceSeq: all.seq }, alice());
+    expect(tail.events).toEqual([]); // nothing after the head
+
+    await cmds.remember({ key: 'after-head', value: 1 }, alice());
+    const next = await cmds.changes({ sinceSeq: all.seq }, alice());
+    expect(next.events.map((e) => `${e.op}:${e.key}`)).toEqual(['write:after-head']);
+  });
+
+  it('attention surfaces stale, unlinked, and dangling as a derived read', async () => {
+    // Everything was written moments ago, so nothing is stale at the default
+    // threshold; with staleMs 0 everything live qualifies.
+    const att = await cmds.attention({ staleMs: 0 }, alice());
+    expect(att.stale.length).toBeGreaterThan(0);
+    expect(att.unlinked).toContain('note'); // never linked
+    expect(att.unlinked).not.toContain('t1'); // linked
+    // d1 was retired *toward* d1v2, so its remaining edges (none) are clean,
+    // and no edge should dangle on a retired-without-successor endpoint.
+    expect(att.dangling).toEqual([]);
+
+    // Retire the successor with no onward pointer — its inbound edge dangles.
+    await cmds.supersede({ key: 'd1v2' }, alice());
+    const att2 = await cmds.attention({ staleMs: 0 }, alice());
+    expect(att2.dangling.some((d) => d.to === 'd1v2' && d.reason.includes('retired'))).toBe(true);
   });
 });
