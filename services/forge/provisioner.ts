@@ -187,3 +187,49 @@ export async function getCellLogs(p: GetCellLogsParams): Promise<CellLogEvent[]>
     throw err;
   }
 }
+
+// ─── S3 object store (the cell common layer) ─────────────────────────
+// forge brokers all cell S3 access; it already holds ReadWrite on the bucket.
+
+/** Write an object (a source file, a blob, or a built zip). */
+export async function putObject(bucket: string, key: string, body: string | Buffer, contentType = 'application/octet-stream'): Promise<void> {
+  await s3().putObject({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }).promise();
+}
+
+/** Read an object as a UTF-8 string, or `null` if it does not exist. */
+export async function getObject(bucket: string, key: string): Promise<string | null> {
+  try {
+    const res = await s3().getObject({ Bucket: bucket, Key: key }).promise();
+    const body = res.Body;
+    if (body == null) return '';
+    return typeof body === 'string' ? body : Buffer.from(body as Uint8Array).toString('utf-8');
+  } catch (err) {
+    const e = err as { code?: string; statusCode?: number };
+    if (e.code === 'NoSuchKey' || e.code === 'NotFound' || e.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+/** List all object keys under a prefix (paginated to completion). */
+export async function listObjects(bucket: string, prefix: string): Promise<string[]> {
+  const keys: string[] = [];
+  let token: string | undefined;
+  do {
+    const res = await s3()
+      .listObjectsV2({ Bucket: bucket, Prefix: prefix, ContinuationToken: token })
+      .promise();
+    for (const o of res.Contents ?? []) if (o.Key) keys.push(o.Key);
+    token = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (token);
+  return keys;
+}
+
+/** Delete one object. */
+export async function deleteObject(bucket: string, key: string): Promise<void> {
+  await s3().deleteObject({ Bucket: bucket, Key: key }).promise();
+}
+
+/** Point a cell's Lambda at a new code zip in S3 (the deploy-on-update step). */
+export async function updateFunctionCode(functionName: string, bucket: string, key: string): Promise<void> {
+  await lambda().updateFunctionCode({ FunctionName: functionName, S3Bucket: bucket, S3Key: key }).promise();
+}

@@ -235,7 +235,10 @@ describe('forge: backend commands', () => {
     expect(res.result!.status).toBe('CREATING');
     expect(res.result!.address).toBe('/@alice/my-notes');
     expect(res.result!.cellId).toMatch(/^my-notes-[0-9a-f]{8}$/);
-    expect(s3Calls).toHaveLength(1);
+    // Two uploads: the built zip + the seeded editable src/index.ts.
+    expect(s3Calls).toHaveLength(2);
+    expect(s3Calls.some((c) => c.Key === `cells/${res.result!.cellId}/src/index.ts`)).toBe(true);
+    expect(s3Calls.some((c) => c.Key.endsWith('.zip'))).toBe(true);
     expect(cfnCalls).toHaveLength(1);
     expect(cfnCalls[0].StackName).toBe(`cell-${res.result!.cellId}`);
     expect(cfnCalls[0].TemplateBody).toContain('arn:aws:iam::111:policy/boundary');
