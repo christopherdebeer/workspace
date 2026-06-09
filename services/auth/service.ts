@@ -101,6 +101,18 @@ async function validateToken(input: ValidateTokenInput) {
   return validateBearer(input.token, store);
 }
 
+/**
+ * The caller's stable account id (UUID). The exposed principal
+ * (`ctx.identity.user`) is the human username (so addresses/scopes are readable),
+ * but token storage stays keyed by the durable account id — so resolve back here.
+ * Falls back to the principal if it can't be resolved to an account.
+ */
+async function callerAccountId(ctx: ServiceContext): Promise<string> {
+  const principal = requireUser(ctx.identity);
+  const account = await store.getUserByUsername(principal);
+  return account?.id ?? principal;
+}
+
 interface MintTokenInput {
   scope: string;
   label?: string;
@@ -108,7 +120,7 @@ interface MintTokenInput {
   withRefresh?: boolean;
 }
 async function mintToken(input: MintTokenInput, ctx: ServiceContext) {
-  const userId = requireUser(ctx.identity);
+  const userId = await callerAccountId(ctx);
   const result = await store.mintToken({
     userId,
     scope: input.scope,
@@ -121,14 +133,14 @@ async function mintToken(input: MintTokenInput, ctx: ServiceContext) {
 }
 
 async function listTokens(_input: unknown, ctx: ServiceContext) {
-  return store.listUserTokens(requireUser(ctx.identity));
+  return store.listUserTokens(await callerAccountId(ctx));
 }
 
 interface RevokeTokenInput {
   tokenId: string;
 }
 async function revokeToken(input: RevokeTokenInput, ctx: ServiceContext) {
-  const userId = requireUser(ctx.identity);
+  const userId = await callerAccountId(ctx);
   const ok = await store.revokeToken(input.tokenId, userId);
   if (ok) await ctx.events.emit('auth.token.revoked', { userId, id: input.tokenId });
   return { revoked: ok };

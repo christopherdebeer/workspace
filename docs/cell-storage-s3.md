@@ -100,6 +100,18 @@ Promotion to tier-1 also gets cleaner: copy the `src/` tree into the repo.
   `owner`/`grants`, identical to `callCell`.
 - **Secrets** never go in `src/`; use the env mechanism.
 
+## Principals are human usernames
+
+`<user>` (and a cell's `<owner>` in `@<owner>/<cell>`) is the caller's **username**,
+not an account UUID. The auth cell exposes the human handle as the principal —
+`validateBearer` resolves the account id → username, while the UUID stays the
+durable anchor for credentials + token storage (token-management commands resolve
+the handle back to the account id). So **dispatch addresses, substrate scopes, and
+these S3 prefixes are all readable** — `@alice/notes`, scope `alice`, `data/alice/…`
+— rather than `@cb47e675-…/…`. Renaming a handle is a future one-shot migration;
+the account UUID is the stable join key. (Done in this PR; fixed while there's
+almost no UUID-keyed data — retrofitting addressing later is painful.)
+
 ## Where it sits in the storage picture
 
 Per `docs/sync-learnings.md` / `substrate-gaps.md`: DynamoDB stays the structured
