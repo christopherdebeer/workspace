@@ -16,7 +16,7 @@ export const handler = defineService({
   name: 'workspace',
   commands,
   events: {
-    emits: ['workspace.fact.written', 'workspace.shared'],
+    emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked'],
   },
 });
 

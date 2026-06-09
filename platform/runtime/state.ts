@@ -66,6 +66,8 @@ export interface EntryMeta {
   type: string | null;
   /** Optional tags (filterable in `query`). */
   tags: string[];
+  /** The fact's timer (lease/reveal), when set. Liveness is computed at read. */
+  timer: { expiresAt: string; effect: 'delete' | 'enable' } | null;
   /** Salience score in [0,1], computed at read time from the trajectory. */
   score: number;
   /** Recent write rate (writes per minute over the salience window). */
@@ -103,6 +105,49 @@ export class StatePreconditionError extends Error {
   }
 }
 
+// ── per-entry timers (sync's lease/visibility primitive) ──────────
+
+/**
+ * A fact timer, evaluated **lazily at read** — no scheduler (sync's model).
+ *
+ *   - `effect: 'delete'` — the fact is live now and *vanishes* at expiry. This
+ *     is the lease / visibility-timeout: a claim that auto-disappears so the
+ *     work reappears. (The only deliberate exception to "nothing is lost" —
+ *     a timer declares the fact ephemeral; DynamoDB TTL eventually GCs it.)
+ *   - `effect: 'enable'` — the fact is *dormant* until expiry, then live
+ *     (scheduled reveal / cooldown release).
+ */
+export interface FactTimer {
+  /** Relative expiry in ms from the write. */
+  ms?: number;
+  /** Absolute ISO expiry. Exactly one of `ms`/`at` is required. */
+  at?: string;
+  effect: 'delete' | 'enable';
+}
+
+/** Is a record live right now, per its timer? (No timer = live.) */
+export function isTimerLive(rec: Pick<StateRecord, 'timerExpiresAt' | 'timerEffect'>, nowMs: number): boolean {
+  if (!rec.timerExpiresAt || !rec.timerEffect) return true;
+  const expired = nowMs >= Date.parse(rec.timerExpiresAt);
+  return rec.timerEffect === 'delete' ? !expired : expired;
+}
+
+function resolveTimer(timer: FactTimer, nowMs: number): { expiresAt: string; effect: 'delete' | 'enable' } {
+  const hasMs = typeof timer.ms === 'number';
+  const hasAt = typeof timer.at === 'string';
+  if (hasMs === hasAt) throw new Error('timer requires exactly one of `ms` or `at`');
+  if (timer.effect !== 'delete' && timer.effect !== 'enable') throw new Error('timer.effect must be "delete" or "enable"');
+  let expiresMs: number;
+  if (hasMs) {
+    if (!Number.isFinite(timer.ms) || (timer.ms as number) <= 0) throw new Error('timer.ms must be a positive number');
+    expiresMs = nowMs + (timer.ms as number);
+  } else {
+    expiresMs = Date.parse(timer.at as string);
+    if (Number.isNaN(expiresMs)) throw new Error('timer.at must be an ISO timestamp');
+  }
+  return { expiresAt: new Date(expiresMs).toISOString(), effect: timer.effect };
+}
+
 // ── storage contract (injected) ────────────────────────────────────
 
 export interface StateRecord {
@@ -123,6 +168,9 @@ export interface StateRecord {
   supersededBy: string | null;
   type: string | null;
   tags: string[];
+  /** ISO expiry when a timer is set, else null. Liveness is computed at read. */
+  timerExpiresAt: string | null;
+  timerEffect: 'delete' | 'enable' | null;
 }
 
 /** A typed, directed edge between two located keys within one scope. */
@@ -144,11 +192,15 @@ export interface TrajectoryEvent {
   seq: number;
 }
 
-export interface PutCondition {
-  /** Require the stored revision to equal this (0 = the key must not exist). */
-  ifRevision?: number;
-  /** Require the key not to exist. */
-  ifAbsent?: boolean;
+/**
+ * Store-level optimistic guard: assert the *physical* item is unchanged since
+ * it was read (`expectRevision: null` = the item must not exist). The
+ * semantic CAS (`ifRevision`/`ifAbsent` against the *live* view, timers
+ * considered) is evaluated in the primitive; this guard closes the race
+ * window atomically at the storage layer.
+ */
+export interface PutGuard {
+  expectRevision: number | null;
 }
 
 export interface StateStore {
@@ -158,11 +210,11 @@ export interface StateStore {
   currentSeq(scope: string): Promise<number>;
   get(scope: string, key: string): Promise<StateRecord | null>;
   /**
-   * Persist a record. When `cond` is given the write is atomic on the *stored*
-   * item's state (DynamoDB `ConditionExpression`); a failed condition throws
+   * Persist a record. When `guard` is given the write is atomic on the stored
+   * item's revision (DynamoDB `ConditionExpression`); a failed guard throws
    * `StatePreconditionError`.
    */
-  put(record: StateRecord, cond?: PutCondition): Promise<void>;
+  put(record: StateRecord, guard?: PutGuard): Promise<void>;
   list(scope: string): Promise<StateRecord[]>;
   /** Records of a given indexable `type` within a scope (GSI-backed in prod). */
   listByType(scope: string, type: string): Promise<StateRecord[]>;
@@ -250,6 +302,12 @@ export interface WriteInput {
   ifRevision?: number;
   /** CAS: require the key not to exist. */
   ifAbsent?: boolean;
+  /**
+   * Lease/reveal timer, evaluated at read: `effect:'delete'` = live now,
+   * vanishes at expiry (a lease); `effect:'enable'` = dormant until expiry.
+   * CAS treats an expired-delete fact as absent — the crash-safe claim.
+   */
+  timer?: FactTimer;
 }
 
 export interface ReadOptions {
@@ -385,6 +443,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         supersededBy: rec.supersededBy,
         type: rec.type,
         tags: rec.tags,
+        timer:
+          rec.timerExpiresAt && rec.timerEffect ? { expiresAt: rec.timerExpiresAt, effect: rec.timerEffect } : null,
         score,
         velocity: windowMin > 0 ? writes / windowMin : 0,
         elided: false,
@@ -420,24 +480,28 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       if (!input?.scope || !input?.key) throw new Error('state.put requires `scope` and `key`');
       const writer = identity?.user ?? null;
       const now = new Date();
+      const nowMs = now.getTime();
       const nowIso = now.toISOString();
       const prev = await store.get(input.scope, input.key);
+      // CAS sees the *live* view: an expired-delete fact counts as absent
+      // (that lapse is exactly what makes a lease claim crash-safe).
+      const livePrev = prev && isTimerLive(prev, nowMs) ? prev : null;
 
-      // CAS: fail fast on what we just read; the store's conditional put
+      // CAS: fail fast on what we just read; the store's revision guard
       // closes the remaining race window atomically.
-      const cond: PutCondition | undefined =
-        input.ifRevision !== undefined || input.ifAbsent ? { ifRevision: input.ifRevision, ifAbsent: input.ifAbsent } : undefined;
-      if (cond) {
-        if (cond.ifAbsent && prev) {
-          throw new StatePreconditionError(`"${input.key}" already exists (revision ${prev.revision})`);
+      const hasCas = input.ifRevision !== undefined || !!input.ifAbsent;
+      if (hasCas) {
+        if (input.ifAbsent && livePrev) {
+          throw new StatePreconditionError(`"${input.key}" already exists (revision ${livePrev.revision})`);
         }
-        if (cond.ifRevision !== undefined && (prev?.revision ?? 0) !== cond.ifRevision) {
+        if (input.ifRevision !== undefined && (livePrev?.revision ?? 0) !== input.ifRevision) {
           throw new StatePreconditionError(
-            `"${input.key}" is at revision ${prev?.revision ?? 0}, expected ${cond.ifRevision}`,
+            `"${input.key}" is at revision ${livePrev?.revision ?? 0}, expected ${input.ifRevision}`,
           );
         }
       }
 
+      const timer = input.timer ? resolveTimer(input.timer, nowMs) : null;
       const seq = await store.nextSeq(input.scope);
       const writers = prev
         ? writer && !prev.writers.includes(writer)
@@ -450,6 +514,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         scope: input.scope,
         key: input.key,
         value: input.value,
+        // physical continuity even across a lapsed lease — monotonic always
         revision: (prev?.revision ?? 0) + 1,
         seq,
         firstSeq: prev?.firstSeq ?? seq,
@@ -464,16 +529,18 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         // omitting type/tags on a rewrite preserves what is already stored
         type: input.type !== undefined ? input.type : (prev?.type ?? null),
         tags: input.tags !== undefined ? input.tags : (prev?.tags ?? []),
+        timerExpiresAt: timer?.expiresAt ?? null,
+        timerEffect: timer?.effect ?? null,
       };
-      await store.put(record, cond);
+      await store.put(record, hasCas ? { expectRevision: prev?.revision ?? null } : undefined);
       await store.appendTrajectory({ op: 'write', scope: input.scope, key: input.key, at: nowIso, seq });
-      return wrap(record, now.getTime());
+      return wrap(record, nowMs);
     },
 
     async get(scope: string, key: string, _identity?: Identity): Promise<Entry | null> {
       const rec = await store.get(scope, key);
-      if (!rec) return null;
       const now = new Date();
+      if (!rec || !isTimerLive(rec, now.getTime())) return null;
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'read', scope, key, at: now.toISOString(), seq });
       return wrap(rec, now.getTime());
@@ -492,6 +559,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const scored: Record<string, Entry> = {};
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
+        if (!isTimerLive(rec, nowMs)) continue;
         scored[rec.key] = await wrap(rec, nowMs, traj);
       }
 
@@ -509,6 +577,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const traj = await store.recentTrajectory(scope, nowMs - s.windowMs);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
+        if (!isTimerLive(rec, nowMs)) return false;
         if (opts?.tag && !rec.tags.includes(opts.tag)) return false;
         if (opts?.prefix && !rec.key.startsWith(opts.prefix)) return false;
         return true;
@@ -570,7 +639,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
         const rec = await store.get(scope, nk);
-        if (rec) entries[nk] = await wrap(rec, nowMs, traj);
+        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, traj);
       }
       return { outbound, inbound, entries };
     },
@@ -597,7 +666,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         linked.add(e.from);
         linked.add(e.to);
       }
-      const live = records.filter((r) => !r.superseded);
+      const live = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
       const stale = live
         .filter((r) => nowMs - Date.parse(r.updatedAt) > staleMs)
         .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
@@ -677,12 +746,11 @@ export function createMemoryStateStore(): StateStore {
       const r = records.get(k(scope, key));
       return r ? { ...r, writers: [...r.writers], tags: [...r.tags] } : null;
     },
-    async put(record: StateRecord, cond?: PutCondition): Promise<void> {
-      if (cond) {
+    async put(record: StateRecord, guard?: PutGuard): Promise<void> {
+      if (guard) {
         const stored = records.get(k(record.scope, record.key));
-        if (cond.ifAbsent && stored) throw new StatePreconditionError(`"${record.key}" already exists`);
-        if (cond.ifRevision !== undefined && (stored?.revision ?? 0) !== cond.ifRevision) {
-          throw new StatePreconditionError(`"${record.key}" is at revision ${stored?.revision ?? 0}, expected ${cond.ifRevision}`);
+        if ((stored?.revision ?? null) !== guard.expectRevision) {
+          throw new StatePreconditionError(`"${record.key}" failed its write condition`);
         }
       }
       records.set(k(record.scope, record.key), { ...record, writers: [...record.writers], tags: [...record.tags] });

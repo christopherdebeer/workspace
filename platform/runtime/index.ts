@@ -35,7 +35,7 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
-export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError } from './state';
+export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError, isTimerLive } from './state';
 export type {
   ObservedState,
   StateStore,
@@ -49,7 +49,8 @@ export type {
   ShapingSummary,
   ReadOptions,
   WriteInput,
-  PutCondition,
+  PutGuard,
+  FactTimer,
   QueryOptions,
   QueryResult,
   NeighborsOptions,
