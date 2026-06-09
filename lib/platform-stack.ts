@@ -100,7 +100,7 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'recall', 'peek', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
+      commands: ['remember', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'changes', 'attention', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared'],
       eventBus,
     });

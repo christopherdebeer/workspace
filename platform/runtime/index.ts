@@ -35,11 +35,12 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
-export { createObservedState, createMemoryStateStore, computeScore } from './state';
+export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError } from './state';
 export type {
   ObservedState,
   StateStore,
   StateRecord,
+  EdgeRecord,
   TrajectoryEvent,
   Entry,
   EntryMeta,
@@ -48,5 +49,14 @@ export type {
   ShapingSummary,
   ReadOptions,
   WriteInput,
+  PutCondition,
+  QueryOptions,
+  QueryResult,
+  NeighborsOptions,
+  NeighborsResult,
+  ChangesResult,
+  AttentionOptions,
+  AttentionResult,
+  SupersedeOptions,
   SalienceOptions,
 } from './state';
