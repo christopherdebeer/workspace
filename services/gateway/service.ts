@@ -279,7 +279,7 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
 }
 
 export const handler = defineMcpService({
-  name: 'resource',
+  name: 'gateway',
   mcpPath: '/mcp',
   serverInfo: { name: 'workspace', version: '1.0.0' },
   tools,

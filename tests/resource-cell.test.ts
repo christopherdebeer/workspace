@@ -8,7 +8,7 @@
  * owning cell, enforce per-target scope, and refuse to cross the read/act boundary;
  * and that dynamic-cell tools dispatch through `forge.callCellTool`.
  */
-import { handler as gateway } from '../services/resource/service';
+import { handler as gateway } from '../services/gateway/service';
 import { __setLambda } from '../platform/runtime/service-client';
 import type { FunctionUrlEvent, FunctionUrlResponse } from '../platform/runtime';
 
@@ -91,7 +91,7 @@ async function callTool(token: string, name: string, args: unknown): Promise<{ i
 
 describe('resource cell (MCP gateway, read/act)', () => {
   beforeEach(() => {
-    process.env.SERVICE_NAME = 'resource';
+    process.env.SERVICE_NAME = 'gateway';
     process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', cells: 'cells-fn', workspace: 'workspace-fn' });
     process.env.PUBLIC_BASE_URL = 'https://parc.land';
     lastCall = undefined;
