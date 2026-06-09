@@ -78,23 +78,10 @@ export class PlatformStack extends cdk.Stack {
       // the public domain) exists.
     });
 
-    const render = new HttpServiceCell(this, 'RenderService', {
-      name: 'render',
-      entry: serviceEntry('render'),
-      routes: ['/render/*'],
-      commands: ['generatePreview'],
-      eventBus,
-    });
-
-    const documents = new HttpServiceCell(this, 'DocumentService', {
-      name: 'documents',
-      entry: serviceEntry('documents'),
-      routes: ['/documents/*'],
-      persistence: { dynamo: true, turso: true },
-      commands: ['createDocument', 'getDocument'],
-      emits: ['document.created'],
-      eventBus,
-    });
+    // (Retired: the `documents` + `render` example cells — bootstrap-era demos of
+    // defineService persistence + peer sync-calls, superseded by `workspace` (real
+    // substrate persistence) and `cells` (the real reflexive example). See
+    // docs/platform-cells.md.)
 
     // The first flagship room over the observed-state substrate: each user's
     // workspace is their slice of the one Substrate ({ value, _meta } facts with
@@ -166,11 +153,8 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
     });
 
-    // Least-privilege: documents may invoke render, but not vice versa.
-    documents.allow(render);
     // Any cell that protects routes asks the auth service to validate the
     // bearer token (the in-cell alternative to edge validation).
-    documents.allow(auth);
     workspace.allow(auth);
     resource.allow(auth);
     dispatch.allow(auth);
@@ -207,7 +191,7 @@ export class PlatformStack extends cdk.Stack {
 
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.
-      cells: [home, auth, documents, workspace, render, resource, dispatch],
+      cells: [home, auth, workspace, resource, dispatch],
       defaultCell: home,
       domainNames: props?.domainNames,
       certificate,
@@ -238,7 +222,7 @@ export class PlatformStack extends cdk.Stack {
     // the single source of truth) so the home SPA renders the service list from
     // real data rather than a hardcoded copy. Served at GET /_catalog. (forge is
     // a routeless backend, surfaced through the /mcp gateway, not listed here.)
-    const catalog = [home, auth, resource, documents, workspace, render, dispatch].map((c) => c.manifest);
+    const catalog = [home, auth, resource, workspace, dispatch].map((c) => c.manifest);
     home.fn.addEnvironment('PLATFORM_CATALOG', JSON.stringify(catalog));
   }
 }
