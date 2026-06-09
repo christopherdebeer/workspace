@@ -36,6 +36,17 @@ export type CommandHandler<Input = unknown, Output = unknown> = (
  */
 export type RegisteredCommand = CommandHandler<never, unknown>;
 
+/**
+ * Handler for an EventBridge-delivered domain event (subscriber side of
+ * Mode 2). `meta.source` is the emitter's IAM-attested event source when the
+ * rule restricts sources (see `PlatformEventBus.routeTo`).
+ */
+export type EventBridgeHandler = (
+  detail: Record<string, unknown>,
+  ctx: ServiceContext,
+  meta: { source: string; detailType: string },
+) => Promise<void> | void;
+
 export interface ServiceDefinition {
   /** Must match the manifest/infra name. */
   name: string;
@@ -43,7 +54,11 @@ export interface ServiceDefinition {
   version?: string;
   /** Synchronous commands, callable over HTTP and via direct invoke. */
   commands: Record<string, RegisteredCommand>;
-  events?: { emits?: string[] };
+  events?: {
+    emits?: string[];
+    /** Bus events this cell consumes, by detail-type (wired via `routeTo`). */
+    handles?: Record<string, EventBridgeHandler>;
+  };
   /**
    * Raw HTTP routes for paths that don't fit the `/<service>/<command>` shape
    * (e.g. OAuth endpoints, `.well-known` documents, redirect/consent pages).

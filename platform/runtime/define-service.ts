@@ -170,7 +170,31 @@ export function defineService(definition: ServiceDefinition) {
 
   async function handler(
     event: FunctionUrlEvent | CommandEnvelope,
-  ): Promise<FunctionUrlResponse | CommandResult> {
+  ): Promise<FunctionUrlResponse | CommandResult | void> {
+    // ---- EventBridge-delivered domain event (Mode 2, subscriber side) ----
+    const eb = event as unknown as { 'detail-type'?: string; source?: string; detail?: Record<string, unknown> };
+    if (
+      typeof eb['detail-type'] === 'string' &&
+      typeof eb.source === 'string' &&
+      eb.detail !== undefined &&
+      !('requestContext' in event)
+    ) {
+      const detailType = eb['detail-type'];
+      const correlationId = (eb.detail?.correlationId as string | undefined) ?? randomUUID();
+      // Bus events carry no caller identity; trust derives from the event's
+      // IAM-attested `source`, which the handler receives in `meta`.
+      const ctx = buildContext({ correlationId, traceId: correlationId, identity: { scopes: [] } });
+      const eventHandler = definition.events?.handles?.[detailType];
+      if (!eventHandler) {
+        ctx.logger.warn('unhandled bus event', { detailType, source: eb.source });
+        return;
+      }
+      // Throwing lets Lambda's async retry handle transient failures.
+      await eventHandler(eb.detail ?? {}, ctx, { source: eb.source, detailType });
+      ctx.logger.info('bus event handled', { detailType, source: eb.source });
+      return;
+    }
+
     // ---- Direct service-to-service invoke -------------------------------
     if (isCommandEnvelope(event)) {
       const correlationId = event.correlationId ?? randomUUID();

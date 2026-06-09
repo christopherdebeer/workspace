@@ -155,10 +155,14 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
                     Resource: [tableArn, `${tableArn}/index/*`],
                   },
                   {
+                    // Source-pinned: this cell can only emit events AS itself,
+                    // so a subscriber (e.g. the workspace's substrate-write
+                    // handler) can trust `source` as IAM-attested identity.
                     Sid: 'PublishEvents',
                     Effect: 'Allow',
                     Action: ['events:PutEvents'],
                     Resource: p.eventBusArn,
+                    Condition: { StringEquals: { 'events:source': name } },
                   },
                   ...substrateStatements,
                 ],

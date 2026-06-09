@@ -214,10 +214,33 @@ workspace read/act targets:
   targets are detected from the declared `writes[]` and surfaced, not
   blocked. Actions may not write the `_actions/` vocabulary itself.
 
-Not yet: a substrate *write* path for organs (needs an identity-propagation
-design first), Streams→EventBridge fan-out (the feed is poll-based today),
-CEL conditions + registered views with render hints, and rooms
-(shared multi-writer scopes).
+## Status — phase 4 shipped (views + the organ write path)
+
+- **Registered views v1** (`services/workspace/views.ts`): a view is a fact
+  at `_views/<id>` — `{ id, query, reduce?: list|count|latest|sum, path?,
+  render? }` — a *stored projection* with an optional **render hint**, so the
+  same declaration is a dashboard surface for humans and an affordance for
+  agents (home's phases 2–3 build on this). Prefix-less views exclude the
+  reserved vocabulary keys.
+- **The organ-to-reef write path**: a dynamic cell emits a
+  `substrate.write.requested` event; an EventBridge rule (source-prefixed
+  `cell-`) routes it to the workspace, which applies the fact in the cell
+  **owner's** slice with writer `@owner/<cell>` — through the same
+  observed-state primitive (provenance, revision, trajectory). The trust
+  design: identity propagation via direct invoke was rejected (the command
+  envelope's `user` is client-supplied — impersonation), so instead each
+  cell's role policy pins `events:PutEvents` to `events:source =
+  cell-<cellId>`, making the event source **IAM-attested**; the owner is
+  resolved through the cells registry, never from the event body. Organs may
+  not write the `_actions/`/`_views/` vocabulary. `defineService` gained the
+  subscriber side of Mode 2 (`events.handles`), and `PlatformEventBus` gained
+  `routeTo`.
+
+Not yet (deliberate decisions, not gaps): a CEL upgrade replacing the
+structured condition/projection DSL (the stored models were designed for
+drop-in replacement), rooms (shared multi-writer scopes — a product
+decision: per-user substrate vs multi-agent collaboration unit), and
+Streams→EventBridge change-feed fan-out (the feed is poll-based today).
 
 ## Verdict
 
