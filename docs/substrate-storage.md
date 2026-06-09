@@ -192,10 +192,32 @@ workspace read/act targets:
 - **Gap 5 — attention**: a derived read of stale / unlinked / dangling —
   the just-in-time cron, as a read.
 
+## Status — phase 3 shipped (timers + the declarative tier v1)
+
+- **Per-entry timers** (sync's lease/visibility primitive, *evaluated at
+  read* — no scheduler): `remember` takes `timer: { ms|at, effect:
+  'delete'|'enable' }`. `delete` = live now, vanishes at expiry (the lease;
+  DynamoDB TTL GCs the husk — the one deliberate exception to "nothing is
+  lost"); `enable` = dormant until expiry (the reveal). CAS treats an
+  expired lease as **absent**, so `ifAbsent` re-claims are crash-safe; the
+  store-level guard is now an optimistic physical-revision check that closes
+  the race window for both cases.
+- **Declarative actions v1** (`services/workspace/actions.ts`, per
+  `declarative-actions-vs-code-cells.md`): an action is a *fact* at
+  `_actions/<id>` — `{ id, if?, enabled?, writes[], params? }` — applied by
+  a small fixed interpreter (`registerAction`/`actions`/`deleteAction`/
+  `invoke`). Conditions are a structured, decidable DSL (exists/absent/eq/
+  ne/gt/lt over key+path) — a CEL upgrade can replace the evaluator without
+  changing the stored model. Substitution (`${params.x}`/`${self}`/`${now}`)
+  is single-pass; per-write `ifAbsent` + `timer` reproduces sync's canonical
+  task-queue claim (atomic, lease-bound, crash-safe). Contested write
+  targets are detected from the declared `writes[]` and surfaced, not
+  blocked. Actions may not write the `_actions/` vocabulary itself.
+
 Not yet: a substrate *write* path for organs (needs an identity-propagation
 design first), Streams→EventBridge fan-out (the feed is poll-based today),
-per-entry timers/leases, and the declarative actions/views/CEL tier
-(`docs/declarative-actions-vs-code-cells.md`).
+CEL conditions + registered views with render hints, and rooms
+(shared multi-writer scopes).
 
 ## Verdict
 

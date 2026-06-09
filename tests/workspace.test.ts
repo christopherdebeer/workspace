@@ -144,6 +144,7 @@ describe('workspace sharing / view layer', () => {
       [
         'peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare',
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
+        'registerAction', 'actions', 'deleteAction', 'invoke',
       ].sort(),
     );
     // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
@@ -270,5 +271,176 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     await cmds.supersede({ key: 'd1v2' }, alice());
     const att2 = await cmds.attention({ staleMs: 0 }, alice());
     expect(att2.dangling.some((d) => d.to === 'd1v2' && d.reason.includes('retired'))).toBe(true);
+  });
+});
+
+describe('workspace timers (lease / reveal, evaluated at read)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const alice = (): ServiceContext => ctxFor('alice').ctx;
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  it('a delete-effect timer makes a fact vanish at expiry (the lease)', async () => {
+    const e = await cmds.remember({ key: 'claim', value: 'mine', timer: { ms: 40, effect: 'delete' } }, alice());
+    expect(e._meta.timer?.effect).toBe('delete');
+    expect((await cmds.peek({ key: 'claim' }, alice()))?.value).toBe('mine'); // live now
+
+    await sleep(50);
+    expect(await cmds.peek({ key: 'claim' }, alice())).toBeNull(); // lapsed
+    const view = await cmds.recall({ elision: 'none' }, alice());
+    expect(view.entries['claim']).toBeUndefined(); // hidden from recall too
+  });
+
+  it('an enable-effect timer keeps a fact dormant until expiry (the reveal)', async () => {
+    await cmds.remember({ key: 'reveal', value: 'later', timer: { ms: 40, effect: 'enable' } }, alice());
+    expect(await cmds.peek({ key: 'reveal' }, alice())).toBeNull(); // dormant
+
+    await sleep(50);
+    expect((await cmds.peek({ key: 'reveal' }, alice()))?.value).toBe('later'); // revealed
+  });
+
+  it('ifAbsent treats an expired lease as absent — the crash-safe re-claim', async () => {
+    await cmds.remember({ key: 'slot', value: 'worker-1', ifAbsent: true, timer: { ms: 30, effect: 'delete' } }, alice());
+    // While the lease holds, a competing claim fails.
+    await expect(
+      cmds.remember({ key: 'slot', value: 'worker-2', ifAbsent: true }, alice()),
+    ).rejects.toThrow(/precondition_failed/);
+
+    await sleep(40); // the lease lapses — nobody released it
+    const reclaimed = await cmds.remember({ key: 'slot', value: 'worker-2', ifAbsent: true }, alice());
+    expect(reclaimed.value).toBe('worker-2');
+    expect(reclaimed._meta.revision).toBe(2); // physical continuity, monotonic
+  });
+
+  it('rejects malformed timers', async () => {
+    await expect(
+      cmds.remember({ key: 'bad', value: 1, timer: { ms: 10, at: 'now', effect: 'delete' } }, alice()),
+    ).rejects.toThrow(/exactly one/);
+    await expect(
+      cmds.remember({ key: 'bad', value: 1, timer: { ms: -5, effect: 'delete' } }, alice()),
+    ).rejects.toThrow(/positive/);
+  });
+});
+
+describe('workspace declarative actions (the no-code vocabulary tier)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const alice = (): ServiceContext => ctxFor('alice').ctx;
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  it('registers an action as a fact and lists it', async () => {
+    const res = await cmds.registerAction(
+      {
+        action: {
+          id: 'set-phase',
+          description: 'Move the project phase',
+          params: { phase: { type: 'string', enum: ['planning', 'building', 'done'], required: true } },
+          writes: [{ key: 'phase', value: '${params.phase}', type: 'status' }],
+        },
+      },
+      alice(),
+    );
+    expect(res.contested).toEqual([]);
+    const listed = await cmds.actions(undefined, alice());
+    expect(listed.actions.map((a) => a.id)).toEqual(['set-phase']);
+    // The definition is itself a fact in the slice — vocabulary is state.
+    expect((await cmds.peek({ key: '_actions/set-phase' }, alice()))?._meta.type).toBe('action');
+  });
+
+  it('invoke applies the declared writes with substitution and stamps via', async () => {
+    const res = await cmds.invoke({ action: 'set-phase', params: { phase: 'building' } }, alice());
+    expect(res.writes).toHaveLength(1);
+    expect(res.writes[0].key).toBe('phase');
+    expect(res.writes[0].value).toBe('building');
+    const phase = await cmds.peek({ key: 'phase' }, alice());
+    expect(phase?.value).toBe('building');
+    expect(phase?._meta.via).toBe('action:set-phase');
+    expect(phase?._meta.type).toBe('status');
+  });
+
+  it('validates params against the declared schema', async () => {
+    await expect(cmds.invoke({ action: 'set-phase', params: {} }, alice())).rejects.toThrow(/invalid_param/);
+    await expect(cmds.invoke({ action: 'set-phase', params: { phase: 'flying' } }, alice())).rejects.toThrow(/invalid_param/);
+  });
+
+  it('if conditions gate invocation with a precondition_failed error', async () => {
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'ship',
+          if: [{ key: 'phase', op: 'eq', value: 'done' }],
+          writes: [{ key: 'shipped', value: '${now}' }],
+        },
+      },
+      alice(),
+    );
+    await expect(cmds.invoke({ action: 'ship' }, alice())).rejects.toThrow(/precondition_failed/);
+    await cmds.invoke({ action: 'set-phase', params: { phase: 'done' } }, alice());
+    const shipped = await cmds.invoke({ action: 'ship' }, alice());
+    expect(shipped.invoked).toBe(true);
+  });
+
+  it('surfaces contested write targets at registration (not blocked)', async () => {
+    const res = await cmds.registerAction(
+      {
+        action: { id: 'set-phase-2', writes: [{ key: 'phase', value: 'override' }] },
+      },
+      alice(),
+    );
+    expect(res.contested).toEqual([{ target: 'phase', actions: ['set-phase', 'set-phase-2'] }]);
+  });
+
+  it('reproduces the canonical claim: ifAbsent + lease timer = atomic, crash-safe hand-off', async () => {
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'claim-task',
+          description: 'Claim a task for ${self} with a 50ms lease',
+          params: { task: { type: 'string', required: true } },
+          writes: [
+            {
+              key: 'task:${params.task}:claim',
+              value: { by: '${self}', at: '${now}' },
+              ifAbsent: true,
+              timer: { ms: 50, effect: 'delete' },
+            },
+          ],
+        },
+      },
+      alice(),
+    );
+
+    const first = await cmds.invoke({ action: 'claim-task', params: { task: 't1' } }, alice());
+    expect((first.writes[0].value as { by: string }).by).toBe('alice');
+
+    // Racing second claim → 409-style precondition failure.
+    await expect(cmds.invoke({ action: 'claim-task', params: { task: 't1' } }, alice())).rejects.toThrow(
+      /precondition_failed/,
+    );
+
+    // The claimant crashes (never releases); the lease lapses; the claim frees.
+    await sleep(60);
+    const reclaim = await cmds.invoke({ action: 'claim-task', params: { task: 't1' } }, alice());
+    expect(reclaim.invoked).toBe(true);
+  });
+
+  it('deleteAction retires the vocabulary entry', async () => {
+    await cmds.deleteAction({ id: 'set-phase-2' }, alice());
+    const listed = await cmds.actions(undefined, alice());
+    expect(listed.actions.map((a) => a.id).sort()).toEqual(['claim-task', 'set-phase', 'ship']);
+    await expect(cmds.invoke({ action: 'set-phase-2' }, alice())).rejects.toThrow(/not_found/);
+  });
+
+  it('a declared action may not write the vocabulary itself', async () => {
+    await expect(
+      cmds.registerAction(
+        { action: { id: 'sneaky', writes: [{ key: '_actions/set-phase', value: {} }] } },
+        alice(),
+      ),
+    ).rejects.toThrow(/may not write/);
   });
 });

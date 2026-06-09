@@ -25,7 +25,7 @@ import {
   type StateRecord,
   type EdgeRecord,
   type TrajectoryEvent,
-  type PutCondition,
+  type PutGuard,
 } from './state';
 
 /** How long trajectory events live (s). Comfortably beyond the salience window. */
@@ -54,6 +54,8 @@ export function createDynamoStateStore(tableName: string): StateStore {
       supersededBy: item.supersededBy ?? null,
       type: item.type ?? null,
       tags: Array.isArray(item.tags) ? item.tags : [],
+      timerExpiresAt: item.timerExpiresAt ?? null,
+      timerEffect: item.timerEffect ?? null,
     };
   }
 
@@ -108,7 +110,7 @@ export function createDynamoStateStore(tableName: string): StateStore {
       return res.Item ? toRecord(res.Item) : null;
     },
 
-    async put(record: StateRecord, cond?: PutCondition): Promise<void> {
+    async put(record: StateRecord, guard?: PutGuard): Promise<void> {
       const item: DynamoDB.DocumentClient.AttributeMap = {
         pk: statePk(record.scope),
         sk: `KEY#${record.key}`,
@@ -119,12 +121,19 @@ export function createDynamoStateStore(tableName: string): StateStore {
         item.gsi2pk = `TYPE#${record.scope}#${record.type}`;
         item.gsi2sk = record.updatedAt;
       }
+      // A delete-effect timer declares the fact ephemeral: read-time filtering
+      // gives precise visibility; table TTL eventually GCs the husk.
+      if (record.timerEffect === 'delete' && record.timerExpiresAt) {
+        item.ttl = Math.floor(Date.parse(record.timerExpiresAt) / 1000) + 24 * 60 * 60;
+      }
       const params: DynamoDB.DocumentClient.PutItemInput = { TableName: tableName, Item: item };
-      if (cond?.ifAbsent || cond?.ifRevision === 0) {
-        params.ConditionExpression = 'attribute_not_exists(pk)';
-      } else if (cond?.ifRevision !== undefined) {
-        params.ConditionExpression = 'revision = :ifrev';
-        params.ExpressionAttributeValues = { ':ifrev': cond.ifRevision };
+      if (guard) {
+        if (guard.expectRevision === null) {
+          params.ConditionExpression = 'attribute_not_exists(pk)';
+        } else {
+          params.ConditionExpression = 'revision = :rev';
+          params.ExpressionAttributeValues = { ':rev': guard.expectRevision };
+        }
       }
       try {
         await db.put(params).promise();

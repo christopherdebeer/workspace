@@ -33,9 +33,16 @@ import {
   type ChangesResult,
   type AttentionResult,
   type EdgeRecord,
+  type FactTimer,
   type CommandHandler,
   type RegisteredCommand,
 } from '../../platform/runtime';
+import {
+  createDeclarativeActions,
+  type ActionDefinition,
+  type RegisterResult,
+  type InvokeResult,
+} from './actions';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
 import {
   createDynamoGrantStore,
@@ -77,6 +84,8 @@ export interface RememberInput {
   ifRevision?: number;
   /** CAS: require the key not to exist. */
   ifAbsent?: boolean;
+  /** Lease/reveal timer, evaluated at read (no scheduler). */
+  timer?: FactTimer;
 }
 export interface RecallInput {
   elision?: 'auto' | 'none';
@@ -122,6 +131,16 @@ export interface SupersedeInput {
   /** Re-point the fact's edges at the successor (requires `by`). */
   migrateLinks?: boolean;
 }
+export interface RegisterActionInput {
+  action: ActionDefinition;
+}
+export interface DeleteActionInput {
+  id: string;
+}
+export interface InvokeInput {
+  action: string;
+  params?: Record<string, unknown>;
+}
 export interface ShareInput {
   /** The user to share with. */
   to: string;
@@ -148,6 +167,10 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
+  registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
+  actions: CommandHandler<undefined, { actions: ActionDefinition[] }>;
+  deleteAction: CommandHandler<DeleteActionInput, { ok: true }>;
+  invoke: CommandHandler<InvokeInput, InvokeResult>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
@@ -188,7 +211,19 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         type: { type: 'string', description: 'Optional indexable fact type (e.g. "decision", "todo")' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags (filterable in query)' },
         ifRevision: { type: 'number', description: 'Only write if the stored revision equals this (0 = key must not exist)' },
-        ifAbsent: { type: 'boolean', description: 'Only write if the key does not exist' },
+        ifAbsent: { type: 'boolean', description: 'Only write if the key does not exist (treats an expired lease as absent)' },
+        timer: {
+          type: 'object',
+          description:
+            'Lease/reveal timer, evaluated at read: effect "delete" = live now, vanishes at expiry (a lease); "enable" = dormant until expiry.',
+          properties: {
+            ms: { type: 'number', description: 'Relative expiry in ms' },
+            at: { type: 'string', description: 'Absolute ISO expiry (exactly one of ms/at)' },
+            effect: { type: 'string', enum: ['delete', 'enable'] },
+          },
+          required: ['effect'],
+          additionalProperties: false,
+        },
       },
       required: ['key', 'value'],
       additionalProperties: false,
@@ -320,6 +355,72 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'registerAction',
+    description:
+      'Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic, lease-bound claim.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'object',
+          description: 'The action definition',
+          properties: {
+            id: { type: 'string' },
+            description: { type: 'string' },
+            if: { type: 'array', description: 'Preconditions (AND): [{ key, path?, op: exists|absent|eq|ne|gt|lt, value? }]', items: { type: 'object' } },
+            enabled: { type: 'array', description: 'Availability conditions (same shape as if)', items: { type: 'object' } },
+            writes: {
+              type: 'array',
+              description: 'Declared writes: [{ key, value?, ifAbsent?, timer?, type?, tags? }]',
+              items: { type: 'object' },
+            },
+            params: { type: 'object', description: 'Param schema: { <name>: { type?, description?, enum?, required? } }' },
+          },
+          required: ['id', 'writes'],
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'actions',
+    description: 'List the declared actions in your slice (the registered no-code vocabulary).',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'deleteAction',
+    description: 'Retire a declared action (supersedes its `_actions/<id>` fact).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'invoke',
+    description:
+      'Invoke a declared action by id with params. Checks enabled + if conditions (a failed precondition is a 409-style error), then applies the declared writes with substitution. The substrate interprets; no code runs.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'The action id' },
+        params: { type: 'object', description: 'Arguments for the action' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'supersede',
     description:
       'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot.',
@@ -392,6 +493,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           tags: input.tags,
           ifRevision: input.ifRevision,
           ifAbsent: input.ifAbsent,
+          timer: input.timer,
         },
         ctx.identity,
       );
@@ -482,6 +584,42 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
       return state.attention(scope, { staleMs: input?.staleMs, limit: input?.limit });
+    },
+
+    async registerAction(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.action) throw new Error('action is required');
+      const { state } = build(ctx);
+      const result = await createDeclarativeActions(state).register(scope, input.action, ctx.identity);
+      ctx.logger.info('workspace action registered', {
+        scope,
+        action: result.action.id,
+        contested: result.contested.length,
+      });
+      return result;
+    },
+
+    async actions(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return { actions: await createDeclarativeActions(state).list(scope) };
+    },
+
+    async deleteAction(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.id) throw new Error('id is required');
+      const { state } = build(ctx);
+      return createDeclarativeActions(state).remove(scope, input.id, ctx.identity);
+    },
+
+    async invoke(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.action) throw new Error('action is required');
+      const { state } = build(ctx);
+      const result = await createDeclarativeActions(state).invoke(scope, input.action, input.params ?? {}, ctx.identity);
+      await ctx.events.emit('workspace.action.invoked', { scope, action: input.action });
+      ctx.logger.info('workspace action invoked', { scope, action: input.action, writes: result.writes.length });
+      return result;
     },
 
     async supersede(input, ctx) {
