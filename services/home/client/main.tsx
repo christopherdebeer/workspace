@@ -320,6 +320,101 @@ function ResourceProbe(): React.JSX.Element {
   );
 }
 
+interface Capability {
+  target: string;
+  kind: 'read' | 'act';
+  description: string;
+  scope: string | null;
+}
+
+/**
+ * The live capability palette — exactly what `read("$catalog")` returns to an
+ * agent, grouped by cell. This is home as a **read/act client**: the human reads
+ * the same vocabulary (read/act targets) the agent does, through the same `/mcp`.
+ * Phase 0 of the home redesign (see docs/home-cell.md); the `/_catalog` cell
+ * directory below is being subsumed by this — a "cell" is just a namespace here.
+ */
+function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
+  const [caps, setCaps] = useState<Capability[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    authFetch('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'read', arguments: { target: '$catalog' } },
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          if (live) setErr(`HTTP ${res.status}`);
+          return;
+        }
+        const rpc = (await res.json()) as {
+          result?: { content?: Array<{ text?: string }> };
+          error?: { message?: string };
+        };
+        if (rpc.error) {
+          if (live) setErr(rpc.error.message ?? 'error');
+          return;
+        }
+        const parsed = JSON.parse(rpc.result?.content?.[0]?.text ?? '{}') as { capabilities?: Capability[] };
+        if (live) setCaps(parsed.capabilities ?? []);
+      })
+      .catch((e) => {
+        if (live) setErr(String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
+  // Group by namespace (everything before the last dot): workspace.recall → "workspace".
+  const groups: Record<string, Capability[]> = {};
+  for (const c of caps ?? []) {
+    const dot = c.target.lastIndexOf('.');
+    const ns = dot > 0 ? c.target.slice(0, dot) : c.target;
+    (groups[ns] ??= []).push(c);
+  }
+
+  return (
+    <Card>
+      <Heading sub='What you can do, grouped by cell — the read/act vocabulary your agent sees via read("$catalog").'>
+        Capabilities
+      </Heading>
+      {!authed ? <p style={{ color: theme.dim }}>Sign in above to load your capabilities.</p> : null}
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {authed && !caps && !err ? <p style={{ color: theme.dim }}>Loading…</p> : null}
+      {authed && caps && caps.length === 0 ? (
+        <p style={{ color: theme.dim }}>No capabilities — your token may lack scopes.</p>
+      ) : null}
+      <div style={{ display: 'grid', gap: '0.9rem', marginTop: '0.5rem' }}>
+        {Object.keys(groups)
+          .sort()
+          .map((ns) => (
+            <div key={ns} style={{ display: 'grid', gap: '0.3rem' }}>
+              <strong>{ns}</strong>
+              {groups[ns].map((c) => (
+                <div key={c.target} style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <code>{c.target.slice(c.target.lastIndexOf('.') + 1)}</code>
+                  <Badge tone={c.kind === 'read' ? 'dim' : 'accent'}>{c.kind}</Badge>
+                  {c.scope ? <Badge tone="dim">{c.scope}</Badge> : null}
+                  <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{c.description}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+    </Card>
+  );
+}
+
 function App(): React.JSX.Element {
   const session = useAuth();
   return (
@@ -329,6 +424,7 @@ function App(): React.JSX.Element {
       </Heading>
 
       <Account session={session} />
+      <Capabilities authed={!!session.user} />
       <MyCells authed={!!session.user} />
       <Catalog />
       <Discovery />
