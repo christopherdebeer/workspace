@@ -65,10 +65,18 @@ phase it, shipping value before that lands:
   (`Catalog`/`MyCells`) is **retained** for now; retiring it (the capability
   catalog subsumes the cell directory — a "cell" is just a namespace in
   `$catalog`) is a fast-follow once the palette is confirmed in the live UI.
-- **Phase 1 — workspace window (read-only).** Render `workspace.recall` as the
-  default surface (focus/peripheral/elided tiers, expand). Pure `read`.
-- **Phase 2 — cells console (`act`).** File tree + editor + deploy + logs over
-  `cells.*`. The "val.town on AWS" authoring UI in the browser.
+- **Phase 1 — interactive read/act console (shipped).** Each capability in the
+  palette is now *invokable*: expand it → a JSON args box (seeded from its
+  `inputSchema`) → run `read`/`act` via `/mcp` → see the result rendered. One
+  `mcpCall(verb, target, input)` helper drives it — the human invokes the same
+  vocabulary the agent does. This generalises the planned "workspace window"
+  (`read("workspace.recall")` is just one row) and seeds the cells console
+  (`act("cells.writeFile" / "cells.deploy" / …)`).
+- **Phase 2 — purpose-built surfaces.** Above the generic console, dedicated
+  views: the workspace window (recall rendered as focus/peripheral/elided tiers),
+  the cells console (file tree + editor + deploy + logs). Retiring `/_catalog`
+  (`Catalog`/`MyCells`) folds in here — the console already subsumes the cell
+  directory.
 - **Phase 3 — the generic view renderer.** Once registered views + render hints
   exist, draw any view by its hint; dashboards/surfaces come from the registry,
   not code. This is where `home` stops being hand-written screens.

@@ -325,14 +325,127 @@ interface Capability {
   kind: 'read' | 'act';
   description: string;
   scope: string | null;
+  inputSchema?: { properties?: Record<string, { type?: string }>; required?: string[] };
 }
 
 /**
- * The live capability palette — exactly what `read("$catalog")` returns to an
- * agent, grouped by cell. This is home as a **read/act client**: the human reads
- * the same vocabulary (read/act targets) the agent does, through the same `/mcp`.
- * Phase 0 of the home redesign (see docs/home-cell.md); the `/_catalog` cell
- * directory below is being subsumed by this — a "cell" is just a namespace here.
+ * Invoke a capability through the gateway's MCP endpoint, exactly as an agent
+ * would: `tools/call` with name=read|act and `{ target, input }`. Returns the
+ * tool's JSON result (or its error text). This is the one call the whole console
+ * is built on — the human drives read/act the same way the agent does.
+ */
+async function mcpCall(verb: string, target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
+  const res = await authFetch('/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'tools/call',
+      params: { name: verb, arguments: input === undefined ? { target } : { target, input } },
+    }),
+  });
+  if (!res.ok) return { ok: false, value: `HTTP ${res.status}` };
+  const rpc = (await res.json()) as {
+    result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    error?: { message?: string };
+  };
+  if (rpc.error) return { ok: false, value: rpc.error.message ?? 'error' };
+  const text = rpc.result?.content?.[0]?.text ?? '';
+  let value: unknown = text;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    /* not JSON — keep the raw text (e.g. an error message) */
+  }
+  return { ok: !rpc.result?.isError, value };
+}
+
+/** A starter JSON argument object from a capability's input schema. */
+function argSkeleton(schema?: Capability['inputSchema']): string {
+  const props = schema?.properties ?? {};
+  const keys = schema?.required?.length ? schema.required : Object.keys(props);
+  if (keys.length === 0) return '{}';
+  const obj: Record<string, unknown> = {};
+  for (const k of keys) {
+    const t = props[k]?.type;
+    obj[k] = t === 'number' ? 0 : t === 'boolean' ? false : t === 'array' ? [] : t === 'object' ? {} : '';
+  }
+  return JSON.stringify(obj, null, 2);
+}
+
+/** One capability: expand to give JSON args, invoke read/act, and see the result. */
+function CapabilityRow({ cap }: { cap: Capability }): React.JSX.Element {
+  const verb = cap.target.slice(cap.target.lastIndexOf('.') + 1);
+  const [open, setOpen] = useState(false);
+  const [args, setArgs] = useState(() => argSkeleton(cap.inputSchema));
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{ ok: boolean; value: unknown } | null>(null);
+
+  const run = async (): Promise<void> => {
+    let input: unknown;
+    try {
+      input = args.trim() ? JSON.parse(args) : {};
+    } catch {
+      setOut({ ok: false, value: 'Invalid JSON in arguments' });
+      return;
+    }
+    setBusy(true);
+    try {
+      setOut(await mcpCall(cap.kind, cap.target, input));
+    } catch (e) {
+      setOut({ ok: false, value: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '0.3rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          style={{ background: 'none', border: 'none', color: theme.text, cursor: 'pointer', fontFamily: theme.mono, padding: 0, fontSize: '0.85rem' }}
+        >
+          {open ? '▾' : '▸'} <code>{verb}</code>
+        </button>
+        <Badge tone={cap.kind === 'read' ? 'dim' : 'accent'}>{cap.kind}</Badge>
+        {cap.scope ? <Badge tone="dim">{cap.scope}</Badge> : null}
+        <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{cap.description}</span>
+      </div>
+      {open ? (
+        <div style={{ display: 'grid', gap: '0.4rem', marginLeft: '1.1rem' }}>
+          <textarea
+            value={args}
+            onChange={(e) => setArgs(e.target.value)}
+            rows={Math.min(10, Math.max(2, args.split('\n').length))}
+            spellCheck={false}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '0.5rem', background: '#0d0d0d', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.text, fontFamily: theme.mono, fontSize: '0.8rem' }}
+          />
+          <div>
+            <Button onClick={run} disabled={busy}>
+              {busy ? 'Running…' : `${cap.kind}("${cap.target}")`}
+            </Button>
+          </div>
+          {out ? (
+            <div>
+              <Badge tone={out.ok ? 'accent' : 'danger'}>{out.ok ? 'ok' : 'error'}</Badge>
+              <div style={{ marginTop: '0.3rem' }}>
+                <CodeBlock>{typeof out.value === 'string' ? out.value : JSON.stringify(out.value, null, 2)}</CodeBlock>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The live read/act **console** — `read("$catalog")` lists every capability the
+ * caller can use, grouped by cell; each row invokes read/act and shows the result.
+ * Home is now a read/act client: the human drives the same vocabulary the agent
+ * does. (Home redesign; see docs/home-cell.md.)
  */
 function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
   const [caps, setCaps] = useState<Capability[] | null>(null);
@@ -341,31 +454,14 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
   useEffect(() => {
     if (!authed) return;
     let live = true;
-    authFetch('/mcp', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'read', arguments: { target: '$catalog' } },
-      }),
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          if (live) setErr(`HTTP ${res.status}`);
+    mcpCall('read', '$catalog')
+      .then((r) => {
+        if (!live) return;
+        if (!r.ok) {
+          setErr(typeof r.value === 'string' ? r.value : 'error');
           return;
         }
-        const rpc = (await res.json()) as {
-          result?: { content?: Array<{ text?: string }> };
-          error?: { message?: string };
-        };
-        if (rpc.error) {
-          if (live) setErr(rpc.error.message ?? 'error');
-          return;
-        }
-        const parsed = JSON.parse(rpc.result?.content?.[0]?.text ?? '{}') as { capabilities?: Capability[] };
-        if (live) setCaps(parsed.capabilities ?? []);
+        setCaps((r.value as { capabilities?: Capability[] }).capabilities ?? []);
       })
       .catch((e) => {
         if (live) setErr(String(e));
@@ -375,7 +471,6 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
     };
   }, [authed]);
 
-  // Group by namespace (everything before the last dot): workspace.recall → "workspace".
   const groups: Record<string, Capability[]> = {};
   for (const c of caps ?? []) {
     const dot = c.target.lastIndexOf('.');
@@ -385,7 +480,7 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
 
   return (
     <Card>
-      <Heading sub='What you can do, grouped by cell — the read/act vocabulary your agent sees via read("$catalog").'>
+      <Heading sub='Invoke any read/act capability and see the result — the same vocabulary your agent sees via read("$catalog").'>
         Capabilities
       </Heading>
       {!authed ? <p style={{ color: theme.dim }}>Sign in above to load your capabilities.</p> : null}
@@ -398,15 +493,10 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
         {Object.keys(groups)
           .sort()
           .map((ns) => (
-            <div key={ns} style={{ display: 'grid', gap: '0.3rem' }}>
+            <div key={ns} style={{ display: 'grid', gap: '0.4rem' }}>
               <strong>{ns}</strong>
               {groups[ns].map((c) => (
-                <div key={c.target} style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <code>{c.target.slice(c.target.lastIndexOf('.') + 1)}</code>
-                  <Badge tone={c.kind === 'read' ? 'dim' : 'accent'}>{c.kind}</Badge>
-                  {c.scope ? <Badge tone="dim">{c.scope}</Badge> : null}
-                  <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{c.description}</span>
-                </div>
+                <CapabilityRow key={c.target} cap={c} />
               ))}
             </div>
           ))}
