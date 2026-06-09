@@ -24,6 +24,8 @@ export interface CellRecord {
   stackName: string;
   /** Principals allowed to invoke the cell (always includes the owner). */
   grants: string[];
+  /** Public cells accept anonymous GETs via dispatch (a web-facing cell). */
+  public: boolean;
   status: CellStatus;
   createdAt: string;
   updatedAt: string;
@@ -55,6 +57,7 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
     functionName: String(item.functionName),
     stackName: String(item.stackName),
     grants: Array.isArray(item.grants) ? (item.grants as string[]) : [],
+    public: !!item.public,
     status: item.status as CellStatus,
     createdAt: String(item.createdAt),
     updatedAt: String(item.updatedAt),

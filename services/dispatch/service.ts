@@ -19,6 +19,9 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
 interface CallCellResult {
   statusCode: number;
   body: unknown;
+  /** The cell's own response headers (content-type etc.). */
+  headers?: Record<string, string>;
+  isBase64Encoded?: boolean;
 }
 
 /** Split `/@<owner>/<name>/<rest>` into owner, name, and the cell-relative path. */
@@ -33,7 +36,12 @@ function parsePath(rawPath: string): { owner: string; name: string; subPath: str
 }
 
 async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
-  if (!ctx.identity.user) {
+  // Anonymous GET/HEAD flow through so *public* cells can serve pages and
+  // assets to a plain browser; `cells.call` is the gate — it only honours
+  // anonymous reads for cells marked public, and everything else still
+  // requires an authenticated owner-or-granted caller.
+  const anonymousRead = req.method === 'GET' || req.method === 'HEAD';
+  if (!ctx.identity.user && !anonymousRead) {
     return { statusCode: 401, headers: JSON_HEADERS, body: { error: 'Authentication required' } };
   }
   const parsed = parsePath(req.path);
@@ -58,9 +66,17 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
       name: parsed.name,
       method: req.method,
       path: parsed.subPath,
+      query: new URLSearchParams(req.query).toString(),
       body,
     });
-    return { statusCode: result.statusCode ?? 200, headers: JSON_HEADERS, body: result.body };
+    // Pass the cell's response through faithfully: its headers (content-type
+    // for HTML/JS/CSS), its body encoding, its status.
+    return {
+      statusCode: result.statusCode ?? 200,
+      headers: result.headers ?? JSON_HEADERS,
+      body: result.body,
+      isBase64Encoded: result.isBase64Encoded,
+    };
   } catch (err) {
     ctx.logger.warn('dispatch failed', {
       owner: parsed.owner,
@@ -76,6 +92,7 @@ export const handler = defineService({
   commands: {},
   http: [
     { method: 'GET', path: '/@*', handler: route },
+    { method: 'HEAD', path: '/@*', handler: route },
     { method: 'POST', path: '/@*', handler: route },
     { method: 'PUT', path: '/@*', handler: route },
     { method: 'DELETE', path: '/@*', handler: route },
