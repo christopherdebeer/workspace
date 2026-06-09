@@ -369,6 +369,39 @@ describe('cells: backend commands', () => {
     expect(res.error).toMatch(/not authorised/i);
   });
 
+  it('a public cell serves anonymous GETs but still gates writes (web-facing)', async () => {
+    lambdaResponse = {
+      statusCode: 200,
+      headers: { 'content-type': 'text/html' },
+      body: '<!doctype html><h1>hi</h1>',
+    };
+    await call('alice', 'create', { name: 'site', code: cellCode, public: true });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    await reg.setStatus(cell.cellId, 'ACTIVE');
+    expect(cell.public).toBe(true);
+
+    // Anonymous GET → allowed, with the cell's headers passed through.
+    const anon = await call<{ statusCode: number; headers: Record<string, string>; body: string }>(
+      undefined, 'call', { cellId: cell.cellId, method: 'GET', path: '/' },
+    );
+    expect(anon.ok).toBe(true);
+    expect(anon.result!.statusCode).toBe(200);
+    expect(anon.result!.headers['content-type']).toBe('text/html');
+    expect(anon.result!.body).toBe('<!doctype html><h1>hi</h1>');
+
+    // Anonymous write → still refused.
+    const anonPost = await call(undefined, 'call', { cellId: cell.cellId, method: 'POST', path: '/x' });
+    expect(anonPost.ok).toBe(false);
+
+    // A *private* cell refuses anonymous GETs.
+    await call('alice', 'create', { name: 'secret', code: cellCode });
+    const secret = (await reg.listByOwner('alice')).find((c) => c.name === 'secret')!;
+    await reg.setStatus(secret.cellId, 'ACTIVE');
+    const anonSecret = await call(undefined, 'call', { cellId: secret.cellId, method: 'GET', path: '/' });
+    expect(anonSecret.ok).toBe(false);
+  });
+
   it('describeCellTools advertises an active cell’s tools, namespaced by cellId', async () => {
     // The cell answers GET /_tools with its tool manifest.
     lambdaResponse = {
