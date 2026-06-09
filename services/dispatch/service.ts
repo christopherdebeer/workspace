@@ -53,7 +53,7 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
   try {
     // forge holds the registry + invoke permission; we proxy rather than read its
     // table or invoke the cell ourselves (preserving the cell boundary).
-    const result = await ctx.serviceClient('forge').command<CallCellResult>('callCell', {
+    const result = await ctx.serviceClient('cells').command<CallCellResult>('call', {
       owner: parsed.owner,
       name: parsed.name,
       method: req.method,

@@ -1,5 +1,11 @@
 # Dynamic Cells — A Reflexive Two-Tier Platform
 
+> **Naming update:** the control-plane cell is now named **`cells`** (was
+> `forge`), and its tools use bare verbs — `cells.create`, `cells.call`,
+> `cells.deploy`, `cells.logs`, … (was `forge.createCell`, etc.). This doc still
+> says "forge" in prose; read it as `cells`. See `docs/platform-cells.md`.
+
+
 This document describes how the platform extends from a fixed set of
 build-time service cells into a **reflexive** platform: one that can create new,
 capability-scoped, user-owned cells *at runtime, through its own API*, and later

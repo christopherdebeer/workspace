@@ -42,7 +42,7 @@ import {
 const NO_STORE = { 'cache-control': 'no-store' };
 
 /** Tier-1 (kernel) cells whose commands are dispatchable. Few, reviewed, IAM-granted. */
-const PROVIDERS = ['workspace', 'forge'] as const;
+const PROVIDERS = ['workspace', 'cells'] as const;
 
 /** Sentinel target for the capability menu. */
 const CATALOG = '$catalog';
@@ -119,7 +119,7 @@ async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capab
     const tool = target.slice(dot + 1);
     if (!owner || !name || !tool) return null;
     const res = await ctx
-      .serviceClient('forge')
+      .serviceClient('cells')
       .command<{ tools: CellTool[] }>('describeCellTools', { owner, name });
     const d = res?.tools?.find((t) => t.tool === tool);
     if (!d) return null;
@@ -129,7 +129,7 @@ async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capab
       description: d.description,
       inputSchema: d.inputSchema,
       scope: d.scope,
-      forward: (input, c) => c.serviceClient('forge').command('callCellTool', { owner, name, tool, args: input ?? {} }),
+      forward: (input, c) => c.serviceClient('cells').command('callCellTool', { owner, name, tool, args: input ?? {} }),
     };
   }
 
@@ -168,7 +168,7 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
   }
 
   try {
-    const res = await ctx.serviceClient('forge').command<{ tools: CellTool[] }>('describeCellTools', {});
+    const res = await ctx.serviceClient('cells').command<{ tools: CellTool[] }>('describeCellTools', {});
     for (const t of res?.tools ?? []) {
       caps.push({ target: `${t.address}.${t.tool}`, kind: t.kind, description: t.description, inputSchema: t.inputSchema, scope: t.scope ?? null });
     }

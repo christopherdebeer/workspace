@@ -22,9 +22,9 @@ const WORKSPACE_TOOLS = [
   { name: 'recall', description: 'Your view.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
   { name: 'remember', description: 'Write a fact.', inputSchema: { type: 'object' }, scope: null, kind: 'act' },
 ];
-const FORGE_TOOLS = [
-  { name: 'createCell', description: 'Provision a cell.', inputSchema: { type: 'object' }, scope: 'platform:cells:create', kind: 'act' },
-  { name: 'listCells', description: 'List your cells.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
+const CELLS_TOOLS = [
+  { name: 'create', description: 'Provision a cell.', inputSchema: { type: 'object' }, scope: 'platform:cells:create', kind: 'act' },
+  { name: 'list', description: 'List your cells.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
 ];
 
 let lastCall: { fn: string; command: string; payload: unknown } | undefined;
@@ -45,11 +45,11 @@ function stub(tokens: Record<string, ValidatedToken>): void {
           lastCall = { fn: 'workspace', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
         }
-      } else if (fn === 'forge-fn') {
-        if (env.__command === 'describeTools') result = { tools: FORGE_TOOLS };
+      } else if (fn === 'cells-fn') {
+        if (env.__command === 'describeTools') result = { tools: CELLS_TOOLS };
         else if (env.__command === 'describeCellTools') result = { tools: cellTools };
         else {
-          lastCall = { fn: 'forge', command: env.__command, payload: env.payload };
+          lastCall = { fn: 'cells', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
         }
       }
@@ -92,7 +92,7 @@ async function callTool(token: string, name: string, args: unknown): Promise<{ i
 describe('resource cell (MCP gateway, read/act)', () => {
   beforeEach(() => {
     process.env.SERVICE_NAME = 'resource';
-    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn', workspace: 'workspace-fn' });
+    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', cells: 'cells-fn', workspace: 'workspace-fn' });
     process.env.PUBLIC_BASE_URL = 'https://parc.land';
     lastCall = undefined;
     cellTools = [];
@@ -119,12 +119,12 @@ describe('resource cell (MCP gateway, read/act)', () => {
     ];
     const cat = await callTool('creator', 'read', { target: '$catalog' });
     const targets = ((cat.parsed as { capabilities: Array<{ target: string }> }).capabilities).map((c) => c.target).sort();
-    expect(targets).toEqual(['@alice/tools-demo.echo', 'forge.createCell', 'forge.listCells', 'workspace.recall', 'workspace.remember']);
+    expect(targets).toEqual(['@alice/tools-demo.echo', 'cells.create', 'cells.list', 'workspace.recall', 'workspace.remember']);
 
     // bob lacks platform:cells:create, so forge.createCell is filtered out.
     const bobCat = await callTool('plain', 'read', { target: '$catalog' });
     const bobTargets = ((bobCat.parsed as { capabilities: Array<{ target: string }> }).capabilities).map((c) => c.target);
-    expect(bobTargets).not.toContain('forge.createCell');
+    expect(bobTargets).not.toContain('cells.create');
     expect(bobTargets).toContain('workspace.recall');
   });
 
@@ -146,12 +146,12 @@ describe('resource cell (MCP gateway, read/act)', () => {
   });
 
   it('act enforces the per-target scope (createCell needs platform:cells:create)', async () => {
-    const ok = await callTool('creator', 'act', { target: 'forge.createCell', input: { name: 'n', code: 'c' } });
+    const ok = await callTool('creator', 'act', { target: 'cells.create', input: { name: 'n', code: 'c' } });
     expect(ok.isError).toBeUndefined();
-    expect(lastCall).toEqual({ fn: 'forge', command: 'createCell', payload: { name: 'n', code: 'c' } });
+    expect(lastCall).toEqual({ fn: 'cells', command: 'create', payload: { name: 'n', code: 'c' } });
 
     lastCall = undefined;
-    const denied = await callTool('plain', 'act', { target: 'forge.createCell', input: { name: 'n', code: 'c' } });
+    const denied = await callTool('plain', 'act', { target: 'cells.create', input: { name: 'n', code: 'c' } });
     expect(denied.isError).toBe(true);
     expect(denied.text).toMatch(/scope/i);
     expect(lastCall).toBeUndefined(); // never forwarded
@@ -176,7 +176,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
     const res = await callTool('creator', 'act', { target: '@alice/tools-demo.echo', input: { message: 'hi' } });
     expect(res.isError).toBeUndefined();
     expect(lastCall).toEqual({
-      fn: 'forge',
+      fn: 'cells',
       command: 'callCellTool',
       payload: { owner: 'alice', name: 'tools-demo', tool: 'echo', args: { message: 'hi' } },
     });

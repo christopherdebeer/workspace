@@ -7,15 +7,15 @@
  * deploy bundles the tree and points the cell's Lambda at the new build; per-user
  * data is partitioned by caller and owner-gated; and every op is ownership-gated.
  */
-import { handler as forge } from '../services/forge/service';
-import { __setDocumentClient } from '../services/forge/registry';
-import { __setEsbuild } from '../services/forge/transpile';
+import { handler as forge } from '../services/cells/service';
+import { __setDocumentClient } from '../services/cells/registry';
+import { __setEsbuild } from '../services/cells/transpile';
 import {
   __setCloudFormation,
   __setS3,
   __setLambda as __setProvisionerLambda,
   __setCloudWatchLogs,
-} from '../services/forge/provisioner';
+} from '../services/cells/provisioner';
 
 interface Item {
   pk: string;
@@ -83,7 +83,7 @@ const cellCode = 'export const handler = async () => ({ statusCode: 200, body: "
 
 describe('forge: cell common layer (S3 files + data)', () => {
   beforeEach(() => {
-    process.env.SERVICE_NAME = 'forge';
+    process.env.SERVICE_NAME = 'cells';
     process.env.TABLE_NAME = 'forge-table';
     process.env.CELL_CODE_BUCKET = 'code-bucket';
     process.env.CELL_PERMISSION_BOUNDARY_ARN = 'arn:aws:iam::111:policy/boundary';
@@ -127,7 +127,7 @@ describe('forge: cell common layer (S3 files + data)', () => {
   });
 
   async function makeCell(owner: string, share: string[] = []): Promise<string> {
-    const res = await call<{ cellId: string }>(owner, 'createCell', { name: 'tools', code: cellCode, share });
+    const res = await call<{ cellId: string }>(owner, 'create', { name: 'tools', code: cellCode, share });
     expect(res.ok).toBe(true);
     return res.result!.cellId;
   }

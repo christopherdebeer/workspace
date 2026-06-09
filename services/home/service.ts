@@ -68,7 +68,7 @@ async function catalog(_req: unknown, ctx: ServiceContext): Promise<ServiceHttpR
   if (ctx.identity.user) {
     try {
       const res = await ctx
-        .serviceClient('forge')
+        .serviceClient('cells')
         .command<{ cells: CatalogCell[] }>('catalogCells', {});
       cells = res?.cells ?? [];
     } catch (err) {
