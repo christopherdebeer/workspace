@@ -58,9 +58,13 @@ The full version is **gated on the views primitive** (registered CEL views +
 render hints — Gap 1 in `substrate-gaps.md` / the `sync-learnings.md` menu). So
 phase it, shipping value before that lands:
 
-- **Phase 0 — collapse discovery (now).** Home reads `read("$catalog")` for the
-  capability list + `whoami` for identity; delete the bespoke `/_catalog` merge.
-  Works today (read/act is live). Home becomes a real read/act client.
+- **Phase 0 — capability palette (shipped, additive).** The SPA calls
+  `read("$catalog")` via `/mcp` (using the same `authFetch`/bearer it already uses
+  for `/mcp/whoami`) and renders a **Capabilities** card grouped by cell — home is
+  now a real read/act client. Done *additively*: the bespoke `/_catalog`
+  (`Catalog`/`MyCells`) is **retained** for now; retiring it (the capability
+  catalog subsumes the cell directory — a "cell" is just a namespace in
+  `$catalog`) is a fast-follow once the palette is confirmed in the live UI.
 - **Phase 1 — workspace window (read-only).** Render `workspace.recall` as the
   default surface (focus/peripheral/elided tiers, expand). Pure `read`.
 - **Phase 2 — cells console (`act`).** File tree + editor + deploy + logs over
