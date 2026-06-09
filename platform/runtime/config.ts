@@ -11,6 +11,12 @@ export interface PlatformConfig {
   serviceName: string;
   eventBusName?: string;
   tableName?: string;
+  /**
+   * The shared substrate table (the platform's observed-state store), when the
+   * cell has been granted access to it. Distinct from `tableName`, which is
+   * the cell's own private table (organ scratch).
+   */
+  substrateTableName?: string;
   /** Map of peer service name -> Lambda function name. */
   registry: Record<string, string>;
   /** Turso/libSQL connection settings, when relational persistence is enabled. */
@@ -47,6 +53,7 @@ export function loadConfig(): PlatformConfig {
     serviceName: getString('SERVICE_NAME'),
     eventBusName: getOptional('EVENT_BUS_NAME'),
     tableName: getOptional('TABLE_NAME'),
+    substrateTableName: getOptional('SUBSTRATE_TABLE'),
     registry,
     turso: tursoUrl ? { url: tursoUrl, authToken: getOptional('TURSO_AUTH_TOKEN') } : undefined,
   };

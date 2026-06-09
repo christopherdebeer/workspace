@@ -15,4 +15,6 @@ export { DynamicCellControlPlane } from './dynamic-cell-control-plane';
 export type { DynamicCellControlPlaneProps } from './dynamic-cell-control-plane';
 export { TableFactory } from './table-factory';
 export type { PlatformTableProps } from './table-factory';
+export { SubstrateTable } from './substrate-table';
+export type { SubstrateTableProps } from './substrate-table';
 export type { ServiceManifest, ServiceRegistry } from '../manifest';

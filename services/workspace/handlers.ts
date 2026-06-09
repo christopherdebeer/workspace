@@ -46,11 +46,14 @@ export interface WorkspaceDeps {
 export type DepsBuilder = (ctx: ServiceContext) => WorkspaceDeps;
 
 function tableName(ctx: ServiceContext): string {
-  if (!ctx.config.tableName) throw new Error('workspace requires a DynamoDB table (TABLE_NAME)');
-  return ctx.config.tableName;
+  // The shared substrate table is the home of facts + grants; the cell's own
+  // table remains only as a fallback (tests/local). See docs/substrate-storage.md.
+  const table = ctx.config.substrateTableName ?? ctx.config.tableName;
+  if (!table) throw new Error('workspace requires the substrate table (SUBSTRATE_TABLE)');
+  return table;
 }
 
-/** Production deps: observed state + grants over the cell's own DynamoDB table. */
+/** Production deps: observed state + grants over the shared substrate table. */
 export const dynamoDeps: DepsBuilder = (ctx) => {
   const table = tableName(ctx);
   return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table) };

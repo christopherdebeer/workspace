@@ -92,9 +92,13 @@ interface ForgeEnv {
   eventBusArn: string;
   region: string;
   accountId: string;
+  /** The shared substrate table cells get LeadingKeys-scoped read access to. */
+  substrateTable?: { name: string; arn: string };
 }
 
 function loadForgeEnv(): ForgeEnv {
+  const substrateName = getOptional('CELL_SUBSTRATE_TABLE_NAME');
+  const substrateArn = getOptional('CELL_SUBSTRATE_TABLE_ARN');
   return {
     registryTable: getString('TABLE_NAME'),
     codeBucket: getString('CELL_CODE_BUCKET'),
@@ -103,6 +107,8 @@ function loadForgeEnv(): ForgeEnv {
     eventBusArn: getString('CELL_EVENT_BUS_ARN'),
     region: getOptional('CELL_REGION') ?? getString('AWS_REGION'),
     accountId: getString('CELL_ACCOUNT_ID'),
+    substrateTable:
+      substrateName && substrateArn ? { name: substrateName, arn: substrateArn } : undefined,
   };
 }
 
@@ -166,6 +172,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     eventBusArn: env.eventBusArn,
     region: env.region,
     accountId: env.accountId,
+    substrateTable: env.substrateTable,
   });
   await deployStack(stackName, template);
 

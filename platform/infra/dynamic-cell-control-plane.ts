@@ -4,10 +4,17 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { HttpServiceCell } from './http-service-cell';
 import { PlatformEventBus } from './event-bus';
+import { SubstrateTable } from './substrate-table';
 
 export interface DynamicCellControlPlaneProps {
   /** Shared event bus dynamic cells may publish to. */
   eventBus: PlatformEventBus;
+  /**
+   * The shared substrate table. The permission boundary caps dynamic cells to
+   * *read* access on it; each cell's role policy narrows that to its owner's
+   * scope partitions via `dynamodb:LeadingKeys` (see the cell template).
+   */
+  substrateTable?: SubstrateTable;
 }
 
 /**
@@ -26,10 +33,12 @@ export class DynamicCellControlPlane extends Construct {
   readonly codeBucket: s3.Bucket;
   readonly permissionBoundary: iam.ManagedPolicy;
   private readonly eventBus: PlatformEventBus;
+  private readonly substrateTable?: SubstrateTable;
 
   constructor(scope: Construct, id: string, props: DynamicCellControlPlaneProps) {
     super(scope, id);
     this.eventBus = props.eventBus;
+    this.substrateTable = props.substrateTable;
 
     const stack = cdk.Stack.of(this);
     const fnArn = `arn:aws:lambda:${stack.region}:${stack.account}:function:cell-*`;
@@ -77,6 +86,23 @@ export class DynamicCellControlPlane extends Construct {
           actions: ['lambda:InvokeFunction'],
           resources: [fnArn],
         }),
+        // The organ-to-reef read path: the boundary *caps* dynamic cells at
+        // read-only substrate access; each cell's role policy narrows this to
+        // its owner's scope partitions with a `dynamodb:LeadingKeys` condition
+        // (rendered by the cell template). Writes stay mediated for now — see
+        // docs/substrate-storage.md.
+        ...(props.substrateTable
+          ? [
+              new iam.PolicyStatement({
+                sid: 'SubstrateRead',
+                actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:BatchGetItem'],
+                resources: [
+                  props.substrateTable.table.tableArn,
+                  `${props.substrateTable.table.tableArn}/index/*`,
+                ],
+              }),
+            ]
+          : []),
       ],
     });
   }
@@ -201,5 +227,9 @@ export class DynamicCellControlPlane extends Construct {
     forge.fn.addEnvironment('CELL_EVENT_BUS_ARN', this.eventBus.bus.eventBusArn);
     forge.fn.addEnvironment('CELL_ACCOUNT_ID', account);
     forge.fn.addEnvironment('CELL_REGION', region);
+    if (this.substrateTable) {
+      forge.fn.addEnvironment('CELL_SUBSTRATE_TABLE_NAME', this.substrateTable.table.tableName);
+      forge.fn.addEnvironment('CELL_SUBSTRATE_TABLE_ARN', this.substrateTable.table.tableArn);
+    }
   }
 }

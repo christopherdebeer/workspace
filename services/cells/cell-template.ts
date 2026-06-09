@@ -31,6 +31,13 @@ export interface CellTemplateParams {
   accountId: string;
   memorySize?: number;
   timeoutSeconds?: number;
+  /**
+   * The shared substrate table (the platform's observed-state store). When
+   * present, the cell role gets *read* access scoped — via a
+   * `dynamodb:LeadingKeys` condition — to the owner's partitions, so an organ
+   * can observe the reef but only its own slice. Writes stay mediated.
+   */
+  substrateTable?: { name: string; arn: string };
 }
 
 /** Deployment resource name for a cell: stable, predictable, ARN-scopable. */
@@ -52,6 +59,33 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
   const name = cellResourceName(p.cellId);
   const tableArn = `arn:aws:dynamodb:${p.region}:${p.accountId}:table/${name}`;
   const logArn = `arn:aws:logs:${p.region}:${p.accountId}:log-group:/aws/lambda/${name}:*`;
+
+  // Read-only observation of the owner's slice of the shared substrate. The
+  // LeadingKeys condition scopes every table *and* index read to partitions
+  // whose leading key carries the owner's scope (the GSI pks repeat the scope
+  // for exactly this reason — see platform/infra/substrate-table.ts). This is
+  // Σ-calculus scope authority enforced by IAM rather than an interpreter.
+  const substrateStatements = p.substrateTable
+    ? [
+        {
+          Sid: 'SubstrateOwnScopeRead',
+          Effect: 'Allow',
+          Action: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:BatchGetItem'],
+          Resource: [p.substrateTable.arn, `${p.substrateTable.arn}/index/*`],
+          Condition: {
+            'ForAllValues:StringLike': {
+              'dynamodb:LeadingKeys': [
+                `STATE#${p.owner}`,
+                `TRAJ#${p.owner}`,
+                `SEQ#${p.owner}`,
+                `IN#${p.owner}#*`,
+                `TYPE#${p.owner}#*`,
+              ],
+            },
+          },
+        },
+      ]
+    : [];
 
   return {
     AWSTemplateFormatVersion: '2010-09-09',
@@ -126,6 +160,7 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
                     Action: ['events:PutEvents'],
                     Resource: p.eventBusArn,
                   },
+                  ...substrateStatements,
                 ],
               },
             },
@@ -154,6 +189,7 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
               SERVICE_NAME: name,
               TABLE_NAME: name,
               EVENT_BUS_NAME: p.eventBusName,
+              ...(p.substrateTable ? { SUBSTRATE_TABLE: p.substrateTable.name } : {}),
             },
           },
           Tags: [

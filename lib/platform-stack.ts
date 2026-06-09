@@ -7,6 +7,7 @@ import {
   ServiceRouter,
   PlatformEventBus,
   DynamicCellControlPlane,
+  SubstrateTable,
 } from '../platform/infra';
 
 export interface PlatformStackProps extends cdk.StackProps {
@@ -53,6 +54,13 @@ export class PlatformStack extends cdk.Stack {
     const busName = envName === 'production' ? 'platform-bus' : `platform-bus-${envName}`;
     const eventBus = new PlatformEventBus(this, 'EventBus', { busName });
 
+    // The substrate table — the platform's shared observed-state store (the
+    // blackboard), a stack-level primitive with the same status as the event
+    // bus. Scope-partitioned; the workspace cell is its room provider, and
+    // dynamic cells get LeadingKeys-scoped read access through the permission
+    // boundary. See docs/substrate-storage.md.
+    const substrate = new SubstrateTable(this, 'Substrate');
+
     // Auth primitive: WebAuthn passkeys + OAuth 2.1 + scoped tokens (ported from
     // c15r/mcp-auth). Owns the auth_* data; peers consume it via tokens, never
     // by reading its table. PUBLIC_BASE_URL keeps OAuth issuer/rpId stable
@@ -85,17 +93,18 @@ export class PlatformStack extends cdk.Stack {
 
     // The first flagship room over the observed-state substrate: each user's
     // workspace is their slice of the one Substrate ({ value, _meta } facts with
-    // provenance + salience). dynamoTtl backs the trajectory log used to compute
-    // salience (facts themselves are durable). See docs/substrate.md.
+    // provenance + salience). The workspace is the substrate's *room provider* —
+    // vocabulary, sharing, shaping — over the shared substrate table; it owns no
+    // private storage. See docs/substrate.md + docs/substrate-storage.md.
     const workspace = new HttpServiceCell(this, 'WorkspaceService', {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      persistence: { dynamo: true, dynamoTtl: true },
       commands: ['remember', 'recall', 'peek', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared'],
       eventBus,
     });
+    substrate.grantReadWrite(workspace);
 
     // Self-documenting front-end: a mobile-first React SPA served at `/` (the
     // router default). Its browser bundle is built from client/main.tsx by
@@ -125,7 +134,10 @@ export class PlatformStack extends cdk.Stack {
     // runtime (each its own Lambda + table + permission-bounded role) and invokes
     // them. `dispatch` is the single `/@*` ingress that routes `/@<owner>/<cell>`
     // to forge. See docs/dynamic-cells.md.
-    const controlPlane = new DynamicCellControlPlane(this, 'DynamicCells', { eventBus });
+    const controlPlane = new DynamicCellControlPlane(this, 'DynamicCells', {
+      eventBus,
+      substrateTable: substrate,
+    });
 
     // forge is a backend tool-provider (no public route): the /mcp gateway and
     // dispatch reach it via allow-listed invokes. It provisions and invokes
