@@ -22,9 +22,10 @@ import {
 } from '../../platform/runtime';
 import { createRegistry, CellRecord } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
-import { transpileCell, bundleFiles } from './transpile';
+import { transpileCell, bundleFiles, bundleClientFiles } from './transpile';
 import {
   uploadCode,
+  uploadPackage,
   deployStack,
   describeStack,
   deleteStack,
@@ -506,6 +507,9 @@ async function deleteFile(input: DeleteFileInput, ctx: ServiceContext): Promise<
 }
 
 /** Bundle the cell's src/ tree and point its Lambda at the new code (deploy-on-update). */
+/** Client entry conventions, in priority order (the tier-2 `clientEntry`). */
+const CLIENT_ENTRIES = ['client/main.tsx', 'client/main.ts', 'client/index.tsx', 'client/index.ts'];
+
 async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext): Promise<unknown> {
   const prefix = srcPrefix(record.cellId);
   const keys = await listObjects(env.codeBucket, prefix);
@@ -525,16 +529,54 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   } catch (err) {
     throw new Error(`Cell source failed to bundle: ${(err as Error).message}`);
   }
+  const pkg: Array<{ name: string; content: string }> = [{ name: 'index.js', content: js }];
+
+  // The tier-2 mirror of home's `clientEntry`: a `client/` entry in the src
+  // tree browser-bundles to `app.js` (bare imports become esm.sh externals);
+  // `static/` files ship verbatim. The handler serves both from its package
+  // (fs.readFileSync — they sit beside index.js in /var/task).
+  const clientEntry = CLIENT_ENTRIES.find((c) => files[c] !== undefined);
+  if (clientEntry) {
+    let imports: Record<string, string> | undefined;
+    if (files['client/imports.json'] !== undefined) {
+      try {
+        imports = JSON.parse(files['client/imports.json']) as Record<string, string>;
+      } catch {
+        throw new Error('client/imports.json is not valid JSON');
+      }
+    }
+    try {
+      pkg.push({ name: 'app.js', content: await bundleClientFiles(files, clientEntry, imports) });
+    } catch (err) {
+      throw new Error(`Cell client failed to bundle: ${(err as Error).message}`);
+    }
+  }
+  const staticFiles = Object.keys(files).filter((f) => f.startsWith('static/'));
+  for (const f of staticFiles) pkg.push({ name: f, content: files[f] });
 
   const version = `${Date.now()}`;
   const codeKey = buildKey(record.cellId, version);
-  await uploadCode({ bucket: env.codeBucket, key: codeKey, code: js });
+  await uploadPackage({ bucket: env.codeBucket, key: codeKey, files: pkg });
   await updateFunctionCode(record.functionName, env.codeBucket, codeKey);
   await createRegistry(env.registryTable).put({ ...record, updatedAt: new Date().toISOString() });
 
-  ctx.logger.info('cell deployed', { cellId: record.cellId, version, files: Object.keys(files).length });
+  ctx.logger.info('cell deployed', {
+    cellId: record.cellId,
+    version,
+    files: Object.keys(files).length,
+    client: clientEntry ?? null,
+    static: staticFiles.length,
+  });
   await ctx.events.emit('cell.deployed', { cellId: record.cellId, version });
-  return { deployed: true, cellId: record.cellId, version, entry, files: Object.keys(files) };
+  return {
+    deployed: true,
+    cellId: record.cellId,
+    version,
+    entry,
+    clientEntry: clientEntry ?? null,
+    staticFiles,
+    files: Object.keys(files),
+  };
 }
 
 async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {

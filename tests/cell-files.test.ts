@@ -9,7 +9,7 @@
  */
 import { handler as forge } from '../services/cells/service';
 import { __setDocumentClient } from '../services/cells/registry';
-import { __setEsbuild } from '../services/cells/transpile';
+import { __setEsbuild, resolveBareImport } from '../services/cells/transpile';
 import {
   __setCloudFormation,
   __setS3,
@@ -168,6 +168,56 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(updateCodeCalls).toHaveLength(1);
     expect(updateCodeCalls[0].S3Key).toBe(`cells/${cellId}/build/${res.result!.version}.zip`);
     expect(s3mem.store.has(`code-bucket/cells/${cellId}/build/${res.result!.version}.zip`)).toBe(true);
+    // No client entry → no client bundle, no static assets.
+    expect(res.result!).toMatchObject({ clientEntry: null, staticFiles: [] });
+  });
+
+  it('deploy browser-bundles a client/ entry and ships static/ assets (the tier-2 clientEntry)', async () => {
+    const cellId = await makeCell('alice');
+    await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: 'document.title = "canvas";' });
+    await call('alice', 'writeFile', { cellId, path: 'client/imports.json', content: '{"yjs":"13.6.27"}' });
+    await call('alice', 'writeFile', { cellId, path: 'static/style.css', content: 'body{margin:0}' });
+
+    const res = await call<{
+      deployed: boolean;
+      clientEntry: string | null;
+      staticFiles: string[];
+    }>('alice', 'deploy', { cellId });
+    expect(res.ok).toBe(true);
+    expect(res.result!.clientEntry).toBe('client/main.ts');
+    expect(res.result!.staticFiles).toEqual(['static/style.css']);
+
+    // The package zip carries index.js + app.js + the static asset.
+    const zipKey = [...s3mem.store.keys()].find((k) => k.includes('/build/'))!;
+    const zip = s3mem.store.get(zipKey) as Buffer;
+    const names = zip.toString('latin1');
+    expect(names).toContain('index.js');
+    expect(names).toContain('app.js');
+    expect(names).toContain('static/style.css');
+  });
+
+  it('deploy rejects a malformed client/imports.json', async () => {
+    const cellId = await makeCell('alice');
+    await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: 'export {};' });
+    await call('alice', 'writeFile', { cellId, path: 'client/imports.json', content: '{nope' });
+    const res = await call('alice', 'deploy', { cellId });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/imports\.json/);
+  });
+
+  it('resolveBareImport maps npm specifiers to esm.sh, honouring the import map', () => {
+    expect(resolveBareImport('yjs')).toBe('https://esm.sh/yjs');
+    expect(resolveBareImport('yjs', { yjs: '13.6.27' })).toBe('https://esm.sh/yjs@13.6.27');
+    expect(resolveBareImport('y-webrtc', { 'y-webrtc': 'https://esm.sh/y-webrtc@10.3.0' })).toBe(
+      'https://esm.sh/y-webrtc@10.3.0',
+    );
+    // Subpaths ride along; scoped packages count as one name segment.
+    expect(resolveBareImport('xstate/lib/interpreter', { xstate: '4.38.3' })).toBe(
+      'https://esm.sh/xstate@4.38.3/lib/interpreter',
+    );
+    expect(resolveBareImport('@scope/pkg/sub')).toBe('https://esm.sh/@scope/pkg/sub');
+    // Absolute URLs pass through untouched.
+    expect(resolveBareImport('https://esm.sh/marked@12')).toBe('https://esm.sh/marked@12');
   });
 
   it('per-user blob data is partitioned by caller and owner-gated', async () => {
