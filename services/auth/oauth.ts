@@ -312,5 +312,11 @@ export interface ValidatedToken {
 export async function validateBearer(token: string, store: AuthStore): Promise<ValidatedToken | null> {
   const tok = await store.validateTokenByHash(sha256(token));
   if (!tok) return null;
-  return { userId: tok.mintedBy, scope: tok.scope, clientId: tok.clientId };
+  // The principal exposed to cells is the human **username**, so scopes, cell
+  // ownership, dispatch addresses (`@<username>/<cell>`) and S3 prefixes are all
+  // readable. The stable account id (`mintedBy`/UUID) stays the durable anchor for
+  // credentials + token management; resolve it to the handle here. Falls back to
+  // `mintedBy` when the account can't be resolved (e.g. a token minted by handle).
+  const account = await store.getUserById(tok.mintedBy);
+  return { userId: account?.username ?? tok.mintedBy, scope: tok.scope, clientId: tok.clientId };
 }

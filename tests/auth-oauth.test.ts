@@ -59,6 +59,22 @@ describe('auth store (in-memory)', () => {
     expect(await store.validateTokenByHash(sha256(minted.token))).toBeNull();
   });
 
+  it('validateBearer exposes the username as the principal (account id stays the anchor)', async () => {
+    const store = createMemoryStore();
+    await store.createUser('uuid-1', 'alice');
+    const minted = await store.mintToken({ userId: 'uuid-1', scope: 'workspace:read' });
+
+    // The token is stored keyed by the stable account id…
+    expect(await store.validateTokenByHash(sha256(minted.token))).toMatchObject({ mintedBy: 'uuid-1' });
+    // …but the principal cells see is the human username — so addresses become
+    // @alice/<cell>, scopes/S3 prefixes become readable.
+    expect(await validateBearer(minted.token, store)).toMatchObject({ userId: 'alice', scope: 'workspace:read' });
+
+    // Falls back to mintedBy when the account can't be resolved.
+    const orphan = await store.mintToken({ userId: 'ghost', scope: 's' });
+    expect(await validateBearer(orphan.token, store)).toMatchObject({ userId: 'ghost' });
+  });
+
   it('refreshes a token, rotating and invalidating the old one', async () => {
     const store = createMemoryStore();
     const minted = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
@@ -128,9 +144,10 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     const tok = tokenRes.body as { access_token: string; refresh_token: string; scope: string };
     expect(tok.scope).toBe('workspace:read');
 
-    // 5. The minted token validates.
+    // 5. The minted token validates — and the principal cells see is the human
+    // username ('alice'), not the account id ('u1').
     const validated = await validateBearer(tok.access_token, store);
-    expect(validated).toMatchObject({ userId: 'u1', scope: 'workspace:read' });
+    expect(validated).toMatchObject({ userId: 'alice', scope: 'workspace:read' });
 
     // 6. Refresh works.
     const refreshRes = await handleToken(
@@ -255,6 +272,7 @@ describe('OAuth device authorization grant', () => {
     );
     const tok = granted.body as { access_token: string; scope: string };
     expect(tok.scope).toBe('workspace:write');
-    expect(await validateBearer(tok.access_token, store)).toMatchObject({ userId: 'u1', scope: 'workspace:write' });
+    // principal is the human username, not the account id
+    expect(await validateBearer(tok.access_token, store)).toMatchObject({ userId: 'alice', scope: 'workspace:write' });
   });
 });
