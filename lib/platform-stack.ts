@@ -130,12 +130,12 @@ export class PlatformStack extends cdk.Stack {
     // forge is a backend tool-provider (no public route): the /mcp gateway and
     // dispatch reach it via allow-listed invokes. It provisions and invokes
     // dynamic cells; the gateway enforces tool scopes before forwarding.
-    const forge = new HttpServiceCell(this, 'ForgeService', {
-      name: 'forge',
-      entry: serviceEntry('forge'),
+    const cells = new HttpServiceCell(this, 'CellsService', {
+      name: 'cells',
+      entry: serviceEntry('cells'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['createCell', 'listCells', 'getCell', 'callCell', 'grantCapability', 'deleteCell', 'cellLogs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
+      commands: ['create', 'list', 'get', 'call', 'grant', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
       emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
@@ -144,7 +144,7 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       timeoutSeconds: 60,
     });
-    controlPlane.grantControlPlane(forge);
+    controlPlane.grantControlPlane(cells);
 
     const dispatch = new HttpServiceCell(this, 'DispatchService', {
       name: 'dispatch',
@@ -161,8 +161,8 @@ export class PlatformStack extends cdk.Stack {
     // The /mcp gateway aggregates + forwards forge's tools; dispatch proxies
     // cell invocations through forge (which holds the registry and invoke
     // permission). Neither reads forge's table directly.
-    resource.allow(forge);
-    dispatch.allow(forge);
+    resource.allow(cells);
+    dispatch.allow(cells);
     // The gateway also aggregates the workspace cell's tools (remember/recall/
     // share/…): it calls workspace.describeTools and forwards tools/call to it.
     resource.allow(workspace);
@@ -170,7 +170,7 @@ export class PlatformStack extends cdk.Stack {
     // in the dynamic cells they own or were granted (forge.catalogCells), so the
     // self-model surfaces tier-2 cells beside the static tier-1 manifests.
     home.allow(auth);
-    home.allow(forge);
+    home.allow(cells);
 
     // Single public entrypoint, behaviours generated from manifests. Optionally
     // fronted by a custom domain (CloudFront alias + ACM cert in us-east-1).

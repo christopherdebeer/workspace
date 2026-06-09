@@ -28,7 +28,7 @@ function stub(tokens: Record<string, { userId: string; scope: string }>): void {
       let result: unknown = null;
       if (params.FunctionName === 'auth-fn' && env.__command === 'validateToken') {
         result = tokens[env.payload.token as string] ?? null;
-      } else if (params.FunctionName === 'forge-fn' && env.__command === 'callCell') {
+      } else if (params.FunctionName === 'cells-fn' && env.__command === 'call') {
         lastCallCell = env.payload as unknown as CallCellPayload;
         result = { statusCode: 200, body: { echoed: env.payload.name } };
       }
@@ -51,7 +51,7 @@ const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
 describe('dispatch cell (/@owner/cell)', () => {
   beforeEach(() => {
     process.env.SERVICE_NAME = 'dispatch';
-    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn' });
+    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', cells: 'cells-fn' });
     lastCallCell = undefined;
     stub({ good: { userId: 'alice', scope: 'workspace:read' } });
   });
@@ -60,7 +60,7 @@ describe('dispatch cell (/@owner/cell)', () => {
     delete process.env.SERVICE_REGISTRY;
   });
 
-  it('routes /@alice/notes/items to forge.callCell with parsed owner/name/path', async () => {
+  it('routes /@alice/notes/items to cells.call with parsed owner/name/path', async () => {
     const res = (await dispatch(
       event('POST', '/@alice/notes/items', bearer('good'), { v: 1 }),
     )) as FunctionUrlResponse;

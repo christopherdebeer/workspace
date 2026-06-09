@@ -26,7 +26,7 @@ function stub(tokens: Record<string, ValidatedToken>, cells: unknown[]): void {
       let result: unknown = null;
       if (params.FunctionName === 'auth-fn' && env.__command === 'validateToken') {
         result = tokens[env.payload.token as string] ?? null;
-      } else if (params.FunctionName === 'forge-fn' && env.__command === 'catalogCells') {
+      } else if (params.FunctionName === 'cells-fn' && env.__command === 'catalogCells') {
         lastForgeCall = { command: env.__command, payload: env.payload };
         result = { cells };
       }
@@ -79,7 +79,7 @@ describe('home cell', () => {
 
   it('merges the caller\'s dynamic cells into /_catalog when authenticated', async () => {
     process.env.PLATFORM_CATALOG = JSON.stringify([{ name: 'home', routes: [], commands: [] }]);
-    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn' });
+    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', cells: 'cells-fn' });
     const cell = {
       name: 'notes',
       owner: 'alice',
@@ -100,7 +100,7 @@ describe('home cell', () => {
 
   it('keeps /_catalog usable when forge is unavailable', async () => {
     process.env.PLATFORM_CATALOG = JSON.stringify([{ name: 'home', routes: [], commands: [] }]);
-    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', forge: 'forge-fn' });
+    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn', cells: 'cells-fn' });
     __setLambda({
       invoke: (params: { FunctionName: string; Payload: string }) => {
         const env = JSON.parse(params.Payload) as { __command: string };

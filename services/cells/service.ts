@@ -718,7 +718,7 @@ interface ToolSpec {
 }
 
 const TOOLS: Record<string, ToolSpec> = {
-  createCell: {
+  create: {
     description:
       'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE.',
     scope: CREATE_SCOPE,
@@ -736,14 +736,14 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: createCell as RegisteredCommand,
   },
-  listCells: {
+  list: {
     description: 'List the dynamic cells you own.',
     scope: null,
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: listCells as RegisteredCommand,
   },
-  getCell: {
+  get: {
     description: 'Get one dynamic cell, refreshing its provisioning status.',
     scope: null,
     kind: 'read',
@@ -755,7 +755,7 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: getCell as RegisteredCommand,
   },
-  callCell: {
+  call: {
     description:
       'Invoke a dynamic cell you own or were granted, over this same connection. Optionally pass method, path, and a JSON body.',
     scope: null,
@@ -774,7 +774,7 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: callCell as RegisteredCommand,
   },
-  grantCapability: {
+  grant: {
     description: 'Share a cell you own with another principal (expand permissions).',
     scope: null,
     kind: 'act',
@@ -786,7 +786,7 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: grantCapability as RegisteredCommand,
   },
-  deleteCell: {
+  delete: {
     description: 'Delete a cell you own (tears down its stack).',
     scope: null,
     kind: 'act',
@@ -798,7 +798,7 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: deleteCell as RegisteredCommand,
   },
-  cellLogs: {
+  logs: {
     description:
       "Fetch a cell's recent CloudWatch logs (observability). Identify the cell by cellId or owner+name; optional `since` (e.g. 15m, 2h), `limit`, and `filter` (CloudWatch filter pattern).",
     scope: null,
@@ -969,7 +969,7 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 }
 
 export const handler = defineService({
-  name: 'forge',
+  name: 'cells',
   commands,
   events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed'] },
 });

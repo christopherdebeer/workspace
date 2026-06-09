@@ -9,17 +9,17 @@
  * that `callCell` invokes only for authorised principals, and that
  * `describeTools` advertises the create scope for the gateway to enforce.
  */
-import { handler as forge } from '../services/forge/service';
-import { crc32, zipStore } from '../services/forge/zip';
-import { buildCellTemplate, cellResourceName } from '../services/forge/cell-template';
-import { createRegistry, __setDocumentClient, CellRecord } from '../services/forge/registry';
-import { __setEsbuild } from '../services/forge/transpile';
+import { handler as forge } from '../services/cells/service';
+import { crc32, zipStore } from '../services/cells/zip';
+import { buildCellTemplate, cellResourceName } from '../services/cells/cell-template';
+import { createRegistry, __setDocumentClient, CellRecord } from '../services/cells/registry';
+import { __setEsbuild } from '../services/cells/transpile';
 import {
   __setCloudFormation,
   __setS3,
   __setLambda as __setProvisionerLambda,
   __setCloudWatchLogs,
-} from '../services/forge/provisioner';
+} from '../services/cells/provisioner';
 
 // ── in-memory AWS stubs ────────────────────────────────────────────
 
@@ -129,7 +129,7 @@ async function call<T = unknown>(user: string | undefined, command: string, payl
   return (await forge({ __command: command, payload, user })) as CommandResult<T>;
 }
 
-describe('forge: zip framing', () => {
+describe('cells: zip framing', () => {
   it('crc32 matches the known IEEE vector for "123456789"', () => {
     expect(crc32(Buffer.from('123456789'))).toBe(0xcbf43926);
   });
@@ -140,7 +140,7 @@ describe('forge: zip framing', () => {
   });
 });
 
-describe('forge: cell template', () => {
+describe('cells: cell template', () => {
   const tpl = buildCellTemplate({
     cellId: 'notes-abc12345',
     owner: 'alice',
@@ -163,7 +163,7 @@ describe('forge: cell template', () => {
   });
 });
 
-describe('forge: registry', () => {
+describe('cells: registry', () => {
   it('puts, gets, lists by owner, and grants', async () => {
     __setDocumentClient(memoryDocClient() as unknown as Parameters<typeof __setDocumentClient>[0]);
     const reg = createRegistry('forge-table');
@@ -187,9 +187,9 @@ describe('forge: registry', () => {
   });
 });
 
-describe('forge: backend commands', () => {
+describe('cells: backend commands', () => {
   beforeEach(() => {
-    process.env.SERVICE_NAME = 'forge';
+    process.env.SERVICE_NAME = 'cells';
     process.env.TABLE_NAME = 'forge-table';
     process.env.CELL_CODE_BUCKET = 'code-bucket';
     process.env.CELL_PERMISSION_BOUNDARY_ARN = 'arn:aws:iam::111:policy/boundary';
@@ -220,14 +220,14 @@ describe('forge: backend commands', () => {
   it('describeTools advertises createCell with the create scope (for the gateway)', async () => {
     const res = await call<{ tools: Array<{ name: string; scope: string | null }> }>('alice', 'describeTools', {});
     expect(res.ok).toBe(true);
-    const create = res.result!.tools.find((t) => t.name === 'createCell');
+    const create = res.result!.tools.find((t) => t.name === 'create');
     expect(create?.scope).toBe('platform:cells:create');
     // callCell is ownership-gated, not scoped
-    expect(res.result!.tools.find((t) => t.name === 'callCell')?.scope).toBeNull();
+    expect(res.result!.tools.find((t) => t.name === 'call')?.scope).toBeNull();
   });
 
   it('createCell transpiles, uploads, deploys a cell-* stack, and records it', async () => {
-    const res = await call<{ cellId: string; address: string; status: string }>('alice', 'createCell', {
+    const res = await call<{ cellId: string; address: string; status: string }>('alice', 'create', {
       name: 'My Notes',
       code: cellCode,
     });
@@ -246,12 +246,12 @@ describe('forge: backend commands', () => {
 
   it('callCell invokes the cell for the owner and returns its parsed body', async () => {
     lambdaResponse = { statusCode: 200, body: JSON.stringify({ greeting: 'hi' }) };
-    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
 
-    const res = await call<{ statusCode: number; body: { greeting: string } }>('alice', 'callCell', {
+    const res = await call<{ statusCode: number; body: { greeting: string } }>('alice', 'call', {
       cellId: cell.cellId,
       body: { name: 'x' },
     });
@@ -261,10 +261,10 @@ describe('forge: backend commands', () => {
   });
 
   it('cellLogs returns the cell logs for the owner', async () => {
-    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
-    const res = await call<{ count: number; events: Array<{ message: string }> }>('alice', 'cellLogs', {
+    const res = await call<{ count: number; events: Array<{ message: string }> }>('alice', 'logs', {
       cellId: cell.cellId,
       since: '1h',
     });
@@ -274,8 +274,8 @@ describe('forge: backend commands', () => {
   });
 
   it('catalogCells returns the caller-accessible cells (own + granted), scoped per caller', async () => {
-    await call('alice', 'createCell', { name: 'notes', code: cellCode, share: ['bob'] });
-    await call('alice', 'createCell', { name: 'private', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode, share: ['bob'] });
+    await call('alice', 'create', { name: 'private', code: cellCode });
 
     const mine = await call<{ cells: Array<{ name: string; address: string; shared: boolean }> }>(
       'alice',
@@ -298,12 +298,12 @@ describe('forge: backend commands', () => {
   });
 
   it('callCell denies a principal who is neither owner nor grantee', async () => {
-    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
 
-    const res = await call('bob', 'callCell', { cellId: cell.cellId });
+    const res = await call('bob', 'call', { cellId: cell.cellId });
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/not authorised/i);
   });
@@ -316,7 +316,7 @@ describe('forge: backend commands', () => {
         tools: [{ name: 'add', description: 'Add a note.', inputSchema: { type: 'object' }, scope: null }],
       }),
     };
-    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
@@ -344,7 +344,7 @@ describe('forge: backend commands', () => {
       statusCode: 200,
       body: JSON.stringify({ tools: [{ name: 'add', description: 'Add.', inputSchema: { type: 'object' }, kind: 'read' }] }),
     };
-    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
@@ -359,14 +359,14 @@ describe('forge: backend commands', () => {
 
   it('describeCellTools skips cells that are not ACTIVE', async () => {
     lambdaResponse = { statusCode: 200, body: JSON.stringify({ tools: [{ name: 'add' }] }) };
-    await call('alice', 'createCell', { name: 'notes', code: cellCode }); // stays CREATING
+    await call('alice', 'create', { name: 'notes', code: cellCode }); // stays CREATING
     const res = await call<{ tools: unknown[] }>('alice', 'describeCellTools', {});
     expect(res.result!.tools).toEqual([]);
   });
 
   it('callCellTool forwards to the cell tool and returns its body, ownership-gated', async () => {
     lambdaResponse = { statusCode: 200, body: JSON.stringify({ added: true }) };
-    await call('alice', 'createCell', { name: 'notes', code: cellCode });
+    await call('alice', 'create', { name: 'notes', code: cellCode });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
     await reg.setStatus(cell.cellId, 'ACTIVE');
