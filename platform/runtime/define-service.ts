@@ -353,6 +353,7 @@ function renderHttp(res: ServiceHttpResponse, correlationId: string): FunctionUr
     statusCode: res.statusCode ?? 200,
     headers,
     body: res.body === undefined ? '' : isString ? (res.body as string) : JSON.stringify(res.body),
+    ...(res.isBase64Encoded ? { isBase64Encoded: true } : {}),
   };
 }
 

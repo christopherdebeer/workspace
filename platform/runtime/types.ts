@@ -91,6 +91,8 @@ export interface ServiceHttpResponse {
   headers?: Record<string, string>;
   /** Object bodies are JSON-encoded; string bodies are sent verbatim. */
   body?: unknown;
+  /** Set when `body` is a base64-encoded binary string. */
+  isBase64Encoded?: boolean;
 }
 
 export type HttpHandler = (
@@ -121,6 +123,8 @@ export interface FunctionUrlResponse {
   statusCode: number;
   headers: Record<string, string>;
   body: string;
+  /** Set when `body` is base64-encoded binary. */
+  isBase64Encoded?: boolean;
 }
 
 /** Result shape returned from a direct (service-to-service) invoke. */

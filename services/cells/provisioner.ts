@@ -112,6 +112,10 @@ export interface InvokeCellResult {
   statusCode: number;
   /** Parsed JSON body when possible, else the raw string. */
   body: unknown;
+  /** The cell's own response headers (content-type etc.), passed through. */
+  headers?: Record<string, string>;
+  /** Set when the cell returned a base64-encoded binary body. */
+  isBase64Encoded?: boolean;
 }
 
 /** Synchronously invoke a cell's Lambda with a Function-URL-shaped event. */
@@ -133,21 +137,27 @@ export async function invokeCell(p: InvokeCellParams): Promise<InvokeCellResult>
   if (!raw) return { statusCode: 502, body: 'Empty response from cell' };
 
   // A cell returns a Function-URL response: { statusCode, headers, body }.
-  let parsed: { statusCode?: number; body?: string };
+  let parsed: { statusCode?: number; headers?: Record<string, string>; body?: string; isBase64Encoded?: boolean };
   try {
-    parsed = JSON.parse(raw) as { statusCode?: number; body?: string };
+    parsed = JSON.parse(raw) as typeof parsed;
   } catch {
     return { statusCode: 200, body: raw };
   }
   let body: unknown = parsed.body;
-  if (typeof parsed.body === 'string') {
+  // Binary bodies stay verbatim (base64); text bodies parse to JSON when they are.
+  if (typeof parsed.body === 'string' && !parsed.isBase64Encoded) {
     try {
       body = JSON.parse(parsed.body);
     } catch {
       body = parsed.body;
     }
   }
-  return { statusCode: parsed.statusCode ?? 200, body };
+  return {
+    statusCode: parsed.statusCode ?? 200,
+    body,
+    headers: parsed.headers,
+    isBase64Encoded: parsed.isBase64Encoded,
+  };
 }
 
 export interface CellLogEvent {

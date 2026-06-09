@@ -127,6 +127,8 @@ interface CreateCellInput {
   description?: string;
   /** Principals to share the cell with on creation (in addition to the owner). */
   share?: string[];
+  /** Web-facing: anonymous GETs are allowed through dispatch (`/@owner/name`). */
+  public?: boolean;
 }
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
@@ -186,6 +188,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     functionName,
     stackName,
     grants,
+    public: !!input.public,
     status: 'CREATING',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -215,6 +218,7 @@ async function listCells(_input: unknown, ctx: ServiceContext): Promise<unknown>
       name: c.name,
       status: c.status,
       grants: c.grants,
+      public: c.public,
       description: c.description,
       address: cellAddress(c.owner, c.name),
     })),
@@ -309,6 +313,8 @@ interface CallCellInput {
   method?: string;
   path?: string;
   body?: unknown;
+  /** Raw query string to forward to the cell (no leading `?`). */
+  query?: string;
 }
 
 /** Resolve the input's target to an internal cellId. */
@@ -319,18 +325,25 @@ function resolveCellId(input: { cellId?: string; owner?: string; name?: string }
 }
 
 async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unknown> {
-  const user = requireUser(ctx.identity);
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
   const cellId = resolveCellId(input);
   const record = await registry.get(cellId);
   if (!record) throw new Error(`Unknown cell "${cellId}"`);
-  authorizeAccess(record, user);
+
+  const method = (input.method ?? 'POST').toUpperCase();
+  // A public cell is web-facing: anonymous GETs (and HEADs) are allowed so a
+  // browser can fetch its pages/assets through dispatch. Everything else
+  // still requires an authenticated, owner-or-granted caller.
+  const anonymousOk = record.public && (method === 'GET' || method === 'HEAD');
+  if (!anonymousOk) {
+    const user = requireUser(ctx.identity);
+    authorizeAccess(record, user);
+  }
   if (record.status !== 'ACTIVE') {
     throw new Error(`Cell "${record.cellId}" is not ACTIVE (status ${record.status})`);
   }
 
-  const method = (input.method ?? 'POST').toUpperCase();
   const path = input.path ?? '/';
   const bodyStr =
     input.body === undefined
@@ -344,8 +357,8 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
     event: {
       version: '2.0',
       rawPath: path,
-      rawQueryString: '',
-      headers: { 'content-type': 'application/json', 'x-cell-caller': user },
+      rawQueryString: input.query ?? '',
+      headers: { 'content-type': 'application/json', 'x-cell-caller': ctx.identity.user ?? 'anonymous' },
       requestContext: { http: { method, path } },
       body: bodyStr,
       isBase64Encoded: false,
@@ -739,6 +752,7 @@ const TOOLS: Record<string, ToolSpec> = {
         code: { type: 'string', description: 'TypeScript source exporting `handler`' },
         description: { type: 'string' },
         share: { type: 'array', items: { type: 'string' }, description: 'Principals to share with' },
+        public: { type: 'boolean', description: 'Web-facing: allow anonymous GETs via /@<owner>/<name>' },
       },
       required: ['name', 'code'],
       additionalProperties: false,
