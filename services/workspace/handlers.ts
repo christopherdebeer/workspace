@@ -39,10 +39,18 @@ import {
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
+  ACTIONS_PREFIX,
   type ActionDefinition,
   type RegisterResult,
   type InvokeResult,
 } from './actions';
+import {
+  createRegisteredViews,
+  VIEWS_PREFIX,
+  type ViewDefinition,
+  type ViewResult,
+} from './views';
+import type { EventBridgeHandler } from '../../platform/runtime';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
 import {
   createDynamoGrantStore,
@@ -141,6 +149,13 @@ export interface InvokeInput {
   action: string;
   params?: Record<string, unknown>;
 }
+export interface RegisterViewInput {
+  view: ViewDefinition;
+}
+export interface ViewInput {
+  id: string;
+}
+export type DeleteViewInput = ViewInput;
 export interface ShareInput {
   /** The user to share with. */
   to: string;
@@ -171,6 +186,10 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   actions: CommandHandler<undefined, { actions: ActionDefinition[] }>;
   deleteAction: CommandHandler<DeleteActionInput, { ok: true }>;
   invoke: CommandHandler<InvokeInput, InvokeResult>;
+  registerView: CommandHandler<RegisterViewInput, ViewDefinition>;
+  views: CommandHandler<undefined, { views: ViewDefinition[] }>;
+  deleteView: CommandHandler<DeleteViewInput, { ok: true }>;
+  view: CommandHandler<ViewInput, ViewResult>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
@@ -421,6 +440,64 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'registerView',
+    description:
+      'Register a named view: `{ id, query, reduce?, path?, render? }` stored as a fact at `_views/<id>`. A view is a stored projection (the query primitive as data) with an optional reduction (list|count|latest|sum) and a render hint — the same declaration is a dashboard surface for humans and an affordance for agents.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: {
+          type: 'object',
+          description: 'The view definition',
+          properties: {
+            id: { type: 'string' },
+            description: { type: 'string' },
+            query: { type: 'object', description: 'Query options: { type?, tag?, prefix?, rankBy?, limit?, includeSuperseded? }' },
+            reduce: { type: 'string', enum: ['list', 'count', 'latest', 'sum'] },
+            path: { type: 'string', description: 'Dot-path into each value, for sum' },
+            render: { type: 'object', description: 'Render hint: { type: metric|table|feed|list|markdown, label?, ... }' },
+          },
+          required: ['id', 'query'],
+        },
+      },
+      required: ['view'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'views',
+    description: 'List the registered views in your slice.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'view',
+    description: 'Evaluate a registered view against the current slice — returns its value, count, and render hint.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The view id' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'deleteView',
+    description: 'Retire a registered view (supersedes its `_views/<id>` fact).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'supersede',
     description:
       'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot.',
@@ -622,6 +699,35 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       return result;
     },
 
+    async registerView(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.view) throw new Error('view is required');
+      const { state } = build(ctx);
+      const view = await createRegisteredViews(state).register(scope, input.view, ctx.identity);
+      ctx.logger.info('workspace view registered', { scope, view: view.id });
+      return view;
+    },
+
+    async views(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return { views: await createRegisteredViews(state).list(scope) };
+    },
+
+    async deleteView(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.id) throw new Error('id is required');
+      const { state } = build(ctx);
+      return createRegisteredViews(state).remove(scope, input.id, ctx.identity);
+    },
+
+    async view(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.id) throw new Error('id is required');
+      const { state } = build(ctx);
+      return createRegisteredViews(state).evaluate(scope, input.id, ctx.identity);
+    },
+
     async supersede(input, ctx) {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
@@ -665,5 +771,68 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     async describeTools() {
       return { tools: TOOL_DESCRIPTORS };
     },
+  };
+}
+
+/**
+ * The organ-to-reef write path: a dynamic cell emits a
+ * `substrate.write.requested` event, and the workspace applies it as a fact
+ * in the cell **owner's** slice with the cell as the attested writer.
+ *
+ * Trust model: the event's `source` is IAM-attested — each cell's role policy
+ * pins `events:PutEvents` to `events:source = cell-<cellId>`, so a cell
+ * cannot speak as anyone but itself. The owner is resolved through the cells
+ * registry (never trusted from the event body), and the write flows through
+ * the same observed-state primitive as every other write (provenance,
+ * revision, trajectory). Organs may not write the declared vocabulary.
+ */
+export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (!meta.source.startsWith('cell-')) {
+      ctx.logger.warn('substrate write from non-cell source refused', { source: meta.source });
+      return;
+    }
+    const cellId = meta.source.slice('cell-'.length);
+    const key = detail.key;
+    if (typeof key !== 'string' || !key) {
+      ctx.logger.warn('substrate write without a key refused', { source: meta.source });
+      return;
+    }
+    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX)) {
+      ctx.logger.warn('substrate write to reserved vocabulary refused', { source: meta.source, key });
+      return;
+    }
+    const resolved = (await ctx.serviceClient('cells').command('resolveCell', { cellId })) as {
+      owner?: string;
+      name?: string;
+    } | null;
+    if (!resolved?.owner) {
+      ctx.logger.warn('substrate write from unknown cell refused', { cellId });
+      return;
+    }
+    const writerAddress = `@${resolved.owner}/${resolved.name ?? cellId}`;
+    const { state } = build(ctx);
+    const entry = await state.put(
+      {
+        scope: resolved.owner,
+        key,
+        value: detail.value,
+        via: typeof detail.via === 'string' ? detail.via : writerAddress,
+        type: typeof detail.type === 'string' ? detail.type : undefined,
+        tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
+      },
+      { user: writerAddress, scopes: [] },
+    );
+    await ctx.events.emit('workspace.fact.written', {
+      scope: resolved.owner,
+      key,
+      revision: entry._meta.revision,
+    });
+    ctx.logger.info('substrate write applied for organ', {
+      cell: writerAddress,
+      scope: resolved.owner,
+      key,
+      revision: entry._meta.revision,
+    });
   };
 }

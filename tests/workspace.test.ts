@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler } from '../services/workspace/handlers';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -145,6 +145,7 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare',
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
+        'registerView', 'views', 'view', 'deleteView',
       ].sort(),
     );
     // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
@@ -442,5 +443,128 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
         alice(),
       ),
     ).rejects.toThrow(/may not write/);
+  });
+});
+
+describe('workspace registered views (the declared read vocabulary)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const alice = (): ServiceContext => ctxFor('alice').ctx;
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'todo:a', value: { title: 'wire views', effort: 2 }, type: 'todo' }, alice());
+    await cmds.remember({ key: 'todo:b', value: { title: 'ship views', effort: 3 }, type: 'todo' }, alice());
+    await cmds.remember({ key: 'note', value: 'unrelated' }, alice());
+  });
+
+  it('registers a view as a fact, lists and evaluates it (count + render hint)', async () => {
+    const def = await cmds.registerView(
+      {
+        view: {
+          id: 'open-todos',
+          query: { type: 'todo' },
+          reduce: 'count',
+          render: { type: 'metric', label: 'Open todos' },
+        },
+      },
+      alice(),
+    );
+    expect(def.id).toBe('open-todos');
+    expect((await cmds.views(undefined, alice())).views.map((v) => v.id)).toEqual(['open-todos']);
+    // Vocabulary is state: the definition is a fact.
+    expect((await cmds.peek({ key: '_views/open-todos' }, alice()))?._meta.type).toBe('view');
+
+    const res = await cmds.view({ id: 'open-todos' }, alice());
+    expect(res.value).toBe(2);
+    expect(res.count).toBe(2);
+    expect(res.render).toEqual({ type: 'metric', label: 'Open todos' });
+  });
+
+  it('evaluates sum and latest reductions', async () => {
+    await cmds.registerView(
+      { view: { id: 'total-effort', query: { type: 'todo' }, reduce: 'sum', path: 'effort' } },
+      alice(),
+    );
+    expect((await cmds.view({ id: 'total-effort' }, alice())).value).toBe(5);
+
+    await cmds.registerView({ view: { id: 'latest-todo', query: { type: 'todo' }, reduce: 'latest' } }, alice());
+    const latest = await cmds.view({ id: 'latest-todo' }, alice());
+    expect((latest.value as { key: string }).key).toBeDefined();
+  });
+
+  it('a prefix-less view does not observe the vocabulary itself', async () => {
+    await cmds.registerView({ view: { id: 'everything', query: {} } }, alice());
+    const res = await cmds.view({ id: 'everything' }, alice());
+    const keys = (res.value as Array<{ key: string }>).map((e) => e.key);
+    expect(keys.some((k) => k.startsWith('_views/') || k.startsWith('_actions/'))).toBe(false);
+    expect(keys).toContain('note');
+  });
+
+  it('deleteView retires the definition', async () => {
+    await cmds.deleteView({ id: 'everything' }, alice());
+    expect((await cmds.views(undefined, alice())).views.map((v) => v.id).sort()).toEqual([
+      'latest-todo', 'open-todos', 'total-effort',
+    ]);
+    await expect(cmds.view({ id: 'everything' }, alice())).rejects.toThrow(/not_found/);
+  });
+
+  it('rejects malformed views', async () => {
+    await expect(cmds.registerView({ view: { id: 'bad/slash', query: {} } }, alice())).rejects.toThrow(/must not contain/);
+    await expect(
+      cmds.registerView({ view: { id: 'bad', query: {}, reduce: 'median' as never } }, alice()),
+    ).rejects.toThrow(/reduce/);
+  });
+});
+
+describe('workspace substrate-write handler (the organ-to-reef path)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const handler = createSubstrateWriteHandler(() => ({ state, grants }));
+
+  /** A bus-event ctx: no caller identity; a stubbed cells.resolveCell. */
+  function busCtx(resolved: { owner: string; name?: string } | null): ServiceContext {
+    const base = ctxFor(null).ctx as unknown as Record<string, unknown>;
+    return {
+      ...base,
+      identity: { scopes: [] },
+      serviceClient: () => ({
+        command: async (cmd: string) => {
+          if (cmd !== 'resolveCell') throw new Error(`unexpected command ${cmd}`);
+          return resolved;
+        },
+      }),
+    } as unknown as ServiceContext;
+  }
+
+  it('applies an IAM-attested cell write into the owner slice with the cell as writer', async () => {
+    await handler(
+      { key: 'sensor:reading', value: { temp: 21 }, type: 'reading' },
+      busCtx({ owner: 'alice', name: 'thermo' }),
+      { source: 'cell-thermo-abc123', detailType: 'substrate.write.requested' },
+    );
+    const view = await cmds.recall({ elision: 'none' }, ctxFor('alice').ctx);
+    const fact = view.entries['sensor:reading'];
+    expect(fact.value).toEqual({ temp: 21 });
+    expect(fact._meta.writer).toBe('@alice/thermo');
+    expect(fact._meta.via).toBe('@alice/thermo');
+    expect(fact._meta.type).toBe('reading');
+  });
+
+  it('refuses non-cell sources, missing keys, unknown cells, and vocabulary writes', async () => {
+    // None of these should write anything.
+    await handler({ key: 'x', value: 1 }, busCtx({ owner: 'alice' }), { source: 'rogue', detailType: 'substrate.write.requested' });
+    await handler({ value: 1 }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
+    await handler({ key: 'x', value: 1 }, busCtx(null), { source: 'cell-a', detailType: 'substrate.write.requested' });
+    await handler({ key: '_actions/evil', value: 1 }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
+    await handler({ key: '_views/evil', value: 1 }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
+
+    const view = await cmds.recall({ elision: 'none' }, ctxFor('alice').ctx);
+    expect(view.entries['x']).toBeUndefined();
+    expect(view.entries['_actions/evil']).toBeUndefined();
+    expect(view.entries['_views/evil']).toBeUndefined();
   });
 });
