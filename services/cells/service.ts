@@ -39,6 +39,7 @@ import {
 } from './provisioner';
 import type { InvokeCellResult } from './provisioner';
 import { srcKey, srcPrefix, buildKey, dataKey, dataPrefix, cleanPath } from './cell-files';
+import { extractTarGz } from './tar';
 
 /** Parse a relative window like "15m", "2h", "1d" into milliseconds. */
 function sinceToMs(since: string | undefined): number {
@@ -475,6 +476,51 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
   return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
 }
 
+interface ImportSrcInput extends CellRef {
+  /** HTTPS URL of a tar / tar.gz archive (e.g. a GitHub codeload tarball). */
+  url: string;
+  /** Archive path prefix to select AND strip (e.g. `repo-main/src/`). */
+  include?: string;
+  /** Destination prefix inside the cell's src tree (e.g. `client/`). */
+  prefix?: string;
+}
+
+/**
+ * Bulk-import text sources from a public archive into the cell's src tree —
+ * hoisting an existing repo into a cell without pushing it file-by-file.
+ * Same ownership gate and path validation as `writeFile`.
+ */
+async function importSrc(input: ImportSrcInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.url || !/^https:\/\//.test(input.url)) throw new Error('an https `url` is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+
+  const fetchFn = (globalThis as { fetch?: (url: string) => Promise<{ ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> }> }).fetch;
+  if (!fetchFn) throw new Error('fetch unavailable in this runtime');
+  const res = await fetchFn(input.url);
+  if (!res.ok) throw new Error(`archive fetch failed: HTTP ${res.status}`);
+  const archive = Buffer.from(await res.arrayBuffer());
+  if (archive.length > 30 * 1024 * 1024) throw new Error('archive too large (>30MB)');
+
+  const { entries, skipped } = extractTarGz(archive, { include: input.include });
+  const written: string[] = [];
+  const skippedPaths: string[] = [];
+  for (const entry of entries) {
+    const rel = input.include ? entry.name.slice(input.include.length) : entry.name;
+    if (!rel) continue;
+    const target = `${input.prefix ?? ''}${rel}`;
+    try {
+      await putObject(bucket, srcKey(record.cellId, target), entry.content, 'text/plain; charset=utf-8');
+      written.push(cleanPath(target));
+    } catch (err) {
+      ctx.logger.warn('importSrc skipped unsafe path', { path: target, error: (err as Error).message });
+      skippedPaths.push(target);
+    }
+  }
+  ctx.logger.info('cell src imported', { cellId: record.cellId, url: input.url, files: written.length, skipped });
+  return { imported: written.length, files: written, skippedBinary: skipped, skippedUnsafe: skippedPaths };
+}
+
 interface ReadFileInput extends CellRef {
   path: string;
 }
@@ -901,6 +947,26 @@ const TOOLS: Record<string, ToolSpec> = {
       additionalProperties: false,
     },
     handler: writeFile as RegisteredCommand,
+  },
+  importSrc: {
+    description:
+      "Bulk-import text sources from a public https tar/tar.gz archive (e.g. a GitHub codeload tarball) into the cell's src tree — hoist an existing repo into a cell without pushing it file-by-file. `include` selects+strips an archive prefix; `prefix` is the destination under src/. Redeploy with cells.deploy.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        url: { type: 'string', description: 'https tarball, e.g. https://codeload.github.com/<o>/<r>/tar.gz/refs/heads/main' },
+        include: { type: 'string', description: 'Archive prefix to select and strip, e.g. "repo-main/src/"' },
+        prefix: { type: 'string', description: 'Destination prefix in src/, e.g. "client/"' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+    handler: importSrc as RegisteredCommand,
   },
   readFile: {
     description: "Read one source file from a cell's src/ tree.",

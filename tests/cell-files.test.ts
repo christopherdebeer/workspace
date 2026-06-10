@@ -205,6 +205,43 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(res.error).toMatch(/imports\.json/);
   });
 
+  it('importSrc pulls a tarball into the src tree under a prefix (ownership-gated)', async () => {
+    const cellId = await makeCell('alice');
+    const { gzipSync } = await import('node:zlib');
+    const { buildTar } = await import('./helpers/tar-fixture');
+    const tarball = gzipSync(
+      buildTar([
+        { name: 'repo-main/src/main.ts', content: 'export const a = 1;' },
+        { name: 'repo-main/src/lib/util.ts', content: 'export const b = 2;' },
+        { name: 'repo-main/src/logo.png', content: 'binary!' }, // non-text → skipped
+        { name: 'repo-main/README.md', content: 'outside include' }, // filtered by include
+      ]),
+    );
+    const g = globalThis as { fetch?: unknown };
+    const realFetch = g.fetch;
+    g.fetch = async () => ({ ok: true, status: 200, arrayBuffer: async () => tarball.buffer.slice(tarball.byteOffset, tarball.byteOffset + tarball.byteLength) });
+    try {
+      const res = await call<{ imported: number; files: string[]; skippedBinary: number }>('alice', 'importSrc', {
+        cellId,
+        url: 'https://codeload.github.com/x/y/tar.gz/refs/heads/main',
+        include: 'repo-main/src/',
+        prefix: 'client/',
+      });
+      expect(res.ok).toBe(true);
+      expect(res.result!.files.sort()).toEqual(['client/lib/util.ts', 'client/main.ts']);
+      expect(res.result!.skippedBinary).toBe(1);
+      // The files landed in the cell's src tree, readable like any other.
+      const read = await call<{ content: string }>('alice', 'readFile', { cellId, path: 'client/lib/util.ts' });
+      expect(read.result!.content).toBe('export const b = 2;');
+
+      // http:// and non-owners are refused.
+      expect((await call('alice', 'importSrc', { cellId, url: 'http://evil/x.tgz' })).ok).toBe(false);
+      expect((await call('mallory', 'importSrc', { cellId, url: 'https://x/y.tgz' })).ok).toBe(false);
+    } finally {
+      g.fetch = realFetch;
+    }
+  });
+
   it('resolveBareImport maps npm specifiers to esm.sh, honouring the import map', () => {
     expect(resolveBareImport('yjs')).toBe('https://esm.sh/yjs');
     expect(resolveBareImport('yjs', { yjs: '13.6.27' })).toBe('https://esm.sh/yjs@13.6.27');
