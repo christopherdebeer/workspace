@@ -308,6 +308,161 @@ function CapabilityRow({ cap }: { cap: Capability }): React.JSX.Element {
   );
 }
 
+interface RenderHint {
+  type?: string;
+  label?: string;
+  href?: string;
+}
+
+interface ViewDef {
+  id: string;
+  description?: string;
+  reduce?: string;
+  render?: RenderHint | null;
+}
+
+interface ViewEval {
+  id: string;
+  render: RenderHint | null;
+  value: unknown;
+  count: number;
+}
+
+/** One registered view, rendered by its hint — the dashboard is a view query. */
+function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
+  const [out, setOut] = useState<ViewEval | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    mcpCall('read', 'workspace.view', { id: def.id })
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) setOut(r.value as ViewEval);
+        else setErr(typeof r.value === 'string' ? r.value : 'error');
+      })
+      .catch((e) => {
+        if (live) setErr(String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [def.id]);
+
+  const hint = out?.render ?? def.render ?? null;
+  const label = hint?.label ?? def.description ?? def.id;
+  const type = hint?.type ?? 'json';
+  const box: React.CSSProperties = {
+    border: `1px solid ${theme.border}`,
+    borderRadius: 10,
+    padding: '0.7rem 0.9rem',
+    display: 'grid',
+    gap: '0.25rem',
+  };
+
+  if (err) {
+    return (
+      <div style={box}>
+        <strong>{label}</strong>
+        <Badge tone="danger">{err}</Badge>
+      </div>
+    );
+  }
+
+  // A canvas view IS a board: the surface links into the spatial projection.
+  if (type === 'canvas') {
+    const board = def.id.startsWith('canvas:') ? def.id.slice('canvas:'.length) : def.id;
+    const href = hint?.href ?? `/@c15r/canvas?canvas=${encodeURIComponent(board)}`;
+    return (
+      <a href={href} style={{ ...box, textDecoration: 'none', color: 'inherit' }}>
+        <strong>🌲 {label}</strong>
+        <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
+          {out ? `${out.count} item${out.count === 1 ? '' : 's'} on the board` : 'Loading…'}
+        </span>
+        <span style={{ color: theme.accent, fontSize: '0.85rem' }}>Open board →</span>
+      </a>
+    );
+  }
+
+  if (type === 'metric' || type === 'count') {
+    return (
+      <div style={box}>
+        <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{label}</span>
+        <strong style={{ fontSize: '1.6rem' }}>{out ? String(out.value ?? '—') : '…'}</strong>
+      </div>
+    );
+  }
+
+  if (type === 'list' || type === 'table' || type === 'feed') {
+    const entries = Array.isArray(out?.value) ? (out?.value as Array<{ key: string }>) : [];
+    return (
+      <div style={box}>
+        <strong>{label}</strong>
+        {out === null ? (
+          <span style={{ color: theme.dim }}>Loading…</span>
+        ) : entries.length === 0 ? (
+          <span style={{ color: theme.dim }}>Empty.</span>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
+            {entries.slice(0, 8).map((e) => (
+              <li key={e.key}>
+                <code>{e.key}</code>
+              </li>
+            ))}
+            {entries.length > 8 ? <li style={{ color: theme.dim }}>… {entries.length - 8} more</li> : null}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={box}>
+      <strong>{label}</strong>
+      {out === null ? <span style={{ color: theme.dim }}>Loading…</span> : <CodeBlock>{JSON.stringify(out.value, null, 2)}</CodeBlock>}
+    </div>
+  );
+}
+
+/**
+ * Registered views, rendered as surfaces (home redesign phase 3: the UI comes
+ * from the registry, not code — `render: {type: 'canvas'}` links out to the
+ * spatial projection at /@<owner>/canvas).
+ */
+function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
+  const [views, setViews] = useState<ViewDef[] | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    mcpCall('read', 'workspace.views')
+      .then((r) => {
+        if (!live) return;
+        setViews(r.ok ? ((r.value as { views?: ViewDef[] }).views ?? []) : []);
+      })
+      .catch(() => {
+        if (live) setViews([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
+  if (!authed || views === null || views.length === 0) return null;
+  return (
+    <Card>
+      <Heading sub="Registered views rendered by their hints — one declaration, a dashboard for you and an affordance for agents.">
+        Surfaces
+      </Heading>
+      <div style={{ display: 'grid', gap: '0.7rem', marginTop: '0.5rem' }}>
+        {views.map((v) => (
+          <ViewSurface key={v.id} def={v} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 /**
  * The live read/act **console** — `read("$catalog")` lists every capability the
  * caller can use, grouped by cell; each row invokes read/act and shows the result.
@@ -381,6 +536,7 @@ function App(): React.JSX.Element {
       </Heading>
 
       <Account session={session} />
+      <Views authed={!!session.user} />
       <Capabilities authed={!!session.user} />
       <Discovery />
       <ResourceProbe />
