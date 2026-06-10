@@ -73,6 +73,15 @@ function loaderFor(path: string): 'ts' | 'tsx' | 'js' | 'jsx' {
   return 'ts';
 }
 
+/** A CSS import becomes a JS module that injects a <style> tag at load. */
+function cssAsJs(css: string): string {
+  return `const css = ${JSON.stringify(css)};
+const el = document.createElement('style');
+el.textContent = css;
+document.head.appendChild(el);
+export default css;`;
+}
+
 /**
  * Resolve a bare (npm) import for the **browser** bundle to an esm.sh URL —
  * the Val Town model: dependencies are fetched as native ES modules at load
@@ -134,10 +143,12 @@ export async function bundleClientFiles(
             }
             return { path: resolveBareImport(args.path, imports), external: true };
           });
-          build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => ({
-            contents: files[args.path] ?? '',
-            loader: loaderFor(args.path),
-          }));
+          build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => {
+            const contents = files[args.path] ?? '';
+            // `import './x.css'` injects the styles at load time.
+            if (args.path.endsWith('.css')) return { contents: cssAsJs(contents), loader: 'js' };
+            return { contents, loader: loaderFor(args.path) };
+          });
         },
       },
     ],
