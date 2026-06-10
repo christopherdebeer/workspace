@@ -396,6 +396,8 @@ export interface ObservedState {
   unlink(scope: string, from: string, rel: string, to: string, identity?: Identity): Promise<{ ok: true }>;
   /** Edges (and neighbor entries) around a key. */
   neighbors(scope: string, key: string, opts?: NeighborsOptions, identity?: Identity): Promise<NeighborsResult>;
+  /** Every edge in the scope (bounded; boards project their edges from this). */
+  edges(scope: string): Promise<EdgeRecord[]>;
   /** Tail the trajectory from a sequence number — the change feed. */
   changes(scope: string, sinceSeq: number, limit?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
@@ -642,6 +644,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, traj);
       }
       return { outbound, inbound, entries };
+    },
+
+    async edges(scope): Promise<EdgeRecord[]> {
+      return store.listEdges(scope);
     },
 
     async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
