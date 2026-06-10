@@ -234,6 +234,14 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect((await cmds.neighbors({ key: 'd1' }, alice())).inbound.map((e) => e.from)).toEqual(['t1']);
   });
 
+  it('links lists every edge in the slice, with prefix filtering', async () => {
+    const all = await cmds.links(undefined, alice());
+    expect(all.edges.length).toBeGreaterThanOrEqual(2);
+    const filtered = await cmds.links({ prefix: 't1' }, alice());
+    expect(filtered.edges.every((e) => e.from.startsWith('t1') || e.to.startsWith('t1'))).toBe(true);
+    expect(filtered.edges.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('supersede migrateLinks carries edges to the successor', async () => {
     await cmds.remember({ key: 'd1v2', value: 'successor decision', type: 'decision' }, alice());
     await cmds.supersede({ key: 'd1', by: 'd1v2', migrateLinks: true }, alice());

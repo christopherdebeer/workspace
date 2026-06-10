@@ -127,6 +127,10 @@ export interface ChangesInput {
   sinceSeq?: number;
   limit?: number;
 }
+export interface LinksInput {
+  /** Only edges whose `from` or `to` starts with this prefix. */
+  prefix?: string;
+}
 export interface AttentionInput {
   /** Age (ms) beyond which a live fact counts as stale. Default 14 days. */
   staleMs?: number;
@@ -180,6 +184,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   link: CommandHandler<LinkInput, EdgeRecord>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
+  links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[] }>;
   changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
@@ -341,6 +346,19 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         rel: { type: 'string', description: 'Only edges of this type' },
       },
       required: ['key'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'links',
+    description: 'Every edge in your slice (optionally filtered by a from/to key prefix) — boards and graph surfaces project their edges from this.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefix: { type: 'string', description: 'Only edges whose from or to starts with this prefix' },
+      },
       additionalProperties: false,
     },
   },
@@ -649,6 +667,16 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
       return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel }, ctx.identity);
+    },
+
+    async links(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      const all = await state.edges(scope);
+      const prefix = input?.prefix;
+      return {
+        edges: prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all,
+      };
     },
 
     async changes(input, ctx) {
