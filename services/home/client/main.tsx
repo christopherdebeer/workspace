@@ -369,17 +369,26 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     );
   }
 
-  // A canvas view IS a board: the surface links into the spatial projection.
+  // A canvas view IS a board: a live, pinned-viewport embed of the actual
+  // region (the same declaration agents read), linking into the full board.
   if (type === 'canvas') {
     const board = def.id.startsWith('canvas:') ? def.id.slice('canvas:'.length) : def.id;
     const href = hint?.href ?? `/@c15r/canvas?canvas=${encodeURIComponent(board)}`;
+    const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1`;
     return (
-      <a href={href} style={{ ...box, textDecoration: 'none', color: 'inherit' }}>
-        <strong>🌲 {label}</strong>
-        <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
-          {out ? `${out.count} item${out.count === 1 ? '' : 's'} on the board` : 'Loading…'}
+      <a href={href} style={{ ...box, textDecoration: 'none', color: 'inherit', padding: 0, overflow: 'hidden' }}>
+        <iframe
+          src={embedSrc}
+          title={label}
+          loading="lazy"
+          style={{ width: '100%', height: 230, border: 0, pointerEvents: 'none', display: 'block', background: '#fff' }}
+        />
+        <span style={{ display: 'flex', justifyContent: 'space-between', padding: '0.55rem 0.9rem' }}>
+          <strong>🌲 {label}</strong>
+          <span style={{ color: theme.accent, fontSize: '0.85rem' }}>
+            {out ? `${out.count} item${out.count === 1 ? '' : 's'} · ` : ''}Open board →
+          </span>
         </span>
-        <span style={{ color: theme.accent, fontSize: '0.85rem' }}>Open board →</span>
       </a>
     );
   }
