@@ -205,6 +205,47 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(res.error).toMatch(/imports\.json/);
   });
 
+  it('replaceInFile does targeted exact-string edits without resending the file', async () => {
+    const cellId = await makeCell('alice');
+    await call('alice', 'writeFile', { cellId, path: 'lib/u.ts', content: 'const a = 1;\nconst b = 1;\nexport { a, b };' });
+
+    // First-occurrence by default, with ambiguity visible via `occurrences`.
+    const first = await call<{ replacements: number; occurrences: number }>('alice', 'replaceInFile', {
+      cellId, path: 'lib/u.ts', old_str: '= 1;', new_str: '= 2;',
+    });
+    expect(first.ok).toBe(true);
+    expect(first.result!).toMatchObject({ replacements: 1, occurrences: 2 });
+    expect((await call<{ content: string }>('alice', 'readFile', { cellId, path: 'lib/u.ts' })).result!.content)
+      .toBe('const a = 2;\nconst b = 1;\nexport { a, b };');
+
+    // replace_all, and empty new_str deletes.
+    await call('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'const ', new_str: 'let ', replace_all: true });
+    await call('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: '\nexport { a, b };', new_str: '' });
+    expect((await call<{ content: string }>('alice', 'readFile', { cellId, path: 'lib/u.ts' })).result!.content)
+      .toBe('let a = 2;\nlet b = 1;');
+
+    // Not-found and ownership failures.
+    const miss = await call('alice', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'nope', new_str: 'x' });
+    expect(miss.ok).toBe(false);
+    expect(miss.error).toMatch(/not found/);
+    expect((await call('mallory', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'let', new_str: 'x' })).ok).toBe(false);
+
+    // deploy:true fuses edit + rebuild (one round trip).
+    const fused = await call<{ deploy: { deployed: boolean } }>('alice', 'replaceInFile', {
+      cellId, path: 'index.ts', old_str: 'handler', new_str: 'handler', replace_all: true, deploy: true,
+    });
+    expect(fused.ok).toBe(true);
+    expect(fused.result!.deploy.deployed).toBe(true);
+  });
+
+  it('appendToFile extends (or creates) a source file', async () => {
+    const cellId = await makeCell('alice');
+    await call('alice', 'appendToFile', { cellId, path: 'notes.md', content: '# notes' });
+    await call('alice', 'appendToFile', { cellId, path: 'notes.md', content: '\nmore' });
+    expect((await call<{ content: string }>('alice', 'readFile', { cellId, path: 'notes.md' })).result!.content)
+      .toBe('# notes\nmore');
+  });
+
   it('importSrc pulls a tarball into the src tree under a prefix (ownership-gated)', async () => {
     const cellId = await makeCell('alice');
     const { gzipSync } = await import('node:zlib');
