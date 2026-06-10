@@ -521,6 +521,75 @@ async function importSrc(input: ImportSrcInput, ctx: ServiceContext): Promise<un
   return { imported: written.length, files: written, skippedBinary: skipped, skippedUnsafe: skippedPaths };
 }
 
+interface ReplaceInFileInput extends CellRef {
+  path: string;
+  /** The exact string to find (case-sensitive). */
+  old_str: string;
+  /** The replacement (empty string deletes). */
+  new_str: string;
+  /** Replace every occurrence (default: first only). */
+  replace_all?: boolean;
+  /** Fused verify: bundle + redeploy in the same call. */
+  deploy?: boolean;
+}
+
+/**
+ * Targeted edit on a cell source file — exact string replacement without
+ * resending the whole file (the Val Town `replace_in_file` contract). The
+ * response reports `occurrences` so a caller can detect ambiguity; `deploy`
+ * fuses edit + rebuild into one round trip.
+ */
+async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.path) throw new Error('path is required');
+  if (typeof input?.old_str !== 'string' || input.old_str.length === 0) throw new Error('old_str (non-empty string) is required');
+  if (typeof input?.new_str !== 'string') throw new Error('new_str (string, may be empty) is required');
+  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const key = srcKey(record.cellId, input.path);
+  const content = await getObject(bucket, key);
+  if (content === null) throw new Error(`File not found: ${cleanPath(input.path)}`);
+  const occurrences = content.split(input.old_str).length - 1;
+  if (occurrences === 0) {
+    throw new Error(`old_str not found in ${cleanPath(input.path)} — it must match exactly (case-sensitive, including whitespace)`);
+  }
+  const next = input.replace_all
+    ? content.split(input.old_str).join(input.new_str)
+    : content.replace(input.old_str, input.new_str);
+  await putObject(bucket, key, next, 'text/plain; charset=utf-8');
+  const replacements = input.replace_all ? occurrences : 1;
+  ctx.logger.info('cell file edited', { cellId: record.cellId, path: cleanPath(input.path), replacements });
+  const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), replacements, occurrences };
+  if (input.deploy) {
+    const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
+    return { ...result, deploy: deployed };
+  }
+  return result;
+}
+
+interface AppendToFileInput extends CellRef {
+  path: string;
+  content: string;
+  deploy?: boolean;
+}
+
+/** Append to a cell source file (creates it when missing). */
+async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.path) throw new Error('path is required');
+  if (typeof input?.content !== 'string' || input.content.length === 0) throw new Error('content (non-empty string) is required');
+  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const key = srcKey(record.cellId, input.path);
+  const existing = (await getObject(bucket, key)) ?? '';
+  await putObject(bucket, key, existing + input.content, 'text/plain; charset=utf-8');
+  ctx.logger.info('cell file appended', { cellId: record.cellId, path: cleanPath(input.path), created: existing === '' });
+  const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), created: existing === '' };
+  if (input.deploy) {
+    const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
+    return { ...result, deploy: deployed };
+  }
+  return result;
+}
+
 interface ReadFileInput extends CellRef {
   path: string;
 }
@@ -947,6 +1016,47 @@ const TOOLS: Record<string, ToolSpec> = {
       additionalProperties: false,
     },
     handler: writeFile as RegisteredCommand,
+  },
+  replaceInFile: {
+    description:
+      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to bundle + redeploy in the same call (edit + verify, one round trip). Use writeFile only when rewriting most of a file.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        path: { type: 'string', description: 'Relative path under src/, e.g. client/main.ts' },
+        old_str: { type: 'string', description: 'Exact string to find (case-sensitive, including whitespace)' },
+        new_str: { type: 'string', description: 'Replacement (empty string deletes)' },
+        replace_all: { type: 'boolean', description: 'Replace every occurrence (default: first only)' },
+        deploy: { type: 'boolean', description: 'Bundle + redeploy after the edit' },
+      },
+      required: ['path', 'old_str', 'new_str'],
+      additionalProperties: false,
+    },
+    handler: replaceInFile as RegisteredCommand,
+  },
+  appendToFile: {
+    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to bundle + redeploy in the same call.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        path: { type: 'string' },
+        content: { type: 'string', description: 'Content to append (lead with \\n for a separator)' },
+        deploy: { type: 'boolean', description: 'Bundle + redeploy after appending' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+    handler: appendToFile as RegisteredCommand,
   },
   importSrc: {
     description:
