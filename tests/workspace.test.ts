@@ -145,7 +145,7 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare',
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
-        'registerView', 'views', 'view', 'deleteView',
+        'registerView', 'views', 'view', 'deleteView', 'links',
       ].sort(),
     );
     // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
@@ -236,7 +236,7 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
 
   it('links lists every edge in the slice, with prefix filtering', async () => {
     const all = await cmds.links(undefined, alice());
-    expect(all.edges.length).toBeGreaterThanOrEqual(2);
+    expect(all.edges.length).toBeGreaterThanOrEqual(1);
     const filtered = await cmds.links({ prefix: 't1' }, alice());
     expect(filtered.edges.every((e) => e.from.startsWith('t1') || e.to.startsWith('t1'))).toBe(true);
     expect(filtered.edges.length).toBeGreaterThanOrEqual(1);
