@@ -111,6 +111,16 @@ export class PlatformStack extends cdk.Stack {
     // cell-<id>) emit substrate.write.requested; the workspace applies the
     // fact in the owner's slice. See docs/substrate-storage.md.
     eventBus.routeTo('SubstrateWriteRoute', workspace.fn, ['substrate.write.requested'], 'cell-');
+    // Platform reflected in the substrate: cell lifecycle events (source pinned
+    // to the cells service — dynamic cells emit as `cell-<id>`, which this
+    // prefix does not match) project into `cells/<cellId>` pointer facts in the
+    // owner's slice, making cells queryable/linkable like any other fact.
+    eventBus.routeTo(
+      'CellLifecycleRoute',
+      workspace.fn,
+      ['cell.create.requested', 'cell.deployed', 'cell.files.changed', 'cell.delete.requested'],
+      'cells',
+    );
     // Autonomous tending (the legacy workspace's signature loop): a daily
     // schedule delivers workspace.tend.requested; the handler distills
     // attention() into a tending/latest audit fact per scope.
@@ -169,7 +179,7 @@ export class PlatformStack extends cdk.Stack {
       routes: [],
       persistence: { dynamo: true },
       commands: ['create', 'list', 'get', 'call', 'grant', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
-      emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed'],
+      emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
       // it so its .wasm ships in the asset.

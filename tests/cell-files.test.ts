@@ -45,16 +45,21 @@ function memoryDocClient(): Record<string, unknown> {
 /** In-memory S3: keyed by `${Bucket}/${Key}`. */
 function memoryS3(): { store: Map<string, string | Buffer> } & Record<string, unknown> {
   const store = new Map<string, string | Buffer>();
+  const types = new Map<string, string>();
   return {
     store,
-    putObject: ({ Bucket, Key, Body }: { Bucket: string; Key: string; Body: string | Buffer }) => ({
-      promise: async () => { store.set(`${Bucket}/${Key}`, Body); return {}; },
+    putObject: ({ Bucket, Key, Body, ContentType }: { Bucket: string; Key: string; Body: string | Buffer; ContentType?: string }) => ({
+      promise: async () => {
+        store.set(`${Bucket}/${Key}`, Body);
+        if (ContentType) types.set(`${Bucket}/${Key}`, ContentType);
+        return {};
+      },
     }),
     getObject: ({ Bucket, Key }: { Bucket: string; Key: string }) => ({
       promise: async () => {
         const k = `${Bucket}/${Key}`;
         if (!store.has(k)) { const e = new Error('NoSuchKey') as Error & { code: string }; e.code = 'NoSuchKey'; throw e; }
-        return { Body: store.get(k) };
+        return { Body: store.get(k), ContentType: types.get(k) };
       },
     }),
     listObjectsV2: ({ Bucket, Prefix }: { Bucket: string; Prefix?: string }) => ({
@@ -315,6 +320,36 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(denied.error).toMatch(/owner/i);
 
     expect((await call<{ keys: string[] }>('alice', 'listData', { cellId })).result!.keys).toEqual(['notes.txt']);
+  });
+
+  it('base64 blobs under public/ get a web address and are served via the _data path', async () => {
+    const created = await call<{ cellId: string }>('alice', 'create', { name: 'board', code: cellCode, public: true });
+    const cellId = created.result!.cellId;
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+    // Binary put: base64 in, bytes stored, web address handed back.
+    const put = await call<{ bytes: number; url: string | null }>('alice', 'putData', {
+      cellId, key: 'public/img/dot.png', content: png.toString('base64'), encoding: 'base64', contentType: 'image/png',
+    });
+    expect(put.ok).toBe(true);
+    expect(put.result!.bytes).toBe(4);
+    expect(put.result!.url).toBe(`/@alice/board/_data/alice/public/img/dot.png`);
+
+    // Anonymous GET through the dispatch seam serves it raw from S3.
+    const got = await call<{ statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded: boolean }>(
+      undefined, 'call', { cellId, method: 'GET', path: '/_data/alice/public/img/dot.png' },
+    );
+    expect(got.ok).toBe(true);
+    expect(got.result!.statusCode).toBe(200);
+    expect(got.result!.headers['content-type']).toBe('image/png');
+    expect(got.result!.isBase64Encoded).toBe(true);
+    expect(Buffer.from(got.result!.body, 'base64').equals(png)).toBe(true);
+
+    // Missing blob → 404; outside public/ → never web-served (and no url).
+    const missing = await call<{ statusCode: number }>(undefined, 'call', { cellId, method: 'GET', path: '/_data/alice/public/img/nope.png' });
+    expect(missing.result!.statusCode).toBe(404);
+    const priv = await call<{ url: string | null }>('alice', 'putData', { cellId, key: 'img/secret.png', content: 'x' });
+    expect(priv.result!.url).toBeNull();
   });
 
   it('file + data ops are ownership-gated', async () => {

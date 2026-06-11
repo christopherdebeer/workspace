@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -24,6 +24,12 @@ export const handler = defineService({
     handles: {
       'substrate.write.requested': createSubstrateWriteHandler(dynamoDeps),
       'workspace.tend.requested': createTendHandler(dynamoDeps),
+      // Platform reflected in the substrate: cell lifecycle events project to
+      // `cells/<cellId>` pointer facts in the owner's slice.
+      'cell.create.requested': createCellLifecycleHandler(dynamoDeps),
+      'cell.deployed': createCellLifecycleHandler(dynamoDeps),
+      'cell.files.changed': createCellLifecycleHandler(dynamoDeps),
+      'cell.delete.requested': createCellLifecycleHandler(dynamoDeps),
     },
   },
 });
