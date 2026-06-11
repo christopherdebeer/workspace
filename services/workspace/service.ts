@@ -16,7 +16,7 @@ export const handler = defineService({
   name: 'workspace',
   commands,
   events: {
-    emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended'],
+    emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested'],
     // The organ-to-reef write path: dynamic cells emit substrate.write.requested
     // (source IAM-pinned to cell-<id>); the workspace applies it as a fact in
     // the owner's slice. The daily tend schedule delivers tend.requested.
