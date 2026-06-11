@@ -763,6 +763,7 @@ function warmField(): void {
     )
     .stop();
 
+  const episodeEnd = performance.now() + 8000; // hard cap: no eternal episodes
   const frame = (): void => {
     const now = performance.now();
     // The dragged (fixed) items move under the simulation's feet — track them.
@@ -779,10 +780,13 @@ function warmField(): void {
       n.el.x = Math.round(n.x);
       n.el.y = Math.round(n.y);
       synthOrigin.set(n.el.id, { x: n.el.x, y: n.el.y }); // still the board's proposal
+      // Self-feed guard: our own movement is not "movement" — pre-register it
+      // so the save/CRDT sweep doesn't re-warm the field with our writes.
+      lastPos.set(n.el.id, `${n.el.x},${n.el.y}`);
     }
     cc.requestRender();
     cc.requestEdgeUpdate();
-    if (now < warmUntil) {
+    if (now < warmUntil && now < episodeEnd) {
       warmRaf = requestAnimationFrame(frame);
     } else {
       warmRaf = 0; // cooled — next movement builds a fresh episode
