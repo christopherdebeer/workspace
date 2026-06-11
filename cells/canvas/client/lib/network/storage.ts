@@ -58,6 +58,7 @@ function decorateFactCard(el: any, metaType: string | null): void {
     el.id;
   el._factIcon = FACT_ICONS[metaType ?? ''] ?? '•';
   el._factMeta = [metaType ?? 'fact', el._factKey ?? el.id].join(' · ');
+  if (typeof el.items === 'number') el._factMeta += ` · ${el.items} item${el.items === 1 ? '' : 's'}`;
   if (metaType === 'cell' && typeof el.address === 'string') el._factHref = el.address;
   else if (String(el._factKey ?? '').startsWith('doc:')) el._factHref = `/@c15r/lit?doc=${encodeURIComponent(String(el._factKey).slice(4))}`;
   else if (metaType === 'capture' && typeof el.captured === 'string') el._factHref = `/@c15r/lit?doc=log:${el.captured}`;
