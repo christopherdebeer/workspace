@@ -161,7 +161,12 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   // persist the placement only once the element has actually been moved.
   const so = synthOrigin.get(el.id as string);
   if (so && el.x === so.x && el.y === so.y) return;
-  if (so) synthOrigin.delete(el.id as string);
+  if (so) {
+    // The human moved it: the proposal became a pin — the rest re-settle.
+    synthOrigin.delete(el.id as string);
+    delete (el as any)._synthesized;
+    scheduleRewarm();
+  }
   queueFact(`_canvas/${canvasId}/${key}`, placement);
 }
 
@@ -608,8 +613,31 @@ function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: an
   if (el) {
     Object.assign(el, entry.value);
   } else {
-    cc.canvasState.elements.push({ width: 240, height: 120, rotation: 0, x: 160, y: 60, _synthesized: true, ...entry.value });
-    synthOrigin.set(id, { x: 160, y: 60 });
+    const nu: any = { width: 240, height: 120, rotation: 0, ...entry.value };
+    if (!nu.id) nu.id = id;
+    nu._factKey = key;
+    decorateFactCard(nu, entry._meta);
+    // Arrivals land near a present linked neighbour, else cascade — never
+    // a single hardcoded spot (the clump failure mode).
+    let ax: number | undefined;
+    let ay: number | undefined;
+    for (const e of lastEdges.values()) {
+      const other = e.source === nu.id ? e.target : e.target === nu.id ? e.source : null;
+      if (!other) continue;
+      const n = cc.canvasState.elements.find((x: any) => x.id === other);
+      if (n) {
+        ax = n.x + 300;
+        ay = n.y + ((arrivalIdx % 5) - 2) * 64;
+        break;
+      }
+    }
+    arrivalIdx++;
+    nu.x = ax ?? 160 + (arrivalIdx % 8) * 64;
+    nu.y = ay ?? 60 + (arrivalIdx % 8) * 48 + Math.floor(arrivalIdx / 8) * 44;
+    nu._synthesized = true;
+    synthOrigin.set(nu.id, { x: nu.x, y: nu.y });
+    cc.canvasState.elements.push(nu);
+    scheduleRewarm();
   }
   return true;
 }
@@ -683,6 +711,71 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   cc.canvasState.edges = valid;
 }
 
+let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
+let arrivalIdx = 0;
+
+function scheduleRewarm(): void {
+  if (readonlyBoard) return;
+  clearTimeout(rewarmTimer);
+  rewarmTimer = setTimeout(() => {
+    const cc = (window as { CC?: any }).CC;
+    if (cc) rewarmSynthesized(cc);
+  }, 500);
+}
+
+/**
+ * Incremental re-arrangement: when the human pins an item (or new facts
+ * arrive), the still-synthesized items re-settle around the changed field —
+ * WARM start from current positions with a low alpha, so the layout adjusts
+ * instead of reshuffling. Pinned/placed items are immovable.
+ */
+function rewarmSynthesized(cc: any): void {
+  const els = cc.canvasState.elements as any[];
+  const sims = els.filter((e) => e._synthesized);
+  if (!sims.length) return;
+  type N = { id: string; x?: number; y?: number; fx?: number; fy?: number; el?: any };
+  const nodes: N[] = [
+    ...els.filter((e) => !e._synthesized).map((e) => ({ id: e.id, fx: e.x, fy: e.y })),
+    ...sims.map((e) => ({ id: e.id, x: e.x, y: e.y, el: e })),
+  ];
+  const present = new Set(nodes.map((n) => n.id));
+  const links = [...lastEdges.values()]
+    .filter((e) => present.has(e.source) && present.has(e.target))
+    .map((e) => ({ source: e.source, target: e.target }));
+  const sim = forceSimulation(nodes as any)
+    .force('link', forceLink(links as any).id((d: any) => d.id).distance(190).strength(0.5))
+    .force('charge', forceManyBody().strength(-380))
+    .force(
+      'collide',
+      forceCollide()
+        .radius((d: any) => {
+          const w = typeof d.el?.width === 'number' ? d.el.width : 250;
+          const h = typeof d.el?.height === 'number' ? d.el.height : 100;
+          return Math.hypot(w, h) / 2 + 22;
+        })
+        .iterations(2),
+    )
+    .alpha(0.35)
+    .stop();
+  sim.tick(70);
+  let dirty = false;
+  for (const n of nodes as any[]) {
+    if (!n.el) continue;
+    const x = Math.round(n.x);
+    const y = Math.round(n.y);
+    if (x !== n.el.x || y !== n.el.y) {
+      n.el.x = x;
+      n.el.y = y;
+      synthOrigin.set(n.el.id, { x, y }); // still the board's proposal
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    cc.requestRender();
+    cc.requestEdgeUpdate();
+  }
+}
+
 /**
  * Expand a fact's neighbourhood onto the board (a deliberate attention act,
  * like tapping a chip): fetch one hop, materialise absent neighbours as
@@ -738,6 +831,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
   }
   cc.requestRender();
   cc.requestEdgeUpdate();
+  scheduleRewarm(); // fold the new ring into the field
   read('workspace.peek', { key }).catch(() => undefined); // attention raises salience
 }
 
