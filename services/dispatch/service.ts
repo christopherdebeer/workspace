@@ -44,9 +44,17 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
   if (!ctx.identity.user && !anonymousRead) {
     return { statusCode: 401, headers: JSON_HEADERS, body: { error: 'Authentication required' } };
   }
-  const parsed = parsePath(req.path);
+  let parsed = parsePath(req.path);
   if (!parsed) {
-    return { statusCode: 404, headers: JSON_HEADERS, body: { error: 'Expected /@<owner>/<cell> path' } };
+    // Userland root (the home demotion): when DISPATCH_DEFAULT_CELL is set
+    // ("owner/name"), unmatched paths route to that cell — the platform's
+    // face becomes a tier-2 surface. Unset = current behavior.
+    const [defOwner, defName] = (process.env.DISPATCH_DEFAULT_CELL ?? '').split('/');
+    if (defOwner && defName) {
+      parsed = { owner: defOwner, name: defName, subPath: req.path || '/' };
+    } else {
+      return { statusCode: 404, headers: JSON_HEADERS, body: { error: 'Expected /@<owner>/<cell> path' } };
+    }
   }
 
   let body: unknown;
