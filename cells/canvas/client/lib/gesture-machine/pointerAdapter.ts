@@ -84,6 +84,12 @@ export function installPointerAdapter(
   let lpTimer: ReturnType<typeof setTimeout> | null = null;
   const LP_DELAY = 600;                     // ms
   function startLongPress(ev: PointerEvent): void {
+    // Never two timers: a second finger used to ORPHAN the first one
+    // (overwritten, uncancelable — it fired mid-pinch and opened the
+    // context menu). And a pinch is not a press: two active pointers
+    // means zoom intent, so no long-press at all.
+    cancelLongPress();
+    if (active.size > 1) return;
     lpTimer = setTimeout(() => {
       send('LONG_PRESS', ev);                // new pure FSM event
       lpTimer = null;
