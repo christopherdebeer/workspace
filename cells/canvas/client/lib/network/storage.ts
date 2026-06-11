@@ -796,6 +796,36 @@ function warmField(): void {
 }
 
 /**
+ * Un-pin: the inverse of drag-to-pin. The placement decoration retires
+ * (supersede — provenance survives), the element returns to the board's
+ * proposal layer (synthesized), and the field re-arranges it. Un-sticks
+ * stuck items too (static/fixed flags clear).
+ */
+export function unpinElements(cc: any, ids: string[]): void {
+  if (readonlyBoard) return;
+  const cid = cc.canvasState.canvasId;
+  for (const id of ids) {
+    const el = cc.canvasState.elements.find((e: any) => e.id === id);
+    if (!el) continue;
+    const placementKey = `_canvas/${cid}/${factKeyOf(el)}`;
+    lastWritten.delete(placementKey);
+    act('workspace.supersede', { key: placementKey }).catch((err) =>
+      console.warn('[substrate] unpin supersede failed', placementKey, err),
+    );
+    el._synthesized = true;
+    el.static = false;
+    delete el.fixedTop;
+    delete el.fixedLeft;
+    synthOrigin.set(el.id, { x: el.x, y: el.y }); // proposal starts where it stood
+    lastPos.set(el.id, `${el.x},${el.y}`);
+  }
+  cc.clearSelection?.();
+  warmField(); // the field takes them back
+  cc.requestRender();
+  cc.requestEdgeUpdate();
+}
+
+/**
  * Expand a fact's neighbourhood onto the board (a deliberate attention act,
  * like tapping a chip): fetch one hop, materialise absent neighbours as
  * synthesized cards ringed around the anchor, project the edges, and peek
