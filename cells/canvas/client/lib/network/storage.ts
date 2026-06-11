@@ -389,7 +389,10 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       } else placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
     }
 
-    const presentIds = new Set((els.entries ?? []).map((e) => e.key));
+    // Reserved prefixes are the board's OWN data (placements, vocabulary,
+    // type decls) — never board members, whatever the membership query says.
+    els.entries = (els.entries ?? []).filter((e) => !e.key.startsWith('_'));
+    const presentIds = new Set(els.entries.map((e) => e.key));
 
     // Edges are PROJECTED from substrate links among this board's elements;
     // decoration edges (style/label edits, edge-to-edge) merge by signature.
