@@ -156,3 +156,18 @@ body.embed-unauthed::before {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .fact-card .fc-open { font-size: 0.7rem; color: #2f6f4f; text-decoration: none; }
+
+.fact-card { position: relative; }
+.fact-card .fc-expand {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  border: 0;
+  background: none;
+  color: #8aa890;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+body.readonly .fc-expand, body.embed .fc-expand { display: none; }

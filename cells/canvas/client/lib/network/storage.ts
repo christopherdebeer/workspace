@@ -133,6 +133,9 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   // Chip-display dims are transient; persist the TRUE geometry.
   const persisted: Record<string, unknown> = { ...el };
   if ((el as any)._factCard) delete persisted.type; // presentation, not the fact's
+  // parcland's client-side history — the substrate's revision chain IS the
+  // history; persisting versions would double-store every prior value.
+  delete persisted.versions;
   if (typeof el._origW === 'number') {
     persisted.width = el._origW;
     persisted.height = el._origH;
@@ -554,6 +557,11 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
     startSalience(cid);
     startLiveSync(cid);
+    document.addEventListener('parc:expand', (ev) => {
+      const cc = (window as { CC?: any }).CC;
+      const d = (ev as CustomEvent).detail as { key: string; id: string };
+      if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
+    });
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
     console.error('[substrate] load failed — falling back to local copy', err);
@@ -673,6 +681,64 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
     });
   }
   cc.canvasState.edges = valid;
+}
+
+/**
+ * Expand a fact's neighbourhood onto the board (a deliberate attention act,
+ * like tapping a chip): fetch one hop, materialise absent neighbours as
+ * synthesized cards ringed around the anchor, project the edges, and peek
+ * the fact so real salience follows attention. Day cards bring their
+ * elided captures back this way.
+ */
+async function expandFact(cc: any, key: string, anchorId: string): Promise<void> {
+  const nb = await read<{
+    outbound: Array<{ from: string; rel: string; to: string }>;
+    inbound: Array<{ from: string; rel: string; to: string }>;
+    entries: Record<string, { value: any; _meta?: any }>;
+  }>('workspace.neighbors', { key });
+  const anchor = cc.canvasState.elements.find((e: any) => e.id === anchorId);
+  if (!anchor) return;
+  const have = new Set(cc.canvasState.elements.map((e: any) => factKeyOf(e)));
+  const edges = [...(nb.inbound ?? []), ...(nb.outbound ?? [])];
+  const newKeys = edges
+    .map((e) => (e.to === key ? e.from : e.to))
+    .filter((k, i, a) => a.indexOf(k) === i && !have.has(k) && !k.startsWith('_'));
+
+  newKeys.sort();
+  newKeys.forEach((k, i) => {
+    const entry = nb.entries?.[k];
+    if (!entry) return;
+    const value = entry.value ?? {};
+    const el: any = { width: 240, height: 120, rotation: 0, ...(typeof value === 'object' ? value : { content: String(value) }) };
+    if (!el.id) el.id = idOfKey(k);
+    el._factKey = k;
+    decorateFactCard(el, entry._meta);
+    const a = (i / Math.max(newKeys.length, 1)) * 2 * Math.PI - Math.PI / 2;
+    const r = 260 + 26 * Math.floor(i / 12);
+    el.x = Math.round(anchor.x + r * Math.cos(a));
+    el.y = Math.round(anchor.y + r * Math.sin(a));
+    el._synthesized = true;
+    synthOrigin.set(el.id, { x: el.x, y: el.y });
+    lastWritten.set(k, JSON.stringify(entry.value));
+    factMeta.set(k, { type: entry._meta?.type ?? null, tags: entry._meta?.tags ?? [] });
+    if (typeof entry._meta?.score === 'number') salienceByKey.set(k, entry._meta.score);
+    cc.canvasState.elements.push(el);
+  });
+
+  const present = new Map(cc.canvasState.elements.map((e: any) => [factKeyOf(e), e.id]));
+  for (const e of edges) {
+    const sId = present.get(e.from);
+    const tId = present.get(e.to);
+    if (!sId || !tId) continue;
+    const id = `lnk:${e.from}|${e.rel}|${e.to}`;
+    if (cc.canvasState.edges.some((x: any) => x.id === id)) continue;
+    cc.canvasState.edges.push({ id, source: sId, target: tId, label: e.rel });
+    lastEdges.set(id, { source: sId, target: tId, rel: e.rel, decorated: false });
+    linkedEdges.add(`${sId}|${e.rel}|${tId}`);
+  }
+  cc.requestRender();
+  cc.requestEdgeUpdate();
+  read('workspace.peek', { key }).catch(() => undefined); // attention raises salience
 }
 
 export function startLiveSync(cid: string): void {
