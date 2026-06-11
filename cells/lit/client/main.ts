@@ -262,31 +262,92 @@ async function renderDoc(docId: string): Promise<void> {
 
 /* — doc list — */
 
-/** A day (or any tag) log: membership from the tag, ordered by arrival. */
+/** Log surfaces, dotlit-shaped: day → week → month → year, all VIEWS.
+ *  log:YYYY-MM-DD = the day (tag query); log:YYYY-Www / log:YYYY-MM /
+ *  log:YYYY = rollups grouped by day, derived from each capture's
+ *  \`captured\` field — no rollup files, no copies. */
+const isoWeekOf = (d: string): string => {
+  const dt = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)));
+  const wd = (dt.getUTCDay() + 6) % 7;
+  dt.setUTCDate(dt.getUTCDate() - wd + 3);
+  const y = dt.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(y, 0, 4));
+  return `${y}-w${String(1 + Math.round(((+dt - +jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7)).padStart(2, '0')}`;
+};
+
+function logNav(label: string): HTMLElement {
+  const p = el('p', 'summary');
+  const add = (txt: string, id: string): void => {
+    const a = el('a', 'back', txt) as HTMLAnchorElement;
+    a.href = `?doc=log:${encodeURIComponent(id)}`;
+    a.style.marginRight = '0.8rem';
+    p.appendChild(a);
+  };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(label)) {
+    add(`week ${isoWeekOf(label).slice(5)}`, isoWeekOf(label));
+    add(`month ${label.slice(5, 7)}`, label.slice(0, 7));
+    add(`year ${label.slice(0, 4)}`, label.slice(0, 4));
+  } else if (/^\d{4}-w\d{2}$/.test(label)) {
+    add(`year ${label.slice(0, 4)}`, label.slice(0, 4));
+  } else if (/^\d{4}-\d{2}$/.test(label)) {
+    add(`year ${label.slice(0, 4)}`, label.slice(0, 4));
+  }
+  return p;
+}
+
+function logBlock(e: Entry): HTMLElement {
+  const art = el('article', 'block');
+  art.dataset.key = e.key;
+  const body = el('div', 'block-body');
+  body.innerHTML = marked.parse(contentOf(e.value)) as string;
+  art.appendChild(body);
+  void hydrateFences(body);
+  return art;
+}
+
 async function renderLogDoc(docId: string): Promise<void> {
   const label = docId.slice(4);
+  const isDay = /^\d{4}-\d{2}-\d{2}$/.test(label);
   const header = el('header');
   const back = el('a', 'back', '← documents') as HTMLAnchorElement;
   back.href = location.pathname;
   header.appendChild(back);
   header.appendChild(el('h1', '', `📥 ${label}`));
-  header.appendChild(el('p', 'summary', `a view over tag ${docId} — captures, not copies`));
+  header.appendChild(logNav(label));
   app.appendChild(header);
   const main = el('main');
   app.appendChild(main);
-  const res = await read<{ entries: Entry[] }>('workspace.query', { tag: docId, limit: 200 });
-  const items = (res.entries ?? []).sort(
-    (a, b) => Date.parse(a._meta?.updatedAt ?? '0') - Date.parse(b._meta?.updatedAt ?? '0'),
-  );
-  if (!items.length) main.appendChild(el('p', 'boot', 'nothing captured this day'));
-  for (const e of items) {
-    const art = el('article', 'block');
-    art.dataset.key = e.key;
-    const body = el('div', 'block-body');
-    body.innerHTML = marked.parse(contentOf(e.value)) as string;
-    art.appendChild(body);
-    void hydrateFences(body);
-    main.appendChild(art);
+
+  if (isDay) {
+    const res = await read<{ entries: Entry[] }>('workspace.query', { tag: docId, limit: 200 });
+    const items = (res.entries ?? [])
+      .filter((e) => !e.key.startsWith('log:'))
+      .sort((a, b) => Date.parse(a._meta?.updatedAt ?? '0') - Date.parse(b._meta?.updatedAt ?? '0'));
+    if (!items.length) main.appendChild(el('p', 'boot', 'nothing captured this day'));
+    for (const e of items) main.appendChild(logBlock(e));
+  } else {
+    // Rollup: group this period's captures by day (derived, not stored).
+    const res = await read<{ entries: Entry[] }>('workspace.query', { type: 'capture', limit: 250 });
+    const match = (d: string): boolean =>
+      /^\d{4}-w\d{2}$/.test(label) ? isoWeekOf(d) === label : d.startsWith(label);
+    const byDay = new Map<string, Entry[]>();
+    for (const e of res.entries ?? []) {
+      const d = (e.value as { captured?: string } | undefined)?.captured;
+      if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && match(d)) {
+        if (!byDay.has(d)) byDay.set(d, []);
+        byDay.get(d)!.push(e);
+      }
+    }
+    const days = [...byDay.keys()].sort();
+    if (!days.length) main.appendChild(el('p', 'boot', 'nothing captured in this period'));
+    for (const d of days) {
+      const h = el('h2');
+      const a = el('a', 'back', `🗓️ ${d}`) as HTMLAnchorElement;
+      a.href = `?doc=log:${encodeURIComponent(d)}`;
+      h.appendChild(a);
+      main.appendChild(h);
+      for (const e of byDay.get(d)!) main.appendChild(logBlock(e));
+    }
   }
   const cap = el('a', 'add-block btn', '+ capture') as HTMLAnchorElement;
   cap.href = `/@${cellOwner()}/input`;
