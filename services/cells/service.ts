@@ -27,6 +27,7 @@ import {
   uploadCode,
   uploadPackage,
   deployStack,
+  updateStack,
   describeStack,
   deleteStack,
   invokeCell,
@@ -132,7 +133,16 @@ interface CreateCellInput {
   share?: string[];
   /** Web-facing: anonymous GETs are allowed through dispatch (`/@owner/name`). */
   public?: boolean;
+  /** Lambda timeout in seconds (10–300; default 10). Long-running work —
+   *  e.g. model providers — needs more; the EDGE still caps a synchronous
+   *  round trip at ~30s, so >30s only helps fire-and-poll patterns. */
+  timeoutSeconds?: number;
 }
+
+const clampTimeout = (n: unknown): number | undefined => {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.min(300, Math.max(10, Math.round(v))) : undefined;
+};
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
   // Scope (platform:cells:create) is enforced at the /mcp gateway; forge is a
@@ -167,6 +177,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
   // writeFile/readFile/listFiles/deploy operate on cells/<cellId>/src/.
   await putObject(env.codeBucket, srcKey(cellId, 'index.ts'), input.code, 'text/plain');
 
+  const timeoutSeconds = clampTimeout(input.timeoutSeconds);
   const template = buildCellTemplate({
     cellId,
     owner,
@@ -178,6 +189,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     region: env.region,
     accountId: env.accountId,
     substrateTable: env.substrateTable,
+    timeoutSeconds,
   });
   await deployStack(stackName, template);
 
@@ -192,6 +204,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     stackName,
     grants,
     public: !!input.public,
+    timeoutSeconds,
     status: 'CREATING',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -427,6 +440,59 @@ async function resolveCell(input: ResolveInput, ctx: ServiceContext): Promise<un
 interface DeleteInput {
   cellId: string;
 }
+interface ConfigureCellInput extends CellRef {
+  timeoutSeconds: number;
+}
+async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cellId = resolveCellId(input);
+  const record = await registry.get(cellId);
+  if (!record) throw new Error(`Unknown cell "${cellId}"`);
+  if (record.owner !== user) throw new ServiceAuthError('Only the owner can reconfigure a cell');
+  const timeoutSeconds = clampTimeout(input.timeoutSeconds);
+  if (!timeoutSeconds) throw new Error('timeoutSeconds (10–300) is required');
+  const codeKey = `cells/${cellId}/${randomUUID()}.zip`;
+  // The template needs a code object; reuse the current src bundle so the
+  // stack update does not revert live code.
+  const prefix = srcPrefix(cellId);
+  const keys = await listObjects(env.codeBucket, prefix);
+  const files: Record<string, string> = {};
+  for (const k of keys) {
+    const rel = k.slice(prefix.length);
+    if (!rel) continue;
+    const content = await getObject(env.codeBucket, k);
+    if (content !== null) files[rel] = content;
+  }
+  if (!Object.keys(files).length) throw new Error('no source files — cannot reconfigure');
+  const entry = files['index.ts'] !== undefined ? 'index.ts' : Object.keys(files)[0];
+  const js = await bundleFiles(files, entry);
+  await uploadCode({ bucket: env.codeBucket, key: codeKey, code: js });
+  const template = buildCellTemplate({
+    cellId,
+    owner: record.owner,
+    codeBucket: env.codeBucket,
+    codeKey,
+    boundaryArn: env.boundaryArn,
+    eventBusName: env.eventBusName,
+    eventBusArn: env.eventBusArn,
+    region: env.region,
+    accountId: env.accountId,
+    substrateTable: env.substrateTable,
+    timeoutSeconds,
+  });
+  await updateStack(record.stackName, template);
+  await registry.put({ ...record, timeoutSeconds, updatedAt: new Date().toISOString() });
+  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds });
+  return {
+    ok: true,
+    cellId,
+    timeoutSeconds,
+    note: 'stack update in progress — static/client assets need a cells.deploy after it completes',
+  };
+}
+
 async function deleteCell(input: DeleteInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   const env = loadForgeEnv();
@@ -1008,6 +1074,7 @@ const TOOLS: Record<string, ToolSpec> = {
         description: { type: 'string' },
         share: { type: 'array', items: { type: 'string' }, description: 'Principals to share with' },
         public: { type: 'boolean', description: 'Web-facing: allow anonymous GETs via /@<owner>/<name>' },
+        timeoutSeconds: { type: 'number', description: 'Lambda timeout 10–300s (default 10)' },
       },
       required: ['name', 'code'],
       additionalProperties: false,
@@ -1226,6 +1293,23 @@ const TOOLS: Record<string, ToolSpec> = {
       additionalProperties: false,
     },
     handler: deploy as RegisteredCommand,
+  },
+  configureCell: {
+    description: 'Reconfigure a cell you own: Lambda timeoutSeconds (10–300). Re-renders the stack and preserves live code; run cells.deploy afterwards to restore client/static assets.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        timeoutSeconds: { type: 'number' },
+      },
+      required: ['timeoutSeconds'],
+      additionalProperties: false,
+    },
+    handler: configureCell as RegisteredCommand,
   },
   putData: {
     description: "Store a blob in a cell's per-caller data space (cells/<id>/data/<you>/<key>) — for content too big/binary for the substrate. Pass encoding 'base64' + a contentType for binary (images); keys under public/ in a public cell are web-served at /@owner/cell/_data/<you>/<key> (returned as `url`).",

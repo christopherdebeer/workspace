@@ -90,6 +90,7 @@ async function runOpenAI(rec: ProviderRec, input: RunInput): Promise<RunOutput> 
         model: input.model ?? rec.imageModel ?? DEFAULTS.openai.image,
         prompt: input.prompt,
         size: '1024x1024',
+        quality: 'medium', // the edge caps a sync round trip at ~30s — speed over polish
         output_format: 'webp',
       }),
     });
