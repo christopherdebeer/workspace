@@ -89,6 +89,16 @@ export async function generateNew(c: any): Promise<void> {
     c.updateElementNode(c.elementNodesMap[id], el, true);
     saveCanvas(c.canvasState);
   }
+  // Transformer discipline: the output is linked to its source.
+  try {
+    const src = [...c.selectedElementIds][0];
+    const ids = c.canvasState.elements.map((e: any) => e.id);
+    const newest = ids[ids.length - 1];
+    if (src && newest && newest !== src) {
+      const { act } = await import('../network/substrate.ts');
+      void act('workspace.link', { from: `el:${newest}`, rel: 'derived-from', to: `el:${src}` }).catch(() => undefined);
+    }
+  } catch { /* provenance is best-effort */ }
 }
 
 /* ─── quick inline edit using the existing modal ‐ one element only ───────── */

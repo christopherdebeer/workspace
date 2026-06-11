@@ -1,231 +1,142 @@
-import { getAuthToken, saveCanvas } from "./storage";
+/**
+ * generation.ts — the canvas's hand into the generative executor.
+ *
+ * All model calls go through @c15r/models.run (provider client code + key
+ * custody live THERE, not here). Providers are picked from whatever the
+ * owner has enabled (/@c15r/models/secrets); context still flows from the
+ * element's incoming edges — the substrate graph is the prompt context.
+ * Generated images land in blob storage (putData) and the fact carries
+ * only the pointer, like pasted images.
+ */
+import { act, read } from './substrate.ts';
+import { saveCanvas } from './storage.ts';
+
+type RunOut = { text?: string; imageB64?: string; mime?: string };
+
+let providersCache: Record<string, { enabled?: boolean }> | null = null;
+
+async function pickProvider(mode: 'text' | 'image'): Promise<string> {
+  if (!providersCache) {
+    try {
+      providersCache = (await read<{ providers: Record<string, { enabled?: boolean }> }>('@c15r/models.listProviders', {}))
+        .providers;
+    } catch {
+      providersCache = {};
+    }
+  }
+  const order = mode === 'image' ? ['openai', 'google'] : ['anthropic', 'openai', 'google'];
+  const found = order.find((p) => providersCache?.[p]?.enabled);
+  if (!found) {
+    throw new Error(`no ${mode} provider enabled — paste a key at /@c15r/models/secrets`);
+  }
+  return found;
+}
+
+/** Incoming-edge context: the graph IS the prompt context. */
+function edgeContext(el: any, c: any): string {
+  const incoming = c
+    .findEdgesByElementId(el.id)
+    .filter((e: any) => e.target === el.id)
+    .map((e: any) => ({ label: e.label, content: c.findElementById(e.source)?.content }))
+    .filter((r: any) => typeof r.content === 'string');
+  if (!incoming.length) return '';
+  return incoming.map((r: any) => `<relation label="${r.label ?? ''}">\n${r.content}\n</relation>`).join('\n');
+}
 
 /**
- * Given a free-form prompt and a selected element, ask the AI to edit that element.
- * Mutates el.content with the returned result, updates its DOM node, and persists.
+ * Edit an element per a free-form instruction (the command-palette flow).
+ * Explicitly user-invoked, so the result applies directly; the substrate
+ * revision chain keeps the prior value.
  */
-export async function editElementWithPrompt(prompt, el, controller) {
-  const { type, id } = el;
-  // Gather any “related” context (e.g. incoming edges)
-  const incoming = controller
-    .findEdgesByElementId(id)
-    .filter(e => e.target === id)
-    .map(e => ({
-      label: e.label,
-      content: controller.findElementById(e.source)?.content,
-    }));
+export async function editElementWithPrompt(prompt: string, el: any, controller: any): Promise<string | undefined> {
+  const provider = await pickProvider('text');
+  const out = await act<RunOut>('@c15r/models.run', {
+    provider,
+    prompt: `Update this canvas element (type: ${el.type}) according to the instruction.\n\n<current-content>\n${el.content ?? ''}\n</current-content>\n\nInstruction: "${prompt}"`,
+    system:
+      'You edit elements on a visual canvas. Respond ONLY with the new element content — no preamble, no explanation, no code fences (unless the content itself is code).',
+    context: edgeContext(el, controller) || undefined,
+  });
+  if (!out.text) return undefined;
+  el.content = out.text.trim();
+  controller.updateElementNode(controller.elementNodesMap[el.id], el, true);
+  saveCanvas(controller.canvasState);
+  return el.content;
+}
 
-  const token = getAuthToken();
-  if (!token || token === 'TBC') {
-    console.warn("No auth token, cannot edit element via AI");
-    return;
-  }
-
+/**
+ * Generate/improve content from a seed (modal Generate button, palette
+ * Generate New). Returns the text; the CALLER decides where it lands —
+ * the modal shows it for review (consent before save).
+ */
+export async function generateContent(content: string, el: any, c: any): Promise<string | null> {
   try {
-    const resp = await fetch(
-      "https://gen.parc.land",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 4096,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `You are given an existing canvas element of type <type>${type}</type>.  
-Here is its current content:
-
-<current-content>
-${el.content}
-</current-content>
-
-${incoming.length > 0 ? "<related-context>\n" +
-                      incoming
-                        .map(r => `<relation><label>${r.label}</label><content>${r.content}</content></relation>`)
-                        .join("\n") +
-                      "\n</related-context>" : ""}
-
-The user wants you to update that element according to this instruction:
-
-"${prompt}"
-
-Respond *only* with valid JSON* following this schema* (no code fences):
-
-<schema>
-interface ApiResponse {
-  thoughts: string;
-  result: string;
-}
-</schema>`,
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
-
-    if (!resp.ok) {
-      console.error("AI edit request failed:", resp.status, await resp.text());
-      return;
-    }
-
-    const text = await resp.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (e) {
-      console.error("Failed to parse AI response:", e, text);
-      return;
-    }
-
-    // Apply the new content
-    el.content = parsed.result;
-    // Update its DOM node in place
-    controller.updateElementNode(
-      controller.elementNodesMap[el.id],
-      el,
-      /* isSelected: */ true
-    );
-    // Persist the change
-    saveCanvas(controller.canvasState);
-
-    return parsed.result;
-  } catch (err) {
-    console.error("Error in editElementWithPrompt:", err);
-  }
-}
-
-export async function generateContent(content, el, c) {
-  const { type, id } = el;
-  const edges = c.findEdgesByElementId(id).filter(e => e.target === id).map(e => ({ label: e.label, el: c.findElementById(e.source) }));
-  console.log("Relevant edges", edges);
-  const token = getAuthToken();
-  if (!token || token === 'TBC') return await generateContentOld(content, type);
-  try {
-    const response = await fetch('https://gen.parc.land', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 4096,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `You will be given an element which is rendered into visual canvas. Either follow the user request or improve the provided content. The element content type should be <type>${type}</type>.
-
-Please provide your response in two parts:
-1. Your thought process about how to handle this request
-2. The actual result/content
-
-Here is the user request or content to process:
-
-<related-context>
-${edges.map(e => `<relation><label>${e.label || "undefined"}</label><content>${e.el.content}</content>`).join("\n")}
-<related-context>
-
-<current-content>
-${content}
-</current-content>
-
-Respond only with valid json (do not wrap in code block) following the ApiResponse schema:
-
-<schema>
-interface ApiResponse {
-thoughts: string;
-result: string;
-}
-<schema>
-`
-              }
-            ]
-          }
-        ]
-      }),
+    const provider = await pickProvider('text');
+    const out = await act<RunOut>('@c15r/models.run', {
+      provider,
+      prompt: content || `Write content for an empty ${el.type} canvas element.`,
+      system: `You write content for elements on a visual canvas. The element type is "${el.type}" — produce content appropriate to it (markdown for markdown, valid HTML fragments for html, plain prose for text). Respond ONLY with the content: no preamble, no code fences.`,
+      context: edgeContext(el, c) || undefined,
     });
-    console.log("response.ok", response.ok);
-    const data = await response.text();
-    console.log("AI response:", data);
-    try {
-      const resp = JSON.parse(data);
-      return resp.result;
-    } catch (e) {
-      console.error("Failed to parse json response", e);
-      return null;
-    }
-  } catch (error) {
-    console.error('Error fetching AI response:', error);
+    return out.text?.trim() ?? null;
+  } catch (err) {
+    console.warn('[generate]', err);
+    alert((err as Error).message);
     return null;
   }
 }
 
-export async function regenerateImage(el) {
-  try {
-    const response = await fetch("https://img.parc.land/generate", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getAuthToken()}`
-      },
-      body: JSON.stringify({
-        prompt: el.content,
-        width: el.width,
-        height: el.height,
-      })
-    });
-    const newImg = await response.json();
-    el.src = newImg.imageUrl;
-
-  } catch (err) {
-    console.error("Failed to regenerate image", err);
+/** Re-encode to webp under the edge's ~700KB inline ceiling. */
+async function compressForUpload(b64: string, mime: string): Promise<{ b64: string; mime: string }> {
+  if (b64.length * 0.75 < 600 * 1024 && mime === 'image/webp') return { b64, mime };
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('generated image failed to decode'));
+    img.src = `data:${mime};base64,${b64}`;
+  });
+  const cv = document.createElement('canvas');
+  const k = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+  cv.width = Math.round(img.naturalWidth * k);
+  cv.height = Math.round(img.naturalHeight * k);
+  cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
+  for (const q of [0.85, 0.65, 0.45]) {
+    const data = cv.toDataURL('image/webp', q);
+    const out = data.slice(data.indexOf(',') + 1);
+    if (out.length * 0.75 < 600 * 1024) return { b64: out, mime: 'image/webp' };
   }
+  throw new Error('generated image too large even after compression');
 }
 
-async function generateContentOld(content, type) {
+/**
+ * Generate an image for an img element from its content (the prompt).
+ * The bytes go to blob storage; the fact carries only the pointer.
+ */
+export async function regenerateImage(el: any): Promise<void> {
   try {
-    const response = await fetch('/api/ai_completion', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        instructions: `You will be given an element which is rendered into a visual canvas. 
-Either follow the user request or improve the provided content. 
-The element content type should be <content-type>${type}</content-type>.
-
-Response should be valid JSON conforming to response schema:
-
-<schema>
-interface Response {
-thinking: string;
-result: string;
-}
-</schema>
-
-<user_request_or_content>
-${content}
-</user_request_or_content>`
-      }),
+    const provider = await pickProvider('image');
+    const out = await act<RunOut>('@c15r/models.run', {
+      provider,
+      mode: 'image',
+      prompt: el.content || 'abstract placeholder image',
     });
-    const data = await response.json();
-    return data.result;
-  } catch (error) {
-    console.error('Error fetching AI response (old fallback):', error);
-    return null;
+    if (!out.imageB64) throw new Error('no image returned');
+    const { b64, mime } = await compressForUpload(out.imageB64, out.mime ?? 'image/png');
+    const key = `public/img/gen-${Date.now().toString(36)}.webp`;
+    const put = await act<{ url: string | null }>('cells.putData', {
+      owner: 'c15r',
+      name: 'canvas',
+      key,
+      content: b64,
+      encoding: 'base64',
+      contentType: mime,
+    });
+    if (!put.url) throw new Error('image stored but not web-addressable');
+    el.src = put.url;
+    el.srcPrompt = el.content; // provenance: the prompt that produced this artifact
+  } catch (err) {
+    console.warn('[regenerateImage]', err);
+    // Leave a visible placeholder rather than re-triggering generation loops.
+    el.src = el.src || `https://placehold.co/${Math.round(el.width || 300)}x${Math.round(el.height || 200)}?text=${encodeURIComponent(((err as Error).message || 'generation failed').slice(0, 60))}`;
   }
 }
