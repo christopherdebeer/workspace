@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler } from '../services/workspace/handlers';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -145,12 +145,14 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare',
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
-        'registerView', 'views', 'view', 'deleteView', 'links',
+        'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
       ].sort(),
     );
     // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
-    // to any authenticated principal.
-    expect(tools.every((t) => t.scope === null)).toBe(true);
+    // to any authenticated principal. The one exception is tend: distilling a
+    // slice into audit facts is an operator action, gated on workspace:admin.
+    expect(tools.every((t) => t.scope === null || t.name === 'tend')).toBe(true);
+    expect(tools.find((t) => t.name === 'tend')!.scope).toBe('workspace:admin');
     // Every tool ships a JSON Schema the gateway can surface to clients.
     expect(tools.every((t) => (t.inputSchema as { type?: string }).type === 'object')).toBe(true);
     const remember = tools.find((t) => t.name === 'remember')!;
@@ -523,6 +525,42 @@ describe('workspace registered views (the declared read vocabulary)', () => {
     await expect(
       cmds.registerView({ view: { id: 'bad', query: {}, reduce: 'median' as never } }, alice()),
     ).rejects.toThrow(/reduce/);
+  });
+});
+
+describe('workspace tending (attention distilled into an audit fact)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  it('tend writes tending/latest with counts, samples, and provenance, and announces it', async () => {
+    const { ctx, emitted } = ctxFor('alice');
+    await cmds.remember({ key: 'lonely', value: 'no links here' }, ctx);
+    const report = await cmds.tend(undefined, ctx);
+    expect(report.scope).toBe('alice');
+    expect(report.unlinked).toBeGreaterThanOrEqual(1);
+    expect(report.unlinkedSample).toContain('lonely');
+    expect(emitted).toContainEqual({
+      type: 'workspace.tended',
+      payload: { scope: 'alice', stale: report.stale, unlinked: report.unlinked, dangling: report.dangling },
+    });
+    const fact = await cmds.peek({ key: 'tending/latest' }, ctx);
+    expect(fact?._meta.type).toBe('audit');
+    expect(fact?._meta.tags).toContain('tending');
+    expect((fact?.value as { unlinked: number }).unlinked).toBe(report.unlinked);
+  });
+
+  it('the scheduled handler tends each requested scope as platform/tend', async () => {
+    const handler = createTendHandler(() => ({ state, grants }));
+    const { ctx } = ctxFor(null);
+    await handler({ scopes: ['alice'] }, { ...ctx, identity: { scopes: [] } } as never, {
+      source: 'platform.tend',
+      detailType: 'workspace.tend.requested',
+    });
+    const fact = await cmds.peek({ key: 'tending/latest' }, ctxFor('alice').ctx);
+    expect(fact?._meta.writer).toBe('platform/tend');
+    expect(fact?._meta.via).toBe('tend:schedule');
   });
 });
 

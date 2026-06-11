@@ -2,6 +2,8 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as awsevents from 'aws-cdk-lib/aws-events';
+import * as eventTargets from 'aws-cdk-lib/aws-events-targets';
 import {
   HttpServiceCell,
   ServiceRouter,
@@ -100,8 +102,8 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
-      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked'],
+      commands: ['remember', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
+      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended'],
       eventBus,
     });
     substrate.grantReadWrite(workspace);
@@ -109,6 +111,21 @@ export class PlatformStack extends cdk.Stack {
     // cell-<id>) emit substrate.write.requested; the workspace applies the
     // fact in the owner's slice. See docs/substrate-storage.md.
     eventBus.routeTo('SubstrateWriteRoute', workspace.fn, ['substrate.write.requested'], 'cell-');
+    // Autonomous tending (the legacy workspace's signature loop): a daily
+    // schedule delivers workspace.tend.requested; the handler distills
+    // attention() into a tending/latest audit fact per scope.
+    new awsevents.Rule(this, 'TendSchedule', {
+      schedule: awsevents.Schedule.cron({ minute: '30', hour: '6' }),
+      targets: [
+        new eventTargets.LambdaFunction(workspace.fn, {
+          event: awsevents.RuleTargetInput.fromObject({
+            'detail-type': 'workspace.tend.requested',
+            source: 'platform.tend',
+            detail: { scopes: ['c15r'] },
+          }),
+        }),
+      ],
+    });
 
     // Self-documenting front-end: a mobile-first React SPA served at `/` (the
     // router default). Its browser bundle is built from client/main.tsx by
