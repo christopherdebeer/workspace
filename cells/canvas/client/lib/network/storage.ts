@@ -568,6 +568,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
     startSalience(cid);
     startLiveSync(cid);
+    startFlightRecorder();
     document.addEventListener('parc:expand', (ev) => {
       const cc = (window as { CC?: any }).CC;
       const d = (ev as CustomEvent).detail as { key: string; id: string };
@@ -765,6 +766,10 @@ function warmField(): void {
 
   const episodeEnd = performance.now() + 8000; // hard cap: no eternal episodes
   const frame = (): void => {
+    if (document.hidden) {
+      warmRaf = 0; // a hidden tab does no physics
+      return;
+    }
     const now = performance.now();
     // The dragged (fixed) items move under the simulation's feet — track them.
     for (const n of nodes as any[]) {
@@ -884,12 +889,57 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
   read('workspace.peek', { key }).catch(() => undefined); // attention raises salience
 }
 
+/**
+ * Flight recorder: a 1s heartbeat of vital signs into localStorage. If the
+ * page dies without a clean pagehide (the iOS tab-kill case — no error
+ * event, no banner), the NEXT boot surfaces the final record, so a crash
+ * that leaves no trace still tells us what was growing.
+ */
+function startFlightRecorder(): void {
+  if (typeof window === 'undefined') return;
+  const KEY = 'parc.canvas.flight';
+  try {
+    const prev = localStorage.getItem(KEY);
+    if (prev) {
+      const p = JSON.parse(prev);
+      if (!p.clean) {
+        const banner = document.getElementById('err-banner');
+        if (banner) {
+          banner.style.display = 'block';
+          banner.textContent = `previous session died uncleanly — last vitals: ${JSON.stringify(p)} (dismiss: tap)`;
+          banner.onclick = () => { banner.style.display = 'none'; };
+        }
+        console.warn('[flight] unclean exit, last vitals', p);
+      }
+    }
+  } catch { /* storage unavailable */ }
+  const record = (clean: boolean): void => {
+    try {
+      const cc = (window as { CC?: any }).CC;
+      const mem = (performance as any).memory;
+      localStorage.setItem(KEY, JSON.stringify({
+        t: new Date().toISOString().slice(11, 19),
+        els: cc?.canvasState?.elements?.length ?? 0,
+        edges: cc?.canvasState?.edges?.length ?? 0,
+        dom: document.querySelectorAll('.canvas-element').length,
+        svg: document.querySelectorAll('#edges-layer *').length,
+        warm: warmRaf !== 0,
+        lw: lastWritten.size,
+        heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : undefined,
+        clean,
+      }));
+    } catch { /* storage unavailable */ }
+  };
+  setInterval(() => record(false), 1000);
+  window.addEventListener('pagehide', () => record(true));
+}
+
 export function startLiveSync(cid: string): void {
   if (liveSyncStarted || typeof window === 'undefined') return;
   liveSyncStarted = true;
   const tick = async (): Promise<void> => {
     const cc = (window as { CC?: any }).CC;
-    if (cc) {
+    if (cc && !document.hidden) {
       try {
         if (liveCursor === 0) {
           liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 0, limit: 0 })).seq;
