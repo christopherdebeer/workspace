@@ -329,6 +329,46 @@ interface ViewEval {
 }
 
 /** One registered view, rendered by its hint — the dashboard is a view query. */
+interface ListEntry {
+  key: string;
+  value?: unknown;
+  _meta?: { type?: string | null; tags?: string[]; updatedAt?: string };
+}
+
+/** A fact's one-line presentation: title from its value, not its key. */
+function factTitle(e: ListEntry): string {
+  const v = e.value;
+  if (typeof v === 'string') return v.slice(0, 80) || e.key;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (typeof o.title === 'string' && o.title) return o.title.slice(0, 80);
+    if (typeof o.name === 'string' && o.name) return o.name.slice(0, 80);
+    if (typeof o.content === 'string' && o.content) {
+      const line = o.content.match(/^#+\s*(.+)$/m)?.[1] ?? o.content.split('\n').find((l) => l.trim()) ?? '';
+      const clean = line.replace(/^[-*]\s*\[[ x]\]\s*/, '').replace(/[#*_`>\\[\]()]/g, '').trim();
+      if (clean) return clean.slice(0, 80);
+    }
+  }
+  return e.key;
+}
+
+/** Where a fact lives — its home surface, by type/key convention. */
+function factHref(e: ListEntry): string | null {
+  const t = e._meta?.type ?? null;
+  const v = (e.value ?? {}) as Record<string, unknown>;
+  const tags = e._meta?.tags ?? [];
+  if (e.key.startsWith('doc:')) return `/@c15r/lit?doc=${encodeURIComponent(e.key.slice(4))}`;
+  if (t === 'capture' || e.key.startsWith('inbox/')) {
+    return typeof v.captured === 'string' ? `/@c15r/lit?doc=${encodeURIComponent(`log:${v.captured}`)}` : '/@c15r/input';
+  }
+  if (t === 'cell' && typeof v.address === 'string') return v.address;
+  const docTag = tags.find((x) => x.startsWith('doc:'));
+  if (docTag) return `/@c15r/lit?doc=${encodeURIComponent(docTag.slice(4))}`;
+  const boardTag = tags.find((x) => x.startsWith('canvas:'));
+  if (boardTag) return `/@c15r/canvas?canvas=${encodeURIComponent(boardTag.slice(7))}`;
+  return null;
+}
+
 function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const [out, setOut] = useState<ViewEval | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -403,22 +443,46 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   }
 
   if (type === 'list' || type === 'table' || type === 'feed') {
-    const entries = Array.isArray(out?.value) ? (out?.value as Array<{ key: string }>) : [];
+    const entries = Array.isArray(out?.value)
+      ? (out?.value as Array<{ key: string; value?: unknown; _meta?: { type?: string | null; tags?: string[]; updatedAt?: string } }>)
+      : [];
+    const href = typeof hint?.href === 'string' ? hint.href : null;
     return (
       <div style={box}>
-        <strong>{label}</strong>
+        {href ? (
+          <a href={href} style={{ color: 'inherit', textDecoration: 'none' }}>
+            <strong>{label} →</strong>
+          </a>
+        ) : (
+          <strong>{label}</strong>
+        )}
         {out === null ? (
           <span style={{ color: theme.dim }}>Loading…</span>
         ) : entries.length === 0 ? (
           <span style={{ color: theme.dim }}>Empty.</span>
         ) : (
-          <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
-            {entries.slice(0, 8).map((e) => (
-              <li key={e.key}>
-                <code>{e.key}</code>
-              </li>
-            ))}
-            {entries.length > 8 ? <li style={{ color: theme.dim }}>… {entries.length - 8} more</li> : null}
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.35rem' }}>
+            {entries.slice(0, 8).map((e) => {
+              const to = factHref(e);
+              const title = factTitle(e);
+              const date = e._meta?.updatedAt ? e._meta.updatedAt.slice(0, 10) : null;
+              const sub = [e._meta?.type, e.key, date].filter(Boolean).join(' · ');
+              return (
+                <li key={e.key} style={{ lineHeight: 1.35 }}>
+                  {to ? (
+                    <a href={to} style={{ color: theme.accent, textDecoration: 'none' }}>
+                      {title}
+                    </a>
+                  ) : (
+                    <span>{title}</span>
+                  )}
+                  <div style={{ color: theme.dim, fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {sub}
+                  </div>
+                </li>
+              );
+            })}
+            {entries.length > 8 ? <li style={{ color: theme.dim, fontSize: '0.8rem' }}>… {entries.length - 8} more</li> : null}
           </ul>
         )}
       </div>
