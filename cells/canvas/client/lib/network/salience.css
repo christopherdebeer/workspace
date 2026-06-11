@@ -171,3 +171,54 @@ body.embed-unauthed::before {
   padding: 2px 4px;
 }
 body.readonly .fc-expand, body.embed .fc-expand { display: none; }
+
+/* — Context menu v2: labeled rows, real tap targets, fact-aware header — */
+#context-menu.cm2 {
+  min-width: 248px;
+  max-width: 300px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 0.35rem;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #ddd;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16);
+  font-family: system-ui, sans-serif;
+}
+#context-menu.cm2 .cm-head {
+  padding: 0.5rem 0.65rem 0.45rem;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 0.25rem;
+}
+#context-menu.cm2 .cm-head strong { display: block; font-size: 0.88rem; line-height: 1.3; }
+#context-menu.cm2 .cm-head code { display: block; color: #999; font-size: 0.66rem; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#context-menu.cm2 .cm-open { font-size: 0.75rem; color: #2f6f4f; text-decoration: none; }
+#context-menu.cm2 .cm-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.88rem;
+  border-radius: 9px;
+  color: #1c1c1a;
+  text-align: left;
+  cursor: pointer;
+}
+#context-menu.cm2 .cm-row:hover, #context-menu.cm2 .cm-row:active { background: #f1f1ea; }
+#context-menu.cm2 .cm-row i { width: 1.1rem; text-align: center; color: #8a8a82; }
+#context-menu.cm2 .cm-danger, #context-menu.cm2 .cm-danger i { color: #7a1f1f; }
+#context-menu.cm2 .cm-appearance { border-top: 1px solid #eee; margin-top: 0.25rem; padding: 0.25rem 0; }
+#context-menu.cm2 .cm-appearance summary { padding: 0.45rem 0.65rem; color: #8a8a82; font-size: 0.8rem; cursor: pointer; }
+#context-menu.cm2 .cm-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  color: #8a8a82;
+}
+#context-menu.cm2 .cm-field select { font-size: 0.85rem; padding: 3px 6px; border-radius: 7px; border: 1px solid #e4e4dc; }
