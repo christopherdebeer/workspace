@@ -971,7 +971,9 @@ async function callCellTool(input: CallCellToolInput, ctx: ServiceContext): Prom
     ctx,
   )) as InvokeCellResult;
   if (typeof res?.statusCode === 'number' && res.statusCode >= 400) {
-    throw new Error(`Cell tool "${input.tool}" failed (status ${res.statusCode})`);
+    // Surface the cell's own error — an opaque status helps nobody.
+    const detail = (res.body as { error?: string } | undefined)?.error;
+    throw new Error(`Cell tool "${input.tool}" failed (status ${res.statusCode})${detail ? `: ${detail}` : ''}`);
   }
   return res?.body;
 }
