@@ -454,6 +454,47 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
       ),
     ).rejects.toThrow(/may not write/);
   });
+
+  it('CEL conditions: declared fetch + real expression over { value, exists, params, self }', async () => {
+    await cmds.remember({ key: 'task:t9', value: { status: 'open', priority: 5, assignees: ['alice', 'bob'] } }, alice());
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'escalate',
+          params: { task: { type: 'string', required: true } },
+          if: [
+            { key: 'task:${params.task}', cel: "exists && value.status == 'open' && value.priority > 3" },
+            { cel: 'self in ["alice", "carol"]' }, // no key — pure params/self predicate
+          ],
+          writes: [{ key: 'task:${params.task}:escalated', value: { by: '${self}' } }],
+        },
+      },
+      alice(),
+    );
+    const res = await cmds.invoke({ action: 'escalate', params: { task: 't9' } }, alice());
+    expect(res.invoked).toBe(true);
+
+    // The expression's verdict gates with the same explained errors as v1.
+    await cmds.remember({ key: 'task:t9', value: { status: 'closed', priority: 5 } }, alice());
+    await expect(cmds.invoke({ action: 'escalate', params: { task: 't9' } }, alice())).rejects.toThrow(
+      /precondition_failed.*status/,
+    );
+  });
+
+  it('CEL conditions: parse errors refuse registration; non-boolean results fail closed', async () => {
+    await expect(
+      cmds.registerAction(
+        { action: { id: 'broken', if: [{ cel: 'value.' }], writes: [{ key: 'x' }] } },
+        alice(),
+      ),
+    ).rejects.toThrow(/invalid CEL/);
+
+    await cmds.registerAction(
+      { action: { id: 'nonbool', if: [{ cel: '1 + 1' }], writes: [{ key: 'x', value: 1 }] } },
+      alice(),
+    );
+    await expect(cmds.invoke({ action: 'nonbool' }, alice())).rejects.toThrow(/precondition_failed/);
+  });
 });
 
 describe('workspace registered views (the declared read vocabulary)', () => {
@@ -525,6 +566,28 @@ describe('workspace registered views (the declared read vocabulary)', () => {
     await expect(
       cmds.registerView({ view: { id: 'bad', query: {}, reduce: 'median' as never } }, alice()),
     ).rejects.toThrow(/reduce/);
+  });
+
+  it('CEL filter narrows the query before reduce; eval errors fail closed per entry', async () => {
+    await cmds.registerView(
+      {
+        view: {
+          id: 'heavy-todos',
+          query: { type: 'todo' },
+          // `note` has a string value — value.effort errors there; it is a todo-typed
+          // query anyway, but the >= guard is what selects within the type.
+          filter: 'value.effort >= 3',
+          reduce: 'count',
+        },
+      },
+      alice(),
+    );
+    expect((await cmds.view({ id: 'heavy-todos' }, alice())).value).toBe(1);
+
+    // A broken expression can never be registered.
+    await expect(
+      cmds.registerView({ view: { id: 'bad-cel', query: {}, filter: 'value.' } }, alice()),
+    ).rejects.toThrow(/valid CEL/);
   });
 });
 

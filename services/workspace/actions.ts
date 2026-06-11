@@ -9,15 +9,20 @@
  * auditable before execution, and contested-target detection is a registry
  * scan — none of which opaque code can offer.
  *
- * v1 deliberately uses a **structured condition DSL** instead of CEL — total,
+ * v1 deliberately used a **structured condition DSL** instead of CEL — total,
  * decidable, no dependency — with the same shape everywhere (`if`, `enabled`).
- * A CEL upgrade can replace the evaluator without changing the stored model.
+ * The CEL upgrade (this version) keeps that stored model and adds `cel`: a
+ * condition may carry a CEL expression instead of an `op`, evaluated over
+ * `{ params, self, now, key, exists, value }` — the fact fetch stays declared
+ * (`key`), only the predicate over it gets a real expression language. Parse
+ * errors surface at registration; a non-boolean result fails the condition.
  *
  * Template substitution (`${params.x}`, `${self}`, `${now}`) is single-pass
  * (no re-expansion of substituted content) in keys and string values.
  * Combined with per-write `ifAbsent` + `timer`, this expresses sync's
  * canonical task-queue claim: an atomic, lease-bound, crash-safe hand-off.
  */
+import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
 import type { Identity } from '../../platform/runtime';
 import type { ObservedState, Entry, FactTimer } from '../../platform/runtime';
 
@@ -26,15 +31,23 @@ export const ACTIONS_PREFIX = '_actions/';
 
 // ── the declared model ─────────────────────────────────────────────
 
-/** A decidable predicate over one fact in the invoker's slice. */
+/**
+ * A decidable predicate. Two forms share the shape:
+ *   - structured: `{ key, op, path?, value? }` (v1 — still supported)
+ *   - CEL:        `{ cel, key? }` — `cel` evaluates over
+ *     `{ params, self, now, key?, exists?, value? }`; when `key` is given the
+ *     fact is fetched (live view) and bound as `exists`/`value`.
+ */
 export interface DeclaredCondition {
   /** Fact key to test (supports `${params.*}`/`${self}` substitution). */
-  key: string;
+  key?: string;
   /** Optional dot-path into the fact's value (e.g. "status" or "meta.owner"). */
   path?: string;
-  op: 'exists' | 'absent' | 'eq' | 'ne' | 'gt' | 'lt';
+  op?: 'exists' | 'absent' | 'eq' | 'ne' | 'gt' | 'lt';
   /** Comparison operand for eq/ne/gt/lt. */
   value?: unknown;
+  /** CEL expression — must evaluate to a boolean. */
+  cel?: string;
 }
 
 export interface DeclaredWrite {
@@ -131,8 +144,20 @@ function validateConditions(field: string, conds: DeclaredCondition[] | undefine
   if (conds === undefined) return;
   if (!Array.isArray(conds)) throw new Error(`\`${field}\` must be an array of conditions`);
   for (const c of conds) {
+    if (typeof c?.cel === 'string') {
+      // CEL form: parse now so a broken expression can never be registered.
+      try {
+        celParse(c.cel);
+      } catch (err) {
+        throw new Error(`\`${field}\` condition has invalid CEL: ${(err as Error).message}`);
+      }
+      if (c.key !== undefined && typeof c.key !== 'string') {
+        throw new Error(`\`${field}\` condition \`key\` must be a string`);
+      }
+      continue;
+    }
     if (!c?.key || typeof c.key !== 'string') throw new Error(`\`${field}\` condition requires a string \`key\``);
-    if (!VALID_OPS.has(c.op)) throw new Error(`\`${field}\` condition op must be one of ${[...VALID_OPS].join('/')}`);
+    if (!c.op || !VALID_OPS.has(c.op)) throw new Error(`\`${field}\` condition op must be one of ${[...VALID_OPS].join('/')}`);
     if ((c.op === 'eq' || c.op === 'ne' || c.op === 'gt' || c.op === 'lt') && c.value === undefined) {
       throw new Error(`\`${field}\` condition op "${c.op}" requires a \`value\``);
     }
@@ -147,7 +172,28 @@ async function evaluateCondition(
   self: string,
   now: string,
 ): Promise<{ holds: boolean; detail: string }> {
-  const key = substituteString(c.key, params, self, now);
+  if (typeof c.cel === 'string') {
+    // CEL form: the fact fetch stays declared; the predicate is an expression.
+    const bindings: Record<string, unknown> = { params, self, now };
+    let at = c.cel;
+    if (c.key) {
+      const key = substituteString(c.key, params, self, now);
+      const entry = await state.get(scope, key);
+      const present = entry !== null && !entry._meta.superseded;
+      bindings.key = key;
+      bindings.exists = present;
+      bindings.value = present ? entry!.value : null;
+      at = `"${key}": ${c.cel}`;
+    }
+    try {
+      const out = celEvaluate(c.cel, bindings);
+      // String(), not JSON.stringify — CEL ints are BigInt, which JSON rejects.
+      return { holds: out === true, detail: `${at} → ${String(out)}` };
+    } catch (err) {
+      return { holds: false, detail: `${at} → error: ${(err as Error).message}` };
+    }
+  }
+  const key = substituteString(c.key!, params, self, now);
   const entry = await state.get(scope, key); // live view: timers/supersession respected
   const present = entry !== null && !entry._meta.superseded;
   if (c.op === 'exists') return { holds: present, detail: `"${key}" ${present ? 'exists' : 'is absent'}` };
@@ -164,6 +210,9 @@ async function evaluateCondition(
       return { holds: typeof actual === 'number' && typeof expected === 'number' && actual > expected, detail: `${at} = ${JSON.stringify(actual)}` };
     case 'lt':
       return { holds: typeof actual === 'number' && typeof expected === 'number' && actual < expected, detail: `${at} = ${JSON.stringify(actual)}` };
+    default:
+      // Unreachable for registered actions (validateConditions enforces a form).
+      return { holds: false, detail: `${at} has no evaluable predicate` };
   }
 }
 
