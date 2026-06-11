@@ -68,6 +68,9 @@ function decorateFactCard(el: any, metaType: string | null): void {
  *  on a board — its original key rides along as a transient. */
 const factKeyOf = (el: any): string => (typeof el._factKey === 'string' ? el._factKey : `el:${el.id}`);
 
+/** Board element id for a substrate key (el:* strips the prefix). */
+const idOfKey = (k: string): string => (k.startsWith('el:') ? k.slice(3) : k);
+
 const PLACEMENT_KEYS = new Set([
   'x', 'y', 'width', 'height', 'rotation', 'scale', 'zIndex',
   'blendMode', 'color', 'static', 'group', 'fixedTop', 'fixedLeft',
@@ -359,7 +362,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     const deco = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', { prefix: `_canvas/${cid}/` });
     let links: LinkEdge[] = [];
     try {
-      links = (await read<{ edges: LinkEdge[] }>('workspace.links', { prefix: 'el:' })).edges ?? [];
+      links = (await read<{ edges: LinkEdge[] }>('workspace.links', {})).edges ?? [];
     } catch (err) {
       console.warn('[substrate] links unavailable; decoration edges only', err);
     }
@@ -399,8 +402,8 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     const decorated = new Set(edges.map((e) => `${e.source}|${(e.label && String(e.label).trim()) || 'relates'}|${e.target}`));
     for (const l of links) {
       if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
-      const source = l.from.slice(3);
-      const target = l.to.slice(3);
+      const source = idOfKey(l.from);
+      const target = idOfKey(l.to);
       if (decorated.has(`${source}|${l.rel}|${target}`)) continue;
       const id = `lnk:${l.from}|${l.rel}|${l.to}`;
       edges.push({ id, source, target, label: l.rel });
@@ -596,11 +599,11 @@ function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: 
 }
 
 async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
-  const presentIds = new Set(cc.canvasState.elements.map((e: any) => `el:${e.id}`));
+  const presentIds = new Set(cc.canvasState.elements.map((e: any) => factKeyOf(e)));
   const deco = await read<{ entries: Array<{ key: string; value: any }> }>('workspace.query', { prefix: `_canvas/${cid}/edge:` });
   let links: LinkEdge[] = [];
   try {
-    links = (await read<{ edges: LinkEdge[] }>('workspace.links', { prefix: 'el:' })).edges ?? [];
+    links = (await read<{ edges: LinkEdge[] }>('workspace.links', {})).edges ?? [];
   } catch { /* links unavailable */ }
   lastEdges.clear();
   linkedEdges.clear();
@@ -617,8 +620,8 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   const decorated = new Set(edges.map((e: any) => `${e.source}|${(e.label && String(e.label).trim()) || 'relates'}|${e.target}`));
   for (const l of links) {
     if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
-    const s = l.from.slice(3);
-    const t = l.to.slice(3);
+    const s = idOfKey(l.from);
+    const t = idOfKey(l.to);
     if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
     const id = `lnk:${l.from}|${l.rel}|${l.to}`;
     edges.push({ id, source: s, target: t, label: l.rel });
