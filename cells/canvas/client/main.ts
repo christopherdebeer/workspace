@@ -204,7 +204,10 @@ class CanvasController {
         };
 
         this.requestRender();
-        this.uninstallCommandPalette = installCommandPalette(this);
+        this.uninstallCommandPalette =
+            new URLSearchParams(location.search).get('embed') === '1'
+                ? () => undefined // an embed is a picture: no chrome
+                : installCommandPalette(this);
     }
 
     detach() {
