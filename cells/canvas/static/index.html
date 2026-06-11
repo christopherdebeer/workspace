@@ -56,8 +56,21 @@
 </head>
 
 <body>
-  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-  <script>eruda.init();</script>
+  <script>
+    // On-device console: ?debug=1 (sticky; ?debug=0 clears) — never in embeds.
+    (function () {
+      try {
+        var qs = new URLSearchParams(location.search);
+        if (qs.get('debug') === '1') localStorage.setItem('parc.canvas.debug', '1');
+        if (qs.get('debug') === '0') localStorage.removeItem('parc.canvas.debug');
+        if (qs.get('embed') === '1' || localStorage.getItem('parc.canvas.debug') !== '1') return;
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/eruda';
+        s.onload = function () { window.eruda && window.eruda.init(); };
+        document.head.appendChild(s);
+      } catch (e) { /* storage unavailable */ }
+    })();
+  </script>
 
   <div id="err-banner"></div>
 
