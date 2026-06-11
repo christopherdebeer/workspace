@@ -96,6 +96,19 @@ export interface RememberInput {
   /** Lease/reveal timer, evaluated at read (no scheduler). */
   timer?: FactTimer;
 }
+
+/** Bulk intake — imports and capture backfills land in one round trip. */
+export interface IngestInput {
+  facts: RememberInput[];
+  /** Default `via` for facts that do not set their own. */
+  via?: string;
+}
+
+export interface IngestResult {
+  ingested: number;
+  /** Per-fact failures (the rest were written — intake is best-effort). */
+  errors: Array<{ key: string; error: string }>;
+}
 export interface RecallInput {
   elision?: 'auto' | 'none';
   expand?: string[];
@@ -179,6 +192,7 @@ export interface SharedResult {
 // while keeping precise per-command types for the unit tests.
 export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   remember: CommandHandler<RememberInput, Entry>;
+  ingest: CommandHandler<IngestInput, IngestResult>;
   recall: CommandHandler<RecallInput | undefined, ReadResult>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
@@ -252,6 +266,38 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
       },
       required: ['key', 'value'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ingest',
+    description:
+      'Bulk intake: write up to 100 facts in one call (imports, capture backfills). Each fact takes the same fields as `remember` (no `ifRevision`); failures are reported per-fact, the rest are written. May not write `_actions/` or `_views/`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        facts: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string' },
+              value: {},
+              via: { type: 'string' },
+              type: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+              ifAbsent: { type: 'boolean' },
+            },
+            required: ['key', 'value'],
+            additionalProperties: false,
+          },
+        },
+        via: { type: 'string', description: 'Default `via` for facts that do not set their own' },
+      },
+      required: ['facts'],
       additionalProperties: false,
     },
   },
@@ -605,6 +651,46 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       await ctx.events.emit('workspace.fact.written', { scope, key: input.key, revision: entry._meta.revision });
       ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision });
       return entry;
+    },
+
+    async ingest(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!Array.isArray(input?.facts) || input.facts.length === 0) throw new Error('facts (non-empty array) is required');
+      if (input.facts.length > 100) throw new Error('ingest is capped at 100 facts per call');
+      // Vocabulary stays deliberate: bulk intake may not write declarations.
+      for (const f of input.facts) {
+        if (!f?.key || typeof f.key !== 'string') throw new Error('every fact requires a string `key`');
+        if (f.key.startsWith(ACTIONS_PREFIX) || f.key.startsWith(VIEWS_PREFIX)) {
+          throw new Error(`ingest may not write the declared vocabulary ("${f.key}")`);
+        }
+      }
+      const { state } = build(ctx);
+      const errors: IngestResult['errors'] = [];
+      let ingested = 0;
+      for (const f of input.facts) {
+        try {
+          await state.put(
+            {
+              scope,
+              key: f.key,
+              value: f.value,
+              via: f.via ?? input.via,
+              type: f.type,
+              tags: f.tags,
+              ifAbsent: f.ifAbsent,
+              timer: f.timer,
+            },
+            ctx.identity,
+          );
+          ingested++;
+        } catch (err) {
+          errors.push({ key: f.key, error: (err as Error).message });
+        }
+      }
+      // One announcement for the batch — intake should not storm the bus.
+      await ctx.events.emit('workspace.ingested', { scope, count: ingested, errors: errors.length });
+      ctx.logger.info('workspace facts ingested', { scope, count: ingested, errors: errors.length });
+      return { ingested, errors };
     },
 
     async recall(input, ctx) {
