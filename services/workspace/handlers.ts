@@ -191,6 +191,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   actions: CommandHandler<undefined, { actions: ActionDefinition[] }>;
   deleteAction: CommandHandler<DeleteActionInput, { ok: true }>;
   invoke: CommandHandler<InvokeInput, InvokeResult>;
+  tend: CommandHandler<undefined, TendReport>;
   registerView: CommandHandler<RegisterViewInput, ViewDefinition>;
   views: CommandHandler<undefined, { views: ViewDefinition[] }>;
   deleteView: CommandHandler<DeleteViewInput, { ok: true }>;
@@ -456,6 +457,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['action'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'tend',
+    description:
+      'Run a tending pass now: attention() distilled into a `tending/latest` audit fact (stale / unlinked / dangling, with samples) — the just-in-time cron made manual. A daily schedule writes the same report.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'registerView',
@@ -727,6 +736,12 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       return result;
     },
 
+    async tend(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return runTend(state, scope, ctx, 'manual', ctx.identity);
+    },
+
     async registerView(input, ctx) {
       const scope = requireUser(ctx.identity);
       if (!input?.view) throw new Error('view is required');
@@ -799,6 +814,71 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     async describeTools() {
       return { tools: TOOL_DESCRIPTORS };
     },
+  };
+}
+
+/** A tending pass distilled into a written report — the audit fact. */
+export interface TendReport {
+  at: string;
+  scope: string;
+  stale: number;
+  unlinked: number;
+  dangling: number;
+  staleSample: Array<{ key: string; updatedAt: string; type: string | null }>;
+  unlinkedSample: string[];
+  danglingSample: Array<{ from: string; rel: string; to: string; reason: string }>;
+}
+
+/**
+ * One tending pass (the legacy workspace's signature loop, on this substrate):
+ * read `attention()` — the just-in-time cron — and write what it surfaced as
+ * a `tending/latest` audit fact, so every observer (home, boards, agents)
+ * sees the substrate's health as state.
+ */
+async function runTend(
+  state: ObservedState,
+  scope: string,
+  ctx: ServiceContext,
+  via: string,
+  writer: { user?: string; scopes: string[] },
+): Promise<TendReport> {
+  const att = await state.attention(scope, {});
+  const report: TendReport = {
+    at: new Date().toISOString(),
+    scope,
+    stale: att.stale.length,
+    unlinked: att.unlinked.length,
+    dangling: att.dangling.length,
+    staleSample: att.stale.slice(0, 5),
+    unlinkedSample: att.unlinked.slice(0, 5),
+    danglingSample: att.dangling.slice(0, 3),
+  };
+  await state.put(
+    { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },
+    writer,
+  );
+  await ctx.events.emit('workspace.tended', {
+    scope,
+    stale: report.stale,
+    unlinked: report.unlinked,
+    dangling: report.dangling,
+  });
+  ctx.logger.info('workspace tended', { scope, via, stale: report.stale, unlinked: report.unlinked, dangling: report.dangling });
+  return report;
+}
+
+/** The scheduled tend: an EventBridge cron delivers `workspace.tend.requested`. */
+export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx) => {
+    const scopes = Array.isArray(detail.scopes) ? (detail.scopes as string[]) : [];
+    if (!scopes.length) {
+      ctx.logger.warn('tend requested without scopes');
+      return;
+    }
+    const { state } = build(ctx);
+    for (const scope of scopes) {
+      await runTend(state, scope, ctx, 'schedule', { user: 'platform/tend', scopes: [] });
+    }
   };
 }
 

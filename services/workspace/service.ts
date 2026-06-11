@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -16,12 +16,14 @@ export const handler = defineService({
   name: 'workspace',
   commands,
   events: {
-    emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked'],
+    emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended'],
     // The organ-to-reef write path: dynamic cells emit substrate.write.requested
     // (source IAM-pinned to cell-<id>); the workspace applies it as a fact in
-    // the owner's slice. Wired via PlatformEventBus.routeTo in the stack.
+    // the owner's slice. The daily tend schedule delivers tend.requested.
+    // Both wired via PlatformEventBus.routeTo / the TendSchedule rule.
     handles: {
       'substrate.write.requested': createSubstrateWriteHandler(dynamoDeps),
+      'workspace.tend.requested': createTendHandler(dynamoDeps),
     },
   },
 });
