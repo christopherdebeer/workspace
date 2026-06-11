@@ -106,6 +106,25 @@ export function buildRootItems(controller) {
         },
         { label: 'Delete', icon: 'fa-trash', category: 'Edit', shortcut: '⌫', action: c => deleteSelection(c) },
         {
+          label: 'Image from selection', icon: 'fa-image', category: 'AI',
+          visible: c => c.selectedElementIds.size === 1,
+          action: async (c) => {
+            // The transform affordance: source content becomes the PROMPT of a
+            // new img element, linked derived-from its source.
+            const srcId = [...c.selectedElementIds][0];
+            const src = c.findElementById(srcId);
+            if (!src) return;
+            const id = c.createNewElement(src.x + (src.width ?? 240) + 80, src.y, 'img', src.content ?? '', false, {});
+            const el = c.findElementById(id);
+            if (el) { el.width = 320; el.height = 320; }
+            c.requestRender();
+            try {
+              const { act } = await import('../network/substrate.ts');
+              void act('workspace.link', { from: `el:${id}`, rel: 'derived-from', to: `el:${srcId}` }).catch(() => undefined);
+            } catch { /* provenance is best-effort */ }
+          },
+        },
+        {
           label: 'Un-pin', icon: 'fa-thumbtack', category: 'Edit',
           visible: c => c.selectedElementIds.size > 0,
           action: c => unpinElements(c, [...c.selectedElementIds]),

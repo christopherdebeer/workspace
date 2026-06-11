@@ -27,6 +27,8 @@ export interface CellRecord {
   /** Public cells accept anonymous GETs via dispatch (a web-facing cell). */
   public: boolean;
   status: CellStatus;
+  /** Lambda timeout override (seconds, 10–300). */
+  timeoutSeconds?: number;
   createdAt: string;
   updatedAt: string;
 }

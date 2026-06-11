@@ -91,6 +91,22 @@ export async function deployStack(stackName: string, template: Record<string, un
     .promise();
 }
 
+/** Update an existing cell stack in place (config changes — timeout, memory). */
+export async function updateStack(stackName: string, template: Record<string, unknown>): Promise<void> {
+  try {
+    await cfn()
+      .updateStack({
+        StackName: stackName,
+        TemplateBody: JSON.stringify(template),
+        Capabilities: ['CAPABILITY_NAMED_IAM'],
+      })
+      .promise();
+  } catch (err) {
+    if (/No updates are to be performed/i.test((err as Error).message ?? '')) return;
+    throw err;
+  }
+}
+
 export interface StackState {
   status: string;
   outputs: Record<string, string>;
