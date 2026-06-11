@@ -31,6 +31,15 @@ interface Pending { title?: string; text?: string; url?: string; input?: string 
 
 const today = (): string => new Date().toISOString().split('T')[0];
 
+const isoWeekOf = (d: string): string => {
+  const dt = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)));
+  const wd = (dt.getUTCDay() + 6) % 7;
+  dt.setUTCDate(dt.getUTCDate() - wd + 3);
+  const y = dt.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(y, 0, 4));
+  return `${y}-w${String(1 + Math.round(((+dt - +jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7)).padStart(2, '0')}`;
+};
+
 function composeContent(p: Pending): { content: string; title?: string; url?: string } {
   const title = p.title?.trim() || undefined;
   const url = (p.url?.trim() || (p.text && /^https?:\/\/\S+$/.test(p.text.trim()) ? p.text.trim() : undefined)) || undefined;
@@ -50,13 +59,21 @@ async function capture(p: Pending): Promise<{ key: string; content: string }> {
   const { content, title, url } = composeContent(p);
   if (!content) throw new Error('nothing to capture');
   const key = `inbox/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  const day = today();
   await mcp('act', 'workspace.remember', {
     key,
-    value: { content, ...(title ? { title } : {}), ...(url ? { url } : {}), captured: today() },
+    value: { content, ...(title ? { title } : {}), ...(url ? { url } : {}), captured: day },
     via: 'input',
     type: 'capture',
-    tags: ['inbox', `log:${today()}`],
+    tags: ['inbox', `log:${day}`],
   });
+  // The day is a fact; the capture hangs off it (boards render the edge).
+  void mcp('act', 'workspace.remember', {
+    key: `log:${day}`,
+    value: { date: day, week: isoWeekOf(day), month: day.slice(0, 7), year: day.slice(0, 4), title: day },
+    ifAbsent: true, type: 'log', tags: ['log'], via: 'input',
+  }).catch(() => undefined); // already exists — fine
+  void mcp('act', 'workspace.link', { from: key, rel: 'on', to: `log:${day}` }).catch(() => undefined);
   return { key, content };
 }
 
