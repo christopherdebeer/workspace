@@ -1030,8 +1030,13 @@ ${script.getAttribute('src')}`);
                 saveCanvas(this.canvasState);
             };
         } else {
-            console.warn("Unknown element type", el.type, el)
-            console.log("Delete?")
+            // Once per type per session — this fired per element PER FRAME
+            // (an eruda memory bomb on iOS when debug is sticky).
+            const w = ((window as any).__warnedTypes ??= new Set());
+            if (!w.has(el.type)) {
+                w.add(el.type);
+                console.warn("Unknown element type", el.type, el);
+            }
         }
 
         const c = node.querySelector('.content');
