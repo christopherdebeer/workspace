@@ -235,6 +235,22 @@ export async function getObject(bucket: string, key: string): Promise<string | n
   }
 }
 
+/** Read an object's raw bytes + content type (binary blobs), or `null`. */
+export async function getObjectRaw(bucket: string, key: string): Promise<{ body: Buffer; contentType: string } | null> {
+  try {
+    const res = await s3().getObject({ Bucket: bucket, Key: key }).promise();
+    const body = res.Body;
+    return {
+      body: body == null ? Buffer.alloc(0) : typeof body === 'string' ? Buffer.from(body) : Buffer.from(body as Uint8Array),
+      contentType: res.ContentType ?? 'application/octet-stream',
+    };
+  } catch (err) {
+    const e = err as { code?: string; statusCode?: number };
+    if (e.code === 'NoSuchKey' || e.code === 'NotFound' || e.statusCode === 404) return null;
+    throw err;
+  }
+}
+
 /** List all object keys under a prefix (paginated to completion). */
 export async function listObjects(bucket: string, prefix: string): Promise<string[]> {
   const keys: string[] = [];

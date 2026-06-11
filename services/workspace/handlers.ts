@@ -36,6 +36,7 @@ import {
   type FactTimer,
   type CommandHandler,
   type RegisteredCommand,
+  type Identity,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -942,5 +943,101 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       key,
       revision: entry._meta.revision,
     });
+  };
+}
+
+/** The substrate pointer a cell lifecycle projects to: `cells/<cellId>`. */
+interface CellPointer {
+  cellId: string;
+  name: string;
+  address: string;
+  public?: boolean;
+  description?: string | null;
+  status: string;
+  version?: string;
+  files?: string[];
+  clientEntry?: string | null;
+  staticFiles?: string[];
+  /** Source edited since the last deploy. */
+  dirty?: boolean;
+}
+
+/**
+ * Platform reflected in the substrate: the cells service announces lifecycle
+ * events (create / files changed / deployed / delete), and the workspace
+ * projects each cell into a `cells/<cellId>` pointer fact (type `cell`) in the
+ * owner's slice — so cells are queryable, linkable, and placeable on boards
+ * like any other fact.
+ *
+ * Trust model: the rule pins `source` to the cells service (platform code),
+ * which resolved `owner` from its registry — unlike `substrate.write.requested`
+ * the detail is first-party, so it is taken as-is.
+ */
+export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'cells') {
+      ctx.logger.warn('cell lifecycle event from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const cellId = typeof detail.cellId === 'string' ? detail.cellId : '';
+    const owner = typeof detail.owner === 'string' ? detail.owner : '';
+    if (!cellId || !owner) {
+      ctx.logger.warn('cell lifecycle event missing cellId/owner refused', { detailType: meta.detailType });
+      return;
+    }
+    const { state } = build(ctx);
+    const key = `cells/${cellId}`;
+    const writer: Identity = { user: 'platform/cells', scopes: [] };
+    const prior = (await state.get(owner, key))?.value as CellPointer | undefined;
+    const name = typeof detail.name === 'string' ? detail.name : prior?.name ?? cellId;
+    const base: CellPointer = {
+      ...(prior && typeof prior === 'object' ? prior : undefined),
+      cellId,
+      name,
+      address: typeof detail.address === 'string' ? detail.address : prior?.address ?? `@${owner}/${name}`,
+      status: prior?.status ?? 'ACTIVE',
+    };
+    if (typeof detail.public === 'boolean') base.public = detail.public;
+
+    let value: CellPointer;
+    switch (meta.detailType) {
+      case 'cell.create.requested':
+        value = { ...base, status: 'CREATING', description: (detail.description as string | null | undefined) ?? null };
+        break;
+      case 'cell.deployed':
+        value = {
+          ...base,
+          status: 'ACTIVE',
+          version: typeof detail.version === 'string' ? detail.version : undefined,
+          files: Array.isArray(detail.files) ? (detail.files as string[]) : base.files,
+          clientEntry: (detail.clientEntry as string | null | undefined) ?? null,
+          staticFiles: Array.isArray(detail.staticFiles) ? (detail.staticFiles as string[]) : [],
+          dirty: false,
+        };
+        break;
+      case 'cell.files.changed': {
+        const paths = Array.isArray(detail.paths) ? (detail.paths as string[]) : [];
+        const files = new Set(base.files ?? []);
+        for (const p of paths) {
+          if (detail.op === 'delete') files.delete(p);
+          else files.add(p);
+        }
+        value = { ...base, files: Array.from(files).sort(), dirty: true };
+        break;
+      }
+      case 'cell.delete.requested':
+        value = { ...base, status: 'DELETED' };
+        break;
+      default:
+        ctx.logger.warn('unhandled cell lifecycle event', { detailType: meta.detailType });
+        return;
+    }
+
+    const entry = await state.put(
+      { scope: owner, key, value, via: `cells:${meta.detailType}`, type: 'cell', tags: ['cell'] },
+      writer,
+    );
+    await ctx.events.emit('workspace.fact.written', { scope: owner, key, revision: entry._meta.revision });
+    ctx.logger.info('cell lifecycle projected', { scope: owner, key, status: value.status, revision: entry._meta.revision });
   };
 }

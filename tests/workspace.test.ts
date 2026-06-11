@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler } from '../services/workspace/handlers';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -612,5 +612,66 @@ describe('workspace substrate-write handler (the organ-to-reef path)', () => {
     expect(view.entries['x']).toBeUndefined();
     expect(view.entries['_actions/evil']).toBeUndefined();
     expect(view.entries['_views/evil']).toBeUndefined();
+  });
+});
+
+describe('cell lifecycle projection (the platform reflected in the substrate)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const handler = createCellLifecycleHandler(() => ({ state, grants }));
+
+  const busCtx = () =>
+    ({ ...(ctxFor(null).ctx as unknown as Record<string, unknown>), identity: { scopes: [] } } as unknown as ServiceContext);
+  const event = (detailType: string, detail: Record<string, unknown>, source = 'cells') =>
+    handler(detail, busCtx(), { source, detailType });
+
+  it('projects create → deploy into a cells/<id> pointer fact in the owner slice', async () => {
+    await event('cell.create.requested', {
+      cellId: 'notes-abc', owner: 'alice', name: 'notes', address: '@alice/notes', public: false, description: 'scratch',
+    });
+    let fact = await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx);
+    expect(fact?._meta.type).toBe('cell');
+    expect(fact?._meta.tags).toContain('cell');
+    expect(fact?._meta.writer).toBe('platform/cells');
+    expect(fact?.value).toMatchObject({ cellId: 'notes-abc', name: 'notes', address: '@alice/notes', status: 'CREATING' });
+
+    await event('cell.deployed', {
+      cellId: 'notes-abc', owner: 'alice', name: 'notes', address: '@alice/notes', public: true,
+      version: '123', files: ['index.ts', 'client/main.tsx'], clientEntry: 'client/main.tsx', staticFiles: [],
+    });
+    fact = await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx);
+    expect(fact?.value).toMatchObject({
+      status: 'ACTIVE', public: true, version: '123', files: ['index.ts', 'client/main.tsx'], dirty: false,
+    });
+  });
+
+  it('tracks file mutations as a dirty manifest until the next deploy', async () => {
+    await event('cell.files.changed', { cellId: 'notes-abc', owner: 'alice', name: 'notes', op: 'write', paths: ['lib/util.ts'] });
+    let value = (await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx))?.value as { files: string[]; dirty: boolean };
+    expect(value.dirty).toBe(true);
+    expect(value.files).toContain('lib/util.ts');
+
+    await event('cell.files.changed', { cellId: 'notes-abc', owner: 'alice', name: 'notes', op: 'delete', paths: ['lib/util.ts'] });
+    value = (await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx))?.value as { files: string[]; dirty: boolean };
+    expect(value.files).not.toContain('lib/util.ts');
+
+    await event('cell.deployed', { cellId: 'notes-abc', owner: 'alice', name: 'notes', version: '124', files: ['index.ts'] });
+    value = (await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx))?.value as { files: string[]; dirty: boolean };
+    expect(value).toMatchObject({ files: ['index.ts'], dirty: false });
+  });
+
+  it('marks deletion, refuses non-cells sources, and is queryable by type', async () => {
+    await event('cell.delete.requested', { cellId: 'notes-abc', owner: 'alice' });
+    const fact = await cmds.peek({ key: 'cells/notes-abc' }, ctxFor('alice').ctx);
+    expect((fact?.value as { status: string }).status).toBe('DELETED');
+    expect((fact?.value as { name: string }).name).toBe('notes'); // preserved from prior
+
+    await event('cell.deployed', { cellId: 'evil-xyz', owner: 'alice', name: 'evil' }, 'cell-evil-xyz');
+    expect(await cmds.peek({ key: 'cells/evil-xyz' }, ctxFor('alice').ctx)).toBeNull();
+
+    const byType = await cmds.query({ type: 'cell' }, ctxFor('alice').ctx);
+    expect(byType.entries.some((e) => e.key === 'cells/notes-abc')).toBe(true);
   });
 });

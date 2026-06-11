@@ -33,6 +33,7 @@ import {
   getCellLogs,
   putObject,
   getObject,
+  getObjectRaw,
   listObjects,
   deleteObject,
   updateFunctionCode,
@@ -198,7 +199,14 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
   await registry.put(record);
 
   ctx.logger.info('dynamic cell create requested', { cellId, owner });
-  await ctx.events.emit('cell.create.requested', { cellId, owner });
+  await ctx.events.emit('cell.create.requested', {
+    cellId,
+    owner,
+    name: input.name,
+    address: cellAddress(owner, input.name),
+    public: !!input.public,
+    description: input.description ?? null,
+  });
 
   return {
     cellId,
@@ -342,11 +350,36 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
     const user = requireUser(ctx.identity);
     authorizeAccess(record, user);
   }
+  const path = input.path ?? '/';
+
+  // The cell data layer, web-served: GET /@owner/cell/_data/<user>/public/<key>
+  // streams a blob straight from S3 (no Lambda hop). Only the `public/`
+  // sub-space of a user's data is reachable this way — everything else stays
+  // tool-only (getData) — and the same public/anonymous gate as pages applies.
+  if (method === 'GET' || method === 'HEAD') {
+    const dataMatch = path.match(/^\/_data\/([^/]+)\/(public\/.+)$/);
+    if (dataMatch) {
+      let key: string;
+      try {
+        key = dataKey(record.cellId, decodeURIComponent(dataMatch[1]), decodeURIComponent(dataMatch[2]));
+      } catch {
+        return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'not found' };
+      }
+      const obj = await getObjectRaw(env.codeBucket, key);
+      if (!obj) return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'not found' };
+      return {
+        statusCode: 200,
+        headers: { 'content-type': obj.contentType, 'cache-control': 'public, max-age=31536000, immutable' },
+        body: method === 'HEAD' ? '' : obj.body.toString('base64'),
+        isBase64Encoded: method !== 'HEAD',
+      };
+    }
+  }
+
   if (record.status !== 'ACTIVE') {
     throw new Error(`Cell "${record.cellId}" is not ACTIVE (status ${record.status})`);
   }
 
-  const path = input.path ?? '/';
   const bodyStr =
     input.body === undefined
       ? undefined
@@ -465,6 +498,25 @@ interface WriteFileInput extends CellRef {
   content: string;
   deploy?: boolean;
 }
+
+/**
+ * Announce a source mutation so the cell's substrate pointer fact tracks the
+ * file manifest (the workspace projects this into `cells/<cellId>`). Skipped
+ * when the mutation is fused with a deploy — `cell.deployed` then carries the
+ * canonical manifest and event ordering is not guaranteed.
+ */
+async function emitFilesChanged(ctx: ServiceContext, record: CellRecord, op: string, paths: string[]): Promise<void> {
+  await ctx.events.emit('cell.files.changed', {
+    cellId: record.cellId,
+    owner: record.owner,
+    name: record.name,
+    address: cellAddress(record.owner, record.name),
+    public: record.public,
+    op,
+    paths,
+  });
+}
+
 async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
@@ -473,6 +525,7 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
   await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
   ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
   if (input.deploy) return deployCell(record, env, ctx);
+  await emitFilesChanged(ctx, record, 'write', [cleanPath(input.path)]);
   return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
 }
 
@@ -518,6 +571,7 @@ async function importSrc(input: ImportSrcInput, ctx: ServiceContext): Promise<un
     }
   }
   ctx.logger.info('cell src imported', { cellId: record.cellId, url: input.url, files: written.length, skipped });
+  if (written.length) await emitFilesChanged(ctx, record, 'import', written);
   return { imported: written.length, files: written, skippedBinary: skipped, skippedUnsafe: skippedPaths };
 }
 
@@ -563,6 +617,7 @@ async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Pr
     const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
     return { ...result, deploy: deployed };
   }
+  await emitFilesChanged(ctx, record, 'replace', [cleanPath(input.path)]);
   return result;
 }
 
@@ -587,6 +642,7 @@ async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Prom
     const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
     return { ...result, deploy: deployed };
   }
+  await emitFilesChanged(ctx, record, 'append', [cleanPath(input.path)]);
   return result;
 }
 
@@ -618,6 +674,7 @@ async function deleteFile(input: DeleteFileInput, ctx: ServiceContext): Promise<
   if (!input?.path) throw new Error('path is required');
   const { record, bucket } = await resolveAuthorized(input, user);
   await deleteObject(bucket, srcKey(record.cellId, input.path));
+  await emitFilesChanged(ctx, record, 'delete', [cleanPath(input.path)]);
   return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
 }
 
@@ -682,7 +739,17 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     client: clientEntry ?? null,
     static: staticFiles.length,
   });
-  await ctx.events.emit('cell.deployed', { cellId: record.cellId, version });
+  await ctx.events.emit('cell.deployed', {
+    cellId: record.cellId,
+    owner: record.owner,
+    name: record.name,
+    address: cellAddress(record.owner, record.name),
+    public: record.public,
+    version,
+    files: Object.keys(files),
+    clientEntry: clientEntry ?? null,
+    staticFiles,
+  });
   return {
     deployed: true,
     cellId: record.cellId,
@@ -703,14 +770,26 @@ async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
 interface PutDataInput extends CellRef {
   key: string;
   content: string;
+  /** Interpret `content` as base64 bytes — images and other binary blobs. */
+  encoding?: 'utf8' | 'base64';
+  contentType?: string;
 }
 async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.key) throw new Error('key is required');
   if (typeof input?.content !== 'string') throw new Error('content (string) is required');
   const { record, bucket } = await resolveAuthorized(input, user);
-  await putObject(bucket, dataKey(record.cellId, user, input.key), input.content);
-  return { ok: true, cellId: record.cellId, user, key: cleanPath(input.key) };
+  const body = input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : input.content;
+  if (body.length > 8 * 1024 * 1024) throw new Error('blob too large (>8MB)');
+  const key = cleanPath(input.key);
+  await putObject(bucket, dataKey(record.cellId, user, input.key), body, input.contentType ?? 'application/octet-stream');
+  // Blobs under public/ in a public cell are web-served (see the `_data`
+  // intercept in callCell) — hand back the address so a client can embed it.
+  const url =
+    record.public && key.startsWith('public/')
+      ? `/@${record.owner}/${record.name}/_data/${user}/${key}`
+      : null;
+  return { ok: true, cellId: record.cellId, user, key, bytes: body.length, url };
 }
 
 interface DataRefInput extends CellRef {
@@ -1130,7 +1209,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: deploy as RegisteredCommand,
   },
   putData: {
-    description: "Store a blob in a cell's per-caller data space (cells/<id>/data/<you>/<key>) — for content too big/binary for the substrate.",
+    description: "Store a blob in a cell's per-caller data space (cells/<id>/data/<you>/<key>) — for content too big/binary for the substrate. Pass encoding 'base64' + a contentType for binary (images); keys under public/ in a public cell are web-served at /@owner/cell/_data/<you>/<key> (returned as `url`).",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1141,6 +1220,8 @@ const TOOLS: Record<string, ToolSpec> = {
         name: { type: 'string' },
         key: { type: 'string' },
         content: { type: 'string' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'] },
+        contentType: { type: 'string' },
       },
       required: ['key', 'content'],
       additionalProperties: false,
@@ -1212,7 +1293,7 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'cells',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed'] },
+  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
 });
 
 export default handler;
