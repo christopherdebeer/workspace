@@ -159,13 +159,19 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
 
   // Synthesized positions are the board's proposal, not the human's pin —
   // persist the placement only once the element has actually been moved.
+  // Movement (of anything — pinned or proposal) warms the field; the first
+  // sighting of an element just registers it (load sweeps must not warm).
+  const posKey = `${el.x},${el.y}`;
+  const seen = lastPos.get(el.id as string);
+  lastPos.set(el.id as string, posKey);
+  if (seen !== undefined && seen !== posKey) warmField();
+
   const so = synthOrigin.get(el.id as string);
   if (so && el.x === so.x && el.y === so.y) return;
   if (so) {
-    // The human moved it: the proposal became a pin — the rest re-settle.
+    // The human moved it: the proposal became a pin.
     synthOrigin.delete(el.id as string);
     delete (el as any)._synthesized;
-    scheduleRewarm();
   }
   queueFact(`_canvas/${canvasId}/${key}`, placement);
 }
@@ -637,7 +643,7 @@ function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: an
     nu._synthesized = true;
     synthOrigin.set(nu.id, { x: nu.x, y: nu.y });
     cc.canvasState.elements.push(nu);
-    scheduleRewarm();
+    warmField();
   }
   return true;
 }
@@ -711,33 +717,32 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   cc.canvasState.edges = valid;
 }
 
-let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
+let warmUntil = 0;
+let warmRaf = 0;
 let arrivalIdx = 0;
-
-function scheduleRewarm(): void {
-  if (readonlyBoard) return;
-  clearTimeout(rewarmTimer);
-  rewarmTimer = setTimeout(() => {
-    const cc = (window as { CC?: any }).CC;
-    if (cc) rewarmSynthesized(cc);
-  }, 500);
-}
+/** Last seen position per element — movement (not save sweeps) warms the field. */
+const lastPos = new Map<string, string>();
 
 /**
- * Incremental re-arrangement: when the human pins an item (or new facts
- * arrive), the still-synthesized items re-settle around the changed field —
- * WARM start from current positions with a low alpha, so the layout adjusts
- * instead of reshuffling. Pinned/placed items are immovable.
+ * The continuous warmer: while movement keeps arriving (a drag, an
+ * expansion, a live arrival), the synthesized field flows around the
+ * fixed items — including the one being dragged, whose fixed position
+ * is re-read every frame. A few ticks per frame: animation, not a snap.
+ * 700ms after the last movement the field cools and settles.
  */
-function rewarmSynthesized(cc: any): void {
+function warmField(): void {
+  if (readonlyBoard || typeof window === 'undefined') return;
+  warmUntil = performance.now() + 700;
+  if (warmRaf) return; // loop already running
+  const cc = (window as { CC?: any }).CC;
+  if (!cc) return;
+
+  type N = { id: string; x?: number; y?: number; fx?: number; fy?: number; el?: any; fixedEl?: any };
   const els = cc.canvasState.elements as any[];
-  const sims = els.filter((e) => e._synthesized);
-  if (!sims.length) return;
-  type N = { id: string; x?: number; y?: number; fx?: number; fy?: number; el?: any };
-  const nodes: N[] = [
-    ...els.filter((e) => !e._synthesized).map((e) => ({ id: e.id, fx: e.x, fy: e.y })),
-    ...sims.map((e) => ({ id: e.id, x: e.x, y: e.y, el: e })),
-  ];
+  const nodes: N[] = els.map((e) =>
+    e._synthesized ? { id: e.id, x: e.x, y: e.y, el: e } : { id: e.id, fx: e.x, fy: e.y, fixedEl: e },
+  );
+  if (!nodes.some((n) => n.el)) return; // nothing synthesized to arrange
   const present = new Set(nodes.map((n) => n.id));
   const links = [...lastEdges.values()]
     .filter((e) => present.has(e.source) && present.has(e.target))
@@ -749,31 +754,41 @@ function rewarmSynthesized(cc: any): void {
       'collide',
       forceCollide()
         .radius((d: any) => {
-          const w = typeof d.el?.width === 'number' ? d.el.width : 250;
-          const h = typeof d.el?.height === 'number' ? d.el.height : 100;
+          const e = d.el ?? d.fixedEl;
+          const w = typeof e?.width === 'number' ? e.width : 250;
+          const h = typeof e?.height === 'number' ? e.height : 100;
           return Math.hypot(w, h) / 2 + 22;
         })
         .iterations(2),
     )
-    .alpha(0.35)
     .stop();
-  sim.tick(70);
-  let dirty = false;
-  for (const n of nodes as any[]) {
-    if (!n.el) continue;
-    const x = Math.round(n.x);
-    const y = Math.round(n.y);
-    if (x !== n.el.x || y !== n.el.y) {
-      n.el.x = x;
-      n.el.y = y;
-      synthOrigin.set(n.el.id, { x, y }); // still the board's proposal
-      dirty = true;
+
+  const frame = (): void => {
+    const now = performance.now();
+    // The dragged (fixed) items move under the simulation's feet — track them.
+    for (const n of nodes as any[]) {
+      if (n.fixedEl) {
+        n.fx = n.fixedEl.x;
+        n.fy = n.fixedEl.y;
+      }
     }
-  }
-  if (dirty) {
+    sim.alpha(0.3);
+    sim.tick(3);
+    for (const n of nodes as any[]) {
+      if (!n.el) continue;
+      n.el.x = Math.round(n.x);
+      n.el.y = Math.round(n.y);
+      synthOrigin.set(n.el.id, { x: n.el.x, y: n.el.y }); // still the board's proposal
+    }
     cc.requestRender();
     cc.requestEdgeUpdate();
-  }
+    if (now < warmUntil) {
+      warmRaf = requestAnimationFrame(frame);
+    } else {
+      warmRaf = 0; // cooled — next movement builds a fresh episode
+    }
+  };
+  warmRaf = requestAnimationFrame(frame);
 }
 
 /**
@@ -831,7 +846,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
   }
   cc.requestRender();
   cc.requestEdgeUpdate();
-  scheduleRewarm(); // fold the new ring into the field
+  warmField(); // fold the new ring into the field
   read('workspace.peek', { key }).catch(() => undefined); // attention raises salience
 }
 
