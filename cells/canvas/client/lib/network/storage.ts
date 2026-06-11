@@ -470,10 +470,13 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       return el;
     });
 
-    // Synthesized placement: graph gravity toward placed neighbours, else the
-    // tray (a salience-ordered margin strip). Never persisted until moved.
+    // Synthesized placement — three tiers, never persisted until moved:
+    //   1. gravity toward PLACED neighbours (the human's pins anchor the graph)
+    //   2. linked clusters among the unplaced: hubs (degree ≥ 2 — days, docs)
+    //      wrap in rows with their leaves stacked beneath — EDGES BECOME LAYOUT
+    //   3. the link-less tray grid, salience-ordered
     const placedById = new Map(placed.map((p) => [p.id, p]));
-    const neighborsOf = (id: string): Array<{ x: number; y: number; w: number; h: number }> => {
+    const placedNeighborsOf = (id: string): Array<{ x: number; y: number; w: number; h: number }> => {
       const out: Array<{ x: number; y: number; w: number; h: number }> = [];
       for (const e of lastEdges.values()) {
         if (e.source === id && placedById.has(e.target)) out.push(placedById.get(e.target)!);
@@ -481,34 +484,84 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       }
       return out;
     };
-    unplaced.sort((a, b) => (salienceByKey.get(`el:${b.id}`) ?? 0) - (salienceByKey.get(`el:${a.id}`) ?? 0));
-    let trayIdx = 0;
-    let gravIdx = 0;
-    for (const el of unplaced) {
-      const near = neighborsOf(el.id);
-      let x: number, y: number;
-      if (near.length) {
-        // Dimension-aware gravity: sit beside the linked cluster with real
-        // breathing room, so the connecting edge stays legible. Multiple
-        // arrivals stagger vertically instead of stacking.
-        const cx = near.reduce((s, p) => s + p.x, 0) / near.length;
-        const cy = near.reduce((s, p) => s + p.y, 0) / near.length;
-        const widest = Math.max(...near.map((p) => p.w));
-        const ownW = typeof el.width === 'number' ? el.width : 240;
-        const ownH = typeof el.height === 'number' ? el.height : 120;
-        x = cx + widest / 2 + ownW / 2 + 160;
-        y = cy + gravIdx * (ownH + 70);
-        gravIdx++;
-      } else {
-        // The tray wraps: a grid, not an infinite strip off the viewport.
-        x = 160 + (trayIdx % 10) * 300;
-        y = 60 + Math.floor(trayIdx / 10) * 180;
-        trayIdx++;
-      }
+    unplaced.sort(
+      (a, b) =>
+        (salienceByKey.get(b._factKey ?? `el:${b.id}`) ?? 0) - (salienceByKey.get(a._factKey ?? `el:${a.id}`) ?? 0),
+    );
+    const pin = (el: any, x: number, y: number): void => {
       el.x = x;
       el.y = y;
       el._synthesized = true;
       synthOrigin.set(el.id, { x, y });
+    };
+
+    // Tier 1: pinned-neighbour gravity.
+    const rest: any[] = [];
+    let gravIdx = 0;
+    for (const el of unplaced) {
+      const near = placedNeighborsOf(el.id);
+      if (!near.length) {
+        rest.push(el);
+        continue;
+      }
+      const cx = near.reduce((acc, p) => acc + p.x, 0) / near.length;
+      const cy = near.reduce((acc, p) => acc + p.y, 0) / near.length;
+      const widest = Math.max(...near.map((p) => p.w));
+      const ownW = typeof el.width === 'number' ? el.width : 240;
+      const ownH = typeof el.height === 'number' ? el.height : 120;
+      pin(el, cx + widest / 2 + ownW / 2 + 160, cy + gravIdx * (ownH + 70));
+      gravIdx++;
+    }
+
+    // Tier 2: clusters among the unplaced themselves.
+    const restIds = new Set(rest.map((e: any) => e.id));
+    const adj = new Map<string, string[]>();
+    const addAdj = (a: string, b: string): void => {
+      if (!adj.has(a)) adj.set(a, []);
+      adj.get(a)!.push(b);
+    };
+    for (const e of lastEdges.values()) {
+      if (restIds.has(e.source) && restIds.has(e.target)) {
+        addAdj(e.source, e.target);
+        addAdj(e.target, e.source);
+      }
+    }
+    const deg = (id: string): number => adj.get(id)?.length ?? 0;
+    const hubs = rest
+      .filter((el: any) => deg(el.id) >= 2)
+      .sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)));
+    const hubSet = new Set(hubs.map((h: any) => h.id));
+    const leavesOf = new Map<string, any[]>();
+    const leafSet = new Set<string>();
+    for (const el of rest) {
+      if (hubSet.has(el.id) || deg(el.id) === 0) continue;
+      const anchor = (adj.get(el.id) ?? []).find((n) => hubSet.has(n));
+      if (anchor) {
+        if (!leavesOf.has(anchor)) leavesOf.set(anchor, []);
+        leavesOf.get(anchor)!.push(el);
+        leafSet.add(el.id);
+      }
+    }
+    const COLS = 8;
+    let y0 = 60;
+    for (let r = 0; r * COLS < hubs.length; r++) {
+      const row = hubs.slice(r * COLS, r * COLS + COLS);
+      let maxStack = 0;
+      row.forEach((h: any, c: number) => {
+        pin(h, 160 + c * 330, y0);
+        const ls = leavesOf.get(h.id) ?? [];
+        ls.forEach((leaf: any, i: number) => pin(leaf, 160 + c * 330 + (i % 2 ? 26 : -26), y0 + 140 + i * 112));
+        maxStack = Math.max(maxStack, ls.length);
+      });
+      y0 += 200 + maxStack * 112;
+    }
+
+    // Tier 3: the tray, below the clusters.
+    let trayIdx = 0;
+    for (const el of rest) {
+      if (hubSet.has(el.id) || leafSet.has(el.id)) continue;
+      pin(el, 160 + (trayIdx % 10) * 300, y0 + 60 + Math.floor(trayIdx / 10) * 180);
+      trayIdx++;
     }
 
     // Camera: pinned by the view declaration (or fit) — device free-roam wins otherwise.
