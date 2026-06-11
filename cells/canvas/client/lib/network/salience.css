@@ -225,3 +225,5 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
 
 .canvas-element .minimap-tile { background: #fbfbf8; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-sizing: border-box; }
 .minimap-tile canvas { width: 100%; height: 100%; display: block; }
+
+.surface-tile.surface-blocked { display: flex; align-items: center; justify-content: center; padding: 0.8em; color: #8a8a82; font-family: system-ui, sans-serif; font-size: 0.8rem; text-align: center; }

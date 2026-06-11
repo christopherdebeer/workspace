@@ -193,8 +193,16 @@ export function registerSubstrateTypes(): void {
     mount(el: any) {
       const host = document.createElement('div');
       host.className = 'content surface-tile';
+      const src = safeEmbedSrc(String(el.content || ''));
+      if (!src) {
+        // Not a URL, self-referencing, or too deep — a flat card, never a frame.
+        host.classList.add('surface-blocked');
+        host.textContent = '🪞 ' + (String(el.content || '(empty)').slice(0, 60)) + ' — not embeddable';
+        sizeToElement(el, host);
+        return host;
+      }
       const frame = document.createElement('iframe');
-      frame.src = String(el.content || 'about:blank');
+      frame.src = src;
       frame.loading = 'lazy';
       host.appendChild(frame);
       sizeToElement(el, host);
@@ -266,4 +274,31 @@ function renderFactCard(el: any, host: HTMLElement): void {
     document.dispatchEvent(new CustomEvent('parc:expand', { detail: { key: String(el._factKey ?? ('el:' + el.id)), id: el.id } }));
   };
   host.appendChild(ex);
+}
+
+/**
+ * Embed safety: only real URLs become iframes; a fragment or junk string
+ * resolves to THE CURRENT PAGE (a board iframing itself — infinite
+ * recursion, the tab-kill crash). Self-references are refused outright and
+ * nesting is depth-capped via a _d param threaded through embed URLs.
+ */
+function safeEmbedSrc(raw: string): string | null {
+  if (!/^(https?:\/\/|\/)/.test(raw)) return null; // fragments, markdown, junk
+  let u: URL;
+  try {
+    u = new URL(raw, location.origin);
+  } catch {
+    return null;
+  }
+  const here = new URL(location.href);
+  const depth = Number(here.searchParams.get('_d') ?? '0');
+  if (depth >= 2) return null; // deep enough — no more nesting
+  if (u.origin === here.origin && u.pathname === here.pathname) {
+    const sameBoard =
+      (u.searchParams.get('view') ?? '') === (here.searchParams.get('view') ?? '') &&
+      (u.searchParams.get('canvas') ?? '') === (here.searchParams.get('canvas') ?? '');
+    if (sameBoard) return null; // a board may not contain itself
+  }
+  u.searchParams.set('_d', String(depth + 1));
+  return u.pathname + u.search;
 }
