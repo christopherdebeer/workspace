@@ -740,9 +740,19 @@ function warmField(): void {
 
   type N = { id: string; x?: number; y?: number; fx?: number; fy?: number; el?: any; fixedEl?: any };
   const els = cc.canvasState.elements as any[];
-  const nodes: N[] = els.map((e) =>
-    e._synthesized ? { id: e.id, x: e.x, y: e.y, el: e } : { id: e.id, fx: e.x, fy: e.y, fixedEl: e },
-  );
+  // Link-less items sit OUT of the simulation entirely: with no link force
+  // to hold them, charge alone shoves them further out every episode (the
+  // drift failure mode). The tray is a shelf, not a participant.
+  const linkedIds = new Set<string>();
+  for (const e of lastEdges.values()) {
+    linkedIds.add(e.source);
+    linkedIds.add(e.target);
+  }
+  const nodes: N[] = els
+    .filter((e) => linkedIds.has(e.id))
+    .map((e) =>
+      e._synthesized ? { id: e.id, x: e.x, y: e.y, el: e } : { id: e.id, fx: e.x, fy: e.y, fixedEl: e },
+    );
   if (!nodes.some((n) => n.el)) return; // nothing synthesized to arrange
   const present = new Set(nodes.map((n) => n.id));
   const links = [...lastEdges.values()]

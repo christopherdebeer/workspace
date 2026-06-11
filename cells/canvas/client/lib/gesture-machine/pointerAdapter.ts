@@ -144,11 +144,17 @@ export function installPointerAdapter(
   }
 
 
-  /* listeners */
-  rootEl.addEventListener('pointerdown', onPointerDown, { passive: false });
-  rootEl.addEventListener('pointermove', onPointerMove, { passive: true });
-  rootEl.addEventListener('pointerup', finishPointer, { passive: false });
-  rootEl.addEventListener('pointercancel', finishPointer, { passive: true });
+  /* listeners — bound to the canvas AND the static layer (a sibling, so
+     stuck-to-screen elements stay selectable / un-stickable). */
+  const roots: HTMLElement[] = [rootEl];
+  const staticEl = document.getElementById('static-container');
+  if (staticEl) roots.push(staticEl);
+  for (const r of roots) {
+    r.addEventListener('pointerdown', onPointerDown, { passive: false });
+    r.addEventListener('pointermove', onPointerMove, { passive: true });
+    r.addEventListener('pointerup', finishPointer, { passive: false });
+    r.addEventListener('pointercancel', finishPointer, { passive: true });
+  }
   rootEl.addEventListener('wheel', onWheel, { passive: true });
   window.addEventListener('keydown', onKeydown, { passive: true });
   window.addEventListener('keyup', onKeyup, { passive: true });
