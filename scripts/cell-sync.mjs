@@ -14,14 +14,37 @@ import { join, dirname, relative } from 'node:path';
 
 const BASE = process.env.PARC_BASE ?? 'https://parc.land';
 
+function tokenFile() {
+  try {
+    return JSON.parse(readFileSync('/tmp/parc-token.json', 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function token() {
   if (process.env.PARC_TOKEN) return process.env.PARC_TOKEN;
-  try {
-    return JSON.parse(readFileSync('/tmp/parc-token.json', 'utf8')).access_token;
-  } catch {
+  const t = tokenFile();
+  if (!t?.access_token) {
     console.error('No PARC_TOKEN and no /tmp/parc-token.json — mint a device token first.');
     process.exit(1);
   }
+  return t.access_token;
+}
+
+/** Device tokens live ~1h; refresh in place and retry once on a 401. */
+async function refreshToken() {
+  const t = tokenFile();
+  if (!t?.refresh_token) return false;
+  const res = await fetch(`${BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
+  });
+  const j = await res.json();
+  if (!j.access_token) return false;
+  writeFileSync('/tmp/parc-token.json', JSON.stringify(j), { mode: 0o600 });
+  return true;
 }
 
 async function call(verb, target, input) {
@@ -35,6 +58,7 @@ async function call(verb, target, input) {
       params: { name: verb, arguments: { target, input } },
     }),
   });
+  if (res.status === 401 && !process.env.PARC_TOKEN && (await refreshToken())) return call(verb, target, input);
   if (!res.ok) throw new Error(`${target}: HTTP ${res.status}`);
   const rpc = await res.json();
   const text = rpc.result?.content?.[0]?.text ?? '';
