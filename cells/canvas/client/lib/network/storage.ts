@@ -18,6 +18,7 @@ import { ensureAuth, accessToken, isAuthed } from './auth.ts';
 import { startSalience } from './salience.ts';
 import { registerSubstrateTypes, loadRendererFacts } from '../elements/substrateTypes.ts';
 import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
+import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -471,97 +472,73 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       return el;
     });
 
-    // Synthesized placement — three tiers, never persisted until moved:
-    //   1. gravity toward PLACED neighbours (the human's pins anchor the graph)
-    //   2. linked clusters among the unplaced: hubs (degree ≥ 2 — days, docs)
-    //      wrap in rows with their leaves stacked beneath — EDGES BECOME LAYOUT
-    //   3. the link-less tray grid, salience-ordered
-    const placedById = new Map(placed.map((p) => [p.id, p]));
-    const placedNeighborsOf = (id: string): Array<{ x: number; y: number; w: number; h: number }> => {
-      const out: Array<{ x: number; y: number; w: number; h: number }> = [];
-      for (const e of lastEdges.values()) {
-        if (e.source === id && placedById.has(e.target)) out.push(placedById.get(e.target)!);
-        if (e.target === id && placedById.has(e.source)) out.push(placedById.get(e.source)!);
-      }
-      return out;
+    // Synthesized placement: a DETERMINISTIC force layout (d3-force).
+    //   - pinned items join as FIXED nodes — gravity toward the human's pins
+    //     emerges from the physics instead of being a special case
+    //   - unplaced linked items seed from a key-sorted phyllotaxis (same
+    //     facts → same layout, every load) and settle in a fixed tick count
+    //   - the link-less keep the salience-ordered tray below the field
+    const pin = (el: any, x: number, y: number): void => {
+      el.x = Math.round(x);
+      el.y = Math.round(y);
+      el._synthesized = true;
+      synthOrigin.set(el.id, { x: el.x, y: el.y });
     };
-    unplaced.sort(
-      (a, b) =>
+    const placedById = new Map(placed.map((p) => [p.id, p]));
+    const linkedIds = new Set<string>();
+    for (const e of lastEdges.values()) {
+      linkedIds.add(e.source);
+      linkedIds.add(e.target);
+    }
+    const sims = unplaced.filter((el: any) => linkedIds.has(el.id)).sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)));
+    const loose = unplaced.filter((el: any) => !linkedIds.has(el.id));
+
+    if (sims.length) {
+      const cx0 = placed.length ? placed.reduce((a, p) => a + p.x, 0) / placed.length : 800;
+      const cy0 = placed.length ? placed.reduce((a, p) => a + p.y, 0) / placed.length : 600;
+      type SimNode = { id: string; x?: number; y?: number; fx?: number; fy?: number; el?: any };
+      const nodes: SimNode[] = [
+        ...placed.map((p) => ({ id: p.id, fx: p.x, fy: p.y })),
+        ...sims.map((el: any, i: number) => {
+          // Deterministic phyllotaxis seed around the field centre.
+          const r = 140 * Math.sqrt(i + 1);
+          const a = (i + 1) * 2.39996; // golden angle
+          return { id: el.id, x: cx0 + r * Math.cos(a), y: cy0 + r * Math.sin(a), el };
+        }),
+      ];
+      const present = new Set(nodes.map((n) => n.id));
+      const simLinks = [...lastEdges.values()]
+        .filter((e) => present.has(e.source) && present.has(e.target))
+        .map((e) => ({ source: e.source, target: e.target }));
+      const radiusOf = (n: SimNode): number => {
+        const w = typeof n.el?.width === 'number' ? n.el.width : 250;
+        const h = typeof n.el?.height === 'number' ? n.el.height : 100;
+        return Math.hypot(w, h) / 2 + 24;
+      };
+      const sim = forceSimulation(nodes as any)
+        .force('link', forceLink(simLinks as any).id((d: any) => d.id).distance(190).strength(0.55))
+        .force('charge', forceManyBody().strength(-420))
+        .force('collide', forceCollide().radius((d: any) => radiusOf(d)).iterations(2))
+        .force('x', forceX(cx0).strength(0.03))
+        .force('y', forceY(cy0).strength(0.03))
+        .stop();
+      sim.tick(180); // fixed count: deterministic settle, no animation
+      for (const n of nodes as any[]) if (n.el) pin(n.el, n.x, n.y);
+    }
+
+    // The tray: link-less items, salience-ordered, parked under the field.
+    loose.sort(
+      (a: any, b: any) =>
         (salienceByKey.get(b._factKey ?? `el:${b.id}`) ?? 0) - (salienceByKey.get(a._factKey ?? `el:${a.id}`) ?? 0),
     );
-    const pin = (el: any, x: number, y: number): void => {
-      el.x = x;
-      el.y = y;
-      el._synthesized = true;
-      synthOrigin.set(el.id, { x, y });
-    };
-
-    // Tier 1: pinned-neighbour gravity.
-    const rest: any[] = [];
-    let gravIdx = 0;
-    for (const el of unplaced) {
-      const near = placedNeighborsOf(el.id);
-      if (!near.length) {
-        rest.push(el);
-        continue;
-      }
-      const cx = near.reduce((acc, p) => acc + p.x, 0) / near.length;
-      const cy = near.reduce((acc, p) => acc + p.y, 0) / near.length;
-      const widest = Math.max(...near.map((p) => p.w));
-      const ownW = typeof el.width === 'number' ? el.width : 240;
-      const ownH = typeof el.height === 'number' ? el.height : 120;
-      pin(el, cx + widest / 2 + ownW / 2 + 160, cy + gravIdx * (ownH + 70));
-      gravIdx++;
-    }
-
-    // Tier 2: clusters among the unplaced themselves.
-    const restIds = new Set(rest.map((e: any) => e.id));
-    const adj = new Map<string, string[]>();
-    const addAdj = (a: string, b: string): void => {
-      if (!adj.has(a)) adj.set(a, []);
-      adj.get(a)!.push(b);
-    };
-    for (const e of lastEdges.values()) {
-      if (restIds.has(e.source) && restIds.has(e.target)) {
-        addAdj(e.source, e.target);
-        addAdj(e.target, e.source);
-      }
-    }
-    const deg = (id: string): number => adj.get(id)?.length ?? 0;
-    const hubs = rest
-      .filter((el: any) => deg(el.id) >= 2)
-      .sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)));
-    const hubSet = new Set(hubs.map((h: any) => h.id));
-    const leavesOf = new Map<string, any[]>();
-    const leafSet = new Set<string>();
-    for (const el of rest) {
-      if (hubSet.has(el.id) || deg(el.id) === 0) continue;
-      const anchor = (adj.get(el.id) ?? []).find((n) => hubSet.has(n));
-      if (anchor) {
-        if (!leavesOf.has(anchor)) leavesOf.set(anchor, []);
-        leavesOf.get(anchor)!.push(el);
-        leafSet.add(el.id);
-      }
-    }
-    const COLS = 8;
-    let y0 = 60;
-    for (let r = 0; r * COLS < hubs.length; r++) {
-      const row = hubs.slice(r * COLS, r * COLS + COLS);
-      let maxStack = 0;
-      row.forEach((h: any, c: number) => {
-        pin(h, 160 + c * 330, y0);
-        const ls = leavesOf.get(h.id) ?? [];
-        ls.forEach((leaf: any, i: number) => pin(leaf, 160 + c * 330 + (i % 2 ? 26 : -26), y0 + 140 + i * 112));
-        maxStack = Math.max(maxStack, ls.length);
-      });
-      y0 += 200 + maxStack * 112;
-    }
-
-    // Tier 3: the tray, below the clusters.
+    const fieldBottom = Math.max(
+      120,
+      ...placed.map((p) => p.y + p.h),
+      ...sims.map((el: any) => (typeof el.y === 'number' ? el.y + (el.height ?? 100) : 0)),
+    );
     let trayIdx = 0;
-    for (const el of rest) {
-      if (hubSet.has(el.id) || leafSet.has(el.id)) continue;
-      pin(el, 160 + (trayIdx % 10) * 300, y0 + 60 + Math.floor(trayIdx / 10) * 180);
+    for (const el of loose) {
+      pin(el, 160 + (trayIdx % 10) * 300, fieldBottom + 140 + Math.floor(trayIdx / 10) * 180);
       trayIdx++;
     }
 
