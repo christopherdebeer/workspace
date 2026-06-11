@@ -769,20 +769,37 @@ async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
 
 interface PutDataInput extends CellRef {
   key: string;
-  content: string;
+  /** Inline content — or omit and pass `url` for a server-side fetch. */
+  content?: string;
   /** Interpret `content` as base64 bytes — images and other binary blobs. */
   encoding?: 'utf8' | 'base64';
   contentType?: string;
+  /** https URL to fetch server-side (large blobs would fail the edge's
+   *  request-signing; the platform's own egress has no such cap). */
+  url?: string;
 }
 async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.key) throw new Error('key is required');
-  if (typeof input?.content !== 'string') throw new Error('content (string) is required');
+  let body: string | Buffer;
+  let fetchedType: string | undefined;
+  if (typeof input.url === 'string') {
+    if (!/^https:\/\//.test(input.url)) throw new Error('url must be https');
+    const fetchFn = (globalThis as { fetch?: typeof fetch }).fetch;
+    if (!fetchFn) throw new Error('fetch unavailable in this runtime');
+    const res = await fetchFn(input.url);
+    if (!res.ok) throw new Error(`url fetch failed: HTTP ${res.status}`);
+    body = Buffer.from(await res.arrayBuffer());
+    fetchedType = res.headers.get('content-type') ?? undefined;
+  } else if (typeof input.content === 'string') {
+    body = input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : input.content;
+  } else {
+    throw new Error('either content (string) or url (https) is required');
+  }
   const { record, bucket } = await resolveAuthorized(input, user);
-  const body = input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : input.content;
   if (body.length > 8 * 1024 * 1024) throw new Error('blob too large (>8MB)');
   const key = cleanPath(input.key);
-  await putObject(bucket, dataKey(record.cellId, user, input.key), body, input.contentType ?? 'application/octet-stream');
+  await putObject(bucket, dataKey(record.cellId, user, input.key), body, input.contentType ?? fetchedType ?? 'application/octet-stream');
   // Blobs under public/ in a public cell are web-served (see the `_data`
   // intercept in callCell) — hand back the address so a client can embed it.
   const url =
@@ -1222,8 +1239,9 @@ const TOOLS: Record<string, ToolSpec> = {
         content: { type: 'string' },
         encoding: { type: 'string', enum: ['utf8', 'base64'] },
         contentType: { type: 'string' },
+        url: { type: 'string', description: 'https URL to fetch server-side (for blobs too large to inline)' },
       },
-      required: ['key', 'content'],
+      required: ['key'],
       additionalProperties: false,
     },
     handler: putData as RegisteredCommand,
