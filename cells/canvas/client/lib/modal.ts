@@ -136,6 +136,12 @@ function hydrateUiFor(el: CanvasElement): void {
   clearError();
 
   $root!.style.display = "block";
+  // CodeMirror measured a hidden container (zero height) — re-measure now
+  // that the modal is visible, else the editor paints empty until tapped.
+  requestAnimationFrame(() => {
+    cmContent?.refresh();
+    cmSrc?.refresh();
+  });
 }
 
 function loadVersion(idx: number): void {
