@@ -121,6 +121,74 @@ export function registerSubstrateTypes(): void {
     },
   });
 
+  // A minimap IS just an element (drag it, stick it to screen, it persists
+  // as a fact like anything else): scaled overview + viewport box; tap to jump.
+  elementRegistry.register('minimap', {
+    mount(el: any) {
+      const host = document.createElement('div');
+      host.className = 'content minimap-tile';
+      const cv = document.createElement('canvas');
+      host.appendChild(cv);
+      sizeToElement(el, host);
+      const draw = (): void => {
+        const cc = (window as { CC?: any }).CC;
+        if (!cc || !host.isConnected) return;
+        const w = (cv.width = host.clientWidth || 200);
+        const h = (cv.height = host.clientHeight || 140);
+        const g = cv.getContext('2d');
+        if (!g) return;
+        g.clearRect(0, 0, w, h);
+        const els2 = (cc.canvasState.elements as any[]).filter((e) => e.type !== 'minimap' && !e.static);
+        if (!els2.length) return;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const e of els2) {
+          minX = Math.min(minX, e.x); minY = Math.min(minY, e.y);
+          maxX = Math.max(maxX, e.x + (e.width || 200)); maxY = Math.max(maxY, e.y + (e.height || 100));
+        }
+        const pad = 200;
+        minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+        const k = Math.min(w / (maxX - minX), h / (maxY - minY));
+        const ox = (w - (maxX - minX) * k) / 2 - minX * k;
+        const oy = (h - (maxY - minY) * k) / 2 - minY * k;
+        (host as any)._map = { k, ox, oy };
+        g.fillStyle = '#c9c9bd';
+        for (const e of els2) g.fillRect(e.x * k + ox, e.y * k + oy, Math.max(2, (e.width || 200) * k), Math.max(2, (e.height || 100) * k));
+        // The viewport box.
+        const vs = cc.viewState;
+        const vx = (-vs.translateX / vs.scale) * k + ox;
+        const vy = (-vs.translateY / vs.scale) * k + oy;
+        g.strokeStyle = '#2f6f4f';
+        g.lineWidth = 1.5;
+        g.strokeRect(vx, vy, (window.innerWidth / vs.scale) * k, (window.innerHeight / vs.scale) * k);
+      };
+      draw();
+      (host as any)._timer = setInterval(draw, 800);
+      cv.addEventListener('pointerup', (ev) => {
+        const cc = (window as { CC?: any }).CC;
+        const map = (host as any)._map;
+        if (!cc || !map) return;
+        ev.stopPropagation();
+        const r = cv.getBoundingClientRect();
+        const cxCanvas = (ev.clientX - r.left) * (cv.width / r.width);
+        const cyCanvas = (ev.clientY - r.top) * (cv.height / r.height);
+        const tx = (cxCanvas - map.ox) / map.k;
+        const ty = (cyCanvas - map.oy) / map.k;
+        cc.viewState.translateX = window.innerWidth / 2 - cc.viewState.scale * tx;
+        cc.viewState.translateY = window.innerHeight / 2 - cc.viewState.scale * ty;
+        cc.updateCanvasTransform();
+        cc.requestRender();
+        cc.requestEdgeUpdate();
+      });
+      return host;
+    },
+    update(el: any, dom: HTMLElement) {
+      sizeToElement(el, dom);
+    },
+    unmount(dom: HTMLElement) {
+      clearInterval((dom as any)?._timer);
+    },
+  });
+
   elementRegistry.register('surface', {
     mount(el: any) {
       const host = document.createElement('div');
