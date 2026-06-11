@@ -38,6 +38,36 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 /** Read-time salience per fact key, for the presentation channel. */
 export const salienceByKey = new Map<string, number>();
 
+const FACT_ICONS: Record<string, string> = {
+  cell: '🔋', doc: '📄', capture: '📥', audit: '🔎', 'type-decl': '🏷️', view: '📊', action: '⚡',
+};
+
+/** A fact with no renderable type becomes a 'fact' CARD — presentation only
+ *  (_fact* transients + a type the persister strips), value untouched. */
+function decorateFactCard(el: any, metaType: string | null): void {
+  if (el.type) return;
+  el.type = 'fact';
+  el._factCard = true;
+  const line = typeof el.content === 'string'
+    ? (el.content.match(/^#+\s*(.+)$/m)?.[1] ?? el.content.split('\n').find((l: string) => l.trim()) ?? '')
+    : '';
+  el._factTitle =
+    (typeof el.title === 'string' && el.title) ||
+    (typeof el.name === 'string' && el.name) ||
+    line.replace(/[#*_`>\[\]()]/g, '').trim() ||
+    el.id;
+  el._factIcon = FACT_ICONS[metaType ?? ''] ?? '•';
+  el._factMeta = [metaType ?? 'fact', el._factKey ?? el.id].join(' · ');
+  if (metaType === 'cell' && typeof el.address === 'string') el._factHref = el.address;
+  else if (String(el._factKey ?? '').startsWith('doc:')) el._factHref = `/@c15r/lit?doc=${encodeURIComponent(String(el._factKey).slice(4))}`;
+  else if (metaType === 'capture' && typeof el.captured === 'string') el._factHref = `/@c15r/lit?doc=log:${el.captured}`;
+  if (el.width === 240 && el.height === 120) { el.width = 270; el.height = 92; }
+}
+
+/** A board item's substrate key: el:<id> by convention, but ANY fact can sit
+ *  on a board — its original key rides along as a transient. */
+const factKeyOf = (el: any): string => (typeof el._factKey === 'string' ? el._factKey : `el:${el.id}`);
+
 const PLACEMENT_KEYS = new Set([
   'x', 'y', 'width', 'height', 'rotation', 'scale', 'zIndex',
   'blendMode', 'color', 'static', 'group', 'fixedTop', 'fixedLeft',
@@ -94,10 +124,11 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   // Editor UI is ephemera, not facts (the dotlit lesson): label editors and
   // their meta edges live only in the session, never in the substrate.
   if (el.type === 'edit-prompt') return;
-  const key = `el:${el.id}`;
+  const key = factKeyOf(el);
   const canvasTag = `canvas:${canvasId}`;
   // Chip-display dims are transient; persist the TRUE geometry.
   const persisted: Record<string, unknown> = { ...el };
+  if ((el as any)._factCard) delete persisted.type; // presentation, not the fact's
   if (typeof el._origW === 'number') {
     persisted.width = el._origW;
     persisted.height = el._origH;
@@ -124,7 +155,7 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   const so = synthOrigin.get(el.id as string);
   if (so && el.x === so.x && el.y === so.y) return;
   if (so) synthOrigin.delete(el.id as string);
-  queueFact(`_canvas/${canvasId}/el:${el.id}`, placement);
+  queueFact(`_canvas/${canvasId}/${key}`, placement);
 }
 
 const linkedEdges = new Set<string>();
@@ -165,8 +196,8 @@ async function _saveCanvas(canvasState: any): Promise<void> {
   const live = new Set<string>();
   const liveEdgeIds = new Set<string>();
   for (const el of canvasState.elements ?? []) {
-    live.add(`el:${el.id}`);
-    live.add(`_canvas/${cid}/el:${el.id}`);
+    live.add(factKeyOf(el));
+    live.add(`_canvas/${cid}/${factKeyOf(el)}`);
     queueElementWrite(cid, el);
   }
   for (const edge of canvasState.edges ?? []) {
@@ -419,6 +450,8 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const pl = placements.get(e.key);
       const el: any = { width: 240, height: 120, rotation: 0, ...value, ...(pl ?? {}) };
       if (!el.id) el.id = e.key.startsWith('el:') ? e.key.slice(3) : e.key;
+      el._factKey = e.key;
+      decorateFactCard(el, e._meta?.type ?? null);
       if (pl && typeof pl.x === 'number')
         placed.push({
           id: el.id,
@@ -461,8 +494,9 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
         y = cy + gravIdx * (ownH + 70);
         gravIdx++;
       } else {
-        x = 160 + trayIdx * 300;
-        y = 60;
+        // The tray wraps: a grid, not an infinite strip off the viewport.
+        x = 160 + (trayIdx % 10) * 300;
+        y = 60 + Math.floor(trayIdx / 10) * 180;
         trayIdx++;
       }
       el.x = x;

@@ -102,6 +102,25 @@ export function registerSubstrateTypes(): void {
     },
   });
 
+
+  // The ladder's floor: ANY fact with no specific renderer becomes a card —
+  // icon + title + meta + open-link, computed at load into _fact* transients
+  // (underscore fields never persist; the fact's value is never polluted).
+  elementRegistry.register('fact', {
+    mount(el: any) {
+      const host = document.createElement('div');
+      host.className = 'content fact-card';
+      renderFactCard(el, host);
+      sizeToElement(el, host);
+      return host;
+    },
+    update(el: any, dom: HTMLElement) {
+      if (!dom) return;
+      sizeToElement(el, dom);
+      if (dom.dataset.fc !== String(el._factTitle ?? el.id)) renderFactCard(el, dom);
+    },
+  });
+
   elementRegistry.register('surface', {
     mount(el: any) {
       const host = document.createElement('div');
@@ -147,5 +166,24 @@ export async function loadRendererFacts(): Promise<void> {
     }
   } catch (err) {
     console.warn('[renderers] unavailable', err);
+  }
+}
+
+function renderFactCard(el: any, host: HTMLElement): void {
+  host.dataset.fc = String(el._factTitle ?? el.id);
+  host.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'fc-title';
+  title.textContent = `${el._factIcon ?? '•'} ${el._factTitle ?? el.id}`;
+  const meta = document.createElement('div');
+  meta.className = 'fc-meta';
+  meta.textContent = String(el._factMeta ?? '');
+  host.append(title, meta);
+  if (el._factHref) {
+    const a = document.createElement('a');
+    a.className = 'fc-open';
+    a.href = String(el._factHref);
+    a.textContent = 'open →';
+    host.appendChild(a);
   }
 }
