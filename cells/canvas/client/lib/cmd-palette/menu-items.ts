@@ -60,6 +60,18 @@ export function buildRootItems(controller) {
         { label: 'Image', icon: 'fa-image', category: 'Create', shortcut: '⌘N I', needsInput: "Prompt", action: (c, text) => addEl(c, 'img', text) },
         { label: 'Canvas', icon: 'fa-object-group', category: 'Create', shortcut: '⌘N C', action: c => addEl(c, 'canvas-container') },
         {
+          label: 'Minimap', icon: 'fa-map', category: 'Create',
+          action: c => {
+            const id = c.createNewElement(
+              c.screenToCanvas(window.innerWidth * 0.75, window.innerHeight * 0.7).x,
+              c.screenToCanvas(window.innerWidth * 0.75, window.innerHeight * 0.7).y,
+              'minimap', ' ', false, {});
+            const el = c.findElementById(id);
+            if (el) { el.width = 220; el.height = 150; }
+            c.requestRender();
+          },
+        },
+        {
           label: 'Generate',
           icon: 'fa-wand-magic-sparkles',
           category: 'AI',

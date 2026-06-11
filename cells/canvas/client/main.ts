@@ -902,6 +902,9 @@ ${script.getAttribute('src')}`);
             el.x = centerCanvas.x - (el.width * (el.scale || 1)) / 2;
             el.y = centerCanvas.y - (el.height * (el.scale || 1)) / 2;
             el.static = false;
+            delete el.fixedTop;   // stale fixed coords persisted forever and
+            delete el.fixedLeft;  // confused every later read of the fact
+            this.container.appendChild(node);
         }
     }
 
