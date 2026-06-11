@@ -1,4 +1,4 @@
-import { saveCanvas } from '../network/storage.ts';
+import { saveCanvas, unpinElements } from '../network/storage.ts';
 import {
   addEl, duplicateEl, deleteSelection, changeType,
   copySelection, pasteClipboard, clipboardHasContent,
@@ -93,6 +93,11 @@ export function buildRootItems(controller) {
           action: c => c.selectedElementIds.forEach(id => duplicateEl(c, id))
         },
         { label: 'Delete', icon: 'fa-trash', category: 'Edit', shortcut: '⌫', action: c => deleteSelection(c) },
+        {
+          label: 'Un-pin', icon: 'fa-thumbtack', category: 'Edit',
+          visible: c => c.selectedElementIds.size > 0,
+          action: c => unpinElements(c, [...c.selectedElementIds]),
+        },
         { label: 'Copy', icon: 'fa-clone', category: 'Edit', shortcut: '⌘C', action: c => copySelection(c) },
         {
           label: 'Paste', icon: 'fa-paste', category: 'Edit', shortcut: '⌘V',
