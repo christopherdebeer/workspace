@@ -15,7 +15,7 @@ type RunOut = { text?: string; imageB64?: string; mime?: string };
 
 let providersCache: Record<string, { enabled?: boolean }> | null = null;
 
-async function pickProvider(mode: 'text' | 'image'): Promise<string> {
+async function enabledProviders(mode: 'text' | 'image'): Promise<string[]> {
   if (!providersCache) {
     try {
       providersCache = (await read<{ providers: Record<string, { enabled?: boolean }> }>('@c15r/models.listProviders', {}))
@@ -25,11 +25,24 @@ async function pickProvider(mode: 'text' | 'image'): Promise<string> {
     }
   }
   const order = mode === 'image' ? ['openai', 'google'] : ['anthropic', 'openai', 'google'];
-  const found = order.find((p) => providersCache?.[p]?.enabled);
-  if (!found) {
+  const found = order.filter((p) => providersCache?.[p]?.enabled);
+  if (!found.length) {
     throw new Error(`no ${mode} provider enabled — paste a key at /@c15r/models/secrets`);
   }
   return found;
+}
+
+/** Try each enabled provider in order — an out-of-credits key must not block. */
+async function runWithFallback(mode: 'text' | 'image', args: Record<string, unknown>): Promise<RunOut> {
+  const errors: string[] = [];
+  for (const provider of await enabledProviders(mode)) {
+    try {
+      return await act<RunOut>('@c15r/models.run', { ...args, provider, ...(mode === 'image' ? { mode } : {}) });
+    } catch (err) {
+      errors.push((err as Error).message);
+    }
+  }
+  throw new Error(errors.join(' | '));
 }
 
 /** Incoming-edge context: the graph IS the prompt context. */
@@ -49,9 +62,7 @@ function edgeContext(el: any, c: any): string {
  * revision chain keeps the prior value.
  */
 export async function editElementWithPrompt(prompt: string, el: any, controller: any): Promise<string | undefined> {
-  const provider = await pickProvider('text');
-  const out = await act<RunOut>('@c15r/models.run', {
-    provider,
+  const out = await runWithFallback('text', {
     prompt: `Update this canvas element (type: ${el.type}) according to the instruction.\n\n<current-content>\n${el.content ?? ''}\n</current-content>\n\nInstruction: "${prompt}"`,
     system:
       'You edit elements on a visual canvas. Respond ONLY with the new element content — no preamble, no explanation, no code fences (unless the content itself is code).',
@@ -71,9 +82,7 @@ export async function editElementWithPrompt(prompt: string, el: any, controller:
  */
 export async function generateContent(content: string, el: any, c: any): Promise<string | null> {
   try {
-    const provider = await pickProvider('text');
-    const out = await act<RunOut>('@c15r/models.run', {
-      provider,
+    const out = await runWithFallback('text', {
       prompt: content || `Write content for an empty ${el.type} canvas element.`,
       system: `You write content for elements on a visual canvas. The element type is "${el.type}" — produce content appropriate to it (markdown for markdown, valid HTML fragments for html, plain prose for text). Respond ONLY with the content: no preamble, no code fences.`,
       context: edgeContext(el, c) || undefined,
@@ -114,10 +123,7 @@ async function compressForUpload(b64: string, mime: string): Promise<{ b64: stri
  */
 export async function regenerateImage(el: any): Promise<void> {
   try {
-    const provider = await pickProvider('image');
-    const out = await act<RunOut>('@c15r/models.run', {
-      provider,
-      mode: 'image',
+    const out = await runWithFallback('image', {
       prompt: el.content || 'abstract placeholder image',
     });
     if (!out.imageB64) throw new Error('no image returned');
