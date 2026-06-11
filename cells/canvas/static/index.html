@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=overlays-content">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="canvas">
+  <title>🌲 canvas</title>
+  <style>
+    /* Critical input invariants at FIRST PAINT (the bundle re-asserts them
+       later, but iOS latches gestures before late-injected styles apply):
+       zoom/pan belong to the app, not the browser. */
+    html, body { touch-action: none; -webkit-user-select: none; user-select: none; overflow: hidden; overscroll-behavior: none; }
+    #canvas { touch-action: none; }
+    #err-banner { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999; background: crimson; color: #fff; font: 12px monospace; padding: 6px 10px; white-space: pre-wrap; }
+  </style>
+  <script>
+    // iOS Safari: double-tap smart-zoom rides TOUCH events and survives
+    // pointer-event preventDefault — a non-passive touchend guard is the
+    // only reliable suppressor. Editable targets keep native behaviour.
+    (function () {
+      var last = 0;
+      document.addEventListener('touchend', function (e) {
+        var t = e.target;
+        if (t && t.closest && t.closest('input, textarea, select, [contenteditable], .CodeMirror')) return;
+        var now = Date.now();
+        if (now - last < 350) e.preventDefault();
+        last = now;
+      }, { passive: false, capture: true });
+      // Surface runtime errors on-device (tap the banner to dismiss).
+      function show(msg) {
+        var b = document.getElementById('err-banner');
+        if (!b) return;
+        b.textContent = String(msg).slice(0, 500);
+        b.style.display = 'block';
+      }
+      window.addEventListener('error', function (e) { show('⚠ ' + e.message + ' @ ' + (e.filename || '').split('/').pop() + ':' + e.lineno); });
+      window.addEventListener('unhandledrejection', function (e) { show('⚠ (async) ' + (e.reason && e.reason.message || e.reason)); });
+      document.addEventListener('DOMContentLoaded', function () {
+        var b = document.getElementById('err-banner');
+        if (b) b.addEventListener('click', function () { b.style.display = 'none'; });
+      });
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.1/codemirror.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.1/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.1/mode/markdown/markdown.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.1/mode/xml/xml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.1/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.1/mode/htmlmixed/htmlmixed.min.js"></script>
+</head>
+
+<body>
+  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+  <script>eruda.init();</script>
+
+  <div id="err-banner"></div>
+
+  <button id="drillUp">↑ Drill Up</button>
+
+  <div id="canvas" mode="navigate">
+    <svg id="edges-layer"></svg>
+    <div id="canvas-container"></div>
+    <div id="context-menu"></div>
+  </div>
+
+  <div id="static-container"></div>
+
+  <button id="mode">
+    <i class="fa-solid fa-hand"></i> direct
+  </button>
+
+  <div id="edit-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-versions">
+        <div class="versions-nav">
+          <button id="versions-prev"><i class="fa-solid fa-angle-left"></i></button>
+          <span id="versions-info">Version X of Y</span>
+          <button id="versions-next"><i class="fa-solid fa-angle-right"></i></button>
+        </div>
+        <div id="modal-error"></div>
+      </div>
+      <div class="modal-tabs">
+        <button id="tab-content" class="active">Content</button>
+        <button id="tab-src">Src</button>
+      </div>
+      <div class="modal-editor">
+        <div id="editor-content"></div>
+        <div id="editor-src"></div>
+      </div>
+      <div class="modal-buttons">
+        <button id="modal-clear">Clear</button>
+        <button id="modal-copy">Copy</button>
+        <button id="modal-cancel">Close</button>
+        <button id="modal-save">Save</button>
+        <button id="modal-generate">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/@c15r/canvas/app.js"></script>
+</body>
+
+</html>

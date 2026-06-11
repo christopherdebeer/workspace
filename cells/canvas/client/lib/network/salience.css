@@ -1,0 +1,141 @@
+/* Salience as a presentation channel — never position (canvas-substrate-design.md §4). */
+
+.canvas-element[data-salience="peripheral"] > .content {
+  opacity: 0.72;
+  filter: saturate(0.7);
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+
+.canvas-element[data-salience="focus"] > .content {
+  opacity: 1;
+  filter: none;
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+
+/* Faded: low salience on a human-placed element — represented, never
+   restructured. The pin is the human's; the dimming is the substrate's. */
+.canvas-element[data-salience="faded"] > .content {
+  opacity: 0.4;
+  filter: saturate(0.35) contrast(0.9);
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+.canvas-element[data-salience="faded"]:hover > .content {
+  opacity: 0.85;
+  filter: none;
+}
+
+/* Elided: the value is withheld — a title chip stays at the pinned position.
+   Tap to expand (a deliberate peek; attention re-focuses it). */
+.canvas-element[data-salience="elided"] > .content {
+  display: none;
+}
+.canvas-element[data-salience="elided"]::after {
+  content: attr(data-chip) " …";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #f4f4ee;
+  border: 1px solid #c9c9bd;
+  border-radius: 999px;
+  padding: 0.35em 0.9em;
+  font-family: system-ui, sans-serif;
+  font-size: calc(0.7rem / var(--zoom, 1));
+  color: #666;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Synthesized (unpinned) placement — the board's proposal, visibly provisional.
+   Dragging pins it (writes the placement fact). */
+.canvas-element.synthesized {
+  outline: 2px dashed #a9c3a9;
+  outline-offset: 5px;
+  border-radius: 4px;
+}
+.canvas-element.synthesized > .content {
+  opacity: 0.88;
+}
+
+/* — Embedded / view-backed boards (canvas-substrate-design.md §2) — */
+
+body.embed #mode,
+body.embed #drillUp,
+body.embed #eruda,
+body.embed .eruda-container {
+  display: none !important;
+}
+
+/* A non-interactive view is a living picture: it pans nowhere, edits nothing. */
+body.readonly #canvas {
+  pointer-events: none;
+}
+body.readonly #mode {
+  display: none;
+}
+
+body.embed-unauthed::before {
+  content: "🌲 sign in at parc.land/@c15r/canvas to see this board";
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+  color: #777;
+  background: #fafaf7;
+  z-index: 9999;
+}
+
+/* — The renderer ladder (canvas-substrate-design.md §1) — */
+
+.canvas-element .view-tile {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 0.6em 0.8em;
+  overflow: auto;
+  box-sizing: border-box;
+  font-family: system-ui, sans-serif;
+  font-size: 0.8rem;
+}
+.view-tile .vt-label {
+  display: block;
+  color: #888;
+  font-size: 0.72em;
+  margin-bottom: 0.3em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.view-tile .vt-metric {
+  font-size: 2.1em;
+  font-weight: 700;
+}
+.view-tile .vt-list {
+  margin: 0;
+  padding-left: 1.1em;
+}
+.view-tile .vt-json {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.85em;
+}
+
+.canvas-element .surface-tile {
+  box-sizing: border-box;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+.surface-tile iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+/* In navigate mode the board pans; embedded surfaces become interactive in direct mode. */
+#canvas[mode="navigate"] .surface-tile iframe {
+  pointer-events: none;
+}

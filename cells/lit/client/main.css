@@ -1,0 +1,113 @@
+/* lit — mobile-first reader over the substrate */
+:root {
+  --ink: #1c1c1a;
+  --faint: #8a8a82;
+  --paper: #fbfbf8;
+  --line: #e4e4dc;
+  --accent: #2f6f4f;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+#app { max-width: 720px; margin: 0 auto; padding: 1rem 1.1rem 4rem; }
+.boot { color: var(--faint); }
+
+header { margin: 0.6rem 0 1.4rem; }
+header h1 { margin: 0.2rem 0 0; font-size: 1.6rem; line-height: 1.25; }
+header .summary { margin: 0.3rem 0 0; color: var(--faint); }
+.back { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+
+/* — doc list — */
+.doc-list { display: grid; gap: 0.7rem; }
+.doc-card {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.8rem 1rem;
+  text-decoration: none;
+  color: inherit;
+}
+.doc-card h2 { margin: 0; font-size: 1.05rem; }
+.doc-card p { margin: 0.25rem 0 0; color: var(--faint); font-size: 0.9rem; }
+.doc-meta { display: block; margin-top: 0.4rem; color: var(--faint); font-size: 0.75rem; }
+
+/* — blocks — */
+.block { position: relative; padding: 0.2rem 0 0.4rem; border-bottom: 1px solid transparent; }
+.block + .block { border-top: 1px solid var(--line); }
+.block-tools {
+  position: absolute;
+  top: 0.3rem;
+  right: -0.2rem;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.block:hover .block-tools, .block:focus-within .block-tools { opacity: 1; }
+@media (pointer: coarse) { .block-tools { opacity: 0.5; } }
+.tool {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 4px 6px;
+  color: var(--faint);
+}
+.block-body h1, .block-body h2, .block-body h3 { line-height: 1.3; }
+.block-body pre { background: #f1f1ea; border-radius: 8px; padding: 0.7rem 0.9rem; overflow-x: auto; font-size: 0.85rem; }
+.block-body code { font-size: 0.88em; }
+.block-body img { max-width: 100%; border-radius: 8px; }
+.block-body table { border-collapse: collapse; font-size: 0.9rem; }
+.block-body th, .block-body td { border: 1px solid var(--line); padding: 0.3rem 0.6rem; text-align: left; }
+.folded { color: var(--faint); margin: 0.3rem 0; cursor: default; }
+.is-folded { padding: 0; }
+
+/* — transclusion — */
+.embed-board { position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 0.8rem 0; }
+.embed-board iframe { width: 100%; height: 340px; border: 0; display: block; pointer-events: none; }
+.embed-open { position: absolute; right: 8px; bottom: 6px; font-size: 0.75rem; color: var(--accent); background: #fffd; padding: 2px 8px; border-radius: 999px; text-decoration: none; }
+.embed-view, .embed-cell {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.7rem 0.9rem;
+  margin: 0.8rem 0;
+  font-size: 0.9rem;
+}
+.embed-label { display: block; color: var(--faint); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.embed-metric { font-size: 1.9rem; }
+.cell-head { display: flex; align-items: center; gap: 0.6rem; }
+.cell-addr { color: var(--accent); text-decoration: none; font-weight: 600; }
+.cell-status { font-size: 0.7rem; padding: 1px 8px; border-radius: 999px; background: #eee; color: var(--faint); }
+.cell-status.s-active { background: #e3efe7; color: var(--accent); }
+.cell-dirty { font-size: 0.7rem; color: #9a6b1f; }
+.cell-meta { color: var(--faint); font-size: 0.8rem; margin-top: 0.2rem; }
+
+/* — editing — */
+.editor { margin: 0.6rem 0; }
+.editor textarea {
+  width: 100%;
+  font: 0.88rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+  background: #fff;
+}
+.editor-bar { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
+.btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.add-block { margin-top: 1.2rem; color: var(--faint); }
