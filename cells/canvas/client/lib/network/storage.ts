@@ -17,6 +17,7 @@ import { act, read } from './substrate.ts';
 import { ensureAuth, accessToken, isAuthed } from './auth.ts';
 import { startSalience } from './salience.ts';
 import { registerSubstrateTypes, loadRendererFacts } from '../elements/substrateTypes.ts';
+import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
 import { installImagePaste } from './imagePaste.ts';
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -39,29 +40,27 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 export const salienceByKey = new Map<string, number>();
 
 const FACT_ICONS: Record<string, string> = {
-  cell: '🔋', doc: '📄', capture: '📥', audit: '🔎', 'type-decl': '🏷️', view: '📊', action: '⚡',
+  cell: '🔋', doc: '📄', capture: '📥', audit: '🔎', 'type-decl': '🏷️', view: '📊', action: '⚡', log: '🗓️',
 };
 
+/** `_types/<type>` declarations, loaded once per board (kernel-cached). */
+let factTypeDecls: Record<string, { icon?: string }> = {};
+
 /** A fact with no renderable type becomes a 'fact' CARD — presentation only
- *  (_fact* transients + a type the persister strips), value untouched. */
-function decorateFactCard(el: any, metaType: string | null): void {
+ *  (_fact* transients + a type the persister strips), value untouched.
+ *  Title/href come from the kernel: _types declarations first, conventions
+ *  as fallback — a new type's routing is one fact, no deploys. */
+function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[] } | undefined): void {
   if (el.type) return;
   el.type = 'fact';
   el._factCard = true;
-  const line = typeof el.content === 'string'
-    ? (el.content.match(/^#+\s*(.+)$/m)?.[1] ?? el.content.split('\n').find((l: string) => l.trim()) ?? '')
-    : '';
-  el._factTitle =
-    (typeof el.title === 'string' && el.title) ||
-    (typeof el.name === 'string' && el.name) ||
-    line.replace(/[#*_`>\[\]()]/g, '').trim() ||
-    el.id;
-  el._factIcon = FACT_ICONS[metaType ?? ''] ?? '•';
-  el._factMeta = [metaType ?? 'fact', el._factKey ?? el.id].join(' · ');
+  const metaType = meta?.type ?? null;
+  const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
+  el._factTitle = titleOf(entry);
+  el._factHref = hrefOf(entry);
+  el._factIcon = factTypeDecls[metaType ?? '']?.icon ?? FACT_ICONS[metaType ?? ''] ?? '•';
+  el._factMeta = [metaType ?? 'fact', entry.key].join(' · ');
   if (typeof el.items === 'number') el._factMeta += ` · ${el.items} item${el.items === 1 ? '' : 's'}`;
-  if (metaType === 'cell' && typeof el.address === 'string') el._factHref = el.address;
-  else if (String(el._factKey ?? '').startsWith('doc:')) el._factHref = `/@c15r/lit?doc=${encodeURIComponent(String(el._factKey).slice(4))}`;
-  else if (metaType === 'capture' && typeof el.captured === 'string') el._factHref = `/@c15r/lit?doc=log:${el.captured}`;
   if (el.width === 240 && el.height === 120) { el.width = 270; el.height = 92; }
 }
 
@@ -329,6 +328,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   // both registered before the first element mounts.
   registerSubstrateTypes();
   await loadRendererFacts();
+  factTypeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { icon?: string }>;
   installImagePaste();
 
   // View-backed board: membership from the view's query; placements from its
@@ -458,7 +458,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const el: any = { width: 240, height: 120, rotation: 0, ...value, ...(pl ?? {}) };
       if (!el.id) el.id = e.key.startsWith('el:') ? e.key.slice(3) : e.key;
       el._factKey = e.key;
-      decorateFactCard(el, e._meta?.type ?? null);
+      decorateFactCard(el, e._meta);
       if (pl && typeof pl.x === 'number')
         placed.push({
           id: el.id,
