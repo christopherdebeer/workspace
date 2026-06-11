@@ -1,7 +1,14 @@
 # The narrative surface — lit reborn as a tier-2 cell
 
-*Status: design assessment (2026-06-11). Companion to `canvas-substrate-design.md`
-and `dotlit-review.md`; written in response to the chips feedback on canvas-002.*
+*Status: built (2026-06-11) — live at `parc.land/@c15r/lit` (cell `lit-3b547284`),
+and hoisted into the substrate as `doc:narrative-surface`, where the living
+version now resides (this repo copy is an export per §"Where do design docs
+live"). Companion to `canvas-substrate-design.md` and `dotlit-review.md`
+(both also hoisted); written in response to the chips feedback on canvas-002.
+One amendment from implementation: block ordering lives in the doc fact
+(`blocks: [{key, fold?}]`) rather than per-key `_doc/` decorations — a
+sequence is a list, and reordering is one write; per-surface decorations can
+return when cross-doc reuse demands independent fold state.*
 
 ## Do we need it?
 
