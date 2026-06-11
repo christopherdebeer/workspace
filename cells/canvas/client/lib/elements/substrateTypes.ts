@@ -186,4 +186,16 @@ function renderFactCard(el: any, host: HTMLElement): void {
     a.textContent = 'open →';
     host.appendChild(a);
   }
+  // Expand the fact's neighbourhood onto the board (its elided captures,
+  // its links) — handled by the storage seam via a DOM event (no cycle).
+  const ex = document.createElement('button');
+  ex.className = 'fc-expand';
+  ex.textContent = '⊕';
+  ex.title = 'expand links onto the board';
+  ex.onpointerdown = (e) => e.stopPropagation();
+  ex.onclick = (e) => {
+    e.stopPropagation();
+    document.dispatchEvent(new CustomEvent('parc:expand', { detail: { key: String(el._factKey ?? ('el:' + el.id)), id: el.id } }));
+  };
+  host.appendChild(ex);
 }
