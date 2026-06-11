@@ -78,6 +78,39 @@ describe('workspace cell', () => {
     const { ctx } = ctxFor(null);
     await expect(cmds.remember({ key: 'x', value: 1 }, ctx)).rejects.toThrow();
   });
+
+  it('ingest writes a batch with one announcement; vocabulary writes are refused whole', async () => {
+    const { ctx, emitted } = ctxFor('alice');
+    const res = await cmds.ingest(
+      {
+        via: 'import',
+        facts: [
+          { key: 'inbox/a', value: { content: 'first' }, type: 'capture', tags: ['inbox'] },
+          { key: 'inbox/b', value: { content: 'second' }, type: 'capture', tags: ['inbox', 'log:2026-06-11'] },
+        ],
+      },
+      ctx,
+    );
+    expect(res).toEqual({ ingested: 2, errors: [] });
+    expect(emitted).toEqual([{ type: 'workspace.ingested', payload: { scope: 'alice', count: 2, errors: 0 } }]);
+    const a = await cmds.peek({ key: 'inbox/a' }, ctx);
+    expect(a?._meta.via).toBe('import');
+    expect(a?._meta.type).toBe('capture');
+
+    // Declarations stay deliberate — the whole batch is refused up front.
+    await expect(
+      cmds.ingest({ facts: [{ key: 'ok', value: 1 }, { key: '_actions/evil', value: 1 }] }, ctx),
+    ).rejects.toThrow(/vocabulary/);
+    expect(await cmds.peek({ key: 'ok' }, ctx)).toBeNull();
+
+    // Per-fact CAS failures are reported, not fatal.
+    const partial = await cmds.ingest(
+      { facts: [{ key: 'inbox/a', value: 'dupe', ifAbsent: true }, { key: 'inbox/c', value: 'new' }] },
+      ctx,
+    );
+    expect(partial.ingested).toBe(1);
+    expect(partial.errors[0].key).toBe('inbox/a');
+  });
 });
 
 describe('workspace sharing / view layer', () => {
@@ -142,7 +175,7 @@ describe('workspace sharing / view layer', () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
-        'peek', 'recall', 'remember', 'shared', 'share', 'supersede', 'unshare',
+        'peek', 'recall', 'remember', 'ingest', 'shared', 'share', 'supersede', 'unshare',
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
