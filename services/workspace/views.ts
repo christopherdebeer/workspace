@@ -7,11 +7,14 @@
  * dashboard surface for humans and an affordance for agents ("the dashboard
  * is a view query"). Stored as a fact at `_views/<id>`; vocabulary is state.
  *
- * v1 deliberately mirrors the actions tier's stance: a structured, decidable
- * model instead of CEL — a view is a `query` (the existing projection
- * primitive) plus an optional `reduce`. A CEL upgrade can replace the
- * evaluator without changing the stored model.
+ * v1 deliberately mirrored the actions tier's stance: a structured, decidable
+ * model instead of CEL. The CEL upgrade keeps that stored model and adds
+ * `filter`: a per-entry CEL expression over `{ key, value, meta }` applied
+ * between the query and the reduce. Parse errors surface at registration; an
+ * entry whose evaluation errors (or is non-boolean) is excluded — a view is a
+ * read and stays total.
  */
+import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
 import type { Identity } from '../../platform/runtime';
 import type { ObservedState, Entry, QueryOptions } from '../../platform/runtime';
 
@@ -40,6 +43,8 @@ export interface ViewDefinition {
   reduce?: 'list' | 'count' | 'latest' | 'sum';
   /** Dot-path into each value for `sum`. */
   path?: string;
+  /** CEL predicate over `{ key, value, meta }`, applied before `reduce`. */
+  filter?: string;
   /** Render hint — makes this view a surface. */
   render?: RenderHint;
 }
@@ -71,6 +76,14 @@ function validateView(def: ViewDefinition): void {
   if (!def.query || typeof def.query !== 'object') throw new Error('view requires a `query` object');
   if (def.reduce !== undefined && !REDUCERS.has(def.reduce)) {
     throw new Error(`view \`reduce\` must be one of ${[...REDUCERS].join('/')}`);
+  }
+  if (def.filter !== undefined) {
+    if (typeof def.filter !== 'string') throw new Error('view `filter` must be a valid CEL expression');
+    try {
+      celParse(def.filter);
+    } catch (err) {
+      throw new Error(`view \`filter\` must be a valid CEL expression: ${(err as Error).message}`);
+    }
   }
   if (def.render && typeof def.render.type !== 'string') {
     throw new Error('view `render` requires a `type`');
@@ -118,9 +131,18 @@ export function createRegisteredViews(state: ObservedState): RegisteredViews {
       // Views must not observe the vocabulary itself unless they ask to —
       // exclude reserved keys when the view has no explicit prefix.
       const result = await state.query(scope, def.query);
-      const entries = def.query.prefix
+      let entries = def.query.prefix
         ? result.entries
         : result.entries.filter((e) => !e.key.startsWith('_actions/') && !e.key.startsWith(VIEWS_PREFIX));
+      if (def.filter) {
+        entries = entries.filter((e) => {
+          try {
+            return celEvaluate(def.filter!, { key: e.key, value: e.value, meta: e._meta }) === true;
+          } catch {
+            return false; // a view is a read — stays total
+          }
+        });
+      }
       const reduce = def.reduce ?? 'list';
       let value: unknown;
       switch (reduce) {
