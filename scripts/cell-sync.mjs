@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+/**
+ * cell-sync — git is the truth for tier-2 cell sources (cells/<name>/…).
+ *
+ *   node scripts/cell-sync.mjs pull <name> [--owner c15r]   live src → cells/<name>/
+ *   node scripts/cell-sync.mjs push <name> [--deploy]       cells/<name>/ → live src (+ deploy)
+ *
+ * Auth: PARC_TOKEN env, or a device-flow token JSON at /tmp/parc-token.json
+ * (mint one: POST https://parc.land/auth/device, approve the user_code, then
+ * exchange at /oauth/token with the device_code grant).
+ */
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { join, dirname, relative } from 'node:path';
+
+const BASE = process.env.PARC_BASE ?? 'https://parc.land';
+
+function token() {
+  if (process.env.PARC_TOKEN) return process.env.PARC_TOKEN;
+  try {
+    return JSON.parse(readFileSync('/tmp/parc-token.json', 'utf8')).access_token;
+  } catch {
+    console.error('No PARC_TOKEN and no /tmp/parc-token.json — mint a device token first.');
+    process.exit(1);
+  }
+}
+
+async function call(verb, target, input) {
+  const res = await fetch(`${BASE}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'tools/call',
+      params: { name: verb, arguments: { target, input } },
+    }),
+  });
+  if (!res.ok) throw new Error(`${target}: HTTP ${res.status}`);
+  const rpc = await res.json();
+  const text = rpc.result?.content?.[0]?.text ?? '';
+  let value = text;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    /* raw */
+  }
+  if (rpc.error || rpc.result?.isError) throw new Error(`${target}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+  return value;
+}
+
+function* walk(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) yield* walk(p);
+    else yield p;
+  }
+}
+
+const [, , cmd, name, ...flags] = process.argv;
+const owner = flags.includes('--owner') ? flags[flags.indexOf('--owner') + 1] : 'c15r';
+if (!cmd || !name) {
+  console.error('usage: cell-sync.mjs <pull|push> <cellName> [--owner c15r] [--deploy]');
+  process.exit(1);
+}
+const localRoot = join(process.cwd(), 'cells', name);
+
+if (cmd === 'pull') {
+  const { files } = await call('read', 'cells.listFiles', { owner, name });
+  for (const f of files) {
+    const { content } = await call('read', 'cells.readFile', { owner, name, path: f });
+    const dest = join(localRoot, f);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, content);
+    console.log('pulled', f, `(${content.length}b)`);
+  }
+  console.log(`✓ ${files.length} files → cells/${name}/`);
+} else if (cmd === 'push') {
+  const local = [...walk(localRoot)].map((p) => relative(localRoot, p));
+  for (const f of local) {
+    const content = readFileSync(join(localRoot, f), 'utf8');
+    await call('act', 'cells.writeFile', { owner, name, path: f, content });
+    console.log('pushed', f, `(${content.length}b)`);
+  }
+  if (flags.includes('--deploy')) {
+    const out = await call('act', 'cells.deploy', { owner, name });
+    console.log(`✓ deployed ${out.cellId} v${out.version} (${out.files.length} files)`);
+  } else {
+    console.log(`✓ ${local.length} files pushed (no deploy — pass --deploy)`);
+  }
+} else {
+  console.error(`unknown command "${cmd}"`);
+  process.exit(1);
+}
