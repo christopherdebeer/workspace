@@ -30,9 +30,9 @@ const SHELL = `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<title>workspace · platform</title>
-<style>html,body{margin:0;background:#0a0a0a}</style>
+<meta name="color-scheme" content="light">
+<title>parc.land</title>
+<style>html,body{margin:0;background:#f3edde}</style>
 </head><body><div id="root"></div><script src="/app.js"></script></body></html>`;
 
 function shell(): ServiceHttpResponse {
