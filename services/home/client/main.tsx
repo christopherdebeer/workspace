@@ -195,6 +195,238 @@ interface Capability {
   inputSchema?: { properties?: Record<string, { type?: string }>; required?: string[] };
 }
 
+// ── identity & grants shell (home redesign phase 2a; docs/scope-grants.md §6) ──
+
+interface TokenRow {
+  id: string;
+  scope: string;
+  label: string | null;
+  clientId: string | null;
+  revoked: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+interface GrantRow {
+  owner: string;
+  grantee: string;
+  key: string;
+  mode?: 'read' | 'write';
+  createdAt: string;
+}
+
+interface RequestRow {
+  key: string;
+  requester: string;
+  resource: string;
+  note?: string;
+  requestedAt: string;
+}
+
+interface AnswerRow {
+  key: string;
+  resource: string;
+  status: 'approved' | 'denied';
+  by: string;
+  at: string;
+  reason?: string;
+}
+
+interface IdentityData {
+  tokens: TokenRow[];
+  shared: GrantRow[];
+  receiving: GrantRow[];
+  incoming: RequestRow[];
+  answers: AnswerRow[];
+}
+
+const rowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.5rem',
+  flexWrap: 'wrap',
+  fontSize: '0.85rem',
+};
+
+function InlineButton({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: 'none',
+        border: `1px solid ${theme.border}`,
+        borderRadius: 6,
+        color: danger ? '#e66' : theme.accent,
+        cursor: 'pointer',
+        fontSize: '0.75rem',
+        padding: '0.15rem 0.5rem',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * The identity & grants shell: the human projection of the grants vocabulary —
+ * who am I, what credentials exist (revoke), what I've shared and what's
+ * shared with me (revoke), and the grant-request inbox (approve/deny). Every
+ * row is the same `mcpCall` an agent makes; this surface is a rendering, not
+ * new plumbing.
+ */
+function IdentityShell({ authed, user }: { authed: boolean; user: string | null }): React.JSX.Element | null {
+  const [data, setData] = useState<IdentityData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = async (): Promise<void> => {
+    try {
+      const [tokens, shared, requests] = await Promise.all([
+        mcpCall('read', 'auth.tokens'),
+        mcpCall('read', 'workspace.shared'),
+        mcpCall('read', 'workspace.grantRequests'),
+      ]);
+      const t = tokens.ok ? ((tokens.value as { tokens?: TokenRow[] }).tokens ?? []) : [];
+      const s = shared.ok ? (shared.value as { shared?: GrantRow[]; receiving?: GrantRow[] }) : {};
+      const r = requests.ok ? (requests.value as { incoming?: RequestRow[]; answers?: AnswerRow[] }) : {};
+      setData({
+        tokens: t.filter((x) => !x.revoked),
+        shared: s.shared ?? [],
+        receiving: s.receiving ?? [],
+        incoming: r.incoming ?? [],
+        answers: r.answers ?? [],
+      });
+      setErr(null);
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  useEffect(() => {
+    if (!authed) return;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed]);
+
+  if (!authed) return null;
+
+  const act = async (label: string, verb: string, target: string, input: unknown): Promise<void> => {
+    setBusy(label);
+    try {
+      const r = await mcpCall(verb, target, input);
+      if (!r.ok) setErr(typeof r.value === 'string' ? r.value : 'error');
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const section: React.CSSProperties = { display: 'grid', gap: '0.4rem' };
+
+  return (
+    <Card>
+      <Heading sub="Credentials, grants, and the request inbox — the standing management plane over the same grants.* / auth.* targets agents use.">
+        Identity &amp; grants
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {!data ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : (
+        <div style={{ display: 'grid', gap: '1rem', marginTop: '0.5rem' }}>
+          {data.incoming.length ? (
+            <div style={section}>
+              <strong>Grant requests</strong>
+              {data.incoming.map((r) => (
+                <div key={r.key} style={rowStyle}>
+                  <Badge tone="accent">{r.requester}</Badge>
+                  <code style={{ fontSize: '0.78rem' }}>{r.resource}</code>
+                  {r.note ? <span style={{ color: theme.dim }}>“{r.note}”</span> : null}
+                  <InlineButton onClick={() => void act(r.key, 'act', 'workspace.approveGrant', { key: r.key })}>
+                    {busy === r.key ? '…' : 'Approve'}
+                  </InlineButton>
+                  <InlineButton danger onClick={() => void act(r.key, 'act', 'workspace.denyGrant', { key: r.key })}>
+                    Deny
+                  </InlineButton>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div style={section}>
+            <strong>Credentials</strong>
+            {data.tokens.length === 0 ? (
+              <span style={{ color: theme.dim, fontSize: '0.85rem' }}>No active tokens.</span>
+            ) : (
+              data.tokens.map((t) => (
+                <div key={t.id} style={rowStyle}>
+                  <span>{t.label ?? t.clientId ?? t.id.slice(0, 8)}</span>
+                  <Badge tone="dim">{t.scope}</Badge>
+                  <span style={{ color: theme.dim, fontSize: '0.75rem' }}>
+                    {t.expiresAt ? `expires ${t.expiresAt.slice(0, 10)}` : 'non-expiring'}
+                  </span>
+                  <InlineButton danger onClick={() => void act(t.id, 'act', 'auth.revokeToken', { tokenId: t.id })}>
+                    {busy === t.id ? '…' : 'Revoke'}
+                  </InlineButton>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div style={section}>
+            <strong>Shared by you</strong>
+            {data.shared.length === 0 ? (
+              <span style={{ color: theme.dim, fontSize: '0.85rem' }}>Nothing shared.</span>
+            ) : (
+              data.shared.map((g) => (
+                <div key={`${g.grantee}|${g.key}`} style={rowStyle}>
+                  <Badge tone="dim">{g.grantee}</Badge>
+                  <code style={{ fontSize: '0.78rem' }}>{g.key}</code>
+                  <Badge tone={g.mode === 'write' ? 'accent' : 'dim'}>{g.mode ?? 'read'}</Badge>
+                  <InlineButton
+                    danger
+                    onClick={() => void act(`${g.grantee}|${g.key}`, 'act', 'workspace.unshare', { to: g.grantee, key: g.key })}
+                  >
+                    {busy === `${g.grantee}|${g.key}` ? '…' : 'Revoke'}
+                  </InlineButton>
+                </div>
+              ))
+            )}
+          </div>
+
+          {data.receiving.length ? (
+            <div style={section}>
+              <strong>Shared with you</strong>
+              {data.receiving.map((g) => (
+                <div key={`${g.owner}|${g.key}`} style={rowStyle}>
+                  <Badge tone="dim">{g.owner}</Badge>
+                  <code style={{ fontSize: '0.78rem' }}>{g.key}</code>
+                  <Badge tone={g.mode === 'write' ? 'accent' : 'dim'}>{g.mode ?? 'read'}</Badge>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {data.answers.length ? (
+            <div style={section}>
+              <strong>Your requests</strong>
+              {data.answers.map((a) => (
+                <div key={a.key} style={rowStyle}>
+                  <Badge tone={a.status === 'approved' ? 'accent' : 'danger'}>{a.status}</Badge>
+                  <code style={{ fontSize: '0.78rem' }}>{a.resource}</code>
+                  <span style={{ color: theme.dim, fontSize: '0.75rem' }}>
+                    by {a.by === user ? 'you' : a.by}
+                    {a.reason ? ` — “${a.reason}”` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /**
  * Invoke a capability through the gateway's MCP endpoint, exactly as an agent
  * would: `tools/call` with name=read|act and `{ target, input }`. Returns the
@@ -654,6 +886,7 @@ function App(): React.JSX.Element {
       </Heading>
 
       <Account session={session} />
+      <IdentityShell authed={!!session.user} user={session.user} />
       <Views authed={!!session.user} />
       <Capabilities authed={!!session.user} />
       <Discovery />

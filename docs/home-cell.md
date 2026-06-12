@@ -89,11 +89,12 @@ the old Phase 2/3 ordering:
 - **Phase 1 — interactive read/act console** *(shipped)*: every capability
   invokable; `/_catalog`, `PLATFORM_CATALOG`, and home's `allow()` grants
   retired.
-- **Phase 2a — identity & grants shell.** First the read half against what
-  exists today (`whoami`, `auth.listTokens`, workspace `shared`), then act
-  affordances as the `grants.*` / `auth.*` targets land
-  (`scope-grants.md` §6, sequencing step 6). This is also where the **grant
-  inbox** appears — the human end of the agent escalation loop.
+- **Phase 2a — identity & grants shell** *(shipped, same day)*: one card
+  rendering `auth.tokens` (revoke), `workspace.shared` given/received
+  (revoke), and the `workspace.grantRequests` inbox (approve/deny) + request
+  answers — the human end of the agent escalation loop, every row an
+  `mcpCall` the console could already make. Still to come here: minting a
+  narrow token from the UI, and the scope-elevation (re-consent) entry.
 - **Phase 2b — the landing face.** Narrative + sign-in + public-cells
   directory; server-shaped first paint.
 - **Phase 2c — workspace window + cells console.** Purpose-built renderings of

@@ -264,3 +264,38 @@ home is the **standing** management plane.
 Each step is additive (the layering discipline sharing itself used); 3 and 6
 ship user-visible value before the unification in 4 is complete, and 4 can
 land behind the existing call sites without changing their semantics.
+
+> **Status (2026-06-12, same day).** Steps 2, 3, 5, 6, and 7 shipped in the
+> commits following this doc:
+>
+> - **Grammar + ∩ algebra** — `matchesScope` / `intersectScopePatterns` /
+>   `intersectScopes` in `platform/runtime/auth.ts`; `hasScope` rides the
+>   matcher unchanged. Command envelopes now carry the caller's token scopes
+>   across service hops (the ceiling survives the gateway → provider invoke).
+> - **Per-tool cell grants** — `cells.grant {tools}` (patterns, trailing `*`),
+>   `cells.revoke`, per-tool enforcement in `authorizeAccess`/`callCell`/
+>   `callCellTool`, scope-filtered `describeCellTools`. The regwatch reviewer
+>   split is expressible today: one `cells.grant { owner, name: "regwatch",
+>   principal: "emily", tools: ["review","flag","list_*","stats"] }`.
+> - **Write-through + prefix grants** — `workspace.share {mode, key:
+>   "inbox/*"}`; `remember`/`peek` take `owner` for write-/read-through;
+>   provenance stamps the grantee as writer; reserved namespaces refused.
+> - **Token CRUD** — `auth` joined the gateway providers (`auth.tokens` /
+>   `auth.mintToken` / `auth.revokeToken`); `mintToken` narrows to
+>   `requested ∩ minter's scopes` and refuses an empty meet.
+> - **Request/escalation loop** — `workspace.requestGrant` / `grantRequests`
+>   / `approveGrant` (routes cell-family resources to `cells.grant`) /
+>   `denyGrant`; outcomes land in the requester's slice under
+>   `_grants/answers/`. `grant_denied` (cells, workspace) and `scope_denied`
+>   (gateway) errors carry the ready-made next call.
+> - **Home identity & grants shell** (Phase 2a in `home-cell.md`) —
+>   credentials with revoke, grants given/received with revoke, the request
+>   inbox with approve/deny, request answers.
+>
+> Deliberately not done this pass: **step 4** (grants-as-facts as the single
+> store — workspace grants remain on the dual-index `GrantStore`, cell grants
+> on the registry record; the `_grants/` namespace currently holds only
+> requests/answers), the **stateless elevation URL** for the human re-consent
+> path (the `scope_denied` error names the path in prose instead), and the
+> **step 1 principal cleanup** (explicitly waived — pre-rename UUID-era grants
+> are treated as abandoned).
