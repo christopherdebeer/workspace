@@ -17,7 +17,10 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { randomUUID } from 'node:crypto';
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+// removeUndefinedValues: a job result legitimately carries undefined fields
+// (`error` on success, `result` on failure) — without this, saving a
+// *successful* async run throws and the job reports the marshaller's error.
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 const events = new EventBridgeClient({});
 const lambda = new LambdaClient({});
 

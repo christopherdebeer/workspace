@@ -22,7 +22,9 @@ import { randomUUID } from 'node:crypto';
 
 const lambda = new LambdaClient({});
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+// removeUndefinedValues: job results may carry undefined fields; without
+// this, saving such a job throws and the marshaller's error masks the result.
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 const TABLE = process.env.TABLE_NAME ?? '';
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
 
