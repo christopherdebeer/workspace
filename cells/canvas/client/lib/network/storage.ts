@@ -136,6 +136,7 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   // parcland's client-side history — the substrate's revision chain IS the
   // history; persisting versions would double-store every prior value.
   delete persisted.versions;
+  delete persisted.childCanvasState; // dead pre-refCanvasId nesting vestige
   if (typeof el._origW === 'number') {
     persisted.width = el._origW;
     persisted.height = el._origH;
