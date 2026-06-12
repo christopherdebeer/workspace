@@ -341,6 +341,7 @@ const FENCES: Record<string, (host: HTMLElement, code: string, ownerId: string) 
   csv: renderCsv,
   mermaid: renderMermaid,
   style: renderStyle,
+  repl: (host, code, ownerId) => renderRepl(host, { id: ownerId, content: code }),
 };
 
 export const fenceLangs = Object.keys(FENCES);
