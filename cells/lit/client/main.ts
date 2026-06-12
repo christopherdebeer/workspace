@@ -58,6 +58,17 @@ async function hydrateFences(root: HTMLElement): Promise<void> {
     const arg = (code.textContent || '').trim();
     if (!lang || !arg) continue;
     const pre = code.parentElement as HTMLElement;
+    // Pure viewers (json tree / csv table / mermaid / style) — one shared
+    // module, same implementations the canvas renderer facts use.
+    if (['json', 'csv', 'mermaid', 'style'].includes(lang)) {
+      const box = el('div', 'embed-view');
+      box.textContent = '…';
+      pre.replaceWith(box);
+      import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
+        .then((v) => v.renderFence(box, lang, arg))
+        .catch((err) => { box.textContent = `${lang}: ${(err as Error).message}`; });
+      continue;
+    }
     if (lang === 'board') {
       const wrap = el('div', 'embed-board');
       const frame = document.createElement('iframe');
