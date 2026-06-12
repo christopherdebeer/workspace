@@ -249,3 +249,106 @@ Steps 1–3 are done and live; the cell is `regwatch-b0393000` at
   (step 5); freeze the val after a week of green runs (step 6). Until the
   collector is repointed it keeps feeding the val, so plan a final
   incremental `migrate` (the URL dedupe makes it idempotent) at cutover.
+
+## 7. Substrate-nativity, honestly (2026-06-12)
+
+Assessment after re-reading [`substrate.md`](substrate.md),
+[`declarative-actions-vs-code-cells.md`](declarative-actions-vs-code-cells.md),
+and the trajectory ledger — recorded so the next session can pick up the
+outstanding items without re-deriving the argument.
+
+### What the port is, in the thesis's terms
+
+A well-housed **organ**, not reef. `substrate.md`'s pre-substrate diagnosis
+of the platform — "all organs and no reef" — describes regwatch-as-ported in
+miniature:
+
+- **Items are rows, not facts.** No `{value, _meta}`, no server-stamped
+  provenance (`collected_at`/`reviewer` are hand-rolled where the substrate
+  stamps `writer`/`revision` for free), no supersede (status mutates in
+  place), no salience, no links.
+- **The dashboard is a bespoke surface, not a projection.** The tools and
+  the client are two separate builds, not two renderers of one declaration.
+- **The vocabulary is code-only.** `review`/`flag` are exactly the shape
+  sync's declarative actions express as data — a CEL guard
+  (`status == 'unreviewed'`) plus a declared write footprint. On the
+  execution gradient, only the collector genuinely needs an organ (network
+  I/O, dedupe serialization); the triage loop sits at the declarative end
+  and is the obvious first demotion of code to declaration.
+
+The thesis names the test this trips: *"if porting requires working against
+the platform's grain — treating `{value, _meta}` as cell-private trivia —
+that is the signal the foundation is missing something."* Tripped
+deliberately, as step one; the missing piece it points at is identity.
+
+### Tenancy: what a grant actually gets you
+
+The cell's table is **one shared pool with attribution, not isolation**.
+Every granted principal sees the same items/notes/sources through the tools;
+reviews are stamped with the caller via `x-cell-caller`. Known consequences:
+
+- `REVIEW` is keyed by item id alone — structurally **one review per item,
+  latest reviewer wins**. Correct while "the reviewer" is singular (the
+  app's design premise); wrong the day two reviewers disagree.
+- Grants are binary (per-cell), so the owner/reviewer split is an ad-hoc
+  `OWNER_ONLY` check inside the cell — an interim stand-in for the deferred
+  per-principal scope grammar.
+- The only *primitive* per-caller storage a cell gets is the S3 data space
+  (`cells.putData` partitions by caller); the table's tenancy is whatever
+  the cell code decides, and regwatch decided team-shared.
+
+### The single-user bias is foundational, not incidental
+
+A substrate-native regwatch would be: the collector as an attested organ
+(the `@c15r/input` pattern) emitting `reg-item` facts into a **slice**;
+inbox as a registered view; triage as declared actions; salience doing the
+deadline/neglect work the val built bespoke machinery for; items linkable
+onto boards and day-logs so the silo dissolves. But — **whose slice?** The
+natural owner is Emily, with the collector granted write-into-her-scope. The
+substrate cannot express that today:
+
+- slices are per-user and cells bake `OWNER=c15r` into IAM
+  (`LeadingKeys: STATE#c15r`) and env;
+- `workspace.share` is **read-only** sharing — `substrate.md` step 3 lists
+  "write-through grants" as next;
+- grants-to-principals sits in the trajectory doc's deferred ledger.
+
+So *Emily-as-grantee-of-c15r's-app* is what's expressible today (and what
+shipped); *Emily-as-first-class-owner-of-her-own-reviewed-state* is what the
+model wants and the primitives don't yet support. Regwatch is now the
+concrete motivating case for three deferred things at once: per-tool scope
+grammar (the app's view), write-through grants + grants-to-principals (the
+substrate's view), and the organ→vocabulary promotion path (triage first).
+
+### Outstanding items (pickup list for the next session)
+
+Operational (from §6):
+
+1. Repoint the Claude Code scheduled collector at the parc.land MCP server
+   (config lives in claude.ai); watch one full run and its coverage note.
+2. At cutover, run one final incremental `migrate` from a fresh val export
+   (idempotent — URL dedupe skips existing items).
+3. Emily onboarding: passkey sign-in at `parc.land/@c15r/regwatch`, then
+   `cells.grant { cellId: "regwatch-b0393000", principal: <her handle> }`.
+4. Real-device check of the OAuth → inbox boot (verified via gateway and
+   dispatch, not yet clicked through on a phone).
+5. After a week of green runs: freeze the val (revoke its token, keep as
+   archive).
+
+Substrate-convergence (each independently shippable):
+
+6. **Reef projection (cheap, now):** have the cell emit a small projection
+   into the substrate via the reef-writer/organ path — `regwatch/inbox-count`
+   and/or stub facts per high-relevance item linking back to the cell — so
+   regwatch surfaces in home/attention/tend instead of being invisible to
+   the reef.
+7. **Per-review history:** key reviews `REVIEW / <item_id>#<reviewer>` (or
+   append-only) before a second reviewer ever exists.
+8. **Triage as declared actions:** when write-through grants land, move
+   `review`/`flag` to vocabulary over item facts and demote the cell to
+   ingest-only organ.
+9. **Items as facts:** the full promotion — collector writes `reg-item`
+   facts into the owning slice via the attested event path; inbox becomes a
+   registered view; the dashboard shrinks to a themed projection. Gated on
+   grants-to-principals + write-through grants; regwatch is the test case
+   that should drive their design.
