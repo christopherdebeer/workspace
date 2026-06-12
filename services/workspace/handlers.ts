@@ -33,6 +33,7 @@ import {
   type ChangesResult,
   type AttentionResult,
   type EdgeRecord,
+  type LinkResult,
   type FactTimer,
   type CommandHandler,
   type RegisteredCommand,
@@ -123,6 +124,8 @@ export interface QueryInput {
   prefix?: string;
   rankBy?: 'salience' | 'recency';
   limit?: number;
+  /** Resume token from a previous page's `nextCursor`. */
+  cursor?: string;
   includeSuperseded?: boolean;
 }
 export interface LinkInput {
@@ -138,7 +141,8 @@ export interface NeighborsInput {
   rel?: string;
 }
 export interface ChangesInput {
-  sinceSeq?: number;
+  /** Events after this seq; `'head'` returns no events, just the current head to tail from. */
+  sinceSeq?: number | 'head';
   limit?: number;
 }
 export interface LinksInput {
@@ -149,6 +153,8 @@ export interface AttentionInput {
   /** Age (ms) beyond which a live fact counts as stale. Default 14 days. */
   staleMs?: number;
   limit?: number;
+  /** Also surface `_`-prefixed system namespaces (default false). */
+  includeSystem?: boolean;
 }
 export interface SupersedeInput {
   key: string;
@@ -196,7 +202,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   recall: CommandHandler<RecallInput | undefined, ReadResult>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
-  link: CommandHandler<LinkInput, EdgeRecord>;
+  link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[] }>;
@@ -223,11 +229,48 @@ interface ToolDescriptor {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * The result envelope, declared. Self-documentation has two directions: an
+   * input schema teaches the call, a result schema teaches the read — and an
+   * undeclared envelope is exactly where shapes drift apart. Kept shallow.
+   */
+  resultSchema?: Record<string, unknown>;
   /** Scope the gateway enforces before forwarding (null = any authenticated user). */
   scope: string | null;
   /** `read` = side-effect-free (observe); `act` = may mutate. Routes read/act dispatch. */
   kind: 'read' | 'act';
 }
+
+// ── shared result-schema fragments (shallow on purpose — catalog weight is an
+//    ergonomic budget; see docs/trajectory/2026-06-12-mcp-agent-ergonomics-review.md) ──
+
+const META_SCHEMA = {
+  type: 'object',
+  description:
+    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, elided',
+} as const;
+
+const ENTRY_SCHEMA = {
+  type: 'object',
+  properties: { value: { description: 'The stored JSON value' }, _meta: META_SCHEMA },
+} as const;
+
+const KEYED_ENTRY_SCHEMA = {
+  type: 'object',
+  properties: { key: { type: 'string' }, value: { description: 'The stored JSON value' }, _meta: META_SCHEMA },
+} as const;
+
+const EDGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    from: { type: 'string' },
+    rel: { type: 'string' },
+    to: { type: 'string' },
+    strength: { type: ['number', 'null'] },
+    createdAt: { type: 'string' },
+    writer: { type: ['string', 'null'] },
+  },
+} as const;
 
 /**
  * The workspace vocabulary as MCP tool descriptors. Every command operates on the
@@ -268,6 +311,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key', 'value'],
       additionalProperties: false,
     },
+    resultSchema: { ...ENTRY_SCHEMA, description: 'The written fact' },
   },
   {
     name: 'ingest',
@@ -300,26 +344,45 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['facts'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        ingested: { type: 'number' },
+        errors: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, error: { type: 'string' } } } },
+      },
+    },
   },
   {
     name: 'recall',
     description:
-      'Your workspace view: your own slice plus everything shared with you, salience-shaped into focus/peripheral/elided. Granted facts appear under `<owner>/<key>`.',
+      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        elision: { type: 'string', enum: ['auto', 'none'], description: "'auto' hides elided values; 'none' returns everything" },
+        elision: { type: 'string', enum: ['auto', 'none'], description: "'auto' (default) collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
         expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
       },
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts', additionalProperties: ENTRY_SCHEMA },
+        elided: {
+          type: 'array',
+          description: 'Stubs for withheld entries (score-descending)',
+          items: { type: 'object', properties: { key: { type: 'string' }, type: { type: ['string', 'null'] }, score: { type: 'number' } } },
+        },
+        _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total }' },
+      },
+    },
   },
   {
     name: 'peek',
-    description: 'Read one fact by key from your slice (no salience shaping).',
+    description: 'Read one fact by key from your slice (no salience shaping). Returns null when the key is absent — including a lapsed lease — so it doubles as an existence probe.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -328,11 +391,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key'],
       additionalProperties: false,
     },
+    resultSchema: { ...ENTRY_SCHEMA, description: 'The fact, or null when absent' },
   },
   {
     name: 'query',
     description:
-      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit. Use this instead of recall when you want a targeted subset.',
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Use this instead of recall when you want a targeted subset.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -343,14 +407,25 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         prefix: { type: 'string', description: 'Only keys with this prefix' },
         rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
         limit: { type: 'number', description: 'Max entries to return' },
+        cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
       },
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        entries: { type: 'array', items: KEYED_ENTRY_SCHEMA },
+        count: { type: 'number', description: 'Entries in this page' },
+        total: { type: 'number', description: 'Entries matching overall' },
+        nextCursor: { type: 'string', description: 'Present when more pages remain' },
+      },
+    },
   },
   {
     name: 'link',
-    description: 'Add a typed, directed edge `from --rel--> to` between two fact keys in your slice (e.g. rel: "grounds", "refines", "relates").',
+    description:
+      'Add a typed, directed edge `from --rel--> to` between two fact keys in your slice (e.g. rel: "grounds", "refines", "relates"). The result carries `fromExists`/`toExists` hints — a dangling edge is allowed, but you learn at write time, not at the next tending pass.',
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -363,6 +438,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       },
       required: ['from', 'rel', 'to'],
       additionalProperties: false,
+    },
+    resultSchema: {
+      ...EDGE_SCHEMA,
+      properties: {
+        ...EDGE_SCHEMA.properties,
+        fromExists: { type: 'boolean', description: 'from resolves to a live fact' },
+        toExists: { type: 'boolean', description: 'to resolves to a live fact' },
+      },
     },
   },
   {
@@ -380,6 +463,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['from', 'rel', 'to'],
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
   },
   {
     name: 'neighbors',
@@ -396,6 +480,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        outbound: { type: 'array', items: EDGE_SCHEMA },
+        inbound: { type: 'array', items: EDGE_SCHEMA },
+        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist', additionalProperties: ENTRY_SCHEMA },
+      },
+    },
   },
   {
     name: 'links',
@@ -409,25 +501,37 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       },
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
   },
   {
     name: 'changes',
-    description: 'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. The change feed.',
+    description:
+      'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. Pass sinceSeq:"head" to get just the head seq and start tailing in one call. The change feed.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        sinceSeq: { type: 'number', description: 'Return events with seq greater than this (default 0)' },
+        sinceSeq: {
+          description: 'Return events with seq greater than this number (default 0), or "head" for no events + the current head seq',
+          oneOf: [{ type: 'number' }, { type: 'string', enum: ['head'] }],
+        },
         limit: { type: 'number', description: 'Max events' },
       },
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        events: { type: 'array', items: { type: 'object', properties: { op: { type: 'string' }, key: { type: ['string', 'null'] }, at: { type: 'string' }, seq: { type: 'number' } } } },
+        seq: { type: 'number', description: 'Current head — resume from here' },
+      },
     },
   },
   {
     name: 'attention',
     description:
-      'What needs tending, as a derived read: stale facts, unlinked facts, and dangling edges. The just-in-time cron — read it at session start and act on what surfaces.',
+      'What needs tending, as a derived read: stale facts, unlinked facts, and dangling edges. `_`-prefixed system namespaces (canvas elements, declared vocabulary) are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -435,8 +539,17 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         staleMs: { type: 'number', description: 'Staleness threshold in ms (default 14 days)' },
         limit: { type: 'number', description: 'Max items per category (default 25)' },
+        includeSystem: { type: 'boolean', description: 'Also surface `_`-prefixed system namespaces (default false)' },
       },
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        stale: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, updatedAt: { type: 'string' }, type: { type: ['string', 'null'] } } } },
+        unlinked: { type: 'array', items: { type: 'string' } },
+        dangling: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, rel: { type: 'string' }, to: { type: 'string' }, reason: { type: 'string' } } } },
+      },
     },
   },
   {
@@ -469,6 +582,13 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['action'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'object', description: 'The registered definition, echoed' },
+        contested: { type: 'array', description: 'Other actions declaring writes to the same keys (surfaced, not blocked)' },
+      },
+    },
   },
   {
     name: 'actions',
@@ -476,6 +596,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     scope: null,
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { actions: { type: 'array', items: { type: 'object', description: 'Action definitions' } } } },
   },
   {
     name: 'deleteAction',
@@ -488,6 +609,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['id'],
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
   },
   {
     name: 'invoke',
@@ -504,6 +626,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['action'],
       additionalProperties: false,
     },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        invoked: { type: 'boolean' },
+        action: { type: 'string' },
+        params: { type: 'object' },
+        writes: { type: 'array', description: 'The applied writes, each `{ key, value, _meta }`', items: KEYED_ENTRY_SCHEMA },
+      },
+    },
   },
   {
     name: 'tend',
@@ -512,6 +643,20 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     scope: 'workspace:admin',
     kind: 'act',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      description: 'The tending report (also written to `tending/latest`)',
+      properties: {
+        at: { type: 'string' },
+        scope: { type: 'string' },
+        stale: { type: 'number' },
+        unlinked: { type: 'number' },
+        dangling: { type: 'number' },
+        staleSample: { type: 'array' },
+        unlinkedSample: { type: 'array' },
+        danglingSample: { type: 'array' },
+      },
+    },
   },
   {
     name: 'registerView',
@@ -539,6 +684,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['view'],
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', description: 'The registered view definition, echoed' },
   },
   {
     name: 'views',
@@ -546,6 +692,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     scope: null,
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { views: { type: 'array', items: { type: 'object', description: 'View definitions' } } } },
   },
   {
     name: 'view',
@@ -557,6 +704,16 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: { id: { type: 'string', description: 'The view id' } },
       required: ['id'],
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        description: { type: 'string' },
+        render: { type: ['object', 'null'], description: 'The render hint' },
+        value: { description: 'The evaluated value, per the view’s reduce' },
+        count: { type: 'number' },
+      },
     },
   },
   {
@@ -570,11 +727,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['id'],
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
   },
   {
     name: 'supersede',
     description:
-      'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot.',
+      'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot. Returns the retired fact, or null when the key never existed.',
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -587,6 +745,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key'],
       additionalProperties: false,
     },
+    resultSchema: { ...ENTRY_SCHEMA, description: 'The retired fact, or null when the key never existed' },
   },
   {
     name: 'share',
@@ -601,6 +760,10 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       },
       required: ['to'],
       additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { owner: { type: 'string' }, grantee: { type: 'string' }, key: { type: 'string', description: '"*" = whole slice' }, createdAt: { type: 'string' } },
     },
   },
   {
@@ -617,6 +780,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['to'],
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
   },
   {
     name: 'shared',
@@ -624,6 +788,13 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     scope: null,
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        shared: { type: 'array', description: 'Grants you have made' },
+        receiving: { type: 'array', description: 'Grants made to you' },
+      },
+    },
   },
 ];
 
@@ -736,6 +907,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           prefix: input?.prefix,
           rankBy: input?.rankBy,
           limit: input?.limit,
+          cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
         },
         ctx.identity,
@@ -778,13 +950,14 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     async changes(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
-      return state.changes(scope, input?.sinceSeq ?? 0, input?.limit);
+      const sinceSeq = input?.sinceSeq === 'head' ? 'head' : (input?.sinceSeq ?? 0);
+      return state.changes(scope, sinceSeq, input?.limit);
     },
 
     async attention(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
-      return state.attention(scope, { staleMs: input?.staleMs, limit: input?.limit });
+      return state.attention(scope, { staleMs: input?.staleMs, limit: input?.limit, includeSystem: input?.includeSystem });
     },
 
     async registerAction(input, ctx) {

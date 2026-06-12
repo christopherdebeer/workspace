@@ -39,8 +39,12 @@ function makeParc(emitted: Array<{ key: string; value: unknown }>) {
       const item = res.Item as { value?: unknown; superseded?: boolean } | undefined;
       return item && !item.superseded ? item.value : null;
     },
-    /** Query the owner's slice by key prefix (bounded). */
-    async query(opts: { prefix?: string; limit?: number } = {}): Promise<Array<{ key: string; value: unknown }>> {
+    /**
+     * Query the owner's slice by key prefix (bounded). Returns the same
+     * `{ entries, count }` envelope as workspace.query, so code moved between
+     * the repl and the gateway does not re-learn the shape.
+     */
+    async query(opts: { prefix?: string; limit?: number } = {}): Promise<{ entries: Array<{ key: string; value: unknown }>; count: number }> {
       if (!SUBSTRATE) throw new Error('substrate unavailable');
       const res = await ddb.send(new QueryCommand({
         TableName: SUBSTRATE,
@@ -48,9 +52,10 @@ function makeParc(emitted: Array<{ key: string; value: unknown }>) {
         ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':sk': `KEY#${opts.prefix ?? ''}` },
         Limit: Math.min(opts.limit ?? 50, 200),
       }));
-      return (res.Items ?? [])
+      const entries = (res.Items ?? [])
         .filter((i) => !i.superseded)
         .map((i) => ({ key: String(i.sk).slice('KEY#'.length), value: i.value }));
+      return { entries, count: entries.length };
     },
     /** Emit a fact to the owner's slice (organ path — provenance attested). */
     async emit(key: string, value: unknown, opts: { type?: string; tags?: string[] } = {}): Promise<void> {
@@ -136,7 +141,7 @@ const TOOLS = [
   {
     name: 'exec',
     description:
-      'Run code server-side with substrate-native access. The code is a JS async function body; `return` yields the result. Bindings: parc.read(key) / parc.query({prefix,limit}) / parc.emit(key,value,{type,tags}) (organ-path write to your slice), console (captured), input, fetch. Returns {result, logs, emitted, error}. async:true for long runs → {jobId}, poll fetch. v0 is js/ts.',
+      'Run code server-side with substrate-native access. The code is a JS async function body; `return` yields the result. Bindings: parc.read(key) / parc.query({prefix,limit}) → {entries:[{key,value}],count} (same envelope as workspace.query) / parc.emit(key,value,{type,tags}) (organ-path write to your slice), console (captured), input, fetch. Returns {result, logs, emitted, error}. async:true for long runs → {jobId}, poll fetch. v0 is js/ts.',
     kind: 'act',
     inputSchema: {
       type: 'object',

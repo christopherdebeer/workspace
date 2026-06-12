@@ -219,6 +219,17 @@ both trajectory records, `canvas-substrate-design.md` (skimmed),
    say "parc.land substrate" and name the cell families, so harness-level
    tool search lands here instead of on the ancestors.
 
+> **Addendum (same day):** recommendations 1–6 and 8 were implemented in the
+> commits following this review — compact elided stubs + rounded salience
+> figures (`state.ts`), query cursor/total, `changes sinceSeq:"head"`, link
+> existence hints, namespace-aware attention, catalog `resultSchema` + summary
+> mode, and the server's MCP identity (`instructions`/title/annotations — see
+> `docs/mcp-spec-alignment.md`). Recommendation 7 (salience v2) remains open
+> and deserves its own design doc. The recall map-vs-array unification was
+> deliberately deferred: the compact stubs remove the payload problem, and
+> breaking `ReadResult` for every surface wasn't worth the remaining
+> consistency win this pass.
+
 ## 5. The one-line verdict
 
 The surface is unusually good at teaching its *semantics* — verbs, state

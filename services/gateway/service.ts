@@ -52,6 +52,8 @@ interface ProviderTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** The declared result envelope, when the provider documents it. */
+  resultSchema?: Record<string, unknown>;
   scope: string | null;
   kind: 'read' | 'act';
 }
@@ -62,6 +64,7 @@ interface CellTool {
   address: string; // `@<owner>/<slug>`
   description: string;
   inputSchema: Record<string, unknown>;
+  resultSchema?: Record<string, unknown>;
   scope: string | null;
   kind: 'read' | 'act';
   cellId: string;
@@ -84,7 +87,17 @@ interface CatalogEntry {
   kind: 'read' | 'act';
   description: string;
   inputSchema: Record<string, unknown>;
+  /** The declared result envelope — self-documentation's read direction. */
+  resultSchema?: Record<string, unknown>;
   scope: string | null;
+}
+
+/** One capability in the summary catalog: enough to decide, not to call. */
+interface CatalogSummaryEntry {
+  target: string;
+  kind: 'read' | 'act';
+  /** First sentence of the description. */
+  summary: string;
 }
 
 function baseUrl(req: ServiceHttpRequest): string {
@@ -160,7 +173,14 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
     try {
       const res = await ctx.serviceClient(cell).command<{ tools: ProviderTool[] }>('describeTools', {});
       for (const t of res?.tools ?? []) {
-        caps.push({ target: `${cell}.${t.name}`, kind: t.kind, description: t.description, inputSchema: t.inputSchema, scope: t.scope ?? null });
+        caps.push({
+          target: `${cell}.${t.name}`,
+          kind: t.kind,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
+          scope: t.scope ?? null,
+        });
       }
     } catch (err) {
       ctx.logger.warn('provider describeTools failed', { cell, error: (err as Error).message });
@@ -170,7 +190,14 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
   try {
     const res = await ctx.serviceClient('cells').command<{ tools: CellTool[] }>('describeCellTools', {});
     for (const t of res?.tools ?? []) {
-      caps.push({ target: `${t.address}.${t.tool}`, kind: t.kind, description: t.description, inputSchema: t.inputSchema, scope: t.scope ?? null });
+      caps.push({
+        target: `${t.address}.${t.tool}`,
+        kind: t.kind,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
+        scope: t.scope ?? null,
+      });
     }
   } catch (err) {
     ctx.logger.warn('dynamic cell tools aggregation failed', { error: (err as Error).message });
@@ -178,6 +205,41 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
 
   // Advertise only what the caller is entitled to use.
   return caps.filter((c) => !c.scope || hasScope(ctx.identity, c.scope));
+}
+
+/** The cell-name half of a target (`workspace.recall` → `workspace`; `@a/b.t` → `@a/b`). */
+function cellOf(target: string): string {
+  const dot = target.startsWith('@') ? target.lastIndexOf('.') : target.indexOf('.');
+  return dot > 0 ? target.slice(0, dot) : target;
+}
+
+/** First sentence of a description — enough to decide whether to drill in. */
+function firstSentence(text: string): string {
+  const m = text.match(/^[^.!?]*[.!?]/);
+  return (m ? m[0] : text).trim();
+}
+
+/**
+ * The summary catalog: capabilities grouped by cell, one line each, no schemas
+ * — a fraction of the full catalog's weight. Progressive disclosure for the
+ * menu itself: skim here, then `read("$catalog")` or a single target resolve
+ * for the full contract.
+ */
+function summarizeCatalog(caps: CatalogEntry[]): {
+  cells: Array<{ cell: string; count: number; capabilities: CatalogSummaryEntry[] }>;
+  hint: string;
+} {
+  const byCell = new Map<string, CatalogSummaryEntry[]>();
+  for (const c of caps) {
+    const cell = cellOf(c.target);
+    const list = byCell.get(cell) ?? [];
+    list.push({ target: c.target, kind: c.kind, summary: firstSentence(c.description) });
+    byCell.set(cell, list);
+  }
+  return {
+    cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
+    hint: 'Summary view. read("$catalog") without detail returns full input/result schemas.',
+  };
 }
 
 // ─── the two tools ────────────────────────────────────────────────
@@ -190,7 +252,10 @@ interface DispatchInput {
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
-    return { capabilities: await buildCatalog(ctx) };
+    const caps = await buildCatalog(ctx);
+    const detail = (input?.input as { detail?: string } | undefined)?.detail;
+    if (detail === 'summary') return summarizeCatalog(caps);
+    return { capabilities: caps };
   }
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
@@ -224,7 +289,10 @@ const READ_SCHEMA = {
   type: 'object',
   properties: {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
-    input: INPUT_PROP,
+    input: {
+      ...INPUT_PROP,
+      description: `${INPUT_PROP.description} For "${CATALOG}": { detail: "summary" } returns capabilities grouped by cell, one line each, no schemas.`,
+    },
   },
   additionalProperties: false,
 };
@@ -237,20 +305,28 @@ const ACT_SCHEMA = {
 
 const tools: Record<string, McpToolDefinition> = {
   whoami: {
-    description: 'Return the authenticated principal and granted scopes.',
+    title: 'Who am I',
+    description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
     handler: whoamiTool,
   },
   read: {
+    title: 'Observe the substrate',
     description:
-      'Observe a platform capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect.',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu.',
     inputSchema: READ_SCHEMA,
+    annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],
   },
   act: {
+    title: 'Act on the substrate',
     description:
-      'Invoke a platform capability that may mutate (e.g. workspace.remember, forge.createCell, @owner/cell.tool). Discover targets with read("$catalog").',
+      'Invoke a parc.land substrate capability that may mutate (e.g. workspace.remember, cells.create, @owner/cell.tool). Discover targets with read("$catalog").',
     inputSchema: ACT_SCHEMA,
+    // No destructiveHint:false — cells.delete is genuinely destructive; the
+    // substrate side supersedes-not-deletes, but act spans both.
+    annotations: { readOnlyHint: false },
     handler: act as McpToolDefinition['handler'],
   },
 };
@@ -272,8 +348,9 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
       authorization_servers: [origin],
       transport: 'streamable-http',
       mcp_endpoint: `${origin}/mcp`,
+      name: 'parc.land substrate',
       tools: ['whoami', 'read', 'act'],
-      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer to list what you can do.',
+      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer to list what you can do ({detail:"summary"} for the grouped one-line menu).',
     },
   };
 }
@@ -281,7 +358,15 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
 export const handler = defineMcpService({
   name: 'gateway',
   mcpPath: '/mcp',
-  serverInfo: { name: 'workspace', version: '1.0.0' },
+  serverInfo: { name: 'parc-substrate', title: 'parc.land substrate', version: '1.0.0' },
+  // The spec's `instructions` field: the server's self-introduction, surfaced
+  // into the model's context at connect — discovery must not depend on a
+  // client knowing what "read/act" means here.
+  instructions:
+    'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
+    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog", {detail:"summary"}) for the grouped menu, ' +
+    'read("$catalog") for full schemas. Targets look like workspace.query or @owner/cell.tool. ' +
+    'Prefer workspace.query (filtered, paged) over workspace.recall (the whole shaped view) for targeted reads.',
   tools,
   http: [
     { method: 'GET', path: '/mcp', handler: info },

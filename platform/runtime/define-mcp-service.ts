@@ -35,8 +35,17 @@ const PROTOCOL_VERSION = '2025-06-18';
 export interface McpToolDefinition<Input = never, Output = unknown> {
   /** Human-readable description shown to the model/client. */
   description: string;
+  /** Spec display name (clients show this instead of the programmatic name). */
+  title?: string;
   /** JSON Schema for the tool's arguments (defaults to an open object). */
   inputSchema?: Record<string, unknown>;
+  /** JSON Schema for the tool's result (spec `outputSchema`) — declares the read direction. */
+  outputSchema?: Record<string, unknown>;
+  /**
+   * Spec tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+   * `openWorldHint`) — how clients learn a tool's blast radius without calling it.
+   */
+  annotations?: Record<string, unknown>;
   /** Optional scope required to call the tool (enforced via `requireScope`). */
   scope?: string;
   handler: (input: Input, ctx: ServiceContext) => Promise<Output> | Output;
@@ -48,8 +57,16 @@ export interface McpServiceDefinition {
   version?: string;
   /** Path of the JSON-RPC endpoint. Defaults to `/mcp`. */
   mcpPath?: string;
-  /** Advertised in `initialize`. Defaults to `{ name, version }`. */
-  serverInfo?: { name: string; version: string };
+  /** Advertised in `initialize`. Defaults to `{ name, version }`. `title` is the spec's display name. */
+  serverInfo?: { name: string; version: string; title?: string };
+  /**
+   * Advertised in `initialize` as the spec's `instructions` field — the
+   * server's self-introduction, surfaced into the client's context. This is
+   * the one channel a server controls to teach a model what it is *before*
+   * the first tool call; leaving it empty means discovery starts from tool
+   * names alone.
+   */
+  instructions?: string;
   /**
    * Require a validated bearer on the MCP endpoint. When true (default), an
    * unauthenticated request gets 401 + WWW-Authenticate so the client can
@@ -146,6 +163,7 @@ export function defineMcpService(def: McpServiceDefinition) {
             typeof params.protocolVersion === 'string' ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo,
+          ...(def.instructions ? { instructions: def.instructions } : {}),
         });
       case 'ping':
         return rpcResult(id, {});
@@ -154,11 +172,17 @@ export function defineMcpService(def: McpServiceDefinition) {
         return rpcResult(id, {
           tools: Object.keys(tools)
             .filter((name) => entitled(tools[name], ctx))
-            .map((name) => ({
-              name,
-              description: tools[name].description,
-              inputSchema: tools[name].inputSchema ?? { type: 'object' },
-            })),
+            .map((name) => {
+              const t = tools[name];
+              return {
+                name,
+                ...(t.title ? { title: t.title } : {}),
+                description: t.description,
+                inputSchema: t.inputSchema ?? { type: 'object' },
+                ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+                ...(t.annotations ? { annotations: t.annotations } : {}),
+              };
+            }),
         });
       }
       case 'tools/call': {
