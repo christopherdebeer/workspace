@@ -335,8 +335,42 @@ interface ListEntry {
   _meta?: { type?: string | null; tags?: string[]; updatedAt?: string };
 }
 
+/** Type vocabulary loaded from the substrate (`_types/<type>` facts): the
+ *  presentation/routing table is data now, not hardcoded. Conventions below
+ *  remain as the fallback for types without a declaration. */
+interface TypeDecl { icon?: string; titlePath?: string; href?: string }
+let typeDecls: Record<string, TypeDecl> = {};
+export async function loadTypeDecls(): Promise<void> {
+  try {
+    const r = await mcpCall('read', 'workspace.query', { prefix: '_types/', limit: 100 });
+    if (r.ok) {
+      const entries = (r.value as { entries?: Array<{ key: string; value: TypeDecl }> }).entries ?? [];
+      typeDecls = Object.fromEntries(entries.map((e) => [e.key.slice('_types/'.length), e.value ?? {}]));
+    }
+  } catch {
+    /* conventions still apply */
+  }
+}
+function pathInto(value: unknown, path: string): unknown {
+  let cur: unknown = value;
+  for (const p of path.split('.')) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[p];
+  }
+  return cur;
+}
+
+export function typeIcon(e: ListEntry): string {
+  return typeDecls[e._meta?.type ?? '']?.icon ?? '';
+}
+
 /** A fact's one-line presentation: title from its value, not its key. */
 function factTitle(e: ListEntry): string {
+  const decl = typeDecls[e._meta?.type ?? ''];
+  if (decl?.titlePath) {
+    const v = pathInto(e.value, decl.titlePath);
+    if (typeof v === 'string' && v) return v.slice(0, 80);
+  }
   const v = e.value;
   if (typeof v === 'string') return v.slice(0, 80) || e.key;
   if (v && typeof v === 'object') {
@@ -352,11 +386,19 @@ function factTitle(e: ListEntry): string {
   return e.key;
 }
 
-/** Where a fact lives — its home surface, by type/key convention. */
+/** Where a fact lives — its home surface, from `_types` href template or convention. */
 function factHref(e: ListEntry): string | null {
   const t = e._meta?.type ?? null;
   const v = (e.value ?? {}) as Record<string, unknown>;
   const tags = e._meta?.tags ?? [];
+  const decl = typeDecls[t ?? ''];
+  if (decl?.href) {
+    const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
+    return decl.href
+      .replace(/\$\{key\}/g, encodeURIComponent(e.key))
+      .replace(/\$\{id\}/g, encodeURIComponent(id))
+      .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_m, p: string) => String(pathInto(e.value, p) ?? ''));
+  }
   if (e.key.startsWith('doc:')) return `/@c15r/lit?doc=${encodeURIComponent(e.key.slice(4))}`;
   if (t === 'capture' || e.key.startsWith('inbox/')) {
     return typeof v.captured === 'string' ? `/@c15r/lit?doc=${encodeURIComponent(`log:${v.captured}`)}` : '/@c15r/input';
@@ -464,7 +506,8 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
           <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.35rem' }}>
             {entries.slice(0, 8).map((e) => {
               const to = factHref(e);
-              const title = factTitle(e);
+              const icon = typeIcon(e);
+              const title = `${icon ? icon + ' ' : ''}${factTitle(e)}`;
               const date = e._meta?.updatedAt ? e._meta.updatedAt.slice(0, 10) : null;
               const sub = [e._meta?.type, e.key, date].filter(Boolean).join(' · ');
               return (
@@ -508,14 +551,16 @@ function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
   useEffect(() => {
     if (!authed) return;
     let live = true;
-    mcpCall('read', 'workspace.views')
-      .then((r) => {
+    // Load the type vocabulary first so list surfaces show icons + route by it.
+    loadTypeDecls().then(() => {
+      if (!live) return;
+      return mcpCall('read', 'workspace.views').then((r) => {
         if (!live) return;
         setViews(r.ok ? ((r.value as { views?: ViewDef[] }).views ?? []) : []);
-      })
-      .catch(() => {
-        if (live) setViews([]);
       });
+    }).catch(() => {
+      if (live) setViews([]);
+    });
     return () => {
       live = false;
     };

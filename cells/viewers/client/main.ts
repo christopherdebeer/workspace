@@ -36,6 +36,16 @@ function injectCss(): void {
 .vw-style code { color: #2f6f4f; }
 .vw-mermaid { display: flex; align-items: center; justify-content: center; background: #fff; }
 .vw-mermaid svg { max-width: 100%; max-height: 100%; }
+.vw-repl { display: flex; flex-direction: column; padding: 0; }
+.repl-code { flex: 1; min-height: 60px; font: 11px/1.4 ui-monospace, Menlo, monospace; border: 0; border-bottom: 1px solid #e4e4dc; padding: 0.5em; resize: none; background: #fbfbf8; }
+.repl-bar { display: flex; align-items: center; gap: 0.6em; padding: 0.3em 0.5em; background: #f4f4ee; font: 11px system-ui, sans-serif; }
+.repl-bar button { border: 1px solid #c9c9bd; background: #fff; border-radius: 6px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
+.repl-server { color: #8a8a82; display: flex; align-items: center; gap: 2px; }
+.repl-out { overflow: auto; max-height: 50%; padding: 0.3em 0.5em; }
+.repl-out pre { margin: 0.2em 0; white-space: pre-wrap; word-break: break-word; }
+.repl-logs { color: #555; }
+.repl-result { color: #2f4f8a; }
+.repl-emit { color: #2f6f4f; font-size: 10px; }
 .vw-err { color: #7a1f1f; font: 11px ui-monospace, monospace; padding: 0.5em 0.7em; white-space: pre-wrap; }
 `;
   document.head.appendChild(s);
@@ -217,6 +227,111 @@ export const style = {
   unmount(_dom: HTMLElement): void {
     /* the sheet persists for the session; a content change replaces it */
   },
+};
+
+/* ── repl: editor + run + output (outputs-as-facts gateway) ─────── */
+
+interface ReplEl { id: string; content?: string; lang?: string; server?: boolean; width?: number; height?: number; scale?: number; _factKey?: string }
+
+function renderRepl(host: HTMLElement, el: ReplEl, controller?: any): void {
+  injectCss();
+  host.classList.add('vw', 'vw-repl');
+  host.textContent = '';
+  const lang = el.lang ?? 'js';
+  const ta = document.createElement('textarea');
+  ta.className = 'repl-code';
+  ta.value = el.content ?? '';
+  ta.spellcheck = false;
+  const bar = document.createElement('div');
+  bar.className = 'repl-bar';
+  const runBtn = document.createElement('button');
+  runBtn.textContent = '▶ run';
+  const serverToggle = document.createElement('label');
+  serverToggle.className = 'repl-server';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = !!el.server;
+  serverToggle.append(cb, document.createTextNode(' server'));
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = '⤓ output→fact';
+  saveBtn.className = 'repl-save';
+  saveBtn.style.display = 'none';
+  bar.append(runBtn, serverToggle, saveBtn);
+  const out = document.createElement('div');
+  out.className = 'repl-out';
+  host.append(ta, bar, out);
+
+  let lastResult: unknown;
+  const show = (r: { result?: unknown; logs?: string[]; emitted?: string[]; error?: string }): void => {
+    lastResult = r.result;
+    out.textContent = '';
+    if (r.logs?.length) { const p = document.createElement('pre'); p.className = 'repl-logs'; p.textContent = r.logs.join('\n'); out.appendChild(p); }
+    if (r.emitted?.length) { const e = document.createElement('div'); e.className = 'repl-emit'; e.textContent = '↳ emitted: ' + r.emitted.join(', '); out.appendChild(e); }
+    if (r.error) { const p = document.createElement('pre'); p.className = 'vw-err'; p.textContent = r.error; out.appendChild(p); }
+    else { const p = document.createElement('pre'); p.className = 'repl-result'; p.textContent = r.result === undefined ? '(no return value)' : typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2); out.appendChild(p); saveBtn.style.display = ''; }
+  };
+
+  runBtn.onclick = async () => {
+    runBtn.textContent = '…';
+    if (controller) { el.content = ta.value; (controller.saveCanvas ?? (() => {}))(controller.canvasState); }
+    try {
+      if (cb.checked) {
+        const sub: any = (window as any).__parcAct ? await (window as any).__parcAct('@c15r/run.exec', { code: ta.value, lang, async: true }) : null;
+        if (!sub?.jobId) throw new Error('server exec unavailable in this context');
+        const read = (window as any).__parcRead;
+        const deadline = Date.now() + 90000;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 2500));
+          const j = await read('@c15r/run.fetch', { jobId: sub.jobId });
+          if (j.status === 'done') { show(j.out as any); break; }
+          if (j.status === 'error') { show({ error: j.error }); break; }
+          if (Date.now() > deadline) { show({ error: 'timed out (90s)' }); break; }
+        }
+      } else {
+        show(await runClient(ta.value));
+      }
+    } catch (err) {
+      show({ error: (err as Error).message });
+    }
+    runBtn.textContent = '▶ run';
+  };
+
+  saveBtn.onclick = async () => {
+    const act = (window as any).__parcAct;
+    if (!act) return;
+    const key = `out:${el._factKey ?? el.id}:${Date.now().toString(36)}`;
+    await act('workspace.remember', { key, value: { content: typeof lastResult === 'string' ? lastResult : JSON.stringify(lastResult, null, 2), producedBy: el._factKey ?? `el:${el.id}` }, via: 'repl', type: 'output' });
+    await act('workspace.link', { from: key, rel: 'produced-by', to: el._factKey ?? `el:${el.id}` }).catch(() => {});
+    saveBtn.textContent = '✓ saved ' + key;
+    setTimeout(() => { saveBtn.textContent = '⤓ output→fact'; }, 2500);
+  };
+}
+
+/** Client-side JS execution — sandboxed Function with console capture. */
+async function runClient(code: string): Promise<{ result?: unknown; logs?: string[]; error?: string }> {
+  const logs: string[] = [];
+  const c = {
+    log: (...a: unknown[]) => logs.push(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')),
+    error: (...a: unknown[]) => logs.push('ERROR: ' + a.map((x) => String(x)).join(' ')),
+    warn: (...a: unknown[]) => logs.push('WARN: ' + a.map((x) => String(x)).join(' ')),
+  };
+  try {
+    const fn = new Function('console', 'input', `return (async () => { ${code}\n })()`);
+    const result = await fn(c, undefined);
+    return { result, logs };
+  } catch (err) {
+    return { logs, error: (err as Error).stack ?? (err as Error).message };
+  }
+}
+
+export const repl = {
+  mount(el: ReplEl, controller?: any): HTMLElement {
+    const host = document.createElement('div');
+    host.className = 'content';
+    renderRepl(host, el, controller);
+    return sized(el, host);
+  },
+  update(el: ReplEl, dom: HTMLElement): void { if (dom) sized(el, dom); },
 };
 
 /* ── lit fences ─────────────────────────────────────────────────── */
