@@ -50,6 +50,16 @@ export class DynamicCellControlPlane extends Construct {
       encryption: s3.BucketEncryption.S3_MANAGED,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      // Browsers PUT blobs straight to presigned URLs (the data layer's
+      // large-upload path — the edge caps request bodies, S3 does not).
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT],
+          allowedOrigins: ['https://parc.land'],
+          allowedHeaders: ['content-type'],
+          maxAge: 3600,
+        },
+      ],
     });
 
     // The cap on every dynamic cell role: it can only ever touch its own

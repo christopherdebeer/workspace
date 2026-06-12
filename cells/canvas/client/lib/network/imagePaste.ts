@@ -8,6 +8,7 @@
  * ------------------------------------------------------------------------- */
 import { act } from './substrate.ts';
 import { saveCanvas } from './storage.ts';
+import { uploadBlob } from './generation.ts';
 
 let installed = false;
 
@@ -36,20 +37,11 @@ function blobDims(url: string): Promise<{ w: number; h: number }> {
 }
 
 async function uploadImage(file: Blob): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes.length > 8 * 1024 * 1024) throw new Error('image too large (>8MB)');
   const type = file.type || 'image/png';
   const ext = (type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'png';
   const key = `public/img/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const res = await act<{ url: string | null }>('cells.putData', {
-    ...cellAddr(),
-    key,
-    content: toBase64(bytes),
-    encoding: 'base64',
-    contentType: type,
-  });
-  if (!res.url) throw new Error('blob stored but not web-addressable (cell not public?)');
-  return res.url;
+  // Presigned PUT: bytes go straight to S3 — no size ceiling, no base64.
+  return uploadBlob(key, file, type);
 }
 
 function isEditTarget(t: EventTarget | null): boolean {

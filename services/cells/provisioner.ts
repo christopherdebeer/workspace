@@ -281,6 +281,16 @@ export async function listObjects(bucket: string, prefix: string): Promise<strin
   return keys;
 }
 
+/** Presigned PUT URL — the browser uploads bytes straight to S3. */
+export function presignPut(bucket: string, key: string, contentType: string, expiresSec = 300): string {
+  return s3().getSignedUrl('putObject', {
+    Bucket: bucket,
+    Key: key,
+    ContentType: contentType,
+    Expires: expiresSec,
+  });
+}
+
 /** Delete one object. */
 export async function deleteObject(bucket: string, key: string): Promise<void> {
   await s3().deleteObject({ Bucket: bucket, Key: key }).promise();
