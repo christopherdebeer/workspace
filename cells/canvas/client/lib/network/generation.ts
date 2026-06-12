@@ -142,6 +142,9 @@ export async function regenerateImage(el: any): Promise<void> {
   try {
     const out = await runWithFallback('image', {
       prompt: el.content || 'abstract placeholder image',
+      // The node's box informs the shape — landscape nodes get landscape images.
+      width: typeof el.width === 'number' ? Math.round(el.width) : undefined,
+      height: typeof el.height === 'number' ? Math.round(el.height) : undefined,
     });
     if (!out.imageB64) throw new Error('no image returned');
     const mime = out.mime ?? 'image/png';

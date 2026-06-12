@@ -57,6 +57,28 @@ interface RunInput {
   imageB64?: string;
   imageMediaType?: string;
   maxTokens?: number;
+  /** Target dimensions (e.g. the canvas node's box) — providers map to
+   *  their nearest supported size / aspect ratio. */
+  width?: number;
+  height?: number;
+}
+
+/** openai sizes: square, landscape, portrait. */
+function openaiSize(w?: number, h?: number): string {
+  if (!w || !h) return '1024x1024';
+  const r = w / h;
+  if (r > 1.2) return '1536x1024';
+  if (r < 0.83) return '1024x1536';
+  return '1024x1024';
+}
+
+/** google imageConfig aspect ratios. */
+function googleAspect(w?: number, h?: number): string {
+  if (!w || !h) return '1:1';
+  const r = w / h;
+  const options: Array<[string, number]> = [['1:1', 1], ['4:3', 4 / 3], ['3:4', 3 / 4], ['16:9', 16 / 9], ['9:16', 9 / 16]];
+  options.sort((a, b) => Math.abs(a[1] - r) - Math.abs(b[1] - r));
+  return options[0][0];
 }
 
 type RunOutput = { text: string } | { imageB64: string; mime: string };
@@ -93,7 +115,7 @@ async function runOpenAI(rec: ProviderRec, input: RunInput): Promise<RunOutput> 
       body: JSON.stringify({
         model: input.model ?? rec.imageModel ?? DEFAULTS.openai.image,
         prompt: input.prompt,
-        size: '1024x1024',
+        size: openaiSize(input.width, input.height),
         quality: 'medium', // the edge caps a sync round trip at ~30s — speed over polish
         output_format: 'webp',
       }),
@@ -133,6 +155,9 @@ async function runGoogle(rec: ProviderRec, input: RunInput): Promise<RunOutput> 
     body: JSON.stringify({
       contents: [{ parts }],
       ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
+      ...(input.mode === 'image'
+        ? { generationConfig: { imageConfig: { aspectRatio: googleAspect(input.width, input.height) } } }
+        : {}),
     }),
   });
   const j = (await res.json()) as {
@@ -232,6 +257,8 @@ const TOOLS = [
         imageMediaType: { type: 'string' },
         maxTokens: { type: 'number' },
         async: { type: 'boolean', description: 'Return {jobId} immediately; poll fetch — required for work beyond the ~30s edge cap (image gen)' },
+        width: { type: 'number', description: 'Target width — image providers map to nearest supported size/aspect' },
+        height: { type: 'number' },
       },
       required: ['prompt'],
       additionalProperties: false,
