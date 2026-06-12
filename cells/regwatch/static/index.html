@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RegWatch — FCA &amp; IA Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #faf9f7; --surface: #ffffff; --text: #1a1a1a; --text-secondary: #6b7280;
+      --border: #e5e2dd; --accent: #1a3a5c; --accent-light: #e8eef4;
+      --high: #b91c1c; --med: #d97706; --low: #6b7280; --nr: #d1d5db; --flag: #7c3aed;
+      --radius: 6px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+    header { background: var(--accent); color: white; padding: 14px 18px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-family: 'DM Serif Display', serif; font-size: 21px; font-weight: 400; letter-spacing: 0.02em; }
+    header h1 a { color: inherit; text-decoration: none; }
+    header .subtitle { font-size: 11px; opacity: 0.7; margin-top: 1px; }
+    header nav { display: flex; gap: 14px; align-items: center; }
+    header nav a { color: rgba(255,255,255,0.8); text-decoration: none; font-size: 13px; font-weight: 500; }
+    header nav a:hover, header nav a.active { color: white; }
+    .boot { padding: 40px 20px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+    .stats-bar { display: flex; gap: 1px; background: var(--border); }
+    .stat { flex: 1; background: var(--surface); padding: 12px 8px; text-align: center; }
+    .stat-num { font-size: 22px; font-weight: 600; color: var(--accent); line-height: 1; }
+    .stat-label { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+    .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 58px; z-index: 99; }
+    .tab { flex: 1; padding: 12px; text-align: center; font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; background: none; border-top: none; border-left: none; border-right: none; font-family: inherit; }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab .count { display: inline-block; background: var(--accent-light); color: var(--accent); font-size: 11px; padding: 1px 6px; border-radius: 10px; margin-left: 4px; }
+    .tab.active .count { background: var(--accent); color: white; }
+    .feed { padding: 12px; max-width: 720px; margin: 0 auto; }
+    .empty { text-align: center; color: var(--text-secondary); font-size: 13px; padding: 32px 0; }
+    .item-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px; }
+    .item-card:hover { border-color: var(--accent); }
+    .item-card.flagged { border-left: 3px solid var(--flag); }
+    .item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .category-badge { display: inline-block; color: white; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 3px; }
+    time { font-size: 12px; color: var(--text-secondary); }
+    .item-card h3 { font-size: 15px; font-weight: 500; margin-bottom: 4px; line-height: 1.3; }
+    .item-card h3 a { color: var(--text); text-decoration: none; }
+    .item-card h3 a:hover { color: var(--accent); }
+    .summary { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .signals { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .signal { font-size: 10px; background: var(--accent-light); color: var(--accent); padding: 2px 8px; border-radius: 3px; text-transform: capitalize; }
+    .deadline { font-size: 12px; color: var(--high); margin-bottom: 8px; }
+    .triage-actions { display: flex; gap: 6px; }
+    .triage-actions button { width: 38px; height: 32px; border: 1px solid var(--border); border-radius: 4px; background: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .btn-high { color: var(--high); } .btn-med { color: var(--med); } .btn-low { color: var(--low); }
+    .btn-nr { color: var(--text-secondary); } .btn-flag { color: var(--flag); margin-left: auto; }
+    .detail-view { padding: 16px 20px; max-width: 720px; margin: 0 auto; }
+    .back { display: inline-block; font-size: 13px; color: var(--accent); text-decoration: none; margin-bottom: 16px; }
+    .detail-view h2 { font-family: 'DM Serif Display', serif; font-size: 22px; font-weight: 400; margin-bottom: 8px; }
+    .detail-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .detail-body { font-size: 14px; line-height: 1.7; }
+    .detail-body h1, .detail-body h2, .detail-body h3 { margin: 20px 0 8px; font-size: 16px; font-family: 'DM Sans', sans-serif; }
+    .detail-body p { margin-bottom: 12px; }
+    .detail-body ul, .detail-body ol { margin: 8px 0 12px 20px; }
+    .detail-body blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--text-secondary); margin-bottom: 12px; }
+    .detail-body code { background: var(--accent-light); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+    .source-link { display: inline-block; margin-top: 16px; padding: 10px 20px; background: var(--accent); color: white; text-decoration: none; border-radius: var(--radius); font-size: 13px; font-weight: 500; }
+    .review-form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 24px; }
+    .review-form h4 { font-size: 14px; font-weight: 500; margin-bottom: 12px; }
+    .review-form textarea { width: 100%; min-height: 80px; border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; font-family: inherit; font-size: 13px; resize: vertical; margin-top: 8px; }
+    .review-form .btns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .review-form button, .note-card button { padding: 8px 16px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; cursor: pointer; background: white; font-family: inherit; }
+    .review-form button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+    .reviewed-stamp { font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+    .note-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px; font-size: 13px; }
+    .note-card.resolved, .note-card.dismissed { opacity: 0.65; }
+    .note-card .note-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .note-card .note-body { line-height: 1.6; }
+    .note-card .note-body p { margin-bottom: 8px; }
+    .note-card .note-body ul, .note-card .note-body ol { margin: 4px 0 8px 18px; }
+    .note-card .note-body code { background: var(--accent-light); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+    .note-card textarea { width: 100%; min-height: 56px; border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; font-family: inherit; font-size: 13px; margin: 8px 0; }
+    .note-card .resolution { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 8px; color: var(--text-secondary); }
+    .settings-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
+    .settings-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+    .settings-section table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .settings-section td, .settings-section th { padding: 6px 8px 6px 0; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .settings-section .inactive { opacity: 0.5; }
+    .err-toast { position: fixed; bottom: 16px; left: 16px; right: 16px; background: var(--high); color: white; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; z-index: 999; }
+  </style>
+</head>
+<body>
+  <div id="app"><p class="boot">loading…</p></div>
+  <div id="err-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#7a1f1f;color:#fff;font:12px/1.4 monospace;padding:6px 10px;z-index:9999;white-space:pre-wrap;"></div>
+  <script>
+    // On-device console: ?debug=1 (sticky via ?debug=0 to clear).
+    (function () {
+      try {
+        var qs = new URLSearchParams(location.search);
+        if (qs.get('debug') === '1') localStorage.setItem('parc.regwatch.debug', '1');
+        if (qs.get('debug') === '0') localStorage.removeItem('parc.regwatch.debug');
+        if (localStorage.getItem('parc.regwatch.debug') === '1') {
+          var s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/eruda';
+          s.onload = function () { window.eruda && window.eruda.init(); };
+          document.head.appendChild(s);
+        }
+      } catch (e) { /* storage unavailable */ }
+    })();
+    // Boot watchdog: a silent hang names the step it stuck on.
+    setTimeout(function () {
+      var b = document.querySelector('#app .boot');
+      if (!b) return;
+      var eb = document.getElementById('err-banner');
+      eb.style.display = 'block';
+      eb.textContent = window.__lit_module
+        ? 'still booting after 12s, stuck at: "' + b.textContent + '" — reload with ?debug=1 for a console'
+        : 'app.js never executed — the module script failed to load (path/MIME/network); check the network tab for app.js';
+    }, 12000);
+    window.addEventListener('error', function (e) {
+      var b = document.getElementById('err-banner');
+      b.style.display = 'block';
+      b.textContent = 'error: ' + (e.message || e.type) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var b = document.getElementById('err-banner');
+      b.style.display = 'block';
+      b.textContent = 'rejection: ' + (e.reason && (e.reason.message || String(e.reason)));
+    });
+  </script>
+  <script type="module" src="/@c15r/regwatch/app.js"></script>
+</body>
+</html>

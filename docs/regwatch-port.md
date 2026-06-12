@@ -219,3 +219,33 @@ What this exposes, honestly:
 6. After a week of green runs: freeze the val (revoke its token, leave it as
    archive), and fold the BoE 403 workaround into the active collector
    prompt.
+
+## 6. Status — ported (2026-06-12)
+
+Steps 1–3 are done and live; the cell is `regwatch-b0393000` at
+`https://parc.land/@c15r/regwatch/`.
+
+- **Cell deployed** from `cells/regwatch/` (source mirrored here under git):
+  Lambda handler + per-cell DynamoDB table (60s timeout for the migration
+  path), 17 tools at `/_tools` → `@c15r/regwatch.*`, public shell + kernel
+  client. Verified end-to-end through the gateway as owner: `stats`,
+  `list_items`, `get_item`, `get_instructions`, `save_prompt`,
+  `resolve_note`, and anonymous `GET /app.js` through dispatch.
+- **Data migrated and reconciled.** A temporary token-gated `/api/export`
+  route on the val let the cell's `migrate` tool pull the dump server-side
+  (nothing bulky through chat context); the route and `checkAuth` bypass were
+  removed afterwards. Counts match the val exactly: 291 items (per-source
+  distribution identical), 11 sources (10 active), 80 collector notes,
+  collector prompt v1–v2 + classifier v1.
+- **Collector prompt v3 saved** (active): tool references renamed from
+  `regwatch_*` to `@c15r/regwatch.*`, and the BoE browser-UA fetch
+  workaround is now standing instruction. The two recurring BoE-403 notes
+  were resolved with replies pointing at v3, which now surface in
+  `get_instructions` as reviewer guidance — first real use of the
+  resolved-notes feedback channel.
+- **Remaining (require the humans):** repoint the Claude Code scheduled
+  collector at the parc.land MCP server (step 4 — its config lives in
+  claude.ai, not reachable from here); Emily's first sign-in + `cells.grant`
+  (step 5); freeze the val after a week of green runs (step 6). Until the
+  collector is repointed it keeps feeding the val, so plan a final
+  incremental `migrate` (the URL dedupe makes it idempotent) at cutover.
