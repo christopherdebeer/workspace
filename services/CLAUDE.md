@@ -7,7 +7,7 @@ read another service's database — they call its commands or react to its event
 
 ## Layout
 - `auth/` - Auth primitive (ported from c15r/mcp-auth): WebAuthn passkeys + OAuth 2.1 + scoped tokens
-  - `service.ts` - `defineService` entry: commands (validateToken/mintToken/listTokens/revokeToken) + raw `http` routes (`/oauth/*`, `/webauthn/*`, `/.well-known/*`, `/auth/device*`)
+  - `service.ts` - `defineService` entry: commands (validateToken/mintToken/listTokens/tokens/revokeToken/describeTools — the last three are the gateway-facing `auth.*` token vocabulary; mintToken narrows to the minter's own scope ceiling) + raw `http` routes (`/oauth/*`, `/webauthn/*`, `/.well-known/*`, `/auth/device*`)
   - `store.ts` - `AuthStore` interface, entity types, crypto helpers
   - `dynamo-store.ts` / `memory-store.ts` - storage implementations (prod / tests+local)
   - `oauth.ts` - OAuth 2.1 handlers (DCR, consent, token, PKCE, refresh, device)

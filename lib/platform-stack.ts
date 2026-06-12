@@ -74,7 +74,7 @@ export class PlatformStack extends cdk.Stack {
       clientEntry: path.join(__dirname, '..', '..', 'services', 'auth', 'client', 'main.tsx'),
       routes: ['/auth/*', '/oauth/*', '/webauthn/*', '/.well-known/*'],
       persistence: { dynamo: true, dynamoTtl: true },
-      commands: ['validateToken', 'mintToken', 'listTokens', 'revokeToken'],
+      commands: ['validateToken', 'mintToken', 'listTokens', 'tokens', 'revokeToken', 'describeTools'],
       emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'],
       eventBus,
       environment: {
@@ -102,8 +102,8 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
-      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
     });
     substrate.grantReadWrite(workspace);
@@ -178,8 +178,8 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('cells'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['create', 'list', 'get', 'call', 'grant', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
-      emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
+      commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
+      emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
       // it so its .wasm ships in the asset.
@@ -240,25 +240,23 @@ export class PlatformStack extends cdk.Stack {
       certificate,
     });
 
-    // Make the auth cell self-consistent with the public origin: prefer an
-    // explicit public base URL (custom domain), else the distribution's own
-    // domain. Without this the cell derives URLs from the (OAC-rewritten) Host
-    // and advertises the IAM-protected Function URL as the OAuth issuer.
-    let publicBaseUrl: string;
-    let webauthnRpId: string;
+    // Make the auth cell self-consistent with the public origin via an explicit
+    // public base URL (the custom domain). Without it the cell derives URLs
+    // from the forwarded Host across the OAC hop — acceptable for a fresh
+    // environment's first deploy. Deliberately NOT derived from
+    // `router.distribution.distributionDomainName`: the origin functions would
+    // then reference the distribution that references their Function URLs — a
+    // CloudFormation circular dependency (this is exactly how the first
+    // PlatformStack-staging deploy failed). For a new environment: deploy once,
+    // read the distribution domain from the outputs, set the repo var, redeploy.
     if (props?.publicBaseUrl) {
-      publicBaseUrl = props.publicBaseUrl;
-      webauthnRpId = new URL(props.publicBaseUrl).hostname;
-    } else {
-      const domain = router.distribution.distributionDomainName;
-      publicBaseUrl = `https://${domain}`;
-      webauthnRpId = domain;
+      const webauthnRpId = new URL(props.publicBaseUrl).hostname;
+      auth.fn.addEnvironment('PUBLIC_BASE_URL', props.publicBaseUrl);
+      auth.fn.addEnvironment('WEBAUTHN_RP_ID', webauthnRpId);
+      // The resource cell derives its metadata/challenge URLs from req.url, which
+      // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
+      gateway.fn.addEnvironment('PUBLIC_BASE_URL', props.publicBaseUrl);
+      home.fn.addEnvironment('PUBLIC_BASE_URL', props.publicBaseUrl);
     }
-    auth.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
-    auth.fn.addEnvironment('WEBAUTHN_RP_ID', webauthnRpId);
-    // The resource cell derives its metadata/challenge URLs from req.url, which
-    // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
-    gateway.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
-    home.fn.addEnvironment('PUBLIC_BASE_URL', publicBaseUrl);
   }
 }

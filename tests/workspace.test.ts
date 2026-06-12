@@ -132,7 +132,7 @@ describe('workspace sharing / view layer', () => {
     expect(g).toMatchObject({ owner: 'alice', grantee: 'bob', key: 'roadmap' });
     expect(emitted).toContainEqual({
       type: 'workspace.shared',
-      payload: { owner: 'alice', grantee: 'bob', key: 'roadmap' },
+      payload: { owner: 'alice', grantee: 'bob', key: 'roadmap', mode: 'read' },
     });
 
     const bobView = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
@@ -179,6 +179,7 @@ describe('workspace sharing / view layer', () => {
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
+        'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
       ].sort(),
     );
     // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
@@ -827,5 +828,141 @@ describe('cell lifecycle projection (the platform reflected in the substrate)', 
 
     const byType = await cmds.query({ type: 'cell' }, ctxFor('alice').ctx);
     expect(byType.entries.some((e) => e.key === 'cells/notes-abc')).toBe(true);
+  });
+});
+
+describe('workspace granular grants (write-through / prefix / request loop)', () => {
+  // Fresh substrate per suite; the same one-Substrate/many-views layout.
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  it('prefix shares expose just the covered keys', async () => {
+    const alice = ctxFor('alice').ctx;
+    await cmds.remember({ key: 'inbox/one', value: 1 }, alice);
+    await cmds.remember({ key: 'inbox/two', value: 2 }, alice);
+    await cmds.remember({ key: 'private/x', value: 'no' }, alice);
+    await cmds.share({ to: 'bob', key: 'inbox/*' }, alice);
+
+    const bobView = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
+    expect(bobView.entries['alice/inbox/one'].value).toBe(1);
+    expect(bobView.entries['alice/inbox/two'].value).toBe(2);
+    expect(bobView.entries['alice/private/x']).toBeUndefined();
+  });
+
+  it('peek reads through a grant with owner, and refuses uncovered keys with the escalation hint', async () => {
+    const bob = ctxFor('bob').ctx;
+    expect((await cmds.peek({ key: 'inbox/one', owner: 'alice' }, bob))?.value).toBe(1);
+    await expect(cmds.peek({ key: 'private/x', owner: 'alice' }, bob)).rejects.toThrow(/grant_denied.*requestGrant/s);
+  });
+
+  it('write-through requires a write grant covering the key; provenance stamps the grantee', async () => {
+    const alice = ctxFor('alice').ctx;
+    const bob = ctxFor('bob').ctx;
+
+    // Read grants do not allow writes.
+    await expect(
+      cmds.remember({ key: 'inbox/from-bob', value: 'hi', owner: 'alice' }, bob),
+    ).rejects.toThrow(/grant_denied/);
+
+    await cmds.share({ to: 'bob', key: 'inbox/*', mode: 'write' }, alice);
+    const entry = await cmds.remember({ key: 'inbox/from-bob', value: 'hi', owner: 'alice' }, bob);
+    expect(entry._meta.writer).toBe('bob'); // attribution for free
+    expect((await cmds.peek({ key: 'inbox/from-bob' }, alice))?.value).toBe('hi');
+
+    // The grant is a boundary, not a door: uncovered keys and reserved
+    // namespaces stay refused even under a write grant.
+    await expect(cmds.remember({ key: 'private/x', value: 'no', owner: 'alice' }, bob)).rejects.toThrow(/grant_denied/);
+    await cmds.share({ to: 'bob', mode: 'write' }, alice); // whole slice
+    await expect(
+      cmds.remember({ key: '_actions/evil', value: 1, owner: 'alice' }, bob),
+    ).rejects.toThrow(/reserved/);
+    await expect(
+      cmds.remember({ key: '_grants/requests/forged', value: 1, owner: 'alice' }, bob),
+    ).rejects.toThrow(/reserved/);
+    await cmds.unshare({ to: 'bob' }, alice);
+  });
+
+  it('runs the request → inbox → approve loop for a workspace resource', async () => {
+    const carol = ctxFor('carol');
+    const res = await cmds.requestGrant(
+      { resource: 'workspace:alice:notes/*:write', note: 'porting your notes' },
+      carol.ctx,
+    );
+    expect(res.owner).toBe('alice');
+    expect(carol.emitted).toContainEqual({
+      type: 'workspace.grant.requested',
+      payload: { owner: 'alice', requester: 'carol', resource: 'workspace:alice:notes/*:write' },
+    });
+
+    // The owner sees it in the inbox, with the requester stamped by the platform.
+    const alice = ctxFor('alice');
+    const inbox = await cmds.grantRequests(undefined, alice.ctx);
+    expect(inbox.incoming).toHaveLength(1);
+    expect(inbox.incoming[0]).toMatchObject({
+      requester: 'carol',
+      resource: 'workspace:alice:notes/*:write',
+      note: 'porting your notes',
+      status: 'pending',
+    });
+
+    const approved = await cmds.approveGrant({ key: inbox.incoming[0].key }, alice.ctx);
+    expect(approved).toMatchObject({ approved: true, grantee: 'carol' });
+
+    // The grant is live: carol can write through immediately.
+    const entry = await cmds.remember({ key: 'notes/first', value: 'hello', owner: 'alice' }, carol.ctx);
+    expect(entry._meta.writer).toBe('carol');
+
+    // The inbox is drained and the answer landed in carol's slice.
+    expect((await cmds.grantRequests(undefined, alice.ctx)).incoming).toHaveLength(0);
+    const answers = (await cmds.grantRequests(undefined, carol.ctx)).answers;
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({ resource: 'workspace:alice:notes/*:write', status: 'approved', by: 'alice' });
+  });
+
+  it('deny resolves the request with a reason the requester can read', async () => {
+    const dave = ctxFor('dave').ctx;
+    await cmds.requestGrant({ resource: 'workspace:alice:*:read' }, dave);
+    const alice = ctxFor('alice').ctx;
+    const inbox = await cmds.grantRequests(undefined, alice);
+    const req = inbox.incoming.find((r) => r.requester === 'dave');
+    expect(req).toBeDefined();
+    await cmds.denyGrant({ key: req!.key, reason: 'too broad — ask for a prefix' }, alice);
+
+    const answers = (await cmds.grantRequests(undefined, dave)).answers;
+    expect(answers[0]).toMatchObject({ status: 'denied', reason: 'too broad — ask for a prefix' });
+    // And dave got nothing.
+    await expect(cmds.peek({ key: 'inbox/one', owner: 'alice' }, dave)).rejects.toThrow(/grant_denied/);
+  });
+
+  it('routes cell-family approvals to the cells service', async () => {
+    const emily = ctxFor('emily').ctx;
+    await cmds.requestGrant({ resource: 'cell:alice/regwatch:review' }, emily);
+
+    const calls: Array<{ name: string; payload: unknown }> = [];
+    const { ctx: alice } = ctxFor('alice');
+    (alice as unknown as { serviceClient: unknown }).serviceClient = () => ({
+      command: async (name: string, payload: unknown) => {
+        calls.push({ name, payload });
+        return {};
+      },
+    });
+
+    const inbox = await cmds.grantRequests(undefined, alice);
+    const req = inbox.incoming.find((r) => r.requester === 'emily');
+    await cmds.approveGrant({ key: req!.key }, alice);
+    expect(calls).toEqual([
+      { name: 'grant', payload: { owner: 'alice', name: 'regwatch', principal: 'emily', tools: ['review'] } },
+    ]);
+  });
+
+  it('rejects malformed resources and self-requests with teaching errors', async () => {
+    const bob = ctxFor('bob').ctx;
+    await expect(cmds.requestGrant({ resource: 'workspace:alice:inbox' }, bob)).rejects.toThrow(/Malformed resource/);
+    await expect(cmds.requestGrant({ resource: 'nonsense' }, bob)).rejects.toThrow(/Malformed resource/);
+    await expect(
+      cmds.requestGrant({ resource: 'workspace:bob:*:read' }, bob),
+    ).rejects.toThrow(/you own this resource/);
   });
 });

@@ -56,10 +56,23 @@ import type { EventBridgeHandler } from '../../platform/runtime';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
 import {
   createDynamoGrantStore,
+  grantCovers,
   type GrantStore,
   type Grant,
+  type GrantMode,
   WHOLE_SLICE,
 } from './grants';
+import {
+  parseResource,
+  requestKey,
+  answerKey,
+  GRANTS_NS,
+  REQUESTS_PREFIX,
+  ANSWERS_PREFIX,
+  NOTE_MAX,
+  type GrantRequestValue,
+  type GrantAnswerValue,
+} from './grant-requests';
 
 export interface WorkspaceDeps {
   state: ObservedState;
@@ -84,6 +97,8 @@ export const dynamoDeps: DepsBuilder = (ctx) => {
 export interface RememberInput {
   key: string;
   value: unknown;
+  /** Write-through: the slice owner to write into (requires their write grant). */
+  owner?: string;
   /** Optional label for how the write happened (e.g. an action name). */
   via?: string;
   /** Optional indexable fact type (e.g. "decision", "todo"). */
@@ -117,6 +132,8 @@ export interface RecallInput {
 }
 export interface PeekInput {
   key: string;
+  /** Read-through: the slice owner to read from (requires a grant covering the key). */
+  owner?: string;
 }
 export interface QueryInput {
   type?: string;
@@ -183,15 +200,43 @@ export type DeleteViewInput = ViewInput;
 export interface ShareInput {
   /** The user to share with. */
   to: string;
-  /** A specific fact key, or omitted to share your whole slice. */
+  /** A fact key, a prefix (`inbox/*`), or omitted to share your whole slice. */
   key?: string;
+  /** `read` (default) or `write` — write-through lets the grantee remember into the covered keys. */
+  mode?: GrantMode;
 }
-export type UnshareInput = ShareInput;
+export type UnshareInput = Omit<ShareInput, 'mode'>;
 export interface SharedResult {
   /** Grants you have made to others. */
   shared: Grant[];
   /** Grants others have made to you. */
   receiving: Grant[];
+}
+export interface RequestGrantInput {
+  /** Grammar resource: `workspace:<owner>:<keyPattern>:<read|write>` or `cell:<owner>/<name>:<tool|*>`. */
+  resource: string;
+  note?: string;
+}
+export interface RequestGrantResult {
+  requested: true;
+  owner: string;
+  resource: string;
+  /** The request fact key in the owner's slice. */
+  key: string;
+}
+export interface GrantRequestsResult {
+  /** Pending requests on resources you own (your inbox). */
+  incoming: Array<GrantRequestValue & { key: string }>;
+  /** Outcomes of requests you made (written into your slice on resolve). */
+  answers: Array<GrantAnswerValue & { key: string }>;
+}
+export interface ApproveGrantInput {
+  /** The request fact key (from `grantRequests`). */
+  key: string;
+}
+export interface DenyGrantInput {
+  key: string;
+  reason?: string;
 }
 
 // Index signature so it satisfies defineService's `Record<string, RegisteredCommand>`,
@@ -221,6 +266,10 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
   shared: CommandHandler<undefined, SharedResult>;
+  requestGrant: CommandHandler<RequestGrantInput, RequestGrantResult>;
+  grantRequests: CommandHandler<undefined, GrantRequestsResult>;
+  approveGrant: CommandHandler<ApproveGrantInput, { approved: true; resource: string; grantee: string }>;
+  denyGrant: CommandHandler<DenyGrantInput, { denied: true; resource: string; grantee: string }>;
   describeTools: CommandHandler<undefined, { tools: ToolDescriptor[] }>;
 }
 
@@ -282,13 +331,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'remember',
     description:
-      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold).',
+      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
         key: { type: 'string', description: 'Fact key within your slice' },
+        owner: { type: 'string', description: "Write-through: the slice owner to write into (requires their `write` grant covering the key)" },
         value: { description: 'Any JSON value to remember' },
         via: { type: 'string', description: 'Optional label for how this was written (e.g. an action name)' },
         type: { type: 'string', description: 'Optional indexable fact type (e.g. "decision", "todo")' },
@@ -382,12 +432,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'peek',
-    description: 'Read one fact by key from your slice (no salience shaping). Returns null when the key is absent — including a lapsed lease — so it doubles as an existence probe.',
+    description: 'Read one fact by key from your slice (no salience shaping). Returns null when the key is absent — including a lapsed lease — so it doubles as an existence probe. Pass `owner` to read a fact another user granted you.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
-      properties: { key: { type: 'string', description: 'Fact key to read' } },
+      properties: {
+        key: { type: 'string', description: 'Fact key to read' },
+        owner: { type: 'string', description: 'Read-through: the slice owner to read from (requires a grant covering the key)' },
+      },
       required: ['key'],
       additionalProperties: false,
     },
@@ -749,21 +802,23 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'share',
-    description: 'Expose a fact (or your whole slice, if `key` is omitted) to another user, so it appears in their recall.',
+    description:
+      'Grant another user access to a fact, a key prefix (`inbox/*`), or your whole slice (omit `key`). mode "read" (default) makes it appear in their recall; mode "write" additionally lets them remember into the covered keys of your slice (write-through — their identity is stamped as the writer).',
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'The user to share with' },
-        key: { type: 'string', description: 'A specific fact key, or omit to share your whole slice' },
+        key: { type: 'string', description: 'A fact key, a prefix ending in `*` (e.g. "inbox/*"), or omit for your whole slice' },
+        mode: { type: 'string', enum: ['read', 'write'], description: 'read (default) = visibility; write = write-through too' },
       },
       required: ['to'],
       additionalProperties: false,
     },
     resultSchema: {
       type: 'object',
-      properties: { owner: { type: 'string' }, grantee: { type: 'string' }, key: { type: 'string', description: '"*" = whole slice' }, createdAt: { type: 'string' } },
+      properties: { owner: { type: 'string' }, grantee: { type: 'string' }, key: { type: 'string', description: '"*" = whole slice' }, mode: { type: 'string' }, createdAt: { type: 'string' } },
     },
   },
   {
@@ -784,7 +839,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'shared',
-    description: 'List what you have shared with others and what others have shared with you.',
+    description: 'List what you have shared with others and what others have shared with you (each grant: owner, grantee, key pattern, mode).',
     scope: null,
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -796,15 +851,184 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       },
     },
   },
+  {
+    name: 'requestGrant',
+    description:
+      'Ask a resource owner for access you were denied. The request lands as a fact in the owner\'s slice (provenance-stamped as you), surfaces in their grantRequests inbox, and the outcome is written back into your slice under `_grants/answers/`. Resources use the scope grammar: "workspace:<owner>:<keyPattern>:<read|write>" or "cell:<owner>/<name>:<tool|*>".',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resource: { type: 'string', description: 'e.g. "workspace:alice:inbox/*:write" or "cell:alice/regwatch:save_prompt"' },
+        note: { type: 'string', description: `Why you need it (≤${NOTE_MAX} chars)` },
+      },
+      required: ['resource'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        requested: { type: 'boolean' },
+        owner: { type: 'string' },
+        resource: { type: 'string' },
+        key: { type: 'string', description: "The request fact key in the owner's slice" },
+      },
+    },
+  },
+  {
+    name: 'grantRequests',
+    description:
+      'Your grant inbox: pending requests on resources you own (resolve with approveGrant/denyGrant), plus the outcomes of requests you made (answers land in your slice when the owner resolves).',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        incoming: {
+          type: 'array',
+          description: 'Pending requests: [{ key, requester, resource, note?, requestedAt }]',
+        },
+        answers: {
+          type: 'array',
+          description: 'Outcomes of your requests: [{ key, resource, status, by, at, reason? }]',
+        },
+      },
+    },
+  },
+  {
+    name: 'approveGrant',
+    description:
+      'Approve a pending grant request (by its fact key from grantRequests): applies the grant — workspace resources via share, cell resources via cells.grant — then resolves the request and notifies the requester.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'The request fact key' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { approved: { type: 'boolean' }, resource: { type: 'string' }, grantee: { type: 'string' } },
+    },
+  },
+  {
+    name: 'denyGrant',
+    description: 'Deny a pending grant request (by its fact key), optionally with a reason the requester will see.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'The request fact key' },
+        reason: { type: 'string', description: `Optional reason (≤${NOTE_MAX} chars)` },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { denied: { type: 'boolean' }, resource: { type: 'string' }, grantee: { type: 'string' } },
+    },
+  },
 ];
+
+/**
+ * Write-through guard: a caller may write into another owner's slice only
+ * under a `write` grant covering the key — and never into the reserved
+ * vocabulary/grants namespaces (the same rule the organ path applies). The
+ * denial teaches the escalation path (docs/scope-grants.md §5).
+ */
+async function requireWriteThrough(
+  grants: GrantStore,
+  caller: string,
+  owner: string,
+  key: string,
+): Promise<void> {
+  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GRANTS_NS)) {
+    throw new Error(`write-through may not touch the reserved namespace ("${key}")`);
+  }
+  const held = await grants.listForGrantee(caller);
+  const ok = held.some((g) => g.owner === owner && g.mode === 'write' && grantCovers(g.key, key));
+  if (!ok) {
+    throw new Error(
+      `grant_denied: no write grant from "${owner}" covers "${key}". ` +
+        `Request one: act("workspace.requestGrant", { resource: "workspace:${owner}:${key}:write" })`,
+    );
+  }
+}
+
+/** Load and validate a pending grant request fact from the owner's slice. */
+async function pendingRequest(
+  state: ObservedState,
+  owner: string,
+  key: string | undefined,
+  identity: Identity,
+): Promise<GrantRequestValue> {
+  if (!key || !key.startsWith(REQUESTS_PREFIX)) {
+    throw new Error(`key must be a grant-request fact key (see read("workspace.grantRequests"))`);
+  }
+  const entry = await state.get(owner, key, identity);
+  const req = entry?.value as GrantRequestValue | undefined;
+  if (!entry || entry._meta.superseded || req?.status !== 'pending') {
+    throw new Error(`not_found: no pending grant request at "${key}"`);
+  }
+  if (parseResource(req.resource).owner !== owner) {
+    throw new Error('only the resource owner can resolve this request');
+  }
+  return req;
+}
+
+/** Mark a request resolved and write the outcome into the requester's slice. */
+async function resolveRequest(
+  state: ObservedState,
+  ctx: ServiceContext,
+  owner: string,
+  key: string,
+  req: GrantRequestValue,
+  status: 'approved' | 'denied',
+  reason?: string,
+): Promise<void> {
+  const at = new Date().toISOString();
+  const resolved: GrantRequestValue = { ...req, status, resolvedAt: at, ...(reason ? { reason } : {}) };
+  await state.put(
+    { scope: owner, key, value: resolved, via: `grants:${status}`, type: 'grant-request', tags: ['grants'] },
+    ctx.identity,
+  );
+  // Resolved requests leave the pending inbox but stay in history.
+  await state.supersede(owner, key, null, ctx.identity, {});
+  const answer: GrantAnswerValue = { resource: req.resource, status, by: owner, at, ...(reason ? { reason } : {}) };
+  await state.put(
+    {
+      scope: req.requester,
+      key: answerKey(owner, req.resource),
+      value: answer,
+      via: `grants:${status}`,
+      type: 'grant-answer',
+      tags: ['grants'],
+    },
+    ctx.identity,
+  );
+  await ctx.events.emit('workspace.grant.resolved', {
+    owner,
+    requester: req.requester,
+    resource: req.resource,
+    status,
+  });
+  ctx.logger.info('grant request resolved', { owner, requester: req.requester, resource: req.resource, status });
+}
 
 /** Build the workspace vocabulary over a given way of constructing its deps. */
 export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
   return {
     async remember(input, ctx) {
-      const scope = requireUser(ctx.identity);
+      const caller = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
-      const { state } = build(ctx);
+      const { state, grants } = build(ctx);
+      const scope = input.owner && input.owner !== caller ? input.owner : caller;
+      if (scope !== caller) await requireWriteThrough(grants, caller, scope, input.key);
       const entry = await state.put(
         {
           scope,
@@ -820,7 +1044,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         ctx.identity,
       );
       await ctx.events.emit('workspace.fact.written', { scope, key: input.key, revision: entry._meta.revision });
-      ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision });
+      ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision, writer: caller });
       return entry;
     },
 
@@ -874,11 +1098,15 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer, namespaced by owner.
+      // A grant key is a pattern: `*` = whole slice, trailing `*` = prefix.
       for (const g of await grants.listForGrantee(viewer)) {
         if (g.owner === viewer) continue;
-        if (g.key === WHOLE_SLICE) {
+        if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
           const slice = await state.read(g.owner, { elision: 'none', includeSuperseded }, ctx.identity);
-          for (const [k, e] of Object.entries(slice.entries)) merged[`${g.owner}/${k}`] = e;
+          const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
+          for (const [k, e] of Object.entries(slice.entries)) {
+            if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
+          }
         } else {
           const e = await state.get(g.owner, g.key, ctx.identity);
           if (e && (!e._meta.superseded || includeSuperseded)) merged[`${g.owner}/${g.key}`] = e;
@@ -890,10 +1118,21 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     },
 
     async peek(input, ctx) {
-      const scope = requireUser(ctx.identity);
+      const caller = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
-      const { state } = build(ctx);
-      return state.get(scope, input.key, ctx.identity);
+      const { state, grants } = build(ctx);
+      if (input.owner && input.owner !== caller) {
+        const held = await grants.listForGrantee(caller);
+        const ok = held.some((g) => g.owner === input.owner && grantCovers(g.key, input.key));
+        if (!ok) {
+          throw new Error(
+            `grant_denied: no grant from "${input.owner}" covers "${input.key}". ` +
+              `Request one: act("workspace.requestGrant", { resource: "workspace:${input.owner}:${input.key}:read" })`,
+          );
+        }
+        return state.get(input.owner, input.key, ctx.identity);
+      }
+      return state.get(caller, input.key, ctx.identity);
     },
 
     async query(input, ctx) {
@@ -1042,16 +1281,19 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const owner = requireUser(ctx.identity);
       if (!input?.to) throw new Error('to is required');
       if (input.to === owner) throw new Error('cannot share with yourself');
+      const mode = input.mode ?? 'read';
+      if (mode !== 'read' && mode !== 'write') throw new Error('mode must be "read" or "write"');
       const { grants } = build(ctx);
       const grant: Grant = {
         owner,
         grantee: input.to,
         key: input.key ?? WHOLE_SLICE,
+        mode,
         createdAt: new Date().toISOString(),
       };
       await grants.put(grant);
-      await ctx.events.emit('workspace.shared', { owner, grantee: grant.grantee, key: grant.key });
-      ctx.logger.info('workspace shared', { owner, grantee: grant.grantee, key: grant.key });
+      await ctx.events.emit('workspace.shared', { owner, grantee: grant.grantee, key: grant.key, mode });
+      ctx.logger.info('workspace shared', { owner, grantee: grant.grantee, key: grant.key, mode });
       return grant;
     },
 
@@ -1068,6 +1310,84 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { grants } = build(ctx);
       const [shared, receiving] = await Promise.all([grants.listByOwner(me), grants.listForGrantee(me)]);
       return { shared, receiving };
+    },
+
+    async requestGrant(input, ctx) {
+      const requester = requireUser(ctx.identity);
+      const parsed = parseResource(input?.resource ?? '');
+      if (parsed.owner === requester) {
+        throw new Error('you own this resource — grant it directly (workspace.share or cells.grant)');
+      }
+      const note = input.note ? String(input.note).slice(0, NOTE_MAX) : undefined;
+      const { state } = build(ctx);
+      const key = requestKey(requester, parsed.raw);
+      const value: GrantRequestValue = {
+        requester,
+        resource: parsed.raw,
+        ...(note ? { note } : {}),
+        status: 'pending',
+        requestedAt: new Date().toISOString(),
+      };
+      // One open request per (requester, resource): a re-request bumps the
+      // same fact's revision (and revives it after a deny) rather than piling up.
+      await state.put(
+        { scope: parsed.owner, key, value, via: 'grants:request', type: 'grant-request', tags: ['grants'] },
+        ctx.identity,
+      );
+      await ctx.events.emit('workspace.grant.requested', { owner: parsed.owner, requester, resource: parsed.raw });
+      ctx.logger.info('grant requested', { owner: parsed.owner, requester, resource: parsed.raw });
+      return { requested: true, owner: parsed.owner, resource: parsed.raw, key };
+    },
+
+    async grantRequests(_input, ctx) {
+      const me = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      const [incoming, answers] = await Promise.all([
+        state.query(me, { prefix: REQUESTS_PREFIX, rankBy: 'recency', limit: 100 }, ctx.identity),
+        state.query(me, { prefix: ANSWERS_PREFIX, rankBy: 'recency', limit: 100 }, ctx.identity),
+      ]);
+      return {
+        incoming: incoming.entries
+          .map((e) => ({ key: e.key, ...(e.value as GrantRequestValue) }))
+          .filter((r) => r.status === 'pending'),
+        answers: answers.entries.map((e) => ({ key: e.key, ...(e.value as GrantAnswerValue) })),
+      };
+    },
+
+    async approveGrant(input, ctx) {
+      const me = requireUser(ctx.identity);
+      const req = await pendingRequest(build(ctx).state, me, input?.key, ctx.identity);
+      const parsed = parseResource(req.resource);
+      const { state, grants } = build(ctx);
+      if (parsed.family === 'workspace') {
+        await grants.put({
+          owner: me,
+          grantee: req.requester,
+          key: parsed.keyPattern as string,
+          mode: parsed.mode,
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        // Cell-family resources are applied by the cells service (its registry
+        // owns tool grants); workspace already holds the allow() for lifecycle.
+        await ctx.serviceClient('cells').command('grant', {
+          owner: me,
+          name: parsed.cellName,
+          principal: req.requester,
+          ...(parsed.tool && parsed.tool !== '*' ? { tools: [parsed.tool] } : {}),
+        });
+      }
+      await resolveRequest(state, ctx, me, input.key, req, 'approved');
+      return { approved: true, resource: req.resource, grantee: req.requester };
+    },
+
+    async denyGrant(input, ctx) {
+      const me = requireUser(ctx.identity);
+      const req = await pendingRequest(build(ctx).state, me, input?.key, ctx.identity);
+      const reason = input.reason ? String(input.reason).slice(0, NOTE_MAX) : undefined;
+      const { state } = build(ctx);
+      await resolveRequest(state, ctx, me, input.key, req, 'denied', reason);
+      return { denied: true, resource: req.resource, grantee: req.requester };
     },
 
     // How the `/mcp` gateway discovers this cell's tools (mirrors forge.describeTools).

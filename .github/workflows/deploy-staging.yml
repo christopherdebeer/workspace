@@ -54,6 +54,12 @@ jobs:
         run: npm run cdk -- bootstrap aws://018159942401/us-east-1 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
 
       - name: Deploy PlatformStack-staging
+        env:
+          # Optional: pin the staging public origin (set the repo var after the
+          # first deploy reveals the DistributionDomain output). Unset on a fresh
+          # environment — deriving it from the distribution inside the stack
+          # would be a CloudFormation circular dependency.
+          PLATFORM_PUBLIC_BASE_URL: ${{ vars.PLATFORM_STAGING_PUBLIC_BASE_URL }}
         run: npm run cdk -- deploy PlatformStack-staging -c env=staging --require-approval never --outputs-file staging-outputs.json
 
       - name: Show staging outputs
