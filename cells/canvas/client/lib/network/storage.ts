@@ -343,6 +343,10 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   // The renderer ladder: built-in substrate types, then renderer FACTS —
   // both registered before the first element mounts.
   registerSubstrateTypes();
+  // Bridges for dynamically-imported renderer facts (e.g. the repl viewer):
+  // they can't import the canvas substrate client, so reach it via window.
+  (window as any).__parcAct = act;
+  (window as any).__parcRead = read;
   await loadRendererFacts();
   factTypeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { icon?: string }>;
   installImagePaste();
