@@ -37,7 +37,20 @@ async function runWithFallback(mode: 'text' | 'image', args: Record<string, unkn
   const errors: string[] = [];
   for (const provider of await enabledProviders(mode)) {
     try {
-      return await act<RunOut>('@c15r/models.run', { ...args, provider, ...(mode === 'image' ? { mode } : {}) });
+      if (mode === 'image') {
+        // Image generation exceeds the edge's ~30s sync cap: submit a job
+        // (fast), then poll fetch until it lands.
+        const sub = await act<{ jobId: string }>('@c15r/models.run', { ...args, provider, mode, async: true });
+        const deadline = Date.now() + 120_000;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const job = await read<RunOut & { status?: string; error?: string }>('@c15r/models.fetch', { jobId: sub.jobId });
+          if (job.status === 'done') return job;
+          if (job.status === 'error') throw new Error(job.error ?? 'generation failed');
+          if (Date.now() > deadline) throw new Error('generation timed out (120s)');
+        }
+      }
+      return await act<RunOut>('@c15r/models.run', { ...args, provider });
     } catch (err) {
       errors.push((err as Error).message);
     }
