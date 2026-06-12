@@ -877,18 +877,258 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
   );
 }
 
+// ── face 1: the anonymous landing (home redesign phase 2b) ─────────
+//
+// The platform's public face: one screen of narrative in the same voice the
+// MCP server introduces itself with, and the passkey door. Identical for
+// every visitor — the signed-in console only renders past it.
+
+function Landing({ session }: { session: Session & { signIn: () => void } }): React.JSX.Element {
+  return (
+    <Card>
+      <Heading sub="A personal productivity substrate — facts with provenance and salience, deployable cells, one vocabulary for humans and agents.">
+        parc.land
+      </Heading>
+      <div style={{ display: 'grid', gap: '0.6rem', color: theme.dim, fontSize: '0.9rem', lineHeight: 1.5 }}>
+        <p style={{ margin: 0 }}>
+          Your workspace is a slice of one substrate: facts <code>{'{ value, _meta }'}</code> with
+          server-stamped provenance, supersede-not-delete history, and reads shaped by salience.
+          Cells — small deployed programs — extend it at runtime; declared actions and views extend
+          it without deploying anything.
+        </p>
+        <p style={{ margin: 0 }}>
+          Everything speaks three verbs: <code>whoami</code> · <code>read</code> · <code>act</code>.
+          An agent connects over MCP and discovers capability with <code>read("$catalog")</code>;
+          this page is the same client in a browser. Buttons here and tool calls there are two
+          renderings of one vocabulary.
+        </p>
+        <p style={{ margin: 0 }}>
+          Access is granted, not assumed: your slice is yours; sharing is per-key or per-tool,
+          write grants stamp the writer, and tokens only ever narrow.
+        </p>
+      </div>
+      <div style={{ marginTop: '0.9rem', display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button onClick={session.signIn}>Sign in with passkey</Button>
+        <span style={{ color: theme.dim, fontSize: '0.8rem' }}>
+          New here? The same button registers a passkey.
+        </span>
+      </div>
+      {session.error ? <div style={{ marginTop: '0.6rem' }}><Badge tone="danger">{session.error}</Badge></div> : null}
+    </Card>
+  );
+}
+
+// ── face 2: the workspace window (home redesign phase 2c) ──────────
+
+interface AttentionData {
+  stale: Array<{ key: string; updatedAt: string; type: string | null }>;
+  unlinked: string[];
+  dangling: Array<{ from: string; rel: string; to: string; reason: string }>;
+}
+
+/**
+ * The signed-in window over the substrate: an attention strip (the
+ * just-in-time cron, read at a glance) above the most salient facts of the
+ * slice — `query` ranked by salience, titled and routed by the `_types`
+ * vocabulary, exactly the shaping agents get from the same read.
+ */
+function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | null {
+  const [att, setAtt] = useState<AttentionData | null>(null);
+  const [facts, setFacts] = useState<ListEntry[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    (async () => {
+      try {
+        await loadTypeDecls();
+        const [a, q] = await Promise.all([
+          mcpCall('read', 'workspace.attention', { limit: 5 }),
+          mcpCall('read', 'workspace.query', { limit: 10 }),
+        ]);
+        if (!live) return;
+        if (a.ok) setAtt(a.value as AttentionData);
+        if (q.ok) {
+          const v = q.value as { entries?: ListEntry[]; total?: number };
+          setFacts(v.entries ?? []);
+          setTotal(v.total ?? 0);
+        } else {
+          setErr(typeof q.value === 'string' ? q.value : 'error');
+        }
+      } catch (e) {
+        if (live) setErr(String(e));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
+  if (!authed) return null;
+
+  const attTotal = att ? att.stale.length + att.unlinked.length + att.dangling.length : 0;
+
+  return (
+    <Card>
+      <Heading sub="Your slice, salience-ranked — the same query an agent makes, rendered. The attention strip is the just-in-time cron.">
+        Workspace
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {att ? (
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.3rem 0 0.6rem' }}>
+          <Badge tone={attTotal ? 'accent' : 'dim'}>
+            {attTotal ? `needs attention: ${attTotal}` : 'nothing needs attention'}
+          </Badge>
+          {att.stale.length ? <Badge tone="dim">{att.stale.length} stale</Badge> : null}
+          {att.unlinked.length ? <Badge tone="dim">{att.unlinked.length} unlinked</Badge> : null}
+          {att.dangling.length ? <Badge tone="dim">{att.dangling.length} dangling edges</Badge> : null}
+        </div>
+      ) : null}
+      {facts === null ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : facts.length === 0 ? (
+        <p style={{ color: theme.dim }}>An empty slice — remember something.</p>
+      ) : (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.4rem' }}>
+          {facts.map((e) => {
+            const to = factHref(e);
+            const icon = typeIcon(e);
+            const title = `${icon ? icon + ' ' : ''}${factTitle(e)}`;
+            const date = e._meta?.updatedAt ? e._meta.updatedAt.slice(0, 10) : null;
+            const sub = [e._meta?.type, e.key, date].filter(Boolean).join(' · ');
+            return (
+              <li key={e.key} style={{ lineHeight: 1.35 }}>
+                {to ? (
+                  <a href={to} style={{ color: theme.accent, textDecoration: 'none' }}>{title}</a>
+                ) : (
+                  <span>{title}</span>
+                )}
+                <div style={{ color: theme.dim, fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {sub}
+                </div>
+              </li>
+            );
+          })}
+          {total > facts.length ? (
+            <li style={{ color: theme.dim, fontSize: '0.8rem' }}>… {total - facts.length} more (query/recall for the rest)</li>
+          ) : null}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+// ── the cells console (home redesign phase 2c) ─────────────────────
+
+interface CellRow {
+  cellId: string;
+  name: string;
+  status: string;
+  public: boolean;
+  description: string | null;
+  address: string;
+}
+
+/** One owned cell: address, status, and on-demand recent logs. */
+function CellConsoleRow({ cell }: { cell: CellRow }): React.JSX.Element {
+  const [logs, setLogs] = useState<Array<{ time: string; message: string }> | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const tailLogs = async (): Promise<void> => {
+    if (logs) {
+      setLogs(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await mcpCall('read', 'cells.logs', { cellId: cell.cellId, since: '1h', limit: 15 });
+      setLogs(r.ok ? ((r.value as { events?: Array<{ time: string; message: string }> }).events ?? []) : []);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '0.3rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <a href={cell.address} style={{ color: theme.accent, textDecoration: 'none', fontFamily: theme.mono, fontSize: '0.85rem' }}>
+          {cell.address}
+        </a>
+        <Badge tone={cell.status === 'ACTIVE' ? 'accent' : 'dim'}>{cell.status}</Badge>
+        {cell.public ? <Badge tone="dim">public</Badge> : null}
+        <InlineButton onClick={() => void tailLogs()}>{busy ? '…' : logs ? 'Hide logs' : 'Logs (1h)'}</InlineButton>
+        {cell.description ? <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{cell.description}</span> : null}
+      </div>
+      {logs ? (
+        logs.length === 0 ? (
+          <span style={{ color: theme.dim, fontSize: '0.8rem', marginLeft: '0.2rem' }}>No log events in the last hour.</span>
+        ) : (
+          <CodeBlock>{logs.map((l) => `${l.time.slice(11, 19)}  ${l.message.trim()}`).join('\n')}</CodeBlock>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null {
+  const [cells, setCells] = useState<CellRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    mcpCall('read', 'cells.list')
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) setCells(((r.value as { cells?: CellRow[] }).cells ?? []));
+        else setErr(typeof r.value === 'string' ? r.value : 'error');
+      })
+      .catch((e) => {
+        if (live) setErr(String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
+  if (!authed || (cells !== null && cells.length === 0)) return null;
+  return (
+    <Card>
+      <Heading sub="Your deployed cells — open the surface, tail the logs. Author and deploy through cells.* in the console below.">
+        Cells
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {cells === null ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.4rem' }}>
+          {cells.map((c) => (
+            <CellConsoleRow key={c.cellId} cell={c} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function App(): React.JSX.Element {
   const session = useAuth();
+  const authed = !!session.user;
   return (
     <Page>
       <Heading sub="A personal productivity workspace — serverless, AWS-native, MCP-native cells behind one CloudFront router.">
         workspace <span style={{ color: theme.dim, fontWeight: 400 }}>· platform</span>
       </Heading>
 
-      <Account session={session} />
-      <IdentityShell authed={!!session.user} user={session.user} />
-      <Views authed={!!session.user} />
-      <Capabilities authed={!!session.user} />
+      {session.ready && !authed ? <Landing session={session} /> : null}
+      {authed ? <Account session={session} /> : null}
+      <WorkspaceWindow authed={authed} />
+      <IdentityShell authed={authed} user={session.user} />
+      <Views authed={authed} />
+      <CellsConsole authed={authed} />
+      <Capabilities authed={authed} />
       <Discovery />
       <ResourceProbe />
 

@@ -95,10 +95,24 @@ the old Phase 2/3 ordering:
   answers — the human end of the agent escalation loop, every row an
   `mcpCall` the console could already make. Still to come here: minting a
   narrow token from the UI, and the scope-elevation (re-consent) entry.
-- **Phase 2b — the landing face.** Narrative + sign-in + public-cells
-  directory; server-shaped first paint.
-- **Phase 2c — workspace window + cells console.** Purpose-built renderings of
-  `query`/`attention` and the `cells.*` file surface.
+- **Phase 2b — the landing face** *(shipped, first cut)*: the anonymous route
+  now renders the narrative card (the MCP `instructions` voice,
+  human-rendered: facts/provenance/salience, the three verbs, grants) with the
+  passkey door as the primary action; the signed-in console renders past it.
+  Still open: the **public-cells directory** — anonymous `$catalog` is blocked
+  at the MCP layer today (401 before dispatch), so listing `public: true`
+  cells needs either an anonymous-catalog gateway path or a small public
+  endpoint; and the first paint is still client-rendered (the SSR half of the
+  original question).
+- **Phase 2c — workspace window + cells console** *(shipped, first cut)*: the
+  workspace window renders `workspace.attention` as a strip (the just-in-time
+  cron at a glance) over the top of the slice by salience
+  (`workspace.query`), titled/routed through the `_types` vocabulary; the
+  cells console lists owned cells (`cells.list`) with status, the live
+  address, and on-demand `cells.logs`. Still open: the file tree + editor +
+  deploy surface (authoring stays in the generic capabilities console), and
+  expand-from-elision on the window (query top-N stands in for tiered
+  recall).
 - **Phase 3 — the generic view renderer.** Registered views + render hints;
   dashboards come from the registry, not code. Where `home` stops being
   hand-written screens — the purpose-built surfaces of 2a–2c become the first
