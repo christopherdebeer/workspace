@@ -208,6 +208,8 @@ interface AgentGrants {
 interface AgentInput {
   prompt: string;
   system?: string;
+  /** Pin one provider (skips fallback). Default: walk the enabled agent-capable chain. */
+  provider?: 'anthropic' | 'openai';
   model?: string;
   maxTurns?: number;
   maxTokens?: number;
@@ -225,15 +227,22 @@ function grantAllows(grant: boolean | string[] | undefined, key: string, dflt: b
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…[truncated ${s.length - n} chars]` : s);
 
+/** A neutral tool definition — each provider adapter maps it to its native shape. */
+interface AgentToolDef {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+}
+
 /** The tool surface offered to the model — emit only exists when write is granted. */
-function buildAgentTools(grants: AgentGrants): unknown[] {
-  const tools: unknown[] = [];
+function buildAgentTools(grants: AgentGrants): AgentToolDef[] {
+  const tools: AgentToolDef[] = [];
   if (grants.read !== false) {
     tools.push(
       {
         name: 'substrate_query',
         description: 'List live facts in the workspace by key prefix. Returns {entries: [{key, value}], count}.',
-        input_schema: {
+        schema: {
           type: 'object',
           properties: {
             prefix: { type: 'string', description: 'Key prefix to match (empty = all granted keys)' },
@@ -244,7 +253,7 @@ function buildAgentTools(grants: AgentGrants): unknown[] {
       {
         name: 'substrate_read',
         description: 'Read one fact by exact key. Returns {key, value} or {key, value: null} when absent.',
-        input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
+        schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
       },
     );
   }
@@ -252,7 +261,7 @@ function buildAgentTools(grants: AgentGrants): unknown[] {
     tools.push({
       name: 'substrate_emit',
       description: 'Write a fact to the workspace (provenance is attested to this executor). Use only when the task asks for a write.',
-      input_schema: {
+      schema: {
         type: 'object',
         properties: {
           key: { type: 'string' },
@@ -315,6 +324,33 @@ async function agentToolExec(name: string, args: Record<string, unknown>, grants
   return { error: `unknown tool "${name}"` };
 }
 
+/* The agent loop is provider-agnostic: an adapter owns its provider's native
+ * message format and exposes call()/feed(). Fallback policy mirrors canvas's
+ * runWithFallback, with one agent-specific sharpening: an enabled key can
+ * still be a dead org (seen live — anthropic out of credits), so a failure on
+ * the FIRST model call, before any tool has executed, falls through to the
+ * next enabled provider; a failure after effects fails honestly instead of
+ * switching models mid-conversation. */
+
+interface AgentToolUse {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+interface AgentTurn {
+  text: string;
+  toolUses: AgentToolUse[];
+}
+interface AgentAdapter {
+  provider: string;
+  model: string;
+  call(): Promise<AgentTurn>;
+  feed(results: Array<{ id: string; content: string }>): void;
+}
+
+/** Thrown when the first model call fails — no effects yet, safe to fall back. */
+class FirstCallFailure extends Error {}
+
 interface AnthropicBlock {
   type: string;
   text?: string;
@@ -323,11 +359,100 @@ interface AnthropicBlock {
   input?: Record<string, unknown>;
 }
 
+function anthropicAdapter(rec: ProviderRec, input: AgentInput, system: string, tools: AgentToolDef[]): AgentAdapter {
+  const model = input.model ?? rec.textModel ?? DEFAULTS.anthropic.text ?? '';
+  const messages: unknown[] = [{ role: 'user', content: input.prompt }];
+  const aTools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema }));
+  return {
+    provider: 'anthropic',
+    model,
+    async call(): Promise<AgentTurn> {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': rec.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_tokens: input.maxTokens ?? 4096,
+          system,
+          messages,
+          ...(aTools.length ? { tools: aTools } : {}),
+        }),
+      });
+      const j = (await res.json()) as { content?: AnthropicBlock[]; stop_reason?: string; error?: { message?: string } };
+      if (!res.ok) throw new Error(`anthropic: ${j.error?.message ?? res.status}`);
+      const blocks = j.content ?? [];
+      messages.push({ role: 'assistant', content: blocks });
+      const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+      const toolUses =
+        j.stop_reason === 'tool_use'
+          ? blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id ?? '', name: b.name ?? '', args: b.input ?? {} }))
+          : [];
+      return { text, toolUses };
+    },
+    feed(results): void {
+      messages.push({
+        role: 'user',
+        content: results.map((r) => ({ type: 'tool_result', tool_use_id: r.id, content: r.content })),
+      });
+    },
+  };
+}
+
+interface OpenAIToolCall {
+  id?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+function openaiAdapter(rec: ProviderRec, input: AgentInput, system: string, tools: AgentToolDef[]): AgentAdapter {
+  const model = input.model ?? rec.textModel ?? DEFAULTS.openai.text ?? '';
+  const messages: unknown[] = [
+    { role: 'system', content: system },
+    { role: 'user', content: input.prompt },
+  ];
+  const oTools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.schema } }));
+  return {
+    provider: 'openai',
+    model,
+    async call(): Promise<AgentTurn> {
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${rec.apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_completion_tokens: input.maxTokens ?? 4096,
+          messages,
+          ...(oTools.length ? { tools: oTools } : {}),
+        }),
+      });
+      const j = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string | null; tool_calls?: OpenAIToolCall[] } }>;
+        error?: { message?: string };
+      };
+      if (!res.ok) throw new Error(`openai: ${j.error?.message ?? res.status}`);
+      const msg = j.choices?.[0]?.message ?? {};
+      messages.push(msg);
+      const toolUses = (msg.tool_calls ?? []).map((c) => {
+        let args: Record<string, unknown> = {};
+        try {
+          args = c.function?.arguments ? (JSON.parse(c.function.arguments) as Record<string, unknown>) : {};
+        } catch {
+          /* malformed arguments surface as an empty call, which the tool will refuse legibly */
+        }
+        return { id: c.id ?? '', name: c.function?.name ?? '', args };
+      });
+      return { text: msg.content ?? '', toolUses };
+    },
+    feed(results): void {
+      for (const r of results) messages.push({ role: 'tool', tool_call_id: r.id, content: r.content });
+    },
+  };
+}
+
+/** Agent-capable providers in fallback order. Google's tool-calling is a third format — deferred. */
+const AGENT_PROVIDERS = ['anthropic', 'openai'] as const;
+
 async function runAgent(jobId: string, input: AgentInput): Promise<void> {
-  const rec = await getProvider('anthropic');
-  if (!rec) throw new Error(`provider "anthropic" not enabled — paste a key at /@${OWNER}/models/secrets`);
   const grants = input.grants ?? {};
-  const maxTurns = Math.min(Math.max(input.maxTurns ?? 8, 1), 16);
   const tools = buildAgentTools(grants);
   const factKey = input.factKey ?? `agent/${jobId}`;
   const system =
@@ -335,51 +460,80 @@ async function runAgent(jobId: string, input: AgentInput): Promise<void> {
     `Use the substrate tools to ground your answer in actual facts; finish with a plain-text answer.` +
     (input.system ? `\n\n${input.system}` : '');
 
-  const messages: unknown[] = [{ role: 'user', content: input.prompt }];
-  const transcript: Array<Record<string, unknown>> = [{ role: 'user', text: clip(input.prompt, 4000) }];
+  const wanted: string[] = input.provider ? [input.provider] : [...AGENT_PROVIDERS];
+  const candidates: Array<{ provider: string; rec: ProviderRec }> = [];
+  for (const p of wanted) {
+    if (!(AGENT_PROVIDERS as readonly string[]).includes(p)) throw new Error(`agent: provider "${p}" not supported (anthropic/openai)`);
+    const rec = await getProvider(p);
+    if (rec) candidates.push({ provider: p, rec });
+  }
+  if (!candidates.length) throw new Error(`agent: no agent-capable provider enabled — paste a key at /@${OWNER}/models/secrets`);
+
+  const fallbacks: Array<{ provider: string; error: string }> = [];
+  for (const { provider, rec } of candidates) {
+    const adapter = provider === 'anthropic' ? anthropicAdapter(rec, input, system, tools) : openaiAdapter(rec, input, system, tools);
+    try {
+      await runAgentLoop(jobId, input, adapter, grants, factKey, fallbacks);
+      return;
+    } catch (err) {
+      if (err instanceof FirstCallFailure) {
+        fallbacks.push({ provider, error: err.message });
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`agent: every provider failed — ${fallbacks.map((f) => `${f.provider}: ${f.error}`).join(' | ')}`);
+}
+
+async function runAgentLoop(
+  jobId: string,
+  input: AgentInput,
+  adapter: AgentAdapter,
+  grants: AgentGrants,
+  factKey: string,
+  fallbacks: Array<{ provider: string; error: string }>,
+): Promise<void> {
+  const maxTurns = Math.min(Math.max(input.maxTurns ?? 8, 1), 16);
+  const transcript: Array<Record<string, unknown>> = [
+    { role: 'user', text: clip(input.prompt, 4000) },
+    ...fallbacks.map((f) => ({ role: 'system', note: `provider ${f.provider} failed before any effect (${clip(f.error, 200)}) — fell back` })),
+  ];
   let finalText = '';
   let toolCalls = 0;
   let turns = 0;
 
   for (; turns < maxTurns; turns++) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': rec.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: input.model ?? rec.textModel ?? DEFAULTS.anthropic.text,
-        max_tokens: input.maxTokens ?? 4096,
-        system,
-        messages,
-        ...(tools.length ? { tools } : {}),
-      }),
-    });
-    const j = (await res.json()) as { content?: AnthropicBlock[]; stop_reason?: string; error?: { message?: string } };
-    if (!res.ok) throw new Error(`anthropic: ${j.error?.message ?? res.status}`);
-    const blocks = j.content ?? [];
-    messages.push({ role: 'assistant', content: blocks });
-    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
-    if (text) finalText = text;
+    let turn: AgentTurn;
+    try {
+      turn = await adapter.call();
+    } catch (err) {
+      if (turns === 0) throw new FirstCallFailure((err as Error).message);
+      throw err; // effects may exist — fail honestly rather than replay on another model
+    }
+    if (turn.text) finalText = turn.text;
     transcript.push({
       role: 'assistant',
-      ...(text ? { text: clip(text, 4000) } : {}),
-      ...(j.stop_reason === 'tool_use' ? { tools: blocks.filter((b) => b.type === 'tool_use').map((b) => b.name) } : {}),
+      provider: adapter.provider,
+      ...(turn.text ? { text: clip(turn.text, 4000) } : {}),
+      ...(turn.toolUses.length ? { tools: turn.toolUses.map((t) => t.name) } : {}),
     });
-    if (j.stop_reason !== 'tool_use') break;
+    if (!turn.toolUses.length) break;
 
-    const results: unknown[] = [];
-    for (const block of blocks.filter((b) => b.type === 'tool_use')) {
+    const results: Array<{ id: string; content: string }> = [];
+    for (const use of turn.toolUses) {
       toolCalls++;
       let out: unknown;
       try {
-        out = await agentToolExec(block.name ?? '', block.input ?? {}, grants);
+        out = await agentToolExec(use.name, use.args, grants);
       } catch (err) {
         out = { error: (err as Error).message };
       }
       const s = JSON.stringify(out);
-      results.push({ type: 'tool_result', tool_use_id: block.id, content: clip(s, 16000) });
-      transcript.push({ role: 'tool', tool: block.name, input: block.input, result: clip(s, 2000) });
+      results.push({ id: use.id, content: clip(s, 16000) });
+      transcript.push({ role: 'tool', tool: use.name, input: use.args, result: clip(s, 2000) });
     }
-    messages.push({ role: 'user', content: results });
+    adapter.feed(results);
   }
   if (!finalText) finalText = `[no final text — stopped after ${turns} turn(s)]`;
 
@@ -388,12 +542,23 @@ async function runAgent(jobId: string, input: AgentInput): Promise<void> {
   const at = new Date().toISOString();
   await emitFact(
     factKey,
-    { prompt: clip(input.prompt, 4000), result: finalText, turns: turns + 1, toolCalls, transcriptKey: `${factKey}/transcript`, jobId, at },
+    {
+      prompt: clip(input.prompt, 4000),
+      result: finalText,
+      provider: adapter.provider,
+      model: adapter.model,
+      ...(fallbacks.length ? { fallbacks } : {}),
+      turns: turns + 1,
+      toolCalls,
+      transcriptKey: `${factKey}/transcript`,
+      jobId,
+      at,
+    },
     'agent-run',
     ['agent', ...(input.tags ?? [])],
   );
   await emitFact(`${factKey}/transcript`, { jobId, at, turns: transcript }, 'transcript', ['agent', ...(input.tags ?? [])]);
-  await putJob(jobId, { status: 'done', kind: 'agent', text: finalText, factKey, turns: turns + 1, toolCalls });
+  await putJob(jobId, { status: 'done', kind: 'agent', text: finalText, factKey, provider: adapter.provider, turns: turns + 1, toolCalls });
 }
 
 /* ── async jobs: submit fast, self-invoke for the long work, poll fetch ──
@@ -498,14 +663,15 @@ const TOOLS = [
   {
     name: 'agent',
     description:
-      'Agentic model invocation: an Anthropic tool-use loop with the substrate as its toolbox — substrate_query/substrate_read (the owner’s slice) and substrate_emit (organ-path write, provenance attested to this cell). Per-run `grants` NARROW within the cell’s standing: read defaults true, write defaults false; either may be a list of allowed key prefixes. Always async: returns {jobId, factKey}; the result lands as a substrate fact at factKey (type agent-run) with the full transcript at factKey/transcript (type transcript). Poll fetch for {status, text, turns, toolCalls}.',
+      'Agentic model invocation: a tool-use loop with the substrate as its toolbox — substrate_query/substrate_read (the owner’s slice) and substrate_emit (organ-path write, provenance attested to this cell). Walks the enabled provider chain (anthropic → openai) and falls back when a provider fails before any effect; pin one with `provider`. Per-run `grants` NARROW within the cell’s standing: read defaults true, write defaults false; either may be a list of allowed key prefixes. Always async: returns {jobId, factKey}; the result lands as a substrate fact at factKey (type agent-run, recording provider/model/fallbacks) with the full transcript at factKey/transcript (type transcript). Poll fetch for {status, text, provider, turns, toolCalls}.',
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'The task' },
         system: { type: 'string', description: 'Appended to the substrate-agent system frame' },
-        model: { type: 'string', description: 'Override the configured anthropic text model' },
+        provider: { type: 'string', enum: ['anthropic', 'openai'], description: 'Pin one provider (default: enabled chain with first-call fallback)' },
+        model: { type: 'string', description: 'Override the pinned/first provider’s configured text model' },
         maxTurns: { type: 'number', description: 'Model-call budget (default 8, cap 16)' },
         maxTokens: { type: 'number', description: 'Per-call output cap (default 4096)' },
         grants: {
