@@ -130,11 +130,20 @@ async function runJob(jobId: string): Promise<void> {
   const job = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
   const input = (job.Item as { input?: ExecInput } | undefined)?.input;
   if (!input) return;
+  let out: unknown;
   try {
-    const out = await exec(input);
-    await putJob(jobId, { status: 'done', input, out });
+    out = await exec(input);
   } catch (err) {
     await putJob(jobId, { status: 'error', input, error: (err as Error).message });
+    return;
+  }
+  try {
+    await putJob(jobId, { status: 'done', input, out });
+  } catch (err) {
+    // A save failure must not impersonate the user's code: the marshaller's
+    // advice ("Pass options.removeUndefinedValues…") is meaningless to someone
+    // who wrote Fibonacci. Name the failing stage instead.
+    await putJob(jobId, { status: 'error', input, error: `failed to persist result: ${(err as Error).message}` });
   }
 }
 
