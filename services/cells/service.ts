@@ -37,6 +37,7 @@ import {
   getObjectRaw,
   listObjects,
   deleteObject,
+  presignPut,
   updateFunctionCode,
 } from './provisioner';
 import type { InvokeCellResult } from './provisioner';
@@ -843,10 +844,24 @@ interface PutDataInput extends CellRef {
   /** https URL to fetch server-side (large blobs would fail the edge's
    *  request-signing; the platform's own egress has no such cap). */
   url?: string;
+  /** Return a presigned PUT url instead of writing — the browser uploads
+   *  the bytes straight to S3 (no edge body cap, no inline base64). */
+  presign?: boolean;
 }
 async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.key) throw new Error('key is required');
+  if (input.presign) {
+    const { record, bucket } = await resolveAuthorized(input, user);
+    const key = cleanPath(input.key);
+    const contentType = input.contentType ?? 'application/octet-stream';
+    const uploadUrl = presignPut(bucket, dataKey(record.cellId, user, input.key), contentType, 300);
+    const url =
+      record.public && key.startsWith('public/')
+        ? `/@${record.owner}/${record.name}/_data/${user}/${key}`
+        : null;
+    return { ok: true, cellId: record.cellId, user, key, uploadUrl, contentType, url };
+  }
   let body: string | Buffer;
   let fetchedType: string | undefined;
   if (typeof input.url === 'string') {
@@ -1326,6 +1341,7 @@ const TOOLS: Record<string, ToolSpec> = {
         encoding: { type: 'string', enum: ['utf8', 'base64'] },
         contentType: { type: 'string' },
         url: { type: 'string', description: 'https URL to fetch server-side (for blobs too large to inline)' },
+        presign: { type: 'boolean', description: 'Return {uploadUrl} (presigned S3 PUT, 5 min) instead of writing — for browser uploads of any size' },
       },
       required: ['key'],
       additionalProperties: false,

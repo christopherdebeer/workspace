@@ -108,26 +108,30 @@ export async function generateContent(content: string, el: any, c: any): Promise
   }
 }
 
-/** Re-encode to webp under the edge's ~700KB inline ceiling. */
-async function compressForUpload(b64: string, mime: string): Promise<{ b64: string; mime: string }> {
-  if (b64.length * 0.75 < 600 * 1024 && mime === 'image/webp') return { b64, mime };
-  const img = new Image();
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error('generated image failed to decode'));
-    img.src = `data:${mime};base64,${b64}`;
+/**
+ * Upload bytes via a presigned S3 PUT — no edge body cap, no inline base64,
+ * no compression gate (iOS can't even encode webp: toDataURL('image/webp')
+ * silently returns PNG there).
+ */
+export async function uploadBlob(key: string, blob: Blob, contentType: string): Promise<string> {
+  const grant = await act<{ uploadUrl: string; url: string | null }>('cells.putData', {
+    owner: 'c15r',
+    name: 'canvas',
+    key,
+    contentType,
+    presign: true,
   });
-  const cv = document.createElement('canvas');
-  const k = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
-  cv.width = Math.round(img.naturalWidth * k);
-  cv.height = Math.round(img.naturalHeight * k);
-  cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
-  for (const q of [0.85, 0.65, 0.45]) {
-    const data = cv.toDataURL('image/webp', q);
-    const out = data.slice(data.indexOf(',') + 1);
-    if (out.length * 0.75 < 600 * 1024) return { b64: out, mime: 'image/webp' };
-  }
-  throw new Error('generated image too large even after compression');
+  const put = await fetch(grant.uploadUrl, { method: 'PUT', headers: { 'content-type': contentType }, body: blob });
+  if (!put.ok) throw new Error(`upload failed: HTTP ${put.status}`);
+  if (!grant.url) throw new Error('stored but not web-addressable (cell not public?)');
+  return grant.url;
+}
+
+function b64ToBlob(b64: string, mime: string): Blob {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
 }
 
 /**
@@ -140,18 +144,10 @@ export async function regenerateImage(el: any): Promise<void> {
       prompt: el.content || 'abstract placeholder image',
     });
     if (!out.imageB64) throw new Error('no image returned');
-    const { b64, mime } = await compressForUpload(out.imageB64, out.mime ?? 'image/png');
-    const key = `public/img/gen-${Date.now().toString(36)}.webp`;
-    const put = await act<{ url: string | null }>('cells.putData', {
-      owner: 'c15r',
-      name: 'canvas',
-      key,
-      content: b64,
-      encoding: 'base64',
-      contentType: mime,
-    });
-    if (!put.url) throw new Error('image stored but not web-addressable');
-    el.src = put.url;
+    const mime = out.mime ?? 'image/png';
+    const ext = (mime.split('/')[1] ?? 'png').replace(/[^a-z0-9]/gi, '');
+    const key = `public/img/gen-${Date.now().toString(36)}.${ext}`;
+    el.src = await uploadBlob(key, b64ToBlob(out.imageB64, mime), mime);
     el.srcPrompt = el.content; // provenance: the prompt that produced this artifact
   } catch (err) {
     console.warn('[regenerateImage]', err);
