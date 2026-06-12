@@ -117,11 +117,39 @@ function loadForgeEnv(): ForgeEnv {
   };
 }
 
-/** Throw unless `user` owns or has been granted access to the cell. */
-function authorizeAccess(record: CellRecord, user: string): void {
-  if (record.owner !== user && !record.grants.includes(user)) {
-    throw new ServiceAuthError(`Not authorised for cell "${record.cellId}"`);
-  }
+/** Whether a tool-grant pattern list covers a tool name (exact, `*`, or trailing-`*` like `list_*`). */
+function toolAllowed(patterns: string[], tool: string): boolean {
+  return patterns.some((p) => p === '*' || p === tool || (p.endsWith('*') && tool.startsWith(p.slice(0, -1))));
+}
+
+/** The denial teaches the escalation path (docs/scope-grants.md §5). */
+function grantDenied(record: CellRecord, tool?: string): string {
+  const resource = `cell:${record.owner}/${record.name}:${tool ?? '*'}`;
+  return (
+    `grant_denied: not authorised for cell "${record.cellId}"${tool ? ` tool "${tool}"` : ''}. ` +
+    `Ask the owner: act("workspace.requestGrant", { resource: "${resource}" })`
+  );
+}
+
+/**
+ * Throw unless `user` owns or has been granted access to the cell. A full
+ * grant (`grants[]`) covers everything; a per-tool grant (`toolGrants`) lets
+ * the principal reach the cell (dispatch, discovery, metadata) but only call
+ * the matching tools when a `tool` is named.
+ */
+function authorizeAccess(record: CellRecord, user: string, tool?: string): void {
+  if (record.owner === user || record.grants.includes(user)) return;
+  const patterns = record.toolGrants?.[user];
+  if (patterns && (!tool || toolAllowed(patterns, tool))) return;
+  throw new ServiceAuthError(grantDenied(record, tool));
+}
+
+/** A predicate for which of a cell's tools the user may see/call. */
+function toolVisibility(record: CellRecord, user: string): (tool: string) => boolean {
+  if (record.owner === user || record.grants.includes(user)) return () => true;
+  const patterns = record.toolGrants?.[user];
+  if (!patterns) return () => false;
+  return (tool) => toolAllowed(patterns, tool);
 }
 
 // ─── tools ────────────────────────────────────────────────────────
@@ -305,6 +333,7 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
     owner: record.owner,
     status: record.status,
     grants: record.grants,
+    ...(record.toolGrants ? { toolGrants: record.toolGrants } : {}),
     description: record.description,
     address: cellAddress(record.owner, record.name),
     createdAt: record.createdAt,
@@ -312,21 +341,56 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
 }
 
 interface GrantInput {
-  cellId: string;
+  /** Target the cell by id, or by owner + name. */
+  cellId?: string;
+  owner?: string;
+  name?: string;
   principal: string;
+  /** Restrict the grant to these tool patterns (exact or trailing `*`); omit for every tool. */
+  tools?: string[];
 }
 
 async function grantCapability(input: GrantInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
-  const record = await registry.get(input?.cellId);
-  if (!record) throw new Error(`Unknown cell "${input?.cellId}"`);
+  const record = await registry.get(resolveCellId(input ?? {}));
+  if (!record) throw new Error(`Unknown cell`);
   if (record.owner !== user) throw new ServiceAuthError('Only the owner can share a cell');
   if (!input?.principal?.trim()) throw new Error('A `principal` to grant is required');
-  const updated = await registry.addGrant(record.cellId, input.principal);
-  await ctx.events.emit('cell.shared', { cellId: record.cellId, principal: input.principal });
-  return { cellId: record.cellId, grants: updated?.grants ?? record.grants };
+  const tools = Array.isArray(input.tools) ? input.tools.filter((t) => typeof t === 'string' && t.trim()) : undefined;
+  const updated = await registry.addGrant(record.cellId, input.principal, tools?.length ? tools : undefined);
+  await ctx.events.emit('cell.shared', { cellId: record.cellId, principal: input.principal, ...(tools?.length ? { tools } : {}) });
+  return {
+    cellId: record.cellId,
+    grants: updated?.grants ?? record.grants,
+    ...(updated?.toolGrants ? { toolGrants: updated.toolGrants } : {}),
+  };
+}
+
+interface RevokeInput {
+  cellId?: string;
+  owner?: string;
+  name?: string;
+  principal: string;
+}
+
+async function revokeCapability(input: RevokeInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const record = await registry.get(resolveCellId(input ?? {}));
+  if (!record) throw new Error(`Unknown cell`);
+  if (record.owner !== user) throw new ServiceAuthError('Only the owner can revoke access to a cell');
+  if (!input?.principal?.trim()) throw new Error('A `principal` to revoke is required');
+  if (input.principal === record.owner) throw new Error('The owner cannot be revoked');
+  const updated = await registry.removeGrant(record.cellId, input.principal);
+  await ctx.events.emit('cell.unshared', { cellId: record.cellId, principal: input.principal });
+  return {
+    cellId: record.cellId,
+    grants: updated?.grants ?? record.grants,
+    ...(updated?.toolGrants ? { toolGrants: updated.toolGrants } : {}),
+  };
 }
 
 interface CallCellInput {
@@ -360,11 +424,13 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
   // browser can fetch its pages/assets through dispatch. Everything else
   // still requires an authenticated, owner-or-granted caller.
   const anonymousOk = record.public && (method === 'GET' || method === 'HEAD');
+  const path = input.path ?? '/';
   if (!anonymousOk) {
     const user = requireUser(ctx.identity);
-    authorizeAccess(record, user);
+    // A tool invocation names its tool in the path — per-tool grants apply.
+    const tool = path.match(/^\/_tools\/([^/]+)$/)?.[1];
+    authorizeAccess(record, user, tool);
   }
-  const path = input.path ?? '/';
 
   // The cell data layer, web-served: GET /@owner/cell/_data/<user>/public/<key>
   // streams a blob straight from S3 (no Lambda hop). Only the `public/`
@@ -975,7 +1041,9 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
   let cells: CellRecord[];
   if (input?.cellId || (input?.owner && input?.name)) {
     const rec = await registry.get(resolveCellId(input));
-    cells = rec && rec.grants.includes(user) && rec.status === 'ACTIVE' ? [rec] : [];
+    const accessible =
+      rec && (rec.owner === user || rec.grants.includes(user) || !!rec.toolGrants?.[user]);
+    cells = rec && accessible && rec.status === 'ACTIVE' ? [rec] : [];
   } else {
     cells = (await registry.listAccessibleBy(user)).filter((c) => c.status === 'ACTIVE').slice(0, MAX_TOOL_CELLS);
   }
@@ -984,6 +1052,8 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
   await Promise.all(
     cells.map(async (cell) => {
       const address = cellAddress(cell.owner, cell.name).slice(1); // `@<owner>/<slug>`
+      // Advertise only what this caller may call (per-tool grants filter here).
+      const visible = toolVisibility(cell, user);
       try {
         const res = await invokeCell({
           functionName: cell.functionName,
@@ -1002,6 +1072,7 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
         for (const t of body.tools) {
           const tool = typeof t.name === 'string' ? t.name : '';
           if (!SAFE_TOOL_NAME.test(tool)) continue;
+          if (!visible(tool)) continue;
           out.push({
             name: `${cell.cellId}__${tool}`,
             address,
@@ -1135,16 +1206,40 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: callCell as RegisteredCommand,
   },
   grant: {
-    description: 'Share a cell you own with another principal (expand permissions).',
+    description:
+      'Share a cell you own with another principal. Omit `tools` for full access; pass `tools` (exact names or trailing-`*` patterns like "list_*") to grant just those — the principal can reach the cell but only call matching tools. Re-granting replaces their standing (so a grant can narrow).',
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
-      properties: { cellId: { type: 'string' }, principal: { type: 'string' } },
-      required: ['cellId', 'principal'],
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        principal: { type: 'string' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Tool patterns to allow (omit = every tool)' },
+      },
+      required: ['principal'],
       additionalProperties: false,
     },
     handler: grantCapability as RegisteredCommand,
+  },
+  revoke: {
+    description: "Revoke a principal's access to a cell you own (removes full and per-tool grants).",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        principal: { type: 'string' },
+      },
+      required: ['principal'],
+      additionalProperties: false,
+    },
+    handler: revokeCapability as RegisteredCommand,
   },
   delete: {
     description: 'Delete a cell you own (tears down its stack).',
@@ -1413,7 +1508,7 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'cells',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
+  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
 });
 
 export default handler;

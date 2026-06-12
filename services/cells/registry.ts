@@ -24,6 +24,13 @@ export interface CellRecord {
   stackName: string;
   /** Principals allowed to invoke the cell (always includes the owner). */
   grants: string[];
+  /**
+   * Per-tool grants: principal → tool-name patterns (exact, or trailing `*`
+   * like `list_*`). A principal here can reach the cell (dispatch, discovery)
+   * but only call matching tools — the granular alternative to the
+   * all-or-nothing `grants[]` (docs/scope-grants.md §4).
+   */
+  toolGrants?: Record<string, string[]>;
   /** Public cells accept anonymous GETs via dispatch (a web-facing cell). */
   public: boolean;
   status: CellStatus;
@@ -59,6 +66,9 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
     functionName: String(item.functionName),
     stackName: String(item.stackName),
     grants: Array.isArray(item.grants) ? (item.grants as string[]) : [],
+    ...(item.toolGrants && typeof item.toolGrants === 'object'
+      ? { toolGrants: item.toolGrants as Record<string, string[]> }
+      : {}),
     public: !!item.public,
     status: item.status as CellStatus,
     createdAt: String(item.createdAt),
@@ -73,7 +83,10 @@ export interface CellRegistry {
   /** Cells the principal can access: those they own or were granted. */
   listAccessibleBy(principal: string): Promise<CellRecord[]>;
   setStatus(cellId: string, status: CellStatus): Promise<void>;
-  addGrant(cellId: string, principal: string): Promise<CellRecord | null>;
+  /** Grant a principal: every tool (no `tools`), or just the named tool patterns. Re-granting replaces. */
+  addGrant(cellId: string, principal: string, tools?: string[]): Promise<CellRecord | null>;
+  /** Remove a principal's access entirely (full and per-tool). */
+  removeGrant(cellId: string, principal: string): Promise<CellRecord | null>;
 }
 
 export function createRegistry(tableName: string): CellRegistry {
@@ -114,17 +127,18 @@ export function createRegistry(tableName: string): CellRegistry {
 
     async listAccessibleBy(principal: string): Promise<CellRecord[]> {
       // Backed by a Scan of the profile rows (sk = "A"), filtered server-side on
-      // the grants list (which always includes the owner). The registry is
-      // small — bounded by the per-region cell quota — and there is no
-      // grant-by-principal index, so a Scan is the right trade-off here; revisit
-      // with a secondary index if cell counts grow large. Pages to completion.
+      // the grants list (which always includes the owner) or a per-tool grant.
+      // The registry is small — bounded by the per-region cell quota — and there
+      // is no grant-by-principal index, so a Scan is the right trade-off here;
+      // revisit with a secondary index if cell counts grow large. Pages to completion.
       const records: CellRecord[] = [];
       let startKey: DynamoDB.DocumentClient.Key | undefined;
       do {
         const res = await db
           .scan({
             TableName: tableName,
-            FilterExpression: 'sk = :a AND contains(grants, :p)',
+            FilterExpression: 'sk = :a AND (contains(grants, :p) OR attribute_exists(toolGrants.#p))',
+            ExpressionAttributeNames: { '#p': principal },
             ExpressionAttributeValues: { ':a': PROFILE_SK, ':p': principal },
             ExclusiveStartKey: startKey,
           })
@@ -147,14 +161,35 @@ export function createRegistry(tableName: string): CellRegistry {
         .promise();
     },
 
-    async addGrant(cellId: string, principal: string): Promise<CellRecord | null> {
+    async addGrant(cellId: string, principal: string, tools?: string[]): Promise<CellRecord | null> {
       const record = await this.get(cellId);
       if (!record) return null;
-      if (!record.grants.includes(principal)) {
-        record.grants = [...record.grants, principal];
-        record.updatedAt = new Date().toISOString();
-        await this.put(record);
+      if (tools && tools.length && principal !== record.owner) {
+        // Per-tool grant replaces any prior standing (a re-grant can narrow).
+        record.toolGrants = { ...record.toolGrants, [principal]: [...tools] };
+        record.grants = record.grants.filter((g) => g !== principal);
+      } else {
+        if (record.toolGrants && principal in record.toolGrants) {
+          const { [principal]: _dropped, ...rest } = record.toolGrants;
+          record.toolGrants = rest;
+        }
+        if (!record.grants.includes(principal)) record.grants = [...record.grants, principal];
       }
+      record.updatedAt = new Date().toISOString();
+      await this.put(record);
+      return record;
+    },
+
+    async removeGrant(cellId: string, principal: string): Promise<CellRecord | null> {
+      const record = await this.get(cellId);
+      if (!record || principal === record.owner) return record;
+      record.grants = record.grants.filter((g) => g !== principal);
+      if (record.toolGrants && principal in record.toolGrants) {
+        const { [principal]: _dropped, ...rest } = record.toolGrants;
+        record.toolGrants = rest;
+      }
+      record.updatedAt = new Date().toISOString();
+      await this.put(record);
       return record;
     },
   };

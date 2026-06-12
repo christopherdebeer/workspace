@@ -10,7 +10,14 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { defineService, ServiceContext, ServiceHttpResponse, requireUser, getOptional } from '../../platform/runtime';
+import {
+  defineService,
+  ServiceContext,
+  ServiceHttpResponse,
+  requireUser,
+  getOptional,
+  intersectScopes,
+} from '../../platform/runtime';
 import { AuthStore } from './store';
 import { createMemoryStore } from './memory-store';
 import { createDynamoStore } from './dynamo-store';
@@ -121,19 +128,41 @@ interface MintTokenInput {
 }
 async function mintToken(input: MintTokenInput, ctx: ServiceContext) {
   const userId = await callerAccountId(ctx);
+  if (!input?.scope?.trim()) throw new Error('A `scope` for the token is required');
+  // The minter's own token is the ceiling: a minted token carries the
+  // intersection of what was asked and what the minter's credential holds —
+  // narrow, never widen (docs/scope-grants.md §3). Callers whose identity
+  // arrives without scopes (no PEP on the path) cannot mint at all.
+  const requested = input.scope.split(/[\s,]+/).filter(Boolean);
+  const effective = intersectScopes(requested, ctx.identity.scopes);
+  if (!effective.length) {
+    throw new Error(
+      `scope_denied: none of the requested scopes (${requested.join(' ')}) are within your token's ceiling (${
+        ctx.identity.scopes.join(' ') || 'none'
+      }). A token can only narrow, never widen.`,
+    );
+  }
+  const scope = effective.join(' ');
   const result = await store.mintToken({
     userId,
-    scope: input.scope,
+    scope,
     label: input.label,
     expiresInSec: input.expiresInSec,
     withRefresh: input.withRefresh,
   });
-  await ctx.events.emit('auth.token.minted', { userId, id: result.id, scope: input.scope });
-  return result;
+  await ctx.events.emit('auth.token.minted', { userId, id: result.id, scope });
+  // Echo the effective scope so the minter sees what the narrowing produced.
+  return { ...result, scope };
 }
 
 async function listTokens(_input: unknown, ctx: ServiceContext) {
   return store.listUserTokens(await callerAccountId(ctx));
+}
+
+/** The gateway-facing read: active credentials, newest first. */
+async function tokens(_input: unknown, ctx: ServiceContext) {
+  const all = await store.listUserTokens(await callerAccountId(ctx));
+  return { tokens: all };
 }
 
 interface RevokeTokenInput {
@@ -146,11 +175,99 @@ async function revokeToken(input: RevokeTokenInput, ctx: ServiceContext) {
   return { revoked: ok };
 }
 
+/**
+ * The gateway provider contract: the small token-management vocabulary
+ * (`auth.tokens` / `auth.mintToken` / `auth.revokeToken`). auth stays an
+ * infrastructure cell, but credentials are user-facing state — the standing
+ * management plane home and agents share (docs/scope-grants.md §4/§6).
+ */
+function describeTools() {
+  return {
+    tools: [
+      {
+        name: 'tokens',
+        description:
+          'List your credentials: id, scope, label, client, expiry, revoked. The standing view behind the identity shell — revoke anything you do not recognise.',
+        scope: null,
+        kind: 'read' as const,
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            tokens: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  scope: { type: 'string' },
+                  label: { type: ['string', 'null'] },
+                  clientId: { type: ['string', 'null'] },
+                  revoked: { type: 'boolean' },
+                  expiresAt: { type: ['string', 'null'] },
+                  createdAt: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        name: 'mintToken',
+        description:
+          'Mint a bearer token narrowed to ≤ your own standing (effective scope = requested ∩ yours — a token can only narrow, never widen). Use for long-lived, narrow-scope credentials: webhooks, collectors, one cell. Label it so the list stays legible.',
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            scope: { type: 'string', description: 'Space-separated scopes to request (intersected with yours)' },
+            label: { type: 'string', description: 'What this credential is for' },
+            expiresInSec: { type: 'number', description: 'Lifetime in seconds (omit for the default; ≤0 = non-expiring)' },
+            withRefresh: { type: 'boolean', description: 'Also mint a refresh token' },
+          },
+          required: ['scope'],
+          additionalProperties: false,
+        },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            token: { type: 'string', description: 'The bearer value — shown once, store it now' },
+            scope: { type: 'string', description: 'The effective (narrowed) scope' },
+            expiresAt: { type: ['string', 'null'] },
+          },
+        },
+      },
+      {
+        name: 'revokeToken',
+        description: 'Revoke one of your tokens by id (from auth.tokens). Idempotent.',
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: { tokenId: { type: 'string' } },
+          required: ['tokenId'],
+          additionalProperties: false,
+        },
+        resultSchema: { type: 'object', properties: { revoked: { type: 'boolean' } } },
+      },
+    ],
+  };
+}
+
 // ─── Service ─────────────────────────────────────────────────────
 
 export const handler = defineService({
   name: 'auth',
-  commands: { validateToken, mintToken, listTokens, revokeToken },
+  commands: {
+    validateToken,
+    mintToken,
+    listTokens,
+    tokens,
+    revokeToken,
+    describeTools: () => describeTools(),
+  },
   events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'] },
   http: [
     { method: 'GET', path: '/.well-known/oauth-protected-resource', handler: (req) => handlePRM(req, OAUTH_CONFIG) },

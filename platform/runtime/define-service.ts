@@ -146,6 +146,7 @@ export function defineService(definition: ServiceDefinition) {
       registry: config.registry,
       correlationId: opts.correlationId,
       user: opts.identity.user,
+      scopes: opts.identity.scopes.length ? opts.identity.scopes : undefined,
     });
     return {
       logger,
@@ -201,7 +202,7 @@ export function defineService(definition: ServiceDefinition) {
       const ctx = buildContext({
         correlationId,
         traceId: correlationId,
-        identity: { user: event.user, scopes: [] },
+        identity: { user: event.user, scopes: event.scopes ?? [] },
       });
       try {
         const result = await runCommand(event.__command, event.payload, ctx);

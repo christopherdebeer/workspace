@@ -74,7 +74,7 @@ export class PlatformStack extends cdk.Stack {
       clientEntry: path.join(__dirname, '..', '..', 'services', 'auth', 'client', 'main.tsx'),
       routes: ['/auth/*', '/oauth/*', '/webauthn/*', '/.well-known/*'],
       persistence: { dynamo: true, dynamoTtl: true },
-      commands: ['validateToken', 'mintToken', 'listTokens', 'revokeToken'],
+      commands: ['validateToken', 'mintToken', 'listTokens', 'tokens', 'revokeToken', 'describeTools'],
       emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'],
       eventBus,
       environment: {
@@ -102,8 +102,8 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'describeTools'],
-      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
     });
     substrate.grantReadWrite(workspace);
@@ -178,8 +178,8 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('cells'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['create', 'list', 'get', 'call', 'grant', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
-      emits: ['cell.create.requested', 'cell.shared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
+      commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
+      emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
       // it so its .wasm ships in the asset.

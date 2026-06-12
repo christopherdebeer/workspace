@@ -65,14 +65,17 @@ function memoryDocClient(): { store: Map<string, Item> } & Record<string, unknow
       }),
     }),
     scan: ({ ExpressionAttributeValues }: { ExpressionAttributeValues: Record<string, unknown> }) => ({
-      promise: async () => ({
-        Items: [...store.values()].filter(
-          (i) =>
-            i.sk === ExpressionAttributeValues[':a'] &&
-            Array.isArray(i.grants) &&
-            (i.grants as string[]).includes(ExpressionAttributeValues[':p'] as string),
-        ),
-      }),
+      promise: async () => {
+        const p = ExpressionAttributeValues[':p'] as string;
+        return {
+          Items: [...store.values()].filter(
+            (i) =>
+              i.sk === ExpressionAttributeValues[':a'] &&
+              ((Array.isArray(i.grants) && (i.grants as string[]).includes(p)) ||
+                (typeof i.toolGrants === 'object' && i.toolGrants !== null && p in (i.toolGrants as Record<string, unknown>))),
+          ),
+        };
+      },
     }),
   };
 }
@@ -473,5 +476,69 @@ describe('cells: backend commands', () => {
     const denied = await call('bob', 'callCellTool', { cellId: cell.cellId, tool: 'add', args: {} });
     expect(denied.ok).toBe(false);
     expect(denied.error).toMatch(/not authorised/i);
+  });
+
+  it('per-tool grants: the grantee can call matching tools, sees only them, and is taught the request path otherwise', async () => {
+    lambdaResponse = { statusCode: 200, body: JSON.stringify({ ok: true }) };
+    await call('alice', 'create', { name: 'regwatch', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    await reg.setStatus(cell.cellId, 'ACTIVE');
+
+    // Only the owner can grant; owner+name addressing works.
+    const notOwner = await call('emily', 'grant', { owner: 'alice', name: 'regwatch', principal: 'emily' });
+    expect(notOwner.ok).toBe(false);
+    const granted = await call<{ toolGrants?: Record<string, string[]> }>('alice', 'grant', {
+      owner: 'alice',
+      name: 'regwatch',
+      principal: 'emily',
+      tools: ['review', 'flag', 'list_*', 'stats'],
+    });
+    expect(granted.ok).toBe(true);
+    expect(granted.result!.toolGrants).toEqual({ emily: ['review', 'flag', 'list_*', 'stats'] });
+
+    // Reviewer-scoped tools work (exact and trailing-* patterns)…
+    expect((await call('emily', 'callCellTool', { cellId: cell.cellId, tool: 'review', args: {} })).ok).toBe(true);
+    expect((await call('emily', 'callCellTool', { cellId: cell.cellId, tool: 'list_items', args: {} })).ok).toBe(true);
+    // …owner-shaped tools are denied with the escalation affordance.
+    const denied = await call('emily', 'callCellTool', { cellId: cell.cellId, tool: 'save_prompt', args: {} });
+    expect(denied.ok).toBe(false);
+    expect(denied.error).toMatch(/grant_denied/);
+    expect(denied.error).toMatch(/workspace\.requestGrant/);
+    expect(denied.error).toMatch(/cell:alice\/regwatch:save_prompt/);
+
+    // Discovery is filtered to the granted tools.
+    lambdaResponse = {
+      statusCode: 200,
+      body: JSON.stringify({
+        tools: [
+          { name: 'review', kind: 'act' },
+          { name: 'list_items', kind: 'read' },
+          { name: 'save_prompt', kind: 'act' },
+        ],
+      }),
+    };
+    const emilyTools = await call<{ tools: Array<{ tool: string }> }>('emily', 'describeCellTools', {});
+    expect(emilyTools.result!.tools.map((t) => t.tool).sort()).toEqual(['list_items', 'review']);
+    const aliceTools = await call<{ tools: Array<{ tool: string }> }>('alice', 'describeCellTools', {
+      owner: 'alice',
+      name: 'regwatch',
+    });
+    expect(aliceTools.result!.tools.map((t) => t.tool).sort()).toEqual(['list_items', 'review', 'save_prompt']);
+
+    // The cell UI stays reachable for a tool-granted principal (dispatch GET).
+    lambdaResponse = { statusCode: 200, headers: { 'content-type': 'text/html' }, body: '<h1>app</h1>' };
+    const page = await call<{ statusCode: number }>('emily', 'call', { cellId: cell.cellId, method: 'GET', path: '/' });
+    expect(page.ok).toBe(true);
+    expect(page.result!.statusCode).toBe(200);
+
+    // A full re-grant widens; revoke removes everything.
+    await call('alice', 'grant', { cellId: cell.cellId, principal: 'emily' });
+    lambdaResponse = { statusCode: 200, body: JSON.stringify({ ok: true }) };
+    expect((await call('emily', 'callCellTool', { cellId: cell.cellId, tool: 'save_prompt', args: {} })).ok).toBe(true);
+    await call('alice', 'revoke', { cellId: cell.cellId, principal: 'emily' });
+    const gone = await call('emily', 'callCellTool', { cellId: cell.cellId, tool: 'review', args: {} });
+    expect(gone.ok).toBe(false);
+    expect(gone.error).toMatch(/grant_denied/);
   });
 });

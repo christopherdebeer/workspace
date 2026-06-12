@@ -2,10 +2,13 @@
  * Grants — the sharing layer that turns the one Substrate into per-user *views*.
  *
  * A grant exposes a subset of an owner's slice into a grantee's workspace view:
- * a single `key`, or `*` for the whole slice. This is the additive layer the
- * substrate model anticipated — it changes which facts `recall` assembles, not
- * the observed-state primitive underneath. Read-visibility only for now;
- * write-through (acting in another's slice) is a later capability.
+ * a single `key`, a key prefix (`inbox/*`), or `*` for the whole slice. `mode`
+ * is the verb: `read` (the default — visibility in the grantee's recall) or
+ * `write` (write-through: the grantee may also `remember` into the covered
+ * keys of the owner's slice, provenance-stamped as themselves). This is the
+ * additive layer the substrate model anticipated — it changes which facts
+ * `recall` assembles and which writes `remember` accepts, not the
+ * observed-state primitive underneath. See docs/scope-grants.md.
  *
  * Storage mirrors the cell's other items on the standard pk/sk table:
  *   - by grantee:  pk=`GRANT#<grantee>`    sk=`<owner>#<key>`   (recall reads this)
@@ -16,11 +19,22 @@ import { DynamoDB } from 'aws-sdk';
 /** `*` as the key means the whole slice is shared. */
 export const WHOLE_SLICE = '*';
 
+export type GrantMode = 'read' | 'write';
+
 export interface Grant {
   owner: string;
   grantee: string;
   key: string;
+  /** Absent = read (pre-mode grants stay read-only). Write implies read. */
+  mode?: GrantMode;
   createdAt: string;
+}
+
+/** Whether a grant's key pattern covers a concrete key (`*` = whole slice; a trailing `*` = prefix). */
+export function grantCovers(grantKey: string, key: string): boolean {
+  if (grantKey === WHOLE_SLICE) return true;
+  if (grantKey.endsWith('*')) return key.startsWith(grantKey.slice(0, -1));
+  return grantKey === key;
 }
 
 export interface GrantStore {
@@ -34,7 +48,13 @@ export interface GrantStore {
 
 export function createDynamoGrantStore(tableName: string): GrantStore {
   const db = new DynamoDB.DocumentClient();
-  const item = (g: Grant) => ({ owner: g.owner, grantee: g.grantee, key: g.key, createdAt: g.createdAt });
+  const item = (g: Grant) => ({
+    owner: g.owner,
+    grantee: g.grantee,
+    key: g.key,
+    ...(g.mode ? { mode: g.mode } : {}),
+    createdAt: g.createdAt,
+  });
 
   async function queryAll(pk: string): Promise<Grant[]> {
     const out: Grant[] = [];
@@ -48,7 +68,14 @@ export function createDynamoGrantStore(tableName: string): GrantStore {
           ExclusiveStartKey,
         })
         .promise();
-      for (const i of res.Items ?? []) out.push({ owner: i.owner, grantee: i.grantee, key: i.key, createdAt: i.createdAt });
+      for (const i of res.Items ?? [])
+        out.push({
+          owner: i.owner,
+          grantee: i.grantee,
+          key: i.key,
+          ...(i.mode === 'write' || i.mode === 'read' ? { mode: i.mode as GrantMode } : {}),
+          createdAt: i.createdAt,
+        });
       ExclusiveStartKey = res.LastEvaluatedKey;
     } while (ExclusiveStartKey);
     return out;

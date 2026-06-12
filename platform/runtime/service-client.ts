@@ -15,12 +15,21 @@ export interface CommandEnvelope {
   correlationId?: string;
   /** Identity propagated from the calling service, if any. */
   user?: string;
+  /**
+   * The caller's token scopes, propagated with the user. Trusted on the same
+   * basis as `user`: only allow-listed peers can invoke, and the originating
+   * cell validated the bearer itself (the gateway is the PEP). Needed wherever
+   * the callee applies the `effective = grants ∩ token` ceiling (e.g. the auth
+   * cell narrowing a minted token to the minter's own standing).
+   */
+  scopes?: string[];
 }
 
 export interface ServiceClientOptions {
   registry: Record<string, string>;
   correlationId?: string;
   user?: string;
+  scopes?: string[];
 }
 
 export class ServiceInvokeError extends Error {
@@ -65,6 +74,7 @@ export function createServiceClient(options: ServiceClientOptions) {
           payload,
           correlationId: options.correlationId,
           user: options.user,
+          scopes: options.scopes,
         };
         const result = await getClient()
           .invoke({

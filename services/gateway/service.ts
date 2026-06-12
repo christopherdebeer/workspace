@@ -33,6 +33,7 @@ import {
   defineMcpService,
   hasScope,
   requireScope,
+  ServiceAuthError,
   McpToolDefinition,
   ServiceContext,
   ServiceHttpRequest,
@@ -42,7 +43,9 @@ import {
 const NO_STORE = { 'cache-control': 'no-store' };
 
 /** Tier-1 (kernel) cells whose commands are dispatchable. Few, reviewed, IAM-granted. */
-const PROVIDERS = ['workspace', 'cells'] as const;
+// auth contributes only its small token-management vocabulary (tokens/mint/
+// revoke) — the OAuth plumbing stays on its own HTTP routes.
+const PROVIDERS = ['workspace', 'cells', 'auth'] as const;
 
 /** Sentinel target for the capability menu. */
 const CATALOG = '$catalog';
@@ -249,6 +252,25 @@ interface DispatchInput {
   input?: unknown;
 }
 
+/**
+ * Enforce a capability's scope, and make the denial a teaching affordance
+ * (docs/scope-grants.md §5): the token is the ceiling here, so the fix is a
+ * wider credential — re-consent or a grant from an admin — not a grant
+ * request to a resource owner (that case is `grant_denied`, raised by the
+ * resource cells themselves).
+ */
+function enforceScope(ctx: ServiceContext, target: string, scope: string): void {
+  try {
+    requireScope(ctx.identity, scope);
+  } catch {
+    throw new ServiceAuthError(
+      `scope_denied: "${target}" requires scope "${scope}" and your token carries [${
+        ctx.identity.scopes.join(' ') || 'none'
+      }]. A token is a ceiling — sign in again requesting the scope at /oauth/authorize (humans), or ask your human to re-consent / mint you a wider token via auth.mintToken (agents).`,
+    );
+  }
+}
+
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
@@ -260,7 +282,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
-  if (cap.scope) requireScope(ctx.identity, cap.scope);
+  if (cap.scope) enforceScope(ctx, target, cap.scope);
   return cap.forward(input?.input, ctx);
 }
 
@@ -270,7 +292,7 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
-  if (cap.scope) requireScope(ctx.identity, cap.scope);
+  if (cap.scope) enforceScope(ctx, target, cap.scope);
   return cap.forward(input?.input, ctx);
 }
 
