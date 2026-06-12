@@ -155,6 +155,16 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
                     Resource: [tableArn, `${tableArn}/index/*`],
                   },
                   {
+                    // Self-invoke only: the async work pattern — a tool call
+                    // returns a jobId fast (the edge caps sync round trips at
+                    // ~30s) and the cell re-invokes ITSELF asynchronously to
+                    // do the long work. Peers stay mediated through forge.
+                    Sid: 'InvokeSelf',
+                    Effect: 'Allow',
+                    Action: ['lambda:InvokeFunction'],
+                    Resource: `arn:aws:lambda:${p.region}:${p.accountId}:function:${name}`,
+                  },
+                  {
                     // Source-pinned: this cell can only emit events AS itself,
                     // so a subscriber (e.g. the workspace's substrate-write
                     // handler) can trust `source` as IAM-attested identity.

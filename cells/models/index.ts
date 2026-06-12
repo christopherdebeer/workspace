@@ -17,6 +17,10 @@
  */
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { randomUUID } from 'node:crypto';
+
+const lambda = new LambdaClient({});
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const TABLE = process.env.TABLE_NAME ?? '';
@@ -145,6 +149,46 @@ async function runGoogle(rec: ProviderRec, input: RunInput): Promise<RunOutput> 
   return { text: outParts.map((p) => p.text ?? '').join('') };
 }
 
+/* ── async jobs: submit fast, self-invoke for the long work, poll fetch ──
+ * The edge caps synchronous round trips at ~30s; async Lambda invocations
+ * have no such cap — the cell re-invokes ITSELF with the job and the
+ * caller polls `fetch`. Results chunk across items (DDB's 400KB ceiling). */
+
+const CHUNK = 300 * 1024; // b64 chars per item — safely under the item cap
+
+async function putJob(jobId: string, patch: Record<string, unknown>): Promise<void> {
+  await ddb.send(new PutCommand({
+    TableName: TABLE,
+    Item: { pk: `JOB#${jobId}`, sk: 'v1', ttl: Math.floor(Date.now() / 1000) + 3600, ...patch },
+  }));
+}
+
+async function runJob(jobId: string): Promise<void> {
+  const job = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
+  const input = (job.Item as { input?: RunInput } | undefined)?.input;
+  if (!input) return;
+  try {
+    const out = (await toolCall('run', input as unknown as Record<string, unknown>, OWNER)) as
+      | { text?: string }
+      | { imageB64?: string; mime?: string };
+    const imageB64 = (out as { imageB64?: string }).imageB64;
+    if (imageB64 && imageB64.length > CHUNK) {
+      const chunks = Math.ceil(imageB64.length / CHUNK);
+      for (let i = 0; i < chunks; i++) {
+        await ddb.send(new PutCommand({
+          TableName: TABLE,
+          Item: { pk: `JOB#${jobId}`, sk: `c${i}`, ttl: Math.floor(Date.now() / 1000) + 3600, data: imageB64.slice(i * CHUNK, (i + 1) * CHUNK) },
+        }));
+      }
+      await putJob(jobId, { status: 'done', input, mime: (out as { mime?: string }).mime, chunks });
+    } else {
+      await putJob(jobId, { status: 'done', input, ...out });
+    }
+  } catch (err) {
+    await putJob(jobId, { status: 'error', input, error: (err as Error).message });
+  }
+}
+
 /* ── tools ──────────────────────────────────────────────────────── */
 
 const TOOLS = [
@@ -187,12 +231,27 @@ const TOOLS = [
         imageB64: { type: 'string', description: 'Base64 image input for VLM modes' },
         imageMediaType: { type: 'string' },
         maxTokens: { type: 'number' },
+        async: { type: 'boolean', description: 'Return {jobId} immediately; poll fetch — required for work beyond the ~30s edge cap (image gen)' },
       },
       required: ['prompt'],
       additionalProperties: false,
     },
   },
+  {
+    name: 'fetch',
+    description: 'Poll an async run: {status: pending|done|error, text?, imageB64?, mime?, error?}.',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { jobId: { type: 'string' } },
+      required: ['jobId'],
+      additionalProperties: false,
+    },
+  },
 ];
+
+/** Set per-invocation so toolCall can self-invoke for async jobs. */
+let SELF_FUNCTION = '';
 
 async function toolCall(name: string, args: Record<string, unknown>, caller: string): Promise<unknown> {
   if (name === 'setProvider') {
@@ -223,9 +282,36 @@ async function toolCall(name: string, args: Record<string, unknown>, caller: str
     }
     return { providers: out };
   }
+  if (name === 'fetch') {
+    const jobId = String(args.jobId ?? '');
+    const res = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
+    const item = res.Item as { status?: string; text?: string; imageB64?: string; mime?: string; error?: string; chunks?: number } | undefined;
+    if (!item) throw new Error(`unknown job "${jobId}"`);
+    if (item.chunks) {
+      let b64 = '';
+      for (let i = 0; i < item.chunks; i++) {
+        const c = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: `c${i}` } }));
+        b64 += (c.Item as { data?: string } | undefined)?.data ?? '';
+      }
+      return { status: item.status, imageB64: b64, mime: item.mime };
+    }
+    return { status: item.status, text: item.text, imageB64: item.imageB64, mime: item.mime, error: item.error };
+  }
   if (name === 'run') {
-    const input = args as unknown as RunInput;
+    const input = args as unknown as RunInput & { async?: boolean };
     if (!input.prompt) throw new Error('prompt is required');
+    if (input.async) {
+      if (!SELF_FUNCTION) throw new Error('async unavailable: function name unknown');
+      const jobId = randomUUID().slice(0, 13);
+      const { async: _a, ...rest } = input;
+      await putJob(jobId, { status: 'pending', input: rest });
+      await lambda.send(new InvokeCommand({
+        FunctionName: SELF_FUNCTION,
+        InvocationType: 'Event',
+        Payload: Buffer.from(JSON.stringify({ __job: jobId })),
+      }));
+      return { jobId, status: 'pending' };
+    }
     const provider = input.provider ?? 'anthropic';
     const rec = await getProvider(provider);
     if (!rec) throw new Error(`provider "${provider}" not enabled — paste a key at /@${OWNER}/models/secrets`);
@@ -249,12 +335,22 @@ const respond = (statusCode: number, contentType: string, body: string) => ({
 });
 const json = (code: number, v: unknown) => respond(code, 'application/json', JSON.stringify(v));
 
-export const handler = async (event: {
-  rawPath?: string;
-  requestContext?: { http?: { method?: string } };
-  headers?: Record<string, string>;
-  body?: string;
-}) => {
+export const handler = async (
+  event: {
+    rawPath?: string;
+    requestContext?: { http?: { method?: string } };
+    headers?: Record<string, string>;
+    body?: string;
+    __job?: string;
+  },
+  context?: { functionName?: string },
+) => {
+  SELF_FUNCTION = context?.functionName ?? SELF_FUNCTION;
+  if (event.__job) {
+    // The async self-invocation: do the long work, write the job result.
+    await runJob(event.__job);
+    return { statusCode: 200, body: 'ok' };
+  }
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
   const caller = event.headers?.['x-cell-caller'] ?? 'anonymous';
