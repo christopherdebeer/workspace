@@ -18,7 +18,16 @@ interface ValidatedToken {
   clientId: string | null;
 }
 
-const WORKSPACE_TOOLS = [
+interface StubTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  resultSchema?: Record<string, unknown>;
+  scope: string | null;
+  kind: 'read' | 'act';
+}
+
+const WORKSPACE_TOOLS: StubTool[] = [
   { name: 'recall', description: 'Your view.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
   { name: 'remember', description: 'Write a fact.', inputSchema: { type: 'object' }, scope: null, kind: 'act' },
 ];
@@ -131,6 +140,57 @@ describe('resource cell (MCP gateway, read/act)', () => {
   it('read omitting target also returns the catalog', async () => {
     const cat = await callTool('creator', 'read', {});
     expect((cat.parsed as { capabilities: unknown[] }).capabilities.length).toBeGreaterThan(0);
+  });
+
+  it('read("$catalog", {detail:"summary"}) groups one-line capabilities by cell, schema-free', async () => {
+    cellTools = [
+      { name: 'x__echo', address: '@alice/tools-demo', description: 'Echo. With a second sentence.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const res = await callTool('creator', 'read', { target: '$catalog', input: { detail: 'summary' } });
+    const summary = res.parsed as {
+      cells: Array<{ cell: string; count: number; capabilities: Array<Record<string, unknown>> }>;
+      hint: string;
+    };
+    const cellNames = summary.cells.map((c) => c.cell).sort();
+    expect(cellNames).toEqual(['@alice/tools-demo', 'cells', 'workspace']);
+    const ws = summary.cells.find((c) => c.cell === 'workspace')!;
+    expect(ws.count).toBe(2);
+    expect(ws.capabilities[0]).toEqual({ target: expect.stringMatching(/^workspace\./), kind: expect.any(String), summary: expect.any(String) });
+    // one line each: the echo entry keeps only its first sentence, and no schemas anywhere
+    const echo = summary.cells.find((c) => c.cell === '@alice/tools-demo')!.capabilities[0];
+    expect(echo.summary).toBe('Echo.');
+    expect(JSON.stringify(summary)).not.toContain('inputSchema');
+    expect(summary.hint).toContain('$catalog');
+  });
+
+  it('catalog passes a provider resultSchema through when declared', async () => {
+    WORKSPACE_TOOLS[0].resultSchema = { type: 'object', properties: { entries: { type: 'object' } } };
+    try {
+      const cat = await callTool('creator', 'read', { target: '$catalog' });
+      const caps = (cat.parsed as { capabilities: Array<{ target: string; resultSchema?: unknown }> }).capabilities;
+      expect(caps.find((c) => c.target === 'workspace.recall')?.resultSchema).toEqual(WORKSPACE_TOOLS[0].resultSchema);
+      expect(caps.find((c) => c.target === 'workspace.remember')?.resultSchema).toBeUndefined();
+    } finally {
+      delete WORKSPACE_TOOLS[0].resultSchema;
+    }
+  });
+
+  it('initialize introduces the server: name, title, and instructions', async () => {
+    const init = await mcp('creator', 'initialize', { protocolVersion: '2025-06-18' });
+    const result = init.result as { serverInfo: { name: string; title?: string }; instructions?: string };
+    expect(result.serverInfo.name).toBe('parc-substrate');
+    expect(result.serverInfo.title).toBe('parc.land substrate');
+    expect(result.instructions).toContain('read("$catalog"');
+  });
+
+  it('tools/list carries spec annotations and titles for the three verbs', async () => {
+    const list = await mcp('creator', 'tools/list');
+    const tools = list.result!.tools as Array<{ name: string; title?: string; annotations?: { readOnlyHint?: boolean } }>;
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.read.annotations?.readOnlyHint).toBe(true);
+    expect(byName.whoami.annotations?.readOnlyHint).toBe(true);
+    expect(byName.act.annotations?.readOnlyHint).toBe(false);
+    expect(byName.read.title).toBeDefined();
   });
 
   it('read forwards a read-kind capability to its cell', async () => {

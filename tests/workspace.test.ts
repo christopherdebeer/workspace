@@ -316,6 +316,64 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     const att2 = await cmds.attention({ staleMs: 0 }, alice());
     expect(att2.dangling.some((d) => d.to === 'd1v2' && d.reason.includes('retired'))).toBe(true);
   });
+
+  it('attention ignores `_` system namespaces unless includeSystem', async () => {
+    await cmds.remember({ key: '_canvas/board/el:1', value: { x: 0 } }, alice());
+    await cmds.link({ from: '_canvas/board/el:1', rel: 'derived-from', to: '_canvas/board/el:gone' }, alice());
+
+    // staleMs -1: staleness is strictly age > threshold, and a fact written in
+    // this same millisecond has age 0 — 0 would race the clock on fast runners.
+    const att = await cmds.attention({ staleMs: -1 }, alice());
+    expect(att.stale.map((s) => s.key)).not.toContain('_canvas/board/el:1');
+    expect(att.unlinked).not.toContain('_canvas/board/el:1');
+    expect(att.dangling.some((d) => d.from.startsWith('_canvas/'))).toBe(false);
+
+    const withSystem = await cmds.attention({ staleMs: -1, includeSystem: true }, alice());
+    expect(withSystem.stale.map((s) => s.key)).toContain('_canvas/board/el:1');
+    expect(withSystem.dangling.some((d) => d.to === '_canvas/board/el:gone' && d.reason.includes('missing'))).toBe(true);
+  });
+
+  it('link reports endpoint existence hints at write time', async () => {
+    const sound = await cmds.link({ from: 't1', rel: 'relates', to: 'd2' }, alice());
+    expect(sound.fromExists).toBe(true);
+    expect(sound.toExists).toBe(true);
+
+    const dangling = await cmds.link({ from: 't1', rel: 'relates', to: 'never-written' }, alice());
+    expect(dangling.fromExists).toBe(true);
+    expect(dangling.toExists).toBe(false); // allowed, but you learn now — not at the next tend
+  });
+
+  it('changes sinceSeq:"head" starts tailing in one call', async () => {
+    const head = await cmds.changes({ sinceSeq: 'head' }, alice());
+    expect(head.events).toEqual([]);
+    expect(head.seq).toBeGreaterThan(0);
+
+    await cmds.remember({ key: 'tail-probe', value: 1 }, alice());
+    const next = await cmds.changes({ sinceSeq: head.seq }, alice());
+    expect(next.events.map((e) => `${e.op}:${e.key}`)).toEqual(['write:tail-probe']);
+  });
+
+  it('query pages with limit + cursor and reports the overall total', async () => {
+    await cmds.remember({ key: 'page-a', value: 1, type: 'paged' }, alice());
+    await cmds.remember({ key: 'page-b', value: 2, type: 'paged' }, alice());
+    await cmds.remember({ key: 'page-c', value: 3, type: 'paged' }, alice());
+
+    const first = await cmds.query({ type: 'paged', rankBy: 'recency', limit: 2 }, alice());
+    expect(first.count).toBe(2);
+    expect(first.total).toBe(3);
+    expect(first.nextCursor).toBeDefined();
+
+    const second = await cmds.query({ type: 'paged', rankBy: 'recency', limit: 2, cursor: first.nextCursor }, alice());
+    expect(second.count).toBe(1);
+    expect(second.nextCursor).toBeUndefined();
+    const seen = [...first.entries, ...second.entries].map((e) => e.key).sort();
+    expect(seen).toEqual(['page-a', 'page-b', 'page-c']);
+
+    // an unlimited query has no next page
+    const all = await cmds.query({ type: 'paged' }, alice());
+    expect(all.nextCursor).toBeUndefined();
+    expect(all.total).toBe(all.count);
+  });
 });
 
 describe('workspace timers (lease / reveal, evaluated at read)', () => {

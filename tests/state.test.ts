@@ -129,18 +129,47 @@ describe('observed state: salience-shaped reads', () => {
     const res = await state.read('r');
     expect(res.entries.hot.value).toBe('live');
     expect(res.entries.hot._meta.elided).toBe(false);
-    expect(res.entries.cold.value).toBeNull();
-    expect(res.entries.cold._meta.elided).toBe(true);
+    // Below the threshold the entry collapses to a stub — no _meta envelope.
+    expect(res.entries.cold).toBeUndefined();
+    expect(res.elided).toEqual([{ key: 'cold', type: null, score: expect.any(Number) }]);
     expect(res._shaping.counts.total).toBe(2);
+    expect(res._shaping.counts.elided).toBe(1);
     expect(res._shaping.elision).toBe('auto');
 
-    // elision:none returns every value
+    // elision:none returns every value (and no stub list)
     const full = await state.read('r', { elision: 'none' });
     expect(full.entries.cold.value).toBe('secret');
     expect(full.entries.cold._meta.elided).toBe(false);
+    expect(full.elided).toBeUndefined();
 
-    // expand forces a key to Focus (value present even under auto elision)
+    // expand forces a key to Focus (full entry returns even under auto elision)
     const expanded = await state.read('r', { expand: ['cold'] });
     expect(expanded.entries.cold.value).toBe('secret');
+    expect(expanded.elided).toBeUndefined();
+  });
+
+  it('orders elided stubs by score and keeps salience figures rounded', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store, {
+      halfLifeMs: 20,
+      windowMs: 60 * 60 * 1000,
+      velocitySaturation: 1000,
+      attentionSaturation: 1000,
+      // thresholds above any reachable score → everything elides
+      focusThreshold: 2,
+      elideThreshold: 1.5,
+    });
+    await state.put({ scope: 'r', key: 'older', value: 1, type: 'note' }, alice);
+    await new Promise((r) => setTimeout(r, 60));
+    await state.put({ scope: 'r', key: 'newer', value: 2 }, alice);
+
+    const res = await state.read('r');
+    expect(Object.keys(res.entries)).toHaveLength(0);
+    expect(res.elided?.map((s) => s.key)).toEqual(['newer', 'older']);
+    expect(res.elided?.find((s) => s.key === 'older')?.type).toBe('note');
+    for (const stub of res.elided ?? []) {
+      // a 4-decimal signal, not a 17-digit measurement
+      expect(stub.score).toBe(Math.round(stub.score * 1e4) / 1e4);
+    }
   });
 });

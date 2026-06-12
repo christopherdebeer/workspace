@@ -91,8 +91,22 @@ export interface ShapingSummary {
   counts: { focus: number; peripheral: number; elided: number; total: number };
 }
 
+/**
+ * The compact form an elided entry takes in a shaped read. Elision exists to
+ * protect a bounded observer's attention; shipping a full `_meta` envelope per
+ * hidden fact defeats that, so below the elide threshold an entry collapses to
+ * this stub. `expand: [key]` (or `peek`) pulls the full entry back.
+ */
+export interface ElidedStub {
+  key: string;
+  type: string | null;
+  score: number;
+}
+
 export interface ReadResult {
   entries: Record<string, Entry>;
+  /** Stubs for entries withheld by elision (score-descending). Absent when nothing was elided. */
+  elided?: ElidedStub[];
   _shaping: ShapingSummary;
 }
 
@@ -263,6 +277,9 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
+/** Salience figures are signals, not measurements — 4 decimals is already generous. */
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+
 /**
  * Salience score in [0,1] = a recency term (exponential decay since last write),
  * a velocity term (recent writes), and an attention term (recent reads). The
@@ -332,13 +349,23 @@ export interface QueryOptions {
   /** Ranking: read-time salience (default) or last-write recency. */
   rankBy?: 'salience' | 'recency';
   limit?: number;
+  /**
+   * Resume token from a previous page's `nextCursor`. Pages are computed over
+   * a fresh ranking, so a cursor is a best-effort resume, not a snapshot.
+   */
+  cursor?: string;
   includeSuperseded?: boolean;
 }
 
 export interface QueryResult {
   /** Ranked, keyed entries (full values — query is a projection, not a shaping). */
   entries: Array<{ key: string } & Entry>;
+  /** Entries in this page. */
   count: number;
+  /** Entries matching the filters overall. */
+  total: number;
+  /** Present when more pages remain; pass back as `cursor`. */
+  nextCursor?: string;
 }
 
 export interface NeighborsOptions {
@@ -359,10 +386,27 @@ export interface ChangesResult {
   seq: number;
 }
 
+/**
+ * A written edge plus existence hints for its endpoints, so a caller learns at
+ * write time — not at the next tending pass — that it just created a dangling
+ * edge. Dangling edges are allowed (surfaced, not blocked); the hint is free.
+ */
+export interface LinkResult extends EdgeRecord {
+  /** The `from` key currently resolves to a live, unretired fact. */
+  fromExists: boolean;
+  /** The `to` key currently resolves to a live, unretired fact. */
+  toExists: boolean;
+}
+
 export interface AttentionOptions {
   /** Age (ms) beyond which a live fact counts as stale. Default 14 days. */
   staleMs?: number;
   limit?: number;
+  /**
+   * Also surface `_`-prefixed system namespaces (`_canvas/`, `_actions/`, …).
+   * Default false: tending is about knowledge health, not surface plumbing.
+   */
+  includeSystem?: boolean;
 }
 
 export interface AttentionResult {
@@ -392,14 +436,14 @@ export interface ObservedState {
   /** Projection over the slice: filter by type/tag/prefix, rank, limit. */
   query(scope: string, opts?: QueryOptions, identity?: Identity): Promise<QueryResult>;
   /** Add a typed, directed edge `from --rel--> to` within the scope. */
-  link(scope: string, from: string, rel: string, to: string, strength: number | null, identity?: Identity): Promise<EdgeRecord>;
+  link(scope: string, from: string, rel: string, to: string, strength: number | null, identity?: Identity): Promise<LinkResult>;
   unlink(scope: string, from: string, rel: string, to: string, identity?: Identity): Promise<{ ok: true }>;
   /** Edges (and neighbor entries) around a key. */
   neighbors(scope: string, key: string, opts?: NeighborsOptions, identity?: Identity): Promise<NeighborsResult>;
   /** Every edge in the scope (bounded; boards project their edges from this). */
   edges(scope: string): Promise<EdgeRecord[]>;
-  /** Tail the trajectory from a sequence number — the change feed. */
-  changes(scope: string, sinceSeq: number, limit?: number): Promise<ChangesResult>;
+  /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call. */
+  changes(scope: string, sinceSeq: number | 'head', limit?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
   attention(scope: string, opts?: AttentionOptions): Promise<AttentionResult>;
   /** Retire `key` by pointing it at successor `by` (or just marking it). */
@@ -447,8 +491,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         tags: rec.tags,
         timer:
           rec.timerExpiresAt && rec.timerEffect ? { expiresAt: rec.timerExpiresAt, effect: rec.timerEffect } : null,
-        score,
-        velocity: windowMin > 0 ? writes / windowMin : 0,
+        score: round4(score),
+        velocity: round4(windowMin > 0 ? writes / windowMin : 0),
         elided: false,
       },
     };
@@ -461,20 +505,27 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     const elideThreshold = opts?.elideThreshold ?? s.elideThreshold;
     const expand = new Set(opts?.expand ?? []);
     const out: Record<string, Entry> = {};
+    const stubs: ElidedStub[] = [];
     const counts = { focus: 0, peripheral: 0, elided: 0, total: 0 };
     for (const [key, src] of Object.entries(entries)) {
-      const entry: Entry = { value: src.value, _meta: { ...src._meta, elided: false } };
-      let tier = tierFor(entry._meta.score, { ...s, focusThreshold, elideThreshold });
+      let tier = tierFor(src._meta.score, { ...s, focusThreshold, elideThreshold });
       if (expand.has(key)) tier = 'focus';
       counts[tier]++;
       counts.total++;
       if (tier === 'elided' && elision === 'auto') {
-        entry.value = null;
-        entry._meta.elided = true;
+        // Below the threshold the *entry* is withheld, not just its value — a
+        // shaped read must cost attention proportional to what it surfaces.
+        stubs.push({ key, type: src._meta.type, score: src._meta.score });
+        continue;
       }
-      out[key] = entry;
+      out[key] = { value: src.value, _meta: { ...src._meta, elided: false } };
     }
-    return { entries: out, _shaping: { focusThreshold, elideThreshold, elision, counts } };
+    stubs.sort((a, b) => b.score - a.score);
+    return {
+      entries: out,
+      ...(stubs.length ? { elided: stubs } : {}),
+      _shaping: { focusThreshold, elideThreshold, elision, counts },
+    };
   }
 
   return {
@@ -591,11 +642,21 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
           ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
           : b._meta.score - a._meta.score,
       );
-      const limited = opts?.limit !== undefined ? wrapped.slice(0, Math.max(0, opts.limit)) : wrapped;
-      return { entries: limited, count: limited.length };
+      // Cursor = a plain offset into the fresh ranking: best-effort resume,
+      // honest about salience reordering between pages (no snapshot to leak).
+      const offset = opts?.cursor ? Math.max(0, Number.parseInt(opts.cursor, 10) || 0) : 0;
+      const end = opts?.limit !== undefined ? offset + Math.max(0, opts.limit) : undefined;
+      const page = wrapped.slice(offset, end);
+      const consumed = offset + page.length;
+      return {
+        entries: page,
+        count: page.length,
+        total: wrapped.length,
+        ...(consumed < wrapped.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
+      };
     },
 
-    async link(scope, from, rel, to, strength, identity?: Identity): Promise<EdgeRecord> {
+    async link(scope, from, rel, to, strength, identity?: Identity): Promise<LinkResult> {
       assertEdgePart('from', from);
       assertEdgePart('rel', rel);
       assertEdgePart('to', to);
@@ -613,7 +674,14 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Linking is attention on the source fact.
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'link', scope, key: from, at: edge.createdAt, seq });
-      return edge;
+      // Endpoint hints: dangling edges stay allowed, but the writer should not
+      // have to wait for a tending pass to learn it just made one.
+      const resolves = async (key: string): Promise<boolean> => {
+        const rec = await store.get(scope, key);
+        return !!rec && isTimerLive(rec, now.getTime()) && !rec.superseded;
+      };
+      const [fromExists, toExists] = await Promise.all([resolves(from), resolves(to)]);
+      return { ...edge, fromExists, toExists };
     },
 
     async unlink(scope, from, rel, to, _identity?: Identity): Promise<{ ok: true }> {
@@ -651,12 +719,15 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     },
 
     async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
+      const head = await store.currentSeq(scope);
+      // 'head' = "where do I start tailing from?" — answered without paying
+      // for (or wading through) the scope's whole recent history.
+      if (sinceSeq === 'head') return { events: [], seq: head };
       // The trajectory is TTL-bounded, so the partition stays small; seq rises
       // with time, so time-ordered events are seq-ordered too.
       const events = (await store.recentTrajectory(scope, 0))
         .filter((e) => e.seq > sinceSeq)
         .sort((a, b) => a.seq - b.seq);
-      const head = await store.currentSeq(scope);
       const limited = limit !== undefined ? events.slice(0, Math.max(0, limit)) : events;
       return { events: limited, seq: head };
     },
@@ -665,6 +736,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const staleMs = opts?.staleMs ?? 14 * 24 * 60 * 60 * 1000;
       const limit = opts?.limit ?? 25;
       const nowMs = Date.now();
+      // Tending is about knowledge health; `_` namespaces are surface plumbing
+      // (canvas elements, declared vocabulary) and would drown the signal.
+      const isSystem = (key: string): boolean => key.startsWith('_');
+      const includeSystem = opts?.includeSystem ?? false;
       const [records, edges] = await Promise.all([store.list(scope), store.listEdges(scope)]);
       const byKey = new Map(records.map((r) => [r.key, r]));
       const linked = new Set<string>();
@@ -672,7 +747,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         linked.add(e.from);
         linked.add(e.to);
       }
-      const live = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
+      const live = records.filter(
+        (r) => !r.superseded && isTimerLive(r, nowMs) && (includeSystem || !isSystem(r.key)),
+      );
       const stale = live
         .filter((r) => nowMs - Date.parse(r.updatedAt) > staleMs)
         .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
@@ -685,6 +762,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const dangling: AttentionResult['dangling'] = [];
       for (const e of edges) {
         if (dangling.length >= limit) break;
+        if (!includeSystem && (isSystem(e.from) || isSystem(e.to))) continue;
         for (const [end, k] of [['from', e.from], ['to', e.to]] as const) {
           const rec = byKey.get(k);
           if (!rec) dangling.push({ from: e.from, rel: e.rel, to: e.to, reason: `${end} "${k}" missing` });
