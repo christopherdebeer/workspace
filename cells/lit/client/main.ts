@@ -18,6 +18,7 @@ import './main.css';
 (window as any).__lit_module = true; // watchdog marker: the module executed
 import { marked } from 'marked';
 import { ensureAuth } from './lib/auth.ts';
+import { loadTypes } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
 
 interface Meta { type?: string | null; tags?: string[]; updatedAt?: string; superseded?: boolean }
@@ -42,6 +43,38 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
   return n;
+}
+
+/** The renderer ladder, in documents: a fact whose type declares a viewer
+ *  (`_types/<type>.viewer`) renders through @c15r/viewers instead of as
+ *  markdown — el:demo-json reads as a TREE here, same as on the board. */
+function viewerFor(meta: Meta | undefined, value: any): string | null {
+  const candidates = [meta?.type, value?.type].filter(Boolean) as string[];
+  for (const t of candidates) {
+    const viewer = typeDecls[t]?.viewer;
+    if (viewer) return viewer;
+  }
+  return null;
+}
+
+function renderBlockBody(body: HTMLElement, fact: Entry | null, fallbackMd: string): void {
+  const viewer = fact ? viewerFor(fact._meta, fact.value) : null;
+  if (viewer) {
+    body.textContent = '…';
+    import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
+      .then((m) => {
+        body.textContent = '';
+        const host = el('div');
+        body.appendChild(host);
+        if (!m.renderFence(host, viewer, contentOf(fact!.value), fact!.key)) {
+          body.innerHTML = marked.parse(fallbackMd) as string;
+        }
+      })
+      .catch(() => { body.innerHTML = marked.parse(fallbackMd) as string; });
+    return;
+  }
+  body.innerHTML = marked.parse(fallbackMd) as string;
+  void hydrateFences(body);
 }
 
 function contentOf(value: any): string {
@@ -199,9 +232,8 @@ async function renderDoc(docId: string): Promise<void> {
         body.appendChild(el('p', 'folded', `▸ ${title.replace(/[#*_`]/g, '').trim()}`));
         art.classList.add('is-folded');
       } else {
-        body.innerHTML = marked.parse(text) as string;
         art.classList.remove('is-folded');
-        void hydrateFences(body);
+        renderBlockBody(body, fact, text);
       }
     };
     renderBody(md, !!ref.fold);
@@ -310,9 +342,8 @@ function logBlock(e: Entry): HTMLElement {
   const art = el('article', 'block');
   art.dataset.key = e.key;
   const body = el('div', 'block-body');
-  body.innerHTML = marked.parse(contentOf(e.value)) as string;
+  renderBlockBody(body, e, contentOf(e.value));
   art.appendChild(body);
-  void hydrateFences(body);
   return art;
 }
 
@@ -441,12 +472,15 @@ function bootFail(err: Error): void {
   bootStatus(`failed — ${err.message}`);
 }
 
+let typeDecls: Record<string, { viewer?: string }> = {};
+
 async function boot(): Promise<void> {
   document.addEventListener('lit:auth-warn', (e) =>
     bootStatus(`sign-in return failed (${(e as CustomEvent).detail}) — retrying…`),
   );
   bootStatus('signing in…');
   await ensureAuth();
+  typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>;
   const doc = new URLSearchParams(location.search).get('doc');
   bootStatus(doc ? `loading ${doc}…` : 'loading documents…');
   if (doc) await renderDoc(doc);
