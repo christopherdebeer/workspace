@@ -155,16 +155,26 @@ this kind of fact*.
 1. **This doc / decision** — pin the schema, the resolution ladder, and the
    cell-declares-its-types contract (the ownership scope decision is the one
    that needs deciding deliberately; it touches the grants grammar).
-2. **Resolver + `$types`** — a small shared module (`platform/ui` or a runtime
-   lib) with `resolve(fact, intent)`; gateway `read("$types")` discovery.
-3. **Migrate the call sites** — home `factHref` → `resolve(...,'open')`;
-   canvas `_renderers` lookup → `resolve(...,'render')`. No behaviour change,
-   just the indirection — proves the model on the real cases.
+2. **Resolver** *(shipped 2026-06-13)* — `platform/ui/vocab.ts`:
+   `TypeDecl`/`TypeHandler`, `typeSignals` (type → key-prefix → tag, most
+   specific first), `applyTemplate` (`${id}`/`${key}`/`${type}`/`${match}`/
+   `${value.path}`, alternatives skip on an unresolved variable), `resolve(fact,
+   intent, decls)` and `declFor`. Pure, no cells hardcoded. Unit-tested
+   (`tests/type-vocab.test.ts`, 15 cases mirroring the old routing + overrides
+   + non-open intents). *Gateway `read("$types")` discovery is still to come.*
+3. **Migrate the call sites** — home *(shipped)*: `factHref`/`typeIcon`/
+   `factTitle` now go through `resolve`/`declFor` over a default decl table
+   (`services/home/client/type-decls.ts`, parc's conventions as data) merged
+   with substrate `_types/<type>` overrides (old-shape `{icon,titlePath,href}`
+   facts are normalised). The imperative `factHref` branching and the
+   hardcoded `@c15r/...` strings are gone from home. *Canvas `_renderers`
+   lookup → `resolve(...,'render')` is still to come.*
 4. **Cells declare their types on deploy** — lit→`doc`, canvas→`board`/canvas
    element, input→`capture`, models→`agent-run`, regwatch→its item type. The
-   couplings become explicit and the hardcoded strings disappear.
+   couplings become explicit and the default table in home shrinks toward
+   empty. *(Not started.)*
 5. **`edit` + grants, "open with", per-user overrides** — the richer rungs,
-   once the floor is proven.
+   once the floor is proven. *(Not started.)*
 
 > Net: today a fact is opaque and only *home* (via hardcoded conventions) knows
 > a `doc` opens in lit. Make the type→cell handler explicit and the substrate

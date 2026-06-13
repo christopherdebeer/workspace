@@ -12,6 +12,8 @@
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../../../platform/ui';
+import { resolve, declFor, type TypeDecl } from '../../../platform/ui/vocab';
+import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed } from './auth';
 // Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
 // the dawn panorama strip, and the field computer.
@@ -737,20 +739,31 @@ interface ListEntry {
   _meta?: { type?: string | null; tags?: string[]; updatedAt?: string };
 }
 
-/** Type vocabulary loaded from the substrate (`_types/<type>` facts): the
- *  presentation/routing table is data now, not hardcoded. Conventions below
- *  remain as the fallback for types without a declaration. */
-interface TypeDecl { icon?: string; titlePath?: string; href?: string }
-let typeDecls: Record<string, TypeDecl> = {};
+/**
+ * Type vocabulary (docs/type-vocabulary.md): the fact→cell open/edit/render
+ * table is *data*, resolved by the shared `resolve()` — no hardcoded routing.
+ * The defaults encode parc's conventions; substrate `_types/<type>` facts
+ * override them per-type (old-shape `{icon,titlePath,href}` facts are
+ * normalised so existing declarations keep working).
+ */
+let typeDecls: Record<string, TypeDecl> = { ...DEFAULT_TYPE_DECLS };
+
+interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; manager?: string; label?: string; handlers?: TypeDecl['handlers'] }
+function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
+  if (d.handlers || !d.href) return d as TypeDecl; // already new-shape
+  return { icon: d.icon, manager: d.manager, label: d.label ?? d.titlePath, handlers: { open: [{ surface: d.href }] } };
+}
+
 export async function loadTypeDecls(): Promise<void> {
   try {
     const r = await mcpCall('read', 'workspace.query', { prefix: '_types/', limit: 100 });
     if (r.ok) {
-      const entries = (r.value as { entries?: Array<{ key: string; value: TypeDecl }> }).entries ?? [];
-      typeDecls = Object.fromEntries(entries.map((e) => [e.key.slice('_types/'.length), e.value ?? {}]));
+      const entries = (r.value as { entries?: Array<{ key: string; value: LegacyTypeDecl }> }).entries ?? [];
+      const fromSubstrate = Object.fromEntries(entries.map((e) => [e.key.slice('_types/'.length), normalizeDecl(e.value ?? {})]));
+      typeDecls = { ...DEFAULT_TYPE_DECLS, ...fromSubstrate }; // substrate overrides defaults
     }
   } catch {
-    /* conventions still apply */
+    /* defaults still apply */
   }
 }
 function pathInto(value: unknown, path: string): unknown {
@@ -763,14 +776,14 @@ function pathInto(value: unknown, path: string): unknown {
 }
 
 export function typeIcon(e: ListEntry): string {
-  return typeDecls[e._meta?.type ?? '']?.icon ?? '';
+  return declFor(e, typeDecls)?.icon ?? '';
 }
 
-/** A fact's one-line presentation: title from its value, not its key. */
+/** A fact's one-line presentation: title from its value (its declared label path), not its key. */
 function factTitle(e: ListEntry): string {
-  const decl = typeDecls[e._meta?.type ?? ''];
-  if (decl?.titlePath) {
-    const v = pathInto(e.value, decl.titlePath);
+  const label = declFor(e, typeDecls)?.label;
+  if (label) {
+    const v = pathInto(e.value, label);
     if (typeof v === 'string' && v) return v.slice(0, 80);
   }
   const v = e.value;
@@ -788,29 +801,9 @@ function factTitle(e: ListEntry): string {
   return e.key;
 }
 
-/** Where a fact lives — its home surface, from `_types` href template or convention. */
+/** Where a fact opens — resolved from the type vocabulary, no hardcoded cells. */
 function factHref(e: ListEntry): string | null {
-  const t = e._meta?.type ?? null;
-  const v = (e.value ?? {}) as Record<string, unknown>;
-  const tags = e._meta?.tags ?? [];
-  const decl = typeDecls[t ?? ''];
-  if (decl?.href) {
-    const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
-    return decl.href
-      .replace(/\$\{key\}/g, encodeURIComponent(e.key))
-      .replace(/\$\{id\}/g, encodeURIComponent(id))
-      .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_m, p: string) => String(pathInto(e.value, p) ?? ''));
-  }
-  if (e.key.startsWith('doc:')) return `/@c15r/lit?doc=${encodeURIComponent(e.key.slice(4))}`;
-  if (t === 'capture' || e.key.startsWith('inbox/')) {
-    return typeof v.captured === 'string' ? `/@c15r/lit?doc=${encodeURIComponent(`log:${v.captured}`)}` : '/@c15r/input';
-  }
-  if (t === 'cell' && typeof v.address === 'string') return v.address;
-  const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return `/@c15r/lit?doc=${encodeURIComponent(docTag.slice(4))}`;
-  const boardTag = tags.find((x) => x.startsWith('canvas:'));
-  if (boardTag) return `/@c15r/canvas?canvas=${encodeURIComponent(boardTag.slice(7))}`;
-  return null;
+  return resolve(e, 'open', typeDecls)?.surface ?? null;
 }
 
 /** A content snippet beyond the title — the *substance* of a fact, for exploration. */
