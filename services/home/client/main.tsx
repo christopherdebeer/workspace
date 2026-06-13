@@ -1942,19 +1942,21 @@ function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.J
   }
 }
 
-/** Customise mode: per-section reorder + hide, persisted to `_home/layout`. */
+/** Customise mode: per-section reorder + hide/remove, persisted to `_home/layout`. */
 function SectionControls({
   index,
   total,
   hidden,
   onMove,
   onToggle,
+  onRemove,
 }: {
   index: number;
   total: number;
   hidden: boolean;
   onMove: (dir: -1 | 1) => void;
   onToggle: () => void;
+  onRemove?: () => void;
 }): React.JSX.Element {
   const btn: React.CSSProperties = {
     background: theme.panel,
@@ -1969,10 +1971,100 @@ function SectionControls({
     <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', margin: '0 0.25rem' }}>
       <button style={btn} disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
       <button style={btn} disabled={index === total - 1} onClick={() => onMove(1)}>↓</button>
-      <button style={{ ...btn, color: hidden ? theme.accent : theme.danger }} onClick={onToggle}>
-        {hidden ? 'show' : 'hide'}
-      </button>
+      {onRemove ? (
+        <button style={{ ...btn, color: theme.danger }} onClick={onRemove}>remove</button>
+      ) : (
+        <button style={{ ...btn, color: hidden ? theme.accent : theme.danger }} onClick={onToggle}>
+          {hidden ? 'show' : 'hide'}
+        </button>
+      )}
     </div>
+  );
+}
+
+/** Add a custom section to the layout — a board, a fact, or an ad-hoc query. */
+function AddSection({ onAdd }: { onAdd: (s: LayoutSection) => void }): React.JSX.Element {
+  const [mode, setMode] = useState<'view' | 'fact' | 'query' | null>(null);
+  const [boards, setBoards] = useState<Array<{ id: string; label: string }> | null>(null);
+  const [factKey, setFactKey] = useState('');
+  const [q, setQ] = useState({ type: '', tag: '', prefix: '', title: '' });
+
+  useEffect(() => {
+    if (mode !== 'view' || boards) return;
+    mcpCall('read', 'workspace.views')
+      .then((r) => {
+        const views = r.ok ? ((r.value as { views?: Array<{ id: string; render?: { type?: string; label?: string } }> }).views ?? []) : [];
+        setBoards(views.filter((v) => v.render?.type === 'canvas').map((v) => ({ id: v.id, label: v.render?.label ?? v.id })));
+      })
+      .catch(() => setBoards([]));
+  }, [mode, boards]);
+
+  const field: React.CSSProperties = {
+    padding: '0.4rem 0.5rem', background: '#fffef9', border: `1px solid ${theme.border}`,
+    borderRadius: 6, color: theme.text, fontSize: '0.82rem', fontFamily: 'inherit', boxSizing: 'border-box',
+  };
+  const tab = (m: 'view' | 'fact' | 'query', label: string): React.JSX.Element => (
+    <button
+      onClick={() => setMode(mode === m ? null : m)}
+      style={{ background: mode === m ? theme.accent : theme.panel, color: mode === m ? theme.cream : theme.accent, border: `1px solid ${theme.border}`, borderRadius: 999, padding: '0.2rem 0.7rem', fontSize: '0.8rem', cursor: 'pointer' }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <Card style={{ display: 'grid', gap: '0.6rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ fontFamily: theme.serif }}>Add a section</strong>
+        {tab('view', '🌲 Board')}
+        {tab('fact', '📄 Fact')}
+        {tab('query', '🔎 Query')}
+      </div>
+      {mode === 'view' ? (
+        boards === null ? (
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>Loading boards…</span>
+        ) : boards.length === 0 ? (
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>No boards registered.</span>
+        ) : (
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            {boards.map((b) => (
+              <button key={b.id} onClick={() => { onAdd({ type: 'view', id: b.id }); setMode(null); }} style={{ ...field, cursor: 'pointer', width: 'auto' }}>
+                {b.label} +
+              </button>
+            ))}
+          </div>
+        )
+      ) : null}
+      {mode === 'fact' ? (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input value={factKey} onChange={(e) => setFactKey(e.target.value)} placeholder="fact key (e.g. doc:welcome)" style={{ ...field, flex: 1 }} />
+          <div style={{ width: 90 }}><Button onClick={() => { if (factKey.trim()) { onAdd({ type: 'fact', key: factKey.trim() }); setFactKey(''); setMode(null); } }}>Pin</Button></div>
+        </div>
+      ) : null}
+      {mode === 'query' ? (
+        <div style={{ display: 'grid', gap: '0.4rem' }}>
+          <input value={q.title} onChange={(e) => setQ({ ...q, title: e.target.value })} placeholder="title" style={field} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.4rem' }}>
+            <input value={q.type} onChange={(e) => setQ({ ...q, type: e.target.value })} placeholder="type" style={field} />
+            <input value={q.tag} onChange={(e) => setQ({ ...q, tag: e.target.value })} placeholder="tag" style={field} />
+            <input value={q.prefix} onChange={(e) => setQ({ ...q, prefix: e.target.value })} placeholder="key prefix" style={field} />
+          </div>
+          <div style={{ width: 110 }}>
+            <Button
+              onClick={() => {
+                const query: Record<string, unknown> = {};
+                if (q.type.trim()) query.type = q.type.trim();
+                if (q.tag.trim()) query.tag = q.tag.trim();
+                if (q.prefix.trim()) query.prefix = q.prefix.trim();
+                if (Object.keys(query).length) { onAdd({ type: 'query', query, title: q.title.trim() || undefined }); setQ({ type: '', tag: '', prefix: '', title: '' }); setMode(null); }
+              }}
+            >
+              Add query
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </Card>
   );
 }
 
@@ -2003,12 +2095,12 @@ function App(): React.JSX.Element {
     [next[i], next[j]] = [next[j], next[i]];
     save(next);
   };
-  const toggle = (i: number): void => {
-    const next = sections.map((s, k) => (k === i ? { ...s, hidden: !s.hidden } : s));
-    save(next);
-  };
+  const toggle = (i: number): void => save(sections.map((s, k) => (k === i ? { ...s, hidden: !s.hidden } : s)));
+  const remove = (i: number): void => save(sections.filter((_s, k) => k !== i));
+  const add = (s: LayoutSection): void => save([...sections, s]);
 
   const ctx: SectionCtx = { session, authed, dash };
+  const isCustom = (t: string): boolean => t === 'view' || t === 'fact' || t === 'query';
 
   return (
     <Page>
@@ -2019,7 +2111,7 @@ function App(): React.JSX.Element {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', alignItems: 'center' }}>
             <button
               onClick={() => setCustomizing((c) => !c)}
-              style={{ background: 'none', border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.dim, fontSize: '0.78rem', padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+              style={{ background: customizing ? theme.accent : 'none', color: customizing ? theme.cream : theme.dim, border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: '0.78rem', padding: '0.25rem 0.7rem', cursor: 'pointer' }}
             >
               {customizing ? 'Done' : 'Customise'}
             </button>
@@ -2027,22 +2119,33 @@ function App(): React.JSX.Element {
           {sections.map((s, i) => {
             if (s.hidden && !customizing) return null;
             const body = <SectionView s={s} ctx={ctx} />;
-            if (!customizing) return <React.Fragment key={`${s.type}:${s.id ?? s.key ?? i}`}>{body}</React.Fragment>;
+            const k = `${s.type}:${s.id ?? s.key ?? i}`;
+            if (!customizing) return <React.Fragment key={k}>{body}</React.Fragment>;
             return (
-              <div key={`${s.type}:${s.id ?? s.key ?? i}`} style={{ opacity: s.hidden ? 0.5 : 1, display: 'grid', gap: '0.3rem' }}>
+              <div key={k} style={{ opacity: s.hidden ? 0.5 : 1, display: 'grid', gap: '0.3rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                   <span style={{ color: theme.dim, fontSize: '0.74rem', fontFamily: theme.mono }}>{sectionLabel(s)}</span>
-                  <SectionControls index={i} total={sections.length} hidden={!!s.hidden} onMove={(d) => move(i, d)} onToggle={() => toggle(i)} />
+                  <SectionControls
+                    index={i}
+                    total={sections.length}
+                    hidden={!!s.hidden}
+                    onMove={(d) => move(i, d)}
+                    onToggle={() => toggle(i)}
+                    onRemove={isCustom(s.type) ? () => remove(i) : undefined}
+                  />
                 </div>
                 {body}
               </div>
             );
           })}
           {customizing ? (
-            <p style={{ margin: 0, color: theme.dim, fontSize: '0.75rem', textAlign: 'center' }}>
-              Order &amp; visibility save to <code style={{ fontFamily: theme.mono }}>_home/layout</code> in your slice — your home, as data.
-              Pin a board, fact, or query by writing a section there (the field computer can do it).
-            </p>
+            <>
+              <AddSection onAdd={add} />
+              <p style={{ margin: 0, color: theme.dim, fontSize: '0.75rem', textAlign: 'center' }}>
+                Your home, as data — order, visibility, and pinned sections save to{' '}
+                <code style={{ fontFamily: theme.mono }}>_home/layout</code> in your slice.
+              </p>
+            </>
           ) : null}
         </>
       )}

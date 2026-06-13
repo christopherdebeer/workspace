@@ -124,9 +124,11 @@ the old Phase 2/3 ordering:
   per-section reorder + hide, persisted back to `_home/layout` — *"make your
   own home over time"* is data, not a fork. Each rendered fact gets its
   open path from the type-vocabulary resolver (`docs/type-vocabulary.md`), so
-  home hardcodes no cells. Still open: a UI to *add* custom sections (today you
-  write the section via the field computer / an agent), and richer section
-  types as the view/render-hint vocabulary grows.
+  home hardcodes no cells. An **Add-section** picker (in Customise mode) pins a
+  board, a fact (by key), or an ad-hoc query from the page — and custom
+  sections can be removed. Still open: richer section types as the
+  view/render-hint vocabulary grows, and a sharer (pin someone's board/view
+  into your home, once cross-slice grants make it natural).
 
 ## Naming
 
