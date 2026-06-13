@@ -122,18 +122,22 @@ where, when). Stigmergy with a UI.
 Substrate salience (recency + velocity + attention → focus / peripheral /
 elided) already arrives with every query/recall. The governing rule:
 
-> **Salience modulates presentation, never position.** Position is the
-> human's annotation — spatial memory is the canvas's whole value; a board
-> that rearranges itself destroys it. Salience gets every *other* channel.
+> **Salience modulates presentation, never position — and only ever *adds*.**
+> Position is the human's annotation — spatial memory is the canvas's whole
+> value; a board that rearranges itself destroys it. And a board must show
+> **every fact its query includes, at full fidelity**: salience is a *positive
+> marker*, never a subtraction. (The earlier model faded the peripheral and
+> collapsed the elided to title chips — that hid content the query had chosen
+> to include, inverting the point of a board; it's retired. Revised
+> 2026-06-13.)
 
-- **Focus** — full value, full opacity, subtle elevation (shadow, not
-  zIndex: stacking order is annotation too).
-- **Peripheral** — slightly faded; content intact.
-- **Elided** — the value withheld, exactly like recall's elision: the item
-  collapses to a **title chip at its pinned position**. Tap to expand — and
-  the tap is a deliberate `peek`, which logs attention, which raises
-  salience, which un-elides it. **Looking at a thing literally brings it
-  back into focus.** The perceive→act loop closes through the trajectory.
+- **Salient** — the board's most salient items (relative to its own top score)
+  carry a **✦ badge** (`data-salience="high"`); a glance finds what matters.
+- **Everything else** — full value, full opacity, full geometry. Nothing is
+  dimmed, collapsed, or omitted.
+- **Attention still flows through the trajectory** — reads/`peek`s raise real
+  salience for every future observer; that now changes *which items are
+  badged*, never whether content is shown.
 - **Edges** — stroke opacity/width from endpoint salience and link strength;
   the argument structure fades where attention has.
 - **The tray** (§3) is salience-ordered; the board's margin is its attention
