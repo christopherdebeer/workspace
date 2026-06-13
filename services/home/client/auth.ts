@@ -9,15 +9,41 @@
  * completes the code exchange on return, and attaches the bearer to fetches —
  * refreshing transparently (the refresh token now outlives the access token).
  *
+ * Session storage is the kernel's shared `parc.session.*` namespace — the SAME
+ * keys `@c15r/kernel` (and so lit/canvas/input) use — so signing in on any
+ * surface signs you in on home, and vice versa ("sign in once, origin-wide").
+ * The token shape is a superset of the kernel's, so either can read the other's.
+ *
  * No backend change: it uses the existing DCR, authorize, token, and revoke
  * endpoints. Tokens live in localStorage (a public-client trade-off); revoke on
  * sign-out so a discarded token is dead server-side too.
  */
 
-const TOKENS_KEY = 'parc.tokens';
+// The session itself lives under the kernel's origin-wide namespace
+// (`parc.session.tokens`, cells/kernel/client/main.ts) so every surface — home
+// and the kernel cells — shares ONE sign-in. The OAuth *client* registration and
+// the transient per-flow state stay home-local: home registers its own client
+// (its redirect_uri is the origin root `/`, distinct from the cells' path
+// redirects), so sharing those keys would cross-wire the authorize flow.
+const TOKENS_KEY = 'parc.session.tokens';
 const CLIENT_KEY = 'parc.client_id';
 const PKCE_KEY = 'parc.pkce_verifier';
 const STATE_KEY = 'parc.oauth_state';
+
+// One-time adoption of home's pre-kernel token key, so an existing home-only
+// sign-in surfaces into the shared session instead of being orphaned. The
+// client registration key is unchanged, so nothing re-registers. Runs at import.
+function migrateLegacyTokens(): void {
+  try {
+    if (!localStorage.getItem(TOKENS_KEY)) {
+      const legacy = localStorage.getItem('parc.tokens');
+      if (legacy) localStorage.setItem(TOKENS_KEY, legacy);
+    }
+    localStorage.removeItem('parc.tokens');
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 /** Scopes the web app asks for; the consent picker shows only what the user may grant. */
 export const DEFAULT_SCOPE = 'workspace:read workspace:write platform:cells:create';
@@ -27,6 +53,8 @@ interface Tokens {
   refresh_token?: string;
   /** epoch ms when the access token expires, if it does */
   expires_at?: number;
+  /** granted scopes — kept so the kernel's grantedScopes() reads our token too */
+  scope?: string;
 }
 
 // ── small crypto/encoding helpers (Web Crypto) ─────────────────────
@@ -47,6 +75,8 @@ async function sha256b64url(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
   return b64url(new Uint8Array(digest));
 }
+
+migrateLegacyTokens();
 
 // ── token storage ──────────────────────────────────────────────────
 
@@ -82,6 +112,7 @@ interface TokenResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  scope?: string;
   error?: string;
   error_description?: string;
 }
@@ -162,6 +193,7 @@ export async function completeLoginIfReturning(): Promise<boolean> {
     access_token: j.access_token,
     refresh_token: j.refresh_token,
     expires_at: j.expires_in ? Date.now() + j.expires_in * 1000 : undefined,
+    scope: j.scope,
   });
   return true;
 }
@@ -183,6 +215,7 @@ async function refresh(): Promise<boolean> {
     access_token: j.access_token,
     refresh_token: j.refresh_token ?? t.refresh_token,
     expires_at: j.expires_in ? Date.now() + j.expires_in * 1000 : undefined,
+    scope: j.scope ?? t.scope,
   });
   return true;
 }
