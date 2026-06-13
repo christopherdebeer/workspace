@@ -940,8 +940,6 @@ interface ViewEval {
 function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const [out, setOut] = useState<ViewEval | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // Live canvas embeds mount a full app; default off, opt-in per board.
-  const [preview, setPreview] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -980,55 +978,30 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     );
   }
 
-  // A canvas view IS a board — but a live embed is a full canvas app (CRDT,
-  // presence, a render loop). Mounting one per pinned board crashed home, so
-  // the default is a STATIC board card; the live preview mounts only on
-  // explicit request, one board at a time. (Follow-up: a server-rendered
-  // snapshot from the canvas cell would make the still image free.)
+  // A canvas view IS a board. The embed is now the cell's zero-JS static SSR
+  // thumbnail (?embed=1): server-rendered, edge-cached, no app mounted — so
+  // many pinned boards show real previews inline without the crash. Lazy-loaded
+  // and click-through to the interactive board.
   if (type === 'canvas') {
     const board = def.id.startsWith('canvas:') ? def.id.slice('canvas:'.length) : def.id;
     const href = hint?.href ?? `/@c15r/canvas?canvas=${encodeURIComponent(board)}`;
-    const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1`;
+    const embedSrc = `/@c15r/canvas?canvas=${encodeURIComponent(board)}&embed=1&w=620&h=240`;
     return (
       <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
-        {preview ? (
+        <a href={href} title={`Open ${label}`} style={{ display: 'block', lineHeight: 0 }}>
           <iframe
             src={embedSrc}
             title={label}
-            style={{ width: '100%', height: 230, border: 0, display: 'block', background: '#fff' }}
+            loading="lazy"
+            scrolling="no"
+            style={{ width: '100%', height: 240, border: 0, display: 'block', background: '#fff', pointerEvents: 'none' }}
           />
-        ) : (
-          // Static placeholder: a quiet board "plate", no app mounted.
-          <div
-            style={{
-              height: 120,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.5rem',
-              background: `linear-gradient(160deg, ${theme.pine} 0%, ${theme.dusk} 100%)`,
-              color: theme.cream,
-            }}
-          >
-            <span style={{ fontSize: '1.6rem' }}>🌲</span>
-            <span style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{label}</span>
-          </div>
-        )}
+        </a>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0.9rem', gap: '0.5rem' }}>
-          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
-            {out ? `${out.count} item${out.count === 1 ? '' : 's'}` : 'board'}
-          </span>
-          <span style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-            <button
-              onClick={() => setPreview((p) => !p)}
-              style={{ background: 'none', border: 'none', color: theme.accent, fontSize: '0.82rem', cursor: 'pointer', padding: 0, fontWeight: 600 }}
-            >
-              {preview ? 'Hide preview' : 'Load preview'}
-            </button>
-            <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>
-              Open board →
-            </a>
-          </span>
+          <strong style={{ fontFamily: theme.serif }}>🌲 {label}</strong>
+          <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>
+            {out ? `${out.count} item${out.count === 1 ? '' : 's'} · ` : ''}Open board →
+          </a>
         </div>
       </div>
     );
