@@ -1047,9 +1047,10 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   // many pinned boards show real previews inline without the crash. Lazy-loaded
   // and click-through to the interactive board.
   if (type === 'canvas') {
-    const board = def.id.startsWith('canvas:') ? def.id.slice('canvas:'.length) : def.id;
-    const href = hint?.href ?? `/@c15r/canvas?canvas=${encodeURIComponent(board)}`;
-    const embedSrc = `/@c15r/canvas?canvas=${encodeURIComponent(board)}&embed=1&w=620&h=240`;
+    // Address the board by its VIEW id so SSR honours the view's declared
+    // viewport (the "look here") instead of fitting the whole board.
+    const href = hint?.href ?? `/@c15r/canvas?view=${encodeURIComponent(def.id)}`;
+    const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1&w=620&h=240`;
     return (
       <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
         {/* The iframe is purely visual (pointer-events:none); a transparent

@@ -16,11 +16,17 @@ const TABLE = process.env.SUBSTRATE_TABLE || '';
 // missing module then degrades SSR to the static fallback (caught below)
 // instead of crashing the cell's import — the bare app + app.js must never 500.
 interface Ddb {
-  send(cmd: unknown): Promise<{ Items?: unknown[]; LastEvaluatedKey?: unknown; Responses?: Record<string, unknown[]> }>;
+  send(cmd: unknown): Promise<{
+    Items?: unknown[];
+    Item?: Record<string, unknown>;
+    LastEvaluatedKey?: unknown;
+    Responses?: Record<string, unknown[]>;
+  }>;
 }
 let doc: Ddb | undefined;
 let Query: any;
 let Batch: any;
+let Get: any;
 function ddb(): Ddb {
   if (!doc) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -28,9 +34,25 @@ function ddb(): Ddb {
     const lib = require('@aws-sdk/lib-dynamodb');
     Query = lib.QueryCommand;
     Batch = lib.BatchGetCommand;
+    Get = lib.GetCommand;
     doc = lib.DynamoDBDocumentClient.from(new DynamoDBClient({})) as Ddb;
   }
   return doc;
+}
+
+type Viewport = { x: number; y: number; scale: number } | 'fit';
+
+/**
+ * Resolve a `?view=<id>` to its board + declared camera. The view fact
+ * (`_views/<id>`) declares `render.board` (which board's placements) and
+ * `render.viewport` (the pinned, shareable "look here") — the appropriate
+ * window for an embed, instead of fit-to-everything.
+ */
+async function readView(viewId: string): Promise<{ board: string; viewport: Viewport }> {
+  const r = await ddb().send(new Get({ TableName: TABLE, Key: { pk: `STATE#${OWNER}`, sk: `KEY#_views/${viewId}` } }));
+  const def = (r.Item?.value ?? {}) as { render?: { board?: string; viewport?: Viewport } };
+  const board = def.render?.board ?? (viewId.startsWith('canvas:') ? viewId.slice('canvas:'.length) : viewId);
+  return { board, viewport: def.render?.viewport ?? 'fit' };
 }
 
 interface FactItem {
@@ -137,7 +159,18 @@ body.embed{pointer-events:none}
 body.embed #mode,body.embed #drillUp,body.embed #context-menu,body.embed #edit-modal,body.embed #err-banner{display:none!important}
 `;
 
+/** The camera for a board: the view's declared viewport if any, else fit. */
+function cameraFor(viewport: Viewport, els: BoardElement[], w = 1200, h = 800): { scale: number; tx: number; ty: number } {
+  if (viewport && viewport !== 'fit' && typeof viewport.x === 'number') {
+    const scale = viewport.scale ?? 1;
+    return { scale, tx: w / 2 - scale * viewport.x, ty: h / 2 - scale * viewport.y };
+  }
+  return fitCamera(els, w, h);
+}
+
 interface ShellOpts {
+  board?: string;
+  view?: string;
   embed?: boolean;
   w?: number;
   h?: number;
@@ -154,12 +187,21 @@ interface ShellOpts {
  * that costs nothing, so many can sit on one page. Any failure falls back to
  * the plain static shell — SSR never breaks the page.
  */
-async function renderShell(board: string, opts: ShellOpts = {}): Promise<string> {
+async function renderShell(opts: ShellOpts = {}): Promise<string> {
   const shell = read('static/index.html');
   try {
+    // A view resolves to its board + the declared camera; a bare board fits.
+    let board = opts.board;
+    let viewport: Viewport = 'fit';
+    if (opts.view) {
+      const v = await readView(opts.view);
+      board = v.board;
+      viewport = v.viewport;
+    }
+    if (!board) return shell;
     const els = await readBoard(board);
     if (!els.length) return shell;
-    const cam = fitCamera(els, opts.w, opts.h);
+    const cam = cameraFor(viewport, els, opts.w, opts.h);
     const { dynamic, static: stat } = renderBoard(els, cam);
     const transform = `transform:translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)});--zoom:${cam.scale.toFixed(4)}`;
     let html = shell
@@ -197,16 +239,18 @@ export const handler = async (event: any) => {
     if (path === '/style.css') return respond(200, 'text/css; charset=utf-8', read('static/style.css'));
     if (path === '/' || path === '') {
       const qs = new URLSearchParams((event.rawQueryString as string) || '');
-      const board = qs.get('canvas');
+      const board = qs.get('canvas') ?? undefined;
+      const view = qs.get('view') ?? undefined;
       const embed = qs.get('embed') === '1';
       const w = Number(qs.get('w')) || undefined;
       const h = Number(qs.get('h')) || undefined;
-      // SSR a concrete board; the bare app (no board) keeps the static shell.
-      const html = board ? await renderShell(board, { embed, w, h }) : read('static/index.html');
+      // SSR a board (?canvas=) or a view (?view=, with its declared camera);
+      // the bare app (no target) keeps the static shell.
+      const html = board || view ? await renderShell({ board, view, embed, w, h }) : read('static/index.html');
       // Static embeds are safe to cache briefly at the edge — many thumbnails
       // on one page then cost one render, and refresh within a minute.
       const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
-      if (embed && board) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
+      if (embed && (board || view)) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
       return { statusCode: 200, headers, body: html };
     }
   } catch (err) {
