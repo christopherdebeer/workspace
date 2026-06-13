@@ -813,6 +813,40 @@ function factHref(e: ListEntry): string | null {
   return null;
 }
 
+/** A content snippet beyond the title — the *substance* of a fact, for exploration. */
+function factPreview(e: ListEntry): string {
+  const v = e.value;
+  if (v == null || typeof v !== 'object') return '';
+  const o = v as Record<string, unknown>;
+  const text =
+    typeof o.content === 'string' ? o.content
+    : typeof o.body === 'string' ? o.body
+    : typeof o.text === 'string' ? o.text
+    : typeof o.description === 'string' ? o.description
+    : typeof o.note === 'string' ? o.note
+    : '';
+  if (text) {
+    // Drop the first line (it usually became the title), then flatten.
+    const lines = text.split('\n').filter((l) => l.trim());
+    const body = lines.length > 1 ? lines.slice(1).join(' ') : lines[0] ?? '';
+    return body.replace(/[#*_`>[\]()]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
+  }
+  // Structured value: a few scalar fields.
+  const parts: string[] = [];
+  for (const [k, val] of Object.entries(o)) {
+    if (['content', 'title', 'name', 'id', 'src'].includes(k) || val == null || typeof val === 'object') continue;
+    parts.push(`${k}: ${String(val).slice(0, 40)}`);
+    if (parts.length >= 3) break;
+  }
+  return parts.join(' · ');
+}
+
+interface Edge {
+  from: string;
+  rel: string;
+  to: string;
+}
+
 // ─── the workspace window (phase 2c) ───────────────────────────────
 
 interface AttentionData {
@@ -831,6 +865,7 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
   const [att, setAtt] = useState<AttentionData | null>(null);
   const [facts, setFacts] = useState<ListEntry[] | null>(null);
   const [total, setTotal] = useState(0);
+  const [edges, setEdges] = useState<Map<string, Edge[]>>(new Map());
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -839,12 +874,24 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
     (async () => {
       try {
         await loadTypeDecls();
-        const [a, q] = await Promise.all([
+        const [a, q, l] = await Promise.all([
           mcpCall('read', 'workspace.attention', { limit: 5 }),
           mcpCall('read', 'workspace.query', { limit: 10 }),
+          mcpCall('read', 'workspace.links'),
         ]);
         if (!live) return;
         if (a.ok) setAtt(a.value as AttentionData);
+        if (l.ok) {
+          // Group edges by source so each fact can show its relationships.
+          const all = ((l.value as { edges?: Edge[] }).edges ?? []).filter((x) => !x.from.startsWith('_'));
+          const m = new Map<string, Edge[]>();
+          for (const ed of all) {
+            const list = m.get(ed.from) ?? [];
+            list.push(ed);
+            m.set(ed.from, list);
+          }
+          setEdges(m);
+        }
         if (q.ok) {
           const v = q.value as { entries?: ListEntry[]; total?: number };
           setFacts(v.entries ?? []);
@@ -886,22 +933,39 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
       ) : facts.length === 0 ? (
         <p style={{ color: theme.dim }}>An empty slice — remember something.</p>
       ) : (
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.4rem' }}>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.7rem' }}>
           {facts.map((e) => {
             const to = factHref(e);
             const icon = typeIcon(e);
             const title = `${icon ? icon + ' ' : ''}${factTitle(e)}`;
-            const date = e._meta?.updatedAt ? e._meta.updatedAt.slice(0, 10) : null;
-            const sub = [e._meta?.type, e.key, date].filter(Boolean).join(' · ');
+            const preview = factPreview(e);
+            const out = edges.get(e.key) ?? [];
             return (
-              <li key={e.key} style={{ lineHeight: 1.35 }}>
+              <li key={e.key} style={{ lineHeight: 1.4, display: 'grid', gap: '0.15rem' }}>
                 {to ? (
                   <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{title}</a>
                 ) : (
-                  <span>{title}</span>
+                  <strong style={{ fontWeight: 600 }}>{title}</strong>
                 )}
-                <div style={{ color: theme.dim, fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {sub}
+                {preview ? (
+                  <span style={{ color: theme.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {preview}
+                  </span>
+                ) : null}
+                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>
+                    {[e._meta?.type, e.key].filter(Boolean).join(' · ')}
+                  </span>
+                  {out.slice(0, 5).map((ed, i) => (
+                    <span
+                      key={i}
+                      title={`${ed.rel} → ${ed.to}`}
+                      style={{ fontSize: '0.66rem', color: theme.accent, border: `1px solid ${theme.border}`, borderRadius: 999, padding: '0 0.4rem', fontFamily: theme.mono, whiteSpace: 'nowrap' }}
+                    >
+                      {ed.rel}→{ed.to.length > 14 ? ed.to.slice(0, 13) + '…' : ed.to}
+                    </span>
+                  ))}
+                  {out.length > 5 ? <span style={{ color: theme.dim, fontSize: '0.66rem' }}>+{out.length - 5}</span> : null}
                 </div>
               </li>
             );
@@ -988,15 +1052,26 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     const embedSrc = `/@c15r/canvas?canvas=${encodeURIComponent(board)}&embed=1&w=620&h=240`;
     return (
       <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
-        <a href={href} title={`Open ${label}`} style={{ display: 'block', lineHeight: 0 }}>
+        {/* The iframe is purely visual (pointer-events:none); a transparent
+            overlay link captures the tap so page scroll passes straight through
+            — iframes otherwise swallow touch on iOS even when inert. */}
+        <div style={{ position: 'relative', height: 240 }}>
           <iframe
             src={embedSrc}
             title={label}
             loading="lazy"
             scrolling="no"
-            style={{ width: '100%', height: 240, border: 0, display: 'block', background: '#fff', pointerEvents: 'none' }}
+            tabIndex={-1}
+            aria-hidden
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', background: '#fff', pointerEvents: 'none' }}
           />
-        </a>
+          <a
+            href={href}
+            title={`Open ${label}`}
+            aria-label={`Open ${label}`}
+            style={{ position: 'absolute', inset: 0, display: 'block' }}
+          />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0.9rem', gap: '0.5rem' }}>
           <strong style={{ fontFamily: theme.serif }}>🌲 {label}</strong>
           <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>

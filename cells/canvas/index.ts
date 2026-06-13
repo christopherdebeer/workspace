@@ -127,13 +127,14 @@ const CRITICAL_CSS = `
 img.content{max-width:100%}
 `;
 
-// A static embed (?embed=1) is a zero-JS thumbnail: hide the editor chrome,
-// freeze interactions. Paired with stripping app.js + the editor CDN scripts.
+// A static embed (?embed=1) is a zero-JS thumbnail: hide the editor chrome and
+// make the whole document inert to touch, so it never captures scroll inside a
+// host page. `touch-action:auto` overrides the app's first-paint
+// `touch-action:none`; `pointer-events:none` means no element swallows a touch.
 const EMBED_CSS = `
-html,body{margin:0;height:100%;overflow:hidden}
+html,body{margin:0;height:100%;overflow:hidden;touch-action:auto!important}
+body.embed{pointer-events:none}
 body.embed #mode,body.embed #drillUp,body.embed #context-menu,body.embed #edit-modal,body.embed #err-banner{display:none!important}
-body.embed #canvas{cursor:default}
-body.embed .canvas-element{pointer-events:none}
 `;
 
 interface ShellOpts {
@@ -169,11 +170,14 @@ async function renderShell(board: string, opts: ShellOpts = {}): Promise<string>
       )
       .replace('<div id="static-container"></div>', `<div id="static-container" data-ssr="1">${stat}</div>`);
     if (opts.embed) {
-      // Zero-JS: drop app.js + the editor libraries (marked/codemirror). The
-      // board is already fully rendered server-side, so no script is needed.
+      // Zero-JS: the board is fully rendered server-side, so strip *every*
+      // script — app.js, the editor libraries, AND the inline iOS touch-guard
+      // (a non-passive touchend preventDefault) that was capturing touch and
+      // blocking the host page's scroll.
       html = html
         .replace('<body>', '<body class="embed">')
-        .replace(/<script\b[^>]*\bsrc="[^"]*(?:app\.js|codemirror|marked)[^"]*"[^>]*><\/script>/g, '');
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<script\b[^>]*\/>/gi, '');
     }
     return html;
   } catch (err) {
