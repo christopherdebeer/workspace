@@ -60,6 +60,7 @@ import {
   applicableGrants,
   PUBLIC,
   GROUPS_NS,
+  PUBLIC_NS,
   type GrantStore,
   type Grant,
   type GrantMode,
@@ -1019,7 +1020,7 @@ async function requireWriteThrough(
   owner: string,
   key: string,
 ): Promise<void> {
-  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GRANTS_NS) || key.startsWith(GROUPS_NS)) {
+  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GRANTS_NS) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
     throw new Error(`write-through may not touch the reserved namespace ("${key}")`);
   }
   const held = await grants.listForGrantee(caller);
@@ -1368,6 +1369,16 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         createdAt: new Date().toISOString(),
       };
       await grants.put(grant);
+      // Reflect public shares into the owner's slice so their own cells (which
+      // read the slice under an IAM scope blind to the grant index) can serve
+      // only public keys. The grant index stays the enforcement truth.
+      if (input.to === PUBLIC) {
+        const { state } = build(ctx);
+        await state.put(
+          { scope: owner, key: `${PUBLIC_NS}${grant.key}`, value: { pattern: grant.key, sharedAt: grant.createdAt }, via: 'share:public', type: 'public-share', tags: ['public'] },
+          ctx.identity,
+        );
+      }
       await ctx.events.emit('workspace.shared', { owner, grantee: grant.grantee, key: grant.key, mode });
       ctx.logger.info('workspace shared', { owner, grantee: grant.grantee, key: grant.key, mode });
       return grant;
@@ -1376,8 +1387,10 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     async unshare(input, ctx) {
       const owner = requireUser(ctx.identity);
       if (!input?.to) throw new Error('to is required');
-      const { grants } = build(ctx);
-      await grants.remove(owner, input.to, input.key ?? WHOLE_SLICE);
+      const { state, grants } = build(ctx);
+      const key = input.key ?? WHOLE_SLICE;
+      await grants.remove(owner, input.to, key);
+      if (input.to === PUBLIC) await state.supersede(owner, `${PUBLIC_NS}${key}`, null, ctx.identity, {});
       return { ok: true };
     },
 
@@ -1613,7 +1626,7 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       ctx.logger.warn('substrate write without a key refused', { source: meta.source });
       return;
     }
-    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GROUPS_NS)) {
+    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
       ctx.logger.warn('substrate write to reserved vocabulary refused', { source: meta.source, key });
       return;
     }

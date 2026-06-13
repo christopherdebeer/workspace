@@ -226,6 +226,19 @@ describe('workspace audiences (public + groups)', () => {
     await expect(cmds.share({ to: 'public', key: 'docs/*', mode: 'write' }, ctxFor('c15r').ctx)).rejects.toThrow(/read-only/);
   });
 
+  it('a public share is reflected as a `_public/<pattern>` fact in the owner\'s slice (for in-slice renderers)', async () => {
+    const own = await cmds.query({ prefix: '_public/' }, ctxFor('c15r').ctx);
+    const marker = own.entries.find((e) => e.key === '_public/docs/*');
+    expect(marker).toBeDefined();
+    expect((marker!.value as { pattern: string }).pattern).toBe('docs/*');
+    // unshare retracts the reflection.
+    await cmds.unshare({ to: 'public', key: 'docs/*' }, ctxFor('c15r').ctx);
+    const after = await cmds.query({ prefix: '_public/' }, ctxFor('c15r').ctx);
+    expect(after.entries.find((e) => e.key === '_public/docs/*')).toBeUndefined();
+    // restore for downstream tests.
+    await cmds.share({ to: 'public', key: 'docs/*' }, ctxFor('c15r').ctx);
+  });
+
   it('peek through a public grant resolves for any caller', async () => {
     const e = await cmds.peek({ owner: 'c15r', key: 'docs/intro' }, ctxFor('emily').ctx);
     expect(e?.value).toBe('public intro');
