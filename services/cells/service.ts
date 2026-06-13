@@ -859,11 +859,30 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   const staticFiles = Object.keys(files).filter((f) => f.startsWith('static/'));
   for (const f of staticFiles) pkg.push({ name: f, content: files[f] });
 
+  // Vocabulary as data (docs/type-vocabulary.md): a cell declares the fact
+  // types it manages in a `types.json` at its src root. They are stored on the
+  // cell's *registry* record — one global table — so the type vocabulary is
+  // canonical and readable by every user (and the anonymous landing), not
+  // siloed in the owner's slice. `cells.describeTypes` aggregates them.
+  let declaredTypes: Array<Record<string, unknown>> | undefined;
+  if (files['types.json'] !== undefined) {
+    try {
+      const parsed = JSON.parse(files['types.json']) as { types?: Array<Record<string, unknown>> };
+      if (Array.isArray(parsed.types) && parsed.types.length) declaredTypes = parsed.types;
+    } catch (err) {
+      ctx.logger.warn('cell types.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
+    }
+  }
+
   const version = `${Date.now()}`;
   const codeKey = buildKey(record.cellId, version);
   await uploadPackage({ bucket: env.codeBucket, key: codeKey, files: pkg });
   await updateFunctionCode(record.functionName, env.codeBucket, codeKey);
-  await createRegistry(env.registryTable).put({ ...record, updatedAt: new Date().toISOString() });
+  await createRegistry(env.registryTable).put({
+    ...record,
+    ...(declaredTypes ? { types: declaredTypes } : {}),
+    updatedAt: new Date().toISOString(),
+  });
 
   ctx.logger.info('cell deployed', {
     cellId: record.cellId,
@@ -871,6 +890,7 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     files: Object.keys(files).length,
     client: clientEntry ?? null,
     static: staticFiles.length,
+    types: declaredTypes?.length ?? 0,
   });
   await ctx.events.emit('cell.deployed', {
     cellId: record.cellId,
@@ -883,29 +903,6 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     clientEntry: clientEntry ?? null,
     staticFiles,
   });
-
-  // Vocabulary as data: a cell declares the fact types it manages in a
-  // `types.json` at its src root; on deploy we project those into the owner's
-  // `_types/<type>` registry (the workspace applies it, same path as the
-  // `cells/<id>` lifecycle projection). So a cell's facts become openable
-  // everywhere without any surface hardcoding it. See docs/type-vocabulary.md.
-  if (files['types.json'] !== undefined) {
-    try {
-      const parsed = JSON.parse(files['types.json']) as { types?: Array<Record<string, unknown>> };
-      const types = Array.isArray(parsed.types) ? parsed.types : [];
-      if (types.length) {
-        await ctx.events.emit('cell.types.declared', {
-          cellId: record.cellId,
-          owner: record.owner,
-          address: cellAddress(record.owner, record.name),
-          types,
-        });
-        ctx.logger.info('cell declared types', { cellId: record.cellId, count: types.length });
-      }
-    } catch (err) {
-      ctx.logger.warn('cell types.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
-    }
-  }
   return {
     deployed: true,
     cellId: record.cellId,
@@ -1116,6 +1113,30 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
     }),
   );
   return { tools: out };
+}
+
+/**
+ * The canonical type vocabulary (docs/type-vocabulary.md): every ACTIVE cell's
+ * declared types, aggregated into `{ <type>: decl }` with the cell's address
+ * stamped as `manager`. Global and unauthenticated-friendly — type decls say
+ * *how* to open a fact, not *whether* you may. The gateway's `$types` serves
+ * this merged under the caller's per-user `_types/` overrides.
+ */
+async function describeTypes(_input: unknown, ctx: ServiceContext): Promise<{ types: Record<string, unknown> }> {
+  const env = loadForgeEnv();
+  const cells = await createRegistry(env.registryTable).listActive();
+  const out: Record<string, unknown> = {};
+  for (const c of cells.sort((a, b) => a.cellId.localeCompare(b.cellId))) {
+    for (const decl of c.types ?? []) {
+      const type = typeof decl.type === 'string' ? decl.type : '';
+      if (!type || type.startsWith('_')) continue;
+      const value: Record<string, unknown> = { ...decl, manager: typeof decl.manager === 'string' ? decl.manager : cellAddress(c.owner, c.name) };
+      delete value.type;
+      out[type] = value;
+    }
+  }
+  ctx.logger.info('type vocabulary aggregated', { cells: cells.length, types: Object.keys(out).length });
+  return { types: out };
 }
 
 interface CallCellToolInput {
@@ -1523,6 +1544,7 @@ const commands: Record<string, RegisteredCommand> = {
   // forwards these; they are not themselves advertised as forge MCP tools).
   describeCellTools: describeCellTools as RegisteredCommand,
   callCellTool: callCellTool as RegisteredCommand,
+  describeTypes: describeTypes as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {
   commands[name] = spec.handler;
@@ -1531,7 +1553,7 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'cells',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed', 'cell.types.declared'] },
+  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
 });
 
 export default handler;

@@ -756,11 +756,14 @@ function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
 
 export async function loadTypeDecls(): Promise<void> {
   try {
-    const r = await mcpCall('read', 'workspace.query', { prefix: '_types/', limit: 100 });
+    // $types is the global vocabulary (the cell registry's canonical declarations
+    // merged under this user's _types overrides), so home resolves the same way
+    // for any signed-in user — not just the cells' owner.
+    const r = await mcpCall('read', '$types');
     if (r.ok) {
-      const entries = (r.value as { entries?: Array<{ key: string; value: LegacyTypeDecl }> }).entries ?? [];
-      const fromSubstrate = Object.fromEntries(entries.map((e) => [e.key.slice('_types/'.length), normalizeDecl(e.value ?? {})]));
-      typeDecls = { ...DEFAULT_TYPE_DECLS, ...fromSubstrate }; // substrate overrides defaults
+      const raw = (r.value as { types?: Record<string, LegacyTypeDecl> }).types ?? {};
+      const norm = Object.fromEntries(Object.entries(raw).map(([t, d]) => [t, normalizeDecl(d)]));
+      typeDecls = { ...DEFAULT_TYPE_DECLS, ...norm }; // canonical + overrides win over the built-in fallback
     }
   } catch {
     /* defaults still apply */

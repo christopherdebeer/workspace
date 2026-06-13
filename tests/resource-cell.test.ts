@@ -39,8 +39,10 @@ const CELLS_TOOLS = [
 let lastCall: { fn: string; command: string; payload: unknown } | undefined;
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
-/** `_types/<type>` facts workspace.query returns for the `$types` read (per-test). */
+/** `_types/<type>` facts workspace.query returns for the per-user `$types` overrides (per-test). */
 let typeFacts: Array<{ key: string; value: unknown }> = [];
+/** Global type vocabulary cells.describeTypes returns for the `$types` read (per-test). */
+let globalTypes: Record<string, unknown> = {};
 
 function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
@@ -61,6 +63,7 @@ function stub(tokens: Record<string, ValidatedToken>): void {
       } else if (fn === 'cells-fn') {
         if (env.__command === 'describeTools') result = { tools: CELLS_TOOLS };
         else if (env.__command === 'describeCellTools') result = { tools: cellTools };
+        else if (env.__command === 'describeTypes') result = { types: globalTypes };
         else {
           lastCall = { fn: 'cells', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
@@ -110,6 +113,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
     lastCall = undefined;
     cellTools = [];
     typeFacts = [];
+    globalTypes = {};
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
@@ -147,16 +151,36 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect((cat.parsed as { capabilities: unknown[] }).capabilities.length).toBeGreaterThan(0);
   });
 
-  it('read("$types") returns the type vocabulary keyed by bare type name', async () => {
-    typeFacts = [
-      { key: '_types/doc', value: { manager: '@c15r/lit', handlers: { open: [{ surface: '/@c15r/lit?doc=${match}' }] } } },
-      { key: '_types/capture', value: { manager: '@c15r/input', icon: '📥' } },
-    ];
+  it('read("$types") returns the global cell-registry vocabulary keyed by bare type name', async () => {
+    globalTypes = {
+      doc: { manager: '@c15r/lit', handlers: { open: [{ surface: '/@c15r/lit?doc=${match}' }] } },
+      capture: { manager: '@c15r/input', icon: '📥' },
+    };
     const res = await callTool('creator', 'read', { target: '$types' });
     const out = res.parsed as { types: Record<string, { manager?: string }>; hint: string };
     expect(Object.keys(out.types).sort()).toEqual(['capture', 'doc']);
     expect(out.types.doc.manager).toBe('@c15r/lit');
     expect(out.hint).toMatch(/handlers\[intent\]/);
+  });
+
+  it('read("$types") merges per-user _types/ overrides over the global registry', async () => {
+    globalTypes = {
+      doc: { manager: '@c15r/lit', icon: '📄' },
+      capture: { manager: '@c15r/input', icon: '📥' },
+    };
+    typeFacts = [
+      { key: '_types/doc', value: { manager: '@alice/custom-doc', icon: '✏️' } },
+      { key: '_types/note', value: { manager: '@alice/notes', icon: '🗒️' } },
+    ];
+    const res = await callTool('creator', 'read', { target: '$types' });
+    const out = res.parsed as { types: Record<string, { manager?: string }> };
+    expect(Object.keys(out.types).sort()).toEqual(['capture', 'doc', 'note']);
+    // user override wins over the global declaration for the same type
+    expect(out.types.doc.manager).toBe('@alice/custom-doc');
+    // untouched global type survives
+    expect(out.types.capture.manager).toBe('@c15r/input');
+    // user-only type appears
+    expect(out.types.note.manager).toBe('@alice/notes');
   });
 
   it('read("$catalog", {detail:"summary"}) groups one-line capabilities by cell, schema-free', async () => {

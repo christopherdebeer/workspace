@@ -281,11 +281,21 @@ function enforceScope(ctx: ServiceContext, target: string, scope: string): void 
  * the bare type names. (docs/type-vocabulary.md)
  */
 async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, unknown>; hint: string }> {
-  const res = await ctx
-    .serviceClient('workspace')
-    .command<{ entries?: Array<{ key: string; value: unknown }> }>('query', { prefix: '_types/', limit: 200 });
-  const types: Record<string, unknown> = {};
-  for (const e of res?.entries ?? []) types[e.key.slice('_types/'.length)] = e.value;
+  // Canonical (global, from the cell registry) merged under the caller's
+  // per-user `_types/` overrides (docs/type-vocabulary.md). The canonical half
+  // is unauthenticated-friendly; the slice read fails closed for anonymous
+  // callers, who simply get the global vocabulary.
+  const [global, slice] = await Promise.all([
+    ctx.serviceClient('cells').command<{ types?: Record<string, unknown> }>('describeTypes', {}).catch(() => ({ types: {} })),
+    ctx.identity.user
+      ? ctx
+          .serviceClient('workspace')
+          .command<{ entries?: Array<{ key: string; value: unknown }> }>('query', { prefix: '_types/', limit: 200 })
+          .catch(() => ({ entries: [] }))
+      : Promise.resolve({ entries: [] }),
+  ]);
+  const types: Record<string, unknown> = { ...(global?.types ?? {}) };
+  for (const e of slice?.entries ?? []) types[e.key.slice('_types/'.length)] = e.value; // user override wins
   return {
     types,
     hint: 'A fact of type T resolves through types[T].handlers[intent] (open/edit/render/create) — a surface (a cell URL), an act target, or a renderer; templated with ${id}/${match}/${value.path}.',

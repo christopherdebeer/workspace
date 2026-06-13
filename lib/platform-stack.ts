@@ -118,7 +118,7 @@ export class PlatformStack extends cdk.Stack {
     eventBus.routeTo(
       'CellLifecycleRoute',
       workspace.fn,
-      ['cell.create.requested', 'cell.deployed', 'cell.files.changed', 'cell.delete.requested', 'cell.types.declared'],
+      ['cell.create.requested', 'cell.deployed', 'cell.files.changed', 'cell.delete.requested'],
       'cells',
     );
     // Autonomous tending (the legacy workspace's signature loop): a daily
@@ -178,8 +178,8 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('cells'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
-      emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed', 'cell.types.declared'],
+      commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'describeTypes', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
+      emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
       // it so its .wasm ships in the asset.
