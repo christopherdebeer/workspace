@@ -39,6 +39,8 @@ const CELLS_TOOLS = [
 let lastCall: { fn: string; command: string; payload: unknown } | undefined;
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
+/** `_types/<type>` facts workspace.query returns for the `$types` read (per-test). */
+let typeFacts: Array<{ key: string; value: unknown }> = [];
 
 function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
@@ -50,7 +52,9 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         result = tokens[env.payload.token as string] ?? null;
       } else if (fn === 'workspace-fn') {
         if (env.__command === 'describeTools') result = { tools: WORKSPACE_TOOLS };
-        else {
+        else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_types/') {
+          result = { entries: typeFacts };
+        } else {
           lastCall = { fn: 'workspace', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
         }
@@ -105,6 +109,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
     process.env.PUBLIC_BASE_URL = 'https://parc.land';
     lastCall = undefined;
     cellTools = [];
+    typeFacts = [];
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
@@ -140,6 +145,18 @@ describe('resource cell (MCP gateway, read/act)', () => {
   it('read omitting target also returns the catalog', async () => {
     const cat = await callTool('creator', 'read', {});
     expect((cat.parsed as { capabilities: unknown[] }).capabilities.length).toBeGreaterThan(0);
+  });
+
+  it('read("$types") returns the type vocabulary keyed by bare type name', async () => {
+    typeFacts = [
+      { key: '_types/doc', value: { manager: '@c15r/lit', handlers: { open: [{ surface: '/@c15r/lit?doc=${match}' }] } } },
+      { key: '_types/capture', value: { manager: '@c15r/input', icon: '📥' } },
+    ];
+    const res = await callTool('creator', 'read', { target: '$types' });
+    const out = res.parsed as { types: Record<string, { manager?: string }>; hint: string };
+    expect(Object.keys(out.types).sort()).toEqual(['capture', 'doc']);
+    expect(out.types.doc.manager).toBe('@c15r/lit');
+    expect(out.hint).toMatch(/handlers\[intent\]/);
   });
 
   it('read("$catalog", {detail:"summary"}) groups one-line capabilities by cell, schema-free', async () => {
