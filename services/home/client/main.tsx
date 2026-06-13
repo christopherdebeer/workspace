@@ -1,16 +1,27 @@
 /**
- * Home cell client — a small, self-documenting single-page app served at `/`.
+ * Home cell client — parc.land's two faces (docs/home-cell.md).
  *
- * It introspects the live platform (OAuth discovery documents) and lets you
- * probe the protected resource server, so the page doubles as documentation
- * and a smoke test. Built from the shared `platform/ui` component kit.
+ * Signed out: the trailhead — a painted dusk valley, the wordmark, and the
+ * passkey door. Signed in: your corner of the substrate — greeting, live
+ * stats over the change feed, recent activity, quick capture, the workspace
+ * window, identity & grants, pinned views, cells — and the field computer:
+ * the raw read/act console housed as the one deliberately-technical object
+ * in the warm room. Everything is the same `mcpCall` vocabulary an agent
+ * speaks; the park language lives in headings and copy, never in targets.
  */
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../../../platform/ui';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, getTokens } from './auth';
+// Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
+// the dawn panorama strip, and the field computer.
+import heroUrl from './assets/hero.jpg';
+import stripUrl from './assets/strip.jpg';
+import computerUrl from './assets/computer.webp';
 
 const { useState, useEffect } = React;
+
+// ─── auth/session ──────────────────────────────────────────────────
 
 interface Session {
   ready: boolean;
@@ -67,39 +78,6 @@ function useAuth(): Session & { signIn: () => void; signOut: () => void } {
   };
 }
 
-function Account({ session }: { session: Session & { signIn: () => void; signOut: () => void } }): React.JSX.Element {
-  return (
-    <Card>
-      <Heading sub="Sign in with a passkey to drive the platform as yourself — the same identity an agent gets over MCP.">
-        Account
-      </Heading>
-      {!session.ready ? (
-        <p style={{ color: theme.dim }}>…</p>
-      ) : session.user ? (
-        <div style={{ display: 'grid', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <Badge tone="accent">signed in</Badge>
-            <strong>{session.user}</strong>
-          </div>
-          {session.scopes.length ? (
-            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-              {session.scopes.map((s) => (
-                <Badge key={s} tone="dim">{s}</Badge>
-              ))}
-            </div>
-          ) : null}
-          <Button kind="secondary" onClick={session.signOut}>Sign out</Button>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gap: '0.5rem' }}>
-          {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
-          <Button onClick={session.signIn}>Sign in with passkey</Button>
-        </div>
-      )}
-    </Card>
-  );
-}
-
 async function getJson(path: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
   const res = await fetch(path, init);
   let body: unknown;
@@ -111,41 +89,362 @@ async function getJson(path: string, init?: RequestInit): Promise<{ status: numb
   return { status: res.status, body };
 }
 
-function Discovery(): React.JSX.Element {
-  const [meta, setMeta] = useState<Record<string, unknown> | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+/**
+ * Invoke a capability through the gateway's MCP endpoint, exactly as an agent
+ * would: `tools/call` with name=read|act and `{ target, input }`. Returns the
+ * tool's JSON result (or its error text). This is the one call the whole page
+ * is built on — the human drives read/act the same way the agent does.
+ */
+async function mcpCall(verb: string, target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
+  const res = await authFetch('/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'tools/call',
+      params: { name: verb, arguments: input === undefined ? { target } : { target, input } },
+    }),
+  });
+  if (!res.ok) return { ok: false, value: `HTTP ${res.status}` };
+  const rpc = (await res.json()) as {
+    result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    error?: { message?: string };
+  };
+  if (rpc.error) return { ok: false, value: rpc.error.message ?? 'error' };
+  const text = rpc.result?.content?.[0]?.text ?? '';
+  let value: unknown = text;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    /* not JSON — keep the raw text (e.g. an error message) */
+  }
+  return { ok: !rpc.result?.isError, value };
+}
 
-  useEffect(() => {
-    getJson('/.well-known/oauth-authorization-server')
-      .then((r) => (r.status === 200 ? setMeta(r.body as Record<string, unknown>) : setErr(`HTTP ${r.status}`)))
-      .catch((e) => setErr(String(e)));
-  }, []);
+// ─── the scenery (the painted assets) ──────────────────────────────
 
+/** The painted valley. `tall` = the landing hero; short = the dashboard strip. */
+function DuskScene({ tall, children }: { tall?: boolean; children?: React.ReactNode }): React.JSX.Element {
+  return (
+    <div
+      style={{
+        position: 'relative',
+        borderRadius: theme.radius,
+        overflow: 'hidden',
+        boxShadow: theme.shadow,
+        border: `1px solid ${theme.border}`,
+        background: theme.dusk,
+      }}
+    >
+      <img
+        src={tall ? heroUrl : stripUrl}
+        alt=""
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          objectPosition: tall ? 'center bottom' : 'center 70%',
+          display: 'block',
+        }}
+      />
+      {tall ? (
+        // Legibility veil for the overlaid text — quiet in the sky, gone by mid-frame.
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'linear-gradient(150deg, rgba(8,29,36,0.62) 0%, rgba(8,29,36,0.28) 38%, rgba(8,29,36,0) 62%)',
+          }}
+        />
+      ) : (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(8,29,36,0.30)' }} />
+      )}
+      <div style={{ position: 'relative', minHeight: tall ? 'min(56vh, 430px)' : 96, display: 'grid' }}>{children}</div>
+    </div>
+  );
+}
+
+function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
+  return (
+    <span style={{ fontFamily: theme.mono, fontWeight: 700, letterSpacing: '0.02em', color: light ? theme.cream : theme.text }}>
+      parc.land
+    </span>
+  );
+}
+
+// ─── face 1: the trailhead (landing) ───────────────────────────────
+
+function Landing({ session }: { session: Session & { signIn: () => void } }): React.JSX.Element {
+  const signCard: React.CSSProperties = {
+    background: 'rgba(253,249,239,0.94)',
+    border: `1px solid ${theme.border}`,
+    borderRadius: 10,
+    padding: '0.8rem 0.95rem',
+    boxShadow: theme.shadow,
+    display: 'grid',
+    gap: '0.25rem',
+  };
+  return (
+    <div style={{ display: 'grid', gap: '1rem' }}>
+      <DuskScene tall>
+        <div style={{ padding: 'clamp(1.2rem, 4vw, 2.2rem)', display: 'grid', alignContent: 'start', gap: '0.6rem' }}>
+          <div style={{ fontSize: '1.5rem' }}>
+            <Wordmark light />
+          </div>
+          <h1
+            style={{
+              margin: 0,
+              fontFamily: theme.serif,
+              fontWeight: 600,
+              fontSize: 'clamp(1.5rem, 4.5vw, 2.2rem)',
+              color: theme.cream,
+              maxWidth: '18ch',
+              lineHeight: 1.2,
+              textShadow: '0 1px 12px rgba(8,29,36,0.6)',
+            }}
+          >
+            a personal substrate for exploring the world
+          </h1>
+          <p style={{ margin: 0, color: theme.cream, opacity: 0.85, maxWidth: '44ch', fontSize: '0.95rem', textShadow: '0 1px 8px rgba(8,29,36,0.6)' }}>
+            Your home for notes, plans, and discoveries. Remember what matters, share what helps,
+            and grow the tools as you go.
+          </p>
+          <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+            <div style={{ width: 'min(260px, 100%)' }}>
+              <Button onClick={session.signIn}>Sign in with passkey</Button>
+            </div>
+          </div>
+          <span style={{ color: theme.cream, opacity: 0.7, fontSize: '0.78rem' }}>
+            New here? The same button registers a passkey.
+          </span>
+          {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
+        </div>
+      </DuskScene>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.8rem' }}>
+        <div style={signCard}>
+          <strong style={{ fontFamily: theme.serif }}>🌲 A workspace that remembers</strong>
+          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
+            Facts with provenance and history — nothing is lost, the important rises. What you save
+            today is still legible in ten years.
+          </span>
+        </div>
+        <div style={signCard}>
+          <strong style={{ fontFamily: theme.serif }}>🏕 Tools you can grow</strong>
+          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
+            Cells are small programs you deploy into the land — a tracker, a board, a feed — each
+            with its own address and its own logs.
+          </span>
+        </div>
+        <div style={signCard}>
+          <strong style={{ fontFamily: theme.serif }}>✨ Agents welcome</strong>
+          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
+            One vocabulary for people and AI: <code style={{ fontFamily: theme.mono }}>whoami · read · act</code> over
+            MCP at <code style={{ fontFamily: theme.mono }}>parc.land/mcp</code>. This page is the same client, rendered.
+          </span>
+        </div>
+      </div>
+
+      <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.8rem', fontStyle: 'italic' }}>
+        “A digital communal green space.” — the Visitor Centre, est. v1 🏛
+      </p>
+    </div>
+  );
+}
+
+// ─── face 2: the dashboard ─────────────────────────────────────────
+
+function greetingFor(hour: number): string {
+  if (hour < 5) return 'Up late';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function DashboardHeader({ session }: { session: Session & { signOut: () => void } }): React.JSX.Element {
+  return (
+    <DuskScene>
+      <div
+        style={{
+          padding: '0.9rem 1.1rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.8rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'grid', gap: '0.1rem' }}>
+          <strong style={{ fontFamily: theme.serif, fontSize: '1.25rem', color: theme.cream, textShadow: '0 1px 8px rgba(8,29,36,0.7)' }}>
+            {greetingFor(new Date().getHours())}, {session.user}.
+          </strong>
+          <span style={{ color: theme.cream, opacity: 0.8, fontSize: '0.82rem', textShadow: '0 1px 6px rgba(8,29,36,0.7)' }}>
+            Here’s what’s true in your corner of the substrate.
+          </span>
+        </div>
+        <button
+          onClick={session.signOut}
+          style={{
+            background: 'rgba(253,246,216,0.14)',
+            border: `1px solid rgba(253,246,216,0.4)`,
+            color: theme.cream,
+            borderRadius: 8,
+            padding: '0.35rem 0.8rem',
+            fontSize: '0.8rem',
+            cursor: 'pointer',
+          }}
+        >
+          Sign out
+        </button>
+      </div>
+    </DuskScene>
+  );
+}
+
+function Sparkline({ points }: { points: number[] }): React.JSX.Element | null {
+  if (points.length < 2) return null;
+  const max = Math.max(...points, 1);
+  const pts = points.map((v, i) => `${((i / (points.length - 1)) * 100).toFixed(1)},${(28 - (v / max) * 24).toFixed(1)}`).join(' ');
+  return (
+    <svg viewBox="0 0 100 30" style={{ width: '100%', height: 30, display: 'block' }} aria-hidden>
+      <polyline points={pts} fill="none" stroke={theme.accent} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+interface ChangeEvent {
+  op: string;
+  key: string | null;
+  at: string;
+  seq: number;
+}
+
+interface DashboardData {
+  facts: number;
+  cells: number;
+  views: number;
+  edges: number;
+  /** Write-ish events per day, oldest → newest (the sparkline). */
+  activity: number[];
+  /** Latest write-ish events, newest first. */
+  recent: ChangeEvent[];
+}
+
+async function loadDashboard(): Promise<DashboardData> {
+  const head = await mcpCall('read', 'workspace.changes', { sinceSeq: 'head' });
+  const seq = head.ok ? ((head.value as { seq?: number }).seq ?? 0) : 0;
+  const [q, c, v, l, ch] = await Promise.all([
+    mcpCall('read', 'workspace.query', { limit: 1 }),
+    mcpCall('read', 'cells.list'),
+    mcpCall('read', 'workspace.views'),
+    mcpCall('read', 'workspace.links'),
+    mcpCall('read', 'workspace.changes', { sinceSeq: Math.max(0, seq - 300), limit: 300 }),
+  ]);
+  const events = ch.ok ? (((ch.value as { events?: ChangeEvent[] }).events ?? []) as ChangeEvent[]) : [];
+  const writes = events.filter((e) => e.op !== 'read');
+  // Bucket the last 14 days, oldest first.
+  const days: number[] = new Array(14).fill(0);
+  const now = Date.now();
+  for (const e of writes) {
+    const age = Math.floor((now - Date.parse(e.at)) / 86400000);
+    if (age >= 0 && age < 14) days[13 - age]++;
+  }
+  return {
+    facts: q.ok ? ((q.value as { total?: number }).total ?? 0) : 0,
+    cells: c.ok ? (((c.value as { cells?: unknown[] }).cells ?? []).length) : 0,
+    views: v.ok ? (((v.value as { views?: unknown[] }).views ?? []).length) : 0,
+    edges: l.ok ? (((l.value as { edges?: unknown[] }).edges ?? []).length) : 0,
+    activity: days,
+    recent: writes.slice(-8).reverse(),
+  };
+}
+
+function StatCards({ data }: { data: DashboardData | null }): React.JSX.Element {
+  const cell = (label: string, value: number | null, foot?: React.ReactNode): React.JSX.Element => (
+    <div
+      style={{
+        background: theme.panel,
+        border: `1px solid ${theme.border}`,
+        borderRadius: 10,
+        boxShadow: theme.shadow,
+        padding: '0.7rem 0.85rem',
+        display: 'grid',
+        gap: '0.15rem',
+        alignContent: 'start',
+      }}
+    >
+      <span style={{ color: theme.dim, fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+      <strong style={{ fontFamily: theme.serif, fontSize: '1.5rem' }}>{value === null ? '…' : value}</strong>
+      {foot}
+    </div>
+  );
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.7rem' }}>
+      {cell('Facts', data ? data.facts : null, data ? <Sparkline points={data.activity} /> : undefined)}
+      {cell('Links', data ? data.edges : null)}
+      {cell('Views', data ? data.views : null)}
+      {cell('Cells', data ? data.cells : null)}
+    </div>
+  );
+}
+
+const OP_LABEL: Record<string, string> = {
+  write: 'remembered',
+  supersede: 'retired',
+  link: 'linked',
+  unlink: 'unlinked',
+};
+
+function RecentActivity({ data }: { data: DashboardData | null }): React.JSX.Element | null {
+  if (data && data.recent.length === 0) return null;
   return (
     <Card>
-      <Heading sub="Fetched live from the auth cell's RFC 8414 document.">OAuth discovery</Heading>
-      {err ? <Badge tone="danger">{err}</Badge> : null}
-      {meta ? (
-        <CodeBlock>{JSON.stringify({ issuer: meta.issuer, authorization_endpoint: meta.authorization_endpoint, token_endpoint: meta.token_endpoint, registration_endpoint: meta.registration_endpoint }, null, 2)}</CodeBlock>
+      <Heading sub="The change feed — the land's own record of what happened (reads excluded).">Recent activity</Heading>
+      {!data ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
       ) : (
-        !err && <p style={{ color: theme.dim }}>Loading…</p>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.35rem' }}>
+          {data.recent.map((e) => (
+            <li key={e.seq} style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+              <Badge tone="dim">{OP_LABEL[e.op] ?? e.op}</Badge>
+              <code style={{ fontFamily: theme.mono, fontSize: '0.78rem' }}>{e.key}</code>
+              <span style={{ color: theme.dim, fontSize: '0.72rem' }}>{e.at.slice(5, 16).replace('T', ' ')}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </Card>
   );
 }
 
-function ResourceProbe(): React.JSX.Element {
-  // Defaults to the signed-in session token; still editable as a debug tool.
-  const [token, setToken] = useState(() => getTokens()?.access_token ?? '');
-  const [result, setResult] = useState<{ status: number; body: unknown } | null>(null);
+/** One-box capture: a thought lands as an inbox fact in one act. */
+function QuickCapture(): React.JSX.Element {
+  const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
 
-  const probe = async (): Promise<void> => {
+  const capture = async (): Promise<void> => {
+    const content = text.trim();
+    if (!content) return;
     setBusy(true);
     try {
-      setResult(await getJson('/mcp/whoami', token ? { headers: { authorization: `Bearer ${token}` } } : undefined));
-    } catch (e) {
-      setResult({ status: 0, body: String(e) });
+      const key = `inbox/${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`;
+      const r = await mcpCall('act', 'workspace.remember', {
+        key,
+        value: { content },
+        type: 'capture',
+        tags: ['inbox'],
+        via: 'home:quick-capture',
+      });
+      if (r.ok) {
+        setText('');
+        setDone(key);
+        setTimeout(() => setDone(null), 4000);
+      }
     } finally {
       setBusy(false);
     }
@@ -153,49 +452,44 @@ function ResourceProbe(): React.JSX.Element {
 
   return (
     <Card>
-      <Heading sub="GET /mcp/whoami — paste an access token, or run it empty to see the 401 challenge.">
-        Probe the resource server
-      </Heading>
-      <input
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        placeholder="Bearer token (optional)"
-        style={{
-          width: '100%',
-          boxSizing: 'border-box',
-          padding: '0.6rem',
-          marginBottom: '0.5rem',
-          background: '#0d0d0d',
-          border: `1px solid ${theme.border}`,
-          borderRadius: 6,
-          color: theme.text,
-          fontFamily: theme.mono,
-        }}
-      />
-      <Button onClick={probe} disabled={busy}>
-        {busy ? 'Calling…' : 'Call /mcp/whoami'}
-      </Button>
-      {result ? (
-        <div style={{ marginTop: '0.75rem' }}>
-          <Badge tone={result.status === 200 ? 'accent' : 'danger'}>HTTP {result.status}</Badge>
-          <div style={{ marginTop: '0.5rem' }}>
-            <CodeBlock>{JSON.stringify(result.body, null, 2)}</CodeBlock>
+      <Heading sub="Drop a thought — it lands in your inbox as a fact, provenance stamped.">Quick capture</Heading>
+      <div style={{ display: 'grid', gap: '0.5rem' }}>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={2}
+          placeholder="What's on your mind?"
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '0.6rem',
+            background: '#fffef9',
+            border: `1px solid ${theme.border}`,
+            borderRadius: 8,
+            color: theme.text,
+            fontFamily: 'inherit',
+            fontSize: '0.9rem',
+            resize: 'vertical',
+          }}
+        />
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+          <div style={{ width: 160 }}>
+            <Button onClick={() => void capture()} disabled={busy || !text.trim()}>
+              {busy ? 'Remembering…' : 'Remember'}
+            </Button>
           </div>
+          {done ? (
+            <span style={{ color: theme.accent, fontSize: '0.8rem' }}>
+              ✓ remembered at <code style={{ fontFamily: theme.mono }}>{done}</code>
+            </span>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </Card>
   );
 }
 
-interface Capability {
-  target: string;
-  kind: 'read' | 'act';
-  description: string;
-  scope: string | null;
-  inputSchema?: { properties?: Record<string, { type?: string }>; required?: string[] };
-}
-
-// ── identity & grants shell (home redesign phase 2a; docs/scope-grants.md §6) ──
+// ─── identity & grants shell (phase 2a; docs/scope-grants.md §6) ───
 
 interface TokenRow {
   id: string;
@@ -253,10 +547,10 @@ function InlineButton({ onClick, danger, children }: { onClick: () => void; dang
     <button
       onClick={onClick}
       style={{
-        background: 'none',
+        background: theme.panel,
         border: `1px solid ${theme.border}`,
         borderRadius: 6,
-        color: danger ? '#e66' : theme.accent,
+        color: danger ? theme.danger : theme.accent,
         cursor: 'pointer',
         fontSize: '0.75rem',
         padding: '0.15rem 0.5rem',
@@ -274,7 +568,7 @@ function InlineButton({ onClick, danger, children }: { onClick: () => void; dang
  * row is the same `mcpCall` an agent makes; this surface is a rendering, not
  * new plumbing.
  */
-function IdentityShell({ authed, user }: { authed: boolean; user: string | null }): React.JSX.Element | null {
+function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string | null; scopes: string[] }): React.JSX.Element | null {
   const [data, setData] = useState<IdentityData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -325,21 +619,29 @@ function IdentityShell({ authed, user }: { authed: boolean; user: string | null 
 
   return (
     <Card>
-      <Heading sub="Credentials, grants, and the request inbox — the standing management plane over the same grants.* / auth.* targets agents use.">
+      <Heading sub="Day passes & permits — credentials, grants, and the request inbox, over the same auth.* / workspace.* targets agents use.">
         Identity &amp; grants
       </Heading>
+      <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+        <Badge>{user}</Badge>
+        {scopes.map((s) => (
+          <Badge key={s} tone="dim">
+            {s}
+          </Badge>
+        ))}
+      </div>
       {err ? <Badge tone="danger">{err}</Badge> : null}
       {!data ? (
         <p style={{ color: theme.dim }}>Loading…</p>
       ) : (
-        <div style={{ display: 'grid', gap: '1rem', marginTop: '0.5rem' }}>
+        <div style={{ display: 'grid', gap: '1rem' }}>
           {data.incoming.length ? (
             <div style={section}>
-              <strong>Grant requests</strong>
+              <strong style={{ fontFamily: theme.serif }}>Grant requests</strong>
               {data.incoming.map((r) => (
                 <div key={r.key} style={rowStyle}>
                   <Badge tone="accent">{r.requester}</Badge>
-                  <code style={{ fontSize: '0.78rem' }}>{r.resource}</code>
+                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{r.resource}</code>
                   {r.note ? <span style={{ color: theme.dim }}>“{r.note}”</span> : null}
                   <InlineButton onClick={() => void act(r.key, 'act', 'workspace.approveGrant', { key: r.key })}>
                     {busy === r.key ? '…' : 'Approve'}
@@ -353,7 +655,7 @@ function IdentityShell({ authed, user }: { authed: boolean; user: string | null 
           ) : null}
 
           <div style={section}>
-            <strong>Credentials</strong>
+            <strong style={{ fontFamily: theme.serif }}>Credentials</strong>
             {data.tokens.length === 0 ? (
               <span style={{ color: theme.dim, fontSize: '0.85rem' }}>No active tokens.</span>
             ) : (
@@ -373,14 +675,14 @@ function IdentityShell({ authed, user }: { authed: boolean; user: string | null 
           </div>
 
           <div style={section}>
-            <strong>Shared by you</strong>
+            <strong style={{ fontFamily: theme.serif }}>Shared by you</strong>
             {data.shared.length === 0 ? (
               <span style={{ color: theme.dim, fontSize: '0.85rem' }}>Nothing shared.</span>
             ) : (
               data.shared.map((g) => (
                 <div key={`${g.grantee}|${g.key}`} style={rowStyle}>
                   <Badge tone="dim">{g.grantee}</Badge>
-                  <code style={{ fontSize: '0.78rem' }}>{g.key}</code>
+                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{g.key}</code>
                   <Badge tone={g.mode === 'write' ? 'accent' : 'dim'}>{g.mode ?? 'read'}</Badge>
                   <InlineButton
                     danger
@@ -395,11 +697,11 @@ function IdentityShell({ authed, user }: { authed: boolean; user: string | null 
 
           {data.receiving.length ? (
             <div style={section}>
-              <strong>Shared with you</strong>
+              <strong style={{ fontFamily: theme.serif }}>Shared with you</strong>
               {data.receiving.map((g) => (
                 <div key={`${g.owner}|${g.key}`} style={rowStyle}>
                   <Badge tone="dim">{g.owner}</Badge>
-                  <code style={{ fontSize: '0.78rem' }}>{g.key}</code>
+                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{g.key}</code>
                   <Badge tone={g.mode === 'write' ? 'accent' : 'dim'}>{g.mode ?? 'read'}</Badge>
                 </div>
               ))}
@@ -408,11 +710,11 @@ function IdentityShell({ authed, user }: { authed: boolean; user: string | null 
 
           {data.answers.length ? (
             <div style={section}>
-              <strong>Your requests</strong>
+              <strong style={{ fontFamily: theme.serif }}>Your requests</strong>
               {data.answers.map((a) => (
                 <div key={a.key} style={rowStyle}>
                   <Badge tone={a.status === 'approved' ? 'accent' : 'danger'}>{a.status}</Badge>
-                  <code style={{ fontSize: '0.78rem' }}>{a.resource}</code>
+                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{a.resource}</code>
                   <span style={{ color: theme.dim, fontSize: '0.75rem' }}>
                     by {a.by === user ? 'you' : a.by}
                     {a.reason ? ` — “${a.reason}”` : ''}
@@ -427,140 +729,8 @@ function IdentityShell({ authed, user }: { authed: boolean; user: string | null 
   );
 }
 
-/**
- * Invoke a capability through the gateway's MCP endpoint, exactly as an agent
- * would: `tools/call` with name=read|act and `{ target, input }`. Returns the
- * tool's JSON result (or its error text). This is the one call the whole console
- * is built on — the human drives read/act the same way the agent does.
- */
-async function mcpCall(verb: string, target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
-  const res = await authFetch('/mcp', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: 'tools/call',
-      params: { name: verb, arguments: input === undefined ? { target } : { target, input } },
-    }),
-  });
-  if (!res.ok) return { ok: false, value: `HTTP ${res.status}` };
-  const rpc = (await res.json()) as {
-    result?: { content?: Array<{ text?: string }>; isError?: boolean };
-    error?: { message?: string };
-  };
-  if (rpc.error) return { ok: false, value: rpc.error.message ?? 'error' };
-  const text = rpc.result?.content?.[0]?.text ?? '';
-  let value: unknown = text;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    /* not JSON — keep the raw text (e.g. an error message) */
-  }
-  return { ok: !rpc.result?.isError, value };
-}
+// ─── the type vocabulary (presentation/routing as data) ────────────
 
-/** A starter JSON argument object from a capability's input schema. */
-function argSkeleton(schema?: Capability['inputSchema']): string {
-  const props = schema?.properties ?? {};
-  const keys = schema?.required?.length ? schema.required : Object.keys(props);
-  if (keys.length === 0) return '{}';
-  const obj: Record<string, unknown> = {};
-  for (const k of keys) {
-    const t = props[k]?.type;
-    obj[k] = t === 'number' ? 0 : t === 'boolean' ? false : t === 'array' ? [] : t === 'object' ? {} : '';
-  }
-  return JSON.stringify(obj, null, 2);
-}
-
-/** One capability: expand to give JSON args, invoke read/act, and see the result. */
-function CapabilityRow({ cap }: { cap: Capability }): React.JSX.Element {
-  const verb = cap.target.slice(cap.target.lastIndexOf('.') + 1);
-  const [open, setOpen] = useState(false);
-  const [args, setArgs] = useState(() => argSkeleton(cap.inputSchema));
-  const [busy, setBusy] = useState(false);
-  const [out, setOut] = useState<{ ok: boolean; value: unknown } | null>(null);
-
-  const run = async (): Promise<void> => {
-    let input: unknown;
-    try {
-      input = args.trim() ? JSON.parse(args) : {};
-    } catch {
-      setOut({ ok: false, value: 'Invalid JSON in arguments' });
-      return;
-    }
-    setBusy(true);
-    try {
-      setOut(await mcpCall(cap.kind, cap.target, input));
-    } catch (e) {
-      setOut({ ok: false, value: String(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ display: 'grid', gap: '0.3rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <button
-          onClick={() => setOpen((o) => !o)}
-          style={{ background: 'none', border: 'none', color: theme.text, cursor: 'pointer', fontFamily: theme.mono, padding: 0, fontSize: '0.85rem' }}
-        >
-          {open ? '▾' : '▸'} <code>{verb}</code>
-        </button>
-        <Badge tone={cap.kind === 'read' ? 'dim' : 'accent'}>{cap.kind}</Badge>
-        {cap.scope ? <Badge tone="dim">{cap.scope}</Badge> : null}
-        <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{cap.description}</span>
-      </div>
-      {open ? (
-        <div style={{ display: 'grid', gap: '0.4rem', marginLeft: '1.1rem' }}>
-          <textarea
-            value={args}
-            onChange={(e) => setArgs(e.target.value)}
-            rows={Math.min(10, Math.max(2, args.split('\n').length))}
-            spellCheck={false}
-            style={{ width: '100%', boxSizing: 'border-box', padding: '0.5rem', background: '#0d0d0d', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.text, fontFamily: theme.mono, fontSize: '0.8rem' }}
-          />
-          <div>
-            <Button onClick={run} disabled={busy}>
-              {busy ? 'Running…' : `${cap.kind}("${cap.target}")`}
-            </Button>
-          </div>
-          {out ? (
-            <div>
-              <Badge tone={out.ok ? 'accent' : 'danger'}>{out.ok ? 'ok' : 'error'}</Badge>
-              <div style={{ marginTop: '0.3rem' }}>
-                <CodeBlock>{typeof out.value === 'string' ? out.value : JSON.stringify(out.value, null, 2)}</CodeBlock>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-interface RenderHint {
-  type?: string;
-  label?: string;
-  href?: string;
-}
-
-interface ViewDef {
-  id: string;
-  description?: string;
-  reduce?: string;
-  render?: RenderHint | null;
-}
-
-interface ViewEval {
-  id: string;
-  render: RenderHint | null;
-  value: unknown;
-  count: number;
-}
-
-/** One registered view, rendered by its hint — the dashboard is a view query. */
 interface ListEntry {
   key: string;
   value?: unknown;
@@ -643,6 +813,130 @@ function factHref(e: ListEntry): string | null {
   return null;
 }
 
+// ─── the workspace window (phase 2c) ───────────────────────────────
+
+interface AttentionData {
+  stale: Array<{ key: string; updatedAt: string; type: string | null }>;
+  unlinked: string[];
+  dangling: Array<{ from: string; rel: string; to: string; reason: string }>;
+}
+
+/**
+ * The signed-in window over the substrate: an attention strip (the
+ * just-in-time cron, read at a glance) above the most salient facts of the
+ * slice — `query` ranked by salience, titled and routed by the `_types`
+ * vocabulary, exactly the shaping agents get from the same read.
+ */
+function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | null {
+  const [att, setAtt] = useState<AttentionData | null>(null);
+  const [facts, setFacts] = useState<ListEntry[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    (async () => {
+      try {
+        await loadTypeDecls();
+        const [a, q] = await Promise.all([
+          mcpCall('read', 'workspace.attention', { limit: 5 }),
+          mcpCall('read', 'workspace.query', { limit: 10 }),
+        ]);
+        if (!live) return;
+        if (a.ok) setAtt(a.value as AttentionData);
+        if (q.ok) {
+          const v = q.value as { entries?: ListEntry[]; total?: number };
+          setFacts(v.entries ?? []);
+          setTotal(v.total ?? 0);
+        } else {
+          setErr(typeof q.value === 'string' ? q.value : 'error');
+        }
+      } catch (e) {
+        if (live) setErr(String(e));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
+  if (!authed) return null;
+
+  const attTotal = att ? att.stale.length + att.unlinked.length + att.dangling.length : 0;
+
+  return (
+    <Card>
+      <Heading sub="Your slice, salience-ranked — the same query an agent makes, rendered. The strip is the ranger's notebook.">
+        Workspace
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {att ? (
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.3rem 0 0.6rem' }}>
+          <Badge tone={attTotal ? 'accent' : 'dim'}>
+            {attTotal ? `needs attention: ${attTotal}` : 'all trails clear'}
+          </Badge>
+          {att.stale.length ? <Badge tone="dim">{att.stale.length} stale</Badge> : null}
+          {att.unlinked.length ? <Badge tone="dim">{att.unlinked.length} unlinked</Badge> : null}
+          {att.dangling.length ? <Badge tone="dim">{att.dangling.length} dangling edges</Badge> : null}
+        </div>
+      ) : null}
+      {facts === null ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : facts.length === 0 ? (
+        <p style={{ color: theme.dim }}>An empty slice — remember something.</p>
+      ) : (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.4rem' }}>
+          {facts.map((e) => {
+            const to = factHref(e);
+            const icon = typeIcon(e);
+            const title = `${icon ? icon + ' ' : ''}${factTitle(e)}`;
+            const date = e._meta?.updatedAt ? e._meta.updatedAt.slice(0, 10) : null;
+            const sub = [e._meta?.type, e.key, date].filter(Boolean).join(' · ');
+            return (
+              <li key={e.key} style={{ lineHeight: 1.35 }}>
+                {to ? (
+                  <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{title}</a>
+                ) : (
+                  <span>{title}</span>
+                )}
+                <div style={{ color: theme.dim, fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {sub}
+                </div>
+              </li>
+            );
+          })}
+          {total > facts.length ? (
+            <li style={{ color: theme.dim, fontSize: '0.8rem' }}>… {total - facts.length} more (query/recall for the rest)</li>
+          ) : null}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+// ─── pinned views (registered views rendered by hint) ──────────────
+
+interface RenderHint {
+  type?: string;
+  label?: string;
+  href?: string;
+}
+
+interface ViewDef {
+  id: string;
+  description?: string;
+  reduce?: string;
+  render?: RenderHint | null;
+}
+
+interface ViewEval {
+  id: string;
+  render: RenderHint | null;
+  value: unknown;
+  count: number;
+}
+
 function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const [out, setOut] = useState<ViewEval | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -668,6 +962,7 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const type = hint?.type ?? 'json';
   const box: React.CSSProperties = {
     border: `1px solid ${theme.border}`,
+    background: theme.panel,
     borderRadius: 10,
     padding: '0.7rem 0.9rem',
     display: 'grid',
@@ -677,7 +972,7 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   if (err) {
     return (
       <div style={box}>
-        <strong>{label}</strong>
+        <strong style={{ fontFamily: theme.serif }}>{label}</strong>
         <Badge tone="danger">{err}</Badge>
       </div>
     );
@@ -698,7 +993,7 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
           style={{ width: '100%', height: 230, border: 0, pointerEvents: 'none', display: 'block', background: '#fff' }}
         />
         <span style={{ display: 'flex', justifyContent: 'space-between', padding: '0.55rem 0.9rem' }}>
-          <strong>🌲 {label}</strong>
+          <strong style={{ fontFamily: theme.serif }}>🌲 {label}</strong>
           <span style={{ color: theme.accent, fontSize: '0.85rem' }}>
             {out ? `${out.count} item${out.count === 1 ? '' : 's'} · ` : ''}Open board →
           </span>
@@ -711,7 +1006,7 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     return (
       <div style={box}>
         <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{label}</span>
-        <strong style={{ fontSize: '1.6rem' }}>{out ? String(out.value ?? '—') : '…'}</strong>
+        <strong style={{ fontSize: '1.6rem', fontFamily: theme.serif }}>{out ? String(out.value ?? '—') : '…'}</strong>
       </div>
     );
   }
@@ -725,10 +1020,10 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
       <div style={box}>
         {href ? (
           <a href={href} style={{ color: 'inherit', textDecoration: 'none' }}>
-            <strong>{label} →</strong>
+            <strong style={{ fontFamily: theme.serif }}>{label} →</strong>
           </a>
         ) : (
-          <strong>{label}</strong>
+          <strong style={{ fontFamily: theme.serif }}>{label}</strong>
         )}
         {out === null ? (
           <span style={{ color: theme.dim }}>Loading…</span>
@@ -766,16 +1061,15 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
 
   return (
     <div style={box}>
-      <strong>{label}</strong>
+      <strong style={{ fontFamily: theme.serif }}>{label}</strong>
       {out === null ? <span style={{ color: theme.dim }}>Loading…</span> : <CodeBlock>{JSON.stringify(out.value, null, 2)}</CodeBlock>}
     </div>
   );
 }
 
 /**
- * Registered views, rendered as surfaces (home redesign phase 3: the UI comes
- * from the registry, not code — `render: {type: 'canvas'}` links out to the
- * spatial projection at /@<owner>/canvas).
+ * Registered views, rendered as surfaces (home redesign phase 3 seed: the UI
+ * comes from the registry, not code).
  */
 function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
   const [views, setViews] = useState<ViewDef[] | null>(null);
@@ -801,8 +1095,8 @@ function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
   if (!authed || views === null || views.length === 0) return null;
   return (
     <Card>
-      <Heading sub="Registered views rendered by their hints — one declaration, a dashboard for you and an affordance for agents.">
-        Surfaces
+      <Heading sub="Registered views rendered by their hints — one declaration, a surface for you and an affordance for agents.">
+        Pinned views
       </Heading>
       <div style={{ display: 'grid', gap: '0.7rem', marginTop: '0.5rem' }}>
         {views.map((v) => (
@@ -813,11 +1107,241 @@ function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
   );
 }
 
+// ─── the cells console (phase 2c) ──────────────────────────────────
+
+interface CellRow {
+  cellId: string;
+  name: string;
+  status: string;
+  public: boolean;
+  description: string | null;
+  address: string;
+}
+
+/** One owned cell: address, status, and on-demand recent logs. */
+function CellConsoleRow({ cell }: { cell: CellRow }): React.JSX.Element {
+  const [logs, setLogs] = useState<Array<{ time: string; message: string }> | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const tailLogs = async (): Promise<void> => {
+    if (logs) {
+      setLogs(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await mcpCall('read', 'cells.logs', { cellId: cell.cellId, since: '1h', limit: 15 });
+      setLogs(r.ok ? ((r.value as { events?: Array<{ time: string; message: string }> }).events ?? []) : []);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '0.3rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <a href={cell.address} style={{ color: theme.accent, textDecoration: 'none', fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 600 }}>
+          {cell.address}
+        </a>
+        <Badge tone={cell.status === 'ACTIVE' ? 'accent' : 'dim'}>{cell.status}</Badge>
+        {cell.public ? <Badge tone="dim">public</Badge> : null}
+        <InlineButton onClick={() => void tailLogs()}>{busy ? '…' : logs ? 'Hide logs' : 'Logs (1h)'}</InlineButton>
+        {cell.description ? <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{cell.description}</span> : null}
+      </div>
+      {logs ? (
+        logs.length === 0 ? (
+          <span style={{ color: theme.dim, fontSize: '0.8rem', marginLeft: '0.2rem' }}>No log events in the last hour.</span>
+        ) : (
+          <CodeBlock>{logs.map((l) => `${l.time.slice(11, 19)}  ${l.message.trim()}`).join('\n')}</CodeBlock>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null {
+  const [cells, setCells] = useState<CellRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    mcpCall('read', 'cells.list')
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) setCells(((r.value as { cells?: CellRow[] }).cells ?? []));
+        else setErr(typeof r.value === 'string' ? r.value : 'error');
+      })
+      .catch((e) => {
+        if (live) setErr(String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
+  if (!authed || (cells !== null && cells.length === 0)) return null;
+  return (
+    <Card>
+      <Heading sub="Your outposts — deployed cells with their own addresses and logs. Author and ship through cells.* on the field computer.">
+        Cells
+      </Heading>
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {cells === null ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.4rem' }}>
+          {cells.map((c) => (
+            <CellConsoleRow key={c.cellId} cell={c} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ─── the field computer (the console, housed) ──────────────────────
+//
+// The one deliberately-technical object in the warm room: the raw read/act
+// console, OAuth discovery, and the resource probe live inside a dark
+// machine housing — green phosphor on deep pine, like the radio at the
+// ranger station. Power users open the lid; everyone else never needs to.
+
+const machine = {
+  housing: '#13241f',
+  bezel: '#0b1a16',
+  screen: '#0a1f1a',
+  text: '#cfe3c0',
+  dim: '#7f9a82',
+  green: '#7fc97f',
+  border: '#2c4a3c',
+} as const;
+
+interface Capability {
+  target: string;
+  kind: 'read' | 'act';
+  description: string;
+  scope: string | null;
+  inputSchema?: { properties?: Record<string, { type?: string }>; required?: string[] };
+}
+
+/** A starter JSON argument object from a capability's input schema. */
+function argSkeleton(schema?: Capability['inputSchema']): string {
+  const props = schema?.properties ?? {};
+  const keys = schema?.required?.length ? schema.required : Object.keys(props);
+  if (keys.length === 0) return '{}';
+  const obj: Record<string, unknown> = {};
+  for (const k of keys) {
+    const t = props[k]?.type;
+    obj[k] = t === 'number' ? 0 : t === 'boolean' ? false : t === 'array' ? [] : t === 'object' ? {} : '';
+  }
+  return JSON.stringify(obj, null, 2);
+}
+
+/** One capability: expand to give JSON args, invoke read/act, and see the result. */
+function CapabilityRow({ cap }: { cap: Capability }): React.JSX.Element {
+  const verb = cap.target.slice(cap.target.lastIndexOf('.') + 1);
+  const [open, setOpen] = useState(false);
+  const [args, setArgs] = useState(() => argSkeleton(cap.inputSchema));
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{ ok: boolean; value: unknown } | null>(null);
+
+  const run = async (): Promise<void> => {
+    let input: unknown;
+    try {
+      input = args.trim() ? JSON.parse(args) : {};
+    } catch {
+      setOut({ ok: false, value: 'Invalid JSON in arguments' });
+      return;
+    }
+    setBusy(true);
+    try {
+      setOut(await mcpCall(cap.kind, cap.target, input));
+    } catch (e) {
+      setOut({ ok: false, value: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '0.3rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          style={{ background: 'none', border: 'none', color: machine.text, cursor: 'pointer', fontFamily: theme.mono, padding: 0, fontSize: '0.85rem' }}
+        >
+          {open ? '▾' : '▸'} <code>{verb}</code>
+        </button>
+        <span style={{ color: cap.kind === 'read' ? machine.dim : machine.green, fontFamily: theme.mono, fontSize: '0.7rem', border: `1px solid ${machine.border}`, borderRadius: 999, padding: '0 0.45rem' }}>
+          {cap.kind}
+        </span>
+        {cap.scope ? (
+          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.7rem', border: `1px solid ${machine.border}`, borderRadius: 999, padding: '0 0.45rem' }}>
+            {cap.scope}
+          </span>
+        ) : null}
+        <span style={{ color: machine.dim, fontSize: '0.8rem' }}>{cap.description}</span>
+      </div>
+      {open ? (
+        <div style={{ display: 'grid', gap: '0.4rem', marginLeft: '1.1rem' }}>
+          <textarea
+            value={args}
+            onChange={(e) => setArgs(e.target.value)}
+            rows={Math.min(10, Math.max(2, args.split('\n').length))}
+            spellCheck={false}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '0.5rem', background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, color: machine.text, fontFamily: theme.mono, fontSize: '0.8rem' }}
+          />
+          <div>
+            <button
+              onClick={() => void run()}
+              disabled={busy}
+              style={{
+                padding: '0.45rem 0.9rem',
+                borderRadius: 6,
+                border: `1px solid ${machine.green}`,
+                background: 'transparent',
+                color: machine.green,
+                fontFamily: theme.mono,
+                fontSize: '0.8rem',
+                cursor: busy ? 'wait' : 'pointer',
+              }}
+            >
+              {busy ? 'Running…' : `${cap.kind}("${cap.target}")`}
+            </button>
+          </div>
+          {out ? (
+            <div>
+              <span style={{ color: out.ok ? machine.green : '#e08c7a', fontFamily: theme.mono, fontSize: '0.75rem' }}>
+                {out.ok ? 'ok' : 'error'}
+              </span>
+              <pre
+                style={{
+                  background: machine.screen,
+                  border: `1px solid ${machine.border}`,
+                  borderRadius: 6,
+                  padding: '0.6rem',
+                  margin: '0.3rem 0 0',
+                  overflowX: 'auto',
+                  fontFamily: theme.mono,
+                  fontSize: '0.78rem',
+                  color: machine.text,
+                }}
+              >
+                <code>{typeof out.value === 'string' ? out.value : JSON.stringify(out.value, null, 2)}</code>
+              </pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
- * The live read/act **console** — `read("$catalog")` lists every capability the
- * caller can use, grouped by cell; each row invokes read/act and shows the result.
- * Home is now a read/act client: the human drives the same vocabulary the agent
- * does. (Home redesign; see docs/home-cell.md.)
+ * The live read/act console — `read("$catalog")` lists every capability the
+ * caller can use, grouped by cell; each row invokes read/act and shows the
+ * result. The human drives the same vocabulary the agent does.
  */
 function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
   const [caps, setCaps] = useState<Capability[] | null>(null);
@@ -851,57 +1375,209 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
   }
 
   return (
-    <Card>
-      <Heading sub='Invoke any read/act capability and see the result — the same vocabulary your agent sees via read("$catalog").'>
-        Capabilities
-      </Heading>
-      {!authed ? <p style={{ color: theme.dim }}>Sign in above to load your capabilities.</p> : null}
-      {err ? <Badge tone="danger">{err}</Badge> : null}
-      {authed && !caps && !err ? <p style={{ color: theme.dim }}>Loading…</p> : null}
+    <div>
+      {err ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
+      {authed && !caps && !err ? <p style={{ color: machine.dim, margin: 0 }}>Loading…</p> : null}
       {authed && caps && caps.length === 0 ? (
-        <p style={{ color: theme.dim }}>No capabilities — your token may lack scopes.</p>
+        <p style={{ color: machine.dim, margin: 0 }}>No capabilities — your token may lack scopes.</p>
       ) : null}
-      <div style={{ display: 'grid', gap: '0.9rem', marginTop: '0.5rem' }}>
+      <div style={{ display: 'grid', gap: '0.9rem' }}>
         {Object.keys(groups)
           .sort()
           .map((ns) => (
             <div key={ns} style={{ display: 'grid', gap: '0.4rem' }}>
-              <strong>{ns}</strong>
+              <strong style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.85rem' }}>{ns}</strong>
               {groups[ns].map((c) => (
                 <CapabilityRow key={c.target} cap={c} />
               ))}
             </div>
           ))}
       </div>
-    </Card>
+    </div>
   );
 }
 
+function Discovery(): React.JSX.Element {
+  const [meta, setMeta] = useState<Record<string, unknown> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    getJson('/.well-known/oauth-authorization-server')
+      .then((r) => (r.status === 200 ? setMeta(r.body as Record<string, unknown>) : setErr(`HTTP ${r.status}`)))
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  return (
+    <div style={{ display: 'grid', gap: '0.4rem' }}>
+      <strong style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.85rem' }}>oauth discovery</strong>
+      {err ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
+      {meta ? (
+        <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.6rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.75rem', color: machine.text }}>
+          <code>
+            {JSON.stringify(
+              { issuer: meta.issuer, authorization_endpoint: meta.authorization_endpoint, token_endpoint: meta.token_endpoint, registration_endpoint: meta.registration_endpoint },
+              null,
+              2,
+            )}
+          </code>
+        </pre>
+      ) : !err ? (
+        <span style={{ color: machine.dim, fontSize: '0.8rem' }}>Loading…</span>
+      ) : null}
+    </div>
+  );
+}
+
+function ResourceProbe(): React.JSX.Element {
+  // Defaults to the signed-in session token; still editable as a debug tool.
+  const [token, setToken] = useState(() => getTokens()?.access_token ?? '');
+  const [result, setResult] = useState<{ status: number; body: unknown } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const probe = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      setResult(await getJson('/mcp/whoami', token ? { headers: { authorization: `Bearer ${token}` } } : undefined));
+    } catch (e) {
+      setResult({ status: 0, body: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '0.4rem' }}>
+      <strong style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.85rem' }}>probe · GET /mcp/whoami</strong>
+      <input
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        placeholder="Bearer token (optional — empty shows the 401 challenge)"
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '0.5rem',
+          background: machine.screen,
+          border: `1px solid ${machine.border}`,
+          borderRadius: 6,
+          color: machine.text,
+          fontFamily: theme.mono,
+          fontSize: '0.8rem',
+        }}
+      />
+      <div>
+        <button
+          onClick={() => void probe()}
+          disabled={busy}
+          style={{ padding: '0.45rem 0.9rem', borderRadius: 6, border: `1px solid ${machine.green}`, background: 'transparent', color: machine.green, fontFamily: theme.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
+        >
+          {busy ? 'Calling…' : 'Call'}
+        </button>
+      </div>
+      {result ? (
+        <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.6rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.75rem', color: result.status === 200 ? machine.text : '#e08c7a' }}>
+          <code>HTTP {result.status}{'\n'}{JSON.stringify(result.body, null, 2)}</code>
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+/** The housing: a collapsed machine that opens into the full console. */
+function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <section
+      style={{
+        background: machine.housing,
+        border: `1px solid ${machine.border}`,
+        borderRadius: theme.radius,
+        boxShadow: theme.shadow,
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.6rem',
+          padding: '0.9rem 1.1rem',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+          <img src={computerUrl} alt="" aria-hidden style={{ width: 54, height: 'auto', flexShrink: 0 }} />
+          <span style={{ display: 'grid', gap: '0.1rem' }}>
+            <span style={{ color: machine.green, fontFamily: theme.mono, fontSize: '0.9rem', letterSpacing: '0.08em' }}>
+              ▮ FIELD COMPUTER
+            </span>
+            <span style={{ color: machine.dim, fontSize: '0.78rem' }}>
+              The raw read/act console — every capability, the same wire an agent uses.
+            </span>
+          </span>
+        </span>
+        <span style={{ color: machine.dim, fontFamily: theme.mono }}>{open ? '–' : '+'}</span>
+      </button>
+      {open ? (
+        <div style={{ padding: '0 1.1rem 1.1rem', display: 'grid', gap: '1.2rem', borderTop: `1px solid ${machine.border}`, paddingTop: '1rem' }}>
+          <Capabilities authed={authed} />
+          <Discovery />
+          <ResourceProbe />
+          <p style={{ color: machine.dim, fontSize: '0.75rem', margin: 0 }}>
+            Tokens come from OAuth: clients register (DCR), redirect to /oauth/authorize, you approve
+            with a passkey. Agents connect at parc.land/mcp — whoami · read · act.
+          </p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// ─── the page ──────────────────────────────────────────────────────
+
 function App(): React.JSX.Element {
   const session = useAuth();
+  const authed = !!session.user;
+  const [dash, setDash] = useState<DashboardData | null>(null);
+
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    loadDashboard()
+      .then((d) => {
+        if (live) setDash(d);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+
   return (
     <Page>
-      <Heading sub="A personal productivity workspace — serverless, AWS-native, MCP-native cells behind one CloudFront router.">
-        workspace <span style={{ color: theme.dim, fontWeight: 400 }}>· platform</span>
-      </Heading>
-
-      <Account session={session} />
-      <IdentityShell authed={!!session.user} user={session.user} />
-      <Views authed={!!session.user} />
-      <Capabilities authed={!!session.user} />
-      <Discovery />
-      <ResourceProbe />
-
-      <Card>
-        <Heading>Get a token</Heading>
-        <p style={{ color: theme.dim, fontSize: '0.85rem', margin: '0 0 0.5rem' }}>
-          Tokens come from the OAuth flow. An MCP client performs Dynamic Client Registration and
-          redirects to <code>/oauth/authorize</code> with its <code>client_id</code> and{' '}
-          <code>redirect_uri</code>; you approve with a passkey. Opening{' '}
-          <Anchor href="/oauth/authorize">/oauth/authorize</Anchor> directly has no client context,
-          so it can only register a passkey.
-        </p>
-      </Card>
+      {!session.ready ? null : !authed ? (
+        <Landing session={session} />
+      ) : (
+        <>
+          <DashboardHeader session={session} />
+          <StatCards data={dash} />
+          <QuickCapture />
+          <WorkspaceWindow authed={authed} />
+          <RecentActivity data={dash} />
+          <IdentityShell authed={authed} user={session.user} scopes={session.scopes} />
+          <Views authed={authed} />
+          <CellsConsole authed={authed} />
+          <FieldComputer authed={authed} />
+        </>
+      )}
+      <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>
+        <Wordmark /> · a personal substrate · <Anchor href="/mcp">agents start here</Anchor>
+      </p>
     </Page>
   );
 }

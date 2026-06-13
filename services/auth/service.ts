@@ -76,8 +76,8 @@ const HTML_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-contro
 const JS_HEADERS = { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=300' };
 const SHELL = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark"><title>authorize · ${SERVER_NAME}</title>
-<style>html,body{margin:0;background:#0a0a0a}</style></head>
+<meta name="color-scheme" content="light"><title>authorize · ${SERVER_NAME}</title>
+<style>html,body{margin:0;background:#f3edde}</style></head>
 <body><div id="root"></div><script src="/auth/app.js"></script></body></html>`;
 
 let appJsCache: string | undefined;
