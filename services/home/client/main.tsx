@@ -251,6 +251,30 @@ function Landing({ session }: { session: Session & { signIn: () => void } }): Re
         </div>
       </div>
 
+      <div style={{ ...signCard, gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+        <div style={{ display: 'grid', gap: '0.2rem' }}>
+          <strong style={{ fontFamily: theme.serif }}>📖 Public documentation</strong>
+          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
+            Read the parc.land substrate docs — server-rendered, no sign-in needed.
+          </span>
+        </div>
+        <a
+          href="/@c15r/lit"
+          style={{
+            display: 'inline-block',
+            background: theme.pine,
+            color: theme.cream,
+            borderRadius: 8,
+            padding: '0.4rem 0.9rem',
+            fontSize: '0.85rem',
+            textDecoration: 'none',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Read the docs →
+        </a>
+      </div>
+
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.8rem', fontStyle: 'italic' }}>
         “A digital communal green space.” — the Visitor Centre, est. v1 🏛
       </p>

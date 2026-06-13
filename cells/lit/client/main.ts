@@ -17,7 +17,7 @@
 import './main.css';
 (window as any).__lit_module = true; // watchdog marker: the module executed
 import { marked } from 'marked';
-import { ensureAuth } from './lib/auth.ts';
+import { ensureAuth, isAuthed } from './lib/auth.ts';
 import { loadTypes } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
 
@@ -112,6 +112,10 @@ async function hydrateFences(root: HTMLElement): Promise<void> {
       open.href = `/@${cellOwner()}/canvas?view=${encodeURIComponent(arg)}`;
       wrap.appendChild(open);
       pre.replaceWith(wrap);
+    } else if (!isAuthed()) {
+      // view/cell fences read the substrate; an anonymous reader has no session,
+      // so leave them as the SSR'd code block rather than 401 against /mcp.
+      continue;
     } else if (lang === 'view') {
       const box = el('div', 'embed-view');
       box.textContent = '…';
@@ -474,10 +478,34 @@ function bootFail(err: Error): void {
 
 let typeDecls: Record<string, { viewer?: string }> = {};
 
+/** Anonymous reader on a server-rendered public page: keep the SSR first paint,
+ *  enrich only the substrate-free fences (json/csv/mermaid/board), and never
+ *  force sign-in. Signing in (the link the shell offers) switches to the full
+ *  interactive client on the next load. */
+async function bootAnonymousSSR(): Promise<void> {
+  typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>;
+  for (const body of Array.from(app.querySelectorAll('.block-body'))) {
+    void hydrateFences(body as HTMLElement);
+  }
+  // A quiet affordance to sign in for the editable, live view.
+  const cta = el('p', 'summary');
+  const a = el('a', 'back', 'sign in to edit →') as HTMLAnchorElement;
+  a.href = '#';
+  a.onclick = (e) => { e.preventDefault(); void ensureAuth().then(() => location.reload()); };
+  cta.appendChild(a);
+  app.appendChild(cta);
+}
+
 async function boot(): Promise<void> {
   document.addEventListener('lit:auth-warn', (e) =>
     bootStatus(`sign-in return failed (${(e as CustomEvent).detail}) — retrying…`),
   );
+  // Server-rendered public page + no session → stay anonymous and read-only;
+  // the SSR content is the first paint, no sign-in wall.
+  if (app.dataset.ssr === '1' && !isAuthed()) {
+    await bootAnonymousSSR();
+    return;
+  }
   bootStatus('signing in…');
   await ensureAuth();
   typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>;
