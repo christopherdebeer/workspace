@@ -16,6 +16,10 @@ import { elementRegistry } from './elementRegistry.ts';
 
 const REFRESH_MS = 60_000;
 
+/** An embed is inert: elements render once, no per-element refresh timers. */
+const inertEmbed = (): boolean =>
+  typeof document !== 'undefined' && document.body.classList.contains('embed');
+
 interface ViewOut {
   id: string;
   render?: { type?: string; label?: string; href?: string } | null;
@@ -86,7 +90,7 @@ export function registerSubstrateTypes(): void {
       host.dataset.viewId = String(el.content || '');
       sizeToElement(el, host);
       void hydrate(host);
-      (host as any)._timer = setInterval(() => void hydrate(host), REFRESH_MS);
+      if (!inertEmbed()) (host as any)._timer = setInterval(() => void hydrate(host), REFRESH_MS);
       return host;
     },
     update(el: any, dom: HTMLElement) {
@@ -162,7 +166,7 @@ export function registerSubstrateTypes(): void {
         g.strokeRect(vx, vy, (window.innerWidth / vs.scale) * k, (window.innerHeight / vs.scale) * k);
       };
       draw();
-      (host as any)._timer = setInterval(draw, 800);
+      if (!inertEmbed()) (host as any)._timer = setInterval(draw, 800);
       cv.addEventListener('pointerup', (ev) => {
         const cc = (window as { CC?: any }).CC;
         const map = (host as any)._map;
