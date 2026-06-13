@@ -69,7 +69,7 @@ while the origin is shared — #1 is a direct `localStorage` read.
   public hostname (`platform-stack.ts:253`, `new URL(publicBaseUrl).hostname`).
   `rpIdOf` (`services/auth/webauthn.ts:30`) returns the stable RP id when the
   request host equals it **or ends with `.<rpId>`** — so a passkey registered at
-  `parc.land` already resolves for `c15r-lit.parc.land`. **Passkeys are portable
+  `parc.land` already resolves for `c15r-lit.on.parc.land`. **Passkeys are portable
   across subdomains for free.**
 - **…but `expectedOrigin` is not pinned.** `originOf(req)` (`webauthn.ts:25`)
   returns the *request's own* `protocol//host`, and registration/auth pass it as
@@ -99,40 +99,58 @@ runs on an origin that **cannot read the shell's `localStorage` or cookie**.
 Isolation comes from the **hostname the browser sees**, not the backend path, so
 the backend barely changes:
 
-- Keep the **single CloudFront distribution** as ingress. Add the wildcard
-  subdomain(s) as **alternate domain names** with a wildcard ACM cert, and route
-  by **Host header** (a CloudFront Function, or extend the existing origin
-  Lambda@Edge) → the same `dispatch` → `cells.call` → Function URL path. Cell
-  Function URLs stay OAC-locked exactly as now.
+- Keep the **single CloudFront distribution** as ingress (or add a second one for
+  the cell namespace — see below). Add a **wildcard alternate domain name** with a
+  wildcard ACM cert, and route by **Host header** (a CloudFront Function, or
+  extend the existing origin Lambda@Edge) → the same `dispatch` → `cells.call` →
+  Function URL path. Cell Function URLs stay OAC-locked exactly as now.
 - **Do not point DNS at Function URLs.** Lambda Function URLs don't support
   custom domains; you'd front them with a CDN anyway and lose OAC + the edge
-  layer. So `<username>-<cellname>.parc.land` resolves to **CloudFront**, which
+  layer. So `<username>-<cellname>.on.parc.land` resolves to **CloudFront**, which
   host-routes (by registry lookup, §4.2) to the cell — the gateway/router model
   is unchanged.
-- **Route53 is convenient, not required.** Any DNS can wildcard-`CNAME`/`ALIAS`
-  to the distribution. Route53 only earns its place if we want CDK to manage the
-  records + DNS-validate the wildcard cert automatically (today that's manual on
-  Namecheap). Moving DNS to Route53 is an *ergonomics* decision, orthogonal to
-  isolation.
+- **One wildcard, no per-cell DNS — ever.** A single wildcard record covers every
+  cell host, so cells come and go with **zero** DNS or cert changes — you never
+  add subdomains per cell, manually or programmatically. On Namecheap (the current
+  registrar; **Route53 is not required**) it is two records, once:
+  `*.on.parc.land CNAME <distribution>.cloudfront.net` (routing) and
+  `_<acm>.on.parc.land CNAME <acm-value>` (one-time cert validation). Route53's
+  only value would be CDK auto-managing records; with a wildcard there is nothing
+  ongoing to manage, so it earns no place here.
+- **Put cells under a dedicated namespace label (`*.on.parc.land`), not the apex
+  `*.parc.land`.** parc.land already hosts unrelated subdomains for other
+  projects. A namespace scopes the wildcard — DNS *and* cert — to `on.parc.land`,
+  leaving those untouched. (An apex wildcard wouldn't break *explicit* existing
+  records — explicit beats wildcard in DNS — but the cert would then cover them,
+  and future names could collide.) It costs nothing security-wise: `parc.land`
+  stays a registrable suffix of `c15r-lit.on.parc.land` (passkeys portable, §4.4),
+  the host-only cookie still isn't sent to the deeper host (§4.3), and each cell
+  host is still a distinct origin — the reasoning holds at any depth.
+- **Distribution choice:** either a **SAN cert** (`parc.land` + `*.on.parc.land`)
+  on the existing distribution with host-routing, or a **separate distribution**
+  for `*.on.parc.land` so the existing apex setup is untouched. The separate
+  distribution is the lower-risk rollout.
 
 ### 4.2 Naming & the wildcard-cert constraint
 
-ACM/TLS wildcards match **one label only** — `*.parc.land` covers `foo.parc.land`
-but **not** `foo.bar.parc.land` (two labels). The cell host must therefore stay a
-**single label** to live under one wildcard cert.
+ACM/TLS wildcards match **one label only** — `*.on.parc.land` covers
+`foo.on.parc.land` but **not** `foo.bar.on.parc.land` (two labels under `on`). The
+cell-identifying part must therefore stay a **single label** to live under one
+wildcard cert.
 
-**Recommended: `<username>-<cellname>.parc.land`** — one label encoding both owner
-and cell (e.g. `c15r-lit.parc.land`, `emily-regwatch.parc.land`). It gives
-**per-cell** isolation (every cell its own origin), stays under a single
-`*.parc.land` cert, is human-readable, and is **collision-free** because
-`(username, cellname)` is already unique in the cell registry.
+**Recommended: `<username>-<cellname>.on.parc.land`** — one label (under the `on`
+namespace, §4.1) encoding both owner and cell (e.g. `c15r-lit.on.parc.land`,
+`emily-regwatch.on.parc.land`). It gives **per-cell** isolation (every cell its
+own origin), stays under a single `*.on.parc.land` cert, is human-readable, and is
+**collision-free** because `(username, cellname)` is already unique in the cell
+registry.
 
 | Scheme | Granularity | Cert |
 | --- | --- | --- |
-| **`<username>-<cellname>.parc.land`** (recommended) | **per cell**, readable, collision-free | one `*.parc.land` |
-| `<cellid>.parc.land` | per cell, opaque | one `*.parc.land` |
-| `<user>.parc.land` | per user (a user's own cells share an origin) | one `*.parc.land` |
-| `cell.user.parc.land` | per cell, pretty hierarchy | **per-user** `*.<user>.parc.land` cert each (provisioned on signup) — more machinery, SNI limits |
+| **`<username>-<cellname>.on.parc.land`** (recommended) | **per cell**, readable, collision-free | one `*.on.parc.land` |
+| `<cellid>.on.parc.land` | per cell, opaque | one `*.on.parc.land` |
+| `<user>.on.parc.land` | per user (a user's own cells share an origin) | one `*.on.parc.land` |
+| `<cellname>.<user>.on.parc.land` | per cell, pretty hierarchy | **per-user** `*.<user>.on.parc.land` cert each (provisioned on signup) — more machinery, SNI limits |
 
 Two details for the recommended scheme:
 
@@ -165,9 +183,10 @@ Two details for the recommended scheme:
 
 - **RP ID stays `parc.land`.** Per WebAuthn, a credential is usable by any origin
   whose domain has the RP ID as a registrable suffix — so `parc.land` passkeys
-  work on `parc.land` and every `*.parc.land` subdomain. `rpIdOf` already
-  collapses subdomains to the stable id (§2), so **sign-in keeps working with no
-  passkey changes.**
+  work on `parc.land` and every `*.on.parc.land` cell host (`parc.land` is a
+  registrable suffix of `c15r-lit.on.parc.land`). `rpIdOf` already collapses such
+  hosts to the stable id (§2), so **sign-in keeps working with no passkey
+  changes.**
 - **Pin `expectedOrigin` to a shell allowlist.** Today `originOf(req)` accepts
   the request's own origin, so a cell subdomain *could* complete a ceremony.
   Change WebAuthn verification to accept `expectedOrigin ∈ { shell origins }`
