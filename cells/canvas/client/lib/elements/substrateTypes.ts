@@ -206,7 +206,7 @@ export function registerSubstrateTypes(): void {
         return host;
       }
       const frame = document.createElement('iframe');
-      frame.src = src;
+      frame.src = withEmbedSize(src, el);
       frame.loading = 'lazy';
       host.appendChild(frame);
       sizeToElement(el, host);
@@ -216,7 +216,9 @@ export function registerSubstrateTypes(): void {
       if (!dom) return;
       sizeToElement(el, dom);
       const frame = dom.querySelector('iframe');
-      if (frame && frame.getAttribute('src') !== el.content) frame.src = String(el.content || 'about:blank');
+      const next = safeEmbedSrc(String(el.content || ''));
+      const want = next ? withEmbedSize(next, el) : 'about:blank';
+      if (frame && frame.getAttribute('src') !== want) frame.src = want;
     },
   });
 }
@@ -305,4 +307,24 @@ function safeEmbedSrc(raw: string): string | null {
   }
   u.searchParams.set('_d', String(depth + 1));
   return u.pathname + u.search;
+}
+
+/**
+ * A canvas `?embed=1` is a zero-JS SSR with no app.js left to re-fit, so it
+ * fits the board to the `w`/`h` it is given (default 1200×800). A nested embed
+ * sized to its element must pass its own pixel box, or the board lands off-view.
+ * Adds w/h (from the element's geometry) to canvas embed iframes that lack them.
+ */
+function withEmbedSize(src: string, el: { width?: number; height?: number; scale?: number }): string {
+  try {
+    const u = new URL(src, location.origin);
+    if (u.searchParams.get('embed') === '1' && !u.searchParams.has('w')) {
+      const s = el.scale || 1;
+      if (typeof el.width === 'number') u.searchParams.set('w', String(Math.max(1, Math.round(el.width * s))));
+      if (typeof el.height === 'number') u.searchParams.set('h', String(Math.max(1, Math.round(el.height * s))));
+    }
+    return u.pathname + u.search;
+  } catch {
+    return src;
+  }
 }

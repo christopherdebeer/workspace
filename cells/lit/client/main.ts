@@ -105,7 +105,13 @@ async function hydrateFences(root: HTMLElement): Promise<void> {
     if (lang === 'board') {
       const wrap = el('div', 'embed-board');
       const frame = document.createElement('iframe');
-      frame.src = `/@${cellOwner()}/canvas?view=${encodeURIComponent(arg)}&embed=1`;
+      // Pass the embed's pixel size so the zero-JS SSR fits the board to THIS
+      // frame (no app.js left in embed mode to re-fit). Matches the iframe CSS
+      // box (.embed-board iframe { width:100%; height:340px }); width tracks the
+      // reading column. Without w/h the server fits to a phantom 1200×800 and the
+      // board lands off-view — the regression this fixes.
+      const w = Math.round(Math.min(680, (root.clientWidth || 680)));
+      frame.src = `/@${cellOwner()}/canvas?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`;
       frame.loading = 'lazy';
       wrap.appendChild(frame);
       const open = el('a', 'embed-open', 'open board ↗') as HTMLAnchorElement;
