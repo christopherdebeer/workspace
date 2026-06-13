@@ -57,6 +57,9 @@ import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-stor
 import {
   createDynamoGrantStore,
   grantCovers,
+  applicableGrants,
+  PUBLIC,
+  GROUPS_NS,
   type GrantStore,
   type Grant,
   type GrantMode,
@@ -212,6 +215,33 @@ export interface SharedResult {
   /** Grants others have made to you. */
   receiving: Grant[];
 }
+export interface GroupValue {
+  /** Principals in this audience. */
+  members: string[];
+  label?: string;
+  note?: string;
+}
+export interface GroupInput {
+  /** Group name (the audience handle; share to it with `to: "group:<name>"`). */
+  name: string;
+  /** Replace the membership wholesale. */
+  members?: string[];
+  /** Add these principals (additive patch). */
+  add?: string[];
+  /** Remove these principals (additive patch). */
+  remove?: string[];
+  label?: string;
+  note?: string;
+}
+export interface GroupResult {
+  name: string;
+  members: string[];
+  label?: string;
+  note?: string;
+}
+export interface GroupsResult {
+  groups: Array<GroupResult>;
+}
 export interface RequestGrantInput {
   /** Grammar resource: `workspace:<owner>:<keyPattern>:<read|write>` or `cell:<owner>/<name>:<tool|*>`. */
   resource: string;
@@ -266,6 +296,8 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
   shared: CommandHandler<undefined, SharedResult>;
+  group: CommandHandler<GroupInput, GroupResult>;
+  groups: CommandHandler<undefined, GroupsResult>;
   requestGrant: CommandHandler<RequestGrantInput, RequestGrantResult>;
   grantRequests: CommandHandler<undefined, GrantRequestsResult>;
   approveGrant: CommandHandler<ApproveGrantInput, { approved: true; resource: string; grantee: string }>;
@@ -803,15 +835,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'share',
     description:
-      'Grant another user access to a fact, a key prefix (`inbox/*`), or your whole slice (omit `key`). mode "read" (default) makes it appear in their recall; mode "write" additionally lets them remember into the covered keys of your slice (write-through — their identity is stamped as the writer).',
+      'Grant access to a fact, a key prefix (`inbox/*`), or your whole slice (omit `key`). Share `to` a user, to `public` (the universal audience — anyone, including unauthenticated readers; read-only), or to `group:<name>` (a named audience you define with `workspace.group`). mode "read" (default) makes it appear in their recall; mode "write" additionally lets them remember into the covered keys of your slice (write-through — their identity is stamped as the writer).',
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'The user to share with' },
+        to: { type: 'string', description: 'A username, "public" (anyone), or "group:<name>" (a named audience)' },
         key: { type: 'string', description: 'A fact key, a prefix ending in `*` (e.g. "inbox/*"), or omit for your whole slice' },
-        mode: { type: 'string', enum: ['read', 'write'], description: 'read (default) = visibility; write = write-through too' },
+        mode: { type: 'string', enum: ['read', 'write'], description: 'read (default) = visibility; write = write-through too (not allowed for public)' },
       },
       required: ['to'],
       additionalProperties: false,
@@ -849,6 +881,46 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         shared: { type: 'array', description: 'Grants you have made' },
         receiving: { type: 'array', description: 'Grants made to you' },
       },
+    },
+  },
+  {
+    name: 'group',
+    description:
+      'Define or patch a named audience (a group of principals) you can then `share` to with `to: "group:<name>"`. Pass `members` to set the membership wholesale, or `add`/`remove` to patch it. The group is stored as a `_groups/<name>` fact in your slice; recall resolves group shares for members without scanning. You are always implicitly in your own audiences.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The audience handle (bare name)' },
+        members: { type: 'array', items: { type: 'string' }, description: 'Replace the membership with exactly these principals' },
+        add: { type: 'array', items: { type: 'string' }, description: 'Add these principals' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Remove these principals' },
+        label: { type: 'string' },
+        note: { type: 'string' },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        members: { type: 'array', items: { type: 'string' } },
+        label: { type: 'string' },
+        note: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'groups',
+    description: 'List the named audiences you have defined, each with its current membership.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: { groups: { type: 'array', description: 'Your audiences: { name, members[], label?, note? }' } },
     },
   },
   {
@@ -947,7 +1019,7 @@ async function requireWriteThrough(
   owner: string,
   key: string,
 ): Promise<void> {
-  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GRANTS_NS)) {
+  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GRANTS_NS) || key.startsWith(GROUPS_NS)) {
     throw new Error(`write-through may not touch the reserved namespace ("${key}")`);
   }
   const held = await grants.listForGrantee(caller);
@@ -1097,9 +1169,10 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const own = await state.read(viewer, { elision: 'none', includeSuperseded }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
-      // Fold in the subsets granted to this viewer, namespaced by owner.
-      // A grant key is a pattern: `*` = whole slice, trailing `*` = prefix.
-      for (const g of await grants.listForGrantee(viewer)) {
+      // Fold in the subsets granted to this viewer — directly, via `public`, or
+      // via a group they belong to (docs/scope-grants.md). A grant key is a
+      // pattern: `*` = whole slice, trailing `*` = prefix.
+      for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
           const slice = await state.read(g.owner, { elision: 'none', includeSuperseded }, ctx.identity);
@@ -1122,7 +1195,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       if (!input?.key) throw new Error('key is required');
       const { state, grants } = build(ctx);
       if (input.owner && input.owner !== caller) {
-        const held = await grants.listForGrantee(caller);
+        const held = await applicableGrants(grants, caller);
         const ok = held.some((g) => g.owner === input.owner && grantCovers(g.key, input.key));
         if (!ok) {
           throw new Error(
@@ -1283,6 +1356,9 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       if (input.to === owner) throw new Error('cannot share with yourself');
       const mode = input.mode ?? 'read';
       if (mode !== 'read' && mode !== 'write') throw new Error('mode must be "read" or "write"');
+      // `public` is the universal audience (anyone, including anonymous): read-only,
+      // never write — an open-write public grant would be an unbounded ingress.
+      if (input.to === PUBLIC && mode !== 'read') throw new Error('public shares are read-only');
       const { grants } = build(ctx);
       const grant: Grant = {
         owner,
@@ -1310,6 +1386,57 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { grants } = build(ctx);
       const [shared, receiving] = await Promise.all([grants.listByOwner(me), grants.listForGrantee(me)]);
       return { shared, receiving };
+    },
+
+    /**
+     * Define or patch a named audience (a group of principals) in your slice.
+     * The group is a `_groups/<name>` fact (the record); the membership index is
+     * written through so recall can resolve group grants without a slice scan.
+     * Share to it with `workspace.share { to: "group:<name>" }`.
+     */
+    async group(input, ctx) {
+      const owner = requireUser(ctx.identity);
+      const name = (input?.name ?? '').trim();
+      if (!name) throw new Error('name is required');
+      if (name.includes('/') || name.startsWith('_')) throw new Error('group name must be a bare handle');
+      const { state, grants } = build(ctx);
+      const key = `${GROUPS_NS}${name}`;
+      const existing = (await state.get(owner, key, ctx.identity))?.value as GroupValue | undefined;
+      const before = new Set(existing?.members ?? []);
+      const next = new Set(input.members !== undefined ? input.members : existing?.members ?? []);
+      for (const p of input.add ?? []) next.add(p);
+      for (const p of input.remove ?? []) next.delete(p);
+      next.delete(owner); // the owner is implicitly in every one of their audiences
+      next.delete(PUBLIC); // `public` is the reserved universal group, not a member
+      const members = [...next].sort();
+      // A patch (add/remove) preserves the existing label/note unless overridden.
+      const label = input.label ?? existing?.label;
+      const note = input.note ?? existing?.note;
+      const value: GroupValue = {
+        members,
+        ...(label ? { label } : {}),
+        ...(note ? { note } : {}),
+      };
+      await state.put({ scope: owner, key, value, via: 'groups:set', type: 'group', tags: ['groups'] }, ctx.identity);
+      // Reconcile the membership index against the previous membership.
+      await Promise.all([
+        ...members.filter((p) => !before.has(p)).map((p) => grants.addMember(owner, name, p)),
+        ...[...before].filter((p) => !next.has(p)).map((p) => grants.removeMember(owner, name, p)),
+      ]);
+      ctx.logger.info('workspace group set', { owner, group: name, members: members.length });
+      return { name, ...value };
+    },
+
+    async groups(_input, ctx) {
+      const owner = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      const res = await state.query(owner, { prefix: GROUPS_NS, rankBy: 'recency', limit: 200 }, ctx.identity);
+      return {
+        groups: res.entries.map((e) => {
+          const v = e.value as GroupValue;
+          return { name: e.key.slice(GROUPS_NS.length), members: v.members ?? [], ...(v.label ? { label: v.label } : {}), ...(v.note ? { note: v.note } : {}) };
+        }),
+      };
     },
 
     async requestGrant(input, ctx) {
@@ -1486,7 +1613,7 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       ctx.logger.warn('substrate write without a key refused', { source: meta.source });
       return;
     }
-    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX)) {
+    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GROUPS_NS)) {
       ctx.logger.warn('substrate write to reserved vocabulary refused', { source: meta.source, key });
       return;
     }

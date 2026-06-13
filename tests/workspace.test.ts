@@ -176,6 +176,7 @@ describe('workspace sharing / view layer', () => {
     expect(names).toEqual(
       [
         'peek', 'recall', 'remember', 'ingest', 'shared', 'share', 'supersede', 'unshare',
+        'group', 'groups',
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
@@ -195,6 +196,82 @@ describe('workspace sharing / view layer', () => {
     expect(remember.kind).toBe('act');
     expect(tools.find((t) => t.name === 'recall')!.kind).toBe('read');
     expect(new Set(tools.map((t) => t.kind))).toEqual(new Set(['read', 'act']));
+  });
+});
+
+describe('workspace audiences (public + groups)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'docs/intro', value: 'public intro' }, ctxFor('c15r').ctx);
+    await cmds.remember({ key: 'docs/guide', value: 'public guide' }, ctxFor('c15r').ctx);
+    await cmds.remember({ key: 'private', value: 'just me' }, ctxFor('c15r').ctx);
+    await cmds.remember({ key: 'team/notes', value: 'team only' }, ctxFor('c15r').ctx);
+  });
+
+  it('a public share surfaces in every viewer\'s recall, owner-namespaced', async () => {
+    await cmds.share({ to: 'public', key: 'docs/*' }, ctxFor('c15r').ctx);
+    for (const who of ['emily', 'bob']) {
+      const view = await cmds.recall({ elision: 'none' }, ctxFor(who).ctx);
+      expect(view.entries['c15r/docs/intro'].value).toBe('public intro');
+      expect(view.entries['c15r/docs/guide'].value).toBe('public guide');
+      expect(view.entries['c15r/private']).toBeUndefined();
+    }
+  });
+
+  it('public shares are read-only — write mode is refused', async () => {
+    await expect(cmds.share({ to: 'public', key: 'docs/*', mode: 'write' }, ctxFor('c15r').ctx)).rejects.toThrow(/read-only/);
+  });
+
+  it('peek through a public grant resolves for any caller', async () => {
+    const e = await cmds.peek({ owner: 'c15r', key: 'docs/intro' }, ctxFor('emily').ctx);
+    expect(e?.value).toBe('public intro');
+    await expect(cmds.peek({ owner: 'c15r', key: 'private' }, ctxFor('emily').ctx)).rejects.toThrow(/grant_denied/);
+  });
+
+  it('a group share is visible only to its members, and patching membership adds/removes visibility', async () => {
+    const g = await cmds.group({ name: 'reviewers', members: ['emily'], label: 'Reviewers' }, ctxFor('c15r').ctx);
+    expect(g).toMatchObject({ name: 'reviewers', members: ['emily'], label: 'Reviewers' });
+    await cmds.share({ to: 'group:reviewers', key: 'team/*' }, ctxFor('c15r').ctx);
+
+    // member sees it…
+    let emily = await cmds.recall({ elision: 'none' }, ctxFor('emily').ctx);
+    expect(emily.entries['c15r/team/notes'].value).toBe('team only');
+    // …non-member does not.
+    const bob = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
+    expect(bob.entries['c15r/team/notes']).toBeUndefined();
+
+    // remove emily → her view loses it.
+    await cmds.group({ name: 'reviewers', remove: ['emily'] }, ctxFor('c15r').ctx);
+    emily = await cmds.recall({ elision: 'none' }, ctxFor('emily').ctx);
+    expect(emily.entries['c15r/team/notes']).toBeUndefined();
+
+    // add bob → his view gains it.
+    await cmds.group({ name: 'reviewers', add: ['bob'] }, ctxFor('c15r').ctx);
+    const bob2 = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
+    expect(bob2.entries['c15r/team/notes'].value).toBe('team only');
+  });
+
+  it('groups() lists the owner\'s audiences with membership', async () => {
+    const { groups } = await cmds.groups(undefined, ctxFor('c15r').ctx);
+    const reviewers = groups.find((g) => g.name === 'reviewers');
+    expect(reviewers?.members).toEqual(['bob']);
+    expect(reviewers?.label).toBe('Reviewers');
+  });
+
+  it('the owner is never a member of their own audience, and `public` cannot be added', async () => {
+    const g = await cmds.group({ name: 'team', members: ['c15r', 'public', 'emily'] }, ctxFor('c15r').ctx);
+    expect(g.members).toEqual(['emily']);
+  });
+
+  it('group definitions are a reserved namespace — write-through cannot forge membership', async () => {
+    await cmds.share({ to: 'mallory', key: '*', mode: 'write' }, ctxFor('c15r').ctx);
+    await expect(
+      cmds.remember({ owner: 'c15r', key: '_groups/reviewers', value: { members: ['mallory'] } }, ctxFor('mallory').ctx),
+    ).rejects.toThrow(/reserved/);
   });
 });
 
