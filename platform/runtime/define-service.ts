@@ -102,7 +102,14 @@ async function resolveHttpIdentity(
   let token =
     authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ??
     fwdHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  const cookieAllowed = serviceName === 'dispatch' && (method === 'GET' || method === 'HEAD');
+  // The session cookie is honoured only for a genuine top-level navigation —
+  // `Sec-Fetch-Dest: document` (browser-set, unforgeable from JS). A cell's
+  // `fetch()` is `empty` and an `<iframe>` is `iframe`; neither is honoured, so a
+  // hostile cell can't ride your ambient cookie to read your content (a top-level
+  // navigation it could trigger would unload the cell, so it can't read the
+  // result either). Absent header (curl, old clients) ⇒ treat as non-navigation.
+  const topLevelNav = headerOf(headers, 'sec-fetch-dest') === 'document';
+  const cookieAllowed = serviceName === 'dispatch' && (method === 'GET' || method === 'HEAD') && topLevelNav;
   if (!token && cookieAllowed) token = sessionCookie(headerOf(headers, 'cookie'));
   if (!token) return ANONYMOUS;
 

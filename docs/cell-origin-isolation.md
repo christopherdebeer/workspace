@@ -284,9 +284,13 @@ without waiting on the origin move, and (3) can land (cells served from
 subdomains, still on the shared session) before (4) without regressing — though
 the security win only completes once (4) removes the shared token.
 
-> **Status (2026-06-13).** Design only. The cookie-borne SSR identity
-> (`resolveHttpIdentity` cookie branch, `parc_session`) shipped first and is the
-> motivating context: it is `HttpOnly` (no token theft) but, on the shared
-> origin, exposed the §1.2 ambient-read — hence the §5.1 `Sec-Fetch` gate. The
-> `localStorage` exposure (§1.1) predates it (the kernel's origin-wide session)
-> and is the real driver for this isolation work.
+> **Status (2026-06-13).** Containment §5.1 (1) and (2) landed on the branch: the
+> home `parc.session.tokens` key-share was reverted (the admin token stays out of
+> the cell-readable store; it never deployed), and the cookie branch of
+> `resolveHttpIdentity` now requires `Sec-Fetch-Dest: document` — so the cookie is
+> honoured only on a genuine top-level navigation, closing the §1.2 ambient-read
+> (a cell's `fetch()`/`iframe` no longer rides it). The rest is design: the
+> `localStorage` exposure (§1.1) — the kernel's origin-wide session — is the real
+> driver, and only the subdomain-origin move (§4) plus the scoped-token handoff
+> (§4.5) closes it. The cookie-borne SSR identity (`parc_session`, `HttpOnly`,
+> host-only) shipped first and is the motivating context.
