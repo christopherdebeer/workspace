@@ -157,8 +157,8 @@ function ssrPage(inner: string): string {
     .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" data-ssr="1">${inner}</div>`);
 }
 
-async function renderDocSSR(id: string, patterns: string[]): Promise<string | null> {
-  if (!covers0(patterns, `doc:${id}`)) return null;
+async function renderDocSSR(id: string, patterns: string[], isOwner: boolean): Promise<string | null> {
+  if (!isOwner && !covers0(patterns, `doc:${id}`)) return null;
   const docFact = await getFact(`doc:${id}`);
   if (!docFact) return null;
   const dv = docFact.value as DocValue;
@@ -178,8 +178,8 @@ async function renderDocSSR(id: string, patterns: string[]): Promise<string | nu
   );
 }
 
-async function renderListSSR(patterns: string[]): Promise<string> {
-  const docs = (await queryPrefix('doc:')).filter((f) => covers0(patterns, f.key));
+async function renderListSSR(patterns: string[], isOwner: boolean): Promise<string> {
+  const docs = (await queryPrefix('doc:')).filter((f) => isOwner || covers0(patterns, f.key));
   docs.sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'));
   const cards = docs
     .map((f) => {
@@ -192,9 +192,10 @@ async function renderListSSR(patterns: string[]): Promise<string> {
       );
     })
     .join('\n');
+  const lead = isOwner ? 'your documents — ordered paths through the substrate' : 'public documents — ordered paths through the substrate';
   return (
-    `<header><h1>lit</h1><p class="summary">public documents — ordered paths through the substrate</p></header>` +
-    `<main class="doc-list">${cards || '<p class="boot">no public documents yet</p>'}</main>`
+    `<header><h1>lit</h1><p class="summary">${lead}</p></header>` +
+    `<main class="doc-list">${cards || '<p class="boot">no documents yet</p>'}</main>`
   );
 }
 
@@ -203,6 +204,7 @@ export const handler = async (event: {
   rawPath?: string;
   rawQueryString?: string;
   queryStringParameters?: Record<string, string> | null;
+  headers?: Record<string, string | undefined>;
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
@@ -214,12 +216,19 @@ export const handler = async (event: {
       // populated through the dispatch path) — parse it like the canvas cell.
       const qs = new URLSearchParams(event.rawQueryString || '');
       const id = qs.get('doc') ?? event.queryStringParameters?.doc ?? undefined;
-      // SSR first paint when the requested content is public; otherwise serve the
-      // bare interactive shell (the signed-in client renders it with the session).
+      // `x-cell-caller` is the dispatch-validated identity (gateway sets it from
+      // a bearer; the dispatch tier sets it from the session cookie on navigations).
+      // The owner viewing their own lit gets every doc server-rendered; anyone
+      // else gets only what the `_public/` index covers. Trustworthy: the cell is
+      // reachable only via cells.call, never directly, so the header can't be forged.
+      const caller = event.headers?.['x-cell-caller'];
+      const isOwner = !!caller && caller === OWNER;
+      // SSR first paint when there's public content OR the owner is signed in;
+      // otherwise serve the bare interactive shell (the client renders with the session).
       try {
         const patterns = await publicPatterns();
-        if (patterns.length) {
-          const inner = id ? await renderDocSSR(id, patterns) : await renderListSSR(patterns);
+        if (patterns.length || isOwner) {
+          const inner = id ? await renderDocSSR(id, patterns, isOwner) : await renderListSSR(patterns, isOwner);
           if (inner) return respond(200, 'text/html; charset=utf-8', ssrPage(inner));
         }
       } catch (err) {

@@ -93,6 +93,8 @@ export interface ServiceHttpResponse {
   body?: unknown;
   /** Set when `body` is a base64-encoded binary string. */
   isBase64Encoded?: boolean;
+  /** `Set-Cookie` values — Function URLs emit cookies via this array, not headers. */
+  cookies?: string[];
 }
 
 export type HttpHandler = (
@@ -125,6 +127,8 @@ export interface FunctionUrlResponse {
   body: string;
   /** Set when `body` is base64-encoded binary. */
   isBase64Encoded?: boolean;
+  /** `Set-Cookie` values (Function URL payload format 2.0). */
+  cookies?: string[];
 }
 
 /** Result shape returned from a direct (service-to-service) invoke. */

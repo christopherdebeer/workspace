@@ -41,6 +41,25 @@ const DEFAULT_EXPIRY = 3600;
 const DEFAULT_REFRESH_EXPIRY = REFRESH_TTL_MS / 1000;
 const NO_STORE = { 'cache-control': 'no-store' };
 
+/**
+ * The browser-navigation session cookie. Carries the same opaque access token
+ * the client also holds in localStorage, but as an httpOnly cookie so SSR/
+ * navigation requests (which never send the Authorization header) can be
+ * identified at the `dispatch` tier. `SameSite=Lax` means it rides top-level GET
+ * navigations (what SSR needs) but NOT cross-site POSTs, and the runtime only
+ * honours it on safe methods — so it can never authorize a mutation (no CSRF).
+ */
+const SESSION_COOKIE = 'parc_session';
+function sessionCookie(token: string, maxAgeSecs: number): string {
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor(maxAgeSecs))}`;
+}
+function clearSessionCookie(): string {
+  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+}
+function okWithCookies(body: unknown, cookies: string[], status = 200): ServiceHttpResponse {
+  return { statusCode: status, headers: NO_STORE, body, cookies };
+}
+
 function originOf(req: ServiceHttpRequest): string {
   const u = new URL(req.url);
   return `${u.protocol}//${u.host}`;
@@ -221,7 +240,9 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       response.expires_in = configuredExpiry;
       response.refresh_token = result.refreshToken;
     }
-    return ok(response);
+    // Also set the httpOnly navigation cookie so SSR/page loads are identified.
+    const cookieMaxAge = neverExpires ? 30 * 24 * 3600 : configuredExpiry;
+    return okWithCookies(response, [sessionCookie(result.token, cookieMaxAge)]);
   }
 
   if (body.grant_type === 'refresh_token') {
@@ -229,7 +250,11 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     if (neverExpires) return ok({ error: 'unsupported_grant_type', error_description: 'Tokens are non-expiring' }, 400);
     const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry, refreshExpiry);
     if (!result) return ok({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
-    return ok({ access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken });
+    // Refresh keeps the navigation cookie current (the access token rotated).
+    return okWithCookies(
+      { access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken },
+      [sessionCookie(result.token, configuredExpiry)],
+    );
   }
 
   if (body.grant_type === 'urn:ietf:params:oauth:grant-type:device_code') {
@@ -270,7 +295,8 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
 export async function handleRevoke(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
   const body = parseTokenBody(req);
   if (body.token) await store.revokeByTokenValue(body.token);
-  return ok({});
+  // Drop the navigation cookie too, so sign-out clears the SSR session.
+  return okWithCookies({}, [clearSessionCookie()]);
 }
 
 // ─── Device authorization grant ──────────────────────────────────
