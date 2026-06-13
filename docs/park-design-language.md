@@ -57,10 +57,19 @@ string is real vocabulary".
   capture (one box → an inbox fact); the workspace window; recent activity
   (the trajectory, reads excluded); identity & grants; pinned views; cells.
 - **The field computer.** The one deliberately dark object in the warm room:
-  the raw read/act console, OAuth discovery, and the probe live inside a
-  collapsed machine housing — green phosphor (`#7fc97f` on `#0a1f1a`) like
-  the radio at a ranger station. Approachability and open-ended capability
-  coexist by *containment*, not by hiding: the lid opens, everything is there.
+  the raw read/act console lives inside a collapsed machine housing — green
+  phosphor (`#7fc97f` on `#0a1f1a`) like the radio at a ranger station. On
+  open it is a **command palette** (interaction modelled on `@c15r/canvas`):
+  a single search line fuzzy-filters every `$catalog` capability plus the
+  built-in probes (whoami, oauth discovery); idle, it shows namespace chips
+  with counts (progressive disclosure of *what's available* — tap to drill
+  in) rather than a dense list; picking a command with args reveals an inline
+  JSON editor (⌘↵ to run), argless commands fire immediately; **results stack
+  below newest-first** as the machine's running tape. Approachability and
+  open-ended capability coexist by *containment + disclosure*, not by hiding.
+- **Cells as outpost cards.** The cells section is framing text (no card),
+  then each cell its own card in an auto-fill grid — addresses, status, and
+  on-demand logs, browsable at a glance rather than stacked in one panel.
 - **`CodeBlock` everywhere** keeps a small dark terminal — wherever the
   machine speaks (logs, JSON results), it speaks in phosphor.
 

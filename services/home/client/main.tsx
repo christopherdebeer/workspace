@@ -12,7 +12,7 @@
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../../../platform/ui';
-import { login, logout, completeLoginIfReturning, authFetch, isAuthed, getTokens } from './auth';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed } from './auth';
 // Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
 // the dawn panorama strip, and the field computer.
 import heroUrl from './assets/hero.jpg';
@@ -940,6 +940,8 @@ interface ViewEval {
 function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const [out, setOut] = useState<ViewEval | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Live canvas embeds mount a full app; default off, opt-in per board.
+  const [preview, setPreview] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -978,27 +980,57 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     );
   }
 
-  // A canvas view IS a board: a live, pinned-viewport embed of the actual
-  // region (the same declaration agents read), linking into the full board.
+  // A canvas view IS a board — but a live embed is a full canvas app (CRDT,
+  // presence, a render loop). Mounting one per pinned board crashed home, so
+  // the default is a STATIC board card; the live preview mounts only on
+  // explicit request, one board at a time. (Follow-up: a server-rendered
+  // snapshot from the canvas cell would make the still image free.)
   if (type === 'canvas') {
     const board = def.id.startsWith('canvas:') ? def.id.slice('canvas:'.length) : def.id;
     const href = hint?.href ?? `/@c15r/canvas?canvas=${encodeURIComponent(board)}`;
     const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1`;
     return (
-      <a href={href} style={{ ...box, textDecoration: 'none', color: 'inherit', padding: 0, overflow: 'hidden' }}>
-        <iframe
-          src={embedSrc}
-          title={label}
-          loading="lazy"
-          style={{ width: '100%', height: 230, border: 0, pointerEvents: 'none', display: 'block', background: '#fff' }}
-        />
-        <span style={{ display: 'flex', justifyContent: 'space-between', padding: '0.55rem 0.9rem' }}>
-          <strong style={{ fontFamily: theme.serif }}>🌲 {label}</strong>
-          <span style={{ color: theme.accent, fontSize: '0.85rem' }}>
-            {out ? `${out.count} item${out.count === 1 ? '' : 's'} · ` : ''}Open board →
+      <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
+        {preview ? (
+          <iframe
+            src={embedSrc}
+            title={label}
+            style={{ width: '100%', height: 230, border: 0, display: 'block', background: '#fff' }}
+          />
+        ) : (
+          // Static placeholder: a quiet board "plate", no app mounted.
+          <div
+            style={{
+              height: 120,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              background: `linear-gradient(160deg, ${theme.pine} 0%, ${theme.dusk} 100%)`,
+              color: theme.cream,
+            }}
+          >
+            <span style={{ fontSize: '1.6rem' }}>🌲</span>
+            <span style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{label}</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0.9rem', gap: '0.5rem' }}>
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
+            {out ? `${out.count} item${out.count === 1 ? '' : 's'}` : 'board'}
           </span>
-        </span>
-      </a>
+          <span style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+            <button
+              onClick={() => setPreview((p) => !p)}
+              style={{ background: 'none', border: 'none', color: theme.accent, fontSize: '0.82rem', cursor: 'pointer', padding: 0, fontWeight: 600 }}
+            >
+              {preview ? 'Hide preview' : 'Load preview'}
+            </button>
+            <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>
+              Open board →
+            </a>
+          </span>
+        </div>
+      </div>
     );
   }
 
@@ -1118,8 +1150,8 @@ interface CellRow {
   address: string;
 }
 
-/** One owned cell: address, status, and on-demand recent logs. */
-function CellConsoleRow({ cell }: { cell: CellRow }): React.JSX.Element {
+/** One owned cell as its own card: address, status, description, on-demand logs. */
+function CellCard({ cell }: { cell: CellRow }): React.JSX.Element {
   const [logs, setLogs] = useState<Array<{ time: string; message: string }> | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -1138,27 +1170,35 @@ function CellConsoleRow({ cell }: { cell: CellRow }): React.JSX.Element {
   };
 
   return (
-    <div style={{ display: 'grid', gap: '0.3rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <a href={cell.address} style={{ color: theme.accent, textDecoration: 'none', fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 600 }}>
-          {cell.address}
-        </a>
+    <Card style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.45rem', alignContent: 'start' }}>
+      <a
+        href={cell.address}
+        style={{ color: theme.accent, textDecoration: 'none', fontFamily: theme.mono, fontSize: '0.9rem', fontWeight: 600, wordBreak: 'break-word' }}
+      >
+        {cell.address}
+      </a>
+      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
         <Badge tone={cell.status === 'ACTIVE' ? 'accent' : 'dim'}>{cell.status}</Badge>
         {cell.public ? <Badge tone="dim">public</Badge> : null}
+      </div>
+      {cell.description ? (
+        <span style={{ color: theme.dim, fontSize: '0.8rem', lineHeight: 1.35 }}>{cell.description}</span>
+      ) : null}
+      <div>
         <InlineButton onClick={() => void tailLogs()}>{busy ? '…' : logs ? 'Hide logs' : 'Logs (1h)'}</InlineButton>
-        {cell.description ? <span style={{ color: theme.dim, fontSize: '0.8rem' }}>{cell.description}</span> : null}
       </div>
       {logs ? (
         logs.length === 0 ? (
-          <span style={{ color: theme.dim, fontSize: '0.8rem', marginLeft: '0.2rem' }}>No log events in the last hour.</span>
+          <span style={{ color: theme.dim, fontSize: '0.78rem' }}>No log events in the last hour.</span>
         ) : (
           <CodeBlock>{logs.map((l) => `${l.time.slice(11, 19)}  ${l.message.trim()}`).join('\n')}</CodeBlock>
         )
       ) : null}
-    </div>
+    </Card>
   );
 }
 
+/** The cells section: framing text (no card), each cell its own card in a grid. */
 function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null {
   const [cells, setCells] = useState<CellRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1182,21 +1222,25 @@ function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null
 
   if (!authed || (cells !== null && cells.length === 0)) return null;
   return (
-    <Card>
-      <Heading sub="Your outposts — deployed cells with their own addresses and logs. Author and ship through cells.* on the field computer.">
-        Cells
-      </Heading>
+    <section style={{ display: 'grid', gap: '0.7rem' }}>
+      <div style={{ padding: '0 0.25rem' }}>
+        <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: '1.2rem' }}>Cells</h2>
+        <p style={{ margin: '0.2rem 0 0', color: theme.dim, fontSize: '0.88rem' }}>
+          Your outposts — deployed cells with their own addresses and logs. Author and ship through{' '}
+          <code style={{ fontFamily: theme.mono }}>cells.*</code> on the field computer.
+        </p>
+      </div>
       {err ? <Badge tone="danger">{err}</Badge> : null}
       {cells === null ? (
-        <p style={{ color: theme.dim }}>Loading…</p>
+        <p style={{ color: theme.dim, padding: '0 0.25rem' }}>Loading…</p>
       ) : (
-        <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.4rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.7rem', alignItems: 'start' }}>
           {cells.map((c) => (
-            <CellConsoleRow key={c.cellId} cell={c} />
+            <CellCard key={c.cellId} cell={c} />
           ))}
         </div>
       )}
-    </Card>
+    </section>
   );
 }
 
@@ -1238,114 +1282,127 @@ function argSkeleton(schema?: Capability['inputSchema']): string {
   return JSON.stringify(obj, null, 2);
 }
 
-/** One capability: expand to give JSON args, invoke read/act, and see the result. */
-function CapabilityRow({ cap }: { cap: Capability }): React.JSX.Element {
-  const verb = cap.target.slice(cap.target.lastIndexOf('.') + 1);
-  const [open, setOpen] = useState(false);
-  const [args, setArgs] = useState(() => argSkeleton(cap.inputSchema));
-  const [busy, setBusy] = useState(false);
-  const [out, setOut] = useState<{ ok: boolean; value: unknown } | null>(null);
+// A unified palette command: every capability from $catalog plus a couple of
+// built-in probes (whoami, oauth discovery). One model, one output stack.
+interface Cmd {
+  id: string;
+  ns: string;
+  verb: string;
+  label: string;
+  kind: 'read' | 'act' | 'probe';
+  scope: string | null;
+  description: string;
+  schema?: Capability['inputSchema'];
+  needsArgs: boolean;
+  run: (input: unknown) => Promise<{ ok: boolean; value: unknown }>;
+  search: string;
+}
 
-  const run = async (): Promise<void> => {
-    let input: unknown;
-    try {
-      input = args.trim() ? JSON.parse(args) : {};
-    } catch {
-      setOut({ ok: false, value: 'Invalid JSON in arguments' });
-      return;
-    }
-    setBusy(true);
-    try {
-      setOut(await mcpCall(cap.kind, cap.target, input));
-    } catch (e) {
-      setOut({ ok: false, value: String(e) });
-    } finally {
-      setBusy(false);
-    }
+interface Output {
+  n: number;
+  label: string;
+  kind: Cmd['kind'];
+  ok: boolean;
+  value: unknown;
+  at: number;
+}
+
+/** Subsequence fuzzy match (canvas palette's model): all query chars in order. */
+function fuzzy(text: string, q: string): boolean {
+  let ti = 0;
+  let qi = 0;
+  while (ti < text.length && qi < q.length) {
+    if (text[ti] === q[qi]) qi++;
+    ti++;
+  }
+  return qi === q.length;
+}
+
+const PROBE_CMDS: Cmd[] = [
+  {
+    id: 'probe:whoami',
+    ns: 'probe',
+    verb: 'whoami',
+    label: 'whoami',
+    kind: 'probe',
+    scope: null,
+    description: 'Who the session is — GET /mcp/whoami.',
+    needsArgs: false,
+    search: 'probe whoami identity who am i',
+    run: async () => {
+      const r = await getJson('/mcp/whoami');
+      return { ok: r.status === 200, value: r.body };
+    },
+  },
+  {
+    id: 'probe:oauth',
+    ns: 'probe',
+    verb: 'oauth discovery',
+    label: 'oauth discovery',
+    kind: 'probe',
+    scope: null,
+    description: 'The RFC 8414 authorization-server metadata.',
+    needsArgs: false,
+    search: 'probe oauth discovery metadata well-known issuer',
+    run: async () => {
+      const r = await getJson('/.well-known/oauth-authorization-server');
+      const m = (r.body ?? {}) as Record<string, unknown>;
+      return {
+        ok: r.status === 200,
+        value: r.status === 200 ? { issuer: m.issuer, authorization_endpoint: m.authorization_endpoint, token_endpoint: m.token_endpoint, registration_endpoint: m.registration_endpoint } : m,
+      };
+    },
+  },
+];
+
+function capToCmd(cap: Capability): Cmd {
+  const dot = cap.target.lastIndexOf('.');
+  const ns = dot > 0 ? cap.target.slice(0, dot) : cap.target;
+  const verb = cap.target.slice(dot + 1);
+  const needsArgs = Object.keys(cap.inputSchema?.properties ?? {}).length > 0;
+  return {
+    id: cap.target,
+    ns,
+    verb,
+    label: cap.target,
+    kind: cap.kind,
+    scope: cap.scope,
+    description: cap.description,
+    schema: cap.inputSchema,
+    needsArgs,
+    search: `${cap.target} ${cap.description} ${cap.scope ?? ''}`.toLowerCase(),
+    run: (input) => mcpCall(cap.kind === 'read' ? 'read' : 'act', cap.target, input),
   };
+}
 
+const kindColor = (k: Cmd['kind']): string => (k === 'act' ? machine.green : machine.dim);
+
+/** A pill in the machine's voice (kind / scope / namespace). */
+function MonoPill({ children, color }: { children: React.ReactNode; color?: string }): React.JSX.Element {
   return (
-    <div style={{ display: 'grid', gap: '0.3rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <button
-          onClick={() => setOpen((o) => !o)}
-          style={{ background: 'none', border: 'none', color: machine.text, cursor: 'pointer', fontFamily: theme.mono, padding: 0, fontSize: '0.85rem' }}
-        >
-          {open ? '▾' : '▸'} <code>{verb}</code>
-        </button>
-        <span style={{ color: cap.kind === 'read' ? machine.dim : machine.green, fontFamily: theme.mono, fontSize: '0.7rem', border: `1px solid ${machine.border}`, borderRadius: 999, padding: '0 0.45rem' }}>
-          {cap.kind}
-        </span>
-        {cap.scope ? (
-          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.7rem', border: `1px solid ${machine.border}`, borderRadius: 999, padding: '0 0.45rem' }}>
-            {cap.scope}
-          </span>
-        ) : null}
-        <span style={{ color: machine.dim, fontSize: '0.8rem' }}>{cap.description}</span>
-      </div>
-      {open ? (
-        <div style={{ display: 'grid', gap: '0.4rem', marginLeft: '1.1rem' }}>
-          <textarea
-            value={args}
-            onChange={(e) => setArgs(e.target.value)}
-            rows={Math.min(10, Math.max(2, args.split('\n').length))}
-            spellCheck={false}
-            style={{ width: '100%', boxSizing: 'border-box', padding: '0.5rem', background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, color: machine.text, fontFamily: theme.mono, fontSize: '0.8rem' }}
-          />
-          <div>
-            <button
-              onClick={() => void run()}
-              disabled={busy}
-              style={{
-                padding: '0.45rem 0.9rem',
-                borderRadius: 6,
-                border: `1px solid ${machine.green}`,
-                background: 'transparent',
-                color: machine.green,
-                fontFamily: theme.mono,
-                fontSize: '0.8rem',
-                cursor: busy ? 'wait' : 'pointer',
-              }}
-            >
-              {busy ? 'Running…' : `${cap.kind}("${cap.target}")`}
-            </button>
-          </div>
-          {out ? (
-            <div>
-              <span style={{ color: out.ok ? machine.green : '#e08c7a', fontFamily: theme.mono, fontSize: '0.75rem' }}>
-                {out.ok ? 'ok' : 'error'}
-              </span>
-              <pre
-                style={{
-                  background: machine.screen,
-                  border: `1px solid ${machine.border}`,
-                  borderRadius: 6,
-                  padding: '0.6rem',
-                  margin: '0.3rem 0 0',
-                  overflowX: 'auto',
-                  fontFamily: theme.mono,
-                  fontSize: '0.78rem',
-                  color: machine.text,
-                }}
-              >
-                <code>{typeof out.value === 'string' ? out.value : JSON.stringify(out.value, null, 2)}</code>
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+    <span style={{ color: color ?? machine.dim, fontFamily: theme.mono, fontSize: '0.7rem', border: `1px solid ${machine.border}`, borderRadius: 999, padding: '0 0.45rem', whiteSpace: 'nowrap' }}>
+      {children}
+    </span>
   );
 }
 
 /**
- * The live read/act console — `read("$catalog")` lists every capability the
- * caller can use, grouped by cell; each row invokes read/act and shows the
- * result. The human drives the same vocabulary the agent does.
+ * The console as a command palette (interaction modelled on @c15r/canvas):
+ * type to fuzzy-filter every capability; empty shows recents + namespace
+ * chips for progressive disclosure; pick a command to reveal its args (or run
+ * straight away); results stack below, newest first. The human drives the same
+ * read/act wire an agent does.
  */
-function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
-  const [caps, setCaps] = useState<Capability[] | null>(null);
+function Console({ authed }: { authed: boolean }): React.JSX.Element {
+  const [cmds, setCmds] = useState<Cmd[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [sel, setSel] = useState(0);
+  const [focused, setFocused] = useState<Cmd | null>(null);
+  const [args, setArgs] = useState('{}');
+  const [busy, setBusy] = useState(false);
+  const [outputs, setOutputs] = useState<Output[]>([]);
+  const counter = React.useRef(0);
 
   useEffect(() => {
     if (!authed) return;
@@ -1355,134 +1412,270 @@ function Capabilities({ authed }: { authed: boolean }): React.JSX.Element {
         if (!live) return;
         if (!r.ok) {
           setErr(typeof r.value === 'string' ? r.value : 'error');
+          setCmds([...PROBE_CMDS]);
           return;
         }
-        setCaps((r.value as { capabilities?: Capability[] }).capabilities ?? []);
+        const caps = (r.value as { capabilities?: Capability[] }).capabilities ?? [];
+        setCmds([...caps.map(capToCmd), ...PROBE_CMDS]);
       })
       .catch((e) => {
-        if (live) setErr(String(e));
+        if (live) {
+          setErr(String(e));
+          setCmds([...PROBE_CMDS]);
+        }
       });
     return () => {
       live = false;
     };
   }, [authed]);
 
-  const groups: Record<string, Capability[]> = {};
-  for (const c of caps ?? []) {
-    const dot = c.target.lastIndexOf('.');
-    const ns = dot > 0 ? c.target.slice(0, dot) : c.target;
-    (groups[ns] ??= []).push(c);
-  }
+  const q = query.trim().toLowerCase();
+  const filtered = React.useMemo(() => {
+    const all = cmds ?? [];
+    if (!q) return [];
+    return all
+      .filter((c) => fuzzy(c.search, q) || c.search.includes(q))
+      .sort((a, b) => {
+        const ae = a.search.includes(q);
+        const be = b.search.includes(q);
+        if (ae !== be) return ae ? -1 : 1;
+        return a.label.length - b.label.length;
+      })
+      .slice(0, 12);
+  }, [cmds, q]);
 
-  return (
-    <div>
-      {err ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
-      {authed && !caps && !err ? <p style={{ color: machine.dim, margin: 0 }}>Loading…</p> : null}
-      {authed && caps && caps.length === 0 ? (
-        <p style={{ color: machine.dim, margin: 0 }}>No capabilities — your token may lack scopes.</p>
-      ) : null}
-      <div style={{ display: 'grid', gap: '0.9rem' }}>
-        {Object.keys(groups)
-          .sort()
-          .map((ns) => (
-            <div key={ns} style={{ display: 'grid', gap: '0.4rem' }}>
-              <strong style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.85rem' }}>{ns}</strong>
-              {groups[ns].map((c) => (
-                <CapabilityRow key={c.target} cap={c} />
-              ))}
-            </div>
-          ))}
-      </div>
-    </div>
-  );
-}
+  // Namespaces with counts — the "what's available" overview when idle.
+  const namespaces = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of cmds ?? []) m.set(c.ns, (m.get(c.ns) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [cmds]);
 
-function Discovery(): React.JSX.Element {
-  const [meta, setMeta] = useState<Record<string, unknown> | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    getJson('/.well-known/oauth-authorization-server')
-      .then((r) => (r.status === 200 ? setMeta(r.body as Record<string, unknown>) : setErr(`HTTP ${r.status}`)))
-      .catch((e) => setErr(String(e)));
-  }, []);
-
-  return (
-    <div style={{ display: 'grid', gap: '0.4rem' }}>
-      <strong style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.85rem' }}>oauth discovery</strong>
-      {err ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
-      {meta ? (
-        <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.6rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.75rem', color: machine.text }}>
-          <code>
-            {JSON.stringify(
-              { issuer: meta.issuer, authorization_endpoint: meta.authorization_endpoint, token_endpoint: meta.token_endpoint, registration_endpoint: meta.registration_endpoint },
-              null,
-              2,
-            )}
-          </code>
-        </pre>
-      ) : !err ? (
-        <span style={{ color: machine.dim, fontSize: '0.8rem' }}>Loading…</span>
-      ) : null}
-    </div>
-  );
-}
-
-function ResourceProbe(): React.JSX.Element {
-  // Defaults to the signed-in session token; still editable as a debug tool.
-  const [token, setToken] = useState(() => getTokens()?.access_token ?? '');
-  const [result, setResult] = useState<{ status: number; body: unknown } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const probe = async (): Promise<void> => {
-    setBusy(true);
-    try {
-      setResult(await getJson('/mcp/whoami', token ? { headers: { authorization: `Bearer ${token}` } } : undefined));
-    } catch (e) {
-      setResult({ status: 0, body: String(e) });
-    } finally {
-      setBusy(false);
+  const select = (cmd: Cmd): void => {
+    if (cmd.needsArgs) {
+      setFocused(cmd);
+      setArgs(argSkeleton(cmd.schema));
+    } else {
+      void invoke(cmd, {});
     }
   };
 
-  return (
-    <div style={{ display: 'grid', gap: '0.4rem' }}>
-      <strong style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.85rem' }}>probe · GET /mcp/whoami</strong>
-      <input
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        placeholder="Bearer token (optional — empty shows the 401 challenge)"
-        style={{
-          width: '100%',
-          boxSizing: 'border-box',
-          padding: '0.5rem',
-          background: machine.screen,
-          border: `1px solid ${machine.border}`,
-          borderRadius: 6,
-          color: machine.text,
-          fontFamily: theme.mono,
-          fontSize: '0.8rem',
-        }}
-      />
-      <div>
-        <button
-          onClick={() => void probe()}
-          disabled={busy}
-          style={{ padding: '0.45rem 0.9rem', borderRadius: 6, border: `1px solid ${machine.green}`, background: 'transparent', color: machine.green, fontFamily: theme.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
-        >
-          {busy ? 'Calling…' : 'Call'}
-        </button>
+  const invoke = async (cmd: Cmd, input: unknown): Promise<void> => {
+    setBusy(true);
+    try {
+      const r = await cmd.run(input);
+      counter.current += 1;
+      setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: r.ok, value: r.value, at: Date.now() }, ...prev].slice(0, 40));
+    } catch (e) {
+      counter.current += 1;
+      setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: false, value: String(e), at: Date.now() }, ...prev]);
+    } finally {
+      setBusy(false);
+      setFocused(null);
+      setQuery('');
+      setSel(0);
+    }
+  };
+
+  const runFocused = (): void => {
+    if (!focused) return;
+    let input: unknown;
+    try {
+      input = args.trim() ? JSON.parse(args) : {};
+    } catch {
+      counter.current += 1;
+      setOutputs((prev) => [{ n: counter.current, label: focused.label, kind: focused.kind, ok: false, value: 'Invalid JSON in arguments', at: Date.now() }, ...prev]);
+      return;
+    }
+    void invoke(focused, input);
+  };
+
+  const inputColor = machine.text;
+  const screen: React.CSSProperties = { background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, color: machine.text, fontFamily: theme.mono };
+
+  // ── focused: one command's arg entry ──
+  if (focused) {
+    return (
+      <div style={{ display: 'grid', gap: '0.8rem' }}>
+        <div style={{ display: 'grid', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setFocused(null)}
+              style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}
+            >
+              ‹ back
+            </button>
+            <code style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.9rem' }}>{focused.label}</code>
+            <MonoPill color={kindColor(focused.kind)}>{focused.kind}</MonoPill>
+            {focused.scope ? <MonoPill>{focused.scope}</MonoPill> : null}
+          </div>
+          {focused.description ? <span style={{ color: machine.dim, fontSize: '0.8rem' }}>{focused.description}</span> : null}
+          <textarea
+            value={args}
+            onChange={(e) => setArgs(e.target.value)}
+            rows={Math.min(12, Math.max(2, args.split('\n').length))}
+            spellCheck={false}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                runFocused();
+              }
+            }}
+            style={{ ...screen, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem' }}
+          />
+          <div>
+            <button
+              onClick={runFocused}
+              disabled={busy}
+              style={{ padding: '0.45rem 0.9rem', borderRadius: 6, border: `1px solid ${machine.green}`, background: 'transparent', color: machine.green, fontFamily: theme.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
+            >
+              {busy ? 'Running…' : `run · ${focused.kind}("${focused.label}")  ⌘↵`}
+            </button>
+          </div>
+        </div>
+        <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
       </div>
-      {result ? (
-        <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.6rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.75rem', color: result.status === 200 ? machine.text : '#e08c7a' }}>
-          <code>HTTP {result.status}{'\n'}{JSON.stringify(result.body, null, 2)}</code>
-        </pre>
-      ) : null}
+    );
+  }
+
+  // ── browse: search + (recents-less) namespace overview or filtered list ──
+  return (
+    <div style={{ display: 'grid', gap: '0.8rem' }}>
+      <div style={{ ...screen, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem' }}>
+        <span style={{ color: machine.green, fontFamily: theme.mono }}>›</span>
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSel(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setSel((s) => (filtered.length ? (s + 1) % filtered.length : 0));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setSel((s) => (filtered.length ? (s - 1 + filtered.length) % filtered.length : 0));
+            } else if (e.key === 'Enter' && filtered[sel]) {
+              e.preventDefault();
+              select(filtered[sel]);
+            } else if (e.key === 'Escape') {
+              setQuery('');
+            }
+          }}
+          placeholder="Type a command — workspace.query, cells.list, whoami…"
+          spellCheck={false}
+          autoComplete="off"
+          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: inputColor, fontFamily: theme.mono, fontSize: '0.85rem' }}
+        />
+        {query ? (
+          <button onClick={() => setQuery('')} style={{ background: 'none', border: 'none', color: machine.dim, cursor: 'pointer', fontSize: '1rem' }}>
+            ×
+          </button>
+        ) : null}
+      </div>
+
+      {err && !cmds?.length ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
+      {!cmds && !err ? <p style={{ color: machine.dim, margin: 0 }}>Loading capabilities…</p> : null}
+
+      {q ? (
+        filtered.length === 0 ? (
+          <p style={{ color: machine.dim, margin: 0, fontSize: '0.82rem' }}>No command matches “{query}”.</p>
+        ) : (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.15rem' }}>
+            {filtered.map((c, i) => (
+              <li key={c.id}>
+                <button
+                  onClick={() => select(c)}
+                  onMouseEnter={() => setSel(i)}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    flexWrap: 'wrap',
+                    padding: '0.4rem 0.55rem',
+                    borderRadius: 6,
+                    border: '1px solid transparent',
+                    background: i === sel ? 'rgba(127,201,127,0.10)' : 'transparent',
+                    borderColor: i === sel ? machine.border : 'transparent',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <code style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.82rem' }}>{c.label}</code>
+                  <MonoPill color={kindColor(c.kind)}>{c.kind}</MonoPill>
+                  {c.needsArgs ? <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem' }}>args</span> : null}
+                  <span style={{ color: machine.dim, fontSize: '0.76rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                    {c.description}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : (
+        // idle: the overview — namespaces as chips (progressive disclosure)
+        <div style={{ display: 'grid', gap: '0.5rem' }}>
+          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {cmds ? `${cmds.length} commands` : '…'}
+          </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+            {namespaces.map(([ns, n]) => (
+              <button
+                key={ns}
+                onClick={() => {
+                  setQuery(ns + '.');
+                  setSel(0);
+                }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.6rem', borderRadius: 999, border: `1px solid ${machine.border}`, background: 'transparent', color: machine.text, fontFamily: theme.mono, fontSize: '0.78rem', cursor: 'pointer' }}
+              >
+                {ns}
+                <span style={{ color: machine.dim }}>{n}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
     </div>
   );
 }
 
-/** The housing: a collapsed machine that opens into the full console. */
+/** Results stack, newest first — the machine's running tape. */
+function OutputStack({ outputs, onClear }: { outputs: Output[]; onClear: () => void }): React.JSX.Element | null {
+  if (outputs.length === 0) return null;
+  return (
+    <div style={{ display: 'grid', gap: '0.5rem', borderTop: `1px solid ${machine.border}`, paddingTop: '0.8rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          output · newest first
+        </span>
+        <button onClick={onClear} style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', cursor: 'pointer' }}>
+          clear
+        </button>
+      </div>
+      {outputs.map((o) => (
+        <div key={o.n} style={{ display: 'grid', gap: '0.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ color: o.ok ? machine.green : '#e08c7a', fontFamily: theme.mono, fontSize: '0.72rem' }}>{o.ok ? '✓' : '✕'}</span>
+            <code style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.78rem' }}>{o.label}</code>
+            <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem' }}>
+              {new Date(o.at).toLocaleTimeString()}
+            </span>
+          </div>
+          <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.55rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.76rem', color: o.ok ? machine.text : '#e08c7a', maxHeight: 320 }}>
+          <code>{typeof o.value === 'string' ? o.value : JSON.stringify(o.value, null, 2)}</code>
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The housing: a collapsed machine that opens into the command palette. */
 function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   return (
@@ -1524,10 +1717,8 @@ function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
         <span style={{ color: machine.dim, fontFamily: theme.mono }}>{open ? '–' : '+'}</span>
       </button>
       {open ? (
-        <div style={{ padding: '0 1.1rem 1.1rem', display: 'grid', gap: '1.2rem', borderTop: `1px solid ${machine.border}`, paddingTop: '1rem' }}>
-          <Capabilities authed={authed} />
-          <Discovery />
-          <ResourceProbe />
+        <div style={{ padding: '0 1.1rem 1.1rem', display: 'grid', gap: '1rem', borderTop: `1px solid ${machine.border}`, paddingTop: '1rem' }}>
+          <Console authed={authed} />
           <p style={{ color: machine.dim, fontSize: '0.75rem', margin: 0 }}>
             Tokens come from OAuth: clients register (DCR), redirect to /oauth/authorize, you approve
             with a passkey. Agents connect at parc.land/mcp — whoami · read · act.
