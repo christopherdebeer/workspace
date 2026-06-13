@@ -806,6 +806,22 @@ function factHref(e: ListEntry): string | null {
   return resolve(e, 'open', typeDecls)?.surface ?? null;
 }
 
+/** Where a fact edits — its type's `edit` handler, if it declares one. */
+function factEdit(e: ListEntry): string | null {
+  return resolve(e, 'edit', typeDecls)?.surface ?? null;
+}
+
+/** A small "✎ edit" link, shown only when the fact's type declares an edit surface. */
+function EditLink({ e }: { e: ListEntry }): React.JSX.Element | null {
+  const to = factEdit(e);
+  if (!to) return null;
+  return (
+    <a href={to} title="Edit" style={{ color: theme.dim, fontSize: '0.72rem', textDecoration: 'none', fontFamily: theme.mono }}>
+      ✎ edit
+    </a>
+  );
+}
+
 /** A content snippet beyond the title — the *substance* of a fact, for exploration. */
 function factPreview(e: ListEntry): string {
   const v = e.value;
@@ -949,6 +965,7 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
                   <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>
                     {[e._meta?.type, e.key].filter(Boolean).join(' · ')}
                   </span>
+                  <EditLink e={e} />
                   {out.slice(0, 5).map((ed, i) => (
                     <span
                       key={i}
@@ -1871,7 +1888,10 @@ function PinnedFact({ factKey }: { factKey: string }): React.JSX.Element | null 
         <strong style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</strong>
       )}
       {preview ? <span style={{ color: theme.text, fontSize: '0.85rem' }}>{preview}</span> : null}
-      <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>{factKey}</span>
+      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+        <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>{factKey}</span>
+        <EditLink e={e} />
+      </div>
     </Card>
   );
 }
