@@ -91,8 +91,8 @@ async function readBoard(board: string): Promise<BoardElement[]> {
   return out;
 }
 
-/** A camera that frames the board's bounding box at the top-left of the viewport. */
-function fitCamera(els: BoardElement[]): { scale: number; tx: number; ty: number } {
+/** A camera that frames the board's bounding box within a viewport (w×h). */
+function fitCamera(els: BoardElement[], w = 1200, h = 800): { scale: number; tx: number; ty: number } {
   const xs: number[] = [];
   const ys: number[] = [];
   for (const e of els) {
@@ -104,11 +104,14 @@ function fitCamera(els: BoardElement[]): { scale: number; tx: number; ty: number
   if (!xs.length) return { scale: 1, tx: 0, ty: 0 };
   const minX = Math.min(...xs);
   const minY = Math.min(...ys);
-  const w = Math.max(...xs) - minX;
-  const h = Math.max(...ys) - minY;
-  // Frame to a nominal viewport; the interactive client recomputes on boot.
-  const scale = Math.min(1, 1200 / Math.max(w, 1), 800 / Math.max(h, 1));
-  return { scale, tx: 40 - scale * minX, ty: 40 - scale * minY };
+  const bw = Math.max(...xs) - minX;
+  const bh = Math.max(...ys) - minY;
+  const pad = 24;
+  const scale = Math.min(1, (w - pad * 2) / Math.max(bw, 1), (h - pad * 2) / Math.max(bh, 1));
+  // Center the framed board in the viewport.
+  const tx = (w - scale * bw) / 2 - scale * minX;
+  const ty = (h - scale * bh) / 2 - scale * minY;
+  return { scale, tx, ty };
 }
 
 /** Critical CSS so the SSR board paints correctly before app.js loads. */
@@ -124,28 +127,55 @@ const CRITICAL_CSS = `
 img.content{max-width:100%}
 `;
 
+// A static embed (?embed=1) is a zero-JS thumbnail: hide the editor chrome,
+// freeze interactions. Paired with stripping app.js + the editor CDN scripts.
+const EMBED_CSS = `
+html,body{margin:0;height:100%;overflow:hidden}
+body.embed #mode,body.embed #drillUp,body.embed #context-menu,body.embed #edit-modal,body.embed #err-banner{display:none!important}
+body.embed #canvas{cursor:default}
+body.embed .canvas-element{pointer-events:none}
+`;
+
+interface ShellOpts {
+  embed?: boolean;
+  w?: number;
+  h?: number;
+}
+
 /**
  * Server-render a board into the shell: read the elements, render them through
  * the same isomorphic module the client uses, inject into the containers with a
- * fit camera + critical CSS. `data-ssr` tells the client to adopt/replace
- * rather than append. Any failure falls back to the plain static shell — SSR
- * never breaks the page.
+ * fit camera + critical CSS. `data-ssr` tells the interactive client to
+ * adopt/replace rather than append.
+ *
+ * With `embed`, it becomes a **zero-JS static thumbnail**: app.js and the
+ * editor CDN scripts are stripped, the chrome hidden — a faithful still image
+ * that costs nothing, so many can sit on one page. Any failure falls back to
+ * the plain static shell — SSR never breaks the page.
  */
-async function renderShell(board: string): Promise<string> {
+async function renderShell(board: string, opts: ShellOpts = {}): Promise<string> {
   const shell = read('static/index.html');
   try {
     const els = await readBoard(board);
     if (!els.length) return shell;
-    const cam = fitCamera(els);
+    const cam = fitCamera(els, opts.w, opts.h);
     const { dynamic, static: stat } = renderBoard(els, cam);
     const transform = `transform:translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)});--zoom:${cam.scale.toFixed(4)}`;
-    return shell
-      .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}</style></head>`)
+    let html = shell
+      .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}${opts.embed ? EMBED_CSS : ''}</style></head>`)
       .replace(
         '<div id="canvas-container"></div>',
         `<div id="canvas-container" data-ssr="1" style="${transform}">${dynamic}</div>`,
       )
       .replace('<div id="static-container"></div>', `<div id="static-container" data-ssr="1">${stat}</div>`);
+    if (opts.embed) {
+      // Zero-JS: drop app.js + the editor libraries (marked/codemirror). The
+      // board is already fully rendered server-side, so no script is needed.
+      html = html
+        .replace('<body>', '<body class="embed">')
+        .replace(/<script\b[^>]*\bsrc="[^"]*(?:app\.js|codemirror|marked)[^"]*"[^>]*><\/script>/g, '');
+    }
+    return html;
   } catch (err) {
     // Substrate read failed (cold IAM, throttle, schema drift) — serve the
     // interactive shell; the client hydrates from the substrate as before.
@@ -162,11 +192,18 @@ export const handler = async (event: any) => {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
     if (path === '/style.css') return respond(200, 'text/css; charset=utf-8', read('static/style.css'));
     if (path === '/' || path === '') {
-      const qs = (event.rawQueryString as string) || '';
-      const board = new URLSearchParams(qs).get('canvas');
+      const qs = new URLSearchParams((event.rawQueryString as string) || '');
+      const board = qs.get('canvas');
+      const embed = qs.get('embed') === '1';
+      const w = Number(qs.get('w')) || undefined;
+      const h = Number(qs.get('h')) || undefined;
       // SSR a concrete board; the bare app (no board) keeps the static shell.
-      const html = board ? await renderShell(board) : read('static/index.html');
-      return respond(200, 'text/html; charset=utf-8', html);
+      const html = board ? await renderShell(board, { embed, w, h }) : read('static/index.html');
+      // Static embeds are safe to cache briefly at the edge — many thumbnails
+      // on one page then cost one render, and refresh within a minute.
+      const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
+      if (embed && board) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
+      return { statusCode: 200, headers, body: html };
     }
   } catch (err) {
     return respond(404, 'application/json', JSON.stringify({ error: (err as Error).message }));
