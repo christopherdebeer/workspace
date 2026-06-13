@@ -113,10 +113,20 @@ the old Phase 2/3 ordering:
   deploy surface (authoring stays in the generic capabilities console), and
   expand-from-elision on the window (query top-N stands in for tiered
   recall).
-- **Phase 3 — the generic view renderer.** Registered views + render hints;
-  dashboards come from the registry, not code. Where `home` stops being
-  hand-written screens — the purpose-built surfaces of 2a–2c become the first
-  *registered* views once the primitive exists.
+- **Phase 3 — the layout comes from the registry, not code** *(shipped, first
+  cut)*: home renders from a **`_home/layout` fact** in the signed-in slice —
+  an ordered list of sections — falling back to the default order when absent.
+  Sections are the built-in surfaces (greeting / stats / capture / workspace /
+  activity / identity / views / cells / console) plus custom ones: a pinned
+  **board** (`{type:'view', id}` → `ViewSurface`), a single **fact**
+  (`{type:'fact', key}` → rendered + opened through the type vocabulary), or an
+  ad-hoc **query** (`{type:'query', query, title}`). A **Customise** mode does
+  per-section reorder + hide, persisted back to `_home/layout` — *"make your
+  own home over time"* is data, not a fork. Each rendered fact gets its
+  open path from the type-vocabulary resolver (`docs/type-vocabulary.md`), so
+  home hardcodes no cells. Still open: a UI to *add* custom sections (today you
+  write the section via the field computer / an agent), and richer section
+  types as the view/render-hint vocabulary grows.
 
 ## Naming
 

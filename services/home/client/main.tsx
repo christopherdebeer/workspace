@@ -1773,10 +1773,215 @@ function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
 
 // ─── the page ──────────────────────────────────────────────────────
 
+// ─── the home layout (phase 3: the UI comes from the registry, not code) ──
+//
+// Home renders from a `_home/layout` fact in the signed-in slice — an ordered
+// list of sections — falling back to the default order when absent. Sections
+// are the built-in surfaces plus custom ones (a pinned view/board, a single
+// fact, an ad-hoc query). Customising = writing the fact; "make your own home
+// over time" is data, not a fork. (docs/home-cell.md phase 3.)
+
+interface LayoutSection {
+  type: string;
+  id?: string; // view id (type 'view')
+  key?: string; // fact key (type 'fact')
+  query?: Record<string, unknown>; // (type 'query')
+  title?: string;
+  hidden?: boolean;
+}
+
+const DEFAULT_LAYOUT: LayoutSection[] = [
+  { type: 'greeting' },
+  { type: 'stats' },
+  { type: 'capture' },
+  { type: 'workspace' },
+  { type: 'activity' },
+  { type: 'identity' },
+  { type: 'views' },
+  { type: 'cells' },
+  { type: 'console' },
+];
+
+const SECTION_LABELS: Record<string, string> = {
+  greeting: 'Greeting', stats: 'Stats', capture: 'Quick capture', workspace: 'Workspace',
+  activity: 'Recent activity', identity: 'Identity & grants', views: 'Pinned views',
+  cells: 'Cells', console: 'Field computer',
+};
+function sectionLabel(s: LayoutSection): string {
+  if (s.type === 'view') return `Board · ${s.id}`;
+  if (s.type === 'fact') return `Fact · ${s.key}`;
+  if (s.type === 'query') return `Query · ${s.title ?? '…'}`;
+  return SECTION_LABELS[s.type] ?? s.type;
+}
+
+function useLayout(authed: boolean): { sections: LayoutSection[]; save: (next: LayoutSection[]) => void } {
+  const [sections, setSections] = useState<LayoutSection[]>(DEFAULT_LAYOUT);
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    mcpCall('read', 'workspace.peek', { key: '_home/layout' })
+      .then((r) => {
+        if (!live) return;
+        const secs = (r.ok ? (r.value as { value?: { sections?: LayoutSection[] } } | null)?.value?.sections : null) ?? null;
+        if (Array.isArray(secs) && secs.length) setSections(secs);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+  const save = (next: LayoutSection[]): void => {
+    setSections(next);
+    void mcpCall('act', 'workspace.remember', {
+      key: '_home/layout',
+      value: { sections: next },
+      type: 'home-layout',
+      via: 'home:customize',
+    });
+  };
+  return { sections, save };
+}
+
+/** A single pinned fact, rendered as a card with its content + open path (via the type vocabulary). */
+function PinnedFact({ factKey }: { factKey: string }): React.JSX.Element | null {
+  const [entry, setEntry] = useState<{ value?: unknown; _meta?: ListEntry['_meta'] } | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    loadTypeDecls()
+      .then(() => mcpCall('read', 'workspace.peek', { key: factKey }))
+      .then((r) => {
+        if (live) setEntry(r.ok ? ((r.value as { value?: unknown; _meta?: ListEntry['_meta'] }) ?? null) : null);
+      })
+      .catch(() => setEntry(null));
+    return () => {
+      live = false;
+    };
+  }, [factKey]);
+  if (entry === undefined) return <Card><p style={{ color: theme.dim }}>Loading…</p></Card>;
+  if (entry === null) return null;
+  const e: ListEntry = { key: factKey, value: entry.value, _meta: entry._meta };
+  const to = factHref(e);
+  const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
+  const preview = factPreview(e);
+  return (
+    <Card style={{ display: 'grid', gap: '0.3rem' }}>
+      {to ? (
+        <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600, fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</a>
+      ) : (
+        <strong style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</strong>
+      )}
+      {preview ? <span style={{ color: theme.text, fontSize: '0.85rem' }}>{preview}</span> : null}
+      <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>{factKey}</span>
+    </Card>
+  );
+}
+
+/** An ad-hoc query, rendered as a titled list. */
+function PinnedQuery({ query, title }: { query: Record<string, unknown>; title?: string }): React.JSX.Element {
+  const [entries, setEntries] = useState<ListEntry[] | null>(null);
+  const qs = JSON.stringify(query);
+  useEffect(() => {
+    let live = true;
+    loadTypeDecls()
+      .then(() => mcpCall('read', 'workspace.query', { limit: 8, ...query }))
+      .then((r) => {
+        if (live) setEntries(r.ok ? ((r.value as { entries?: ListEntry[] }).entries ?? []) : []);
+      })
+      .catch(() => setEntries([]));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qs]);
+  return (
+    <Card>
+      <Heading sub="A pinned query over your slice.">{title ?? 'Query'}</Heading>
+      {entries === null ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : entries.length === 0 ? (
+        <p style={{ color: theme.dim }}>Nothing matches.</p>
+      ) : (
+        <ul style={{ margin: '0.4rem 0 0', padding: 0, listStyle: 'none', display: 'grid', gap: '0.4rem' }}>
+          {entries.map((e) => {
+            const to = factHref(e);
+            const t = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
+            return (
+              <li key={e.key} style={{ lineHeight: 1.35 }}>
+                {to ? <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{t}</a> : <span>{t}</span>}
+                <div style={{ color: theme.dim, fontSize: '0.7rem', fontFamily: theme.mono }}>{e.key}</div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+interface SectionCtx {
+  session: Session & { signIn: () => void; signOut: () => void };
+  authed: boolean;
+  dash: DashboardData | null;
+}
+
+function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.JSX.Element | null {
+  switch (s.type) {
+    case 'greeting': return <DashboardHeader session={ctx.session} />;
+    case 'stats': return <StatCards data={ctx.dash} />;
+    case 'capture': return <QuickCapture />;
+    case 'workspace': return <WorkspaceWindow authed={ctx.authed} />;
+    case 'activity': return <RecentActivity data={ctx.dash} />;
+    case 'identity': return <IdentityShell authed={ctx.authed} user={ctx.session.user} scopes={ctx.session.scopes} />;
+    case 'views': return <Views authed={ctx.authed} />;
+    case 'cells': return <CellsConsole authed={ctx.authed} />;
+    case 'console': return <FieldComputer authed={ctx.authed} />;
+    case 'view': return s.id ? <ViewSurface def={{ id: s.id }} /> : null;
+    case 'fact': return s.key ? <PinnedFact factKey={s.key} /> : null;
+    case 'query': return <PinnedQuery query={s.query ?? {}} title={s.title} />;
+    default: return null;
+  }
+}
+
+/** Customise mode: per-section reorder + hide, persisted to `_home/layout`. */
+function SectionControls({
+  index,
+  total,
+  hidden,
+  onMove,
+  onToggle,
+}: {
+  index: number;
+  total: number;
+  hidden: boolean;
+  onMove: (dir: -1 | 1) => void;
+  onToggle: () => void;
+}): React.JSX.Element {
+  const btn: React.CSSProperties = {
+    background: theme.panel,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 6,
+    color: theme.accent,
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    padding: '0.1rem 0.45rem',
+  };
+  return (
+    <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', margin: '0 0.25rem' }}>
+      <button style={btn} disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
+      <button style={btn} disabled={index === total - 1} onClick={() => onMove(1)}>↓</button>
+      <button style={{ ...btn, color: hidden ? theme.accent : theme.danger }} onClick={onToggle}>
+        {hidden ? 'show' : 'hide'}
+      </button>
+    </div>
+  );
+}
+
 function App(): React.JSX.Element {
   const session = useAuth();
   const authed = !!session.user;
   const [dash, setDash] = useState<DashboardData | null>(null);
+  const { sections, save } = useLayout(authed);
+  const [customizing, setCustomizing] = useState(false);
 
   useEffect(() => {
     if (!authed) return;
@@ -1791,21 +1996,54 @@ function App(): React.JSX.Element {
     };
   }, [authed]);
 
+  const move = (i: number, dir: -1 | 1): void => {
+    const j = i + dir;
+    if (j < 0 || j >= sections.length) return;
+    const next = sections.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    save(next);
+  };
+  const toggle = (i: number): void => {
+    const next = sections.map((s, k) => (k === i ? { ...s, hidden: !s.hidden } : s));
+    save(next);
+  };
+
+  const ctx: SectionCtx = { session, authed, dash };
+
   return (
     <Page>
       {!session.ready ? null : !authed ? (
         <Landing session={session} />
       ) : (
         <>
-          <DashboardHeader session={session} />
-          <StatCards data={dash} />
-          <QuickCapture />
-          <WorkspaceWindow authed={authed} />
-          <RecentActivity data={dash} />
-          <IdentityShell authed={authed} user={session.user} scopes={session.scopes} />
-          <Views authed={authed} />
-          <CellsConsole authed={authed} />
-          <FieldComputer authed={authed} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', alignItems: 'center' }}>
+            <button
+              onClick={() => setCustomizing((c) => !c)}
+              style={{ background: 'none', border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.dim, fontSize: '0.78rem', padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+            >
+              {customizing ? 'Done' : 'Customise'}
+            </button>
+          </div>
+          {sections.map((s, i) => {
+            if (s.hidden && !customizing) return null;
+            const body = <SectionView s={s} ctx={ctx} />;
+            if (!customizing) return <React.Fragment key={`${s.type}:${s.id ?? s.key ?? i}`}>{body}</React.Fragment>;
+            return (
+              <div key={`${s.type}:${s.id ?? s.key ?? i}`} style={{ opacity: s.hidden ? 0.5 : 1, display: 'grid', gap: '0.3rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                  <span style={{ color: theme.dim, fontSize: '0.74rem', fontFamily: theme.mono }}>{sectionLabel(s)}</span>
+                  <SectionControls index={i} total={sections.length} hidden={!!s.hidden} onMove={(d) => move(i, d)} onToggle={() => toggle(i)} />
+                </div>
+                {body}
+              </div>
+            );
+          })}
+          {customizing ? (
+            <p style={{ margin: 0, color: theme.dim, fontSize: '0.75rem', textAlign: 'center' }}>
+              Order &amp; visibility save to <code style={{ fontFamily: theme.mono }}>_home/layout</code> in your slice — your home, as data.
+              Pin a board, fact, or query by writing a section there (the field computer can do it).
+            </p>
+          ) : null}
         </>
       )}
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>
