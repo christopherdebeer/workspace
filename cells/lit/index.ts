@@ -201,6 +201,7 @@ async function renderListSSR(patterns: string[]): Promise<string> {
 export const handler = async (event: {
   requestContext?: { http?: { method?: string } };
   rawPath?: string;
+  rawQueryString?: string;
   queryStringParameters?: Record<string, string> | null;
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
@@ -209,7 +210,10 @@ export const handler = async (event: {
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
     if (path === '/' || path === '') {
-      const id = event.queryStringParameters?.doc;
+      // The cell event carries rawQueryString (the parsed map isn't reliably
+      // populated through the dispatch path) — parse it like the canvas cell.
+      const qs = new URLSearchParams(event.rawQueryString || '');
+      const id = qs.get('doc') ?? event.queryStringParameters?.doc ?? undefined;
       // SSR first paint when the requested content is public; otherwise serve the
       // bare interactive shell (the signed-in client renders it with the session).
       try {
