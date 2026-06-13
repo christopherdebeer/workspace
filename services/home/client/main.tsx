@@ -13,6 +13,11 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../../../platform/ui';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, getTokens } from './auth';
+// Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
+// the dawn panorama strip, and the field computer.
+import heroUrl from './assets/hero.jpg';
+import stripUrl from './assets/strip.jpg';
+import computerUrl from './assets/computer.webp';
 
 const { useState, useEffect } = React;
 
@@ -117,58 +122,9 @@ async function mcpCall(verb: string, target: string, input?: unknown): Promise<{
   return { ok: !rpc.result?.isError, value };
 }
 
-// ─── the scenery (inline SVG, replaceable by painted assets) ───────
-//
-// A deterministic dusk scene in the app-icon palette: amber horizon fading to
-// teal night, hand-drawn stars, layered pine silhouettes. Pure vector so it
-// ships inside app.js; the generated hero painting can replace it 1:1 later.
+// ─── the scenery (the painted assets) ──────────────────────────────
 
-function seeded(seed: number): () => number {
-  let s = seed;
-  return () => {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
-}
-
-function treelinePath(seed: number, base: number, peak: number): string {
-  const rnd = seeded(seed);
-  let d = `M0,200 L0,${base}`;
-  let x = 0;
-  while (x < 1200) {
-    const w = 18 + rnd() * 30;
-    const h = base - (peak * (0.55 + rnd() * 0.45));
-    d += ` L${(x + w * 0.2).toFixed(0)},${base} L${(x + w * 0.5).toFixed(0)},${h.toFixed(0)} L${(x + w * 0.8).toFixed(0)},${base}`;
-    x += w;
-  }
-  return d + ` L1200,${base} L1200,200 Z`;
-}
-
-const TREES_FAR = treelinePath(7, 168, 38);
-const TREES_NEAR = treelinePath(23, 186, 64);
-
-function Stars({ seed, count, maxY }: { seed: number; count: number; maxY: number }): React.JSX.Element {
-  const rnd = seeded(seed);
-  const dots: Array<{ x: number; y: number; r: number }> = [];
-  for (let i = 0; i < count; i++) dots.push({ x: rnd() * 1200, y: rnd() * maxY, r: 0.6 + rnd() * 1.1 });
-  const sparks = dots.slice(0, Math.floor(count / 6));
-  return (
-    <g fill={theme.cream} opacity={0.9}>
-      {dots.map((d, i) => (
-        <circle key={i} cx={d.x.toFixed(0)} cy={d.y.toFixed(0)} r={d.r.toFixed(1)} opacity={0.4 + (i % 5) * 0.12} />
-      ))}
-      {sparks.map((d, i) => (
-        <path
-          key={`s${i}`}
-          d={`M${d.x.toFixed(0)},${(d.y - 4).toFixed(0)} l1.2,2.8 2.8,1.2 -2.8,1.2 -1.2,2.8 -1.2,-2.8 -2.8,-1.2 2.8,-1.2 Z`}
-          opacity={0.85}
-        />
-      ))}
-    </g>
-  );
-}
-
-/** The dusk valley. `tall` for the landing hero, short for the dashboard strip. */
+/** The painted valley. `tall` = the landing hero; short = the dashboard strip. */
 function DuskScene({ tall, children }: { tall?: boolean; children?: React.ReactNode }): React.JSX.Element {
   return (
     <div
@@ -178,27 +134,35 @@ function DuskScene({ tall, children }: { tall?: boolean; children?: React.ReactN
         overflow: 'hidden',
         boxShadow: theme.shadow,
         border: `1px solid ${theme.border}`,
+        background: theme.dusk,
       }}
     >
-      <svg
-        viewBox={tall ? '0 0 1200 200' : '0 60 1200 140'}
-        preserveAspectRatio="xMidYMax slice"
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }}
+      <img
+        src={tall ? heroUrl : stripUrl}
+        alt=""
         aria-hidden
-      >
-        <defs>
-          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={theme.duskDeep} />
-            <stop offset="42%" stopColor={theme.dusk} />
-            <stop offset="78%" stopColor="#7e8c6a" />
-            <stop offset="100%" stopColor={theme.horizon} />
-          </linearGradient>
-        </defs>
-        <rect x="0" y="0" width="1200" height="200" fill="url(#sky)" />
-        <Stars seed={11} count={tall ? 90 : 40} maxY={110} />
-        <path d={TREES_FAR} fill={theme.pine} opacity={0.75} />
-        <path d={TREES_NEAR} fill="#122418" />
-      </svg>
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          objectPosition: tall ? 'center bottom' : 'center 70%',
+          display: 'block',
+        }}
+      />
+      {tall ? (
+        // Legibility veil for the overlaid text — quiet in the sky, gone by mid-frame.
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'linear-gradient(150deg, rgba(8,29,36,0.62) 0%, rgba(8,29,36,0.28) 38%, rgba(8,29,36,0) 62%)',
+          }}
+        />
+      ) : (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(8,29,36,0.30)' }} />
+      )}
       <div style={{ position: 'relative', minHeight: tall ? 'min(56vh, 430px)' : 96, display: 'grid' }}>{children}</div>
     </div>
   );
@@ -1546,12 +1510,15 @@ function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
           textAlign: 'left',
         }}
       >
-        <span style={{ display: 'grid', gap: '0.1rem' }}>
-          <span style={{ color: machine.green, fontFamily: theme.mono, fontSize: '0.9rem', letterSpacing: '0.08em' }}>
-            ▮ FIELD COMPUTER
-          </span>
-          <span style={{ color: machine.dim, fontSize: '0.78rem' }}>
-            The raw read/act console — every capability, the same wire an agent uses.
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+          <img src={computerUrl} alt="" aria-hidden style={{ width: 54, height: 'auto', flexShrink: 0 }} />
+          <span style={{ display: 'grid', gap: '0.1rem' }}>
+            <span style={{ color: machine.green, fontFamily: theme.mono, fontSize: '0.9rem', letterSpacing: '0.08em' }}>
+              ▮ FIELD COMPUTER
+            </span>
+            <span style={{ color: machine.dim, fontSize: '0.78rem' }}>
+              The raw read/act console — every capability, the same wire an agent uses.
+            </span>
           </span>
         </span>
         <span style={{ color: machine.dim, fontFamily: theme.mono }}>{open ? '–' : '+'}</span>

@@ -66,9 +66,14 @@ string is real vocabulary".
 
 ## Later
 
-- **Painted assets** replace the SVG scenery when generated (hero ~2400×1000
-  with quiet upper-left sky; strip ~2400×360; the field-computer spot
-  illustration). Drop-in: the `DuskScene` component is the seam.
+- **Painted assets** — *landed (2026-06-13)*: the hero valley, the dawn
+  panorama strip, and the field-computer illustration replaced the SVG
+  scenery through the `DuskScene` seam. They ship as data URIs inside
+  `app.js` (esbuild `dataurl` loader for `.jpg/.png/.webp`, wired in
+  `HttpServiceCell`'s client build) — ~200 KB compressed, cached with the
+  bundle. The computer's baked checkerboard was keyed out (large neutral-grey
+  connected components → alpha); re-export with real transparency if the
+  source ever changes.
 - **The night variant** — the dusk tokens become a full theme (time-of-day
   arc: the park darkens with your evening); needs a theme-switching seam in
   `platform/ui` first.

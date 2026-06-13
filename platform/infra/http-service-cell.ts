@@ -131,7 +131,10 @@ export class HttpServiceCell extends Construct {
               beforeBundling: () => [],
               beforeInstall: () => [],
               afterBundling: (_inputDir: string, outputDir: string): string[] => [
-                `node -e "require('esbuild').buildSync({entryPoints:['${props.clientEntry}'],bundle:true,minify:true,format:'iife',target:['es2020'],loader:{'.tsx':'tsx','.ts':'ts'},jsx:'automatic',define:{'process.env.NODE_ENV':'\\"production\\"'},outfile:'${outputDir}/app.js'})"`,
+                // Image imports become data URIs (dataurl loader): painted
+                // assets ship inside app.js — no extra routes, cached with
+                // the bundle. Keep assets small; they ride every download.
+                `node -e "require('esbuild').buildSync({entryPoints:['${props.clientEntry}'],bundle:true,minify:true,format:'iife',target:['es2020'],loader:{'.tsx':'tsx','.ts':'ts','.jpg':'dataurl','.png':'dataurl','.webp':'dataurl'},jsx:'automatic',define:{'process.env.NODE_ENV':'\\"production\\"'},outfile:'${outputDir}/app.js'})"`,
               ],
             }
           : undefined,
