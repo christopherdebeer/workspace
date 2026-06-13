@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createTypeDeclHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -38,6 +38,8 @@ export const handler = defineService({
       'cell.deployed': createCellLifecycleHandler(dynamoDeps),
       'cell.files.changed': createCellLifecycleHandler(dynamoDeps),
       'cell.delete.requested': createCellLifecycleHandler(dynamoDeps),
+      // Vocabulary as data: a cell's declared types → `_types/<type>` facts.
+      'cell.types.declared': createTypeDeclHandler(dynamoDeps),
     },
   },
 });

@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createTypeDeclHandler } from '../services/workspace/handlers';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -964,5 +964,51 @@ describe('workspace granular grants (write-through / prefix / request loop)', ()
     await expect(
       cmds.requestGrant({ resource: 'workspace:bob:*:read' }, bob),
     ).rejects.toThrow(/you own this resource/);
+  });
+});
+
+describe('type-decl projection (vocabulary as data)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const handler = createTypeDeclHandler(() => ({ state, grants }));
+  const busCtx = () =>
+    ({ ...(ctxFor(null).ctx as unknown as Record<string, unknown>), identity: { scopes: [] } } as unknown as ServiceContext);
+  const event = (detail: Record<string, unknown>, source = 'cells') =>
+    handler(detail, busCtx(), { source, detailType: 'cell.types.declared' });
+
+  it('projects a cell-declared type into a _types/<type> fact (key carries type; manager defaulted to the cell)', async () => {
+    await event({
+      cellId: 'lit-1', owner: 'alice', address: '@alice/lit',
+      types: [{ type: 'doc', icon: '📄', label: 'value.title', handlers: { open: [{ surface: '/@alice/lit?doc=${match}' }] } }],
+    });
+    const decl = await cmds.peek({ key: '_types/doc' }, ctxFor('alice').ctx);
+    expect(decl?.value).toMatchObject({
+      icon: '📄',
+      label: 'value.title',
+      manager: '@alice/lit',
+      handlers: { open: [{ surface: '/@alice/lit?doc=${match}' }] },
+    });
+    expect((decl?.value as Record<string, unknown>).type).toBeUndefined(); // the key carries it
+    expect(decl?._meta.type).toBe('type-decl');
+  });
+
+  it('honours an explicit manager and skips reserved/blank types', async () => {
+    await event({
+      owner: 'alice', address: '@alice/x',
+      types: [
+        { type: 'note', manager: '@alice/notes', handlers: { open: [{ surface: '/n/${id}' }] } },
+        { type: '_secret', handlers: {} },
+        { handlers: {} },
+      ],
+    });
+    expect((await cmds.peek({ key: '_types/note' }, ctxFor('alice').ctx))?.value).toMatchObject({ manager: '@alice/notes' });
+    expect(await cmds.peek({ key: '_types/_secret' }, ctxFor('alice').ctx)).toBeNull();
+  });
+
+  it('refuses declarations not from the cells service', async () => {
+    await event({ owner: 'alice', address: '@x', types: [{ type: 'evil', handlers: {} }] }, 'cell-evil');
+    expect(await cmds.peek({ key: '_types/evil' }, ctxFor('alice').ctx)).toBeNull();
   });
 });

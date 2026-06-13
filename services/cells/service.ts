@@ -883,6 +883,29 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     clientEntry: clientEntry ?? null,
     staticFiles,
   });
+
+  // Vocabulary as data: a cell declares the fact types it manages in a
+  // `types.json` at its src root; on deploy we project those into the owner's
+  // `_types/<type>` registry (the workspace applies it, same path as the
+  // `cells/<id>` lifecycle projection). So a cell's facts become openable
+  // everywhere without any surface hardcoding it. See docs/type-vocabulary.md.
+  if (files['types.json'] !== undefined) {
+    try {
+      const parsed = JSON.parse(files['types.json']) as { types?: Array<Record<string, unknown>> };
+      const types = Array.isArray(parsed.types) ? parsed.types : [];
+      if (types.length) {
+        await ctx.events.emit('cell.types.declared', {
+          cellId: record.cellId,
+          owner: record.owner,
+          address: cellAddress(record.owner, record.name),
+          types,
+        });
+        ctx.logger.info('cell declared types', { cellId: record.cellId, count: types.length });
+      }
+    } catch (err) {
+      ctx.logger.warn('cell types.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
+    }
+  }
   return {
     deployed: true,
     cellId: record.cellId,
@@ -1508,7 +1531,7 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'cells',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
+  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed', 'cell.types.declared'] },
 });
 
 export default handler;

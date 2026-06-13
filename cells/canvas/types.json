@@ -1,0 +1,13 @@
+{
+  "types": [
+    {
+      "type": "canvas",
+      "icon": "🌲",
+      "manager": "@c15r/canvas",
+      "handlers": {
+        "open": [{ "surface": "/@c15r/canvas?canvas=${match}" }],
+        "embed": [{ "surface": "/@c15r/canvas?canvas=${match}&embed=1" }]
+      }
+    }
+  ]
+}

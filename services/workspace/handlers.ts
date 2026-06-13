@@ -1620,3 +1620,44 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
     ctx.logger.info('cell lifecycle projected', { scope: owner, key, status: value.status, revision: entry._meta.revision });
   };
 }
+
+/**
+ * Vocabulary as data: a cell declares the fact types it manages
+ * (`cell.types.declared`, source pinned to the `cells` service — first-party,
+ * owner resolved from the registry) and the workspace projects each into a
+ * `_types/<type>` fact in the owner's slice. The fact carries the type
+ * declaration (icon/label/handlers) that home and any other surface resolve a
+ * fact's open/edit path from (docs/type-vocabulary.md). The cell's address is
+ * stamped as the `manager` unless the declaration names one.
+ */
+export function createTypeDeclHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'cells') {
+      ctx.logger.warn('type declaration from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const owner = typeof detail.owner === 'string' ? detail.owner : '';
+    const address = typeof detail.address === 'string' ? detail.address : '';
+    const types = Array.isArray(detail.types) ? (detail.types as Array<Record<string, unknown>>) : [];
+    if (!owner || !types.length) {
+      ctx.logger.warn('type declaration missing owner/types refused', { detailType: meta.detailType });
+      return;
+    }
+    const { state } = build(ctx);
+    const writer: Identity = { user: 'platform/cells', scopes: [] };
+    let written = 0;
+    for (const decl of types) {
+      const type = typeof decl.type === 'string' ? decl.type : '';
+      if (!type || type.startsWith('_')) continue;
+      const value = { ...decl, manager: typeof decl.manager === 'string' ? decl.manager : address };
+      delete (value as Record<string, unknown>).type; // the key carries it
+      const entry = await state.put(
+        { scope: owner, key: `_types/${type}`, value, via: `cells:types.declared`, type: 'type-decl', tags: ['vocabulary'] },
+        writer,
+      );
+      await ctx.events.emit('workspace.fact.written', { scope: owner, key: `_types/${type}`, revision: entry._meta.revision });
+      written++;
+    }
+    ctx.logger.info('type declarations projected', { scope: owner, address, written });
+  };
+}
