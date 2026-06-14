@@ -205,7 +205,32 @@ export function defineMcpService(def: McpServiceDefinition) {
     }
   }
 
+  // Cross-origin access for host-isolated cells (docs/cell-origin-isolation.md):
+  // a cell on `<owner>-<name>.on.parc.land` calls the apex `/mcp` with its scoped
+  // bearer in the Authorization header. Reflect only origins under the configured
+  // suffix (`MCP_CORS_ORIGIN_SUFFIX`, e.g. ".on.parc.land"); unset ⇒ no CORS.
+  // Credentialless (bearer header, never the cookie), so no CSRF surface.
+  function corsHeaders(req: ServiceHttpRequest): Record<string, string> {
+    const suffix = process.env.MCP_CORS_ORIGIN_SUFFIX;
+    if (!suffix) return {};
+    const origin = req.headers['origin'] ?? req.headers['Origin'];
+    if (!origin || !origin.startsWith('https://') || !origin.endsWith(suffix)) return {};
+    return {
+      'access-control-allow-origin': origin,
+      'access-control-allow-methods': 'POST, OPTIONS',
+      'access-control-allow-headers': 'authorization, content-type',
+      'access-control-max-age': '600',
+      vary: 'Origin',
+    };
+  }
+
+  function preflight(req: ServiceHttpRequest): ServiceHttpResponse {
+    return { statusCode: 204, headers: { ...NO_STORE, ...corsHeaders(req) }, body: '' };
+  }
+
   async function endpoint(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
+    const cors = corsHeaders(req);
+    const withCors = (r: ServiceHttpResponse): ServiceHttpResponse => ({ ...r, headers: { ...(r.headers ?? {}), ...cors } });
     if (requireAuth && !ctx.identity.user) {
       const authz = req.headers['authorization'] ?? req.headers['Authorization'] ?? '';
       const fwd = req.headers['x-forwarded-authorization'] ?? '';
@@ -214,14 +239,14 @@ export function defineMcpService(def: McpServiceDefinition) {
         hadBearer: /^Bearer\s/i.test(authz),
         hadFwdBearer: /^Bearer\s/i.test(fwd),
       });
-      return unauthorized(req, mcpPath);
+      return withCors(unauthorized(req, mcpPath));
     }
 
     let payload: unknown;
     try {
       payload = JSON.parse(req.rawBody ?? '');
     } catch {
-      return rpcError(null, -32700, 'Parse error');
+      return withCors(rpcError(null, -32700, 'Parse error'));
     }
 
     // Minimal batch support: process each request, drop notification responses.
@@ -231,12 +256,12 @@ export function defineMcpService(def: McpServiceDefinition) {
         const res = await dispatch(item as JsonRpcRequest, ctx);
         if (res) out.push((res.body as { jsonrpc: string }) ?? res.body);
       }
-      return { statusCode: 200, headers: NO_STORE, body: out };
+      return withCors({ statusCode: 200, headers: NO_STORE, body: out });
     }
 
     const res = await dispatch(payload as JsonRpcRequest, ctx);
     // A notification yields no body; ack with 202.
-    return res ?? { statusCode: 202, headers: NO_STORE, body: '' };
+    return withCors(res ?? { statusCode: 202, headers: NO_STORE, body: '' });
   }
 
   // Static tools double as directly-invocable commands (dynamic gateway tools
@@ -251,6 +276,10 @@ export function defineMcpService(def: McpServiceDefinition) {
     version: def.version,
     commands,
     events: def.events,
-    http: [{ method: 'POST', path: mcpPath, handler: endpoint }, ...(def.http ?? [])],
+    http: [
+      { method: 'POST', path: mcpPath, handler: endpoint },
+      { method: 'OPTIONS', path: mcpPath, handler: preflight },
+      ...(def.http ?? []),
+    ],
   });
 }

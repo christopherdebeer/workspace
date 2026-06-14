@@ -250,6 +250,8 @@ export class PlatformStack extends cdk.Stack {
         domainName: `*.${props.cellDomain}`,
         validation: acm.CertificateValidation.fromDns(),
       });
+      // Let a host-isolated cell call the apex /mcp cross-origin with its bearer.
+      gateway.fn.addEnvironment('MCP_CORS_ORIGIN_SUFFIX', `.${props.cellDomain}`);
     }
 
     const router = new ServiceRouter(this, 'Router', {

@@ -310,4 +310,50 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(res.statusCode).toBe(401);
     expect(res.headers['www-authenticate']).toContain('resource_metadata="https://parc.land/.well-known/oauth-protected-resource/mcp"');
   });
+
+  describe('CORS for host-isolated cell origins', () => {
+    afterEach(() => delete process.env.MCP_CORS_ORIGIN_SUFFIX);
+
+    it('answers the OPTIONS preflight and reflects an allowed cell origin', async () => {
+      process.env.MCP_CORS_ORIGIN_SUFFIX = '.on.parc.land';
+      const res = (await gateway(
+        httpEvent('OPTIONS', '/mcp', { headers: { origin: 'https://c15r-lit.on.parc.land' } }),
+      )) as FunctionUrlResponse;
+      expect(res.statusCode).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('https://c15r-lit.on.parc.land');
+      expect(res.headers['access-control-allow-headers']).toContain('authorization');
+    });
+
+    it('sets CORS on a real POST from an allowed cell origin', async () => {
+      process.env.MCP_CORS_ORIGIN_SUFFIX = '.on.parc.land';
+      const res = (await gateway(
+        httpEvent('POST', '/mcp', {
+          headers: { 'x-forwarded-authorization': 'Bearer creator', origin: 'https://c15r-lit.on.parc.land' },
+          body: rpc('tools/call', { name: 'whoami', arguments: {} }),
+        }),
+      )) as FunctionUrlResponse;
+      expect(res.headers['access-control-allow-origin']).toBe('https://c15r-lit.on.parc.land');
+      expect(res.headers['vary']).toBe('Origin');
+    });
+
+    it('does NOT reflect a non-cell origin (and 401 still carries no ACAO)', async () => {
+      process.env.MCP_CORS_ORIGIN_SUFFIX = '.on.parc.land';
+      const evil = (await gateway(
+        httpEvent('OPTIONS', '/mcp', { headers: { origin: 'https://evil.example.com' } }),
+      )) as FunctionUrlResponse;
+      expect(evil.headers['access-control-allow-origin']).toBeUndefined();
+      const noBearer = (await gateway(
+        httpEvent('POST', '/mcp', { headers: { origin: 'https://evil.example.com' }, body: rpc('tools/list') }),
+      )) as FunctionUrlResponse;
+      expect(noBearer.statusCode).toBe(401);
+      expect(noBearer.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
+    it('emits no CORS at all when the suffix is unconfigured', async () => {
+      const res = (await gateway(
+        httpEvent('OPTIONS', '/mcp', { headers: { origin: 'https://c15r-lit.on.parc.land' } }),
+      )) as FunctionUrlResponse;
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+  });
 });
