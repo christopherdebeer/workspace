@@ -828,28 +828,33 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   if (Object.keys(files).length === 0) throw new Error('no source files to deploy (write to src/ first)');
   const entry = files['index.ts'] !== undefined ? 'index.ts' : files['index.js'] !== undefined ? 'index.js' : Object.keys(files)[0];
 
+  // One import map (`client/imports.json`) declares the cell's npm deps for BOTH
+  // bundlers: the server inlines them from esm.sh (node target), the client fetches
+  // them from esm.sh in the browser — same pins, so an isomorphic cell stays on the
+  // byte-identical dependency on both sides.
+  let imports: Record<string, string> | undefined;
+  if (files['client/imports.json'] !== undefined) {
+    try {
+      imports = JSON.parse(files['client/imports.json']) as Record<string, string>;
+    } catch {
+      throw new Error('client/imports.json is not valid JSON');
+    }
+  }
+
   let js: string;
   try {
-    js = await bundleFiles(files, entry);
+    js = await bundleFiles(files, entry, imports);
   } catch (err) {
     throw new Error(`Cell source failed to bundle: ${(err as Error).message}`);
   }
   const pkg: Array<{ name: string; content: string }> = [{ name: 'index.js', content: js }];
 
   // The tier-2 mirror of home's `clientEntry`: a `client/` entry in the src
-  // tree browser-bundles to `app.js` (bare imports become esm.sh externals);
+  // tree browser-bundles to `app.js` (declared deps become esm.sh externals);
   // `static/` files ship verbatim. The handler serves both from its package
   // (fs.readFileSync — they sit beside index.js in /var/task).
   const clientEntry = CLIENT_ENTRIES.find((c) => files[c] !== undefined);
   if (clientEntry) {
-    let imports: Record<string, string> | undefined;
-    if (files['client/imports.json'] !== undefined) {
-      try {
-        imports = JSON.parse(files['client/imports.json']) as Record<string, string>;
-      } catch {
-        throw new Error('client/imports.json is not valid JSON');
-      }
-    }
     try {
       pkg.push({ name: 'app.js', content: await bundleClientFiles(files, clientEntry, imports) });
     } catch (err) {
