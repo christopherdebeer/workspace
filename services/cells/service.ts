@@ -683,7 +683,7 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
   const { record, bucket, env } = await resolveAuthorized(input, user);
   await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
   ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
-  if (input.deploy) return deployCell(record, env, ctx);
+  if (input.deploy) return requestDeploy(record, env, ctx);
   await emitFilesChanged(ctx, record, 'write', [cleanPath(input.path)]);
   return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
 }
@@ -742,7 +742,7 @@ interface ReplaceInFileInput extends CellRef {
   new_str: string;
   /** Replace every occurrence (default: first only). */
   replace_all?: boolean;
-  /** Fused verify: bundle + redeploy in the same call. */
+  /** Fused: kick off an async deploy in the same call (poll get for the phase). */
   deploy?: boolean;
 }
 
@@ -773,8 +773,8 @@ async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Pr
   ctx.logger.info('cell file edited', { cellId: record.cellId, path: cleanPath(input.path), replacements });
   const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), replacements, occurrences };
   if (input.deploy) {
-    const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
-    return { ...result, deploy: deployed };
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploy: started.deploy };
   }
   await emitFilesChanged(ctx, record, 'replace', [cleanPath(input.path)]);
   return result;
@@ -798,8 +798,8 @@ async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Prom
   ctx.logger.info('cell file appended', { cellId: record.cellId, path: cleanPath(input.path), created: existing === '' });
   const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), created: existing === '' };
   if (input.deploy) {
-    const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
-    return { ...result, deploy: deployed };
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploy: started.deploy };
   }
   await emitFilesChanged(ctx, record, 'append', [cleanPath(input.path)]);
   return result;
@@ -956,9 +956,19 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
  * `get` until `deploy.phase` is `DEPLOYED` or `FAILED`. (Mirrors `createCell`,
  * whose long work — CloudFormation — is likewise async.)
  */
-async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
-  const user = requireUser(ctx.identity);
-  const { record, env } = await resolveAuthorized(input, user);
+interface DeployStarted {
+  deploying: true;
+  cellId: string;
+  version: string;
+  deploy: DeployState;
+  message: string;
+}
+
+/** Kick off the async deploy: record DEPLOYING, emit `cell.deploy.requested`
+ *  (routed back to `onDeployRequested`), and return the marker. Shared by the
+ *  `deploy` command and the write/edit `deploy:true` flags so every deploy path
+ *  is off the synchronous request/edge timeout. */
+async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceContext): Promise<DeployStarted> {
   const version = `${Date.now()}`;
   const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString() };
   await createRegistry(env.registryTable).setDeploy(record.cellId, deployState);
@@ -976,6 +986,12 @@ async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
     deploy: deployState,
     message: 'Bundling in the background. Poll `get` until `deploy.phase` is DEPLOYED (or FAILED).',
   };
+}
+
+async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const { record, env } = await resolveAuthorized(input, user);
+  return requestDeploy(record, env, ctx);
 }
 
 /**
@@ -1408,7 +1424,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   writeFile: {
     description:
-      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to bundle + redeploy immediately, else call deploy.",
+      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1419,7 +1435,7 @@ const TOOLS: Record<string, ToolSpec> = {
         name: { type: 'string' },
         path: { type: 'string', description: 'Relative path under src/, e.g. index.ts or lib/util.ts' },
         content: { type: 'string' },
-        deploy: { type: 'boolean', description: 'Bundle + redeploy after writing' },
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after writing (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -1428,7 +1444,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   replaceInFile: {
     description:
-      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to bundle + redeploy in the same call (edit + verify, one round trip). Use writeFile only when rewriting most of a file.",
+      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1441,7 +1457,7 @@ const TOOLS: Record<string, ToolSpec> = {
         old_str: { type: 'string', description: 'Exact string to find (case-sensitive, including whitespace)' },
         new_str: { type: 'string', description: 'Replacement (empty string deletes)' },
         replace_all: { type: 'boolean', description: 'Replace every occurrence (default: first only)' },
-        deploy: { type: 'boolean', description: 'Bundle + redeploy after the edit' },
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after the edit (poll get for deploy.phase)' },
       },
       required: ['path', 'old_str', 'new_str'],
       additionalProperties: false,
@@ -1449,7 +1465,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: replaceInFile as RegisteredCommand,
   },
   appendToFile: {
-    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to bundle + redeploy in the same call.",
+    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1460,7 +1476,7 @@ const TOOLS: Record<string, ToolSpec> = {
         name: { type: 'string' },
         path: { type: 'string' },
         content: { type: 'string', description: 'Content to append (lead with \\n for a separator)' },
-        deploy: { type: 'boolean', description: 'Bundle + redeploy after appending' },
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after appending (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,

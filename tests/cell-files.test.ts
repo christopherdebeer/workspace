@@ -246,12 +246,13 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(miss.error).toMatch(/not found/);
     expect((await call('mallory', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'let', new_str: 'x' })).ok).toBe(false);
 
-    // deploy:true fuses edit + rebuild (one round trip).
-    const fused = await call<{ deploy: { deployed: boolean } }>('alice', 'replaceInFile', {
+    // deploy:true fuses edit + async deploy kickoff (one round trip); the
+    // DEPLOYING marker rides back on `deploy`, and the worker finishes it.
+    const fused = await call<{ deploy: { phase: string } }>('alice', 'replaceInFile', {
       cellId, path: 'index.ts', old_str: 'handler', new_str: 'handler', replace_all: true, deploy: true,
     });
     expect(fused.ok).toBe(true);
-    expect(fused.result!.deploy.deployed).toBe(true);
+    expect(fused.result!.deploy.phase).toBe('DEPLOYING');
   });
 
   it('appendToFile extends (or creates) a source file', async () => {
