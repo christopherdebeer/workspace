@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { Surface, type ViewModel, type ListItem, type BlockData, type DocValue } from './shared';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -80,65 +83,15 @@ async function publicPatterns(): Promise<string[]> {
   return facts.map((f) => (f.value as { pattern?: string } | undefined)?.pattern ?? f.key.slice('_public/'.length));
 }
 
-// ── minimal markdown → HTML (server first paint; client re-renders with marked) ──
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-function inline(s: string): string {
-  return esc(s)
-    .replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, t, h) => `<a href="${escAttr(h)}" rel="noopener">${t}</a>`);
-}
-function renderMarkdown(md: string): string {
-  const lines = md.replace(/\r\n/g, '\n').split('\n');
-  const html: string[] = [];
-  let i = 0;
-  let para: string[] = [];
-  let list: string[] | null = null;
-  const flush = (): void => {
-    if (para.length) { html.push(`<p>${inline(para.join(' '))}</p>`); para = []; }
-  };
-  const flushList = (): void => {
-    if (list) { html.push(`<ul>${list.map((li) => `<li>${inline(li)}</li>`).join('')}</ul>`); list = null; }
-  };
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^```/.test(line)) {
-      flush(); flushList();
-      const lang = line.slice(3).trim();
-      const bodyLines: string[] = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i])) { bodyLines.push(lines[i]); i++; }
-      i++;
-      html.push(`<pre><code${lang ? ` class="language-${esc(lang)}"` : ''}>${esc(bodyLines.join('\n'))}</code></pre>`);
-      continue;
-    }
-    const h = line.match(/^(#{1,4})\s+(.*)$/);
-    if (h) { flush(); flushList(); const n = h[1].length; html.push(`<h${n}>${inline(h[2])}</h${n}>`); i++; continue; }
-    const li = line.match(/^\s*[-*]\s+(.*)$/);
-    if (li) { flush(); (list ??= []).push(li[1]); i++; continue; }
-    if (/^\s*>\s?/.test(line)) { flush(); flushList(); html.push(`<blockquote>${inline(line.replace(/^\s*>\s?/, ''))}</blockquote>`); i++; continue; }
-    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { flush(); flushList(); html.push('<hr />'); i++; continue; }
-    if (!line.trim()) { flush(); flushList(); i++; continue; }
-    para.push(line.trim());
-    i++;
-  }
-  flush(); flushList();
-  return html.join('\n');
-}
-
 const contentOf = (value: unknown): string => {
   if (typeof value === 'string') return value;
   if (value && typeof (value as { content?: unknown }).content === 'string') return (value as { content: string }).content;
   return '```json\n' + JSON.stringify(value, null, 2) + '\n```';
 };
 
-interface DocValue { title: string; summary?: string; blocks?: Array<{ key: string; fold?: boolean }> }
-
 // ── SSR assembly ───────────────────────────────────────────────────
+// One React tree (cells/lit/shared.tsx) rendered to a string here and hydrated
+// by the client from the SAME module — identical markup, so no first-paint flash.
 const CRITICAL_CSS = `:root{--ink:#1c1c1a;--faint:#8a8a82;--paper:#fbfbf8;--line:#e4e4dc;--accent:#2f6f4f}
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
 #app{max-width:720px;margin:0 auto;padding:1rem 1.1rem 4rem}.boot{color:var(--faint)}
@@ -150,58 +103,57 @@ header{margin:.6rem 0 1.4rem}header h1{margin:.2rem 0 0;font-size:1.6rem;line-he
 pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
 img{max-width:100%}a{color:var(--accent)}`;
 
-/** Inject SSR markup into the shell's #app. `data-ssr` tells the client this is a
- *  server first paint (hydrate read-only); `data-ssr-auth` additionally tells it the
- *  render was the OWNER's authed view (cookie-driven) — so the client can trust it as
- *  the first paint and swap fresh data in without an empty flash. Anonymous SSR omits
- *  the auth flag, so a signed-in client knows the paint is stale and replaces it. */
-function ssrPage(inner: string, authed: boolean): string {
-  const attrs = authed ? 'data-ssr="1" data-ssr-auth="1"' : 'data-ssr="1"';
+/** Inject the SSR'd tree + its serialized state into the shell. `data-ssr` flags a
+ *  server first paint (hydrate, don't rebuild); `data-ssr-auth` additionally marks the
+ *  OWNER's authed render (cookie-driven) so a signed-in client trusts it. The
+ *  `lit-state` script is the exact ViewModel the tree was rendered from — the client
+ *  hydrates against it, guaranteeing markup parity. */
+function ssrPage(inner: string, vm: ViewModel): string {
+  const attrs = vm.isOwner ? 'data-ssr="1" data-ssr-auth="1"' : 'data-ssr="1"';
+  // `<` is escaped so the JSON can't break out of the script element.
+  const state = JSON.stringify(vm).replace(/</g, '\\u003c');
   return read('static/index.html')
     .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}</style></head>`)
-    .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" ${attrs}>${inner}</div>`);
+    .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" ${attrs}>${inner}</div>`)
+    .replace(
+      '<script type="module"',
+      `<script id="lit-state" type="application/json">${state}</script>\n  <script type="module"`,
+    );
 }
 
-async function renderDocSSR(id: string, patterns: string[], isOwner: boolean): Promise<string | null> {
+/** The doc ViewModel: header + each block's markdown (or fold/missing text). The
+ *  client hydrates this, then enhances fences and enables editing in place. */
+async function buildDocVM(id: string, patterns: string[], isOwner: boolean): Promise<ViewModel | null> {
   if (!isOwner && !covers0(patterns, `doc:${id}`)) return null;
   const docFact = await getFact(`doc:${id}`);
   if (!docFact) return null;
   const dv = docFact.value as DocValue;
   const refs = Array.isArray(dv.blocks) ? dv.blocks : [];
-  const blocks = await Promise.all(refs.map((r) => getFact(r.key)));
-  const body = refs
-    .map((r, i) => {
-      const f = blocks[i];
-      const md = f ? contentOf(f.value) : `*missing fact — ${r.key}*`;
-      return `<article class="block"><div class="block-body">${renderMarkdown(md)}</div></article>`;
-    })
-    .join('\n');
-  return (
-    `<header><a class="back" href="${escAttr(`/@${OWNER}/lit`)}">← documents</a>` +
-    `<h1>${esc(dv.title || id)}</h1>${dv.summary ? `<p class="summary">${esc(dv.summary)}</p>` : ''}</header>` +
-    `<main>${body || '<p class="boot">empty document</p>'}</main>`
-  );
+  const facts = await Promise.all(refs.map((r) => getFact(r.key)));
+  const blocks: BlockData[] = refs.map((r, i) => ({
+    key: r.key,
+    fold: r.fold,
+    md: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${r.key}*`,
+  }));
+  return { kind: 'doc', owner: OWNER, isOwner, id, title: dv.title || id, summary: dv.summary, blocks };
 }
 
-async function renderListSSR(patterns: string[], isOwner: boolean): Promise<string> {
+/** The list ViewModel: one card per doc the caller may see (own slice, or what the
+ *  `_public/` index covers for anyone else). */
+async function buildListVM(patterns: string[], isOwner: boolean): Promise<ViewModel> {
   const docs = (await queryPrefix('doc:')).filter((f) => isOwner || covers0(patterns, f.key));
   docs.sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'));
-  const cards = docs
-    .map((f) => {
-      const id = f.key.slice('doc:'.length);
-      const v = f.value as DocValue;
-      return (
-        `<a class="doc-card" href="${escAttr(`?doc=${encodeURIComponent(id)}`)}">` +
-        `<h2>${esc(v.title || id)}</h2>${v.summary ? `<p>${esc(v.summary)}</p>` : ''}` +
-        `<span class="doc-meta">${(v.blocks ?? []).length} blocks · ${(f._meta?.updatedAt ?? '').slice(0, 10)}</span></a>`
-      );
-    })
-    .join('\n');
-  const lead = isOwner ? 'your documents — ordered paths through the substrate' : 'public documents — ordered paths through the substrate';
-  return (
-    `<header><h1>lit</h1><p class="summary">${lead}</p></header>` +
-    `<main class="doc-list">${cards || '<p class="boot">no documents yet</p>'}</main>`
-  );
+  const items: ListItem[] = docs.map((f) => {
+    const v = f.value as DocValue;
+    return {
+      id: f.key.slice('doc:'.length),
+      title: v.title || f.key.slice('doc:'.length),
+      summary: v.summary,
+      blocks: (v.blocks ?? []).length,
+      updated: f._meta?.updatedAt ?? '',
+    };
+  });
+  return { kind: 'list', owner: OWNER, isOwner, docs: items };
 }
 
 export const handler = async (event: {
@@ -233,8 +185,11 @@ export const handler = async (event: {
       try {
         const patterns = await publicPatterns();
         if (patterns.length || isOwner) {
-          const inner = id ? await renderDocSSR(id, patterns, isOwner) : await renderListSSR(patterns, isOwner);
-          if (inner) return respond(200, 'text/html; charset=utf-8', ssrPage(inner, isOwner));
+          const vm = id ? await buildDocVM(id, patterns, isOwner) : await buildListVM(patterns, isOwner);
+          if (vm) {
+            const inner = renderToString(createElement(Surface, { vm }));
+            return respond(200, 'text/html; charset=utf-8', ssrPage(inner, vm));
+          }
         }
       } catch (err) {
         console.warn('[lit ssr] fell back to shell', (err as Error).message);
