@@ -199,52 +199,108 @@ Two details for the recommended scheme:
   keeps cells out. A separate domain (§6) buys *structural* site isolation
   instead of *enforced*, at the cost of breaking that seamless sharing.
 
-### 4.5 The token handoff (least privilege)
+### 4.5 The token handoff — a narrow, *declared* owner-scoped grant
 
-Once a cell can't read the shell's `localStorage`, it has no credential — by
+Once a cell can't read the shell's `localStorage`, it has no credential by
 design. It must receive a **cell-scoped, least-privilege** token, never the
-shell's session:
+shell's session. The precedent is `sync` (`christopherdebeer/sync.parc.land`),
+whose model we adopt almost verbatim:
 
-- The shell mints, via `auth.mintToken`, a token narrowed to *that cell's*
-  authority — its own tools (`cell:<owner>/<name>:*`) plus only the substrate
-  scopes the cell needs — **explicitly excluding `platform:*`/admin**.
-- Delivery options (cell never sees the shell token):
-  1. **First-load handoff:** the shell opens/links the cell with a one-time code
-     (or fragment) the cell exchanges, same as an OAuth code, landing a scoped
-     token in the *cell's own* (now isolated) `localStorage`.
-  2. **Broker via `postMessage`:** the cell runs as a cross-origin iframe; a
-     hidden shell frame holds the session and answers scoped action requests —
-     the cell holds nothing. (The stronger, Figma/Lightning-Locker model;
-     heavier authoring contract.)
-- The cell then calls `gateway` `/mcp` **cross-origin with its scoped bearer in
-  the `Authorization` header** — which needs CORS on `/mcp` allowing the cell
-  origins (preflight). The cookie is irrelevant to `/mcp` (bearer-only), so no
-  CSRF surface is added.
+- In sync, an agent embodying a room is minted exactly
+  `rooms:<room>:agent:<id>:write` (`agents.ts:60`) — *one* room, bound to *one*
+  identity, write only. Minting is subsumption-checked (`scopeSubsumes`,
+  `tokens.ts`): a token can never exceed its minter's scope, and the user must
+  actually hold access to the room. And writes are bounded *again* by declared
+  actions, whose `writes[]` name specific `(scope,key)` targets. "The
+  declaration is the commitment."
+
+We already have every piece — including, from this session, the cell's **type
+declaration** (`types.json` → `CellRecord.types`), which is our analogue of
+sync's declared actions. So the per-cell token's scope is **derived, not
+hand-designed**:
+
+> **scope(cell, user) = declared(cell) ∩ granted(owner→cell) ∩ scope(user)**
+
+- **declared(cell)** — the write-back region the cell *declares* it manages: its
+  managed-type key prefixes (lit declares `doc` ⇒ `workspace:<owner>:doc:*` +
+  `blk:*`; regwatch declares its item type ⇒ only that) plus its own tools
+  (`cell:<owner>/<name>:*`). Never `workspace:<owner>:*`, never `platform:*`.
+- **granted(owner→cell)** — what the owner has actually granted that cell
+  (`cells.grant` / `workspace.share`); the owner stays in control.
+- **scope(user)** — the visiting principal's own ceiling. `auth.mintToken`
+  already computes `requested ∩ minter.scopes`, so the meet is enforced for free
+  and can never escalate (sync's `scopeSubsumes`).
+
+So when **c15r** views their own `c15r-lit`, the cell gets `workspace:c15r:doc:*`
++ `blk:*` write-back (attributed via `@c15r/lit` provenance) and nothing else.
+When **emily** (granted) views it, the token is *emily's* identity narrowed to
+what c15r granted emily-through-lit. No cell ever holds the owner's whole slice.
+
+**Delivery (cell never sees the shell token):**
+1. **First-load handoff** *(recommended, reuses the kernel OAuth flow):* the cell,
+   on its own origin, runs the kernel's existing PKCE flow against the apex
+   `auth` cell, *requesting the derived cell scope* (it knows `owner`/`name` from
+   its host, §4.1). Consent/mint narrows to the meet above; the scoped token
+   lands in the **cell's own** (origin-isolated) `localStorage`. RP ID `parc.land`
+   keeps passkeys working (§4.4); for the owner's own cells this can be silent
+   (no re-consent) since it only ever narrows.
+2. **Broker via `postMessage`** *(stronger, heavier):* the cell is a cross-origin
+   iframe; a hidden shell frame holds the session and answers scoped requests —
+   the cell holds nothing. Figma/Lightning-Locker model; defer unless needed.
+
+**Cross-origin `/mcp`:** the cell calls the apex `gateway` `/mcp` with its scoped
+bearer in `Authorization` (not the cookie — `/mcp` is bearer-only, so no CSRF).
+This needs **CORS on `/mcp`** allowing the `*.on.parc.land` origins (preflight +
+`Access-Control-Allow-Origin`/`-Headers`). The kernel's `read`/`act` base URL
+must point at the apex (`https://parc.land/mcp`) when running on a cell host.
+
+### 4.6 The same primitive powers *autonomous* write-back
+
+This is not only the interactive-cell handoff. A long-lived narrow owner-scoped
+token is exactly how a cell or agent writes back **programmatically** — a
+collector, a scheduled job, a background agent — into a bounded region of the
+owner's slice, attributed and revocable, holding nothing more. (sync's agents
+*are* this.) So "a cell given a grant to a narrow scope of the owner, for
+programmatic write-back" is the general capability; subdomain isolation is one
+consumer, autonomous agents another.
 
 ## 5. Concrete changes against today's code
 
-A punch list, smallest-blast-radius first:
+A punch list, smallest-blast-radius first. **(1)–(3) are shipped + deployed;
+(4)–(7) are the remaining arc, fully specified below.**
 
-1. **Containment now (no isolation yet):**
-   - **Revert** `services/home/client/auth.ts` sharing `parc.session.tokens` —
-     do not move the admin session into the cell-readable store (branch only,
-     not deployed).
-   - **Add the `Sec-Fetch-Dest: document` gate** to the cookie branch of
-     `resolveHttpIdentity` (closes §1.2 on the shell origin).
-   - Keep admin scope out of any cell-reachable store; consider step-up for
-     `platform:*` rather than minting it into the web session at all.
-2. **WebAuthn:** pin `expectedOrigin` to a shell-origin allowlist in
-   `services/auth/webauthn.ts` (`originOf` → validated allowlist); keep
-   `WEBAUTHN_RP_ID` / `rpIdOf` as-is (already subdomain-correct).
-3. **Routing/infra:** wildcard alternate domain(s) + wildcard cert on the
-   `ServiceRouter`; Host-header routing (CloudFront Function or the existing
-   edge) to `dispatch`; pick the naming scheme (§4.2). Optionally adopt Route53.
-4. **Handoff + CORS:** a `mintToken`-backed cell-scoped handoff (§4.5) and CORS
-   on `/mcp` for cell origins. Update the kernel so a cell reads its *own*
-   scoped token, not the shared one.
-5. **Decommission the shared `localStorage` session for cells** once the handoff
-   lands — the kernel's `parc.session.tokens` stops being cross-cell because each
-   cell is now a separate origin with its own store.
+1. ✅ **Containment** — reverted the home `parc.session.tokens` key-share; added
+   the `Sec-Fetch-Dest: document` gate to `resolveHttpIdentity` (closes §1.2).
+2. ✅ **WebAuthn `expectedOrigin` pin** (`services/auth/webauthn.ts`
+   `allowedOrigins`) + hyphen-free usernames (`^[a-z0-9]+$`) so `<owner>` is a
+   safe single DNS label.
+3. ✅ **Routing/infra** — gated `*.on.parc.land` cell distribution + DNS-validated
+   wildcard cert (`ServiceRouter`, `PLATFORM_CELL_DOMAIN`); viewer-request
+   function rewrites `<owner>-<name>.on.parc.land` → `/@<owner>/<name>` for
+   `dispatch`. Deployed; `c15r-lit.on.parc.land` SSRs.
+4. **Cell client: owner/name from host** (`cells/kernel/client/main.ts`). A
+   `cellAddress()` resolver returns `{owner, name}` from `location.host` when it
+   is `<owner>-<name>.<cellDomain>`, else from the `/@owner/cell` path. The
+   kernel's `read`/`act` base URL becomes the **apex** (`https://parc.land/mcp`)
+   when on a cell host. Cells (lit/canvas/input) drop their local path parsing for
+   `cellAddress()`. *Apex path unchanged — pure fall-through; safe to ship alone.*
+5. **CORS on `/mcp`** (`services/gateway` + the MCP runtime): allow the
+   `*.on.parc.land` origins — preflight `OPTIONS`, `Access-Control-Allow-Origin`
+   (reflect/allowlist the cell host), `-Allow-Headers: authorization,content-type`,
+   `-Allow-Methods: POST`. No credentials mode (bearer in header, not cookie).
+6. **Scoped-token handoff** (§4.5): on a cell host with no session, the kernel
+   runs its PKCE flow against the apex `auth`, **requesting the derived cell
+   scope** = `declared(cell) ∩ granted ∩ user`. New surface:
+   - `auth`/`cells`: resolve a cell's **declared scope** from `CellRecord.types`
+     (managed-type prefixes → `workspace:<owner>:<prefix>:write`) + `cell:<owner>/<name>:*`.
+   - `auth.mintToken` already meets `requested ∩ minter.scopes` — extend consent
+     so the owner's own cells mint silently (narrow-only, no re-prompt).
+   - the cell stores its scoped token in its **own** origin `localStorage`.
+7. **Cutover** — once (4)–(6) land: `/@owner/cell` on the apex **redirects** to
+   `<owner>-<name>.on.parc.land`, and the kernel **stops sharing
+   `parc.session.tokens`** across cells (each holds its own scoped token on its
+   own origin). *This is the step that actually closes §1.1* — until it lands,
+   apex-served cells still share `localStorage`.
 
 ## 6. When you'd want a separate registrable domain
 
@@ -300,13 +356,19 @@ the security win only completes once (4) removes the shared token.
 >   `<owner>-<name>.<cellDomain>` → `/@<owner>/<name>` for `dispatch` (no backend
 >   change). Unset ⇒ nothing changes; synth confirms zero new resources.
 >
-> **Open decision (blocks correctness of the rewrite):** the host→path rewrite
-> splits the label on the **first** hyphen, so **owner names must not contain a
-> hyphen** (cell names may). Registration does not yet enforce a username charset.
-> Pick one before enabling the cell domain: (a) enforce hyphen-free usernames (one
-> line at register; current users `c15r`/`emily` already comply), (b) switch the
-> separator to `--` (`<owner>--<name>`, forbid `--` in names), or (c) registry
-> lookup by host label (no parsing — needs the viewer host forwarded + a cells
-> resolver). Still pending after this: §5.4 (the scoped-token handoff that makes
-> host-isolated cells *functional* — until then a subdomain-served cell is
-> anonymous-only, its client must derive owner from the host) and §5.5.
+> **Resolved:** the host→path rewrite splits the label on the first hyphen, so
+> registration now enforces **hyphen-free usernames** (`^[a-z0-9]+$`).
+>
+> **Deployed (2026-06-14).** `PLATFORM_CELL_DOMAIN=on.parc.land` is live:
+> `*.on.parc.land` cert issued, the cell distribution serves, and
+> `https://c15r-lit.on.parc.land/` returns lit's SSR — the **origin boundary is
+> real**. What's served there is anonymous-only until the handoff (§5.6).
+>
+> **Design complete (the arc).** §4.5/§4.6 specify the per-cell token model,
+> adopted from `sync` (`agents.ts` mints `rooms:<r>:agent:<id>:write`,
+> subsumption-checked; declared actions bound writes): a cell's token is
+> **derived** — `declared(cell, via types.json) ∩ granted(owner) ∩ scope(user)`,
+> met by `mintToken` — never hand-designed, never the owner's whole slice. The
+> remaining *implementation* is §5 (4)–(7): client owner-from-host, `/mcp` CORS,
+> the scoped-token handoff, and the apex→subdomain cutover that finally closes
+> §1.1. Each is independently shippable; the security win completes at (7).

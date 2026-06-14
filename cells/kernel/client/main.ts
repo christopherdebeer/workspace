@@ -73,6 +73,29 @@ export const isAuthed = (): boolean => !!getTokens()?.access_token;
 export const accessToken = (): string | null => getTokens()?.access_token ?? null;
 export const grantedScopes = (): string[] => (getTokens()?.scope ?? '').split(/\s+/).filter(Boolean);
 
+/* ── origin topology (cell isolation, docs/cell-origin-isolation.md) ── */
+// Cells may be served from their own origin `<owner>-<name>.on.parc.land`; the
+// shell APIs (`/mcp`, `/oauth/*`) live on the apex. On a cell host, `/mcp` calls
+// target the apex cross-origin (bearer in header — needs CORS on /mcp); on the
+// apex they stay relative. The viewed cell's owner/name come from the host there,
+// otherwise from the `/@owner/cell` path.
+const CELL_DOMAIN = 'on.parc.land';
+const APEX = 'https://parc.land';
+const onCellHost = (): boolean => location.host.endsWith('.' + CELL_DOMAIN);
+const apiBase = (): string => (onCellHost() ? APEX : '');
+
+/** The cell being viewed: `{owner, name}` from the host (`<owner>-<name>.on.parc.land`
+ *  — owner is hyphen-free, so split on the first hyphen) or the `/@owner/cell` path. */
+export function cellAddress(): { owner: string; name: string } | null {
+  if (onCellHost()) {
+    const label = location.host.slice(0, -(CELL_DOMAIN.length + 1));
+    const i = label.indexOf('-');
+    if (i > 0) return { owner: label.slice(0, i), name: label.slice(i + 1) };
+  }
+  const m = location.pathname.match(/^\/@([^/]+)\/([^/]+)/);
+  return m ? { owner: decodeURIComponent(m[1]), name: decodeURIComponent(m[2]) } : null;
+}
+
 /** One OAuth client for the whole origin; redirect lands wherever you were. */
 async function ensureClientId(): Promise<string> {
   const cached = localStorage.getItem(K.client);
@@ -186,7 +209,9 @@ export async function authFetch(path: string, init?: RequestInit): Promise<Respo
     const headers = new Headers(init?.headers);
     const t = getTokens();
     if (t?.access_token) headers.set('authorization', `Bearer ${t.access_token}`);
-    return fetch(path, { ...init, headers });
+    // On a cell host the shell APIs live on the apex (cross-origin); on the apex
+    // `apiBase()` is empty so the path stays relative (unchanged behaviour).
+    return fetch(apiBase() + path, { ...init, headers });
   };
   let res = await run();
   if (res.status === 401 && getTokens()?.refresh_token) {

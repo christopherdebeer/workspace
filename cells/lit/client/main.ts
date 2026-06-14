@@ -18,7 +18,7 @@ import './main.css';
 (window as any).__lit_module = true; // watchdog marker: the module executed
 import { marked } from 'marked';
 import { ensureAuth, isAuthed } from './lib/auth.ts';
-import { loadTypes } from 'https://parc.land/@c15r/kernel/app.js';
+import { loadTypes, cellAddress } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
 
 interface Meta { type?: string | null; tags?: string[]; updatedAt?: string; superseded?: boolean }
@@ -31,7 +31,8 @@ let currentDoc: string | null = null;
 let editing = 0; // open editors — suspend live refresh while > 0
 let lastSeq = 0;
 
-const cellOwner = (): string => (location.pathname.match(/^\/@([^/]+)\//) || [])[1] ?? 'c15r';
+// Owner from the kernel resolver: the host on a cell origin, else the path.
+const cellOwner = (): string => (cellAddress() as { owner?: string } | null)?.owner ?? 'c15r';
 
 async function fetchFact(key: string): Promise<Entry | null> {
   const res = await read<{ entries: Entry[] }>('workspace.query', { prefix: key, limit: 8 });
