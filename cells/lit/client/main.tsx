@@ -204,9 +204,11 @@ function BlockView({ ref0, fact, editable, onEdit, onFold, onMove, onCut }: Bloc
 
 /* ── doc editor ────────────────────────────────────────────────────────── */
 
-function DocEditor({ docId, editable }: { docId: string; editable: boolean }): React.JSX.Element {
-  const [doc, setDoc] = useState<DocValue | null>(null);
-  const [facts, setFacts] = useState<Record<string, Entry | null>>({});
+function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean; seed?: DocSeed }): React.JSX.Element {
+  // Seed from the SSR ViewModel so the first interactive render IS the server
+  // content — no "loading…" gap while load() refetches. load() refreshes in place.
+  const [doc, setDoc] = useState<DocValue | null>(seed?.doc ?? null);
+  const [facts, setFacts] = useState<Record<string, Entry | null>>(seed?.facts ?? {});
   const [missing, setMissing] = useState(false);
   const editingRef = useRef(0);
 
@@ -303,8 +305,9 @@ function AddBlock({ onAdd, onOpen }: { onAdd: (t: string) => void; onOpen: (open
 
 /* ── list ──────────────────────────────────────────────────────────────── */
 
-function ListEditor({ editable }: { editable: boolean }): React.JSX.Element {
-  const [docs, setDocs] = useState<Array<{ id: string; v: DocValue; updated: string }> | null>(null);
+function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }): React.JSX.Element {
+  // Seed from the SSR ViewModel (no "loading documents…" gap); the effect refreshes.
+  const [docs, setDocs] = useState<Array<{ id: string; v: DocValue; updated: string }> | null>(seed ?? null);
   useEffect(() => {
     void (async () => {
       const res = await read<{ entries: Entry[] }>('workspace.query', { type: 'doc', limit: 100 });
@@ -431,11 +434,38 @@ function AnonView({ vm }: { vm: ViewModel }): React.JSX.Element {
 
 /* ── routing + boot ────────────────────────────────────────────────────── */
 
-function Route({ editable }: { editable: boolean }): React.JSX.Element {
+/** Seeds reconstructed from the SSR ViewModel so an interactive view's first
+ *  render equals the server paint (killing the post-hydration "loading…" flash). */
+type DocSeed = { doc: DocValue; facts: Record<string, Entry | null> };
+type ListSeed = Array<{ id: string; v: DocValue; updated: string }>;
+
+function docSeed(vm: Extract<ViewModel, { kind: 'doc' }>): DocSeed {
+  const facts: Record<string, Entry | null> = {};
+  for (const b of vm.blocks) facts[b.key] = { key: b.key, value: { content: b.md } };
+  return {
+    doc: { title: vm.title, summary: vm.summary, blocks: vm.blocks.map((b) => ({ key: b.key, fold: b.fold })) },
+    facts,
+  };
+}
+function listSeed(vm: Extract<ViewModel, { kind: 'list' }>): ListSeed {
+  // Only `.length`, title, summary and updated are read for the cards; the real
+  // BlockRef contents arrive with the background refresh.
+  return vm.docs.map((d) => ({
+    id: d.id,
+    v: { title: d.title, summary: d.summary, blocks: new Array(d.blocks).fill({ key: '' }) },
+    updated: d.updated,
+  }));
+}
+
+function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewModel | null }): React.JSX.Element {
   const docId = new URLSearchParams(location.search).get('doc');
   if (docId && /^log:/.test(docId)) return <LogView docId={docId} />;
-  if (docId) return <DocEditor docId={docId} editable={editable} />;
-  return <ListEditor editable={editable} />;
+  if (docId) {
+    const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? docSeed(initialVm) : undefined;
+    return <DocEditor docId={docId} editable={editable} seed={seed} />;
+  }
+  const seed = initialVm && initialVm.kind === 'list' ? listSeed(initialVm) : undefined;
+  return <ListEditor editable={editable} seed={seed} />;
 }
 
 function Workspace({ initialVm }: { initialVm: ViewModel | null }): React.JSX.Element {
@@ -456,7 +486,7 @@ function Workspace({ initialVm }: { initialVm: ViewModel | null }): React.JSX.El
 
   if (phase === 'anon' && initialVm) return <AnonView vm={initialVm} />;
   if (phase === 'authing') return initialVm ? <Surface vm={initialVm} /> : <p className="boot">signing you in…</p>;
-  return <Route editable={isAuthed()} />;
+  return <Route editable={isAuthed()} initialVm={initialVm} />;
 }
 
 /** App: render the SSR tree verbatim for the very first paint (so hydrateRoot
