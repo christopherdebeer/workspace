@@ -56,11 +56,45 @@ forge's `create` tool description now advertises the happy path and points at it
 **5. Forge orphan-record fix.** `createCell` reconciles a `DELETING` record whose
 CloudFormation stack is already gone (previously it wedged the cell name forever).
 
+## Addendum — post-merge session (2026-06-14, branch `claude/recent-trajectory-doc-cfeciy`)
+
+After the merge, cleared the low-hanging follow-ons and fixed two issues found
+while validating. All deployed to prod (CDK runs #177–#179) and live-verified.
+
+- **Async `cells.deploy` (was: a misleading 502).** Bundling a cell (esm.sh dep
+  fetches + two esbuild passes + upload + `updateFunctionCode`) outlasts the
+  synchronous path: forge's Lambda has 60s+, but the `/mcp` gateway (default 15s)
+  and CloudFront origin (default 30s) in front time out first and return 502 while
+  the work *completes* (a sync Lambda invoke isn't cancelled when its caller dies).
+  Fixed by making deploy **event-driven**, mirroring `createCell`: `deploy` records
+  `DEPLOYING`, emits `cell.deploy.requested` (routed back to forge via
+  `CellDeployRoute`, source-pinned to `cells`), and returns; `onDeployRequested`
+  runs the bundle off the request path and records `DEPLOYED`/`FAILED` (+ cause).
+  `getCell` surfaces `deploy:{phase,version,requestedAt,error?}` as the poll
+  target; `cell-sync push --deploy` polls it. forge timeout → 120s. The
+  write/edit `deploy:true` flags share the same `requestDeploy` path. Validated
+  live: lit redeployed `DEPLOYING → DEPLOYED`, no 502.
+- **lit post-hydration flash fixed.** lit SSR'd content, hydrated cleanly, then
+  flashed `loading…` before re-showing content. Cause: when the client flips from
+  the SSR `<Surface>` to the interactive `<Route>`, `DocEditor`/`ListEditor` init
+  their state to `null` and render a loading placeholder while they refetch —
+  discarding the server paint for a round-trip. Fixed by **seeding** those views
+  from the serialized ViewModel (`docSeed`/`listSeed`) so the first interactive
+  render IS the server content; `load()` refreshes in place. *Browser eyeball
+  still wanted* to confirm the flash is gone (it's a client-timing behaviour).
+- Also done: items 4/5/7 below (data-ssr-auth drop, marked restore, forge
+  reconcile gaps).
+
+### Known minor polish (not done)
+- The `DEPLOYING` marker's `version` (command-time `Date.now()`) differs from the
+  landed `DEPLOYED` version (the worker's own `Date.now()`, == the S3 build key).
+  Harmless — pollers read the terminal version — but threading one version through
+  `deployCell` would make them identical.
+
 ## Outstanding work
 
-1. **MERGE `claude/canvas-snapshot-ssr` → `main` (PR #136).** Top priority — 44
-   commits, long overdue. CI synths `PlatformStack` only (dummy account). Nothing
-   below should gate this.
+1. ~~**MERGE `claude/canvas-snapshot-ssr` → `main` (PR #136).**~~ **DONE** —
+   merged (commit `99d97d5`); the addendum work landed on top.
 2. **Item 3 — `platform/ui` reusable in cells.** Have `cells/kernel` re-export a
    React UI kit from `kernel/app.js` (cells already import kernel cross-origin),
    then lift `json`/`csv` viewers into shared isomorphic components (the original
