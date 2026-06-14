@@ -128,7 +128,52 @@ while validating. All deployed to prod (CDK runs #177–#179) and live-verified.
 9. **Pending human validation.** Browser eyeball on: the lit pilot (no flash;
    editing/fences/log rollups), the step-7 redirect, and the starter cell.
 
-## Call-out: investigate & contrast legacy vs new workspace salience
+## RESOLVED — salience redesigned to a hybrid (implemented, not yet deployed)
+
+The investigation below ran with the legacy source in hand (the legacy workspace
+is **not in git** — it's the Val Town val `c15r/workspace`; `ops.ts` `salience()`,
+`db.ts` schema, `tend.ts` digest). Verified the legacy formula exactly as the
+"first-pass corrected" reading predicted: cumulative lifetime reads ×0.5 +
+undirected degree ×0.3 + linear age penalty + a **30-day** last-read recency term
+(−5 if never read), surfaced via a daily email digest (a *ranking*, not a filter).
+
+**Key reframing:** the new model is a per-read *attention filter* (elide < 0.1
+hides the value), not a ranking — so a 5-year corpus ported cold lands almost
+entirely below the elide threshold and is **invisible** until each fact is touched.
+That's the real migration risk, not aesthetics.
+
+**Decision (chosen): Hybrid.** `computeScore` is now a bounded-[0,1] blend of five
+computed signals (`platform/runtime/state.ts`):
+
+```
+0.45·recency + 0.15·velocity + 0.10·attention + 0.20·standing + 0.10·centrality
+  recency    = 2^(-age / 7d)                       # half-life 1h → 7d
+  velocity   = min(writes_in_window / 5, 1)
+  attention  = min(reads_in_window  / 5, 1)
+  standing   = min(log1p(lifetime_reads+writes) / log1p(50), 1)   # earned floor, saturating
+  centrality = min(degree / 8, 1)                  # structural; edges were unused by scoring
+```
+
+Both new terms derive from the trajectory + edges in one pass (`buildSignals`);
+read/query/neighbors load the full trajectory once and share it. `_meta` now
+exposes `standing`/`centrality` for tuning (Q4: measure, don't assert). Behavior
+under the new weights (verified by tests): a just-written fact reaches focus; a
+month-idle but earned/linked fact stays peripheral (visible); genuinely cold junk
+still elides.
+
+**Migration plan (for when the corpus ports):** replay the legacy `log` rows as
+trajectory events and `links` as edges into the target scope — `standing` and
+`centrality` then compute naturally, no separate counter seeding or score prior.
+(The legacy `log` is the same shape as the substrate trajectory.)
+
+**Still open:** (1) **deploy** — this changes live read-shaping for the current
+corpus, so it's committed but undeployed pending a deliberate `cdk deploy`;
+(2) write the migration script against the val's sqlite when the port is scheduled;
+(3) instrument scores/tiers post-deploy and tune weights (Q4) rather than asserting.
+
+<details><summary>Original investigation call-out (now resolved above)</summary>
+
+### Call-out: investigate & contrast legacy vs new workspace salience
 
 **Do this around the merge** — it bears on whether a ported legacy corpus will
 feel right under the new substrate.
@@ -193,3 +238,5 @@ will feel worse for the first weeks of a ported corpus because the signal hasn't
 been re-earned — not (necessarily) because the algorithm is worse in steady state.
 Decide the migration story (Q3) before the corpus port, and the link question
 (Q2) before it calcifies.
+
+</details>
