@@ -221,10 +221,14 @@ hand-designed**:
 
 > **scope(cell, user) = declared(cell) ∩ granted(owner→cell) ∩ scope(user)**
 
-- **declared(cell)** — the write-back region the cell *declares* it manages: its
-  managed-type key prefixes (lit declares `doc` ⇒ `workspace:<owner>:doc:*` +
-  `blk:*`; regwatch declares its item type ⇒ only that) plus its own tools
-  (`cell:<owner>/<name>:*`). Never `workspace:<owner>:*`, never `platform:*`.
+- **declared(cell)** — the write-back region the cell *declares* it manages,
+  plus its own tools (`cell:<owner>/<name>:*`). Note a *type name* is not a *key
+  prefix*: lit's `doc` type spans `doc:` **and** `blk:` keys. So the cell must
+  declare its write-back **key prefixes explicitly** (a `writes: ["doc:", "blk:"]`
+  field on `types.json` / the cell manifest — sync's "declared actions name their
+  `(scope,key)`"), which expand to `workspace:<owner>:<prefix>:write`. Never
+  `workspace:<owner>:*`, never `platform:*`. *(New declaration field — the one
+  piece §6's handoff adds.)*
 - **granted(owner→cell)** — what the owner has actually granted that cell
   (`cells.grant` / `workspace.share`); the owner stays in control.
 - **scope(user)** — the visiting principal's own ceiling. `auth.mintToken`
