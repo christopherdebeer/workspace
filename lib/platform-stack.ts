@@ -30,6 +30,13 @@ export interface PlatformStackProps extends cdk.StackProps {
   domainNames?: string[];
   /** ARN of an ACM certificate in us-east-1 covering `domainNames`. */
   certificateArn?: string;
+  /**
+   * Namespace label for host-isolated user cells, e.g. "on.parc.land". When set,
+   * a second CloudFront distribution serves cells from `<owner>-<name>.<cellDomain>`
+   * (each its own browser origin — see docs/cell-origin-isolation.md), fronted by a
+   * CDK-managed, DNS-validated `*.<cellDomain>` cert. Unset ⇒ nothing changes.
+   */
+  cellDomain?: string;
 }
 
 /**
@@ -232,12 +239,30 @@ export class PlatformStack extends cdk.Stack {
       });
     }
 
+    // Host-isolated cell namespace (docs/cell-origin-isolation.md). A CDK-managed,
+    // DNS-validated wildcard cert covers `*.<cellDomain>`; the deploy waits until
+    // it is ISSUED, so add the ACM validation CNAME on Namecheap while it waits.
+    let cellCertificate: acm.ICertificate | undefined;
+    let cellDomainNames: string[] | undefined;
+    if (props?.cellDomain) {
+      cellDomainNames = [`*.${props.cellDomain}`];
+      cellCertificate = new acm.Certificate(this, 'CellCert', {
+        domainName: `*.${props.cellDomain}`,
+        validation: acm.CertificateValidation.fromDns(),
+      });
+    }
+
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.
       cells: [home, auth, workspace, gateway, dispatch],
       defaultCell: home,
       domainNames: props?.domainNames,
       certificate,
+      // dispatch already path-routes `/@<owner>/<name>`; the cell distribution
+      // rewrites `<owner>-<name>.<cellDomain>` hosts onto that path.
+      cellHostRouter: dispatch,
+      cellDomainNames,
+      cellCertificate,
     });
 
     // Make the auth cell self-consistent with the public origin via an explicit

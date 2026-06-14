@@ -284,13 +284,29 @@ without waiting on the origin move, and (3) can land (cells served from
 subdomains, still on the shared session) before (4) without regressing — though
 the security win only completes once (4) removes the shared token.
 
-> **Status (2026-06-13).** Containment §5.1 (1) and (2) landed on the branch: the
-> home `parc.session.tokens` key-share was reverted (the admin token stays out of
-> the cell-readable store; it never deployed), and the cookie branch of
-> `resolveHttpIdentity` now requires `Sec-Fetch-Dest: document` — so the cookie is
-> honoured only on a genuine top-level navigation, closing the §1.2 ambient-read
-> (a cell's `fetch()`/`iframe` no longer rides it). The rest is design: the
-> `localStorage` exposure (§1.1) — the kernel's origin-wide session — is the real
-> driver, and only the subdomain-origin move (§4) plus the scoped-token handoff
-> (§4.5) closes it. The cookie-borne SSR identity (`parc_session`, `HttpOnly`,
-> host-only) shipped first and is the motivating context.
+> **Status (2026-06-14).** Containment §5.1 (1)/(2) and the infra for §5.2/§5.3
+> have landed on the branch (not yet deployed):
+> - **§5.1 (1)** home `parc.session.tokens` key-share reverted (admin token stays
+>   out of the cell-readable store; it never deployed).
+> - **§5.1 (2)** the cookie branch of `resolveHttpIdentity` now requires
+>   `Sec-Fetch-Dest: document` — honoured only on a genuine top-level navigation,
+>   closing the §1.2 ambient-read (`fetch()`/`iframe` no longer ride it).
+> - **§5.2** WebAuthn `expectedOrigin` is pinned to a shell allowlist
+>   (`PUBLIC_BASE_URL` + `WEBAUTHN_EXPECTED_ORIGINS`), falling back to the request
+>   origin only when unconfigured — so a cell subdomain can't complete a ceremony.
+> - **§5.3** `ServiceRouter` gained an additive, gated cell distribution
+>   (`PLATFORM_CELL_DOMAIN`): a `*.<cellDomain>` DNS-validated cert + a second
+>   CloudFront distribution whose viewer-request function rewrites
+>   `<owner>-<name>.<cellDomain>` → `/@<owner>/<name>` for `dispatch` (no backend
+>   change). Unset ⇒ nothing changes; synth confirms zero new resources.
+>
+> **Open decision (blocks correctness of the rewrite):** the host→path rewrite
+> splits the label on the **first** hyphen, so **owner names must not contain a
+> hyphen** (cell names may). Registration does not yet enforce a username charset.
+> Pick one before enabling the cell domain: (a) enforce hyphen-free usernames (one
+> line at register; current users `c15r`/`emily` already comply), (b) switch the
+> separator to `--` (`<owner>--<name>`, forbid `--` in names), or (c) registry
+> lookup by host label (no parsing — needs the viewer host forwarded + a cells
+> resolver). Still pending after this: §5.4 (the scoped-token handoff that makes
+> host-isolated cells *functional* — until then a subdomain-served cell is
+> anonymous-only, its client must derive owner from the host) and §5.5.

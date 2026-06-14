@@ -34,6 +34,33 @@ function rpIdOf(req: ServiceHttpRequest, config: WebAuthnConfig): string {
   return hostname === stable || hostname.endsWith(`.${stable}`) ? stable : hostname;
 }
 
+/**
+ * The origins allowed to *complete* a ceremony. RP ID `parc.land` is a
+ * registrable suffix of every `*.parc.land` host, so a cell subdomain could
+ * otherwise assert it and phish a passkey. Pin verification to the shell
+ * origin(s): `PUBLIC_BASE_URL` plus any explicit extras (`WEBAUTHN_EXPECTED_ORIGINS`,
+ * comma/space separated — e.g. a www/apex variant or the bootstrap CloudFront
+ * domain). Cell subdomains are not on the list, so they're rejected. Falls back to
+ * the request origin only when nothing is configured (local/bootstrap), preserving
+ * today's single-origin behaviour. See docs/cell-origin-isolation.md §4.4.
+ */
+function allowedOrigins(req: ServiceHttpRequest): string[] {
+  const list: string[] = [];
+  const base = process.env.PUBLIC_BASE_URL;
+  if (base) {
+    try {
+      const u = new URL(base);
+      list.push(`${u.protocol}//${u.host}`);
+    } catch {
+      /* malformed base url — ignore */
+    }
+  }
+  const extra = process.env.WEBAUTHN_EXPECTED_ORIGINS;
+  if (extra) for (const o of extra.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)) list.push(o);
+  if (list.length === 0) list.push(originOf(req)); // unconfigured ⇒ today's behaviour
+  return [...new Set(list)];
+}
+
 function json(body: unknown, status = 200): ServiceHttpResponse {
   return { statusCode: status, headers: { 'cache-control': 'no-store' }, body };
 }
@@ -79,6 +106,7 @@ export async function handleRegisterVerify(
   }>();
   const rpId = rpIdOf(req, config);
   const origin = originOf(req);
+  const origins = allowedOrigins(req);
   const challenge = await store.getChallenge(challengeId);
   if (!challenge || challenge.type !== 'registration') return json({ error: 'Invalid or expired challenge' }, 400);
 
@@ -86,12 +114,12 @@ export async function handleRegisterVerify(
     const verification = await verifyRegistrationResponse({
       response: response as never,
       expectedChallenge: challenge.challenge,
-      expectedOrigin: origin,
+      expectedOrigin: origins,
       expectedRPID: rpId,
     });
     if (!verification.verified || !verification.registrationInfo) {
-      console.warn('[webauthn] register: not verified', { rpId, origin });
-      return json({ error: `Registration verification returned false (expectedRPID=${rpId}, expectedOrigin=${origin})` }, 400);
+      console.warn('[webauthn] register: not verified', { rpId, origin, allowed: origins });
+      return json({ error: `Registration verification returned false (expectedRPID=${rpId}, allowedOrigins=${origins.join(', ')}, requestOrigin=${origin})` }, 400);
     }
 
     const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
@@ -111,8 +139,8 @@ export async function handleRegisterVerify(
     await ctx.events.emit('auth.user.registered', { userId, username });
     return json({ verified: true, sessionId });
   } catch (err) {
-    console.warn('[webauthn] register: error', { error: (err as Error).message, rpId, origin });
-    return json({ error: `Registration failed: ${(err as Error).message} (expectedRPID=${rpId}, expectedOrigin=${origin})` }, 400);
+    console.warn('[webauthn] register: error', { error: (err as Error).message, rpId, origin, allowed: origins });
+    return json({ error: `Registration failed: ${(err as Error).message} (expectedRPID=${rpId}, allowedOrigins=${origins.join(', ')}, requestOrigin=${origin})` }, 400);
   }
 }
 
@@ -145,6 +173,7 @@ export async function handleAuthVerify(
   const { challengeId, response } = req.json<{ challengeId: string; response: { id: string } }>();
   const rpId = rpIdOf(req, config);
   const origin = originOf(req);
+  const origins = allowedOrigins(req);
   const challenge = await store.getChallenge(challengeId);
   if (!challenge || challenge.type !== 'authentication') return json({ error: 'Invalid or expired challenge' }, 400);
 
@@ -160,7 +189,7 @@ export async function handleAuthVerify(
     const verification = await verifyAuthenticationResponse({
       response: response as never,
       expectedChallenge: challenge.challenge,
-      expectedOrigin: origin,
+      expectedOrigin: origins,
       expectedRPID: rpId,
       credential: {
         id: credential.id,
@@ -172,8 +201,8 @@ export async function handleAuthVerify(
       },
     });
     if (!verification.verified) {
-      console.warn('[webauthn] auth: not verified', { credentialId: credential.id, credentialRpId: credential.rpId, rpId, origin });
-      return json({ error: `Authentication verification returned false (expectedRPID=${rpId}, expectedOrigin=${origin}, credentialRpId=${credential.rpId ?? 'null'})` }, 400);
+      console.warn('[webauthn] auth: not verified', { credentialId: credential.id, credentialRpId: credential.rpId, rpId, origin, allowed: origins });
+      return json({ error: `Authentication verification returned false (expectedRPID=${rpId}, allowedOrigins=${origins.join(', ')}, requestOrigin=${origin}, credentialRpId=${credential.rpId ?? 'null'})` }, 400);
     }
     await store.updateCredentialCounter(credential.id, verification.authenticationInfo.newCounter);
     await store.deleteChallenge(challengeId);

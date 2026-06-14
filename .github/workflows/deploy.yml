@@ -108,4 +108,9 @@ jobs:
           PLATFORM_DOMAINS: ${{ vars.PLATFORM_DOMAINS }}
           PLATFORM_PUBLIC_BASE_URL: ${{ vars.PLATFORM_PUBLIC_BASE_URL }}
           PLATFORM_CERT_ARN: ${{ vars.PLATFORM_CERT_ARN }}
+          # Host-isolated cell namespace (docs/cell-origin-isolation.md). Set the
+          # repo Variable to e.g. "on.parc.land" to provision the *.on.parc.land
+          # cell distribution + DNS-validated wildcard cert. Empty = not created.
+          # Optional: WEBAUTHN_EXPECTED_ORIGINS pins extra allowed ceremony origins.
+          PLATFORM_CELL_DOMAIN: ${{ vars.PLATFORM_CELL_DOMAIN }}
         run: npm run deploy
