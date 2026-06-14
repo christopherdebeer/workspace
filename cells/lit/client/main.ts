@@ -507,9 +507,13 @@ async function boot(): Promise<void> {
   document.addEventListener('lit:auth-warn', (e) =>
     bootStatus(`sign-in return failed (${(e as CustomEvent).detail}) — retrying…`),
   );
-  // Server-rendered public page + no session → stay anonymous and read-only;
-  // the SSR content is the first paint, no sign-in wall.
-  if (app.dataset.ssr === '1' && !isAuthed()) {
+  // Server-rendered public page + no session → stay anonymous and read-only; the
+  // SSR content is the first paint, no sign-in wall. BUT not when returning from
+  // an OAuth redirect (`?code=`): on a cell subdomain the server always SSRs
+  // anonymously, so without this guard we'd take the anonymous branch and never
+  // exchange the code — the login would silently never complete.
+  const returning = new URLSearchParams(location.search).has('code');
+  if (app.dataset.ssr === '1' && !isAuthed() && !returning) {
     await bootAnonymousSSR();
     return;
   }
