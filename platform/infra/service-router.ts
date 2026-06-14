@@ -106,9 +106,13 @@ const CELL_HOST_REWRITE_SRC = `function handler(event) {
   var label = host.split('.')[0];
   var i = label.indexOf('-');
   if (i > 0) {
-    var owner = label.substring(0, i);
-    var name = label.substring(i + 1);
-    req.uri = '/@' + owner + '/' + name + req.uri;
+    var prefix = '/@' + label.substring(0, i) + '/' + label.substring(i + 1);
+    // Idempotent: assets reference the cell's apex path (/@owner/name/app.js), so
+    // skip the prepend when the URI is already this cell's path — otherwise it
+    // double-prefixes and 404s (the cell's own /app.js, /style.css, …).
+    if (req.uri !== prefix && req.uri.indexOf(prefix + '/') !== 0) {
+      req.uri = prefix + req.uri;
+    }
   }
   return req;
 }`;
