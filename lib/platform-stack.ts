@@ -252,6 +252,8 @@ export class PlatformStack extends cdk.Stack {
       });
       // Let a host-isolated cell call the apex /mcp cross-origin with its bearer.
       gateway.fn.addEnvironment('MCP_CORS_ORIGIN_SUFFIX', `.${props.cellDomain}`);
+      // Cap tokens minted for a cell-host redirect to the cell ceiling (model A).
+      auth.fn.addEnvironment('CELL_DOMAIN_SUFFIX', `.${props.cellDomain}`);
     }
 
     const router = new ServiceRouter(this, 'Router', {

@@ -100,7 +100,7 @@ export function cellAddress(): { owner: string; name: string } | null {
 async function ensureClientId(): Promise<string> {
   const cached = localStorage.getItem(K.client);
   if (cached) return cached;
-  const res = await fetch('/oauth/register', {
+  const res = await fetch(apiBase() + '/oauth/register', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -123,7 +123,7 @@ export async function login(scope: string = DEFAULT_SCOPE): Promise<never> {
   sessionStorage.setItem(K.pkce, verifier);
   sessionStorage.setItem(K.state, state);
   sessionStorage.setItem(K.ret, location.href);
-  const u = new URL('/oauth/authorize', location.origin);
+  const u = new URL('/oauth/authorize', apiBase() || location.origin);
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', clientId);
   u.searchParams.set('redirect_uri', `${location.origin}${location.pathname.replace(/\/+$/, '')}`);
@@ -167,7 +167,7 @@ async function completeLoginIfReturning(): Promise<boolean> {
   sessionStorage.removeItem(K.pkce);
   if (!expected || returnedState !== expected) throw new Error('OAuth state mismatch');
   if (!verifier) throw new Error('missing PKCE verifier');
-  const res = await fetch('/oauth/token', {
+  const res = await fetch(apiBase() + '/oauth/token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -189,7 +189,7 @@ async function completeLoginIfReturning(): Promise<boolean> {
 async function refresh(): Promise<boolean> {
   const t = getTokens();
   if (!t?.refresh_token) return false;
-  const res = await fetch('/oauth/token', {
+  const res = await fetch(apiBase() + '/oauth/token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),

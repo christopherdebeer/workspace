@@ -5,7 +5,33 @@
  * `ServiceHttpRequest` and a storage-agnostic `AuthStore`.
  */
 import type { ServiceHttpRequest, ServiceHttpResponse } from '../../platform/runtime';
+import { intersectScopes } from '../../platform/runtime';
 import { AuthStore, generateToken, sha256, DEVICE_TTL_MS, REFRESH_TTL_MS } from './store';
+
+/**
+ * A cell-host redirect (`https://<owner>-<name>.<cellDomain>/…`) means the token
+ * is for a host-isolated cell acting AS the user (model A,
+ * docs/cell-origin-isolation.md §4.5). Cap it to `workspace:read/write` + the
+ * cell's own tools — never `platform:*` / cell-creation / other cells. Returns
+ * the ceiling, or null when the redirect is not a cell host. (Per-key-prefix
+ * bounding is a v2 once the substrate enforces write scopes — today per-slice
+ * writes are ownership-gated.)
+ */
+function cellCeiling(redirectUri: string | undefined): string[] | null {
+  const suffix = process.env.CELL_DOMAIN_SUFFIX; // e.g. ".on.parc.land"
+  if (!suffix || !redirectUri) return null;
+  let host: string;
+  try {
+    host = new URL(redirectUri).host;
+  } catch {
+    return null;
+  }
+  if (!host.endsWith(suffix)) return null;
+  const label = host.slice(0, -suffix.length);
+  const i = label.indexOf('-');
+  if (i <= 0) return null;
+  return ['workspace:read', 'workspace:write', `cell:${label.slice(0, i)}/${label.slice(i + 1)}:*`];
+}
 
 export interface OAuthConfig {
   serverName: string;
@@ -225,17 +251,20 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     }
 
     const scope = authCode.scope ?? config.scopesSupported[0] ?? 'read';
+    // Cap to the cell ceiling when this token is for a host-isolated cell (model A).
+    const ceiling = cellCeiling(authCode.redirectUri);
+    const effectiveScope = ceiling ? intersectScopes(scope.split(/\s+/).filter(Boolean), ceiling).join(' ') : scope;
     const result = await store.mintToken({
       userId: authCode.userId,
-      scope,
+      scope: effectiveScope,
       label: `OAuth: ${authCode.clientId}`,
       clientId: authCode.clientId,
       expiresInSec: mintExpiry,
       withRefresh: !neverExpires,
       refreshExpiresInSec: refreshExpiry,
     });
-    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope, resource: authCode.resource });
-    const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope };
+    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope: effectiveScope, capped: !!ceiling, resource: authCode.resource });
+    const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
     if (!neverExpires) {
       response.expires_in = configuredExpiry;
       response.refresh_token = result.refreshToken;

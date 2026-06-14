@@ -158,6 +158,64 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     expect((refreshRes.body as { access_token: string }).access_token).toBeTruthy();
   });
 
+  it('caps a cell-host redirect token to the cell ceiling (model A — strips platform:* and other cells)', async () => {
+    process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+    try {
+      const store = createMemoryStore();
+      const verifier = 'cell-verifier-xyz';
+      await store.saveAuthCode({
+        code: 'authz_cell',
+        clientId: 'cl',
+        userId: 'c15r',
+        redirectUri: 'https://c15r-canvas.on.parc.land/',
+        codeChallenge: sha256(verifier),
+        codeChallengeMethod: 'S256',
+        scope: 'workspace:read workspace:write platform:cells:create cell:c15r/lit:* cell:c15r/canvas:*',
+      });
+      const res = await handleToken(
+        makeReq({
+          path: '/oauth/token',
+          body: { grant_type: 'authorization_code', code: 'authz_cell', redirect_uri: 'https://c15r-canvas.on.parc.land/', code_verifier: verifier, client_id: 'cl' },
+        }),
+        store,
+        CONFIG,
+      );
+      const scope = (res.body as { scope: string }).scope.split(' ').sort();
+      // platform:* and the OTHER cell (lit) dropped; workspace + the cell's own (canvas) kept.
+      expect(scope).toEqual(['cell:c15r/canvas:*', 'workspace:read', 'workspace:write']);
+    } finally {
+      delete process.env.CELL_DOMAIN_SUFFIX;
+    }
+  });
+
+  it('does NOT cap an apex (non-cell) redirect token', async () => {
+    process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+    try {
+      const store = createMemoryStore();
+      const verifier = 'apex-verifier';
+      await store.saveAuthCode({
+        code: 'authz_apex',
+        clientId: 'cl',
+        userId: 'c15r',
+        redirectUri: 'https://parc.land/',
+        codeChallenge: sha256(verifier),
+        codeChallengeMethod: 'S256',
+        scope: 'workspace:read workspace:write platform:cells:create',
+      });
+      const res = await handleToken(
+        makeReq({
+          path: '/oauth/token',
+          body: { grant_type: 'authorization_code', code: 'authz_apex', redirect_uri: 'https://parc.land/', code_verifier: verifier, client_id: 'cl' },
+        }),
+        store,
+        CONFIG,
+      );
+      expect((res.body as { scope: string }).scope).toContain('platform:cells:create');
+    } finally {
+      delete process.env.CELL_DOMAIN_SUFFIX;
+    }
+  });
+
   it('rejects a bad PKCE verifier', async () => {
     const store = createMemoryStore();
     await store.createUser('u1', 'alice');
