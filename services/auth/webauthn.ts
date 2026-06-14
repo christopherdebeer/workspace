@@ -74,6 +74,13 @@ export async function handleRegisterOptions(
   if (!username || typeof username !== 'string' || username.length < 1 || username.length > 64) {
     return json({ error: 'Username required (1-64 chars)' }, 400);
   }
+  // The username becomes the owner segment of a cell's subdomain
+  // (`<username>-<cellname>.on.parc.land`, docs/cell-origin-isolation.md), so it
+  // must be a single DNS label and hyphen-free — the host→cell rewrite splits the
+  // label on the first hyphen, reserving it as the owner/cell separator.
+  if (!/^[a-z0-9]+$/.test(username)) {
+    return json({ error: 'Username must be lowercase letters and digits only — no hyphens or symbols (it becomes part of your cells’ subdomain).' }, 400);
+  }
   if (await store.getUserByUsername(username)) {
     return json({ error: 'Username already taken. Try signing in instead.' }, 409);
   }
