@@ -15,6 +15,20 @@ import type { DynamoDB } from 'aws-sdk';
 
 export type CellStatus = 'CREATING' | 'ACTIVE' | 'FAILED' | 'DELETING';
 
+/** Bundling phase for a `cells.deploy`. Deploy runs asynchronously (the bundle
+ *  can outlast the synchronous request/edge timeout — see service.ts `deploy`),
+ *  so the phase is recorded here and callers poll `getCell` until it's terminal. */
+export type DeployPhase = 'DEPLOYING' | 'DEPLOYED' | 'FAILED';
+export interface DeployState {
+  phase: DeployPhase;
+  /** The deploy version (`Date.now()` string) — the requested one, and the
+   *  landed one once DEPLOYED. */
+  version: string;
+  requestedAt: string;
+  /** Present only when `phase === 'FAILED'`. */
+  error?: string;
+}
+
 export interface CellRecord {
   cellId: string;
   name: string;
@@ -41,6 +55,9 @@ export interface CellRecord {
    */
   types?: Array<Record<string, unknown>>;
   status: CellStatus;
+  /** The last/in-flight async deploy's phase (set by `cells.deploy`; polled via
+   *  `getCell`). Absent until the cell has been deployed at least once. */
+  deploy?: DeployState;
   /** Lambda timeout override (seconds, 10–300). */
   timeoutSeconds?: number;
   createdAt: string;
@@ -79,6 +96,7 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
     ...(Array.isArray(item.types) ? { types: item.types as Array<Record<string, unknown>> } : {}),
     public: !!item.public,
     status: item.status as CellStatus,
+    ...(item.deploy && typeof item.deploy === 'object' ? { deploy: item.deploy as DeployState } : {}),
     createdAt: String(item.createdAt),
     updatedAt: String(item.updatedAt),
   };
@@ -93,6 +111,8 @@ export interface CellRegistry {
   /** All ACTIVE cells — for the global type vocabulary (read-only, type decls are public). */
   listActive(): Promise<CellRecord[]>;
   setStatus(cellId: string, status: CellStatus): Promise<void>;
+  /** Record the async deploy phase (DEPLOYING → DEPLOYED/FAILED). */
+  setDeploy(cellId: string, deploy: DeployState): Promise<void>;
   /** Grant a principal: every tool (no `tools`), or just the named tool patterns. Re-granting replaces. */
   addGrant(cellId: string, principal: string, tools?: string[]): Promise<CellRecord | null>;
   /** Remove a principal's access entirely (full and per-tool). */
@@ -188,6 +208,17 @@ export function createRegistry(tableName: string): CellRegistry {
           UpdateExpression: 'SET #s = :s, updatedAt = :u',
           ExpressionAttributeNames: { '#s': 'status' },
           ExpressionAttributeValues: { ':s': status, ':u': new Date().toISOString() },
+        })
+        .promise();
+    },
+
+    async setDeploy(cellId: string, deploy: DeployState): Promise<void> {
+      await db
+        .update({
+          TableName: tableName,
+          Key: profileKey(cellId),
+          UpdateExpression: 'SET deploy = :d, updatedAt = :u',
+          ExpressionAttributeValues: { ':d': deploy, ':u': new Date().toISOString() },
         })
         .promise();
     },

@@ -53,8 +53,9 @@ function memoryDocClient(): { store: Map<string, Item> } & Record<string, unknow
       promise: async () => {
         const item = store.get(key(Key));
         if (item) {
-          item.status = ExpressionAttributeValues[':s'];
-          item.updatedAt = ExpressionAttributeValues[':u'];
+          if (':s' in ExpressionAttributeValues) item.status = ExpressionAttributeValues[':s'];
+          if (':d' in ExpressionAttributeValues) item.deploy = ExpressionAttributeValues[':d'];
+          if (':u' in ExpressionAttributeValues) item.updatedAt = ExpressionAttributeValues[':u'];
         }
         return {};
       },
@@ -135,6 +136,11 @@ interface CommandResult<T = unknown> {
 }
 async function call<T = unknown>(user: string | undefined, command: string, payload: unknown): Promise<CommandResult<T>> {
   return (await forge({ __command: command, payload, user })) as CommandResult<T>;
+}
+
+// A bus event the way EventBridge delivers it (source IAM-attested by the route).
+async function emitEvent(detailType: string, detail: Record<string, unknown>): Promise<void> {
+  await forge({ 'detail-type': detailType, source: 'cells', detail } as unknown as Parameters<typeof forge>[0]);
 }
 
 describe('cells: zip framing', () => {
@@ -372,6 +378,42 @@ describe('cells: backend commands', () => {
     expect(res.ok).toBe(true);
     expect(res.result!.cellId).toBe(before.cellId);
     expect(res.result!.status).toBe('CREATING');
+  });
+
+  it('deploy is async: returns DEPLOYING and records the phase for polling', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    const res = await call<{ deploying: boolean; cellId: string; deploy: { phase: string; version: string } }>(
+      'alice',
+      'deploy',
+      { cellId: cell.cellId },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.result!.deploying).toBe(true);
+    expect(res.result!.deploy.phase).toBe('DEPLOYING');
+    // Persisted and surfaced by `get` — that's the poll target.
+    const got = await call<{ deploy?: { phase: string } }>('alice', 'get', { cellId: cell.cellId });
+    expect(got.result!.deploy?.phase).toBe('DEPLOYING');
+  });
+
+  it('the cell.deploy.requested handler records FAILED (and does not throw) when the bundle fails', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    // Empty src listing → deployCell throws "no source files to deploy"; the
+    // worker must catch it and record FAILED rather than crash the invocation.
+    __setS3({
+      putObject: (p: { Bucket: string; Key: string }) => {
+        s3Calls.push({ Bucket: p.Bucket, Key: p.Key });
+        return { promise: async () => ({}) };
+      },
+      listObjectsV2: () => ({ promise: async () => ({ Contents: [] }) }),
+    } as unknown as Parameters<typeof __setS3>[0]);
+    await emitEvent('cell.deploy.requested', { cellId: cell.cellId });
+    const got = await reg.get(cell.cellId);
+    expect(got?.deploy?.phase).toBe('FAILED');
+    expect(got?.deploy?.error).toBeTruthy();
   });
 
   it('callCell invokes the cell for the owner and returns its parsed body', async () => {

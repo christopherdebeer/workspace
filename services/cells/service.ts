@@ -20,7 +20,7 @@ import {
   ServiceContext,
   RegisteredCommand,
 } from '../../platform/runtime';
-import { createRegistry, CellRecord, CellRegistry } from './registry';
+import { createRegistry, CellRecord, CellRegistry, DeployState } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
 import { transpileCell, bundleFiles, bundleClientFiles } from './transpile';
 import {
@@ -359,6 +359,7 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
     status: record.status,
     grants: record.grants,
     ...(record.toolGrants ? { toolGrants: record.toolGrants } : {}),
+    ...(record.deploy ? { deploy: record.deploy } : {}),
     description: record.description,
     address: cellAddress(record.owner, record.name),
     createdAt: record.createdAt,
@@ -944,10 +945,68 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   };
 }
 
+/**
+ * Kick off an **asynchronous** deploy. Bundling a cell (esm.sh dep fetches + two
+ * esbuild passes + package upload + `updateFunctionCode`) can outlast the
+ * synchronous request path — forge's Lambda has 60s+, but the `/mcp` gateway and
+ * CloudFront in front of it time out sooner, returning a misleading 502 while the
+ * work actually completes. So `deploy` records `DEPLOYING`, emits
+ * `cell.deploy.requested` (routed back to forge as a fresh event-driven
+ * invocation — see `onDeployRequested`), and returns immediately. Callers poll
+ * `get` until `deploy.phase` is `DEPLOYED` or `FAILED`. (Mirrors `createCell`,
+ * whose long work — CloudFormation — is likewise async.)
+ */
 async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   const { record, env } = await resolveAuthorized(input, user);
-  return deployCell(record, env, ctx);
+  const version = `${Date.now()}`;
+  const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString() };
+  await createRegistry(env.registryTable).setDeploy(record.cellId, deployState);
+  await ctx.events.emit('cell.deploy.requested', {
+    cellId: record.cellId,
+    owner: record.owner,
+    name: record.name,
+    version,
+  });
+  ctx.logger.info('cell deploy requested', { cellId: record.cellId, version });
+  return {
+    deploying: true,
+    cellId: record.cellId,
+    version,
+    deploy: deployState,
+    message: 'Bundling in the background. Poll `get` until `deploy.phase` is DEPLOYED (or FAILED).',
+  };
+}
+
+/**
+ * Event-driven worker for `cell.deploy.requested` (routed back to forge). Runs the
+ * heavy bundle off the request path, then records the terminal deploy phase so a
+ * poller sees DEPLOYED/FAILED. Bus events carry no caller identity — trust comes
+ * from the IAM-attested `source` (pinned to `cells` by the route), and the deploy
+ * was already authorized by the `deploy` command that emitted it.
+ */
+async function onDeployRequested(detail: Record<string, unknown>, ctx: ServiceContext): Promise<void> {
+  const cellId = String(detail.cellId ?? '');
+  if (!cellId) {
+    ctx.logger.warn('cell.deploy.requested without cellId');
+    return;
+  }
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const record = await registry.get(cellId);
+  if (!record) {
+    ctx.logger.warn('cell.deploy.requested for unknown cell', { cellId });
+    return;
+  }
+  const requestedAt = record.deploy?.requestedAt ?? new Date().toISOString();
+  const version = record.deploy?.version ?? `${Date.now()}`;
+  try {
+    const result = (await deployCell(record, env, ctx)) as { version: string };
+    await registry.setDeploy(cellId, { phase: 'DEPLOYED', version: result.version, requestedAt });
+  } catch (err) {
+    ctx.logger.error('cell deploy failed', { cellId, error: (err as Error).message });
+    await registry.setDeploy(cellId, { phase: 'FAILED', version, requestedAt, error: (err as Error).message });
+  }
 }
 
 interface PutDataInput extends CellRef {
@@ -1469,7 +1528,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: deleteFile as RegisteredCommand,
   },
   deploy: {
-    description: "Bundle a cell's src/ tree (resolving relative imports) and point its Lambda at the new build — no cdk deploy.",
+    description: "Bundle a cell's src/ tree (resolving relative imports) and point its Lambda at the new build — no cdk deploy. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`).",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1584,7 +1643,20 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'cells',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
+  events: {
+    emits: [
+      'cell.create.requested',
+      'cell.deploy.requested',
+      'cell.shared',
+      'cell.unshared',
+      'cell.delete.requested',
+      'cell.deployed',
+      'cell.files.changed',
+    ],
+    // forge consumes its own `cell.deploy.requested` (routed back by the
+    // CellDeployRoute in platform-stack) to run the bundle asynchronously.
+    handles: { 'cell.deploy.requested': onDeployRequested },
+  },
 });
 
 export default handler;

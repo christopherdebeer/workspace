@@ -194,9 +194,17 @@ export class PlatformStack extends cdk.Stack {
       // index.js for isomorphic SSR — see transpile.ts SERVER_BUNDLED.
       bundlingNodeModules: ['esbuild-wasm', 'react', 'react-dom'],
       memorySize: 512,
-      timeoutSeconds: 60,
+      // The bundle (esm.sh dep fetches + esbuild) runs off the request path as an
+      // event-driven invocation now (cell.deploy.requested → onDeployRequested),
+      // so nothing in front caps it — give a cold cache headroom.
+      timeoutSeconds: 120,
     });
     controlPlane.grantControlPlane(cells);
+    // Async deploy: forge emits `cell.deploy.requested` and consumes it as a
+    // fresh event-driven invocation, so bundling never rides the synchronous
+    // request/edge timeout. Source-pinned to `cells` (the forge service emits as
+    // `cells`; dynamic cells emit as `cell-<id>`, which this prefix excludes).
+    eventBus.routeTo('CellDeployRoute', cells.fn, ['cell.deploy.requested'], 'cells');
 
     const dispatch = new HttpServiceCell(this, 'DispatchService', {
       name: 'dispatch',
