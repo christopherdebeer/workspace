@@ -166,10 +166,31 @@ trajectory events and `links` as edges into the target scope — `standing` and
 `centrality` then compute naturally, no separate counter seeding or score prior.
 (The legacy `log` is the same shape as the substrate trajectory.)
 
-**Still open:** (1) **deploy** — this changes live read-shaping for the current
-corpus, so it's committed but undeployed pending a deliberate `cdk deploy`;
-(2) write the migration script against the val's sqlite when the port is scheduled;
-(3) instrument scores/tiers post-deploy and tune weights (Q4) rather than asserting.
+**Deployed + tuned (CDK #180, #181).** The hybrid went live, then a **tending-audit
+calibration** followed (the legacy tending protocol's observe→adjust→re-observe loop,
+applied to the salience signal itself). Read the legacy tending protocol v4 directly
+from the legacy workspace MCP (`workspace_*` tools = the `c15r/workspace` val) and ran
+its Phase-1 observation over both corpora:
+- **Legacy corpus** (reference): 398 entries, 3296 reads, 860 links — salience
+  discriminates sharply (top items 20+, long negative age tail).
+- **New corpus**: 731 facts, freshly imported (all `createdAt` 2026-06),
+  trajectory-sparse (`standing`=0 for ~74% — imported without trajectory events),
+  read-light, edges on ~44%. Diagnosis: recency-dominated *by data starvation*; the
+  `standing`/`centrality` saturations (50/8) were set for a warm/large corpus.
+- **Calibration** (parameters only): `standingSaturation` 50→20, `centralitySaturation`
+  8→5, `velocityWeight` .15→.10, `attentionWeight` .10→.15 (velocity is bursty and
+  mostly captured by recency; reward reads). Recency/standing/centrality weights and
+  7d half-life unchanged.
+- **Before→after** (live): the flat 0.35–0.45 plateau split into a low mass (0.35–0.40)
+  and a high-peripheral cluster (~0.49) for facts with any earned/structural signal;
+  connected cells lifted (lit .911→.919, kernel .589→.633, viewers .539→.575); still
+  0 wrongly elided. Measurable discrimination gain.
+
+**Still open:** (1) write the migration script against the val's sqlite/MCP when the
+port is scheduled; (2) re-run the tending pass and re-tune as the trajectory fills in
+(reads accrue + migration backfill) — expect supersession; (3) consider porting the
+legacy's agent-facing **tending** + **protocol-as-data** + **run/audit** affordances
+(see the 2026-06-12 ergonomics review addendum).
 
 <details><summary>Original investigation call-out (now resolved above)</summary>
 
