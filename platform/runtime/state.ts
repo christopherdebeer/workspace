@@ -92,6 +92,8 @@ export interface ShapingSummary {
   focusThreshold: number;
   elideThreshold: number;
   elision: 'auto' | 'none';
+  /** The salience lens this read was computed under, when not the default. */
+  lens?: SalienceLens;
   counts: { focus: number; peripheral: number; elided: number; total: number };
 }
 
@@ -308,6 +310,44 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
   };
 }
 
+/**
+ * Named salience lenses — ergonomic per-read biases over the tuned defaults, for
+ * the common "I want a particular view" cases. Each preset's weights sum to 1 so
+ * the score stays in [0,1] and the elision tiers keep their meaning. For precise
+ * control, pass a raw `salience: Partial<SalienceOptions>` instead (or as well —
+ * a raw override merges on top of the preset). Lensing recomputes the score, so
+ * it shifts BOTH the ranking and the focus/peripheral/elided tiers consistently —
+ * unlike `rankBy`, which only reorders an already-scored set.
+ */
+export type SalienceLens = 'salience' | 'recent' | 'connected' | 'durable' | 'active';
+
+const LENS_PRESETS: Record<SalienceLens, Partial<SalienceOptions>> = {
+  salience: {},
+  // Freshness: shorter half-life + heavier recency.
+  recent: {
+    halfLifeMs: 24 * 60 * 60 * 1000,
+    recencyWeight: 0.6,
+    velocityWeight: 0.15,
+    attentionWeight: 0.1,
+    standingWeight: 0.1,
+    centralityWeight: 0.05,
+  },
+  // Graph structure: what's well-connected.
+  connected: { recencyWeight: 0.25, velocityWeight: 0.05, attentionWeight: 0.1, standingWeight: 0.2, centralityWeight: 0.4 },
+  // Earned, cumulative importance — survives idleness.
+  durable: { recencyWeight: 0.2, velocityWeight: 0.05, attentionWeight: 0.1, standingWeight: 0.5, centralityWeight: 0.15 },
+  // What's being touched now (reads + writes in-window).
+  active: { recencyWeight: 0.3, velocityWeight: 0.25, attentionWeight: 0.25, standingWeight: 0.1, centralityWeight: 0.1 },
+};
+
+/** Resolve the salience params for one call: instance defaults ← lens preset ←
+ *  raw override. Returns the base unchanged when neither is set. A raw override
+ *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights). */
+function callSalience(base: ResolvedSalience, lens?: SalienceLens, override?: Partial<SalienceOptions>): ResolvedSalience {
+  if (!lens && !override) return base;
+  return resolveSalience({ ...base, ...(lens ? LENS_PRESETS[lens] : {}), ...override });
+}
+
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
 /** Salience figures are signals, not measurements — 4 decimals is already generous. */
@@ -459,6 +499,10 @@ export interface ReadOptions {
   /** Per-read threshold overrides. */
   focusThreshold?: number;
   elideThreshold?: number;
+  /** Bias salience for this read via a named lens (recent/connected/durable/active). */
+  lens?: SalienceLens;
+  /** Precise per-read salience override (merges over the lens + instance defaults). */
+  salience?: Partial<SalienceOptions>;
 }
 
 export interface QueryOptions {
@@ -470,6 +514,10 @@ export interface QueryOptions {
   prefix?: string;
   /** Ranking: read-time salience (default) or last-write recency. */
   rankBy?: 'salience' | 'recency';
+  /** Bias salience for this query via a named lens (recent/connected/durable/active). */
+  lens?: SalienceLens;
+  /** Precise per-query salience override (merges over the lens + instance defaults). */
+  salience?: Partial<SalienceOptions>;
   limit?: number;
   /**
    * Resume token from a previous page's `nextCursor`. Pages are computed over
@@ -586,17 +634,18 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
    *  pass). Lifetime (cumulative) terms need the full trajectory, so this reads
    *  from seq 0 — the price of `standing`. Callers in bulk paths build it once
    *  and share it across `wrap`s. */
-  async function signalsFor(scope: string, nowMs: number): Promise<Map<string, KeySignals>> {
+  async function signalsFor(scope: string, nowMs: number, windowMs: number): Promise<Map<string, KeySignals>> {
     const [events, edges] = await Promise.all([store.recentTrajectory(scope, 0), store.listEdges(scope)]);
-    return buildSignals(events, edges, nowMs, s.windowMs);
+    return buildSignals(events, edges, nowMs, windowMs);
   }
 
   /** Wrap a stored record into a read-facing entry with a computed score. Pass a
-   *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan. */
-  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>): Promise<Entry> {
-    const sig = (signals ?? (await signalsFor(rec.scope, nowMs))).get(rec.key) ?? EMPTY_SIGNALS;
-    const parts = scoreParts({ updatedAtMs: Date.parse(rec.updatedAt), nowMs, ...sig }, s);
-    const windowMin = s.windowMs / 60000;
+   *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan, and
+   *  `sCall` to score under a per-read lens (defaults to the instance settings). */
+  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s): Promise<Entry> {
+    const sig = (signals ?? (await signalsFor(rec.scope, nowMs, sCall.windowMs))).get(rec.key) ?? EMPTY_SIGNALS;
+    const parts = scoreParts({ updatedAtMs: Date.parse(rec.updatedAt), nowMs, ...sig }, sCall);
+    const windowMin = sCall.windowMs / 60000;
     return {
       value: rec.value,
       _meta: {
@@ -623,16 +672,16 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   }
 
   /** Pure salience shaping over an already-scored set (own + granted, merged). */
-  function shapeEntries(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
+  function shapeEntries(entries: Record<string, Entry>, opts?: ReadOptions, sCall: ResolvedSalience = s): ReadResult {
     const elision = opts?.elision ?? 'auto';
-    const focusThreshold = opts?.focusThreshold ?? s.focusThreshold;
-    const elideThreshold = opts?.elideThreshold ?? s.elideThreshold;
+    const focusThreshold = opts?.focusThreshold ?? sCall.focusThreshold;
+    const elideThreshold = opts?.elideThreshold ?? sCall.elideThreshold;
     const expand = new Set(opts?.expand ?? []);
     const out: Record<string, Entry> = {};
     const stubs: ElidedStub[] = [];
     const counts = { focus: 0, peripheral: 0, elided: 0, total: 0 };
     for (const [key, src] of Object.entries(entries)) {
-      let tier = tierFor(src._meta.score, { ...s, focusThreshold, elideThreshold });
+      let tier = tierFor(src._meta.score, { ...sCall, focusThreshold, elideThreshold });
       if (expand.has(key)) tier = 'focus';
       counts[tier]++;
       counts.total++;
@@ -648,7 +697,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     return {
       entries: out,
       ...(stubs.length ? { elided: stubs } : {}),
-      _shaping: { focusThreshold, elideThreshold, elision, counts },
+      _shaping: { focusThreshold, elideThreshold, elision, ...(opts?.lens ? { lens: opts.lens } : {}), counts },
     };
   }
 
@@ -724,34 +773,38 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     },
 
     shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
-      return shapeEntries(entries, opts);
+      // Re-tiers an already-scored set, so a lens here only adjusts thresholds
+      // (it can't recompute scores without the scope's signals).
+      return shapeEntries(entries, opts, callSalience(s, opts?.lens, opts?.salience));
     },
 
     async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
       const nowMs = Date.now();
+      const sCall = callSalience(s, opts?.lens, opts?.salience);
       const records = await store.list(scope);
-      const signals = await signalsFor(scope, nowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
 
       // Score every live entry (no elision yet); shape in one pass below.
       const scored: Record<string, Entry> = {};
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
         if (!isTimerLive(rec, nowMs)) continue;
-        scored[rec.key] = await wrap(rec, nowMs, signals);
+        scored[rec.key] = await wrap(rec, nowMs, signals, sCall);
       }
 
       // Reading the scope is itself attention on every surfaced key.
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'read', scope, key: null, at: new Date(nowMs).toISOString(), seq });
 
-      return shapeEntries(scored, opts);
+      return shapeEntries(scored, opts, sCall);
     },
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
+      const sCall = callSalience(s, opts?.lens, opts?.salience);
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      const signals = await signalsFor(scope, nowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
@@ -759,7 +812,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (opts?.prefix && !rec.key.startsWith(opts.prefix)) return false;
         return true;
       });
-      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals)) })));
+      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall)) })));
       const rankBy = opts?.rankBy ?? 'salience';
       wrapped.sort((a, b) =>
         rankBy === 'recency'
@@ -825,7 +878,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
       ]);
       const nowMs = Date.now();
-      const signals = await signalsFor(scope, nowMs);
+      const signals = await signalsFor(scope, nowMs, s.windowMs);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);

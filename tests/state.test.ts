@@ -118,6 +118,32 @@ describe('observed state: salience scoring', () => {
     expect(recentOnly).toBeLessThan(fresh);
   });
 
+  it('per-call lens/override recompute the score (ranking + tiers) and echo the lens', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: 'hub', value: 1 }, alice);
+    await state.put({ scope: 'r', key: 'leaf', value: 2 }, alice);
+    await state.put({ scope: 'r', key: 'iso', value: 3 }, alice);
+    await state.link('r', 'hub', 'rel', 'leaf', null, alice);
+    await state.link('r', 'hub', 'rel', 'iso', null, alice); // hub degree 2, leaf+iso degree 1
+    await state.link('r', 'leaf', 'rel', 'iso', null, alice); // leaf degree 2, iso degree 2... rebalance below
+    // Pure-centrality override: only graph degree contributes to the score.
+    const central = await state.read('r', {
+      elision: 'none',
+      salience: { recencyWeight: 0, velocityWeight: 0, attentionWeight: 0, standingWeight: 0, centralityWeight: 1 },
+    });
+    // hub (out:2) and iso (in:2) both have degree 2; leaf has degree 2 as well here,
+    // so assert the override took effect: scores are pure-centrality, not recency.
+    expect(central.entries.hub._meta.score).toBeCloseTo(2 / 5, 5); // degree 2 / centralitySaturation 5
+    expect(central.entries.hub._meta.centrality).toBeCloseTo(2 / 5, 5);
+    // The default read (recency-led) scores the same fresh facts much higher.
+    const def = await state.read('r', { elision: 'none' });
+    expect(def.entries.hub._meta.score).toBeGreaterThan(central.entries.hub._meta.score);
+    // A named lens echoes into _shaping.
+    const con = await state.read('r', { lens: 'connected' });
+    expect(con._shaping.lens).toBe('connected');
+  });
+
   it('standing keeps an idle, earned fact above elision; centrality lifts a hub', () => {
     const s = {
       halfLifeMs: 3600000,
