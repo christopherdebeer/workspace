@@ -84,27 +84,67 @@ describe('observed state: supersede, not delete', () => {
 });
 
 describe('observed state: salience scoring', () => {
-  it('decays with age and rises with velocity/attention', () => {
+  it('decays with age and rises with velocity/attention/standing/centrality', () => {
     const s = {
       halfLifeMs: 3600000,
       windowMs: 3600000,
       velocitySaturation: 5,
       attentionSaturation: 5,
+      standingSaturation: 50,
+      centralitySaturation: 8,
+      recencyWeight: 0.45,
+      velocityWeight: 0.15,
+      attentionWeight: 0.1,
+      standingWeight: 0.2,
+      centralityWeight: 0.1,
       focusThreshold: 0.5,
       elideThreshold: 0.1,
     };
     const now = 1_000_000_000_000;
-    const fresh = computeScore({ updatedAtMs: now, writesInWindow: 5, readsInWindow: 5, nowMs: now }, s);
-    const stale = computeScore(
-      { updatedAtMs: now - 24 * 3600000, writesInWindow: 0, readsInWindow: 0, nowMs: now },
+    // Every term maxed → score approaches 1 (weights sum to 1).
+    const fresh = computeScore(
+      { updatedAtMs: now, windowWrites: 5, windowReads: 5, lifetimeReads: 50, lifetimeWrites: 50, degree: 8, nowMs: now },
+      s,
+    );
+    const cold = computeScore(
+      { updatedAtMs: now - 24 * 3600000, windowWrites: 0, windowReads: 0, nowMs: now },
       s,
     );
     expect(fresh).toBeGreaterThan(0.9);
-    expect(stale).toBeLessThan(0.05);
-    // recency-only fresh write sits between
-    const recentOnly = computeScore({ updatedAtMs: now, writesInWindow: 0, readsInWindow: 0, nowMs: now }, s);
-    expect(recentOnly).toBeGreaterThan(stale);
+    expect(cold).toBeLessThan(0.05);
+    // recency-only fresh write sits between cold and fully-saturated
+    const recentOnly = computeScore({ updatedAtMs: now, nowMs: now }, s);
+    expect(recentOnly).toBeGreaterThan(cold);
     expect(recentOnly).toBeLessThan(fresh);
+  });
+
+  it('standing keeps an idle, earned fact above elision; centrality lifts a hub', () => {
+    const s = {
+      halfLifeMs: 3600000,
+      windowMs: 3600000,
+      velocitySaturation: 5,
+      attentionSaturation: 5,
+      standingSaturation: 50,
+      centralitySaturation: 8,
+      recencyWeight: 0.45,
+      velocityWeight: 0.15,
+      attentionWeight: 0.1,
+      standingWeight: 0.2,
+      centralityWeight: 0.1,
+      focusThreshold: 0.5,
+      elideThreshold: 0.1,
+    };
+    const now = 1_000_000_000_000;
+    const oldMs = now - 30 * 24 * 3600000; // a month idle → recency ≈ 0
+    // No recency/velocity/attention, but a deep cumulative history → not elided.
+    const earned = computeScore({ updatedAtMs: oldMs, lifetimeReads: 40, lifetimeWrites: 10, nowMs: now }, s);
+    expect(earned).toBeGreaterThan(s.elideThreshold);
+    // A well-connected hub gets an additional structural lift.
+    const hub = computeScore({ updatedAtMs: oldMs, lifetimeReads: 40, lifetimeWrites: 10, degree: 8, nowMs: now }, s);
+    expect(hub).toBeGreaterThan(earned);
+    // Genuinely cold junk (one touch, no edges, old) stays elided.
+    const junk = computeScore({ updatedAtMs: oldMs, lifetimeWrites: 1, nowMs: now }, s);
+    expect(junk).toBeLessThan(s.elideThreshold);
   });
 });
 
