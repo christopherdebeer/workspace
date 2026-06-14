@@ -67,6 +67,20 @@ function setTokens(t: Tokens | null): void {
   } catch {
     /* storage unavailable */
   }
+  // On a cell host, mirror the access token to a host-only `parc_session` cookie
+  // so the cell's SERVER can SSR the authed view (dispatch reads parc_session →
+  // x-cell-caller, the cell renders the owner's content) — no anonymous-SSR →
+  // authed-client flash. Same exposure as the localStorage token (origin-
+  // isolated, and it's the capped cell token). Cleared on sign-out (t === null).
+  if (typeof location !== 'undefined' && location.host.endsWith('.' + CELL_DOMAIN)) {
+    try {
+      document.cookie = t?.access_token
+        ? `parc_session=${t.access_token}; Secure; SameSite=Lax; Path=/; Max-Age=3600`
+        : 'parc_session=; Secure; SameSite=Lax; Path=/; Max-Age=0';
+    } catch {
+      /* */
+    }
+  }
 }
 
 export const isAuthed = (): boolean => !!getTokens()?.access_token;
@@ -94,6 +108,14 @@ export function cellAddress(): { owner: string; name: string } | null {
   }
   const m = location.pathname.match(/^\/@([^/]+)\/([^/]+)/);
   return m ? { owner: decodeURIComponent(m[1]), name: decodeURIComponent(m[2]) } : null;
+}
+
+/** A link to another cell's surface, origin-aware: on a cell host, the sibling
+ *  subdomain (keeps each cell its own origin — the `/@owner/name` path would be
+ *  re-prefixed by the edge and 404); on the apex, the `/@owner/name` path. */
+export function cellUrl(owner: string, name: string, rest = ''): string {
+  if (onCellHost()) return `${location.protocol}//${owner}-${name}.${CELL_DOMAIN}${rest}`;
+  return `/@${owner}/${name}${rest}`;
 }
 
 /** One OAuth client for the whole origin; redirect lands wherever you were. */
@@ -380,19 +402,22 @@ export function hrefOf(e: FactEntry): string | null {
       .replace(/\$\{id\}/g, encodeURIComponent(id))
       .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
   }
-  // Convention fallbacks (the pre-_types routing).
+  // Convention fallbacks (the pre-_types routing). Origin-aware via cellUrl.
   const t = e._meta?.type ?? null;
   const v = (e.value ?? {}) as Record<string, unknown>;
   const tags = e._meta?.tags ?? [];
-  if (e.key.startsWith('doc:')) return `/@c15r/lit?doc=${encodeURIComponent(e.key.slice(4))}`;
+  const owner = cellAddress()?.owner ?? 'c15r';
+  if (e.key.startsWith('doc:')) return cellUrl(owner, 'lit', `?doc=${encodeURIComponent(e.key.slice(4))}`);
   if (t === 'capture' || e.key.startsWith('inbox/')) {
-    return typeof v.captured === 'string' ? `/@c15r/lit?doc=${encodeURIComponent(`log:${v.captured}`)}` : '/@c15r/input';
+    return typeof v.captured === 'string'
+      ? cellUrl(owner, 'lit', `?doc=${encodeURIComponent(`log:${v.captured}`)}`)
+      : cellUrl(owner, 'input');
   }
   if (t === 'cell' && typeof v.address === 'string') return v.address;
   const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return `/@c15r/lit?doc=${encodeURIComponent(docTag.slice(4))}`;
+  if (docTag) return cellUrl(owner, 'lit', `?doc=${encodeURIComponent(docTag.slice(4))}`);
   const boardTag = tags.find((x) => x.startsWith('canvas:'));
-  if (boardTag) return `/@c15r/canvas?canvas=${encodeURIComponent(boardTag.slice(7))}`;
+  if (boardTag) return cellUrl(owner, 'canvas', `?canvas=${encodeURIComponent(boardTag.slice(7))}`);
   return null;
 }
 

@@ -18,7 +18,7 @@ import './main.css';
 (window as any).__lit_module = true; // watchdog marker: the module executed
 import { marked } from 'marked';
 import { ensureAuth, isAuthed } from './lib/auth.ts';
-import { loadTypes, cellAddress } from 'https://parc.land/@c15r/kernel/app.js';
+import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
 
 interface Meta { type?: string | null; tags?: string[]; updatedAt?: string; superseded?: boolean }
@@ -112,11 +112,11 @@ async function hydrateFences(root: HTMLElement): Promise<void> {
       // reading column. Without w/h the server fits to a phantom 1200×800 and the
       // board lands off-view — the regression this fixes.
       const w = Math.round(Math.min(680, (root.clientWidth || 680)));
-      frame.src = `/@${cellOwner()}/canvas?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`;
+      frame.src = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`);
       frame.loading = 'lazy';
       wrap.appendChild(frame);
       const open = el('a', 'embed-open', 'open board ↗') as HTMLAnchorElement;
-      open.href = `/@${cellOwner()}/canvas?view=${encodeURIComponent(arg)}`;
+      open.href = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}`);
       wrap.appendChild(open);
       pre.replaceWith(wrap);
     } else if (!isAuthed()) {
@@ -403,7 +403,7 @@ async function renderLogDoc(docId: string): Promise<void> {
     }
   }
   const cap = el('a', 'add-block btn', '+ capture') as HTMLAnchorElement;
-  cap.href = `/@${cellOwner()}/input`;
+  cap.href = cellUrl(cellOwner(), 'input');
   app.appendChild(cap);
 }
 
