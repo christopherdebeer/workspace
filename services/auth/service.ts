@@ -13,6 +13,7 @@ import { join } from 'path';
 import {
   defineService,
   ServiceContext,
+  ServiceHttpRequest,
   ServiceHttpResponse,
   requireUser,
   getOptional,
@@ -258,6 +259,28 @@ function describeTools() {
 
 // ─── Service ─────────────────────────────────────────────────────
 
+// CORS for host-isolated cells: a cell origin (`*.<cellDomain>`) fetches the apex
+// /oauth/register + /oauth/token cross-origin during its sign-in. Reflect only
+// https origins under CELL_DOMAIN_SUFFIX (our domain); credentialless (no cookie).
+function authCors(req: ServiceHttpRequest): Record<string, string> {
+  const suffix = process.env.CELL_DOMAIN_SUFFIX;
+  if (!suffix) return {};
+  const origin = req.headers['origin'] ?? req.headers['Origin'];
+  if (!origin || !origin.startsWith('https://') || !origin.endsWith(suffix)) return {};
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+    'access-control-max-age': '600',
+    vary: 'Origin',
+  };
+}
+const cors = (req: ServiceHttpRequest, res: ServiceHttpResponse): ServiceHttpResponse => ({
+  ...res,
+  headers: { ...(res.headers ?? {}), ...authCors(req) },
+});
+const corsPreflight = (req: ServiceHttpRequest): ServiceHttpResponse => ({ statusCode: 204, headers: authCors(req), body: '' });
+
 export const handler = defineService({
   name: 'auth',
   commands: {
@@ -284,9 +307,14 @@ export const handler = defineService({
     { method: 'GET', path: '/auth/device', handler: shell },
     { method: 'GET', path: '/auth/app.js', handler: () => ({ statusCode: 200, headers: JS_HEADERS, body: appJs() }) },
 
-    { method: 'POST', path: '/oauth/register', handler: (req) => handleDCR(req, store) },
+    // /oauth/register + /oauth/token are fetched cross-origin by host-isolated
+    // cells, so they carry CORS + answer the preflight (the cell-host redirect
+    // makes handleToken cap the scope — see oauth.ts cellCeiling).
+    { method: 'POST', path: '/oauth/register', handler: async (req) => cors(req, await handleDCR(req, store)) },
+    { method: 'OPTIONS', path: '/oauth/register', handler: corsPreflight },
     { method: 'POST', path: '/oauth/consent', handler: (req) => handleConsent(req, store, OAUTH_CONFIG) },
-    { method: 'POST', path: '/oauth/token', handler: (req) => handleToken(req, store, OAUTH_CONFIG) },
+    { method: 'POST', path: '/oauth/token', handler: async (req) => cors(req, await handleToken(req, store, OAUTH_CONFIG)) },
+    { method: 'OPTIONS', path: '/oauth/token', handler: corsPreflight },
     { method: 'POST', path: '/oauth/revoke', handler: (req) => handleRevoke(req, store) },
     { method: 'POST', path: '/auth/grantable', handler: (req) => handleGrantableScopes(req, store, OAUTH_CONFIG) },
 

@@ -24,6 +24,7 @@ new PlatformStack(app, platformStackId, {
   publicBaseUrl: ctx('publicBaseUrl') ?? process.env.PLATFORM_PUBLIC_BASE_URL,
   domainNames: domains ? domains.split(',').map((d) => d.trim()).filter(Boolean) : undefined,
   certificateArn: ctx('certArn') ?? process.env.PLATFORM_CERT_ARN,
+  cellDomain: ctx('cellDomain') ?? process.env.PLATFORM_CELL_DOMAIN,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     // Platform (and its CloudFront/ACM) live in us-east-1; pin it so a differing

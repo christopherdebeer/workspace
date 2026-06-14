@@ -137,6 +137,88 @@ describe('events', () => {
   });
 });
 
+describe('cookie session identity (dispatch tier, safe methods only)', () => {
+  const TOKEN = 'sess-tok';
+  beforeEach(() => {
+    process.env.SERVICE_REGISTRY = JSON.stringify({ auth: 'auth-fn' });
+    process.env.AUTH_SERVICE_NAME = 'auth';
+    __setLambda({
+      invoke: (params: { FunctionName: string; Payload: string }) => {
+        const env = JSON.parse(params.Payload) as { __command: string; payload: { token?: string } };
+        let result: unknown = null;
+        if (params.FunctionName === 'auth-fn' && env.__command === 'validateToken') {
+          result = env.payload.token === TOKEN ? { userId: 'c15r', scope: 'workspace:read', clientId: null } : null;
+        }
+        return { promise: async () => ({ Payload: JSON.stringify({ ok: true, result }) }) };
+      },
+    } as never);
+  });
+  afterEach(() => {
+    __setLambda(undefined);
+    delete process.env.SERVICE_REGISTRY;
+    delete process.env.AUTH_SERVICE_NAME;
+    delete process.env.SERVICE_NAME;
+  });
+
+  const whoami = (name: string) =>
+    defineService({
+      name,
+      commands: {},
+      http: [
+        { method: 'GET', path: '/@*', handler: (_req, ctx) => ({ statusCode: 200, body: { user: ctx.identity.user ?? null } }) },
+        { method: 'POST', path: '/@*', handler: (_req, ctx) => ({ statusCode: 200, body: { user: ctx.identity.user ?? null } }) },
+      ],
+    });
+  // A genuine top-level navigation carries `Sec-Fetch-Dest: document`; only those
+  // are honoured. `nav` = navigation cookie; `sub` = a cell's fetch()/iframe.
+  const nav = (t: string) => ({ cookie: `parc_session=${t}`, 'sec-fetch-dest': 'document' });
+  const sub = (t: string, dest = 'empty') => ({ cookie: `parc_session=${t}`, 'sec-fetch-dest': dest });
+  const userOf = (res: FunctionUrlResponse) => JSON.parse(res.body).user;
+
+  it('dispatch GET resolves identity from the parc_session cookie on a top-level navigation', async () => {
+    process.env.SERVICE_NAME = 'dispatch';
+    const res = (await whoami('dispatch')(httpEvent('GET', '/@c15r/lit', undefined, nav(TOKEN)))) as FunctionUrlResponse;
+    expect(userOf(res)).toBe('c15r');
+  });
+
+  it('does NOT honor the cookie on a cell fetch()/iframe (Sec-Fetch-Dest not document) — no ambient read', async () => {
+    process.env.SERVICE_NAME = 'dispatch';
+    const asFetch = (await whoami('dispatch')(httpEvent('GET', '/@c15r/lit', undefined, sub(TOKEN, 'empty')))) as FunctionUrlResponse;
+    expect(userOf(asFetch)).toBeNull();
+    const asIframe = (await whoami('dispatch')(httpEvent('GET', '/@c15r/lit', undefined, sub(TOKEN, 'iframe')))) as FunctionUrlResponse;
+    expect(userOf(asIframe)).toBeNull();
+    // Absent Sec-Fetch (curl / old client) is treated as non-navigation.
+    const noHint = (await whoami('dispatch')(httpEvent('GET', '/@c15r/lit', undefined, { cookie: `parc_session=${TOKEN}` }))) as FunctionUrlResponse;
+    expect(userOf(noHint)).toBeNull();
+  });
+
+  it('does NOT honor the cookie on a mutating method (no cookie-CSRF)', async () => {
+    process.env.SERVICE_NAME = 'dispatch';
+    const res = (await whoami('dispatch')(httpEvent('POST', '/@c15r/lit', {}, nav(TOKEN)))) as FunctionUrlResponse;
+    expect(userOf(res)).toBeNull();
+  });
+
+  it('does NOT honor the cookie for the gateway tier (/mcp stays bearer-only)', async () => {
+    process.env.SERVICE_NAME = 'gateway';
+    const res = (await whoami('gateway')(httpEvent('GET', '/@x/y', undefined, nav(TOKEN)))) as FunctionUrlResponse;
+    expect(userOf(res)).toBeNull();
+  });
+
+  it('an invalid cookie token resolves anonymous', async () => {
+    process.env.SERVICE_NAME = 'dispatch';
+    const res = (await whoami('dispatch')(httpEvent('GET', '/@c15r/lit', undefined, nav('bogus')))) as FunctionUrlResponse;
+    expect(userOf(res)).toBeNull();
+  });
+
+  it('a bearer still wins and works on any tier (cookie path is additive)', async () => {
+    process.env.SERVICE_NAME = 'gateway';
+    const res = (await whoami('gateway')(
+      httpEvent('GET', '/@x/y', undefined, { 'x-forwarded-authorization': `Bearer ${TOKEN}` }),
+    )) as FunctionUrlResponse;
+    expect(userOf(res)).toBe('c15r');
+  });
+});
+
 describe('defineService dispatch', () => {
   beforeEach(() => {
     process.env.SERVICE_NAME = 'echo';

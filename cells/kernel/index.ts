@@ -19,9 +19,12 @@ export const handler = async (event: any) => {
   try {
     if (path === '/app.js') {
       // Short cache: kernel updates propagate within a minute, without paying
-      // a Lambda hop per import on every page load.
+      // a Lambda hop per import on every page load. ACAO:* so host-isolated cells
+      // on their own origin (<owner>-<name>.on.parc.land) can import this shared
+      // module cross-origin (public static code, no credentials).
       return respond(200, 'application/javascript; charset=utf-8', read('app.js'), {
         'cache-control': 'public, max-age=60',
+        'access-control-allow-origin': '*',
       });
     }
     if (path === '/' || path === '') {

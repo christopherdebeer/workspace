@@ -66,13 +66,18 @@ function memoryDocClient(): { store: Map<string, Item> } & Record<string, unknow
     }),
     scan: ({ ExpressionAttributeValues }: { ExpressionAttributeValues: Record<string, unknown> }) => ({
       promise: async () => {
+        const rows = [...store.values()].filter((i) => i.sk === ExpressionAttributeValues[':a']);
+        // listActive: ACTIVE profile rows for the global type vocabulary.
+        if (':active' in ExpressionAttributeValues) {
+          return { Items: rows.filter((i) => i.status === ExpressionAttributeValues[':active']) };
+        }
+        // listAccessibleBy: rows the principal owns/was granted (whole or per-tool).
         const p = ExpressionAttributeValues[':p'] as string;
         return {
-          Items: [...store.values()].filter(
+          Items: rows.filter(
             (i) =>
-              i.sk === ExpressionAttributeValues[':a'] &&
-              ((Array.isArray(i.grants) && (i.grants as string[]).includes(p)) ||
-                (typeof i.toolGrants === 'object' && i.toolGrants !== null && p in (i.toolGrants as Record<string, unknown>))),
+              (Array.isArray(i.grants) && (i.grants as string[]).includes(p)) ||
+              (typeof i.toolGrants === 'object' && i.toolGrants !== null && p in (i.toolGrants as Record<string, unknown>)),
           ),
         };
       },
@@ -247,6 +252,26 @@ describe('cells: registry', () => {
     expect((await reg.listAccessibleBy('alice')).map((c) => c.cellId)).toEqual(['notes-abc']);
     expect((await reg.listAccessibleBy('bob')).map((c) => c.cellId)).toEqual(['notes-abc']);
     expect(await reg.listAccessibleBy('carol')).toEqual([]);
+    __setDocumentClient(undefined);
+  });
+
+  it('listActive returns only ACTIVE cells and round-trips declared types', async () => {
+    __setDocumentClient(memoryDocClient() as unknown as Parameters<typeof __setDocumentClient>[0]);
+    const reg = createRegistry('forge-table');
+    const base = {
+      description: null, functionName: 'fn', stackName: 'stk', grants: ['alice'],
+      createdAt: 't', updatedAt: 't',
+    };
+    await reg.put({ cellId: 'lit-1', name: 'lit', owner: 'alice', status: 'CREATING', ...base,
+      types: [{ type: 'doc', manager: '@alice/lit', icon: '📄' }] });
+    await reg.put({ cellId: 'input-1', name: 'input', owner: 'alice', status: 'ACTIVE', ...base,
+      types: [{ type: 'capture', manager: '@alice/input', icon: '📥' }] });
+    const active = await reg.listActive();
+    expect(active.map((c) => c.cellId)).toEqual(['input-1']);
+    expect(active[0].types).toEqual([{ type: 'capture', manager: '@alice/input', icon: '📥' }]);
+    // Once the lit cell flips ACTIVE its types become visible too.
+    await reg.setStatus('lit-1', 'ACTIVE');
+    expect((await reg.listActive()).map((c) => c.cellId).sort()).toEqual(['input-1', 'lit-1']);
     __setDocumentClient(undefined);
   });
 });
@@ -540,5 +565,31 @@ describe('cells: backend commands', () => {
     const gone = await call('emily', 'callCellTool', { cellId: cell.cellId, tool: 'review', args: {} });
     expect(gone.ok).toBe(false);
     expect(gone.error).toMatch(/grant_denied/);
+  });
+
+  it('describeTypes aggregates declared types from ACTIVE cells, keyed by bare type', async () => {
+    const reg = createRegistry('forge-table');
+    const base = {
+      description: null, functionName: 'fn', stackName: 'stk', grants: ['alice'],
+      createdAt: 't', updatedAt: 't',
+    };
+    // lit declares `doc` with an explicit manager; input declares `capture` with no
+    // manager (defaults to the cell address); a CREATING cell is excluded entirely.
+    await reg.put({ cellId: 'lit-1', name: 'lit', owner: 'alice', status: 'ACTIVE', ...base,
+      types: [{ type: 'doc', manager: '@alice/lit', icon: '📄' }] });
+    await reg.put({ cellId: 'input-1', name: 'input', owner: 'alice', status: 'ACTIVE', ...base,
+      types: [{ type: 'capture', icon: '📥' }] });
+    await reg.put({ cellId: 'draft-1', name: 'draft', owner: 'alice', status: 'CREATING', ...base,
+      types: [{ type: 'wip', icon: '🚧' }] });
+
+    const res = await call<{ types: Record<string, { manager?: string; icon?: string; type?: string }> }>('alice', 'describeTypes', {});
+    expect(res.ok).toBe(true);
+    const types = res.result!.types;
+    expect(Object.keys(types).sort()).toEqual(['capture', 'doc']);
+    // explicit manager kept; the bare `type` discriminator is stripped from the value
+    expect(types.doc.manager).toBe('@alice/lit');
+    expect(types.doc.type).toBeUndefined();
+    // missing manager defaults to the declaring cell's address
+    expect(types.capture.manager).toBe('/@alice/input');
   });
 });

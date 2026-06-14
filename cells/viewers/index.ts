@@ -19,8 +19,10 @@ export const handler = async (event: { rawPath?: string; requestContext?: { http
   if (method !== 'GET') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     if (path === '/app.js') {
+      // ACAO:* so host-isolated cells can import this shared module cross-origin.
       return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
         'cache-control': 'public, max-age=60',
+        'access-control-allow-origin': '*',
       });
     }
   } catch (err) {

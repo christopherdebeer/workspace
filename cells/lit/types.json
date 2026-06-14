@@ -1,0 +1,14 @@
+{
+  "types": [
+    {
+      "type": "doc",
+      "icon": "📄",
+      "label": "value.title",
+      "manager": "@c15r/lit",
+      "handlers": {
+        "open": [{ "surface": "/@c15r/lit?doc=${match}" }],
+        "edit": [{ "surface": "/@c15r/lit?doc=${match}&edit=1" }]
+      }
+    }
+  ]
+}

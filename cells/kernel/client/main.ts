@@ -67,17 +67,62 @@ function setTokens(t: Tokens | null): void {
   } catch {
     /* storage unavailable */
   }
+  // On a cell host, mirror the access token to a host-only `parc_session` cookie
+  // so the cell's SERVER can SSR the authed view (dispatch reads parc_session →
+  // x-cell-caller, the cell renders the owner's content) — no anonymous-SSR →
+  // authed-client flash. Same exposure as the localStorage token (origin-
+  // isolated, and it's the capped cell token). Cleared on sign-out (t === null).
+  if (typeof location !== 'undefined' && location.host.endsWith('.' + CELL_DOMAIN)) {
+    try {
+      document.cookie = t?.access_token
+        ? `parc_session=${t.access_token}; Secure; SameSite=Lax; Path=/; Max-Age=3600`
+        : 'parc_session=; Secure; SameSite=Lax; Path=/; Max-Age=0';
+    } catch {
+      /* */
+    }
+  }
 }
 
 export const isAuthed = (): boolean => !!getTokens()?.access_token;
 export const accessToken = (): string | null => getTokens()?.access_token ?? null;
 export const grantedScopes = (): string[] => (getTokens()?.scope ?? '').split(/\s+/).filter(Boolean);
 
+/* ── origin topology (cell isolation, docs/cell-origin-isolation.md) ── */
+// Cells may be served from their own origin `<owner>-<name>.on.parc.land`; the
+// shell APIs (`/mcp`, `/oauth/*`) live on the apex. On a cell host, `/mcp` calls
+// target the apex cross-origin (bearer in header — needs CORS on /mcp); on the
+// apex they stay relative. The viewed cell's owner/name come from the host there,
+// otherwise from the `/@owner/cell` path.
+const CELL_DOMAIN = 'on.parc.land';
+const APEX = 'https://parc.land';
+const onCellHost = (): boolean => location.host.endsWith('.' + CELL_DOMAIN);
+const apiBase = (): string => (onCellHost() ? APEX : '');
+
+/** The cell being viewed: `{owner, name}` from the host (`<owner>-<name>.on.parc.land`
+ *  — owner is hyphen-free, so split on the first hyphen) or the `/@owner/cell` path. */
+export function cellAddress(): { owner: string; name: string } | null {
+  if (onCellHost()) {
+    const label = location.host.slice(0, -(CELL_DOMAIN.length + 1));
+    const i = label.indexOf('-');
+    if (i > 0) return { owner: label.slice(0, i), name: label.slice(i + 1) };
+  }
+  const m = location.pathname.match(/^\/@([^/]+)\/([^/]+)/);
+  return m ? { owner: decodeURIComponent(m[1]), name: decodeURIComponent(m[2]) } : null;
+}
+
+/** A link to another cell's surface, origin-aware: on a cell host, the sibling
+ *  subdomain (keeps each cell its own origin — the `/@owner/name` path would be
+ *  re-prefixed by the edge and 404); on the apex, the `/@owner/name` path. */
+export function cellUrl(owner: string, name: string, rest = ''): string {
+  if (onCellHost()) return `${location.protocol}//${owner}-${name}.${CELL_DOMAIN}${rest}`;
+  return `/@${owner}/${name}${rest}`;
+}
+
 /** One OAuth client for the whole origin; redirect lands wherever you were. */
 async function ensureClientId(): Promise<string> {
   const cached = localStorage.getItem(K.client);
   if (cached) return cached;
-  const res = await fetch('/oauth/register', {
+  const res = await fetch(apiBase() + '/oauth/register', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -100,7 +145,7 @@ export async function login(scope: string = DEFAULT_SCOPE): Promise<never> {
   sessionStorage.setItem(K.pkce, verifier);
   sessionStorage.setItem(K.state, state);
   sessionStorage.setItem(K.ret, location.href);
-  const u = new URL('/oauth/authorize', location.origin);
+  const u = new URL('/oauth/authorize', apiBase() || location.origin);
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', clientId);
   u.searchParams.set('redirect_uri', `${location.origin}${location.pathname.replace(/\/+$/, '')}`);
@@ -144,7 +189,7 @@ async function completeLoginIfReturning(): Promise<boolean> {
   sessionStorage.removeItem(K.pkce);
   if (!expected || returnedState !== expected) throw new Error('OAuth state mismatch');
   if (!verifier) throw new Error('missing PKCE verifier');
-  const res = await fetch('/oauth/token', {
+  const res = await fetch(apiBase() + '/oauth/token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -166,7 +211,7 @@ async function completeLoginIfReturning(): Promise<boolean> {
 async function refresh(): Promise<boolean> {
   const t = getTokens();
   if (!t?.refresh_token) return false;
-  const res = await fetch('/oauth/token', {
+  const res = await fetch(apiBase() + '/oauth/token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
@@ -186,7 +231,9 @@ export async function authFetch(path: string, init?: RequestInit): Promise<Respo
     const headers = new Headers(init?.headers);
     const t = getTokens();
     if (t?.access_token) headers.set('authorization', `Bearer ${t.access_token}`);
-    return fetch(path, { ...init, headers });
+    // On a cell host the shell APIs live on the apex (cross-origin); on the apex
+    // `apiBase()` is empty so the path stays relative (unchanged behaviour).
+    return fetch(apiBase() + path, { ...init, headers });
   };
   let res = await run();
   if (res.status === 401 && getTokens()?.refresh_token) {
@@ -355,19 +402,22 @@ export function hrefOf(e: FactEntry): string | null {
       .replace(/\$\{id\}/g, encodeURIComponent(id))
       .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
   }
-  // Convention fallbacks (the pre-_types routing).
+  // Convention fallbacks (the pre-_types routing). Origin-aware via cellUrl.
   const t = e._meta?.type ?? null;
   const v = (e.value ?? {}) as Record<string, unknown>;
   const tags = e._meta?.tags ?? [];
-  if (e.key.startsWith('doc:')) return `/@c15r/lit?doc=${encodeURIComponent(e.key.slice(4))}`;
+  const owner = cellAddress()?.owner ?? 'c15r';
+  if (e.key.startsWith('doc:')) return cellUrl(owner, 'lit', `?doc=${encodeURIComponent(e.key.slice(4))}`);
   if (t === 'capture' || e.key.startsWith('inbox/')) {
-    return typeof v.captured === 'string' ? `/@c15r/lit?doc=${encodeURIComponent(`log:${v.captured}`)}` : '/@c15r/input';
+    return typeof v.captured === 'string'
+      ? cellUrl(owner, 'lit', `?doc=${encodeURIComponent(`log:${v.captured}`)}`)
+      : cellUrl(owner, 'input');
   }
   if (t === 'cell' && typeof v.address === 'string') return v.address;
   const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return `/@c15r/lit?doc=${encodeURIComponent(docTag.slice(4))}`;
+  if (docTag) return cellUrl(owner, 'lit', `?doc=${encodeURIComponent(docTag.slice(4))}`);
   const boardTag = tags.find((x) => x.startsWith('canvas:'));
-  if (boardTag) return `/@c15r/canvas?canvas=${encodeURIComponent(boardTag.slice(7))}`;
+  if (boardTag) return cellUrl(owner, 'canvas', `?canvas=${encodeURIComponent(boardTag.slice(7))}`);
   return null;
 }
 

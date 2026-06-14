@@ -30,6 +30,13 @@ export interface PlatformStackProps extends cdk.StackProps {
   domainNames?: string[];
   /** ARN of an ACM certificate in us-east-1 covering `domainNames`. */
   certificateArn?: string;
+  /**
+   * Namespace label for host-isolated user cells, e.g. "on.parc.land". When set,
+   * a second CloudFront distribution serves cells from `<owner>-<name>.<cellDomain>`
+   * (each its own browser origin — see docs/cell-origin-isolation.md), fronted by a
+   * CDK-managed, DNS-validated `*.<cellDomain>` cert. Unset ⇒ nothing changes.
+   */
+  cellDomain?: string;
 }
 
 /**
@@ -102,7 +109,7 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
     });
@@ -178,12 +185,14 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('cells'),
       routes: [],
       persistence: { dynamo: true },
-      commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
+      commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'describeTypes', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
       emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
-      // it so its .wasm ships in the asset.
-      bundlingNodeModules: ['esbuild-wasm'],
+      // it so its .wasm ships in the asset. react/react-dom ship too so the cell
+      // bundler can inline a server renderer (renderToString) into a cell's
+      // index.js for isomorphic SSR — see transpile.ts SERVER_BUNDLED.
+      bundlingNodeModules: ['esbuild-wasm', 'react', 'react-dom'],
       memorySize: 512,
       timeoutSeconds: 60,
     });
@@ -232,12 +241,34 @@ export class PlatformStack extends cdk.Stack {
       });
     }
 
+    // Host-isolated cell namespace (docs/cell-origin-isolation.md). A CDK-managed,
+    // DNS-validated wildcard cert covers `*.<cellDomain>`; the deploy waits until
+    // it is ISSUED, so add the ACM validation CNAME on Namecheap while it waits.
+    let cellCertificate: acm.ICertificate | undefined;
+    let cellDomainNames: string[] | undefined;
+    if (props?.cellDomain) {
+      cellDomainNames = [`*.${props.cellDomain}`];
+      cellCertificate = new acm.Certificate(this, 'CellCert', {
+        domainName: `*.${props.cellDomain}`,
+        validation: acm.CertificateValidation.fromDns(),
+      });
+      // Let a host-isolated cell call the apex /mcp cross-origin with its bearer.
+      gateway.fn.addEnvironment('MCP_CORS_ORIGIN_SUFFIX', `.${props.cellDomain}`);
+      // Cap tokens minted for a cell-host redirect to the cell ceiling (model A).
+      auth.fn.addEnvironment('CELL_DOMAIN_SUFFIX', `.${props.cellDomain}`);
+    }
+
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.
       cells: [home, auth, workspace, gateway, dispatch],
       defaultCell: home,
       domainNames: props?.domainNames,
       certificate,
+      // dispatch already path-routes `/@<owner>/<name>`; the cell distribution
+      // rewrites `<owner>-<name>.<cellDomain>` hosts onto that path.
+      cellHostRouter: dispatch,
+      cellDomainNames,
+      cellCertificate,
     });
 
     // Make the auth cell self-consistent with the public origin via an explicit

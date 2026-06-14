@@ -49,6 +49,8 @@ const PROVIDERS = ['workspace', 'cells', 'auth'] as const;
 
 /** Sentinel target for the capability menu. */
 const CATALOG = '$catalog';
+/** Sentinel target for the type vocabulary (docs/type-vocabulary.md). */
+const TYPES = '$types';
 
 /** A tier-1 tool as returned by a provider's `describeTools`. */
 interface ProviderTool {
@@ -271,6 +273,35 @@ function enforceScope(ctx: ServiceContext, target: string, scope: string): void 
   }
 }
 
+/**
+ * The type vocabulary as data — `$catalog` for *facts* rather than
+ * capabilities. Returns the caller's `_types/<type>` declarations (icon /
+ * label / manager / handlers), so an agent handed a fact can resolve "how do I
+ * open / edit / render this type, and in which cell" uniformly. The keys are
+ * the bare type names. (docs/type-vocabulary.md)
+ */
+async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, unknown>; hint: string }> {
+  // Canonical (global, from the cell registry) merged under the caller's
+  // per-user `_types/` overrides (docs/type-vocabulary.md). The canonical half
+  // is unauthenticated-friendly; the slice read fails closed for anonymous
+  // callers, who simply get the global vocabulary.
+  const [global, slice] = await Promise.all([
+    ctx.serviceClient('cells').command<{ types?: Record<string, unknown> }>('describeTypes', {}).catch(() => ({ types: {} })),
+    ctx.identity.user
+      ? ctx
+          .serviceClient('workspace')
+          .command<{ entries?: Array<{ key: string; value: unknown }> }>('query', { prefix: '_types/', limit: 200 })
+          .catch(() => ({ entries: [] }))
+      : Promise.resolve({ entries: [] }),
+  ]);
+  const types: Record<string, unknown> = { ...(global?.types ?? {}) };
+  for (const e of slice?.entries ?? []) types[e.key.slice('_types/'.length)] = e.value; // user override wins
+  return {
+    types,
+    hint: 'A fact of type T resolves through types[T].handlers[intent] (open/edit/render/create) — a surface (a cell URL), an act target, or a renderer; templated with ${id}/${match}/${value.path}.',
+  };
+}
+
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
@@ -279,6 +310,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     if (detail === 'summary') return summarizeCatalog(caps);
     return { capabilities: caps };
   }
+  if (target === TYPES) return buildTypes(ctx);
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
@@ -336,7 +368,7 @@ const tools: Record<string, McpToolDefinition> = {
   read: {
     title: 'Observe the substrate',
     description:
-      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu.',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. Pass target="$types" for the type vocabulary: how to open/edit/render a fact of each type, and which cell manages it.',
     inputSchema: READ_SCHEMA,
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],
@@ -388,7 +420,8 @@ export const handler = defineMcpService({
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
     'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog", {detail:"summary"}) for the grouped menu, ' +
     'read("$catalog") for full schemas. Targets look like workspace.query or @owner/cell.tool. ' +
-    'Prefer workspace.query (filtered, paged) over workspace.recall (the whole shaped view) for targeted reads.',
+    'Prefer workspace.query (filtered, paged) over workspace.recall (the whole shaped view) for targeted reads. ' +
+    'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,
   http: [
     { method: 'GET', path: '/mcp', handler: info },

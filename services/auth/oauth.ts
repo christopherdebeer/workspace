@@ -5,7 +5,33 @@
  * `ServiceHttpRequest` and a storage-agnostic `AuthStore`.
  */
 import type { ServiceHttpRequest, ServiceHttpResponse } from '../../platform/runtime';
+import { intersectScopes } from '../../platform/runtime';
 import { AuthStore, generateToken, sha256, DEVICE_TTL_MS, REFRESH_TTL_MS } from './store';
+
+/**
+ * A cell-host redirect (`https://<owner>-<name>.<cellDomain>/…`) means the token
+ * is for a host-isolated cell acting AS the user (model A,
+ * docs/cell-origin-isolation.md §4.5). Cap it to `workspace:read/write` + the
+ * cell's own tools — never `platform:*` / cell-creation / other cells. Returns
+ * the ceiling, or null when the redirect is not a cell host. (Per-key-prefix
+ * bounding is a v2 once the substrate enforces write scopes — today per-slice
+ * writes are ownership-gated.)
+ */
+function cellCeiling(redirectUri: string | undefined): string[] | null {
+  const suffix = process.env.CELL_DOMAIN_SUFFIX; // e.g. ".on.parc.land"
+  if (!suffix || !redirectUri) return null;
+  let host: string;
+  try {
+    host = new URL(redirectUri).host;
+  } catch {
+    return null;
+  }
+  if (!host.endsWith(suffix)) return null;
+  const label = host.slice(0, -suffix.length);
+  const i = label.indexOf('-');
+  if (i <= 0) return null;
+  return ['workspace:read', 'workspace:write', `cell:${label.slice(0, i)}/${label.slice(i + 1)}:*`];
+}
 
 export interface OAuthConfig {
   serverName: string;
@@ -40,6 +66,25 @@ export function grantableScopes(config: OAuthConfig, username: string): string[]
 const DEFAULT_EXPIRY = 3600;
 const DEFAULT_REFRESH_EXPIRY = REFRESH_TTL_MS / 1000;
 const NO_STORE = { 'cache-control': 'no-store' };
+
+/**
+ * The browser-navigation session cookie. Carries the same opaque access token
+ * the client also holds in localStorage, but as an httpOnly cookie so SSR/
+ * navigation requests (which never send the Authorization header) can be
+ * identified at the `dispatch` tier. `SameSite=Lax` means it rides top-level GET
+ * navigations (what SSR needs) but NOT cross-site POSTs, and the runtime only
+ * honours it on safe methods — so it can never authorize a mutation (no CSRF).
+ */
+const SESSION_COOKIE = 'parc_session';
+function sessionCookie(token: string, maxAgeSecs: number): string {
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor(maxAgeSecs))}`;
+}
+function clearSessionCookie(): string {
+  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+}
+function okWithCookies(body: unknown, cookies: string[], status = 200): ServiceHttpResponse {
+  return { statusCode: status, headers: NO_STORE, body, cookies };
+}
 
 function originOf(req: ServiceHttpRequest): string {
   const u = new URL(req.url);
@@ -206,22 +251,27 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     }
 
     const scope = authCode.scope ?? config.scopesSupported[0] ?? 'read';
+    // Cap to the cell ceiling when this token is for a host-isolated cell (model A).
+    const ceiling = cellCeiling(authCode.redirectUri);
+    const effectiveScope = ceiling ? intersectScopes(scope.split(/\s+/).filter(Boolean), ceiling).join(' ') : scope;
     const result = await store.mintToken({
       userId: authCode.userId,
-      scope,
+      scope: effectiveScope,
       label: `OAuth: ${authCode.clientId}`,
       clientId: authCode.clientId,
       expiresInSec: mintExpiry,
       withRefresh: !neverExpires,
       refreshExpiresInSec: refreshExpiry,
     });
-    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope, resource: authCode.resource });
-    const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope };
+    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope: effectiveScope, capped: !!ceiling, resource: authCode.resource });
+    const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
     if (!neverExpires) {
       response.expires_in = configuredExpiry;
       response.refresh_token = result.refreshToken;
     }
-    return ok(response);
+    // Also set the httpOnly navigation cookie so SSR/page loads are identified.
+    const cookieMaxAge = neverExpires ? 30 * 24 * 3600 : configuredExpiry;
+    return okWithCookies(response, [sessionCookie(result.token, cookieMaxAge)]);
   }
 
   if (body.grant_type === 'refresh_token') {
@@ -229,7 +279,11 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     if (neverExpires) return ok({ error: 'unsupported_grant_type', error_description: 'Tokens are non-expiring' }, 400);
     const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry, refreshExpiry);
     if (!result) return ok({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
-    return ok({ access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken });
+    // Refresh keeps the navigation cookie current (the access token rotated).
+    return okWithCookies(
+      { access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken },
+      [sessionCookie(result.token, configuredExpiry)],
+    );
   }
 
   if (body.grant_type === 'urn:ietf:params:oauth:grant-type:device_code') {
@@ -270,7 +324,8 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
 export async function handleRevoke(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
   const body = parseTokenBody(req);
   if (body.token) await store.revokeByTokenValue(body.token);
-  return ok({});
+  // Drop the navigation cookie too, so sign-out clears the SSR session.
+  return okWithCookies({}, [clearSessionCookie()]);
 }
 
 // ─── Device authorization grant ──────────────────────────────────

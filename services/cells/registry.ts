@@ -33,6 +33,13 @@ export interface CellRecord {
   toolGrants?: Record<string, string[]>;
   /** Public cells accept anonymous GETs via dispatch (a web-facing cell). */
   public: boolean;
+  /**
+   * The fact types this cell manages (from its `types.json`) — the canonical,
+   * globally-readable type vocabulary (docs/type-vocabulary.md). Lives on the
+   * registry (one global table) rather than a per-user slice, so every user —
+   * and the anonymous landing — resolves a fact's open/edit path the same way.
+   */
+  types?: Array<Record<string, unknown>>;
   status: CellStatus;
   /** Lambda timeout override (seconds, 10–300). */
   timeoutSeconds?: number;
@@ -69,6 +76,7 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
     ...(item.toolGrants && typeof item.toolGrants === 'object'
       ? { toolGrants: item.toolGrants as Record<string, string[]> }
       : {}),
+    ...(Array.isArray(item.types) ? { types: item.types as Array<Record<string, unknown>> } : {}),
     public: !!item.public,
     status: item.status as CellStatus,
     createdAt: String(item.createdAt),
@@ -82,6 +90,8 @@ export interface CellRegistry {
   listByOwner(owner: string): Promise<CellRecord[]>;
   /** Cells the principal can access: those they own or were granted. */
   listAccessibleBy(principal: string): Promise<CellRecord[]>;
+  /** All ACTIVE cells — for the global type vocabulary (read-only, type decls are public). */
+  listActive(): Promise<CellRecord[]>;
   setStatus(cellId: string, status: CellStatus): Promise<void>;
   /** Grant a principal: every tool (no `tools`), or just the named tool patterns. Re-granting replaces. */
   addGrant(cellId: string, principal: string, tools?: string[]): Promise<CellRecord | null>;
@@ -140,6 +150,27 @@ export function createRegistry(tableName: string): CellRegistry {
             FilterExpression: 'sk = :a AND (contains(grants, :p) OR attribute_exists(toolGrants.#p))',
             ExpressionAttributeNames: { '#p': principal },
             ExpressionAttributeValues: { ':a': PROFILE_SK, ':p': principal },
+            ExclusiveStartKey: startKey,
+          })
+          .promise();
+        for (const item of res.Items ?? []) records.push(toRecord(item));
+        startKey = res.LastEvaluatedKey;
+      } while (startKey);
+      return records;
+    },
+
+    async listActive(): Promise<CellRecord[]> {
+      // Scan the profile rows for ACTIVE cells — the global type vocabulary is
+      // public (type decls say *how* to open a fact, not *whether* you may).
+      const records: CellRecord[] = [];
+      let startKey: DynamoDB.DocumentClient.Key | undefined;
+      do {
+        const res = await db
+          .scan({
+            TableName: tableName,
+            FilterExpression: 'sk = :a AND #s = :active',
+            ExpressionAttributeNames: { '#s': 'status' },
+            ExpressionAttributeValues: { ':a': PROFILE_SK, ':active': 'ACTIVE' },
             ExclusiveStartKey: startKey,
           })
           .promise();

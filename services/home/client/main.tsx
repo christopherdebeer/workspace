@@ -12,6 +12,8 @@
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../../../platform/ui';
+import { resolve, declFor, type TypeDecl } from '../../../platform/ui/vocab';
+import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed } from './auth';
 // Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
 // the dawn panorama strip, and the field computer.
@@ -247,6 +249,30 @@ function Landing({ session }: { session: Session & { signIn: () => void } }): Re
             MCP at <code style={{ fontFamily: theme.mono }}>parc.land/mcp</code>. This page is the same client, rendered.
           </span>
         </div>
+      </div>
+
+      <div style={{ ...signCard, gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+        <div style={{ display: 'grid', gap: '0.2rem' }}>
+          <strong style={{ fontFamily: theme.serif }}>📖 Public documentation</strong>
+          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
+            Read the parc.land substrate docs — server-rendered, no sign-in needed.
+          </span>
+        </div>
+        <a
+          href="/@c15r/lit"
+          style={{
+            display: 'inline-block',
+            background: theme.pine,
+            color: theme.cream,
+            borderRadius: 8,
+            padding: '0.4rem 0.9rem',
+            fontSize: '0.85rem',
+            textDecoration: 'none',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Read the docs →
+        </a>
       </div>
 
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.8rem', fontStyle: 'italic' }}>
@@ -737,20 +763,34 @@ interface ListEntry {
   _meta?: { type?: string | null; tags?: string[]; updatedAt?: string };
 }
 
-/** Type vocabulary loaded from the substrate (`_types/<type>` facts): the
- *  presentation/routing table is data now, not hardcoded. Conventions below
- *  remain as the fallback for types without a declaration. */
-interface TypeDecl { icon?: string; titlePath?: string; href?: string }
-let typeDecls: Record<string, TypeDecl> = {};
+/**
+ * Type vocabulary (docs/type-vocabulary.md): the fact→cell open/edit/render
+ * table is *data*, resolved by the shared `resolve()` — no hardcoded routing.
+ * The defaults encode parc's conventions; substrate `_types/<type>` facts
+ * override them per-type (old-shape `{icon,titlePath,href}` facts are
+ * normalised so existing declarations keep working).
+ */
+let typeDecls: Record<string, TypeDecl> = { ...DEFAULT_TYPE_DECLS };
+
+interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; manager?: string; label?: string; handlers?: TypeDecl['handlers'] }
+function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
+  if (d.handlers || !d.href) return d as TypeDecl; // already new-shape
+  return { icon: d.icon, manager: d.manager, label: d.label ?? d.titlePath, handlers: { open: [{ surface: d.href }] } };
+}
+
 export async function loadTypeDecls(): Promise<void> {
   try {
-    const r = await mcpCall('read', 'workspace.query', { prefix: '_types/', limit: 100 });
+    // $types is the global vocabulary (the cell registry's canonical declarations
+    // merged under this user's _types overrides), so home resolves the same way
+    // for any signed-in user — not just the cells' owner.
+    const r = await mcpCall('read', '$types');
     if (r.ok) {
-      const entries = (r.value as { entries?: Array<{ key: string; value: TypeDecl }> }).entries ?? [];
-      typeDecls = Object.fromEntries(entries.map((e) => [e.key.slice('_types/'.length), e.value ?? {}]));
+      const raw = (r.value as { types?: Record<string, LegacyTypeDecl> }).types ?? {};
+      const norm = Object.fromEntries(Object.entries(raw).map(([t, d]) => [t, normalizeDecl(d)]));
+      typeDecls = { ...DEFAULT_TYPE_DECLS, ...norm }; // canonical + overrides win over the built-in fallback
     }
   } catch {
-    /* conventions still apply */
+    /* defaults still apply */
   }
 }
 function pathInto(value: unknown, path: string): unknown {
@@ -763,14 +803,14 @@ function pathInto(value: unknown, path: string): unknown {
 }
 
 export function typeIcon(e: ListEntry): string {
-  return typeDecls[e._meta?.type ?? '']?.icon ?? '';
+  return declFor(e, typeDecls)?.icon ?? '';
 }
 
-/** A fact's one-line presentation: title from its value, not its key. */
+/** A fact's one-line presentation: title from its value (its declared label path), not its key. */
 function factTitle(e: ListEntry): string {
-  const decl = typeDecls[e._meta?.type ?? ''];
-  if (decl?.titlePath) {
-    const v = pathInto(e.value, decl.titlePath);
+  const label = declFor(e, typeDecls)?.label;
+  if (label) {
+    const v = pathInto(e.value, label);
     if (typeof v === 'string' && v) return v.slice(0, 80);
   }
   const v = e.value;
@@ -788,29 +828,59 @@ function factTitle(e: ListEntry): string {
   return e.key;
 }
 
-/** Where a fact lives — its home surface, from `_types` href template or convention. */
+/** Where a fact opens — resolved from the type vocabulary, no hardcoded cells. */
 function factHref(e: ListEntry): string | null {
-  const t = e._meta?.type ?? null;
-  const v = (e.value ?? {}) as Record<string, unknown>;
-  const tags = e._meta?.tags ?? [];
-  const decl = typeDecls[t ?? ''];
-  if (decl?.href) {
-    const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
-    return decl.href
-      .replace(/\$\{key\}/g, encodeURIComponent(e.key))
-      .replace(/\$\{id\}/g, encodeURIComponent(id))
-      .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_m, p: string) => String(pathInto(e.value, p) ?? ''));
+  return resolve(e, 'open', typeDecls)?.surface ?? null;
+}
+
+/** Where a fact edits — its type's `edit` handler, if it declares one. */
+function factEdit(e: ListEntry): string | null {
+  return resolve(e, 'edit', typeDecls)?.surface ?? null;
+}
+
+/** A small "✎ edit" link, shown only when the fact's type declares an edit surface. */
+function EditLink({ e }: { e: ListEntry }): React.JSX.Element | null {
+  const to = factEdit(e);
+  if (!to) return null;
+  return (
+    <a href={to} title="Edit" style={{ color: theme.dim, fontSize: '0.72rem', textDecoration: 'none', fontFamily: theme.mono }}>
+      ✎ edit
+    </a>
+  );
+}
+
+/** A content snippet beyond the title — the *substance* of a fact, for exploration. */
+function factPreview(e: ListEntry): string {
+  const v = e.value;
+  if (v == null || typeof v !== 'object') return '';
+  const o = v as Record<string, unknown>;
+  const text =
+    typeof o.content === 'string' ? o.content
+    : typeof o.body === 'string' ? o.body
+    : typeof o.text === 'string' ? o.text
+    : typeof o.description === 'string' ? o.description
+    : typeof o.note === 'string' ? o.note
+    : '';
+  if (text) {
+    // Drop the first line (it usually became the title), then flatten.
+    const lines = text.split('\n').filter((l) => l.trim());
+    const body = lines.length > 1 ? lines.slice(1).join(' ') : lines[0] ?? '';
+    return body.replace(/[#*_`>[\]()]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
   }
-  if (e.key.startsWith('doc:')) return `/@c15r/lit?doc=${encodeURIComponent(e.key.slice(4))}`;
-  if (t === 'capture' || e.key.startsWith('inbox/')) {
-    return typeof v.captured === 'string' ? `/@c15r/lit?doc=${encodeURIComponent(`log:${v.captured}`)}` : '/@c15r/input';
+  // Structured value: a few scalar fields.
+  const parts: string[] = [];
+  for (const [k, val] of Object.entries(o)) {
+    if (['content', 'title', 'name', 'id', 'src'].includes(k) || val == null || typeof val === 'object') continue;
+    parts.push(`${k}: ${String(val).slice(0, 40)}`);
+    if (parts.length >= 3) break;
   }
-  if (t === 'cell' && typeof v.address === 'string') return v.address;
-  const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return `/@c15r/lit?doc=${encodeURIComponent(docTag.slice(4))}`;
-  const boardTag = tags.find((x) => x.startsWith('canvas:'));
-  if (boardTag) return `/@c15r/canvas?canvas=${encodeURIComponent(boardTag.slice(7))}`;
-  return null;
+  return parts.join(' · ');
+}
+
+interface Edge {
+  from: string;
+  rel: string;
+  to: string;
 }
 
 // ─── the workspace window (phase 2c) ───────────────────────────────
@@ -831,6 +901,7 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
   const [att, setAtt] = useState<AttentionData | null>(null);
   const [facts, setFacts] = useState<ListEntry[] | null>(null);
   const [total, setTotal] = useState(0);
+  const [edges, setEdges] = useState<Map<string, Edge[]>>(new Map());
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -839,12 +910,24 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
     (async () => {
       try {
         await loadTypeDecls();
-        const [a, q] = await Promise.all([
+        const [a, q, l] = await Promise.all([
           mcpCall('read', 'workspace.attention', { limit: 5 }),
           mcpCall('read', 'workspace.query', { limit: 10 }),
+          mcpCall('read', 'workspace.links'),
         ]);
         if (!live) return;
         if (a.ok) setAtt(a.value as AttentionData);
+        if (l.ok) {
+          // Group edges by source so each fact can show its relationships.
+          const all = ((l.value as { edges?: Edge[] }).edges ?? []).filter((x) => !x.from.startsWith('_'));
+          const m = new Map<string, Edge[]>();
+          for (const ed of all) {
+            const list = m.get(ed.from) ?? [];
+            list.push(ed);
+            m.set(ed.from, list);
+          }
+          setEdges(m);
+        }
         if (q.ok) {
           const v = q.value as { entries?: ListEntry[]; total?: number };
           setFacts(v.entries ?? []);
@@ -886,22 +969,40 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
       ) : facts.length === 0 ? (
         <p style={{ color: theme.dim }}>An empty slice — remember something.</p>
       ) : (
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.4rem' }}>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.7rem' }}>
           {facts.map((e) => {
             const to = factHref(e);
             const icon = typeIcon(e);
             const title = `${icon ? icon + ' ' : ''}${factTitle(e)}`;
-            const date = e._meta?.updatedAt ? e._meta.updatedAt.slice(0, 10) : null;
-            const sub = [e._meta?.type, e.key, date].filter(Boolean).join(' · ');
+            const preview = factPreview(e);
+            const out = edges.get(e.key) ?? [];
             return (
-              <li key={e.key} style={{ lineHeight: 1.35 }}>
+              <li key={e.key} style={{ lineHeight: 1.4, display: 'grid', gap: '0.15rem' }}>
                 {to ? (
                   <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{title}</a>
                 ) : (
-                  <span>{title}</span>
+                  <strong style={{ fontWeight: 600 }}>{title}</strong>
                 )}
-                <div style={{ color: theme.dim, fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {sub}
+                {preview ? (
+                  <span style={{ color: theme.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {preview}
+                  </span>
+                ) : null}
+                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>
+                    {[e._meta?.type, e.key].filter(Boolean).join(' · ')}
+                  </span>
+                  <EditLink e={e} />
+                  {out.slice(0, 5).map((ed, i) => (
+                    <span
+                      key={i}
+                      title={`${ed.rel} → ${ed.to}`}
+                      style={{ fontSize: '0.66rem', color: theme.accent, border: `1px solid ${theme.border}`, borderRadius: 999, padding: '0 0.4rem', fontFamily: theme.mono, whiteSpace: 'nowrap' }}
+                    >
+                      {ed.rel}→{ed.to.length > 14 ? ed.to.slice(0, 13) + '…' : ed.to}
+                    </span>
+                  ))}
+                  {out.length > 5 ? <span style={{ color: theme.dim, fontSize: '0.66rem' }}>+{out.length - 5}</span> : null}
                 </div>
               </li>
             );
@@ -940,8 +1041,6 @@ interface ViewEval {
 function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const [out, setOut] = useState<ViewEval | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // Live canvas embeds mount a full app; default off, opt-in per board.
-  const [preview, setPreview] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -980,55 +1079,42 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     );
   }
 
-  // A canvas view IS a board — but a live embed is a full canvas app (CRDT,
-  // presence, a render loop). Mounting one per pinned board crashed home, so
-  // the default is a STATIC board card; the live preview mounts only on
-  // explicit request, one board at a time. (Follow-up: a server-rendered
-  // snapshot from the canvas cell would make the still image free.)
+  // A canvas view IS a board. The embed is now the cell's zero-JS static SSR
+  // thumbnail (?embed=1): server-rendered, edge-cached, no app mounted — so
+  // many pinned boards show real previews inline without the crash. Lazy-loaded
+  // and click-through to the interactive board.
   if (type === 'canvas') {
-    const board = def.id.startsWith('canvas:') ? def.id.slice('canvas:'.length) : def.id;
-    const href = hint?.href ?? `/@c15r/canvas?canvas=${encodeURIComponent(board)}`;
-    const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1`;
+    // Address the board by its VIEW id so SSR honours the view's declared
+    // viewport (the "look here") instead of fitting the whole board.
+    const href = hint?.href ?? `/@c15r/canvas?view=${encodeURIComponent(def.id)}`;
+    const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1&w=620&h=240`;
     return (
       <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
-        {preview ? (
+        {/* The iframe is purely visual (pointer-events:none); a transparent
+            overlay link captures the tap so page scroll passes straight through
+            — iframes otherwise swallow touch on iOS even when inert. */}
+        <div style={{ position: 'relative', height: 240 }}>
           <iframe
             src={embedSrc}
             title={label}
-            style={{ width: '100%', height: 230, border: 0, display: 'block', background: '#fff' }}
+            loading="lazy"
+            scrolling="no"
+            tabIndex={-1}
+            aria-hidden
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', background: '#fff', pointerEvents: 'none' }}
           />
-        ) : (
-          // Static placeholder: a quiet board "plate", no app mounted.
-          <div
-            style={{
-              height: 120,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.5rem',
-              background: `linear-gradient(160deg, ${theme.pine} 0%, ${theme.dusk} 100%)`,
-              color: theme.cream,
-            }}
-          >
-            <span style={{ fontSize: '1.6rem' }}>🌲</span>
-            <span style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{label}</span>
-          </div>
-        )}
+          <a
+            href={href}
+            title={`Open ${label}`}
+            aria-label={`Open ${label}`}
+            style={{ position: 'absolute', inset: 0, display: 'block' }}
+          />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0.9rem', gap: '0.5rem' }}>
-          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
-            {out ? `${out.count} item${out.count === 1 ? '' : 's'}` : 'board'}
-          </span>
-          <span style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-            <button
-              onClick={() => setPreview((p) => !p)}
-              style={{ background: 'none', border: 'none', color: theme.accent, fontSize: '0.82rem', cursor: 'pointer', padding: 0, fontWeight: 600 }}
-            >
-              {preview ? 'Hide preview' : 'Load preview'}
-            </button>
-            <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>
-              Open board →
-            </a>
-          </span>
+          <strong style={{ fontFamily: theme.serif }}>🌲 {label}</strong>
+          <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>
+            {out ? `${out.count} item${out.count === 1 ? '' : 's'} · ` : ''}Open board →
+          </a>
         </div>
       </div>
     );
@@ -1731,10 +1817,310 @@ function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
 
 // ─── the page ──────────────────────────────────────────────────────
 
+// ─── the home layout (phase 3: the UI comes from the registry, not code) ──
+//
+// Home renders from a `_home/layout` fact in the signed-in slice — an ordered
+// list of sections — falling back to the default order when absent. Sections
+// are the built-in surfaces plus custom ones (a pinned view/board, a single
+// fact, an ad-hoc query). Customising = writing the fact; "make your own home
+// over time" is data, not a fork. (docs/home-cell.md phase 3.)
+
+interface LayoutSection {
+  type: string;
+  id?: string; // view id (type 'view')
+  key?: string; // fact key (type 'fact')
+  query?: Record<string, unknown>; // (type 'query')
+  title?: string;
+  hidden?: boolean;
+}
+
+const DEFAULT_LAYOUT: LayoutSection[] = [
+  { type: 'greeting' },
+  { type: 'stats' },
+  { type: 'capture' },
+  { type: 'workspace' },
+  { type: 'activity' },
+  { type: 'identity' },
+  { type: 'views' },
+  { type: 'cells' },
+  { type: 'console' },
+];
+
+const SECTION_LABELS: Record<string, string> = {
+  greeting: 'Greeting', stats: 'Stats', capture: 'Quick capture', workspace: 'Workspace',
+  activity: 'Recent activity', identity: 'Identity & grants', views: 'Pinned views',
+  cells: 'Cells', console: 'Field computer',
+};
+function sectionLabel(s: LayoutSection): string {
+  if (s.type === 'view') return `Board · ${s.id}`;
+  if (s.type === 'fact') return `Fact · ${s.key}`;
+  if (s.type === 'query') return `Query · ${s.title ?? '…'}`;
+  return SECTION_LABELS[s.type] ?? s.type;
+}
+
+function useLayout(authed: boolean): { sections: LayoutSection[]; save: (next: LayoutSection[]) => void } {
+  const [sections, setSections] = useState<LayoutSection[]>(DEFAULT_LAYOUT);
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    mcpCall('read', 'workspace.peek', { key: '_home/layout' })
+      .then((r) => {
+        if (!live) return;
+        const secs = (r.ok ? (r.value as { value?: { sections?: LayoutSection[] } } | null)?.value?.sections : null) ?? null;
+        if (Array.isArray(secs) && secs.length) setSections(secs);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [authed]);
+  const save = (next: LayoutSection[]): void => {
+    setSections(next);
+    void mcpCall('act', 'workspace.remember', {
+      key: '_home/layout',
+      value: { sections: next },
+      type: 'home-layout',
+      via: 'home:customize',
+    });
+  };
+  return { sections, save };
+}
+
+/** A single pinned fact, rendered as a card with its content + open path (via the type vocabulary). */
+function PinnedFact({ factKey }: { factKey: string }): React.JSX.Element | null {
+  const [entry, setEntry] = useState<{ value?: unknown; _meta?: ListEntry['_meta'] } | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    loadTypeDecls()
+      .then(() => mcpCall('read', 'workspace.peek', { key: factKey }))
+      .then((r) => {
+        if (live) setEntry(r.ok ? ((r.value as { value?: unknown; _meta?: ListEntry['_meta'] }) ?? null) : null);
+      })
+      .catch(() => setEntry(null));
+    return () => {
+      live = false;
+    };
+  }, [factKey]);
+  if (entry === undefined) return <Card><p style={{ color: theme.dim }}>Loading…</p></Card>;
+  if (entry === null) return null;
+  const e: ListEntry = { key: factKey, value: entry.value, _meta: entry._meta };
+  const to = factHref(e);
+  const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
+  const preview = factPreview(e);
+  return (
+    <Card style={{ display: 'grid', gap: '0.3rem' }}>
+      {to ? (
+        <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600, fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</a>
+      ) : (
+        <strong style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</strong>
+      )}
+      {preview ? <span style={{ color: theme.text, fontSize: '0.85rem' }}>{preview}</span> : null}
+      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+        <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>{factKey}</span>
+        <EditLink e={e} />
+      </div>
+    </Card>
+  );
+}
+
+/** An ad-hoc query, rendered as a titled list. */
+function PinnedQuery({ query, title }: { query: Record<string, unknown>; title?: string }): React.JSX.Element {
+  const [entries, setEntries] = useState<ListEntry[] | null>(null);
+  const qs = JSON.stringify(query);
+  useEffect(() => {
+    let live = true;
+    loadTypeDecls()
+      .then(() => mcpCall('read', 'workspace.query', { limit: 8, ...query }))
+      .then((r) => {
+        if (live) setEntries(r.ok ? ((r.value as { entries?: ListEntry[] }).entries ?? []) : []);
+      })
+      .catch(() => setEntries([]));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qs]);
+  return (
+    <Card>
+      <Heading sub="A pinned query over your slice.">{title ?? 'Query'}</Heading>
+      {entries === null ? (
+        <p style={{ color: theme.dim }}>Loading…</p>
+      ) : entries.length === 0 ? (
+        <p style={{ color: theme.dim }}>Nothing matches.</p>
+      ) : (
+        <ul style={{ margin: '0.4rem 0 0', padding: 0, listStyle: 'none', display: 'grid', gap: '0.4rem' }}>
+          {entries.map((e) => {
+            const to = factHref(e);
+            const t = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
+            return (
+              <li key={e.key} style={{ lineHeight: 1.35 }}>
+                {to ? <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{t}</a> : <span>{t}</span>}
+                <div style={{ color: theme.dim, fontSize: '0.7rem', fontFamily: theme.mono }}>{e.key}</div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+interface SectionCtx {
+  session: Session & { signIn: () => void; signOut: () => void };
+  authed: boolean;
+  dash: DashboardData | null;
+}
+
+function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.JSX.Element | null {
+  switch (s.type) {
+    case 'greeting': return <DashboardHeader session={ctx.session} />;
+    case 'stats': return <StatCards data={ctx.dash} />;
+    case 'capture': return <QuickCapture />;
+    case 'workspace': return <WorkspaceWindow authed={ctx.authed} />;
+    case 'activity': return <RecentActivity data={ctx.dash} />;
+    case 'identity': return <IdentityShell authed={ctx.authed} user={ctx.session.user} scopes={ctx.session.scopes} />;
+    case 'views': return <Views authed={ctx.authed} />;
+    case 'cells': return <CellsConsole authed={ctx.authed} />;
+    case 'console': return <FieldComputer authed={ctx.authed} />;
+    case 'view': return s.id ? <ViewSurface def={{ id: s.id }} /> : null;
+    case 'fact': return s.key ? <PinnedFact factKey={s.key} /> : null;
+    case 'query': return <PinnedQuery query={s.query ?? {}} title={s.title} />;
+    default: return null;
+  }
+}
+
+/** Customise mode: per-section reorder + hide/remove, persisted to `_home/layout`. */
+function SectionControls({
+  index,
+  total,
+  hidden,
+  onMove,
+  onToggle,
+  onRemove,
+}: {
+  index: number;
+  total: number;
+  hidden: boolean;
+  onMove: (dir: -1 | 1) => void;
+  onToggle: () => void;
+  onRemove?: () => void;
+}): React.JSX.Element {
+  const btn: React.CSSProperties = {
+    background: theme.panel,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 6,
+    color: theme.accent,
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    padding: '0.1rem 0.45rem',
+  };
+  return (
+    <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', margin: '0 0.25rem' }}>
+      <button style={btn} disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
+      <button style={btn} disabled={index === total - 1} onClick={() => onMove(1)}>↓</button>
+      {onRemove ? (
+        <button style={{ ...btn, color: theme.danger }} onClick={onRemove}>remove</button>
+      ) : (
+        <button style={{ ...btn, color: hidden ? theme.accent : theme.danger }} onClick={onToggle}>
+          {hidden ? 'show' : 'hide'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Add a custom section to the layout — a board, a fact, or an ad-hoc query. */
+function AddSection({ onAdd }: { onAdd: (s: LayoutSection) => void }): React.JSX.Element {
+  const [mode, setMode] = useState<'view' | 'fact' | 'query' | null>(null);
+  const [boards, setBoards] = useState<Array<{ id: string; label: string }> | null>(null);
+  const [factKey, setFactKey] = useState('');
+  const [q, setQ] = useState({ type: '', tag: '', prefix: '', title: '' });
+
+  useEffect(() => {
+    if (mode !== 'view' || boards) return;
+    mcpCall('read', 'workspace.views')
+      .then((r) => {
+        const views = r.ok ? ((r.value as { views?: Array<{ id: string; render?: { type?: string; label?: string } }> }).views ?? []) : [];
+        setBoards(views.filter((v) => v.render?.type === 'canvas').map((v) => ({ id: v.id, label: v.render?.label ?? v.id })));
+      })
+      .catch(() => setBoards([]));
+  }, [mode, boards]);
+
+  const field: React.CSSProperties = {
+    padding: '0.4rem 0.5rem', background: '#fffef9', border: `1px solid ${theme.border}`,
+    borderRadius: 6, color: theme.text, fontSize: '0.82rem', fontFamily: 'inherit', boxSizing: 'border-box',
+  };
+  const tab = (m: 'view' | 'fact' | 'query', label: string): React.JSX.Element => (
+    <button
+      onClick={() => setMode(mode === m ? null : m)}
+      style={{ background: mode === m ? theme.accent : theme.panel, color: mode === m ? theme.cream : theme.accent, border: `1px solid ${theme.border}`, borderRadius: 999, padding: '0.2rem 0.7rem', fontSize: '0.8rem', cursor: 'pointer' }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <Card style={{ display: 'grid', gap: '0.6rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ fontFamily: theme.serif }}>Add a section</strong>
+        {tab('view', '🌲 Board')}
+        {tab('fact', '📄 Fact')}
+        {tab('query', '🔎 Query')}
+      </div>
+      {mode === 'view' ? (
+        boards === null ? (
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>Loading boards…</span>
+        ) : boards.length === 0 ? (
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>No boards registered.</span>
+        ) : (
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            {boards.map((b) => (
+              <button key={b.id} onClick={() => { onAdd({ type: 'view', id: b.id }); setMode(null); }} style={{ ...field, cursor: 'pointer', width: 'auto' }}>
+                {b.label} +
+              </button>
+            ))}
+          </div>
+        )
+      ) : null}
+      {mode === 'fact' ? (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input value={factKey} onChange={(e) => setFactKey(e.target.value)} placeholder="fact key (e.g. doc:welcome)" style={{ ...field, flex: 1 }} />
+          <div style={{ width: 90 }}><Button onClick={() => { if (factKey.trim()) { onAdd({ type: 'fact', key: factKey.trim() }); setFactKey(''); setMode(null); } }}>Pin</Button></div>
+        </div>
+      ) : null}
+      {mode === 'query' ? (
+        <div style={{ display: 'grid', gap: '0.4rem' }}>
+          <input value={q.title} onChange={(e) => setQ({ ...q, title: e.target.value })} placeholder="title" style={field} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.4rem' }}>
+            <input value={q.type} onChange={(e) => setQ({ ...q, type: e.target.value })} placeholder="type" style={field} />
+            <input value={q.tag} onChange={(e) => setQ({ ...q, tag: e.target.value })} placeholder="tag" style={field} />
+            <input value={q.prefix} onChange={(e) => setQ({ ...q, prefix: e.target.value })} placeholder="key prefix" style={field} />
+          </div>
+          <div style={{ width: 110 }}>
+            <Button
+              onClick={() => {
+                const query: Record<string, unknown> = {};
+                if (q.type.trim()) query.type = q.type.trim();
+                if (q.tag.trim()) query.tag = q.tag.trim();
+                if (q.prefix.trim()) query.prefix = q.prefix.trim();
+                if (Object.keys(query).length) { onAdd({ type: 'query', query, title: q.title.trim() || undefined }); setQ({ type: '', tag: '', prefix: '', title: '' }); setMode(null); }
+              }}
+            >
+              Add query
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function App(): React.JSX.Element {
   const session = useAuth();
   const authed = !!session.user;
   const [dash, setDash] = useState<DashboardData | null>(null);
+  const { sections, save } = useLayout(authed);
+  const [customizing, setCustomizing] = useState(false);
 
   useEffect(() => {
     if (!authed) return;
@@ -1749,21 +2135,65 @@ function App(): React.JSX.Element {
     };
   }, [authed]);
 
+  const move = (i: number, dir: -1 | 1): void => {
+    const j = i + dir;
+    if (j < 0 || j >= sections.length) return;
+    const next = sections.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    save(next);
+  };
+  const toggle = (i: number): void => save(sections.map((s, k) => (k === i ? { ...s, hidden: !s.hidden } : s)));
+  const remove = (i: number): void => save(sections.filter((_s, k) => k !== i));
+  const add = (s: LayoutSection): void => save([...sections, s]);
+
+  const ctx: SectionCtx = { session, authed, dash };
+  const isCustom = (t: string): boolean => t === 'view' || t === 'fact' || t === 'query';
+
   return (
     <Page>
       {!session.ready ? null : !authed ? (
         <Landing session={session} />
       ) : (
         <>
-          <DashboardHeader session={session} />
-          <StatCards data={dash} />
-          <QuickCapture />
-          <WorkspaceWindow authed={authed} />
-          <RecentActivity data={dash} />
-          <IdentityShell authed={authed} user={session.user} scopes={session.scopes} />
-          <Views authed={authed} />
-          <CellsConsole authed={authed} />
-          <FieldComputer authed={authed} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', alignItems: 'center' }}>
+            <button
+              onClick={() => setCustomizing((c) => !c)}
+              style={{ background: customizing ? theme.accent : 'none', color: customizing ? theme.cream : theme.dim, border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: '0.78rem', padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+            >
+              {customizing ? 'Done' : 'Customise'}
+            </button>
+          </div>
+          {sections.map((s, i) => {
+            if (s.hidden && !customizing) return null;
+            const body = <SectionView s={s} ctx={ctx} />;
+            const k = `${s.type}:${s.id ?? s.key ?? i}`;
+            if (!customizing) return <React.Fragment key={k}>{body}</React.Fragment>;
+            return (
+              <div key={k} style={{ opacity: s.hidden ? 0.5 : 1, display: 'grid', gap: '0.3rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                  <span style={{ color: theme.dim, fontSize: '0.74rem', fontFamily: theme.mono }}>{sectionLabel(s)}</span>
+                  <SectionControls
+                    index={i}
+                    total={sections.length}
+                    hidden={!!s.hidden}
+                    onMove={(d) => move(i, d)}
+                    onToggle={() => toggle(i)}
+                    onRemove={isCustom(s.type) ? () => remove(i) : undefined}
+                  />
+                </div>
+                {body}
+              </div>
+            );
+          })}
+          {customizing ? (
+            <>
+              <AddSection onAdd={add} />
+              <p style={{ margin: 0, color: theme.dim, fontSize: '0.75rem', textAlign: 'center' }}>
+                Your home, as data — order, visibility, and pinned sections save to{' '}
+                <code style={{ fontFamily: theme.mono }}>_home/layout</code> in your slice.
+              </p>
+            </>
+          ) : null}
         </>
       )}
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>

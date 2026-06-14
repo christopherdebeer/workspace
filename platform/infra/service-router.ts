@@ -77,7 +77,71 @@ export interface ServiceRouterProps {
   domainNames?: string[];
   /** ACM certificate (must be in us-east-1) covering `domainNames`. */
   certificate?: acm.ICertificate;
+
+  // ── cell-origin isolation (docs/cell-origin-isolation.md) ──
+  // An OPTIONAL second distribution that serves user cells from their own
+  // per-cell subdomain (`<owner>-<name>.on.parc.land`), so each cell is a
+  // distinct browser origin and cannot read the shell's localStorage/cookie.
+  // Additive: unset ⇒ nothing changes; set ⇒ a separate distribution is created
+  // and the existing apex one is untouched.
+  /** The cell that routes `/@<owner>/<name>` requests (i.e. `dispatch`). */
+  cellHostRouter?: HttpServiceCell;
+  /** Wildcard alternate domain(s) for the cell distribution, e.g. ["*.on.parc.land"]. */
+  cellDomainNames?: string[];
+  /** ACM cert (us-east-1) covering `cellDomainNames`. */
+  cellCertificate?: acm.ICertificate;
 }
+
+/**
+ * Viewer-request CloudFront Function (cell distribution only): rewrite the
+ * per-cell host `<owner>-<name>.<…>` to the `/@<owner>/<name>` path the
+ * `dispatch` cell already understands — so host-isolated cells reuse the exact
+ * path-routing with no backend change. The owner label must not contain `-`
+ * (cell names may); split on the FIRST hyphen. A label with no hyphen is left
+ * untouched.
+ */
+const CELL_HOST_REWRITE_SRC = `function handler(event) {
+  var req = event.request;
+  var host = (req.headers.host && req.headers.host.value) || '';
+  var label = host.split('.')[0];
+  var i = label.indexOf('-');
+  if (i > 0) {
+    var prefix = '/@' + label.substring(0, i) + '/' + label.substring(i + 1);
+    // Idempotent: assets reference the cell's apex path (/@owner/name/app.js), so
+    // skip the prepend when the URI is already this cell's path — otherwise it
+    // double-prefixes and 404s (the cell's own /app.js, /style.css, …).
+    if (req.uri !== prefix && req.uri.indexOf(prefix + '/') !== 0) {
+      req.uri = prefix + req.uri;
+    }
+  }
+  return req;
+}`;
+
+/**
+ * The apex→subdomain cutover (docs/cell-origin-isolation.md §5.7). On the apex
+ * distribution's `/@<owner>/<name>` behaviour, redirect **navigations** (a
+ * top-level document, or a cell page loaded in an iframe/frame) to the cell's own
+ * subdomain, so a cell's interactive page — the place its `app.js` runs — only
+ * ever executes on its own origin and can never read the shell's localStorage or
+ * cookie. Sub-resources (app.js, css, images, XHR) and absent `Sec-Fetch-Dest`
+ * (non-browser clients) pass straight through, so nothing else changes.
+ */
+const CELL_APEX_REDIRECT_SRC = (cellDomain: string): string => `function handler(event) {
+  var req = event.request;
+  var dest = req.headers['sec-fetch-dest'];
+  // Only navigational loads of the cell page move origin; everything else stays.
+  if (!dest || (dest.value !== 'document' && dest.value !== 'iframe' && dest.value !== 'frame')) return req;
+  var m = req.uri.match(/^\\/@([a-z0-9]+)\\/([^/]+)(\\/.*)?$/);
+  if (!m) return req;
+  var rest = m[3] || '/';
+  var qs = '';
+  for (var k in req.querystring) { qs += (qs ? '&' : '?') + k + (req.querystring[k].value !== '' ? '=' + req.querystring[k].value : ''); }
+  return {
+    statusCode: 302,
+    statusDescription: 'Found',
+    headers: { location: { value: 'https://' + m[1] + '-' + m[2] + '.' + ${JSON.stringify(cellDomain)} + rest + qs } },
+  };
+}`;
 
 /**
  * The single public ingress: one CloudFront distribution that path-routes to
@@ -88,6 +152,8 @@ export interface ServiceRouterProps {
  */
 export class ServiceRouter extends Construct {
   readonly distribution: cloudfront.Distribution;
+  /** The cell-namespace distribution (`*.on.parc.land`), when configured. */
+  readonly cellDistribution?: cloudfront.Distribution;
 
   constructor(scope: Construct, id: string, props: ServiceRouterProps) {
     super(scope, id);
@@ -182,11 +248,28 @@ export class ServiceRouter extends Construct {
       ],
     });
 
+    // The apex→subdomain redirect (cell-origin isolation §5.7): when a cell
+    // namespace is configured, the dispatch `/@*` behaviour bounces navigations
+    // to the cell's own origin. Built once, attached only to that behaviour.
+    const cellDomain = props.cellDomainNames?.[0]?.replace(/^\*\./, '');
+    const cellRedirect =
+      props.cellHostRouter && cellDomain
+        ? new cloudfront.Function(this, 'CellApexRedirect', {
+            code: cloudfront.FunctionCode.fromInline(CELL_APEX_REDIRECT_SRC(cellDomain)),
+            runtime: cloudfront.FunctionRuntime.JS_2_0,
+            comment: 'Redirect apex /@owner/name navigations to the cell subdomain',
+          })
+        : undefined;
+
     const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
     for (const cell of props.cells) {
       for (const route of cell.manifest.routes) {
         if (cell === defaultCell && route === '/*') continue;
-        additionalBehaviors[route] = behaviorFor(cell);
+        const base = behaviorFor(cell);
+        additionalBehaviors[route] =
+          cellRedirect && cell === props.cellHostRouter
+            ? { ...base, functionAssociations: [{ function: cellRedirect, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }] }
+            : base;
       }
     }
 
@@ -202,5 +285,46 @@ export class ServiceRouter extends Construct {
       value: this.distribution.distributionDomainName,
       description: 'Public CloudFront domain for the platform',
     });
+
+    // ── cell-namespace distribution (host-isolated user cells) ──
+    // Additive and self-contained: a separate distribution for `*.on.parc.land`
+    // that rewrites the per-cell host to `/@<owner>/<name>` (the CloudFront
+    // Function above) and forwards to `dispatch`, reusing the OAC + body-signer.
+    // The existing apex distribution is untouched. Cells served here are a
+    // distinct origin — the security goal — so their *clients* must derive owner
+    // from the host (a follow-up); SSR already uses the cell's CELL_OWNER env.
+    if (props.cellHostRouter && props.cellDomainNames?.length && props.cellCertificate) {
+      const cellOrigin = origins.FunctionUrlOrigin.withOriginAccessControl(props.cellHostRouter.functionUrl, {
+        originAccessControl: oac,
+      });
+      const hostRewrite = new cloudfront.Function(this, 'CellHostRewrite', {
+        code: cloudfront.FunctionCode.fromInline(CELL_HOST_REWRITE_SRC),
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        comment: 'Rewrite <owner>-<name>.<domain> to /@<owner>/<name> for dispatch',
+      });
+      this.cellDistribution = new cloudfront.Distribution(this, 'CellDistribution', {
+        defaultBehavior: {
+          origin: cellOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          functionAssociations: [
+            { function: hostRewrite, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST },
+          ],
+          edgeLambdas: [
+            { functionVersion: originSigner.currentVersion, eventType: cloudfront.LambdaEdgeEventType.ORIGIN_REQUEST, includeBody: true },
+            { functionVersion: wwwAuthFix.currentVersion, eventType: cloudfront.LambdaEdgeEventType.ORIGIN_RESPONSE },
+          ],
+        },
+        domainNames: props.cellDomainNames,
+        certificate: props.cellCertificate,
+        comment: 'Cell-namespace router (host-isolated user cells)',
+      });
+      new cdk.CfnOutput(this, 'CellDistributionDomain', {
+        value: this.cellDistribution.distributionDomainName,
+        description: 'CloudFront domain for the cell namespace (point *.on.parc.land here)',
+      });
+    }
   }
 }

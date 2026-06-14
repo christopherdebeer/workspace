@@ -58,27 +58,59 @@ interface ValidatedToken {
   clientId: string | null;
 }
 
+/** The session-cookie name the auth cell sets for browser navigations. */
+const SESSION_COOKIE = 'parc_session';
+
+/** Extract the `parc_session` value from a Cookie header, if present. */
+function sessionCookie(cookieHeader: string | undefined): string | undefined {
+  if (!cookieHeader) return undefined;
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === SESSION_COOKIE) return part.slice(eq + 1).trim() || undefined;
+  }
+  return undefined;
+}
+
 /**
- * Establish the request identity for an HTTP call. Identity is derived ONLY
- * from a validated `Authorization: Bearer` token — never from client-supplied
- * `x-auth-*` headers (which would be trivially forgeable, since CloudFront
- * forwards all viewer headers). The opaque token is validated by invoking the
- * auth cell's `validateToken` command; the cell must list `auth` in `allow[]`
- * for the registry entry to exist. The auth cell itself can't self-validate, so
- * its own HTTP routes resolve anonymous (its OAuth endpoints don't need this).
+ * Establish the request identity for an HTTP call. Identity is derived from a
+ * validated `Authorization: Bearer` token — never from client-supplied `x-auth-*`
+ * headers (trivially forgeable, since CloudFront forwards all viewer headers).
+ * The opaque token is validated by invoking the auth cell's `validateToken`
+ * command; the cell must list `auth` in `allow[]` for the registry entry to
+ * exist. The auth cell itself can't self-validate, so its own HTTP routes
+ * resolve anonymous (its OAuth endpoints don't need this).
+ *
+ * Browser *navigations* (SSR pages, iframes) carry no bearer — only cookies. For
+ * the cell-routing tier (`dispatch`) on **safe methods only**, the `parc_session`
+ * cookie is accepted as the credential, so a signed-in visitor's own cells
+ * render server-side. Scoped deliberately tight: the gateway (`/mcp`) stays
+ * bearer-only (no cookie-CSRF), and a cookie never authorizes a mutation. The
+ * credential reaches only this tier-1 hop; dynamic cells receive `x-cell-caller`,
+ * never the token (see callCell).
  */
 async function resolveHttpIdentity(
   headers: Record<string, string | undefined> | undefined,
   serviceName: string,
+  method?: string,
 ): Promise<Identity> {
   // Prefer the standard Authorization header, but fall back to the
   // `x-forwarded-authorization` header that the edge preserves the viewer's
   // bearer in — CloudFront OAC overwrites Authorization with its SigV4 signature.
   const authHeader = headerOf(headers, 'authorization');
   const fwdHeader = headerOf(headers, 'x-forwarded-authorization');
-  const token =
+  let token =
     authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ??
     fwdHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  // The session cookie is honoured only for a genuine top-level navigation —
+  // `Sec-Fetch-Dest: document` (browser-set, unforgeable from JS). A cell's
+  // `fetch()` is `empty` and an `<iframe>` is `iframe`; neither is honoured, so a
+  // hostile cell can't ride your ambient cookie to read your content (a top-level
+  // navigation it could trigger would unload the cell, so it can't read the
+  // result either). Absent header (curl, old clients) ⇒ treat as non-navigation.
+  const topLevelNav = headerOf(headers, 'sec-fetch-dest') === 'document';
+  const cookieAllowed = serviceName === 'dispatch' && (method === 'GET' || method === 'HEAD') && topLevelNav;
+  if (!token && cookieAllowed) token = sessionCookie(headerOf(headers, 'cookie'));
   if (!token) return ANONYMOUS;
 
   const authService = process.env.AUTH_SERVICE_NAME ?? 'auth';
@@ -222,7 +254,7 @@ export function defineService(definition: ServiceDefinition) {
     const path = httpEvent.rawPath ?? httpEvent.requestContext?.http?.path ?? '/';
     const correlationId = headerOf(httpEvent.headers, 'x-correlation-id') ?? randomUUID();
     const traceId = headerOf(httpEvent.headers, 'x-amzn-trace-id') ?? correlationId;
-    const identity = await resolveHttpIdentity(httpEvent.headers, definition.name);
+    const identity = await resolveHttpIdentity(httpEvent.headers, definition.name, method);
     const ctx = buildContext({ correlationId, traceId, identity });
 
     const rawBody = httpEvent.body
@@ -355,6 +387,7 @@ function renderHttp(res: ServiceHttpResponse, correlationId: string): FunctionUr
     headers,
     body: res.body === undefined ? '' : isString ? (res.body as string) : JSON.stringify(res.body),
     ...(res.isBase64Encoded ? { isBase64Encoded: true } : {}),
+    ...(res.cookies && res.cookies.length ? { cookies: res.cookies } : {}),
   };
 }
 

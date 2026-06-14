@@ -1,49 +1,19 @@
-/* Salience as a presentation channel — never position (canvas-substrate-design.md §4). */
+/* Salience as a presentation channel — a positive marker, never a subtraction
+   (canvas-substrate-design.md §4, revised). The board shows every fact its
+   query includes, at full fidelity; the most salient simply get a badge.
+   Nothing is dimmed, collapsed, or omitted. */
 
-.canvas-element[data-salience="peripheral"] > .content {
-  opacity: 0.72;
-  filter: saturate(0.7);
-  transition: opacity 0.4s ease, filter 0.4s ease;
-}
-
-.canvas-element[data-salience="focus"] > .content {
-  opacity: 1;
-  filter: none;
-  transition: opacity 0.4s ease, filter 0.4s ease;
-}
-
-/* Faded: low salience on a human-placed element — represented, never
-   restructured. The pin is the human's; the dimming is the substrate's. */
-.canvas-element[data-salience="faded"] > .content {
-  opacity: 0.4;
-  filter: saturate(0.35) contrast(0.9);
-  transition: opacity 0.4s ease, filter 0.4s ease;
-}
-.canvas-element[data-salience="faded"]:hover > .content {
-  opacity: 0.85;
-  filter: none;
-}
-
-/* Elided: the value is withheld — a title chip stays at the pinned position.
-   Tap to expand (a deliberate peek; attention re-focuses it). */
-.canvas-element[data-salience="elided"] > .content {
-  display: none;
-}
-.canvas-element[data-salience="elided"]::after {
-  content: attr(data-chip) " …";
+.canvas-element[data-salience="high"]::before {
+  content: "✦";
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: #f4f4ee;
-  border: 1px solid #c9c9bd;
-  border-radius: 999px;
-  padding: 0.35em 0.9em;
-  font-family: system-ui, sans-serif;
-  font-size: calc(0.7rem / var(--zoom, 1));
-  color: #666;
-  white-space: nowrap;
-  cursor: pointer;
+  top: calc(-0.35rem / var(--zoom, 1));
+  right: calc(-0.15rem / var(--zoom, 1));
+  font-size: calc(0.95rem / var(--zoom, 1));
+  line-height: 1;
+  color: #e8b04b;
+  text-shadow: 0 0 calc(7px / var(--zoom, 1)) rgba(232, 176, 75, 0.65);
+  pointer-events: none;
+  z-index: 5;
 }
 
 /* Synthesized (unpinned) placement — the board's proposal, visibly provisional.

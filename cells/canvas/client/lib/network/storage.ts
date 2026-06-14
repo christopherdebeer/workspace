@@ -571,9 +571,17 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       applyViewport(viewport, bbox);
     }
 
-    startSalience(cid);
-    startLiveSync(cid);
-    startFlightRecorder();
+    // An embed is a still picture: render once, start nothing. The background
+    // services (salience polling, the change-feed live-sync, the flight
+    // recorder) are what make an idle board cost CPU + substrate reads forever
+    // — N embeds = N copies, which is what crashed pages full of boards. The
+    // core renderer is already on-demand (coalesced requestRender), so an inert
+    // embed truly settles after first paint.
+    if (!embed) {
+      startSalience(cid);
+      startLiveSync(cid);
+      startFlightRecorder();
+    }
     document.addEventListener('parc:expand', (ev) => {
       const cc = (window as { CC?: any }).CC;
       const d = (ev as CustomEvent).detail as { key: string; id: string };

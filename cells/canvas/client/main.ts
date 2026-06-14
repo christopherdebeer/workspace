@@ -1304,6 +1304,17 @@ function updateCanvasController(controller: CanvasController) {
 }
 
 (async function main() {
+    // SSR first paint: the server pre-rendered the board for an instant, real
+    // first frame. Clear those nodes before the interactive controller renders
+    // so it doesn't duplicate them — the swap to the live board is seamless
+    // (identical content). (Static embeds keep the SSR DOM; they load no app.)
+    const ssrC = document.getElementById('canvas-container');
+    if (ssrC && ssrC.dataset.ssr) {
+        ssrC.innerHTML = '';
+        const ssrS = document.getElementById('static-container');
+        if (ssrS) ssrS.innerHTML = '';
+        delete ssrC.dataset.ssr;
+    }
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
     const token = params.get("token");

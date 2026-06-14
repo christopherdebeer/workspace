@@ -188,7 +188,14 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
 
   const existing = await registry.get(cellId);
   if (existing && existing.status !== 'FAILED') {
-    throw new Error(`Cell "${cellId}" already exists (status ${existing.status})`);
+    // A DELETING record whose CloudFormation stack is already gone is an orphan
+    // (getCell only reconciles while the stack still exists) — recreating would
+    // otherwise be blocked forever. Treat a vanished stack as deletable and let
+    // this create overwrite the record.
+    const orphaned = existing.status === 'DELETING' && (await describeStack(existing.stackName)) === null;
+    if (!orphaned) {
+      throw new Error(`Cell "${cellId}" already exists (status ${existing.status})`);
+    }
   }
 
   // Cells are authored in TypeScript; transpile to JS before packaging.
@@ -828,28 +835,33 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   if (Object.keys(files).length === 0) throw new Error('no source files to deploy (write to src/ first)');
   const entry = files['index.ts'] !== undefined ? 'index.ts' : files['index.js'] !== undefined ? 'index.js' : Object.keys(files)[0];
 
+  // One import map (`client/imports.json`) declares the cell's npm deps for BOTH
+  // bundlers: the server inlines them from esm.sh (node target), the client fetches
+  // them from esm.sh in the browser — same pins, so an isomorphic cell stays on the
+  // byte-identical dependency on both sides.
+  let imports: Record<string, string> | undefined;
+  if (files['client/imports.json'] !== undefined) {
+    try {
+      imports = JSON.parse(files['client/imports.json']) as Record<string, string>;
+    } catch {
+      throw new Error('client/imports.json is not valid JSON');
+    }
+  }
+
   let js: string;
   try {
-    js = await bundleFiles(files, entry);
+    js = await bundleFiles(files, entry, imports);
   } catch (err) {
     throw new Error(`Cell source failed to bundle: ${(err as Error).message}`);
   }
   const pkg: Array<{ name: string; content: string }> = [{ name: 'index.js', content: js }];
 
   // The tier-2 mirror of home's `clientEntry`: a `client/` entry in the src
-  // tree browser-bundles to `app.js` (bare imports become esm.sh externals);
+  // tree browser-bundles to `app.js` (declared deps become esm.sh externals);
   // `static/` files ship verbatim. The handler serves both from its package
   // (fs.readFileSync — they sit beside index.js in /var/task).
   const clientEntry = CLIENT_ENTRIES.find((c) => files[c] !== undefined);
   if (clientEntry) {
-    let imports: Record<string, string> | undefined;
-    if (files['client/imports.json'] !== undefined) {
-      try {
-        imports = JSON.parse(files['client/imports.json']) as Record<string, string>;
-      } catch {
-        throw new Error('client/imports.json is not valid JSON');
-      }
-    }
     try {
       pkg.push({ name: 'app.js', content: await bundleClientFiles(files, clientEntry, imports) });
     } catch (err) {
@@ -859,11 +871,30 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   const staticFiles = Object.keys(files).filter((f) => f.startsWith('static/'));
   for (const f of staticFiles) pkg.push({ name: f, content: files[f] });
 
+  // Vocabulary as data (docs/type-vocabulary.md): a cell declares the fact
+  // types it manages in a `types.json` at its src root. They are stored on the
+  // cell's *registry* record — one global table — so the type vocabulary is
+  // canonical and readable by every user (and the anonymous landing), not
+  // siloed in the owner's slice. `cells.describeTypes` aggregates them.
+  let declaredTypes: Array<Record<string, unknown>> | undefined;
+  if (files['types.json'] !== undefined) {
+    try {
+      const parsed = JSON.parse(files['types.json']) as { types?: Array<Record<string, unknown>> };
+      if (Array.isArray(parsed.types) && parsed.types.length) declaredTypes = parsed.types;
+    } catch (err) {
+      ctx.logger.warn('cell types.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
+    }
+  }
+
   const version = `${Date.now()}`;
   const codeKey = buildKey(record.cellId, version);
   await uploadPackage({ bucket: env.codeBucket, key: codeKey, files: pkg });
   await updateFunctionCode(record.functionName, env.codeBucket, codeKey);
-  await createRegistry(env.registryTable).put({ ...record, updatedAt: new Date().toISOString() });
+  await createRegistry(env.registryTable).put({
+    ...record,
+    ...(declaredTypes ? { types: declaredTypes } : {}),
+    updatedAt: new Date().toISOString(),
+  });
 
   ctx.logger.info('cell deployed', {
     cellId: record.cellId,
@@ -871,6 +902,7 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     files: Object.keys(files).length,
     client: clientEntry ?? null,
     static: staticFiles.length,
+    types: declaredTypes?.length ?? 0,
   });
   await ctx.events.emit('cell.deployed', {
     cellId: record.cellId,
@@ -1095,6 +1127,30 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
   return { tools: out };
 }
 
+/**
+ * The canonical type vocabulary (docs/type-vocabulary.md): every ACTIVE cell's
+ * declared types, aggregated into `{ <type>: decl }` with the cell's address
+ * stamped as `manager`. Global and unauthenticated-friendly — type decls say
+ * *how* to open a fact, not *whether* you may. The gateway's `$types` serves
+ * this merged under the caller's per-user `_types/` overrides.
+ */
+async function describeTypes(_input: unknown, ctx: ServiceContext): Promise<{ types: Record<string, unknown> }> {
+  const env = loadForgeEnv();
+  const cells = await createRegistry(env.registryTable).listActive();
+  const out: Record<string, unknown> = {};
+  for (const c of cells.sort((a, b) => a.cellId.localeCompare(b.cellId))) {
+    for (const decl of c.types ?? []) {
+      const type = typeof decl.type === 'string' ? decl.type : '';
+      if (!type || type.startsWith('_')) continue;
+      const value: Record<string, unknown> = { ...decl, manager: typeof decl.manager === 'string' ? decl.manager : cellAddress(c.owner, c.name) };
+      delete value.type;
+      out[type] = value;
+    }
+  }
+  ctx.logger.info('type vocabulary aggregated', { cells: cells.length, types: Object.keys(out).length });
+  return { types: out };
+}
+
 interface CallCellToolInput {
   /** Target the cell by id, or by owner + name (the `@owner/name` address form). */
   cellId?: string;
@@ -1149,7 +1205,8 @@ interface ToolSpec {
 const TOOLS: Record<string, ToolSpec> = {
   create: {
     description:
-      'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE.',
+      'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE. ' +
+      'Happy path (optional, not required): a cell can be isomorphic React — render the SAME tree to a string on the server (`renderToString`) and hydrate it on the client (`hydrateRoot`), which removes the first-paint flash. Author the server entry as plain `index.ts` (no JSX), keep JSX in `.tsx` modules it imports, and add a `client/main.tsx` (browser bundle → `app.js`). Declare any npm deps ONCE in `client/imports.json` — they are bundled into the server from esm.sh AND fetched by the browser at the same pin. Copy `@c15r/starter` as the template; `@c15r/lit` is the full reference.',
     scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
@@ -1500,6 +1557,7 @@ const commands: Record<string, RegisteredCommand> = {
   // forwards these; they are not themselves advertised as forge MCP tools).
   describeCellTools: describeCellTools as RegisteredCommand,
   callCellTool: callCellTool as RegisteredCommand,
+  describeTypes: describeTypes as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {
   commands[name] = spec.handler;

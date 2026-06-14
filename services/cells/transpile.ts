@@ -157,12 +157,78 @@ export async function bundleClientFiles(
 }
 
 /**
+ * Server-bundleable npm packages: the few we ship in forge's own `node_modules`
+ * (via the cells service `bundlingNodeModules`) so a cell's server can do real
+ * isomorphic SSR. These are NOT externalized — esbuild resolves them from disk
+ * and inlines them into the cell's `index.js`. `react`/`react-dom` give a cell
+ * `renderToString` + the automatic-JSX runtime, matching the client's React (which
+ * the browser bundle pulls from esm.sh) so server markup hydrates without a flash.
+ * Everything else bare stays external (provided by the Lambda runtime).
+ */
+const SERVER_BUNDLED = new Set(['react', 'react-dom', 'scheduler']);
+
+/** The package name of a bare specifier (`react-dom/server` → `react-dom`). */
+function barePackage(spec: string): string {
+  const segs = spec.split('/');
+  return spec.startsWith('@') ? segs.slice(0, 2).join('/') : segs[0];
+}
+
+/** esbuild namespace for modules fetched from a CDN (esm.sh) at bundle time. */
+const HTTP_NS = 'cell-http';
+
+/** The CDN URL a declared server dep resolves to — the node build of the package,
+ *  so it bundles into the cell's Lambda. Honours an `imports.json` override (a
+ *  pinned version or a full URL), exactly like the client bundler — one import map
+ *  drives both sides, which is what keeps an isomorphic cell's server and client on
+ *  the byte-identical dependency (no hydration skew). */
+function serverDepUrl(spec: string, imports?: Record<string, string>): string {
+  const url = resolveBareImport(spec, imports);
+  if (/^https?:\/\//.test(url) && url.includes('esm.sh') && !url.includes('?')) return `${url}?target=node`;
+  return url;
+}
+
+/** Fetch a CDN module (with a /tmp cache that survives warm Lambda invocations).
+ *  esm.sh serves transpiled ESM with no install scripts and no native binaries, so
+ *  this is the portable, supply-chain-narrower alternative to `npm install` (which
+ *  the read-only Lambda fs can't do anyway). */
+function fetchCached(url: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require('node:os');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require('node:path');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createHash } = require('node:crypto');
+  const dir = path.join(os.tmpdir(), 'cell-dep-cache');
+  const key = path.join(dir, createHash('sha1').update(url).digest('hex'));
+  try {
+    return Promise.resolve(fs.readFileSync(key, 'utf8') as string);
+  } catch {
+    /* cache miss */
+  }
+  return fetch(url).then(async (res: Response) => {
+    if (!res.ok) throw new Error(`dependency fetch ${url} → ${res.status}`);
+    const body = await res.text();
+    try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(key, body); } catch { /* /tmp full — skip cache */ }
+    return body;
+  });
+}
+
+/**
  * Bundle a multi-file TypeScript cell (`files`: relative path → source) into one
  * CommonJS module, resolving relative imports against the in-memory tree via an
- * esbuild virtual-FS plugin. Bare/npm imports stay external (provided by the
- * Lambda runtime/layers), exactly as the single-module path leaves them.
+ * esbuild virtual-FS plugin. Bare imports stay external (provided by the Lambda
+ * runtime — node builtins, the bundled @aws-sdk) UNLESS they are (a) in the small
+ * `SERVER_BUNDLED` allowlist (react et al., inlined from forge's node_modules) or
+ * (b) declared in the cell's `imports.json`, in which case they are fetched from
+ * esm.sh (node target) and bundled in — arbitrary npm, server-side, no install.
  */
-export async function bundleFiles(files: Record<string, string>, entry = 'index.ts'): Promise<string> {
+export async function bundleFiles(
+  files: Record<string, string>,
+  entry = 'index.ts',
+  imports?: Record<string, string>,
+): Promise<string> {
   const eb = await ensureEsbuild();
   if (files[entry] === undefined) {
     const found = resolveKey(files, entry);
@@ -175,6 +241,10 @@ export async function bundleFiles(files: Record<string, string>, entry = 'index.
     format: 'cjs',
     target: 'es2020',
     platform: 'node',
+    jsx: 'automatic', // cells may author server views in TSX; harmless for the rest
+    // React (and any lib gated on it) ships its production build in the cell —
+    // no dev-only warnings/work in the Lambda, and `renderToString` stays fast.
+    define: { 'process.env.NODE_ENV': '"production"' },
     write: false,
     plugins: [
       {
@@ -182,16 +252,41 @@ export async function bundleFiles(files: Record<string, string>, entry = 'index.
         setup(build) {
           build.onResolve({ filter: /.*/ }, (args) => {
             if (args.kind === 'entry-point') return { path: args.path, namespace: 'vfs' };
+            // A transitive import from a CDN module: resolve against its URL.
+            if (args.namespace === HTTP_NS) return { path: new URL(args.path, args.importer).href, namespace: HTTP_NS };
+            // Imports from a bundled npm file (real fs, e.g. react-dom pulling in
+            // scheduler) use esbuild's default node_modules resolution.
+            if (args.namespace !== 'vfs') return undefined;
             if (args.path.startsWith('.')) {
               const key = resolveKey(files, resolveRelative(args.importer, args.path));
               if (!key) return { errors: [{ text: `cannot resolve "${args.path}" from "${args.importer}"` }] };
               return { path: key, namespace: 'vfs' };
             }
-            return { path: args.path, external: true }; // npm / runtime-provided
+            // A cell may import a CDN module by URL directly — bundle it in.
+            if (/^https?:\/\//.test(args.path)) return { path: args.path, namespace: HTTP_NS };
+            // Allowlisted packages resolve to their real path in forge's
+            // node_modules and bundle in (react — pinned, exact, reliable).
+            if (SERVER_BUNDLED.has(barePackage(args.path))) {
+              try {
+                return { path: require.resolve(args.path) };
+              } catch {
+                /* not installed in this runtime — fall through */
+              }
+            }
+            // Declared in imports.json → fetched from esm.sh (node) and bundled.
+            if (imports && imports[barePackage(args.path)] !== undefined) {
+              return { path: serverDepUrl(args.path, imports), namespace: HTTP_NS };
+            }
+            return { path: args.path, external: true }; // runtime-provided (node builtins, @aws-sdk)
+          });
+          build.onLoad({ filter: /.*/, namespace: HTTP_NS }, async (args) => {
+            const contents = await fetchCached(args.path);
+            const loader = /\.css(\?|$)/.test(args.path) ? 'css' : /\.json(\?|$)/.test(args.path) ? 'json' : 'js';
+            return { contents, loader };
           });
           build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => ({
             contents: files[args.path] ?? '',
-            loader: args.path.endsWith('.js') ? 'js' : 'ts',
+            loader: loaderFor(args.path),
           }));
         },
       },

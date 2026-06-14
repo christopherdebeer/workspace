@@ -39,6 +39,10 @@ const CELLS_TOOLS = [
 let lastCall: { fn: string; command: string; payload: unknown } | undefined;
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
+/** `_types/<type>` facts workspace.query returns for the per-user `$types` overrides (per-test). */
+let typeFacts: Array<{ key: string; value: unknown }> = [];
+/** Global type vocabulary cells.describeTypes returns for the `$types` read (per-test). */
+let globalTypes: Record<string, unknown> = {};
 
 function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
@@ -50,13 +54,16 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         result = tokens[env.payload.token as string] ?? null;
       } else if (fn === 'workspace-fn') {
         if (env.__command === 'describeTools') result = { tools: WORKSPACE_TOOLS };
-        else {
+        else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_types/') {
+          result = { entries: typeFacts };
+        } else {
           lastCall = { fn: 'workspace', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
         }
       } else if (fn === 'cells-fn') {
         if (env.__command === 'describeTools') result = { tools: CELLS_TOOLS };
         else if (env.__command === 'describeCellTools') result = { tools: cellTools };
+        else if (env.__command === 'describeTypes') result = { types: globalTypes };
         else {
           lastCall = { fn: 'cells', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
@@ -105,6 +112,8 @@ describe('resource cell (MCP gateway, read/act)', () => {
     process.env.PUBLIC_BASE_URL = 'https://parc.land';
     lastCall = undefined;
     cellTools = [];
+    typeFacts = [];
+    globalTypes = {};
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
@@ -140,6 +149,38 @@ describe('resource cell (MCP gateway, read/act)', () => {
   it('read omitting target also returns the catalog', async () => {
     const cat = await callTool('creator', 'read', {});
     expect((cat.parsed as { capabilities: unknown[] }).capabilities.length).toBeGreaterThan(0);
+  });
+
+  it('read("$types") returns the global cell-registry vocabulary keyed by bare type name', async () => {
+    globalTypes = {
+      doc: { manager: '@c15r/lit', handlers: { open: [{ surface: '/@c15r/lit?doc=${match}' }] } },
+      capture: { manager: '@c15r/input', icon: '📥' },
+    };
+    const res = await callTool('creator', 'read', { target: '$types' });
+    const out = res.parsed as { types: Record<string, { manager?: string }>; hint: string };
+    expect(Object.keys(out.types).sort()).toEqual(['capture', 'doc']);
+    expect(out.types.doc.manager).toBe('@c15r/lit');
+    expect(out.hint).toMatch(/handlers\[intent\]/);
+  });
+
+  it('read("$types") merges per-user _types/ overrides over the global registry', async () => {
+    globalTypes = {
+      doc: { manager: '@c15r/lit', icon: '📄' },
+      capture: { manager: '@c15r/input', icon: '📥' },
+    };
+    typeFacts = [
+      { key: '_types/doc', value: { manager: '@alice/custom-doc', icon: '✏️' } },
+      { key: '_types/note', value: { manager: '@alice/notes', icon: '🗒️' } },
+    ];
+    const res = await callTool('creator', 'read', { target: '$types' });
+    const out = res.parsed as { types: Record<string, { manager?: string }> };
+    expect(Object.keys(out.types).sort()).toEqual(['capture', 'doc', 'note']);
+    // user override wins over the global declaration for the same type
+    expect(out.types.doc.manager).toBe('@alice/custom-doc');
+    // untouched global type survives
+    expect(out.types.capture.manager).toBe('@c15r/input');
+    // user-only type appears
+    expect(out.types.note.manager).toBe('@alice/notes');
   });
 
   it('read("$catalog", {detail:"summary"}) groups one-line capabilities by cell, schema-free', async () => {
@@ -268,5 +309,51 @@ describe('resource cell (MCP gateway, read/act)', () => {
     const res = (await gateway(httpEvent('POST', '/mcp', { body: rpc('tools/list') }))) as FunctionUrlResponse;
     expect(res.statusCode).toBe(401);
     expect(res.headers['www-authenticate']).toContain('resource_metadata="https://parc.land/.well-known/oauth-protected-resource/mcp"');
+  });
+
+  describe('CORS for host-isolated cell origins', () => {
+    afterEach(() => delete process.env.MCP_CORS_ORIGIN_SUFFIX);
+
+    it('answers the OPTIONS preflight and reflects an allowed cell origin', async () => {
+      process.env.MCP_CORS_ORIGIN_SUFFIX = '.on.parc.land';
+      const res = (await gateway(
+        httpEvent('OPTIONS', '/mcp', { headers: { origin: 'https://c15r-lit.on.parc.land' } }),
+      )) as FunctionUrlResponse;
+      expect(res.statusCode).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('https://c15r-lit.on.parc.land');
+      expect(res.headers['access-control-allow-headers']).toContain('authorization');
+    });
+
+    it('sets CORS on a real POST from an allowed cell origin', async () => {
+      process.env.MCP_CORS_ORIGIN_SUFFIX = '.on.parc.land';
+      const res = (await gateway(
+        httpEvent('POST', '/mcp', {
+          headers: { 'x-forwarded-authorization': 'Bearer creator', origin: 'https://c15r-lit.on.parc.land' },
+          body: rpc('tools/call', { name: 'whoami', arguments: {} }),
+        }),
+      )) as FunctionUrlResponse;
+      expect(res.headers['access-control-allow-origin']).toBe('https://c15r-lit.on.parc.land');
+      expect(res.headers['vary']).toBe('Origin');
+    });
+
+    it('does NOT reflect a non-cell origin (and 401 still carries no ACAO)', async () => {
+      process.env.MCP_CORS_ORIGIN_SUFFIX = '.on.parc.land';
+      const evil = (await gateway(
+        httpEvent('OPTIONS', '/mcp', { headers: { origin: 'https://evil.example.com' } }),
+      )) as FunctionUrlResponse;
+      expect(evil.headers['access-control-allow-origin']).toBeUndefined();
+      const noBearer = (await gateway(
+        httpEvent('POST', '/mcp', { headers: { origin: 'https://evil.example.com' }, body: rpc('tools/list') }),
+      )) as FunctionUrlResponse;
+      expect(noBearer.statusCode).toBe(401);
+      expect(noBearer.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
+    it('emits no CORS at all when the suffix is unconfigured', async () => {
+      const res = (await gateway(
+        httpEvent('OPTIONS', '/mcp', { headers: { origin: 'https://c15r-lit.on.parc.land' } }),
+      )) as FunctionUrlResponse;
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
   });
 });

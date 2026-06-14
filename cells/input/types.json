@@ -1,0 +1,15 @@
+{
+  "types": [
+    {
+      "type": "capture",
+      "icon": "📥",
+      "manager": "@c15r/input",
+      "handlers": {
+        "open": [
+          { "surface": "/@c15r/lit?doc=log:${value.captured}" },
+          { "surface": "/@c15r/input" }
+        ]
+      }
+    }
+  ]
+}
