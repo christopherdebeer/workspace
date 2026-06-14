@@ -265,13 +265,18 @@ export interface SalienceOptions {
   attentionSaturation?: number;
   /** Lifetime reads+writes at which the cumulative `standing` term saturates
    *  (log-compressed, so it can't run away the way the legacy unbounded score
-   *  did). Default 50. */
+   *  did). Default 20 — tuned to personal scale: a "well-attended" fact is ~15–20
+   *  touches, not 50 (a tending-audit calibration over the live corpus, which is
+   *  read-light; 50 was too coarse to register accruing attention). */
   standingSaturation?: number;
-  /** Graph degree at which the `centrality` term saturates. Default 8. */
+  /** Graph degree at which the `centrality` term saturates. Default 5 — at personal
+   *  scale, being linked at all is signal (1 edge → 0.2). */
   centralitySaturation?: number;
   /** Score-term weights (should sum to ≤1 so the score stays in [0,1] and the
-   *  thresholds keep their meaning). Defaults: recency .45, velocity .15,
-   *  attention .10, standing .20, centrality .10. */
+   *  thresholds keep their meaning). Defaults: recency .45, velocity .10,
+   *  attention .15, standing .20, centrality .10 — velocity (recent writes) is a
+   *  rare, bursty signal already mostly captured by recency, so its weight goes
+   *  to attention (reads), the signal a used workspace actually accrues. */
   recencyWeight?: number;
   velocityWeight?: number;
   attentionWeight?: number;
@@ -291,11 +296,11 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
     windowMs: o?.windowMs ?? 60 * 60 * 1000,
     velocitySaturation: o?.velocitySaturation ?? 5,
     attentionSaturation: o?.attentionSaturation ?? 5,
-    standingSaturation: o?.standingSaturation ?? 50,
-    centralitySaturation: o?.centralitySaturation ?? 8,
+    standingSaturation: o?.standingSaturation ?? 20,
+    centralitySaturation: o?.centralitySaturation ?? 5,
     recencyWeight: o?.recencyWeight ?? 0.45,
-    velocityWeight: o?.velocityWeight ?? 0.15,
-    attentionWeight: o?.attentionWeight ?? 0.1,
+    velocityWeight: o?.velocityWeight ?? 0.1,
+    attentionWeight: o?.attentionWeight ?? 0.15,
     standingWeight: o?.standingWeight ?? 0.2,
     centralityWeight: o?.centralityWeight ?? 0.1,
     focusThreshold: o?.focusThreshold ?? 0.5,
