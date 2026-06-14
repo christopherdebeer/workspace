@@ -189,8 +189,10 @@ export class PlatformStack extends cdk.Stack {
       emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
-      // it so its .wasm ships in the asset.
-      bundlingNodeModules: ['esbuild-wasm'],
+      // it so its .wasm ships in the asset. react/react-dom ship too so the cell
+      // bundler can inline a server renderer (renderToString) into a cell's
+      // index.js for isomorphic SSR — see transpile.ts SERVER_BUNDLED.
+      bundlingNodeModules: ['esbuild-wasm', 'react', 'react-dom'],
       memorySize: 512,
       timeoutSeconds: 60,
     });

@@ -157,10 +157,28 @@ export async function bundleClientFiles(
 }
 
 /**
+ * Server-bundleable npm packages: the few we ship in forge's own `node_modules`
+ * (via the cells service `bundlingNodeModules`) so a cell's server can do real
+ * isomorphic SSR. These are NOT externalized — esbuild resolves them from disk
+ * and inlines them into the cell's `index.js`. `react`/`react-dom` give a cell
+ * `renderToString` + the automatic-JSX runtime, matching the client's React (which
+ * the browser bundle pulls from esm.sh) so server markup hydrates without a flash.
+ * Everything else bare stays external (provided by the Lambda runtime).
+ */
+const SERVER_BUNDLED = new Set(['react', 'react-dom', 'scheduler']);
+
+/** The package name of a bare specifier (`react-dom/server` → `react-dom`). */
+function barePackage(spec: string): string {
+  const segs = spec.split('/');
+  return spec.startsWith('@') ? segs.slice(0, 2).join('/') : segs[0];
+}
+
+/**
  * Bundle a multi-file TypeScript cell (`files`: relative path → source) into one
  * CommonJS module, resolving relative imports against the in-memory tree via an
  * esbuild virtual-FS plugin. Bare/npm imports stay external (provided by the
- * Lambda runtime/layers), exactly as the single-module path leaves them.
+ * Lambda runtime), except the small `SERVER_BUNDLED` allowlist (react et al.),
+ * which is inlined from forge's node_modules so cells can server-render.
  */
 export async function bundleFiles(files: Record<string, string>, entry = 'index.ts'): Promise<string> {
   const eb = await ensureEsbuild();
@@ -175,6 +193,10 @@ export async function bundleFiles(files: Record<string, string>, entry = 'index.
     format: 'cjs',
     target: 'es2020',
     platform: 'node',
+    jsx: 'automatic', // cells may author server views in TSX; harmless for the rest
+    // React (and any lib gated on it) ships its production build in the cell —
+    // no dev-only warnings/work in the Lambda, and `renderToString` stays fast.
+    define: { 'process.env.NODE_ENV': '"production"' },
     write: false,
     plugins: [
       {
@@ -182,16 +204,28 @@ export async function bundleFiles(files: Record<string, string>, entry = 'index.
         setup(build) {
           build.onResolve({ filter: /.*/ }, (args) => {
             if (args.kind === 'entry-point') return { path: args.path, namespace: 'vfs' };
+            // Imports from a bundled npm file (real fs, e.g. react-dom pulling in
+            // scheduler) use esbuild's default node_modules resolution.
+            if (args.namespace !== 'vfs') return undefined;
             if (args.path.startsWith('.')) {
               const key = resolveKey(files, resolveRelative(args.importer, args.path));
               if (!key) return { errors: [{ text: `cannot resolve "${args.path}" from "${args.importer}"` }] };
               return { path: key, namespace: 'vfs' };
             }
-            return { path: args.path, external: true }; // npm / runtime-provided
+            // Allowlisted packages are resolved to their real path in forge's
+            // node_modules and bundled in; everything else stays runtime-provided.
+            if (SERVER_BUNDLED.has(barePackage(args.path))) {
+              try {
+                return { path: require.resolve(args.path) };
+              } catch {
+                /* not installed in this runtime — fall through to external */
+              }
+            }
+            return { path: args.path, external: true };
           });
           build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => ({
             contents: files[args.path] ?? '',
-            loader: args.path.endsWith('.js') ? 'js' : 'ts',
+            loader: loaderFor(args.path),
           }));
         },
       },
