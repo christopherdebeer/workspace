@@ -188,7 +188,14 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
 
   const existing = await registry.get(cellId);
   if (existing && existing.status !== 'FAILED') {
-    throw new Error(`Cell "${cellId}" already exists (status ${existing.status})`);
+    // A DELETING record whose CloudFormation stack is already gone is an orphan
+    // (getCell only reconciles while the stack still exists) — recreating would
+    // otherwise be blocked forever. Treat a vanished stack as deletable and let
+    // this create overwrite the record.
+    const orphaned = existing.status === 'DELETING' && (await describeStack(existing.stackName)) === null;
+    if (!orphaned) {
+      throw new Error(`Cell "${cellId}" already exists (status ${existing.status})`);
+    }
   }
 
   // Cells are authored in TypeScript; transpile to JS before packaging.
@@ -1198,7 +1205,8 @@ interface ToolSpec {
 const TOOLS: Record<string, ToolSpec> = {
   create: {
     description:
-      'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE.',
+      'Provision a new dynamic cell (an isolated Lambda + table) from `code` — a TypeScript module that exports `handler`, a Lambda Function URL handler `(event) => { statusCode, body }`. forge transpiles it. Returns the cellId and address `/@<owner>/<name>`; poll getCell until ACTIVE. ' +
+      'Happy path (optional, not required): a cell can be isomorphic React — render the SAME tree to a string on the server (`renderToString`) and hydrate it on the client (`hydrateRoot`), which removes the first-paint flash. Author the server entry as plain `index.ts` (no JSX), keep JSX in `.tsx` modules it imports, and add a `client/main.tsx` (browser bundle → `app.js`). Declare any npm deps ONCE in `client/imports.json` — they are bundled into the server from esm.sh AND fetched by the browser at the same pin. Copy `@c15r/starter` as the template; `@c15r/lit` is the full reference.',
     scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
