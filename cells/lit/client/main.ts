@@ -26,10 +26,29 @@ interface Entry { key: string; value: any; _meta?: Meta }
 interface BlockRef { key: string; fold?: boolean }
 interface DocValue { title: string; summary?: string; blocks: BlockRef[] }
 
-const app = document.getElementById('app')!;
+const appRoot = document.getElementById('app')!;
+// `app` is the current render target. paint() points it at a detached stage so a
+// view builds off-screen and swaps in only once ready — the SSR first paint stays
+// on screen until then, so a reload never flashes through empty.
+let app: HTMLElement = appRoot;
 let currentDoc: string | null = null;
 let editing = 0; // open editors — suspend live refresh while > 0
 let lastSeq = 0;
+
+/** Build a view into a detached stage, then swap it into #app in one shot. The
+ *  prior content (the server's authed SSR on a reload, or a "signing in…" line on
+ *  the OAuth return) stays visible until the new DOM is ready — no clear-to-empty
+ *  flash. On error the stage is discarded and the prior paint is left intact. */
+async function paint(build: () => Promise<void>): Promise<void> {
+  const stage = document.createElement('div');
+  app = stage;
+  try {
+    await build();
+  } finally {
+    app = appRoot;
+  }
+  appRoot.replaceChildren(...Array.from(stage.childNodes));
+}
 
 // Owner from the kernel resolver: the host on a cell origin, else the path.
 const cellOwner = (): string => (cellAddress() as { owner?: string } | null)?.owner ?? 'c15r';
@@ -192,6 +211,9 @@ function blockEditor(initial: string, onDone: (text: string | null) => void): HT
 }
 
 async function renderDoc(docId: string): Promise<void> {
+  await paint(() => renderDocInner(docId));
+}
+async function renderDocInner(docId: string): Promise<void> {
   currentDoc = docId;
   app.textContent = '';
   const docFact = await fetchFact(`doc:${docId}`);
@@ -408,6 +430,9 @@ async function renderLogDoc(docId: string): Promise<void> {
 }
 
 async function renderList(): Promise<void> {
+  await paint(renderListInner);
+}
+async function renderListInner(): Promise<void> {
   currentDoc = null;
   app.textContent = '';
   const header = el('header');
@@ -513,11 +538,19 @@ async function boot(): Promise<void> {
   // anonymously, so without this guard we'd take the anonymous branch and never
   // exchange the code — the login would silently never complete.
   const returning = new URLSearchParams(location.search).has('code');
-  if (app.dataset.ssr === '1' && !isAuthed() && !returning) {
+  if (appRoot.dataset.ssr === '1' && !isAuthed() && !returning) {
     await bootAnonymousSSR();
     return;
   }
   bootStatus('signing in…');
+  // The SSR first paint is only trustworthy as the authed view when the server
+  // rendered it as the owner (cookie-driven — `data-ssr-auth`). If we're about to
+  // render the authed view but the paint on screen is anonymous/stale (the OAuth
+  // return, or a reload before the cell-origin cookie was set), replace it with a
+  // loading line now so the user isn't left staring at public-only content while
+  // the token loads. When the SSR was already authed, leave it — paint() swaps the
+  // fresh data in without an empty flash.
+  if (appRoot.dataset.ssrAuth !== '1') appRoot.replaceChildren(el('p', 'boot', 'signing you in…'));
   await ensureAuth();
   typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>;
   const doc = new URLSearchParams(location.search).get('doc');

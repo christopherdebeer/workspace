@@ -150,11 +150,16 @@ header{margin:.6rem 0 1.4rem}header h1{margin:.2rem 0 0;font-size:1.6rem;line-he
 pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
 img{max-width:100%}a{color:var(--accent)}`;
 
-/** Inject SSR markup into the shell's #app, with a data-ssr flag the client reads to hydrate read-only. */
-function ssrPage(inner: string): string {
+/** Inject SSR markup into the shell's #app. `data-ssr` tells the client this is a
+ *  server first paint (hydrate read-only); `data-ssr-auth` additionally tells it the
+ *  render was the OWNER's authed view (cookie-driven) — so the client can trust it as
+ *  the first paint and swap fresh data in without an empty flash. Anonymous SSR omits
+ *  the auth flag, so a signed-in client knows the paint is stale and replaces it. */
+function ssrPage(inner: string, authed: boolean): string {
+  const attrs = authed ? 'data-ssr="1" data-ssr-auth="1"' : 'data-ssr="1"';
   return read('static/index.html')
     .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}</style></head>`)
-    .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" data-ssr="1">${inner}</div>`);
+    .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" ${attrs}>${inner}</div>`);
 }
 
 async function renderDocSSR(id: string, patterns: string[], isOwner: boolean): Promise<string | null> {
@@ -229,7 +234,7 @@ export const handler = async (event: {
         const patterns = await publicPatterns();
         if (patterns.length || isOwner) {
           const inner = id ? await renderDocSSR(id, patterns, isOwner) : await renderListSSR(patterns, isOwner);
-          if (inner) return respond(200, 'text/html; charset=utf-8', ssrPage(inner));
+          if (inner) return respond(200, 'text/html; charset=utf-8', ssrPage(inner, isOwner));
         }
       } catch (err) {
         console.warn('[lit ssr] fell back to shell', (err as Error).message);
