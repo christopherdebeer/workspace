@@ -13,6 +13,7 @@
  * render identical to the server is the whole contract.
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
+import { marked } from 'marked';
 
 export interface BlockRef { key: string; fold?: boolean }
 export interface DocValue { title: string; summary?: string; blocks?: BlockRef[] }
@@ -26,57 +27,18 @@ export type ViewModel =
   | { kind: 'doc'; owner: string; isOwner: boolean; id: string; title: string; summary?: string; blocks: BlockData[] };
 
 /* ── markdown → HTML (deterministic; identical on both sides) ──────────────
- * Ported from the old server renderer and now the single source of truth, so a
- * block's HTML is the same byte-for-byte whether the server or the client built
- * it. Fenced code keeps its `language-<lang>` class so the client can later swap
- * a fence for a live embed (board/view/cell/json/csv/mermaid). */
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-function inline(s: string): string {
-  return esc(s)
-    .replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, t, h) => `<a href="${escAttr(h)}" rel="noopener">${t}</a>`);
-}
+ * `marked` is the single source of truth, declared once in `client/imports.json`
+ * so the server bundle (esm.sh node target) and the browser bundle land on the
+ * SAME pinned version — its output is byte-for-byte identical wherever this module
+ * runs, which is the hydration contract. (lit hand-rolled a minimal renderer
+ * during the SSR cutover purely to guarantee that parity; the npm-for-cells path
+ * now gives it for free, restoring richer markdown — tables, nested lists, etc.)
+ * Options are fixed here for determinism; fenced code keeps marked's default
+ * `language-<lang>` class so the client can later swap a fence for a live embed
+ * (board/view/cell/json/csv/mermaid). */
+marked.setOptions({ gfm: true, breaks: false });
 export function renderMarkdown(md: string): string {
-  const lines = md.replace(/\r\n/g, '\n').split('\n');
-  const html: string[] = [];
-  let i = 0;
-  let para: string[] = [];
-  let list: string[] | null = null;
-  const flush = (): void => {
-    if (para.length) { html.push(`<p>${inline(para.join(' '))}</p>`); para = []; }
-  };
-  const flushList = (): void => {
-    if (list) { html.push(`<ul>${list.map((li) => `<li>${inline(li)}</li>`).join('')}</ul>`); list = null; }
-  };
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^```/.test(line)) {
-      flush(); flushList();
-      const lang = line.slice(3).trim();
-      const bodyLines: string[] = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i])) { bodyLines.push(lines[i]); i++; }
-      i++;
-      html.push(`<pre><code${lang ? ` class="language-${esc(lang)}"` : ''}>${esc(bodyLines.join('\n'))}</code></pre>`);
-      continue;
-    }
-    const h = line.match(/^(#{1,4})\s+(.*)$/);
-    if (h) { flush(); flushList(); const n = h[1].length; html.push(`<h${n}>${inline(h[2])}</h${n}>`); i++; continue; }
-    const li = line.match(/^\s*[-*]\s+(.*)$/);
-    if (li) { flush(); (list ??= []).push(li[1]); i++; continue; }
-    if (/^\s*>\s?/.test(line)) { flush(); flushList(); html.push(`<blockquote>${inline(line.replace(/^\s*>\s?/, ''))}</blockquote>`); i++; continue; }
-    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { flush(); flushList(); html.push('<hr />'); i++; continue; }
-    if (!line.trim()) { flush(); flushList(); i++; continue; }
-    para.push(line.trim());
-    i++;
-  }
-  flush(); flushList();
-  return html.join('\n');
+  return marked.parse(md.replace(/\r\n/g, '\n'), { async: false });
 }
 
 /* ── presentational components (read-only first paint) ─────────────────── */

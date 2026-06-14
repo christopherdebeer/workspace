@@ -68,23 +68,26 @@ CloudFormation stack is already gone (previously it wedged the cell name forever
 3. **Generalize isomorphic React to the other tier-2 cells.** `canvas`/`input`/
    `regwatch` are still vanilla DOM — the flash class remains for them; review for
    the same `shared.tsx`/`hydrateRoot` treatment now that the platform supports it.
-4. **lit cleanup.** Drop the now-unread `data-ssr-auth` emission (the React client
-   only reads `data-ssr`). Deferred to the next lit touch.
-5. **Restore richer markdown in lit, cheaply.** lit swapped `marked` for a shared
-   minimal renderer to guarantee hydration parity. With the npm path now live,
-   `marked` can simply be declared in `client/imports.json` and used on both
-   sides (same pin → parity) — a one-line restore, no platform change.
+4. ~~**lit cleanup.** Drop the now-unread `data-ssr-auth` emission.~~ **DONE**
+   (`ssrPage` now emits only `data-ssr="1"`; `isOwner` rides in the serialized
+   state, the only thing the client reads).
+5. ~~**Restore richer markdown in lit, cheaply.**~~ **DONE** — `marked@12.0.2`
+   declared in `cells/lit/client/imports.json` and `renderMarkdown` (shared.tsx)
+   now delegates to it. Both bundlers inline the same pin → hydration parity
+   holds; the fence enhancer keys on `pre > code` + `language-<lang>`, which is
+   marked's default output. *Needs a browser eyeball* (tables/nested-lists render,
+   no hydration warning) since cells aren't in the repo type-check/test path.
 6. **Cell scope v2.** Per-key-prefix write-narrowing (a cell capped to
    `workspace:<owner>:<prefix>:write`) — currently a cell acts AS the user,
    scope-capped (Model A). Cell-as-principal / agent-run principals deferred
    (explicitly "not now").
-7. **Reconcile gaps in forge.** (a) `getCell` only reconciles while the stack
-   exists; a `CREATING` record whose create *failed* (stack rolled back/gone)
-   orphans the same way the `DELETING` case did — extend the reconcile.
-   (b) `cells.list` does **not** reconcile status (only `getCell` does) — this
-   cost real time this session (a cell sat at `CREATING` in the registry while its
-   stack was `CREATE_COMPLETE`; a `getCell` flipped it to `ACTIVE` instantly).
-   Consider reconciling non-terminal statuses in `list`, or document the gotcha.
+7. ~~**Reconcile gaps in forge.**~~ **DONE.** (a) `createCell`'s orphan check now
+   treats *any* non-FAILED record whose stack has vanished as recreatable (was
+   `DELETING`-only) — so a `CREATING` record whose create failed (auto-deleted via
+   `OnFailure: DELETE`) no longer wedges the name. (b) `cells.list` now reconciles
+   non-terminal records against their live stacks (parallel describes), via a
+   shared `reconcileStatus` helper that `getCell` also uses. Covered by two new
+   `forge-cell` tests.
 8. **Optional hardening (§6).** A separate registrable domain
    (`parc-usercontent.land`) would make cookie-scope + RP-ID structural rather
    than enforced. Later.

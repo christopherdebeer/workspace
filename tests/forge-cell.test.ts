@@ -333,6 +333,47 @@ describe('cells: backend commands', () => {
     expect(cfnCalls[0].TemplateBody).toContain('arn:aws:iam::111:policy/boundary');
   });
 
+  it('list reconciles a CREATING record to ACTIVE from the live stack', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode }); // record persists at CREATING
+    // The default CFN stub reports CREATE_COMPLETE, so listing should reconcile
+    // the stale status without a getCell round-trip.
+    const res = await call<{ cells: Array<{ cellId: string; status: string }> }>('alice', 'list', {});
+    expect(res.ok).toBe(true);
+    expect(res.result!.cells).toHaveLength(1);
+    expect(res.result!.cells[0].status).toBe('ACTIVE');
+    // The reconcile is persisted, not just reflected in the response.
+    const reg = createRegistry('forge-table');
+    expect((await reg.listByOwner('alice'))[0].status).toBe('ACTIVE');
+  });
+
+  it('create recreates over an orphaned record whose stack has vanished', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode }); // record at CREATING
+    const reg = createRegistry('forge-table');
+    const [before] = await reg.listByOwner('alice');
+    // Simulate a vanished stack: a failed create auto-deletes (OnFailure: DELETE),
+    // or a teardown finished — describeStacks then rejects with ValidationError,
+    // which describeStack maps to null. A CREATING record over no stack is an
+    // orphan; recreating the same name must succeed instead of "already exists".
+    __setCloudFormation({
+      createStack: (p: { StackName: string; TemplateBody: string }) => {
+        cfnCalls.push(p);
+        return { promise: async () => ({ StackId: 'id' }) };
+      },
+      describeStacks: () => ({
+        promise: async () => {
+          const e = new Error('Stack does not exist') as Error & { code?: string };
+          e.code = 'ValidationError';
+          throw e;
+        },
+      }),
+      deleteStack: () => ({ promise: async () => ({}) }),
+    } as unknown as Parameters<typeof __setCloudFormation>[0]);
+    const res = await call<{ cellId: string; status: string }>('alice', 'create', { name: 'notes', code: cellCode });
+    expect(res.ok).toBe(true);
+    expect(res.result!.cellId).toBe(before.cellId);
+    expect(res.result!.status).toBe('CREATING');
+  });
+
   it('callCell invokes the cell for the owner and returns its parsed body', async () => {
     lambdaResponse = { statusCode: 200, body: JSON.stringify({ greeting: 'hi' }) };
     await call('alice', 'create', { name: 'notes', code: cellCode });

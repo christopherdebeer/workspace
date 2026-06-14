@@ -104,17 +104,17 @@ pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7
 img{max-width:100%}a{color:var(--accent)}`;
 
 /** Inject the SSR'd tree + its serialized state into the shell. `data-ssr` flags a
- *  server first paint (hydrate, don't rebuild); `data-ssr-auth` additionally marks the
- *  OWNER's authed render (cookie-driven) so a signed-in client trusts it. The
+ *  server first paint, telling the client to hydrate (don't rebuild). The
  *  `lit-state` script is the exact ViewModel the tree was rendered from — the client
- *  hydrates against it, guaranteeing markup parity. */
+ *  hydrates against it, guaranteeing markup parity. (`isOwner` rides along in that
+ *  state; the obsolete `data-ssr-auth` attribute is gone — the client only reads
+ *  `data-ssr`.) */
 function ssrPage(inner: string, vm: ViewModel): string {
-  const attrs = vm.isOwner ? 'data-ssr="1" data-ssr-auth="1"' : 'data-ssr="1"';
   // `<` is escaped so the JSON can't break out of the script element.
   const state = JSON.stringify(vm).replace(/</g, '\\u003c');
   return read('static/index.html')
     .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}</style></head>`)
-    .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" ${attrs}>${inner}</div>`)
+    .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" data-ssr="1">${inner}</div>`)
     .replace(
       '<script type="module"',
       `<script id="lit-state" type="application/json">${state}</script>\n  <script type="module"`,

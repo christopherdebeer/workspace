@@ -20,7 +20,7 @@ import {
   ServiceContext,
   RegisteredCommand,
 } from '../../platform/runtime';
-import { createRegistry, CellRecord } from './registry';
+import { createRegistry, CellRecord, CellRegistry } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
 import { transpileCell, bundleFiles, bundleClientFiles } from './transpile';
 import {
@@ -76,6 +76,26 @@ function statusFromStack(stackStatus: string): CellRecord['status'] {
   if (stackStatus.includes('ROLLBACK') || stackStatus.includes('FAILED')) return 'FAILED';
   if (stackStatus.startsWith('DELETE')) return 'DELETING';
   return 'CREATING';
+}
+
+/**
+ * Refresh a record's status from its live stack so callers see CREATING → ACTIVE
+ * (or → FAILED). Only non-terminal records (CREATING/DELETING) are probed — a
+ * stack describe per record is the cost, so terminal ACTIVE/FAILED records are
+ * left untouched. A vanished stack is left as-is (createCell treats it as an
+ * orphan and allows recreate). Mutates and returns the record.
+ */
+async function reconcileStatus(registry: CellRegistry, record: CellRecord): Promise<CellRecord> {
+  if (record.status !== 'CREATING' && record.status !== 'DELETING') return record;
+  const stack = await describeStack(record.stackName);
+  if (stack) {
+    const fresh = statusFromStack(stack.status);
+    if (fresh !== record.status) {
+      await registry.setStatus(record.cellId, fresh);
+      record.status = fresh;
+    }
+  }
+  return record;
 }
 
 /**
@@ -188,11 +208,14 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
 
   const existing = await registry.get(cellId);
   if (existing && existing.status !== 'FAILED') {
-    // A DELETING record whose CloudFormation stack is already gone is an orphan
-    // (getCell only reconciles while the stack still exists) — recreating would
-    // otherwise be blocked forever. Treat a vanished stack as deletable and let
-    // this create overwrite the record.
-    const orphaned = existing.status === 'DELETING' && (await describeStack(existing.stackName)) === null;
+    // A record whose CloudFormation stack is already gone is an orphan — the
+    // registry never caught up (getCell/listCells only reconcile while the stack
+    // still exists), so recreating would otherwise be blocked forever. This covers
+    // both a DELETING record whose teardown finished AND a CREATING record whose
+    // create failed: deployStack uses `OnFailure: DELETE`, so a rolled-back create
+    // leaves no stack behind. Treat a vanished stack as recreatable and let this
+    // create overwrite the record.
+    const orphaned = (await describeStack(existing.stackName)) === null;
     if (!orphaned) {
       throw new Error(`Cell "${cellId}" already exists (status ${existing.status})`);
     }
@@ -271,6 +294,11 @@ async function listCells(_input: unknown, ctx: ServiceContext): Promise<unknown>
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
   const cells = await registry.listByOwner(user);
+  // Reconcile non-terminal records against their live stacks so the list reflects
+  // CREATING → ACTIVE without a getCell round-trip (the gotcha: a stack could be
+  // CREATE_COMPLETE while the registry still said CREATING). Only CREATING/DELETING
+  // records are probed; the describes run in parallel.
+  await Promise.all(cells.map((c) => reconcileStatus(registry, c)));
   return {
     cells: cells.map((c) => ({
       cellId: c.cellId,
@@ -322,17 +350,7 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
   if (!record) throw new Error(`Unknown cell "${input?.cellId}"`);
   authorizeAccess(record, user);
 
-  // Refresh status from the live stack so callers see CREATING → ACTIVE.
-  if (record.status === 'CREATING' || record.status === 'DELETING') {
-    const stack = await describeStack(record.stackName);
-    if (stack) {
-      const fresh = statusFromStack(stack.status);
-      if (fresh !== record.status) {
-        await registry.setStatus(record.cellId, fresh);
-        record.status = fresh;
-      }
-    }
-  }
+  await reconcileStatus(registry, record);
 
   return {
     cellId: record.cellId,
