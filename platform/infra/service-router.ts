@@ -118,6 +118,32 @@ const CELL_HOST_REWRITE_SRC = `function handler(event) {
 }`;
 
 /**
+ * The apex→subdomain cutover (docs/cell-origin-isolation.md §5.7). On the apex
+ * distribution's `/@<owner>/<name>` behaviour, redirect **navigations** (a
+ * top-level document, or a cell page loaded in an iframe/frame) to the cell's own
+ * subdomain, so a cell's interactive page — the place its `app.js` runs — only
+ * ever executes on its own origin and can never read the shell's localStorage or
+ * cookie. Sub-resources (app.js, css, images, XHR) and absent `Sec-Fetch-Dest`
+ * (non-browser clients) pass straight through, so nothing else changes.
+ */
+const CELL_APEX_REDIRECT_SRC = (cellDomain: string): string => `function handler(event) {
+  var req = event.request;
+  var dest = req.headers['sec-fetch-dest'];
+  // Only navigational loads of the cell page move origin; everything else stays.
+  if (!dest || (dest.value !== 'document' && dest.value !== 'iframe' && dest.value !== 'frame')) return req;
+  var m = req.uri.match(/^\\/@([a-z0-9]+)\\/([^/]+)(\\/.*)?$/);
+  if (!m) return req;
+  var rest = m[3] || '/';
+  var qs = '';
+  for (var k in req.querystring) { qs += (qs ? '&' : '?') + k + (req.querystring[k].value !== '' ? '=' + req.querystring[k].value : ''); }
+  return {
+    statusCode: 302,
+    statusDescription: 'Found',
+    headers: { location: { value: 'https://' + m[1] + '-' + m[2] + '.' + ${JSON.stringify(cellDomain)} + rest + qs } },
+  };
+}`;
+
+/**
  * The single public ingress: one CloudFront distribution that path-routes to
  * each service cell's Function URL. The router stays intentionally "dumb" — it
  * does TLS, caching, and path routing, but holds no business logic. Its
@@ -222,11 +248,28 @@ export class ServiceRouter extends Construct {
       ],
     });
 
+    // The apex→subdomain redirect (cell-origin isolation §5.7): when a cell
+    // namespace is configured, the dispatch `/@*` behaviour bounces navigations
+    // to the cell's own origin. Built once, attached only to that behaviour.
+    const cellDomain = props.cellDomainNames?.[0]?.replace(/^\*\./, '');
+    const cellRedirect =
+      props.cellHostRouter && cellDomain
+        ? new cloudfront.Function(this, 'CellApexRedirect', {
+            code: cloudfront.FunctionCode.fromInline(CELL_APEX_REDIRECT_SRC(cellDomain)),
+            runtime: cloudfront.FunctionRuntime.JS_2_0,
+            comment: 'Redirect apex /@owner/name navigations to the cell subdomain',
+          })
+        : undefined;
+
     const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
     for (const cell of props.cells) {
       for (const route of cell.manifest.routes) {
         if (cell === defaultCell && route === '/*') continue;
-        additionalBehaviors[route] = behaviorFor(cell);
+        const base = behaviorFor(cell);
+        additionalBehaviors[route] =
+          cellRedirect && cell === props.cellHostRouter
+            ? { ...base, functionAssociations: [{ function: cellRedirect, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }] }
+            : base;
       }
     }
 

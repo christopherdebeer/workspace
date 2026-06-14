@@ -282,29 +282,29 @@ A punch list, smallest-blast-radius first. **(1)–(3) are shipped + deployed;
    wildcard cert (`ServiceRouter`, `PLATFORM_CELL_DOMAIN`); viewer-request
    function rewrites `<owner>-<name>.on.parc.land` → `/@<owner>/<name>` for
    `dispatch`. Deployed; `c15r-lit.on.parc.land` SSRs.
-4. **Cell client: owner/name from host** (`cells/kernel/client/main.ts`). A
-   `cellAddress()` resolver returns `{owner, name}` from `location.host` when it
-   is `<owner>-<name>.<cellDomain>`, else from the `/@owner/cell` path. The
-   kernel's `read`/`act` base URL becomes the **apex** (`https://parc.land/mcp`)
-   when on a cell host. Cells (lit/canvas/input) drop their local path parsing for
-   `cellAddress()`. *Apex path unchanged — pure fall-through; safe to ship alone.*
-5. **CORS on `/mcp`** (`services/gateway` + the MCP runtime): allow the
-   `*.on.parc.land` origins — preflight `OPTIONS`, `Access-Control-Allow-Origin`
-   (reflect/allowlist the cell host), `-Allow-Headers: authorization,content-type`,
-   `-Allow-Methods: POST`. No credentials mode (bearer in header, not cookie).
-6. **Scoped-token handoff** (§4.5): on a cell host with no session, the kernel
-   runs its PKCE flow against the apex `auth`, **requesting the derived cell
-   scope** = `declared(cell) ∩ granted ∩ user`. New surface:
-   - `auth`/`cells`: resolve a cell's **declared scope** from `CellRecord.types`
-     (managed-type prefixes → `workspace:<owner>:<prefix>:write`) + `cell:<owner>/<name>:*`.
-   - `auth.mintToken` already meets `requested ∩ minter.scopes` — extend consent
-     so the owner's own cells mint silently (narrow-only, no re-prompt).
-   - the cell stores its scoped token in its **own** origin `localStorage`.
-7. **Cutover** — once (4)–(6) land: `/@owner/cell` on the apex **redirects** to
-   `<owner>-<name>.on.parc.land`, and the kernel **stops sharing
-   `parc.session.tokens`** across cells (each holds its own scoped token on its
-   own origin). *This is the step that actually closes §1.1* — until it lands,
-   apex-served cells still share `localStorage`.
+4. ✅ **Cell client: owner/name from host** (`cells/kernel/client/main.ts`).
+   `cellAddress()` returns `{owner, name}` from `location.host` on a cell host,
+   else from the `/@owner/cell` path; `apiBase()` targets the **apex**
+   (`https://parc.land`) when on a cell host. `cellUrl(owner, name)` resolves
+   sibling-cell links origin-aware. lit/canvas/input consume these.
+5. ✅ **CORS on `/mcp`** (`platform/runtime/define-mcp-service.ts`): reflects
+   origins ending in `MCP_CORS_ORIGIN_SUFFIX` (`.on.parc.land`) — preflight
+   `OPTIONS` + `Access-Control-Allow-Origin`/`-Headers`/`-Methods`. Bearer in the
+   header, no credentials mode. CORS also added to `/oauth/{register,token}`.
+6. ✅ **Scoped-token handoff, Model A** (§4.5/§4.6): the kernel runs PKCE against
+   the apex `auth` from the cell origin; `services/auth/oauth.ts` `cellCeiling()`
+   caps the minted scope to `workspace:read/write` + `cell:<owner>/<name>:*` when
+   the `redirect_uri` is a cell host — so a cell can **never** receive admin /
+   `platform:*`. The cell stores that capped token in its **own** origin
+   `localStorage`. (Per-key-prefix write-narrowing is the deferred v2; the cell
+   acts AS the user, scope-capped — cell-as-principal is later.)
+7. ✅ **Cutover** (`platform/infra/service-router.ts` `CELL_APEX_REDIRECT_SRC`):
+   the apex `/@owner/cell` behaviour **302-redirects navigations** (document /
+   iframe / frame) to `<owner>-<name>.on.parc.land`, so a cell's interactive page
+   only ever runs on its own origin; per-origin `localStorage` then isolates the
+   token automatically (the shared `parc.session.tokens` key is harmless once it
+   lives in a distinct origin). Sub-resources and non-browser requests pass
+   through unchanged. **This closes §1.1.**
 
 ## 6. When you'd want a separate registrable domain
 
@@ -372,7 +372,14 @@ the security win only completes once (4) removes the shared token.
 > adopted from `sync` (`agents.ts` mints `rooms:<r>:agent:<id>:write`,
 > subsumption-checked; declared actions bound writes): a cell's token is
 > **derived** — `declared(cell, via types.json) ∩ granted(owner) ∩ scope(user)`,
-> met by `mintToken` — never hand-designed, never the owner's whole slice. The
-> remaining *implementation* is §5 (4)–(7): client owner-from-host, `/mcp` CORS,
-> the scoped-token handoff, and the apex→subdomain cutover that finally closes
-> §1.1. Each is independently shippable; the security win completes at (7).
+> met by `mintToken` — never hand-designed, never the owner's whole slice.
+>
+> **Arc complete (2026-06-14).** §5 (4)–(7) all shipped: `cellAddress()`/
+> `apiBase()`/`cellUrl()` (owner-from-host), `/mcp` + `/oauth` CORS for
+> `*.on.parc.land`, the Model-A scoped-token handoff (`oauth.ts` `cellCeiling`
+> caps the minted scope so a cell can never get admin), and the apex→subdomain
+> **redirect** (`service-router.ts` `CELL_APEX_REDIRECT_SRC`) that bounces cell
+> navigations off the apex origin. **§1.1 is closed**: a cell's interactive page
+> runs only on its own origin and cannot read the shell's `localStorage`. Residual
+> hardening (a separate registrable domain, §6; per-key-prefix write-narrowing,
+> §4.5 v2) stays optional.
