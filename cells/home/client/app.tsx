@@ -70,6 +70,7 @@ export interface Boot {
   workspace?: WorkspaceSeed;
   cells?: CellRow[];
   views?: ViewDef[];
+  identity?: IdentityData;
 }
 
 /**
@@ -721,8 +722,8 @@ function InlineButton({ onClick, danger, children }: { onClick: () => void; dang
  * row is the same `mcpCall` an agent makes; this surface is a rendering, not
  * new plumbing.
  */
-function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string | null; scopes: string[] }): React.JSX.Element | null {
-  const [data, setData] = useState<IdentityData | null>(null);
+function IdentityShell({ authed, user, scopes, seed }: { authed: boolean; user: string | null; scopes: string[]; seed?: IdentityData }): React.JSX.Element | null {
+  const [data, setData] = useState<IdentityData | null>(seed ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -750,7 +751,7 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
   };
 
   useEffect(() => {
-    if (!authed) return;
+    if (!authed || seed) return; // SSR-seeded → trust it (action handlers still reload)
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
@@ -2323,7 +2324,7 @@ function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.J
     case 'capture': return <QuickCapture />;
     case 'workspace': return <WorkspaceWindow authed={ctx.authed} seed={ctx.boot?.workspace} />;
     case 'activity': return <RecentActivity data={ctx.dash} />;
-    case 'identity': return <IdentityShell authed={ctx.authed} user={ctx.session.user} scopes={ctx.session.scopes} />;
+    case 'identity': return <IdentityShell authed={ctx.authed} user={ctx.session.user} scopes={ctx.session.scopes} seed={ctx.boot?.identity} />;
     case 'views': return <Views authed={ctx.authed} seed={ctx.boot?.views} />;
     case 'cells': return <CellsConsole authed={ctx.authed} seed={ctx.boot?.cells} />;
     case 'console': return <FieldComputer authed={ctx.authed} />;

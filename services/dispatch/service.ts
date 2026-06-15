@@ -42,26 +42,43 @@ interface SsrRead {
 }
 
 /**
+ * The ONLY targets the SSR-proxy will run. This is a security boundary: a cell's
+ * `ssr.json` is authored by the cell OWNER but executes as the navigating CALLER,
+ * so a write target (e.g. workspace.remember) would be a CSRF-style write into the
+ * victim's slice. Gate to read-only commands explicitly (not by service), so the
+ * proxy can never mutate. Maps onto the substrate's `observe` (read) verb.
+ */
+const SSR_READ_TARGETS = new Set<string>([
+  'workspace.query', 'workspace.changes', 'workspace.peek', 'workspace.recall',
+  'workspace.views', 'workspace.links', 'workspace.attention', 'workspace.neighbors',
+  'workspace.shared', 'workspace.grantRequests',
+  'cells.list', 'cells.describeTypes', 'cells.describeTools', 'cells.get',
+  'auth.tokens',
+]);
+
+/**
  * Run a cell's declared SSR reads AS THE CALLER. dispatch's service client carries
  * the validated identity (cookie → token on a top-level navigation), so each read
  * is scoped and shaped exactly as it would be for that user over MCP. Only the
- * read-only first-party rooms (`workspace`, `cells`) are proxied; failures degrade
- * (the section just loads client-side). `workspace.changes { recent: N }` resolves
- * to the head→window two-step the browser client does. The shaped results are
- * handed to `cells.call` → injected as `event.ssrData`, so the cell server-renders
- * real content while never receiving a token. (forge can't do this itself —
- * forge↔workspace is a CDK dependency cycle; dispatch has no back-edge.)
+ * read-only targets in `SSR_READ_TARGETS` are proxied (a write target is refused);
+ * failures degrade (the section just loads client-side). `workspace.changes
+ * { recent: N }` resolves to the head→window two-step the browser client does. The
+ * shaped results are handed to `cells.call` → injected as `event.ssrData`, so the
+ * cell server-renders real content while never receiving a token. (forge can't do
+ * this itself — forge↔workspace is a CDK dependency cycle; dispatch has no back-edge.)
  */
 async function runSsrReads(reads: SsrRead[], ctx: ServiceContext): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   await Promise.all(
     reads.map(async (r) => {
       try {
+        if (!SSR_READ_TARGETS.has(r.target)) {
+          ctx.logger.warn('ssr read refused (not a read-only target)', { target: r.target });
+          return;
+        }
         const dot = r.target.indexOf('.');
-        if (dot < 0) return;
         const svc = r.target.slice(0, dot);
         const cmd = r.target.slice(dot + 1);
-        if (svc !== 'workspace' && svc !== 'cells') return; // read-only, first-party only
         let input: Record<string, unknown> = r.input ?? {};
         if (svc === 'workspace' && cmd === 'changes' && typeof input.recent === 'number') {
           const n = input.recent;

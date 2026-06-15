@@ -101,6 +101,21 @@ function buildBoot(session: Session, ssrData: Record<string, unknown> | undefine
   if (cellsList) boot.cells = cellsList as Boot['cells'];
   const viewsList = (d.views as { views?: unknown[] } | undefined)?.views;
   if (viewsList) boot.views = viewsList as Boot['views'];
+
+  // Identity & grants: tokens (auth, read-only), shared/receiving + grant inbox
+  // (workspace) — assembled exactly as the client's IdentityShell.load() does.
+  const tokens = (d.tokens as { tokens?: Array<{ revoked?: boolean }> } | undefined)?.tokens;
+  if (tokens || d.shared || d.grantRequests) {
+    const shared = d.shared as { shared?: unknown[]; receiving?: unknown[] } | undefined;
+    const reqs = d.grantRequests as { incoming?: unknown[]; answers?: unknown[] } | undefined;
+    boot.identity = {
+      tokens: (tokens ?? []).filter((t) => !t.revoked),
+      shared: shared?.shared ?? [],
+      receiving: shared?.receiving ?? [],
+      incoming: reqs?.incoming ?? [],
+      answers: reqs?.answers ?? [],
+    } as Boot['identity'];
+  }
   return boot;
 }
 

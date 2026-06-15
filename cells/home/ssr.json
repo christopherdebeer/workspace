@@ -7,6 +7,9 @@
     { "as": "links", "target": "workspace.links", "input": {} },
     { "as": "changes", "target": "workspace.changes", "input": { "recent": 1000 } },
     { "as": "types", "target": "cells.describeTypes", "input": {} },
-    { "as": "cellsList", "target": "cells.list", "input": {} }
+    { "as": "cellsList", "target": "cells.list", "input": {} },
+    { "as": "tokens", "target": "auth.tokens", "input": {} },
+    { "as": "shared", "target": "workspace.shared", "input": {} },
+    { "as": "grantRequests", "target": "workspace.grantRequests", "input": {} }
   ]
 }
