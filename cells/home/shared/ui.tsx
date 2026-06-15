@@ -53,7 +53,12 @@ export function Page({ children }: { children: React.ReactNode }): React.JSX.Ele
         boxSizing: 'border-box',
       }}
     >
-      <main style={{ width: '100%', maxWidth: 760, margin: '0 auto', display: 'grid', gap: '1rem' }}>
+      {/* `minmax(0, 1fr)` is load-bearing: a grid item's default min-width is
+          `auto`, so a section with wide unbreakable content (a long URL, an
+          inline pill) would otherwise stretch the column past the viewport and
+          break mobile layout. Pinning the column to the available width forces
+          such content to wrap or scroll within its own card. */}
+      <main style={{ width: '100%', maxWidth: 760, margin: '0 auto', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1rem' }}>
         {children}
       </main>
     </div>

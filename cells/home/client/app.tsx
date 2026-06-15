@@ -253,7 +253,7 @@ function Landing({ session }: { session: Session & { signIn: () => void } }): Re
         </div>
       </DuskScene>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.8rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(210px, 100%), 1fr))', gap: '0.8rem' }}>
         <div style={signCard}>
           <strong style={{ fontFamily: theme.serif }}>🌲 A workspace that remembers</strong>
           <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
@@ -457,13 +457,14 @@ const OP_LABEL: Record<string, string> = {
   unlink: 'unlinked',
 };
 
-function RecentActivity({ data }: { data: DashboardData | null }): React.JSX.Element | null {
-  if (data && data.recent.length === 0) return null;
+function RecentActivity({ data }: { data: DashboardData | null }): React.JSX.Element {
   return (
     <Card>
       <Heading sub="The change feed — the land's own record of what happened (reads excluded).">Recent activity</Heading>
       {!data ? (
         <p style={{ color: theme.dim }}>Loading…</p>
+      ) : data.recent.length === 0 ? (
+        <p style={{ color: theme.dim, margin: 0, fontSize: '0.85rem' }}>Nothing yet.</p>
       ) : (
         <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.35rem' }}>
           {data.recent.map((e) => (
@@ -680,14 +681,24 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
       <Heading sub="Day passes & permits — credentials, grants, and the request inbox, over the same auth.* / workspace.* targets agents use.">
         Identity &amp; grants
       </Heading>
-      <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+      <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: scopes.length ? '0.45rem' : '0.6rem' }}>
         <Badge>{user}</Badge>
-        {scopes.map((s) => (
-          <Badge key={s} tone="dim">
-            {s}
-          </Badge>
-        ))}
       </div>
+      {scopes.length ? (
+        // One scope per line: legible, and a long scope (e.g. a resource-qualified
+        // grant) wraps within the line instead of forcing the page wider than the
+        // viewport (the old inline nowrap pills broke mobile layout).
+        <ul style={{ listStyle: 'none', margin: '0 0 0.6rem', padding: 0, display: 'grid', gap: '0.2rem' }}>
+          {scopes.map((s) => (
+            <li key={s} style={{ display: 'flex', gap: '0.4rem', alignItems: 'baseline', minWidth: 0 }}>
+              <span style={{ color: theme.accent, fontSize: '0.7rem', flexShrink: 0 }}>▸</span>
+              <code style={{ fontFamily: theme.mono, fontSize: '0.76rem', color: theme.dim, wordBreak: 'break-word', overflowWrap: 'anywhere', minWidth: 0 }}>
+                {s}
+              </code>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {err ? <Badge tone="danger">{err}</Badge> : null}
       {!data ? (
         <p style={{ color: theme.dim }}>Loading…</p>
@@ -1244,17 +1255,23 @@ function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
     };
   }, [authed]);
 
-  if (!authed || views === null || views.length === 0) return null;
+  if (!authed) return null;
   return (
     <Card>
       <Heading sub="Registered views rendered by their hints — one declaration, a surface for you and an affordance for agents.">
         Pinned views
       </Heading>
-      <div style={{ display: 'grid', gap: '0.7rem', marginTop: '0.5rem' }}>
-        {views.map((v) => (
-          <ViewSurface key={v.id} def={v} />
-        ))}
-      </div>
+      {views === null ? (
+        <p style={{ color: theme.dim, margin: '0.5rem 0 0', fontSize: '0.85rem' }}>Loading…</p>
+      ) : views.length === 0 ? (
+        <p style={{ color: theme.dim, margin: '0.5rem 0 0', fontSize: '0.85rem' }}>No pinned views yet.</p>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.7rem', marginTop: '0.5rem' }}>
+          {views.map((v) => (
+            <ViewSurface key={v.id} def={v} />
+          ))}
+        </div>
+      )}
     </Card>
   );
 }
@@ -1354,7 +1371,7 @@ function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null
       {cells === null ? (
         <p style={{ color: theme.dim, padding: '0 0.25rem' }}>Loading…</p>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.7rem', alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(240px, 100%), 1fr))', gap: '0.7rem', alignItems: 'start' }}>
           {cells.map((c) => (
             <CellCard key={c.cellId} cell={c} />
           ))}
@@ -1865,7 +1882,8 @@ interface LayoutSection {
   key?: string; // fact key (type 'fact')
   query?: Record<string, unknown>; // (type 'query')
   title?: string;
-  hidden?: boolean;
+  hidden?: boolean; // removed from the normal view (toggled in customise)
+  collapsed?: boolean; // folded to its header in the normal view (persisted)
 }
 
 const DEFAULT_LAYOUT: LayoutSection[] = [
@@ -2023,6 +2041,66 @@ function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.J
   }
 }
 
+/**
+ * Normal-view section frame with a persisted collapse toggle. Folds the section
+ * to a slim labelled header (its body — and any async load it would trigger — is
+ * skipped while collapsed); the chevron floats top-right so it sits in the card's
+ * padding without disturbing each section's own heading. Collapsed state lives in
+ * `_home/layout`, so it survives reloads and follows you across devices.
+ */
+function CollapsibleSection({
+  label,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  label: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const chevron: React.CSSProperties = {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 3,
+    width: 26,
+    height: 26,
+    borderRadius: 999,
+    border: `1px solid ${theme.border}`,
+    background: theme.panel,
+    color: theme.dim,
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    lineHeight: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: theme.shadow,
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
+        title={collapsed ? `Expand ${label}` : `Collapse ${label}`}
+        style={chevron}
+      >
+        {collapsed ? '▸' : '▾'}
+      </button>
+      {collapsed ? (
+        <Card style={{ padding: '0.7rem 2.4rem 0.7rem 1rem' }}>
+          <span style={{ fontFamily: theme.serif, color: theme.dim }}>{label}</span>
+        </Card>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
 /** Customise mode: per-section reorder + hide/remove, persisted to `_home/layout`. */
 function SectionControls({
   index,
@@ -2177,6 +2255,7 @@ export function App({ initial }: { initial?: Session } = {}): React.JSX.Element 
     save(next);
   };
   const toggle = (i: number): void => save(sections.map((s, k) => (k === i ? { ...s, hidden: !s.hidden } : s)));
+  const setCollapsed = (i: number): void => save(sections.map((s, k) => (k === i ? { ...s, collapsed: !s.collapsed } : s)));
   const remove = (i: number): void => save(sections.filter((_s, k) => k !== i));
   const add = (s: LayoutSection): void => save([...sections, s]);
 
@@ -2201,7 +2280,15 @@ export function App({ initial }: { initial?: Session } = {}): React.JSX.Element 
             if (s.hidden && !customizing) return null;
             const body = <SectionView s={s} ctx={ctx} />;
             const k = `${s.type}:${s.id ?? s.key ?? i}`;
-            if (!customizing) return <React.Fragment key={k}>{body}</React.Fragment>;
+            if (!customizing) {
+              // The greeting is the banner, not a foldable section.
+              if (s.type === 'greeting') return <React.Fragment key={k}>{body}</React.Fragment>;
+              return (
+                <CollapsibleSection key={k} label={sectionLabel(s)} collapsed={!!s.collapsed} onToggle={() => setCollapsed(i)}>
+                  {body}
+                </CollapsibleSection>
+              );
+            }
             return (
               <div key={k} style={{ opacity: s.hidden ? 0.5 : 1, display: 'grid', gap: '0.3rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
