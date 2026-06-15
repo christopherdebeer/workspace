@@ -9,18 +9,18 @@
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
 import { hydrateRoot, createRoot } from 'react-dom/client';
-import { App, type Session } from './app';
+import { App, type Boot } from './app';
 import { installBridge } from './bridge';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './auth';
 
 installBridge({ login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl });
 
-/** The server's first-paint view model (the resolved session), if it SSR'd. */
-function ssrSeed(): Session | undefined {
+/** The server's first-paint seed (session + layout + dashboard), if it SSR'd. */
+function ssrSeed(): Boot | undefined {
   const tag = document.getElementById('home-state');
   if (!tag?.textContent) return undefined;
   try {
-    return JSON.parse(tag.textContent) as Session;
+    return JSON.parse(tag.textContent) as Boot;
   } catch {
     return undefined;
   }

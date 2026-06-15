@@ -54,6 +54,14 @@ export interface CellRecord {
    * and the anonymous landing — resolves a fact's open/edit path the same way.
    */
   types?: Array<Record<string, unknown>>;
+  /**
+   * Declared SSR reads (from the cell's `ssr.json`): substrate reads forge runs
+   * AS THE AUTHENTICATED CALLER (via its service client — shaped salience/vocab,
+   * no token handed to the cell) and injects into the cell's invocation, so a
+   * cell can server-render real content without holding a credential or touching
+   * storage. See `runSsrReads` in service.ts.
+   */
+  ssrReads?: Array<{ as: string; target: string; input?: Record<string, unknown> }>;
   status: CellStatus;
   /** The last/in-flight async deploy's phase (set by `cells.deploy`; polled via
    *  `getCell`). Absent until the cell has been deployed at least once. */

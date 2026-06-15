@@ -219,6 +219,11 @@ export class PlatformStack extends cdk.Stack {
     // The substrate-write handler resolves an emitting cell's owner through
     // the registry (cells.resolveCell) — never from the event body.
     workspace.allow(cells);
+    // SSR proxy (docs/dynamic-cells.md): forge runs a cell's declared reads as
+    // the authenticated caller via the workspace room, then injects the shaped
+    // results into the cell invocation — so a public cell can server-render real
+    // content without ever holding a user token.
+    cells.allow(workspace);
     gateway.allow(auth);
     dispatch.allow(auth);
     // The /mcp gateway aggregates + forwards forge's tools; dispatch proxies

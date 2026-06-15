@@ -438,6 +438,44 @@ function resolveCellId(input: { cellId?: string; owner?: string; name?: string }
   throw new Error('Provide either `cellId`, or `owner` and `name`');
 }
 
+/**
+ * Run a cell's declared SSR reads as the authenticated caller. forge invokes the
+ * room commands through its own service client — which carries the caller's
+ * identity (propagated from dispatch) — so each read is scoped and shaped exactly
+ * as it would be for that user over MCP. Only the first-party rooms (`workspace`,
+ * `cells`) are proxied; everything is read-only and failures degrade (the section
+ * just loads client-side). `workspace.changes` with `{ recent: N }` is resolved
+ * to the head→window two-step the browser client does.
+ */
+async function runSsrReads(
+  reads: NonNullable<CellRecord['ssrReads']>,
+  ctx: ServiceContext,
+): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  await Promise.all(
+    reads.map(async (r) => {
+      try {
+        const dot = r.target.indexOf('.');
+        if (dot < 0) return;
+        const svc = r.target.slice(0, dot);
+        const cmd = r.target.slice(dot + 1);
+        if (svc !== 'workspace' && svc !== 'cells') return; // read-only, first-party only
+        let input: Record<string, unknown> = r.input ?? {};
+        if (svc === 'workspace' && cmd === 'changes' && typeof input.recent === 'number') {
+          const n = input.recent;
+          const head = await ctx.serviceClient('workspace').command<{ seq?: number }>('changes', { sinceSeq: 'head' });
+          const seq = head?.seq ?? 0;
+          input = { sinceSeq: Math.max(0, seq - n), limit: n };
+        }
+        out[r.as] = await ctx.serviceClient(svc).command(cmd, input);
+      } catch (err) {
+        ctx.logger.warn('ssr read failed', { target: r.target, error: (err as Error).message });
+      }
+    }),
+  );
+  return out;
+}
+
 async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unknown> {
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
@@ -493,6 +531,16 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
         ? input.body
         : JSON.stringify(input.body);
 
+  // SSR proxy: for an authenticated navigation, run the cell's declared reads AS
+  // THE CALLER (forge already holds the propagated identity) and inject the shaped
+  // results into the invocation. The cell server-renders from `ssrData` — it never
+  // receives a token, and the read goes through the same workspace shaping (salience,
+  // vocab, sharing) an agent or the browser client would get.
+  let ssrData: Record<string, unknown> | undefined;
+  if ((method === 'GET' || method === 'HEAD') && ctx.identity.user && record.ssrReads?.length) {
+    ssrData = await runSsrReads(record.ssrReads, ctx);
+  }
+
   const result = await invokeCell({
     functionName: record.functionName,
     event: {
@@ -503,6 +551,7 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
       requestContext: { http: { method, path } },
       body: bodyStr,
       isBase64Encoded: false,
+      ...(ssrData ? { ssrData } : {}),
     },
   });
   return result;
@@ -905,6 +954,19 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     }
   }
 
+  // SSR reads (docs/dynamic-cells.md): a cell declares substrate reads forge runs
+  // as the authenticated caller and injects into the invocation, so the cell can
+  // server-render real content without a token. Stored on the registry like types.
+  let ssrReads: CellRecord['ssrReads'];
+  if (files['ssr.json'] !== undefined) {
+    try {
+      const parsed = JSON.parse(files['ssr.json']) as { reads?: CellRecord['ssrReads'] };
+      if (Array.isArray(parsed.reads) && parsed.reads.length) ssrReads = parsed.reads;
+    } catch (err) {
+      ctx.logger.warn('cell ssr.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
+    }
+  }
+
   const version = `${Date.now()}`;
   const codeKey = buildKey(record.cellId, version);
   await uploadPackage({ bucket: env.codeBucket, key: codeKey, files: pkg });
@@ -912,6 +974,8 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   await createRegistry(env.registryTable).put({
     ...record,
     ...(declaredTypes ? { types: declaredTypes } : {}),
+    // Persist (or clear) the declared SSR reads each deploy.
+    ssrReads: ssrReads ?? undefined,
     updatedAt: new Date().toISOString(),
   });
 

@@ -17,8 +17,66 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { App, type Session } from './client/app';
+import { App, type Session, type Boot, type DashboardData, type LayoutSection, type ChangeEvent } from './client/app';
 import { installBridge } from './client/bridge';
+
+/** Keep in lockstep with the client's loadDashboard bucketing so seeded and any
+ *  later client-computed activity match. */
+const ACTIVITY_BUCKETS = 16;
+
+/**
+ * Build the dashboard view model from forge's SSR reads (run as the caller — see
+ * runSsrReads). Mirrors the client's loadDashboard so the seeded snapshot is what
+ * the client would have fetched — but server-side, so it paints with no flash.
+ */
+function buildDash(d: Record<string, unknown>): DashboardData | undefined {
+  const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
+  const facts = num((d.facts as { total?: number } | undefined)?.total);
+  const cells = num((d.cells as { total?: number } | undefined)?.total);
+  const views = (d.views as { views?: unknown[] } | undefined)?.views?.length;
+  const edges = (d.links as { edges?: unknown[] } | undefined)?.edges?.length;
+  const events = ((d.changes as { events?: ChangeEvent[] } | undefined)?.events ?? []) as ChangeEvent[];
+  if (facts === undefined && !events.length) return undefined; // nothing useful read
+
+  const writes = events.filter((e) => e.op !== 'read');
+  const times = writes
+    .map((e) => Date.parse(e.at))
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b);
+  let activity: number[] = [];
+  let activitySpanMs = 0;
+  if (times.length >= 2) {
+    const lo = times[0];
+    const hi = times[times.length - 1];
+    activitySpanMs = hi - lo;
+    const span = Math.max(1, hi - lo);
+    const buckets = new Array(ACTIVITY_BUCKETS).fill(0);
+    for (const t of times) buckets[Math.min(ACTIVITY_BUCKETS - 1, Math.floor(((t - lo) / span) * ACTIVITY_BUCKETS))]++;
+    activity = buckets;
+  }
+  return {
+    facts: facts ?? 0,
+    cells: cells ?? 0,
+    views: views ?? 0,
+    edges: edges ?? 0,
+    activity,
+    activitySpanMs,
+    recent: writes.slice(-8).reverse(),
+  };
+}
+
+/** Assemble the first-paint seed: session + (for an authed nav) the layout and
+ *  dashboard data forge read on the caller's behalf. */
+function buildBoot(session: Session, ssrData: Record<string, unknown> | undefined): Boot {
+  const boot: Boot = { session };
+  if (!session.user || !ssrData) return boot;
+  const layoutEntry = ssrData.layout as { value?: { sections?: LayoutSection[] } } | null | undefined;
+  const sections = layoutEntry?.value?.sections;
+  if (Array.isArray(sections) && sections.length) boot.layout = sections;
+  const dash = buildDash(ssrData);
+  if (dash) boot.dash = dash;
+  return boot;
+}
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string, extra: Record<string, string> = {}) => ({
@@ -50,6 +108,8 @@ export const handler = async (event: {
   requestContext?: { http?: { method?: string } };
   rawPath?: string;
   headers?: Record<string, string | undefined>;
+  /** Shaped substrate reads forge ran as the caller (see forge runSsrReads). */
+  ssrData?: Record<string, unknown>;
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
@@ -67,9 +127,10 @@ export const handler = async (event: {
         scopes: [],
         error: null,
       };
+      const boot = buildBoot(vm, event.ssrData);
       installServerBridge(event.headers?.['x-forwarded-host']);
-      const inner = renderToString(createElement(App, { initial: vm }));
-      const state = JSON.stringify(vm).replace(/</g, '\\u003c');
+      const inner = renderToString(createElement(App, { initial: boot }));
+      const state = JSON.stringify(boot).replace(/</g, '\\u003c');
       const html = read('static/index.html')
         .replace('<div id="root"></div>', `<div id="root" data-ssr="1">${inner}</div>`)
         .replace('<script type="module"', `<script id="home-state" type="application/json">${state}</script>\n  <script type="module"`);

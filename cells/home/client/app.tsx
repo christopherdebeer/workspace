@@ -44,6 +44,20 @@ export interface Session {
 }
 
 /**
+ * The server's first-paint seed: the resolved session plus the substrate-backed
+ * data the cell read directly (LeadingKeys-scoped STATE#/TRAJ# — see index.ts).
+ * Seeding these makes the dashboard render with REAL content server-side and the
+ * client trust it (no refetch), so stats/activity and the saved layout don't
+ * flash/reflow in after hydration. Sections that need salience or cross-cell
+ * commands (workspace window, identity, cells) still hydrate client-side.
+ */
+export interface Boot {
+  session: Session;
+  layout?: LayoutSection[];
+  dash?: DashboardData;
+}
+
+/**
  * First-party sign-in state. Seeds from the server's auth-aware SSR view model
  * (`initial`) so the first client render matches the server markup (clean
  * hydration, no flash), then on mount completes an OAuth redirect if returning
@@ -374,14 +388,14 @@ function Sparkline({ points }: { points: number[] }): React.JSX.Element | null {
   );
 }
 
-interface ChangeEvent {
+export interface ChangeEvent {
   op: string;
   key: string | null;
   at: string;
   seq: number;
 }
 
-interface DashboardData {
+export interface DashboardData {
   facts: number;
   cells: number;
   views: number;
@@ -1950,7 +1964,7 @@ function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
 // fact, an ad-hoc query). Customising = writing the fact; "make your own home
 // over time" is data, not a fork. (docs/home-cell.md phase 3.)
 
-interface LayoutSection {
+export interface LayoutSection {
   type: string;
   id?: string; // view id (type 'view')
   key?: string; // fact key (type 'fact')
@@ -1984,10 +1998,12 @@ function sectionLabel(s: LayoutSection): string {
   return SECTION_LABELS[s.type] ?? s.type;
 }
 
-function useLayout(authed: boolean): { sections: LayoutSection[]; save: (next: LayoutSection[]) => void } {
-  const [sections, setSections] = useState<LayoutSection[]>(DEFAULT_LAYOUT);
+function useLayout(authed: boolean, seed?: LayoutSection[]): { sections: LayoutSection[]; save: (next: LayoutSection[]) => void } {
+  const [sections, setSections] = useState<LayoutSection[]>(seed && seed.length ? seed : DEFAULT_LAYOUT);
   useEffect(() => {
-    if (!authed) return;
+    // SSR seeded the saved layout → trust it (no reorder/collapse reflow). Only
+    // the unseeded path loads it.
+    if (!authed || (seed && seed.length)) return;
     let live = true;
     mcpCall('read', 'workspace.peek', { key: '_home/layout' })
       .then((r) => {
@@ -1999,6 +2015,7 @@ function useLayout(authed: boolean): { sections: LayoutSection[]; save: (next: L
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
   const save = (next: LayoutSection[]): void => {
     setSections(next);
@@ -2307,15 +2324,17 @@ function AddSection({ onAdd }: { onAdd: (s: LayoutSection) => void }): React.JSX
   );
 }
 
-export function App({ initial }: { initial?: Session } = {}): React.JSX.Element {
-  const session = useAuth(initial);
+export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
+  const session = useAuth(initial?.session);
   const authed = !!session.user;
-  const [dash, setDash] = useState<DashboardData | null>(null);
-  const { sections, save } = useLayout(authed);
+  const [dash, setDash] = useState<DashboardData | null>(initial?.dash ?? null);
+  const { sections, save } = useLayout(authed, initial?.layout);
   const [customizing, setCustomizing] = useState(false);
 
   useEffect(() => {
-    if (!authed) return;
+    // SSR already seeded the snapshot — trust it (no refetch flash). Only the
+    // cold-mount / anon→client-auth path (no seed) loads it here.
+    if (!authed || dash) return;
     let live = true;
     loadDashboard()
       .then((d) => {
@@ -2325,6 +2344,7 @@ export function App({ initial }: { initial?: Session } = {}): React.JSX.Element 
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
   const move = (i: number, dir: -1 | 1): void => {
