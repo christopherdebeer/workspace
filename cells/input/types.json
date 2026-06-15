@@ -8,7 +8,8 @@
         "open": [
           { "surface": "/@c15r/lit?doc=log:${value.captured}" },
           { "surface": "/@c15r/input" }
-        ]
+        ],
+        "render": [{ "hint": "markdown" }]
       }
     }
   ]

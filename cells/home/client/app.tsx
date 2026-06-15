@@ -10,6 +10,7 @@
  * speaks; the park language lives in headings and copy, never in targets.
  */
 import * as React from 'react';
+import { marked } from 'marked';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../shared/ui';
 import { resolve, declFor, type TypeDecl } from '../shared/vocab';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
@@ -1010,6 +1011,115 @@ function factPreview(e: ListEntry): string {
   return parts.join(' · ');
 }
 
+// ─── default viewers (the type's `render`/`embed` handler) ─────────
+//
+// A managing cell declares HOW its type renders inline (docs/type-vocabulary):
+// a built-in `hint` kind that home draws (SSR-safe, no foreign code), or an
+// `embed` surface the cell SSRs as a zero-JS thumbnail in an origin-isolated
+// iframe. Neither runs the cell's code in home — the isolation the subdomains
+// enforce. `marked` is isomorphic (same pin server+client, like starter), so
+// markdown bodies hydrate without a flash.
+
+marked.setOptions({ gfm: true, breaks: false });
+
+/** First present string field among `keys` of an object value. */
+function strField(v: unknown, keys: string[]): string | undefined {
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    for (const k of keys) if (typeof o[k] === 'string' && o[k]) return o[k] as string;
+  }
+  return undefined;
+}
+/** The markdown/text body of a fact value (string, or its content-ish field). */
+function bodyText(v: unknown): string {
+  if (typeof v === 'string') return v;
+  return strField(v, ['content', 'body', 'text', 'description', 'note', 'md', 'markdown']) ?? '';
+}
+
+/** Render a fact body by a built-in `hint` kind. SSR-safe: deterministic, no
+ *  browser globals. Returns null when there's nothing to draw (caller falls back). */
+function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Element | null {
+  const v = e.value;
+  switch (kind) {
+    case 'md':
+    case 'markdown': {
+      const md = bodyText(v);
+      if (!md) return null;
+      const html = marked.parse(md.replace(/\r\n/g, '\n'), { async: false }) as string;
+      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+    }
+    case 'image': {
+      const src = strField(v, ['src', 'url', 'href', 'image']);
+      return src ? <img src={src} alt={factTitle(e)} loading="lazy" style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} /> : null;
+    }
+    case 'code': {
+      const code = bodyText(v);
+      return code ? <CodeBlock>{code.slice(0, 2000)}</CodeBlock> : null;
+    }
+    case 'metric': {
+      const n = typeof v === 'number' ? String(v) : (strField(v, ['value', 'count', 'n', 'total']) ?? bodyText(v));
+      return n ? <strong style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>{n}</strong> : null;
+    }
+    case 'fields':
+      return <FieldsBody value={v} />;
+    default:
+      return null;
+  }
+}
+
+/** A few scalar fields of a structured value, as a compact definition list. */
+function FieldsBody({ value }: { value: unknown }): React.JSX.Element | null {
+  if (!value || typeof value !== 'object') return null;
+  const rows = Object.entries(value as Record<string, unknown>)
+    .filter(([k, val]) => val != null && typeof val !== 'object' && !['content', 'title', 'name', 'id', 'src'].includes(k))
+    .slice(0, 6);
+  if (!rows.length) return null;
+  return (
+    <dl style={{ margin: 0, display: 'grid', gap: '0.15rem', fontSize: '0.8rem' }}>
+      {rows.map(([k, val]) => (
+        <div key={k} style={{ display: 'flex', gap: '0.45rem', minWidth: 0 }}>
+          <dt style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.72rem', flexShrink: 0 }}>{k}</dt>
+          <dd style={{ margin: 0, overflowWrap: 'anywhere', minWidth: 0 }}>{String(val).slice(0, 120)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** A cell-SSR'd embed: the managing cell renders a zero-JS thumbnail on its own
+ *  origin; home shows it in a pointer-inert iframe (origin-isolated — the cell's
+ *  code never touches home). Lazy-loaded; a transparent overlay link opens it. */
+function FactEmbed({ src, href, title }: { src: string; href: string | null; title: string }): React.JSX.Element {
+  return (
+    <div style={{ position: 'relative', height: 200, borderRadius: 8, overflow: 'hidden', border: `1px solid ${theme.border}`, background: '#fff' }}>
+      <iframe src={src} title={title} loading="lazy" scrolling="no" tabIndex={-1} aria-hidden style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', pointerEvents: 'none' }} />
+      {href ? <a href={href} title={`Open ${title}`} aria-label={`Open ${title}`} style={{ position: 'absolute', inset: 0, display: 'block' }} /> : null}
+    </div>
+  );
+}
+
+/**
+ * A fact's inline body, from the type's declared default viewer: a built-in
+ * `render` hint, or (when `embed` is allowed, e.g. a pinned single fact) the
+ * cell's `embed` thumbnail — falling back to the heuristic text preview. Pure
+ * presentation over `typeDecls`, so it renders identically server + client.
+ */
+function FactBody({ e, embed = false }: { e: ListEntry; embed?: boolean }): React.JSX.Element | null {
+  const hint = resolve(e, 'render', typeDecls)?.hint;
+  if (hint) {
+    const el = HintBody({ kind: hint, e });
+    if (el) return el;
+  }
+  if (embed) {
+    const surface = resolve(e, 'embed', typeDecls)?.surface;
+    if (surface) return <FactEmbed src={localize(surface)} href={factHref(e)} title={factTitle(e)} />;
+  }
+  const preview = factPreview(e);
+  return preview ? (
+    <span style={{ color: theme.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{preview}</span>
+  ) : null;
+}
+
 interface Edge {
   from: string;
   rel: string;
@@ -1107,20 +1217,16 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
             const to = factHref(e);
             const icon = typeIcon(e);
             const title = `${icon ? icon + ' ' : ''}${factTitle(e)}`;
-            const preview = factPreview(e);
             const out = edges.get(e.key) ?? [];
             return (
-              <li key={e.key} style={{ lineHeight: 1.4, display: 'grid', gap: '0.15rem' }}>
+              <li key={e.key} style={{ lineHeight: 1.4, display: 'grid', gap: '0.25rem' }}>
                 {to ? (
                   <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{title}</a>
                 ) : (
                   <strong style={{ fontWeight: 600 }}>{title}</strong>
                 )}
-                {preview ? (
-                  <span style={{ color: theme.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                    {preview}
-                  </span>
-                ) : null}
+                {/* The type's declared default viewer (hint), else a text preview. */}
+                <FactBody e={e} />
                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
                   <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>
                     {[e._meta?.type, e.key].filter(Boolean).join(' · ')}
@@ -2049,15 +2155,15 @@ function PinnedFact({ factKey }: { factKey: string }): React.JSX.Element | null 
   const e: ListEntry = { key: factKey, value: entry.value, _meta: entry._meta };
   const to = factHref(e);
   const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
-  const preview = factPreview(e);
   return (
-    <Card style={{ display: 'grid', gap: '0.3rem' }}>
+    <Card style={{ display: 'grid', gap: '0.4rem' }}>
       {to ? (
         <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600, fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</a>
       ) : (
         <strong style={{ fontFamily: theme.serif, fontSize: '1.05rem' }}>{title}</strong>
       )}
-      {preview ? <span style={{ color: theme.text, fontSize: '0.85rem' }}>{preview}</span> : null}
+      {/* A pinned single fact may use its type's richer `embed` viewer. */}
+      <FactBody e={e} embed />
       <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
         <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>{factKey}</span>
         <EditLink e={e} />
