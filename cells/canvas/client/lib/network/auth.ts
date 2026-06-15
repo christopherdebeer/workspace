@@ -12,6 +12,16 @@ const CANVAS_KEY = 'parc.canvas.return_canvas';
 
 export const DEFAULT_SCOPE = 'workspace:read workspace:write';
 
+// Cells are served from their own origin (`<owner>-<name>.on.parc.land`), but the
+// shell APIs (`/mcp`, `/oauth/*`) live on the apex. On a cell host, target the
+// apex cross-origin (CORS is enabled there for cell origins); on the apex itself
+// the paths are same-origin. Mirrors the kernel's apiBase() — the canvas predates
+// adopting the kernel client and kept its own copy, so this fix lives here.
+const CELL_DOMAIN = 'on.parc.land';
+const APEX = 'https://parc.land';
+const onCellHost = (): boolean => location.hostname.endsWith(CELL_DOMAIN);
+export const apiBase = (): string => (onCellHost() ? APEX : '');
+
 interface Tokens {
   access_token: string;
   refresh_token?: string;
@@ -74,7 +84,7 @@ interface TokenResponse {
 async function ensureClientId(): Promise<string> {
   const cached = localStorage.getItem(CLIENT_KEY);
   if (cached) return cached;
-  const res = await fetch('/oauth/register', {
+  const res = await fetch(apiBase() + '/oauth/register', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -99,7 +109,7 @@ export async function login(scope: string = DEFAULT_SCOPE): Promise<void> {
   // Preserve which canvas we were on across the OAuth redirect.
   const canvas = new URLSearchParams(window.location.search).get('canvas');
   if (canvas) sessionStorage.setItem(CANVAS_KEY, canvas);
-  const u = new URL('/oauth/authorize', window.location.origin);
+  const u = new URL('/oauth/authorize', apiBase() || window.location.origin);
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', clientId);
   u.searchParams.set('redirect_uri', redirectUri());
@@ -128,7 +138,7 @@ export async function completeLoginIfReturning(): Promise<boolean> {
   const clientId = localStorage.getItem(CLIENT_KEY);
   if (!clientId) throw new Error('Missing client registration');
 
-  const res = await fetch('/oauth/token', {
+  const res = await fetch(apiBase() + '/oauth/token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -152,7 +162,7 @@ export async function completeLoginIfReturning(): Promise<boolean> {
 async function refresh(): Promise<boolean> {
   const t = getTokens();
   if (!t?.refresh_token) return false;
-  const res = await fetch('/oauth/token', {
+  const res = await fetch(apiBase() + '/oauth/token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
@@ -172,15 +182,25 @@ async function refresh(): Promise<boolean> {
 
 /** fetch() with the session bearer attached, refreshing once on a 401. */
 export async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+  // Shell APIs (/mcp, /oauth) live on the apex; a relative path on a cell host
+  // would hit dispatch (→ this cell), not the gateway. Absolute URLs pass through.
+  const url = /^https?:\/\//.test(path) ? path : apiBase() + path;
   const run = async (): Promise<Response> => {
     const headers = new Headers(init?.headers);
     const t = getTokens();
     if (t?.access_token) headers.set('authorization', `Bearer ${t.access_token}`);
-    return fetch(path, { ...init, headers });
+    return fetch(url, { ...init, headers });
   };
   let res = await run();
-  if (res.status === 401 && getTokens()?.refresh_token) {
-    if (await refresh()) res = await run();
+  if (res.status === 401) {
+    // Refresh once; if that fails the session is dead — re-auth rather than
+    // surfacing a raw 401 (a present-but-invalid bearer now 401s, so this fires).
+    if (getTokens()?.refresh_token && (await refresh())) res = await run();
+    else {
+      setTokens(null);
+      await login();
+      await new Promise<never>(() => undefined); // navigating away
+    }
   }
   return res;
 }
