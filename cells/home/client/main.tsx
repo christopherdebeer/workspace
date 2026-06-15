@@ -14,7 +14,19 @@ import { createRoot } from 'react-dom/client';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../shared/ui';
 import { resolve, declFor, type TypeDecl } from '../shared/vocab';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
-import { login, logout, completeLoginIfReturning, authFetch, isAuthed } from './auth';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './auth';
+
+/**
+ * Make an apex-style `/@owner/name<rest>` link origin-aware. Home now runs as a
+ * cell on its own origin, where a bare `/@owner/name` path is re-prefixed by the
+ * edge (→ 404); the kernel's `cellUrl` routes to the sibling subdomain instead.
+ * Non-cell paths (already-absolute URLs, plain paths) pass through unchanged.
+ */
+function localize(href: string | null | undefined): string {
+  if (!href) return href ?? '';
+  const m = href.match(/^\/@([^/]+)\/([^/?#]+)(.*)$/);
+  return m ? cellUrl(decodeURIComponent(m[1]), decodeURIComponent(m[2]), m[3]) : href;
+}
 // Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
 // the dawn panorama strip, and the field computer.
 const heroUrl = 'https://parc.land/@c15r/home/_data/c15r/public/assets/hero.jpg';
@@ -52,9 +64,22 @@ function useAuth(): Session & { signIn: () => void; signOut: () => void } {
       }
       if (isAuthed()) {
         try {
-          const res = await authFetch('/mcp/whoami');
+          // Identity via the `whoami` MCP tool over POST /mcp — the CORS-enabled
+          // endpoint (the bare GET /mcp/whoami isn't CORS'd for cell origins, so
+          // it fails cross-origin now that home is a cell, not same-origin).
+          const res = await authFetch('/mcp', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'whoami', arguments: {} } }),
+          });
           if (res.ok) {
-            const b = (await res.json()) as { user?: string; userId?: string; scopes?: string[] };
+            const rpc = (await res.json()) as { result?: { content?: Array<{ text?: string }> } };
+            let b: { user?: string; userId?: string; scopes?: string[] } = {};
+            try {
+              b = JSON.parse(rpc.result?.content?.[0]?.text ?? '{}');
+            } catch {
+              /* non-JSON */
+            }
             if (live) setS({ ready: true, user: b.user ?? b.userId ?? 'signed in', scopes: b.scopes ?? [], error });
             return;
           }
@@ -259,7 +284,7 @@ function Landing({ session }: { session: Session & { signIn: () => void } }): Re
           </span>
         </div>
         <a
-          href="/@c15r/lit"
+          href={localize('/@c15r/lit')}
           style={{
             display: 'inline-block',
             background: theme.pine,
@@ -830,12 +855,14 @@ function factTitle(e: ListEntry): string {
 
 /** Where a fact opens — resolved from the type vocabulary, no hardcoded cells. */
 function factHref(e: ListEntry): string | null {
-  return resolve(e, 'open', typeDecls)?.surface ?? null;
+  const s = resolve(e, 'open', typeDecls)?.surface;
+  return s ? localize(s) : null;
 }
 
 /** Where a fact edits — its type's `edit` handler, if it declares one. */
 function factEdit(e: ListEntry): string | null {
-  return resolve(e, 'edit', typeDecls)?.surface ?? null;
+  const s = resolve(e, 'edit', typeDecls)?.surface;
+  return s ? localize(s) : null;
 }
 
 /** A small "✎ edit" link, shown only when the fact's type declares an edit surface. */
@@ -1086,8 +1113,8 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   if (type === 'canvas') {
     // Address the board by its VIEW id so SSR honours the view's declared
     // viewport (the "look here") instead of fitting the whole board.
-    const href = hint?.href ?? `/@c15r/canvas?view=${encodeURIComponent(def.id)}`;
-    const embedSrc = `/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1&w=620&h=240`;
+    const href = localize(hint?.href ?? `/@c15r/canvas?view=${encodeURIComponent(def.id)}`);
+    const embedSrc = localize(`/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1&w=620&h=240`);
     return (
       <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
         {/* The iframe is purely visual (pointer-events:none); a transparent
@@ -1258,7 +1285,7 @@ function CellCard({ cell }: { cell: CellRow }): React.JSX.Element {
   return (
     <Card style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.45rem', alignContent: 'start' }}>
       <a
-        href={cell.address}
+        href={localize(cell.address)}
         style={{ color: theme.accent, textDecoration: 'none', fontFamily: theme.mono, fontSize: '0.9rem', fontWeight: 600, wordBreak: 'break-word' }}
       >
         {cell.address}
@@ -2197,7 +2224,7 @@ function App(): React.JSX.Element {
         </>
       )}
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>
-        <Wordmark /> · a personal substrate · <Anchor href="/mcp">agents start here</Anchor>
+        <Wordmark /> · a personal substrate · <Anchor href="https://parc.land/mcp">agents start here</Anchor>
       </p>
     </Page>
   );

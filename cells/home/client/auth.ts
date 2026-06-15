@@ -3,9 +3,9 @@
  * backed by the kernel. `completeLoginIfReturning` is a complete-without-force
  * wrapper (the kernel only exposes ensureAuth, which forces); gating on `?code`
  * gives the landing for anon instead of redirecting. */
-import { login, signOut, ensureAuth, isAuthed, authFetch } from 'https://parc.land/@c15r/kernel/app.js';
+import { login, signOut, ensureAuth, isAuthed, authFetch, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 
-export { login, authFetch, isAuthed };
+export { login, authFetch, isAuthed, cellUrl };
 
 export async function logout(): Promise<void> {
   signOut();
