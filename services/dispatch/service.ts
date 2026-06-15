@@ -35,6 +35,49 @@ function parsePath(rawPath: string): { owner: string; name: string; subPath: str
   };
 }
 
+interface SsrRead {
+  as: string;
+  target: string;
+  input?: Record<string, unknown>;
+}
+
+/**
+ * Run a cell's declared SSR reads AS THE CALLER. dispatch's service client carries
+ * the validated identity (cookie → token on a top-level navigation), so each read
+ * is scoped and shaped exactly as it would be for that user over MCP. Only the
+ * read-only first-party rooms (`workspace`, `cells`) are proxied; failures degrade
+ * (the section just loads client-side). `workspace.changes { recent: N }` resolves
+ * to the head→window two-step the browser client does. The shaped results are
+ * handed to `cells.call` → injected as `event.ssrData`, so the cell server-renders
+ * real content while never receiving a token. (forge can't do this itself —
+ * forge↔workspace is a CDK dependency cycle; dispatch has no back-edge.)
+ */
+async function runSsrReads(reads: SsrRead[], ctx: ServiceContext): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  await Promise.all(
+    reads.map(async (r) => {
+      try {
+        const dot = r.target.indexOf('.');
+        if (dot < 0) return;
+        const svc = r.target.slice(0, dot);
+        const cmd = r.target.slice(dot + 1);
+        if (svc !== 'workspace' && svc !== 'cells') return; // read-only, first-party only
+        let input: Record<string, unknown> = r.input ?? {};
+        if (svc === 'workspace' && cmd === 'changes' && typeof input.recent === 'number') {
+          const n = input.recent;
+          const head = await ctx.serviceClient('workspace').command<{ seq?: number }>('changes', { sinceSeq: 'head' });
+          const seq = head?.seq ?? 0;
+          input = { sinceSeq: Math.max(0, seq - n), limit: n };
+        }
+        out[r.as] = await ctx.serviceClient(svc).command(cmd, input);
+      } catch (err) {
+        ctx.logger.warn('ssr read failed', { target: r.target, error: (err as Error).message });
+      }
+    }),
+  );
+  return out;
+}
+
 async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
   // Anonymous GET/HEAD flow through so *public* cells can serve pages and
   // assets to a plain browser; `cells.call` is the gate — it only honours
@@ -66,6 +109,22 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
     }
   }
 
+  // SSR proxy: for an authenticated top-level navigation (subPath '/'), run the
+  // cell's declared substrate reads as the caller and hand the shaped results to
+  // cells.call → the cell server-renders real content (no token reaches it).
+  let ssrData: Record<string, unknown> | undefined;
+  if (ctx.identity.user && (req.method === 'GET' || req.method === 'HEAD') && parsed.subPath === '/') {
+    try {
+      const meta = await ctx.serviceClient('cells').command<{ reads?: SsrRead[] }>('ssrReadsFor', {
+        owner: parsed.owner,
+        name: parsed.name,
+      });
+      if (meta?.reads?.length) ssrData = await runSsrReads(meta.reads, ctx);
+    } catch (err) {
+      ctx.logger.warn('ssr prefetch failed', { error: (err as Error).message });
+    }
+  }
+
   try {
     // forge holds the registry + invoke permission; we proxy rather than read its
     // table or invoke the cell ourselves (preserving the cell boundary).
@@ -76,6 +135,7 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
       path: parsed.subPath,
       query: new URLSearchParams(req.query).toString(),
       body,
+      ...(ssrData ? { ssrData } : {}),
     });
     // Pass the cell's response through faithfully: its headers (content-type
     // for HTML/JS/CSS), its body encoding, its status.

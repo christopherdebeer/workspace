@@ -219,11 +219,6 @@ export class PlatformStack extends cdk.Stack {
     // The substrate-write handler resolves an emitting cell's owner through
     // the registry (cells.resolveCell) — never from the event body.
     workspace.allow(cells);
-    // SSR proxy (docs/dynamic-cells.md): forge runs a cell's declared reads as
-    // the authenticated caller via the workspace room, then injects the shaped
-    // results into the cell invocation — so a public cell can server-render real
-    // content without ever holding a user token.
-    cells.allow(workspace);
     gateway.allow(auth);
     dispatch.allow(auth);
     // The /mcp gateway aggregates + forwards forge's tools; dispatch proxies
@@ -234,6 +229,14 @@ export class PlatformStack extends cdk.Stack {
     // The gateway also aggregates the workspace cell's tools (remember/recall/
     // share/…): it calls workspace.describeTools and forwards tools/call to it.
     gateway.allow(workspace);
+    // SSR proxy (docs/dynamic-cells.md): for an authenticated navigation, dispatch
+    // reads the substrate AS THE CALLER (its service client carries the validated
+    // identity) and hands the shaped results to cells.call, which forwards them to
+    // the cell — so a public cell server-renders real content without ever holding
+    // a token. dispatch (not forge) does this: forge↔workspace would be a CDK
+    // dependency cycle (workspace already calls cells.resolveCell), but dispatch
+    // has no back-edge.
+    dispatch.allow(workspace);
     // (home no longer validates tokens or reads the registry server-side — its SPA
     // is a read/act client over /mcp — so it needs no allow() grants.)
 

@@ -429,6 +429,9 @@ interface CallCellInput {
   body?: unknown;
   /** Raw query string to forward to the cell (no leading `?`). */
   query?: string;
+  /** SSR proxy: shaped substrate reads dispatch ran as the caller, forwarded to
+   *  the cell's invocation as `event.ssrData` (docs/dynamic-cells.md). */
+  ssrData?: Record<string, unknown>;
 }
 
 /** Resolve the input's target to an internal cellId. */
@@ -436,44 +439,6 @@ function resolveCellId(input: { cellId?: string; owner?: string; name?: string }
   if (input?.cellId) return input.cellId;
   if (input?.owner && input?.name) return makeCellId(input.owner, input.name);
   throw new Error('Provide either `cellId`, or `owner` and `name`');
-}
-
-/**
- * Run a cell's declared SSR reads as the authenticated caller. forge invokes the
- * room commands through its own service client — which carries the caller's
- * identity (propagated from dispatch) — so each read is scoped and shaped exactly
- * as it would be for that user over MCP. Only the first-party rooms (`workspace`,
- * `cells`) are proxied; everything is read-only and failures degrade (the section
- * just loads client-side). `workspace.changes` with `{ recent: N }` is resolved
- * to the head→window two-step the browser client does.
- */
-async function runSsrReads(
-  reads: NonNullable<CellRecord['ssrReads']>,
-  ctx: ServiceContext,
-): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = {};
-  await Promise.all(
-    reads.map(async (r) => {
-      try {
-        const dot = r.target.indexOf('.');
-        if (dot < 0) return;
-        const svc = r.target.slice(0, dot);
-        const cmd = r.target.slice(dot + 1);
-        if (svc !== 'workspace' && svc !== 'cells') return; // read-only, first-party only
-        let input: Record<string, unknown> = r.input ?? {};
-        if (svc === 'workspace' && cmd === 'changes' && typeof input.recent === 'number') {
-          const n = input.recent;
-          const head = await ctx.serviceClient('workspace').command<{ seq?: number }>('changes', { sinceSeq: 'head' });
-          const seq = head?.seq ?? 0;
-          input = { sinceSeq: Math.max(0, seq - n), limit: n };
-        }
-        out[r.as] = await ctx.serviceClient(svc).command(cmd, input);
-      } catch (err) {
-        ctx.logger.warn('ssr read failed', { target: r.target, error: (err as Error).message });
-      }
-    }),
-  );
-  return out;
 }
 
 async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unknown> {
@@ -531,16 +496,6 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
         ? input.body
         : JSON.stringify(input.body);
 
-  // SSR proxy: for an authenticated navigation, run the cell's declared reads AS
-  // THE CALLER (forge already holds the propagated identity) and inject the shaped
-  // results into the invocation. The cell server-renders from `ssrData` — it never
-  // receives a token, and the read goes through the same workspace shaping (salience,
-  // vocab, sharing) an agent or the browser client would get.
-  let ssrData: Record<string, unknown> | undefined;
-  if ((method === 'GET' || method === 'HEAD') && ctx.identity.user && record.ssrReads?.length) {
-    ssrData = await runSsrReads(record.ssrReads, ctx);
-  }
-
   const result = await invokeCell({
     functionName: record.functionName,
     event: {
@@ -551,7 +506,10 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
       requestContext: { http: { method, path } },
       body: bodyStr,
       isBase64Encoded: false,
-      ...(ssrData ? { ssrData } : {}),
+      // SSR proxy: dispatch ran the cell's declared reads AS THE CALLER and passed
+      // the shaped results here; forward them so the cell can server-render real
+      // content. The cell never receives a token (docs/dynamic-cells.md).
+      ...(input.ssrData ? { ssrData: input.ssrData } : {}),
     },
   });
   return result;
@@ -577,6 +535,21 @@ async function resolveCell(input: ResolveInput, ctx: ServiceContext): Promise<un
     grants: record.grants,
     status: record.status,
   };
+}
+
+/**
+ * Internal: the cell's declared SSR reads (from its `ssr.json`), for dispatch to
+ * run as the caller before invoking the cell. Public-cell metadata only — no
+ * auth required (dispatch gates the navigation itself).
+ */
+async function ssrReadsFor(input: { owner?: string; name?: string; cellId?: string }, ctx: ServiceContext): Promise<unknown> {
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cellId = input.cellId ?? (input.owner && input.name ? makeCellId(input.owner, input.name) : undefined);
+  if (!cellId) return { reads: [] };
+  const record = await registry.get(cellId);
+  ctx.logger.info('ssrReadsFor', { cellId, reads: record?.ssrReads?.length ?? 0 });
+  return { reads: record?.ssrReads ?? [] };
 }
 
 interface DeleteInput {
@@ -1708,6 +1681,7 @@ function describeTools(): { tools: Array<{ name: string; description: string; in
 
 const commands: Record<string, RegisteredCommand> = {
   resolveCell: resolveCell as RegisteredCommand,
+  ssrReadsFor: ssrReadsFor as RegisteredCommand,
   catalogCells: catalogCells as RegisteredCommand,
   describeTools: (() => describeTools()) as RegisteredCommand,
   // Registry-driven dynamic-cell tools (internal: the gateway aggregates and
