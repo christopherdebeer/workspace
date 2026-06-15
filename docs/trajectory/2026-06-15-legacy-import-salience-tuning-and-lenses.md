@@ -92,3 +92,52 @@ standing .30 / centrality .10): KB = **3 focus / 302 peripheral / 11 elided** �
    times out at the edge. Score lazily on write, or scope the scan, before large imports.
 5. **Port the legacy specialist ecosystem** (weave/fix/improve + an agent-run/
    dispatch primitive) — the biggest agent-ergonomics gap vs legacy (see addendum).
+
+## Cell consolidation: canvas→kernel, the cell contract, and a rebuilt starter
+
+**canvas auth regression + kernel migration.** Canvas hit "(async) Authentication
+required": its frontend (on its own cell origin post-isolation-cutover) called
+**relative** `/mcp` + `/oauth/*`, which route to dispatch→the cell, not the apex
+gateway. Root cause: canvas carried a **pre-kernel copy** of the auth/substrate
+client (adapted from home; per-cell `parc.canvas.*` tokens, relative paths) —
+"duplication by precedence," not a deliberate fork. lit/input/regwatch were
+unaffected (they re-export from the kernel, whose `apiBase()` targets the apex on
+a cell host). Fixed-forward (added apiBase to canvas), then **migrated canvas to
+thin kernel re-exports** (lit's pattern), deleting the fork. Verified live: bundle
+imports the kernel, 0 fork remnants.
+
+**Cell audit → the surface-cell contract.** Cells fall in three tiers: surfaces
+(lit/canvas/input/regwatch/starter), capability cells (models/run — MCP-only),
+infra (kernel, viewers). Surface cells should meet: (1) public isomorphic SSR
+frontend, (2) kernel client (no forks), (3) surface↔MCP duality (declared
+`types.json` + facts that are the same ones agents read/act), (4) `platform/ui`.
+Gaps found: only lit/starter are isomorphic (canvas/input/regwatch still vanilla
+DOM — item 3); **nobody consumed platform/ui** (item 2); regwatch lacks types.
+
+**`platform/ui` delivery — decided source-bundled.** Investigated true kernel
+runtime-vend (URL-imported isomorphic React kit). Forge's *client* bundler
+URL-externalizes react (`resolveBareImport`→esm.sh), so a cell's served `app.js`
+carries **URL-baked react, not bare** — a consumer's server bundler fetching it
+pulls a *second* react (breaks `renderToString`; only "works" for pure
+presentational components via the global `react.element` Symbol — fragile). The
+onResolve reorder (resolve bare react→SERVER_BUNDLED regardless of importer) is
+necessary but **not sufficient** — true runtime-vend also needs a forge
+**library-build mode** that emits bare-external react. So: **source-bundle now**
+(`scripts/sync-platform-ui.mjs` copies `platform/ui` into a cell's `shared/ui.tsx`;
+each cell bundles it with its own react — isomorphic, no peering, like react/marked
+already are). Kernel `app.js` re-export of platform/ui stays a *client-only*
+convenience. Library-build mode = future work to revisit runtime-vend.
+
+**starter rebuilt as the canonical reference** (was just an SSR+`ms` demo): kernel
+(auth + read/act) + platform/ui (source-bundled, server-rendered) + a `note` type
+(declared + sample seeded) + one `@c15r/viewers` renderFence + marked-isomorphic
+note bodies + surface↔MCP duality. Verified live (anon SSR renders the platform/ui
+chrome server-side; `app.js` imports kernel + viewers + marked).
+
+### Rollout remaining
+- Generalize isomorphic SSR + source-bundled platform/ui to canvas/input/regwatch
+  (item 3); add `regwatch` a `types.json`.
+- **home → tier-2 cell** (`DISPATCH_DEFAULT_CELL` seam already de-privileges it) —
+  the capstone: home built like starter (kernel + platform/ui + isomorphic).
+- Optional: forge **library-build mode** (bare-external react) to enable true
+  kernel runtime-vend of platform/ui, retiring the per-cell source copies.
