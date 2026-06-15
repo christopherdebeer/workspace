@@ -1,0 +1,13 @@
+{
+  "types": [
+    {
+      "type": "note",
+      "icon": "📝",
+      "label": "value.text",
+      "manager": "@c15r/starter",
+      "handlers": {
+        "open": [{ "surface": "/@c15r/starter" }]
+      }
+    }
+  ]
+}

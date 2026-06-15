@@ -1,16 +1,19 @@
 /* ---------------------------------------------------------------------------
- * starter — the happy-path cell template (server half).
+ * starter — the canonical cell template (server half).
  *
- * Plain TS (no JSX) so it stays the `index.ts` entry forge resolves; all JSX
- * lives in the .tsx modules it imports. It fetches nothing — a real cell would
- * read the substrate here (see cells/lit/index.ts) — and renderToString's the
- * shared tree into the shell for a server first paint the client hydrates.
+ * Plain TS (no JSX) so it stays the `index.ts` entry forge resolves; JSX lives
+ * in the .tsx modules it imports. renderToString's the shared `platform/ui`
+ * tree into the shell for a server first paint (proving platform/ui is
+ * isomorphic — it renders server-side), with a serialized ViewModel the client
+ * hydrates against. The notes themselves load on the client via the kernel
+ * (auth-gated, the viewer's owner slice), so this template needs no DB wiring;
+ * see cells/lit/index.ts for the server-reads-the-substrate-for-SSR pattern.
  * ------------------------------------------------------------------------- */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { Starter } from './shared';
+import { Surface, type ViewModel } from './shared';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string, extra: Record<string, string> = {}) => ({
@@ -30,8 +33,14 @@ export const handler = async (event: {
     // ACAO:* so a host-isolated sibling cell could import this module if it wanted.
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'), { 'access-control-allow-origin': '*' });
     if (path === '/' || path === '') {
-      const inner = renderToString(createElement(Starter));
-      const html = read('static/index.html').replace('<div id="app"></div>', `<div id="app" data-ssr="1">${inner}</div>`);
+      // Anonymous first paint: the shell + chrome render server-side from
+      // platform/ui (the isomorphic proof); the client signs in and fills notes.
+      const vm: ViewModel = { authed: false, notes: [] };
+      const inner = renderToString(createElement(Surface, { vm }));
+      const state = JSON.stringify(vm).replace(/</g, '\\u003c');
+      const html = read('static/index.html')
+        .replace('<div id="app"><p class="boot">loading…</p></div>', `<div id="app" data-ssr="1">${inner}</div>`)
+        .replace('<script type="module"', `<script id="starter-state" type="application/json">${state}</script>\n  <script type="module"`);
       return respond(200, 'text/html; charset=utf-8', html);
     }
   } catch (err) {
