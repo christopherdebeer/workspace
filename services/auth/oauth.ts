@@ -63,6 +63,35 @@ export function grantableScopes(config: OAuthConfig, username: string): string[]
   return config.scopesSupported.filter((s) => isAdmin || !isAdminScope(s, prefixes));
 }
 
+/**
+ * Scope catalog — capability metadata for the consent screen (docs/capability-consent.md).
+ * Grouping by `verb` makes the consent screen legible and surfaces the Σ-calculus
+ * read/write distinction: reads are disclosure (monotone, low-risk), writes/admin
+ * are consequential. Unknown/granular scopes (Phase 2) infer their verb from the
+ * scope shape, so new capabilities group sensibly without a catalog entry.
+ */
+export interface ScopeMeta {
+  verb: 'read' | 'write' | 'admin';
+  title: string;
+  description: string;
+}
+const SCOPE_CATALOG: Record<string, ScopeMeta> = {
+  'workspace:read': { verb: 'read', title: 'Read your workspace', description: 'See your facts, links, views, and activity.' },
+  'workspace:write': { verb: 'write', title: 'Write to your workspace', description: 'Create, edit, link, and retire facts in your slice.' },
+  'workspace:admin': { verb: 'admin', title: 'Administer the workspace', description: 'Manage sharing and grant requests.' },
+  'platform:cells:create': { verb: 'write', title: 'Create cells', description: 'Provision and deploy dynamic cells on your behalf.' },
+  'platform:*': { verb: 'admin', title: 'Full platform control', description: 'Unrestricted admin across the platform.' },
+};
+export function scopeMeta(scope: string): ScopeMeta {
+  const known = SCOPE_CATALOG[scope];
+  if (known) return known;
+  const verb: ScopeMeta['verb'] =
+    /(:admin$|^platform:\*$|^auth:)/.test(scope) ? 'admin'
+    : /(^write:|:write$|^act:|:create$|^cells:)/.test(scope) ? 'write'
+    : 'read';
+  return { verb, title: scope, description: '' };
+}
+
 const DEFAULT_EXPIRY = 3600;
 const DEFAULT_REFRESH_EXPIRY = REFRESH_TTL_MS / 1000;
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -206,7 +235,10 @@ export async function handleGrantableScopes(
   const session = await store.validateSession(sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   const user = await store.getUserById(session.userId);
-  return ok({ username: user?.username ?? null, scopes: grantableScopes(config, user?.username ?? '') });
+  const scopes = grantableScopes(config, user?.username ?? '');
+  // Capability metadata so the consent screen can group + label scopes.
+  const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
+  return ok({ username: user?.username ?? null, scopes, catalog });
 }
 
 // ─── Token endpoint ──────────────────────────────────────────────
