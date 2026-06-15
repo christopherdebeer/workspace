@@ -641,6 +641,31 @@ const rowStyle: React.CSSProperties = {
   fontSize: '0.85rem',
 };
 
+/** Long mono identifiers (OAuth client ids, fact keys, resources) must wrap, not
+ *  stretch the page. `minWidth:0` lets them shrink inside a flex row. */
+const monoKey: React.CSSProperties = {
+  fontSize: '0.78rem',
+  fontFamily: theme.mono,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+  minWidth: 0,
+};
+
+/** Scopes as individual wrapping chips: a token's `scope` is a space-joined
+ *  string ("workspace:read workspace:write platform/cells:create") that, as one
+ *  nowrap badge, runs wider than a phone. Split it so each scope is its own chip. */
+function ScopeBadges({ scope }: { scope?: string | null }): React.JSX.Element | null {
+  const parts = (scope ?? '').split(/[\s,]+/).filter(Boolean);
+  if (!parts.length) return null;
+  return (
+    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', minWidth: 0 }}>
+      {parts.map((p) => (
+        <Badge key={p} tone="dim">{p}</Badge>
+      ))}
+    </div>
+  );
+}
+
 function InlineButton({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }): React.JSX.Element {
   return (
     <button
@@ -750,7 +775,7 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
               {data.incoming.map((r) => (
                 <div key={r.key} style={rowStyle}>
                   <Badge tone="accent">{r.requester}</Badge>
-                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{r.resource}</code>
+                  <code style={monoKey}>{r.resource}</code>
                   {r.note ? <span style={{ color: theme.dim }}>“{r.note}”</span> : null}
                   <InlineButton onClick={() => void act(r.key, 'act', 'workspace.approveGrant', { key: r.key })}>
                     {busy === r.key ? '…' : 'Approve'}
@@ -768,16 +793,25 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
             {data.tokens.length === 0 ? (
               <span style={{ color: theme.dim, fontSize: '0.85rem' }}>No active tokens.</span>
             ) : (
-              data.tokens.map((t) => (
-                <div key={t.id} style={rowStyle}>
-                  <span>{t.label ?? t.clientId ?? t.id.slice(0, 8)}</span>
-                  <Badge tone="dim">{t.scope}</Badge>
+              data.tokens.map((t, i) => (
+                <div
+                  key={t.id}
+                  style={{
+                    display: 'grid',
+                    gap: '0.35rem',
+                    ...(i < data.tokens.length - 1 ? { paddingBottom: '0.5rem', borderBottom: `1px solid ${theme.border}` } : {}),
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <code style={{ ...monoKey, flex: '1 1 12rem' }}>{t.label ?? t.clientId ?? t.id.slice(0, 8)}</code>
+                    <InlineButton danger onClick={() => void act(t.id, 'act', 'auth.revokeToken', { tokenId: t.id })}>
+                      {busy === t.id ? '…' : 'Revoke'}
+                    </InlineButton>
+                  </div>
+                  <ScopeBadges scope={t.scope} />
                   <span style={{ color: theme.dim, fontSize: '0.75rem' }}>
                     {t.expiresAt ? `expires ${t.expiresAt.slice(0, 10)}` : 'non-expiring'}
                   </span>
-                  <InlineButton danger onClick={() => void act(t.id, 'act', 'auth.revokeToken', { tokenId: t.id })}>
-                    {busy === t.id ? '…' : 'Revoke'}
-                  </InlineButton>
                 </div>
               ))
             )}
@@ -791,7 +825,7 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
               data.shared.map((g) => (
                 <div key={`${g.grantee}|${g.key}`} style={rowStyle}>
                   <Badge tone="dim">{g.grantee}</Badge>
-                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{g.key}</code>
+                  <code style={monoKey}>{g.key}</code>
                   <Badge tone={g.mode === 'write' ? 'accent' : 'dim'}>{g.mode ?? 'read'}</Badge>
                   <InlineButton
                     danger
@@ -810,7 +844,7 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
               {data.receiving.map((g) => (
                 <div key={`${g.owner}|${g.key}`} style={rowStyle}>
                   <Badge tone="dim">{g.owner}</Badge>
-                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{g.key}</code>
+                  <code style={monoKey}>{g.key}</code>
                   <Badge tone={g.mode === 'write' ? 'accent' : 'dim'}>{g.mode ?? 'read'}</Badge>
                 </div>
               ))}
@@ -823,7 +857,7 @@ function IdentityShell({ authed, user, scopes }: { authed: boolean; user: string
               {data.answers.map((a) => (
                 <div key={a.key} style={rowStyle}>
                   <Badge tone={a.status === 'approved' ? 'accent' : 'danger'}>{a.status}</Badge>
-                  <code style={{ fontSize: '0.78rem', fontFamily: theme.mono }}>{a.resource}</code>
+                  <code style={monoKey}>{a.resource}</code>
                   <span style={{ color: theme.dim, fontSize: '0.75rem' }}>
                     by {a.by === user ? 'you' : a.by}
                     {a.reason ? ` — “${a.reason}”` : ''}
