@@ -386,11 +386,16 @@ interface DashboardData {
   cells: number;
   views: number;
   edges: number;
-  /** Write-ish events per day, oldest → newest (the sparkline). */
+  /** Write events bucketed across their ACTUAL time span (oldest → newest) —
+   *  honest write-activity, not facts-over-time. Empty when there's too little. */
   activity: number[];
+  /** Milliseconds the activity series covers (first → last write), for the label. */
+  activitySpanMs: number;
   /** Latest write-ish events, newest first. */
   recent: ChangeEvent[];
 }
+
+const ACTIVITY_BUCKETS = 16;
 
 async function loadDashboard(): Promise<DashboardData> {
   const head = await mcpCall('read', 'workspace.changes', { sinceSeq: 'head' });
@@ -400,25 +405,47 @@ async function loadDashboard(): Promise<DashboardData> {
     mcpCall('read', 'cells.list'),
     mcpCall('read', 'workspace.views'),
     mcpCall('read', 'workspace.links'),
-    mcpCall('read', 'workspace.changes', { sinceSeq: Math.max(0, seq - 300), limit: 300 }),
+    mcpCall('read', 'workspace.changes', { sinceSeq: Math.max(0, seq - 1000), limit: 1000 }),
   ]);
   const events = ch.ok ? (((ch.value as { events?: ChangeEvent[] }).events ?? []) as ChangeEvent[]) : [];
   const writes = events.filter((e) => e.op !== 'read');
-  // Bucket the last 14 days, oldest first.
-  const days: number[] = new Array(14).fill(0);
-  const now = Date.now();
-  for (const e of writes) {
-    const age = Math.floor((now - Date.parse(e.at)) / 86400000);
-    if (age >= 0 && age < 14) days[13 - age]++;
+  // Adaptive bucketing: the substrate is young and bursty, so a fixed 14-day
+  // chart is mostly empty and reads as "unchanging". Instead split the writes'
+  // real time span (first → last) into N buckets, so the line always shows a
+  // meaningful shape over whatever period the fetched window actually covers.
+  const times = writes
+    .map((e) => Date.parse(e.at))
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b);
+  let activity: number[] = [];
+  let activitySpanMs = 0;
+  if (times.length >= 2) {
+    const lo = times[0];
+    const hi = times[times.length - 1];
+    activitySpanMs = hi - lo;
+    const span = Math.max(1, hi - lo);
+    const buckets = new Array(ACTIVITY_BUCKETS).fill(0);
+    for (const t of times) buckets[Math.min(ACTIVITY_BUCKETS - 1, Math.floor(((t - lo) / span) * ACTIVITY_BUCKETS))]++;
+    activity = buckets;
   }
   return {
     facts: q.ok ? ((q.value as { total?: number }).total ?? 0) : 0,
     cells: c.ok ? (((c.value as { cells?: unknown[] }).cells ?? []).length) : 0,
     views: v.ok ? (((v.value as { views?: unknown[] }).views ?? []).length) : 0,
     edges: l.ok ? (((l.value as { edges?: unknown[] }).edges ?? []).length) : 0,
-    activity: days,
+    activity,
+    activitySpanMs,
     recent: writes.slice(-8).reverse(),
   };
+}
+
+/** Human-readable duration for the activity caption ("past 3h", "past 2d"). */
+function humanSpan(ms: number): string {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `past ${Math.max(1, m)}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `past ${h}h`;
+  return `past ${Math.round(h / 24)}d`;
 }
 
 function StatCards({ data }: { data: DashboardData | null }): React.JSX.Element {
@@ -440,12 +467,25 @@ function StatCards({ data }: { data: DashboardData | null }): React.JSX.Element 
       {foot}
     </div>
   );
+  const showSpark = !!data && data.activity.length >= 2;
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.7rem' }}>
-      {cell('Facts', data ? data.facts : null, data ? <Sparkline points={data.activity} /> : undefined)}
-      {cell('Links', data ? data.edges : null)}
-      {cell('Views', data ? data.views : null)}
-      {cell('Cells', data ? data.cells : null)}
+    <div style={{ display: 'grid', gap: '0.7rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(130px, 100%), 1fr))', gap: '0.7rem' }}>
+        {cell('Facts', data ? data.facts : null)}
+        {cell('Links', data ? data.edges : null)}
+        {cell('Views', data ? data.views : null)}
+        {cell('Cells', data ? data.cells : null)}
+      </div>
+      {showSpark ? (
+        // Honest label: this is write activity over the window we actually
+        // fetched, not facts-over-time — every op (writes, links, deploys) counts.
+        <div style={{ background: theme.panel, border: `1px solid ${theme.border}`, borderRadius: 10, boxShadow: theme.shadow, padding: '0.6rem 0.85rem', display: 'grid', gap: '0.3rem' }}>
+          <span style={{ color: theme.dim, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Write activity · {humanSpan(data!.activitySpanMs)}
+          </span>
+          <Sparkline points={data!.activity} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2042,10 +2082,11 @@ function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.J
 }
 
 /**
- * Normal-view section frame with a persisted collapse toggle. Folds the section
- * to a slim labelled header (its body — and any async load it would trigger — is
- * skipped while collapsed); the chevron floats top-right so it sits in the card's
- * padding without disturbing each section's own heading. Collapsed state lives in
+ * Normal-view section frame with a persisted collapse toggle. The affordance is a
+ * flat caret that reads as the start of the section's own title (no separate
+ * chip): when expanded it sits in the card's left padding, just before the
+ * heading; when collapsed the section folds to a slim `▸ Label` row (and its body
+ * — and any async load it would trigger — is skipped). Collapsed state lives in
  * `_home/layout`, so it survives reloads and follows you across devices.
  */
 function CollapsibleSection({
@@ -2059,44 +2100,49 @@ function CollapsibleSection({
   onToggle: () => void;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const chevron: React.CSSProperties = {
+  const caret: React.CSSProperties = {
     position: 'absolute',
-    top: 10,
-    right: 10,
+    top: '1.3rem',
+    left: '0.5rem',
     zIndex: 3,
-    width: 26,
-    height: 26,
-    borderRadius: 999,
-    border: `1px solid ${theme.border}`,
-    background: theme.panel,
+    border: 'none',
+    background: 'none',
+    padding: '0.2rem',
+    margin: 0,
     color: theme.dim,
     cursor: 'pointer',
-    fontSize: '0.75rem',
+    fontSize: '0.8rem',
     lineHeight: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: theme.shadow,
   };
+  if (collapsed) {
+    return (
+      <Card style={{ padding: '0.6rem 1rem' }}>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={false}
+          title={`Expand ${label}`}
+          style={{ display: 'flex', alignItems: 'baseline', gap: '0.45rem', width: '100%', border: 'none', background: 'none', padding: 0, margin: 0, cursor: 'pointer', textAlign: 'left' }}
+        >
+          <span style={{ color: theme.dim, fontSize: '0.8rem' }}>▸</span>
+          <span style={{ fontFamily: theme.serif, color: theme.dim, fontSize: '1.05rem' }}>{label}</span>
+        </button>
+      </Card>
+    );
+  }
   return (
     <div style={{ position: 'relative' }}>
       <button
         type="button"
         onClick={onToggle}
-        aria-expanded={!collapsed}
-        aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
-        title={collapsed ? `Expand ${label}` : `Collapse ${label}`}
-        style={chevron}
+        aria-expanded
+        aria-label={`Collapse ${label}`}
+        title={`Collapse ${label}`}
+        style={caret}
       >
-        {collapsed ? '▸' : '▾'}
+        ▾
       </button>
-      {collapsed ? (
-        <Card style={{ padding: '0.7rem 2.4rem 0.7rem 1rem' }}>
-          <span style={{ fontFamily: theme.serif, color: theme.dim }}>{label}</span>
-        </Card>
-      ) : (
-        children
-      )}
+      {children}
     </div>
   );
 }
@@ -2281,8 +2327,9 @@ export function App({ initial }: { initial?: Session } = {}): React.JSX.Element 
             const body = <SectionView s={s} ctx={ctx} />;
             const k = `${s.type}:${s.id ?? s.key ?? i}`;
             if (!customizing) {
-              // The greeting is the banner, not a foldable section.
-              if (s.type === 'greeting') return <React.Fragment key={k}>{body}</React.Fragment>;
+              // The greeting is the banner; the field computer is the always-at-hand
+              // console — neither folds. Everything else is collapsible.
+              if (s.type === 'greeting' || s.type === 'console') return <React.Fragment key={k}>{body}</React.Fragment>;
               return (
                 <CollapsibleSection key={k} label={sectionLabel(s)} collapsed={!!s.collapsed} onToggle={() => setCollapsed(i)}>
                   {body}
