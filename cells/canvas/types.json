@@ -5,8 +5,8 @@
       "icon": "🌲",
       "manager": "@c15r/canvas",
       "handlers": {
-        "open": [{ "surface": "/@c15r/canvas?canvas=${match}" }],
-        "embed": [{ "surface": "/@c15r/canvas?canvas=${match}&embed=1" }]
+        "open": [{ "path": "?canvas=${match}" }],
+        "embed": [{ "path": "?canvas=${match}&embed=1" }]
       }
     }
   ]

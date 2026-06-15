@@ -6,8 +6,8 @@
       "manager": "@c15r/input",
       "handlers": {
         "open": [
-          { "surface": "/@c15r/lit?doc=log:${value.captured}" },
-          { "surface": "/@c15r/input" }
+          { "cell": "/lit", "path": "?doc=log:${value.captured}" },
+          { "path": "" }
         ],
         "render": [{ "hint": "markdown" }]
       }

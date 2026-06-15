@@ -6,18 +6,31 @@
  *
  * A fact's `type` and the cell that opens/edits/renders it are coupled; this
  * makes the coupling *data*. A type declares `handlers` per intent (open /
- * edit / create / render / embed), each resolving to a `surface` (a URL into a
- * cell), an `act` (a declared act target), a `renderer` (a `_renderers/<type>`
- * fact), or a `hint` (a built-in render hint). `resolve(fact, intent, decls)`
- * is the one function every surface and agent shares — home's `factHref`, a
- * canvas element's open path, an agent's "how do I edit this" all go through
- * it. Pure (no DOM, no cells hardcoded): callers supply the declarations.
+ * edit / create / render / embed). The address of a cell surface is NOT baked
+ * in apex-form: a handler declares only the `path` within a cell, and the cell
+ * is implicit (the type's `manager`) unless the handler names another `cell`.
+ * `resolve` returns that as a structured `{ cell: {owner,name}, path }` and the
+ * CONSUMER materializes the origin via the kernel's `cellUrl` — so the same
+ * declaration renders correctly on the apex or a cell subdomain, for any owner.
+ * A handler may instead carry an `act` target, a `renderer` (`_renderers/<type>`
+ * fact), a `hint` (built-in render kind), or a `surface` (a full templated path,
+ * for value-derived addresses like a cell's stored `${value.address}`).
+ * `resolve(fact, intent, decls)` is the one function every surface and agent
+ * shares. Pure (no DOM, no cells hardcoded): callers supply the declarations.
  */
 
 export type Intent = 'open' | 'edit' | 'create' | 'render' | 'embed' | 'preview';
 
 export interface TypeHandler {
-  /** A URL into a cell (open/edit/embed). Templated. */
+  /** Path within the surface cell (templated), e.g. `?doc=${match}`. The cell is
+   *  the type's `manager` unless `cell` overrides it. Preferred over `surface`. */
+  path?: string;
+  /** Override the surface cell when it isn't the type's manager — `owner/name`
+   *  (cross-cell), e.g. a capture opening in `c15r/lit`. Owner may be omitted to
+   *  inherit the type's manager owner (`/name`). */
+  cell?: string;
+  /** A full templated path/URL — for value-derived addresses (`${value.address}`)
+   *  the consumer localizes as-is. Prefer `path`+`cell` for cell surfaces. */
   surface?: string;
   /** A declared `act` target (create, custom verbs). Templated. */
   act?: string;
@@ -25,6 +38,8 @@ export interface TypeHandler {
   renderer?: string;
   /** A built-in render hint (`markdown` / `metric` / …). */
   hint?: string;
+  /** Resolved target cell for `path` (set by `resolve`; consumer → `cellUrl`). */
+  cellRef?: { owner: string; name: string };
 }
 
 export interface TypeDecl {
@@ -127,6 +142,18 @@ function asList<T>(h: T | T[] | undefined): T[] {
   return h == null ? [] : Array.isArray(h) ? h : [h];
 }
 
+/** Parse a cell reference (`@owner/name`, `owner/name`, or `/name` to inherit the
+ *  manager's owner) into `{owner, name}`. `managerOwner` is the fallback owner. */
+function parseCellRef(ref: string | undefined, managerOwner: string): { owner: string; name: string } | null {
+  if (!ref) return null;
+  const clean = ref.replace(/^@/, '');
+  const slash = clean.indexOf('/');
+  if (slash < 0) return null;
+  const owner = clean.slice(0, slash) || managerOwner;
+  const name = clean.slice(slash + 1);
+  return owner && name ? { owner, name } : null;
+}
+
 /** The declaration that governs a fact (first matching type signal). */
 export function declFor(fact: VocabFact, decls: Record<string, TypeDecl>): TypeDecl | null {
   for (const sig of typeSignals(fact)) {
@@ -146,10 +173,23 @@ export function resolve(fact: VocabFact, intent: Intent, decls: Record<string, T
     const handlers = asList(decl?.handlers?.[intent]);
     if (!handlers.length) continue;
     const ctx: TemplateCtx = { id: deriveId(fact.key), key: fact.key, type: sig.type, match: sig.match, value: fact.value };
+    // The owner that an unqualified cell ref inherits — the type's manager owner.
+    const managerRef = parseCellRef(decl?.manager, '');
+    const managerOwner = managerRef?.owner ?? '';
     for (const h of handlers) {
       const resolved: TypeHandler = {};
       let ok = true;
-      if (h.surface !== undefined) {
+      // Preferred: a cell-relative `path` (cell implicit = manager, or `cell` ref).
+      if (h.path !== undefined) {
+        const cellRef = parseCellRef(h.cell ?? decl?.manager, managerOwner);
+        const p = applyTemplate(h.path, ctx);
+        if (!cellRef || p === null) ok = false;
+        else {
+          resolved.cellRef = cellRef;
+          resolved.path = p;
+        }
+      } else if (h.surface !== undefined) {
+        // Value-derived / legacy full path — consumer localizes as-is.
         const s = applyTemplate(h.surface, ctx);
         if (s === null) ok = false;
         else resolved.surface = s;
@@ -161,7 +201,7 @@ export function resolve(fact: VocabFact, intent: Intent, decls: Record<string, T
       }
       if (ok && h.renderer !== undefined) resolved.renderer = h.renderer;
       if (ok && h.hint !== undefined) resolved.hint = h.hint;
-      if (ok && (resolved.surface || resolved.act || resolved.renderer || resolved.hint)) return resolved;
+      if (ok && (resolved.cellRef || resolved.surface || resolved.act || resolved.renderer || resolved.hint)) return resolved;
     }
   }
   return null;

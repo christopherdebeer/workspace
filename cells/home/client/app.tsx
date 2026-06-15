@@ -960,16 +960,27 @@ function factTitle(e: ListEntry): string {
   return e.key;
 }
 
+/**
+ * The concrete URL for a resolved handler. A `path` handler names a cell
+ * (`cellRef`) and a path within it → the kernel's origin-aware `cellUrl` builds
+ * the right URL (subdomain on a cell host, apex path on the apex). A `surface`
+ * handler is a value-derived full path (e.g. a cell's stored `${value.address}`)
+ * → localized as-is. So no apex URLs are baked into the type vocabulary.
+ */
+function handlerUrl(r: ReturnType<typeof resolve>): string | null {
+  if (!r) return null;
+  if (r.cellRef && r.path !== undefined) return cellUrl(r.cellRef.owner, r.cellRef.name, r.path);
+  return r.surface ? localize(r.surface) : null;
+}
+
 /** Where a fact opens — resolved from the type vocabulary, no hardcoded cells. */
 function factHref(e: ListEntry): string | null {
-  const s = resolve(e, 'open', typeDecls)?.surface;
-  return s ? localize(s) : null;
+  return handlerUrl(resolve(e, 'open', typeDecls));
 }
 
 /** Where a fact edits — its type's `edit` handler, if it declares one. */
 function factEdit(e: ListEntry): string | null {
-  const s = resolve(e, 'edit', typeDecls)?.surface;
-  return s ? localize(s) : null;
+  return handlerUrl(resolve(e, 'edit', typeDecls));
 }
 
 /** A small "✎ edit" link, shown only when the fact's type declares an edit surface. */
@@ -1111,8 +1122,8 @@ function FactBody({ e, embed = false }: { e: ListEntry; embed?: boolean }): Reac
     if (el) return el;
   }
   if (embed) {
-    const surface = resolve(e, 'embed', typeDecls)?.surface;
-    if (surface) return <FactEmbed src={localize(surface)} href={factHref(e)} title={factTitle(e)} />;
+    const src = handlerUrl(resolve(e, 'embed', typeDecls));
+    if (src) return <FactEmbed src={src} href={factHref(e)} title={factTitle(e)} />;
   }
   const preview = factPreview(e);
   return preview ? (
