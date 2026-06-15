@@ -102,6 +102,7 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
       ? { toolGrants: item.toolGrants as Record<string, string[]> }
       : {}),
     ...(Array.isArray(item.types) ? { types: item.types as Array<Record<string, unknown>> } : {}),
+    ...(Array.isArray(item.ssrReads) ? { ssrReads: item.ssrReads as CellRecord['ssrReads'] } : {}),
     public: !!item.public,
     status: item.status as CellStatus,
     ...(item.deploy && typeof item.deploy === 'object' ? { deploy: item.deploy as DeployState } : {}),
