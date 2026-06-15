@@ -117,6 +117,9 @@ export interface RememberInput {
   ifAbsent?: boolean;
   /** Lease/reveal timer, evaluated at read (no scheduler). */
   timer?: FactTimer;
+  /** Import-only: preserve a migrated fact's timestamps + cumulative read/write
+   *  counts (folded into `standing`). See WriteInput.import. */
+  import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
 }
 
 /** Bulk intake — imports and capture backfills land in one round trip. */
@@ -124,6 +127,8 @@ export interface IngestInput {
   facts: RememberInput[];
   /** Default `via` for facts that do not set their own. */
   via?: string;
+  /** Optional edges to write after the facts (bulk graph import). */
+  edges?: Array<{ from: string; rel: string; to: string; strength?: number }>;
 }
 
 export interface IngestResult {
@@ -350,6 +355,20 @@ const LENS_SCHEMA = {
     'Salience lens (default salience): recent=freshness, connected=graph degree, durable=earned/cumulative, active=read/written now. Recomputes the score, so it shifts BOTH ranking and focus/peripheral/elided tiers.',
 } as const;
 
+/** Import-only provenance: preserve a migrated fact's timestamps + earned counts. */
+const IMPORT_SCHEMA = {
+  type: 'object',
+  description:
+    'Import-only: { createdAt?, updatedAt? (ISO — preserve true age for recency), seedReads?, seedWrites? (cumulative legacy counts, folded into standing) }.',
+  properties: {
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+    seedReads: { type: 'number' },
+    seedWrites: { type: 'number' },
+  },
+  additionalProperties: false,
+} as const;
+
 /** Raw per-call salience override (escape hatch); merges over the lens + defaults. */
 const SALIENCE_OVERRIDE_SCHEMA = {
   type: 'object',
@@ -416,6 +435,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           required: ['effect'],
           additionalProperties: false,
         },
+        import: IMPORT_SCHEMA,
       },
       required: ['key', 'value'],
       additionalProperties: false,
@@ -443,12 +463,23 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               type: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
               ifAbsent: { type: 'boolean' },
+              import: IMPORT_SCHEMA,
             },
             required: ['key', 'value'],
             additionalProperties: false,
           },
         },
         via: { type: 'string', description: 'Default `via` for facts that do not set their own' },
+        edges: {
+          type: 'array',
+          description: 'Edges to write after the facts (bulk graph import): { from, rel, to, strength? }',
+          items: {
+            type: 'object',
+            properties: { from: { type: 'string' }, rel: { type: 'string' }, to: { type: 'string' }, strength: { type: 'number' } },
+            required: ['from', 'rel', 'to'],
+            additionalProperties: false,
+          },
+        },
       },
       required: ['facts'],
       additionalProperties: false,
@@ -1143,6 +1174,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           ifRevision: input.ifRevision,
           ifAbsent: input.ifAbsent,
           timer: input.timer,
+          import: input.import,
         },
         ctx.identity,
       );
@@ -1177,12 +1209,21 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
               tags: f.tags,
               ifAbsent: f.ifAbsent,
               timer: f.timer,
+              import: f.import,
             },
             ctx.identity,
           );
           ingested++;
         } catch (err) {
           errors.push({ key: f.key, error: (err as Error).message });
+        }
+      }
+      // Bulk edges (graph import) after the facts; dangling edges are allowed.
+      for (const e of input.edges ?? []) {
+        try {
+          if (e?.from && e?.rel && e?.to) await state.link(scope, e.from, e.rel, e.to, e.strength ?? null, ctx.identity);
+        } catch (err) {
+          errors.push({ key: `${e?.from}-[${e?.rel}]->${e?.to}`, error: (err as Error).message });
         }
       }
       // One announcement for the batch — intake should not storm the bus.

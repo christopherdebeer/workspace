@@ -118,6 +118,26 @@ describe('observed state: salience scoring', () => {
     expect(recentOnly).toBeLessThan(fresh);
   });
 
+  it('import preserves timestamps and seeds standing from cumulative counts', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const oldIso = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString(); // 60d ago
+    // A migrated fact: old, but with deep earned history.
+    await state.put(
+      { scope: 'r', key: 'kb/x', value: 'ported', import: { createdAt: oldIso, updatedAt: oldIso, seedReads: 40, seedWrites: 10 } },
+      alice,
+    );
+    // A cold ported fact: old, no history.
+    await state.put({ scope: 'r', key: 'kb/y', value: 'cold', import: { createdAt: oldIso, updatedAt: oldIso } }, alice);
+    const got = await state.get('r', 'kb/x');
+    expect(got!._meta.updatedAt).toBe(oldIso); // real age preserved (recency reflects it)
+    expect(got!._meta.standing).toBeGreaterThan(0.5); // 50 lifetime → near-saturated standing
+    const res = await state.read('r', { elision: 'none' });
+    // Earned fact stays above the default elide threshold despite age; cold one is lower.
+    expect(res.entries['kb/x']._meta.score).toBeGreaterThan(0.1);
+    expect(res.entries['kb/y']._meta.score).toBeLessThan(res.entries['kb/x']._meta.score);
+  });
+
   it('per-call lens/override recompute the score (ranking + tiers) and echo the lens', async () => {
     const store = createMemoryStateStore();
     const state = createObservedState(store);

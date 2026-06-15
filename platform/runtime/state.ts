@@ -191,6 +191,14 @@ export interface StateRecord {
   /** ISO expiry when a timer is set, else null. Liveness is computed at read. */
   timerExpiresAt: string | null;
   timerEffect: 'delete' | 'enable' | null;
+  /**
+   * Import priors: cumulative read/write counts carried in from a migrated corpus
+   * (e.g. legacy `read_count`). Folded into `standing` at read time so a ported
+   * fact arrives with its earned importance instead of cold. Absent for native
+   * facts; never decays (it's a one-time floor on the cumulative term).
+   */
+  seedReads?: number;
+  seedWrites?: number;
 }
 
 /** A typed, directed edge between two located keys within one scope. */
@@ -487,6 +495,12 @@ export interface WriteInput {
    * CAS treats an expired-delete fact as absent — the crash-safe claim.
    */
   timer?: FactTimer;
+  /**
+   * Import-only: preserve a migrated fact's original timestamps (recency reflects
+   * true age) and carry its cumulative read/write counts as `standing` priors.
+   * `import.createdAt` only applies on first write (creation).
+   */
+  import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
 }
 
 export interface ReadOptions {
@@ -644,7 +658,19 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
    *  `sCall` to score under a per-read lens (defaults to the instance settings). */
   async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s): Promise<Entry> {
     const sig = (signals ?? (await signalsFor(rec.scope, nowMs, sCall.windowMs))).get(rec.key) ?? EMPTY_SIGNALS;
-    const parts = scoreParts({ updatedAtMs: Date.parse(rec.updatedAt), nowMs, ...sig }, sCall);
+    // Import priors fold into the cumulative (standing) counts only — never the
+    // recent window — so a ported fact's earned importance shows without faking
+    // current activity.
+    const parts = scoreParts(
+      {
+        updatedAtMs: Date.parse(rec.updatedAt),
+        nowMs,
+        ...sig,
+        lifetimeReads: sig.lifetimeReads + (rec.seedReads ?? 0),
+        lifetimeWrites: sig.lifetimeWrites + (rec.seedWrites ?? 0),
+      },
+      sCall,
+    );
     const windowMin = sCall.windowMs / 60000;
     return {
       value: rec.value,
@@ -746,8 +772,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         firstSeq: prev?.firstSeq ?? seq,
         writer,
         via: input.via ?? null,
-        createdAt: prev?.createdAt ?? nowIso,
-        updatedAt: nowIso,
+        // Import preserves the migrated fact's real timestamps (so recency
+        // reflects true age); native writes stamp now.
+        createdAt: prev?.createdAt ?? input.import?.createdAt ?? nowIso,
+        updatedAt: input.import?.updatedAt ?? nowIso,
         writers,
         // a fresh write to a superseded key revives it
         superseded: false,
@@ -757,9 +785,19 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         tags: input.tags !== undefined ? input.tags : (prev?.tags ?? []),
         timerExpiresAt: timer?.expiresAt ?? null,
         timerEffect: timer?.effect ?? null,
+        // Carry import priors (cumulative legacy reads/writes) so `standing`
+        // reflects earned importance; preserved across rewrites.
+        ...(input.import?.seedReads !== undefined || prev?.seedReads !== undefined
+          ? { seedReads: input.import?.seedReads ?? prev?.seedReads }
+          : {}),
+        ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
+          ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
+          : {}),
       };
       await store.put(record, hasCas ? { expectRevision: prev?.revision ?? null } : undefined);
-      await store.appendTrajectory({ op: 'write', scope: input.scope, key: input.key, at: nowIso, seq });
+      // The trajectory write event carries the (possibly historical) updatedAt so
+      // an import doesn't read as a recent burst.
+      await store.appendTrajectory({ op: 'write', scope: input.scope, key: input.key, at: record.updatedAt, seq });
       return wrap(record, nowMs);
     },
 
