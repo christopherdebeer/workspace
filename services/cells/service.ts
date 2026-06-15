@@ -53,7 +53,7 @@ function sinceToMs(since: string | undefined): number {
   return n * unit;
 }
 
-const CREATE_SCOPE = 'platform:cells:create';
+const CREATE_SCOPE = 'cells:create';
 
 /** Normalise a cell name into an address/ARN-safe slug. */
 function slugify(name: string): string {
@@ -194,8 +194,9 @@ const clampTimeout = (n: unknown): number | undefined => {
 };
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
-  // Scope (platform:cells:create) is enforced at the /mcp gateway; forge is a
-  // backend reachable only via allow-listed invokes, and authorizes by ownership.
+  // Scope (cells:create) is enforced at the /mcp gateway; forge is a backend
+  // reachable only via allow-listed invokes, and authorizes by ownership. Legacy
+  // platform:cells:create / platform:* tokens still satisfy it (impliesScope).
   const owner = requireUser(ctx.identity);
   if (!input?.name?.trim()) throw new Error('A cell `name` is required');
   if (!input?.code?.trim()) throw new Error('Cell `code` (a TypeScript module exporting `handler`) is required');

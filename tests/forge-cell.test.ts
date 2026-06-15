@@ -316,7 +316,7 @@ describe('cells: backend commands', () => {
     const res = await call<{ tools: Array<{ name: string; scope: string | null }> }>('alice', 'describeTools', {});
     expect(res.ok).toBe(true);
     const create = res.result!.tools.find((t) => t.name === 'create');
-    expect(create?.scope).toBe('platform:cells:create');
+    expect(create?.scope).toBe('cells:create');
     // callCell is ownership-gated, not scoped
     expect(res.result!.tools.find((t) => t.name === 'call')?.scope).toBeNull();
   });
