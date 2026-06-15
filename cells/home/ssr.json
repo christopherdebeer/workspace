@@ -1,10 +1,12 @@
 {
   "reads": [
     { "as": "layout", "target": "workspace.peek", "input": { "key": "_home/layout" } },
-    { "as": "facts", "target": "workspace.query", "input": { "limit": 1 } },
-    { "as": "cells", "target": "workspace.query", "input": { "prefix": "cells/", "limit": 1 } },
+    { "as": "window", "target": "workspace.query", "input": { "limit": 10 } },
+    { "as": "attention", "target": "workspace.attention", "input": { "limit": 5 } },
     { "as": "views", "target": "workspace.views", "input": {} },
     { "as": "links", "target": "workspace.links", "input": {} },
-    { "as": "changes", "target": "workspace.changes", "input": { "recent": 1000 } }
+    { "as": "changes", "target": "workspace.changes", "input": { "recent": 1000 } },
+    { "as": "types", "target": "cells.describeTypes", "input": {} },
+    { "as": "cellsList", "target": "cells.list", "input": {} }
   ]
 }

@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { App, type Session, type Boot, type DashboardData, type LayoutSection, type ChangeEvent } from './client/app';
+import { App, typeDeclsFrom, type Session, type Boot, type DashboardData, type LayoutSection, type ChangeEvent } from './client/app';
 import { installBridge } from './client/bridge';
 
 /** Keep in lockstep with the client's loadDashboard bucketing so seeded and any
@@ -31,8 +31,10 @@ const ACTIVITY_BUCKETS = 16;
  */
 function buildDash(d: Record<string, unknown>): DashboardData | undefined {
   const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
-  const facts = num((d.facts as { total?: number } | undefined)?.total);
-  const cells = num((d.cells as { total?: number } | undefined)?.total);
+  // Counts derive from the section reads (no redundant count queries): facts from
+  // the windowed query's total, cells from cells.list, views/edges from their lists.
+  const facts = num((d.window as { total?: number } | undefined)?.total);
+  const cells = (d.cellsList as { cells?: unknown[] } | undefined)?.cells?.length;
   const views = (d.views as { views?: unknown[] } | undefined)?.views?.length;
   const edges = (d.links as { edges?: unknown[] } | undefined)?.edges?.length;
   const events = ((d.changes as { events?: ChangeEvent[] } | undefined)?.events ?? []) as ChangeEvent[];
@@ -70,11 +72,35 @@ function buildDash(d: Record<string, unknown>): DashboardData | undefined {
 function buildBoot(session: Session, ssrData: Record<string, unknown> | undefined): Boot {
   const boot: Boot = { session };
   if (!session.user || !ssrData) return boot;
-  const layoutEntry = ssrData.layout as { value?: { sections?: LayoutSection[] } } | null | undefined;
+  const d = ssrData;
+
+  const layoutEntry = d.layout as { value?: { sections?: LayoutSection[] } } | null | undefined;
   const sections = layoutEntry?.value?.sections;
   if (Array.isArray(sections) && sections.length) boot.layout = sections;
-  const dash = buildDash(ssrData);
+
+  // The canonical type vocabulary (describeTypes), assembled the same way the
+  // client's loadTypeDecls does — so the viewer (render hints) paints server-side.
+  const typesRaw = (d.types as { types?: Record<string, unknown> } | undefined)?.types;
+  if (typesRaw) boot.types = typeDeclsFrom(typesRaw);
+
+  const dash = buildDash(d);
   if (dash) boot.dash = dash;
+
+  // The workspace window: salience-ranked facts (the windowed query), attention,
+  // and edges — exactly what the client would have fetched.
+  const win = d.window as { entries?: unknown[]; total?: number } | undefined;
+  if (win) {
+    boot.workspace = {
+      attention: d.attention ?? null,
+      facts: win.entries ?? [],
+      total: win.total ?? 0,
+      edges: (d.links as { edges?: unknown[] } | undefined)?.edges ?? [],
+    } as Boot['workspace'];
+  }
+  const cellsList = (d.cellsList as { cells?: unknown[] } | undefined)?.cells;
+  if (cellsList) boot.cells = cellsList as Boot['cells'];
+  const viewsList = (d.views as { views?: unknown[] } | undefined)?.views;
+  if (viewsList) boot.views = viewsList as Boot['views'];
   return boot;
 }
 

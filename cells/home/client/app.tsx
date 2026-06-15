@@ -52,10 +52,24 @@ export interface Session {
  * flash/reflow in after hydration. Sections that need salience or cross-cell
  * commands (workspace window, identity, cells) still hydrate client-side.
  */
+/** The workspace window's seed (salience-ranked facts + attention + edges). */
+export interface WorkspaceSeed {
+  attention: AttentionData | null;
+  facts: ListEntry[];
+  total: number;
+  edges: Edge[];
+}
+
 export interface Boot {
   session: Session;
   layout?: LayoutSection[];
   dash?: DashboardData;
+  /** The canonical type vocabulary ($types/describeTypes), seeded so the viewer
+   *  (render hints) and routing paint server-side identically to the client. */
+  types?: Record<string, TypeDecl>;
+  workspace?: WorkspaceSeed;
+  cells?: CellRow[];
+  views?: ViewDef[];
 }
 
 /**
@@ -910,17 +924,27 @@ function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
   return { icon: d.icon, manager: d.manager, label: d.label ?? d.titlePath, handlers: { open: [{ surface: d.href }] } };
 }
 
+/** Build the type vocabulary from a raw `$types`/`describeTypes` map: normalise
+ *  legacy-shape decls and layer them over the built-in bootstrap fallback. The
+ *  one place the vocab is assembled — used by both the SSR seed (index.ts) and
+ *  the client `loadTypeDecls`, so server and client resolve identically. */
+export function typeDeclsFrom(raw: Record<string, unknown> | undefined): Record<string, TypeDecl> {
+  const norm = Object.fromEntries(Object.entries(raw ?? {}).map(([t, d]) => [t, normalizeDecl(d as LegacyTypeDecl)]));
+  return { ...DEFAULT_TYPE_DECLS, ...norm };
+}
+
+/** Replace the module's type vocabulary (SSR seed install / client refresh). */
+export function setTypeDecls(decls: Record<string, TypeDecl>): void {
+  typeDecls = decls;
+}
+
 export async function loadTypeDecls(): Promise<void> {
   try {
     // $types is the global vocabulary (the cell registry's canonical declarations
     // merged under this user's _types overrides), so home resolves the same way
     // for any signed-in user — not just the cells' owner.
     const r = await mcpCall('read', '$types');
-    if (r.ok) {
-      const raw = (r.value as { types?: Record<string, LegacyTypeDecl> }).types ?? {};
-      const norm = Object.fromEntries(Object.entries(raw).map(([t, d]) => [t, normalizeDecl(d)]));
-      typeDecls = { ...DEFAULT_TYPE_DECLS, ...norm }; // canonical + overrides win over the built-in fallback
-    }
+    if (r.ok) typeDecls = typeDeclsFrom((r.value as { types?: Record<string, LegacyTypeDecl> }).types);
   } catch {
     /* defaults still apply */
   }
@@ -1151,15 +1175,67 @@ interface AttentionData {
  * slice — `query` ranked by salience, titled and routed by the `_types`
  * vocabulary, exactly the shaping agents get from the same read.
  */
-function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | null {
-  const [att, setAtt] = useState<AttentionData | null>(null);
-  const [facts, setFacts] = useState<ListEntry[] | null>(null);
-  const [total, setTotal] = useState(0);
-  const [edges, setEdges] = useState<Map<string, Edge[]>>(new Map());
-  const [err, setErr] = useState<string | null>(null);
+/** Group edges by source key so each fact can show its outbound relationships. */
+function edgeMap(edges: Edge[]): Map<string, Edge[]> {
+  const m = new Map<string, Edge[]>();
+  for (const ed of edges.filter((x) => !x.from.startsWith('_'))) {
+    const list = m.get(ed.from) ?? [];
+    list.push(ed);
+    m.set(ed.from, list);
+  }
+  return m;
+}
 
+/** The salience lenses (platform/runtime/state LENS_PRESETS) as a UI choice —
+ *  per-read biases over the tuned default ranking. */
+const LENSES: Array<{ id: string; label: string }> = [
+  { id: 'salience', label: 'Salient' },
+  { id: 'recent', label: 'Recent' },
+  { id: 'connected', label: 'Connected' },
+  { id: 'durable', label: 'Durable' },
+  { id: 'active', label: 'Active' },
+];
+
+function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: WorkspaceSeed }): React.JSX.Element | null {
+  const [att, setAtt] = useState<AttentionData | null>(seed?.attention ?? null);
+  const [facts, setFacts] = useState<ListEntry[] | null>(seed ? seed.facts : null);
+  const [total, setTotal] = useState(seed?.total ?? 0);
+  const [edges, setEdges] = useState<Map<string, Edge[]>>(seed ? edgeMap(seed.edges) : new Map());
+  const [err, setErr] = useState<string | null>(null);
+  const [lens, setLens] = useState('salience');
+  const [busy, setBusy] = useState(false);
+  const firstLens = React.useRef(true);
+
+  // Re-rank on a lens change — a per-read salience bias, the same `lens` an agent
+  // passes to workspace.query. The first run is skipped (the seeded/default view
+  // already stands); switching lens re-queries client-side.
   useEffect(() => {
     if (!authed) return;
+    if (firstLens.current) {
+      firstLens.current = false;
+      return;
+    }
+    let live = true;
+    setBusy(true);
+    mcpCall('read', 'workspace.query', { limit: 10, ...(lens !== 'salience' ? { lens } : {}) })
+      .then((r) => {
+        if (!live || !r.ok) return;
+        const v = r.value as { entries?: ListEntry[]; total?: number };
+        setFacts(v.entries ?? []);
+        setTotal(v.total ?? 0);
+      })
+      .finally(() => {
+        if (live) setBusy(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [lens, authed]);
+
+  useEffect(() => {
+    // SSR seeded this snapshot (salience-ranked facts + attention + edges) — trust
+    // it (no refetch flash). typeDecls is seeded too, so titles/viewers resolve.
+    if (!authed || seed) return;
     let live = true;
     (async () => {
       try {
@@ -1171,17 +1247,7 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
         ]);
         if (!live) return;
         if (a.ok) setAtt(a.value as AttentionData);
-        if (l.ok) {
-          // Group edges by source so each fact can show its relationships.
-          const all = ((l.value as { edges?: Edge[] }).edges ?? []).filter((x) => !x.from.startsWith('_'));
-          const m = new Map<string, Edge[]>();
-          for (const ed of all) {
-            const list = m.get(ed.from) ?? [];
-            list.push(ed);
-            m.set(ed.from, list);
-          }
-          setEdges(m);
-        }
+        if (l.ok) setEdges(edgeMap((l.value as { edges?: Edge[] }).edges ?? []));
         if (q.ok) {
           const v = q.value as { entries?: ListEntry[]; total?: number };
           setFacts(v.entries ?? []);
@@ -1196,6 +1262,7 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
   if (!authed) return null;
@@ -1204,9 +1271,23 @@ function WorkspaceWindow({ authed }: { authed: boolean }): React.JSX.Element | n
 
   return (
     <Card>
-      <Heading sub="Your slice, salience-ranked — the same query an agent makes, rendered. The strip is the ranger's notebook.">
-        Workspace
-      </Heading>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <Heading sub="Your slice, salience-ranked — the same query an agent makes, rendered. The strip is the ranger's notebook.">
+          Workspace
+        </Heading>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: theme.dim, fontSize: '0.72rem', flexShrink: 0 }}>
+          <span style={{ fontFamily: theme.mono }}>{busy ? '…' : 'lens'}</span>
+          <select
+            value={lens}
+            onChange={(e) => setLens(e.target.value)}
+            style={{ fontFamily: 'inherit', fontSize: '0.78rem', color: theme.text, background: '#fffef9', border: `1px solid ${theme.border}`, borderRadius: 6, padding: '0.15rem 0.35rem' }}
+          >
+            {LENSES.map((l) => (
+              <option key={l.id} value={l.id}>{l.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
       {err ? <Badge tone="danger">{err}</Badge> : null}
       {att ? (
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.3rem 0 0.6rem' }}>
@@ -1439,11 +1520,11 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
  * Registered views, rendered as surfaces (home redesign phase 3 seed: the UI
  * comes from the registry, not code).
  */
-function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
-  const [views, setViews] = useState<ViewDef[] | null>(null);
+function Views({ authed, seed }: { authed: boolean; seed?: ViewDef[] }): React.JSX.Element | null {
+  const [views, setViews] = useState<ViewDef[] | null>(seed ?? null);
 
   useEffect(() => {
-    if (!authed) return;
+    if (!authed || seed) return; // SSR-seeded (typeDecls seeded too) → no refetch
     let live = true;
     // Load the type vocabulary first so list surfaces show icons + route by it.
     loadTypeDecls().then(() => {
@@ -1458,6 +1539,7 @@ function Views({ authed }: { authed: boolean }): React.JSX.Element | null {
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
   if (!authed) return null;
@@ -1541,12 +1623,12 @@ function CellCard({ cell }: { cell: CellRow }): React.JSX.Element {
 }
 
 /** The cells section: framing text (no card), each cell its own card in a grid. */
-function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null {
-  const [cells, setCells] = useState<CellRow[] | null>(null);
+function CellsConsole({ authed, seed }: { authed: boolean; seed?: CellRow[] }): React.JSX.Element | null {
+  const [cells, setCells] = useState<CellRow[] | null>(seed ?? null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!authed) return;
+    if (!authed || seed) return; // SSR-seeded → no refetch
     let live = true;
     mcpCall('read', 'cells.list')
       .then((r) => {
@@ -1560,6 +1642,7 @@ function CellsConsole({ authed }: { authed: boolean }): React.JSX.Element | null
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
   if (!authed || (cells !== null && cells.length === 0)) return null;
@@ -2229,6 +2312,8 @@ interface SectionCtx {
   session: Session & { signIn: () => void; signOut: () => void };
   authed: boolean;
   dash: DashboardData | null;
+  /** Server-seeded section data (authed SSR); sections trust it and skip the fetch. */
+  boot?: Boot;
 }
 
 function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.JSX.Element | null {
@@ -2236,11 +2321,11 @@ function SectionView({ s, ctx }: { s: LayoutSection; ctx: SectionCtx }): React.J
     case 'greeting': return <DashboardHeader session={ctx.session} />;
     case 'stats': return <StatCards data={ctx.dash} />;
     case 'capture': return <QuickCapture />;
-    case 'workspace': return <WorkspaceWindow authed={ctx.authed} />;
+    case 'workspace': return <WorkspaceWindow authed={ctx.authed} seed={ctx.boot?.workspace} />;
     case 'activity': return <RecentActivity data={ctx.dash} />;
     case 'identity': return <IdentityShell authed={ctx.authed} user={ctx.session.user} scopes={ctx.session.scopes} />;
-    case 'views': return <Views authed={ctx.authed} />;
-    case 'cells': return <CellsConsole authed={ctx.authed} />;
+    case 'views': return <Views authed={ctx.authed} seed={ctx.boot?.views} />;
+    case 'cells': return <CellsConsole authed={ctx.authed} seed={ctx.boot?.cells} />;
     case 'console': return <FieldComputer authed={ctx.authed} />;
     case 'view': return s.id ? <ViewSurface def={{ id: s.id }} /> : null;
     case 'fact': return s.key ? <PinnedFact factKey={s.key} /> : null;
@@ -2442,6 +2527,9 @@ function AddSection({ onAdd }: { onAdd: (s: LayoutSection) => void }): React.JSX
 }
 
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
+  // Install the SSR-seeded type vocabulary before any fact renders, so the viewer
+  // (render hints) and routing paint identically on server and first client render.
+  if (initial?.types) setTypeDecls(initial.types);
   const session = useAuth(initial?.session);
   const authed = !!session.user;
   const [dash, setDash] = useState<DashboardData | null>(initial?.dash ?? null);
@@ -2476,7 +2564,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const remove = (i: number): void => save(sections.filter((_s, k) => k !== i));
   const add = (s: LayoutSection): void => save([...sections, s]);
 
-  const ctx: SectionCtx = { session, authed, dash };
+  const ctx: SectionCtx = { session, authed, dash, boot: initial };
   const isCustom = (t: string): boolean => t === 'view' || t === 'fact' || t === 'query';
 
   return (
