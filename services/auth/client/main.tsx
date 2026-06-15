@@ -68,6 +68,7 @@ function App(): React.JSX.Element {
   const [signedInUser, setSignedInUser] = useState<string>('');
   const [grantable, setGrantable] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<Record<string, ScopeMeta>>({});
+  const [clientName, setClientName] = useState<string>('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const fail = useCallback((msg: string) => {
@@ -92,16 +93,22 @@ function App(): React.JSX.Element {
       if (!oauthMode || !p.redirect_uri) return fail('Missing OAuth parameters');
 
       // Fetch the scopes this user is allowed to grant, then show the picker.
-      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; error?: string }>('/auth/grantable', {
+      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; clientName?: string; error?: string }>('/auth/grantable', {
         sessionId,
+        clientId: p.client_id,
       });
       if (g.error || !g.scopes) return fail(g.error ?? 'Could not load scopes');
       setSignedInUser(g.username ?? '');
-      setGrantable(g.scopes);
       setCatalog(g.catalog ?? {});
-      const requested = new Set((p.scope ?? '').split(/\s+/).filter(Boolean));
-      // Pre-check the requested scopes the user can actually grant.
-      setSelected(new Set(g.scopes.filter((s) => requested.has(s))));
+      setClientName(g.clientName ?? '');
+      // Show only what the client actually REQUESTED (∩ what the user may grant) —
+      // don't prompt for permissions the client never asked for. Pre-checked; the
+      // user can deselect to grant a subset.
+      const requested = (p.scope ?? '').split(/\s+/).filter(Boolean);
+      const grant = new Set(g.scopes);
+      const shown = requested.length ? requested.filter((s) => grant.has(s)) : g.scopes;
+      setGrantable(shown);
+      setSelected(new Set(requested.length ? shown : []));
       (window as unknown as { __sessionId: string }).__sessionId = sessionId;
       setStep('consent');
     },
@@ -222,8 +229,8 @@ function App(): React.JSX.Element {
         {step === 'consent' ? (
           <div style={{ display: 'grid', gap: '0.75rem', marginTop: '0.5rem' }}>
             <p style={{ color: theme.dim, fontSize: '0.85rem', margin: 0 }}>
-              Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>. Choose the
-              permissions to grant <strong style={{ color: theme.text }}>{p.client_id}</strong>:
+              Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
+              <strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:
             </p>
             <div style={{ display: 'grid', gap: '0.9rem' }}>
               {VERB_GROUPS.map((g) => {

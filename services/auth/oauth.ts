@@ -231,14 +231,16 @@ export async function handleGrantableScopes(
   store: AuthStore,
   config: OAuthConfig,
 ): Promise<ServiceHttpResponse> {
-  const { sessionId } = req.json<{ sessionId: string }>();
+  const { sessionId, clientId } = req.json<{ sessionId: string; clientId?: string }>();
   const session = await store.validateSession(sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   const user = await store.getUserById(session.userId);
   const scopes = grantableScopes(config, user?.username ?? '');
   // Capability metadata so the consent screen can group + label scopes.
   const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
-  return ok({ username: user?.username ?? null, scopes, catalog });
+  // The client's human name (from DCR) so consent shows "parc.land", not a UUID.
+  const client = clientId ? await store.getOAuthClient(clientId) : null;
+  return ok({ username: user?.username ?? null, scopes, catalog, clientName: client?.clientName ?? null });
 }
 
 // ─── Token endpoint ──────────────────────────────────────────────
