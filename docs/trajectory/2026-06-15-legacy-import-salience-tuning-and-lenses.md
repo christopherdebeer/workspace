@@ -57,15 +57,35 @@ against live scores), so a single corpus pull sweeps every variant.
   the legacy salience *also* ranked most old entries deeply negative, so a large
   elided tail is consistent, not a regression.
 
+## Phase B — link graph imported (DONE, 2026-06-15)
+
+The Val Town SQLite tools (`sqlite_execute`/`sqlite_batch`) are approval-gated and
+the approval wasn't surfacing in the client; `create_file`/edits to an existing val
+and `delete_val` are gated too (a new val can't reach another val's per-val DB,
+where the legacy data lives). Resolution: the user exported a full `workspacedump.sql`.
+Parsed it → **864 links**, kept the **515** whose both endpoints are in the imported
+316 (the 349 dropped point at runs/superseded, which weren't imported, so they'd
+dangle). Imported via `workspace.link` (writes are ownership-gated, so the read-scoped
+token worked); 0 errors.
+
+Result: **centrality is live** — 306/316 knowledge facts connected (median degree 2).
+Re-measured under the current default (recency .35 / velocity .10 / attention .15 /
+standing .30 / centrality .10): KB = **3 focus / 302 peripheral / 11 elided** — earned
+*and* connected knowledge stays visible, only the genuinely cold tail elides. A
+`centralityWeight` bump is marginal (std +0.015), so **no further re-tune** — the
+`sw .30` re-tune + now-live centrality is well-calibrated.
+
 ## Outstanding
 
-1. **Phase B — import the legacy link graph (860 edges).** Needs `SELECT * FROM
-   links` (the SQLite path, which requires interactive approval — blocked while AFK)
-   → bulk `ingest {edges}`. Until then imported facts have `centrality 0`, so the
-   structural salience signal is dark for `kb/*` and earned-but-unread knowledge
-   leans entirely on `standing`. **Do this first when back.**
-2. **Final re-tune after edges land** — centrality will rescue connected knowledge;
-   re-measure the joint corpus and likely nudge `centralityWeight` up.
+1. **Edge fidelity gaps (minor):** 349 legacy links to runs/superseded were dropped
+   (those entries weren't imported by design). Superseded entries (129) and runs (82)
+   remain un-imported — exhaust/history, deliberately skipped.
+2. **`ingest` perf** — per-fact `put→wrap` full-scans the trajectory; batch>~15
+   times out at the edge. Score lazily on write, or scope the scan, before large imports.
+3. **Approval surfacing** — the Val Town SQLite/edit/delete tools' approval prompts
+   never reached the client; worth fixing so direct SQL is available next time.
+4. **Temp val cleanup** — `c15r/links-export-tmp` (empty, created during the failed
+   per-val-DB attempt) couldn't be deleted (delete_val gated); remove it manually.
 3. **Weave pass** (the tending protocol's Phase 3) — deferred: high-confidence links
    need either the legacy graph (Phase B) or author judgement, not blind guesses.
 4. **`ingest` perf** — per-fact `put→wrap` full-scans the trajectory; batch>~15
