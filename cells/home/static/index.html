@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>parc.land</title>
+  <style>
+    body { margin: 0; background: #f3edde; }
+    .boot { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem; color: #85795f; font: 16px/1.6 system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="app"><p class="boot">loading…</p></div>
+  <div id="err-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#7a1f1f;color:#fff;font:12px/1.4 monospace;padding:6px 10px;z-index:9999;white-space:pre-wrap;"></div>
+  <script>
+    setTimeout(function () {
+      var b = document.querySelector('#app .boot');
+      if (!b) return;
+      var eb = document.getElementById('err-banner');
+      eb.style.display = 'block';
+      eb.textContent = 'app.js never executed — the module failed to load (path/MIME/network); check the network tab.';
+    }, 12000);
+    window.addEventListener('error', function (e) {
+      var b = document.getElementById('err-banner');
+      b.style.display = 'block';
+      b.textContent = 'error: ' + (e.message || e.type) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var b = document.getElementById('err-banner');
+      b.style.display = 'block';
+      b.textContent = 'rejection: ' + (e.reason && (e.reason.message || String(e.reason)));
+    });
+  </script>
+  <script type="module" src="/@c15r/home/app.js"></script>
+</body>
+</html>

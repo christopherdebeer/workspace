@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 
 const SRC = 'platform/ui/index.tsx';
 // Cells that bundle platform/ui as source. Add a cell's `shared/ui.tsx` here.
-const TARGETS = ['cells/starter/shared/ui.tsx'];
+const TARGETS = ['cells/starter/shared/ui.tsx', 'cells/home/shared/ui.tsx'];
 
 const header =
   `/* GENERATED — synced from ${SRC} by scripts/sync-platform-ui.mjs.\n` +
