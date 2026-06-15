@@ -308,10 +308,15 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
     attentionSaturation: o?.attentionSaturation ?? 5,
     standingSaturation: o?.standingSaturation ?? 20,
     centralitySaturation: o?.centralitySaturation ?? 5,
-    recencyWeight: o?.recencyWeight ?? 0.45,
+    // Re-tuned against the warm imported corpus (2026-06-15): at sw .20 the
+    // default elided ~95 earned (multi-read) knowledge entries once they aged;
+    // sw .30 / rw .35 keeps all standing≥0.3 knowledge above elision while still
+    // budgeting away the read-once tail, and leaves fresh native work visible
+    // (recency still leads for recent facts). See the trajectory doc.
+    recencyWeight: o?.recencyWeight ?? 0.35,
     velocityWeight: o?.velocityWeight ?? 0.1,
     attentionWeight: o?.attentionWeight ?? 0.15,
-    standingWeight: o?.standingWeight ?? 0.2,
+    standingWeight: o?.standingWeight ?? 0.3,
     centralityWeight: o?.centralityWeight ?? 0.1,
     focusThreshold: o?.focusThreshold ?? 0.5,
     elideThreshold: o?.elideThreshold ?? 0.1,
