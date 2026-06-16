@@ -183,11 +183,19 @@ describe('workspace sharing / view layer', () => {
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
       ].sort(),
     );
-    // Per-slice ops gate on ownership, not scopes — so the gateway advertises them
-    // to any authenticated principal. The one exception is tend: distilling a
-    // slice into audit facts is an operator action, gated on workspace:admin.
-    expect(tools.every((t) => t.scope === null || t.name === 'tend')).toBe(true);
+    // Per-slice ops gate on ownership AND a verb scope derived from kind, so a
+    // token's read/write consent is enforced (reads → read:workspace, acts →
+    // write:workspace). tend stays the operator-only workspace:admin override.
+    expect(
+      tools.every((t) =>
+        t.name === 'tend'
+          ? t.scope === 'workspace:admin'
+          : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+      ),
+    ).toBe(true);
     expect(tools.find((t) => t.name === 'tend')!.scope).toBe('workspace:admin');
+    expect(tools.find((t) => t.name === 'recall')!.scope).toBe('read:workspace');
+    expect(tools.find((t) => t.name === 'remember')!.scope).toBe('write:workspace');
     // Every tool ships a JSON Schema the gateway can surface to clients.
     expect(tools.every((t) => (t.inputSchema as { type?: string }).type === 'object')).toBe(true);
     const remember = tools.find((t) => t.name === 'remember')!;

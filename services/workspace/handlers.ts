@@ -401,9 +401,12 @@ const EDGE_SCHEMA = {
 
 /**
  * The workspace vocabulary as MCP tool descriptors. Every command operates on the
- * caller's own slice (or subsets explicitly granted to them), so ownership — not a
- * scope — is the gate: `scope: null` means any authenticated principal, isolated to
- * their own data, exactly as forge treats its per-owner commands.
+ * caller's own slice (or subsets explicitly granted to them) — ownership/slice
+ * isolation is the primary boundary. On top of that, `describeTools` derives a
+ * verb scope from `kind` (reads → `read:workspace`, acts → `write:workspace`) so
+ * a token's read/write consent is actually enforced; `scope: null` here means
+ * "no explicit scope — gate by verb". An explicit scope (e.g. `workspace:admin`)
+ * overrides the verb default.
  */
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
@@ -1607,8 +1610,18 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     },
 
     // How the `/mcp` gateway discovers this cell's tools (mirrors forge.describeTools).
+    // Verb scopes (docs/capability-consent.md): a tool with no explicit scope is
+    // gated by its kind — reads require `read:workspace`, acts `write:workspace` —
+    // so consent means what it says (a read-only token can't write). Slice
+    // isolation still applies in each handler; this adds the verb gate on top.
+    // Legacy coarse tokens satisfy these via impliesScope (workspace:read ⊇
+    // read:*, workspace:write ⊇ write:*), so nothing that worked breaks.
     async describeTools() {
-      return { tools: TOOL_DESCRIPTORS };
+      const tools = TOOL_DESCRIPTORS.map((t) => ({
+        ...t,
+        scope: t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+      }));
+      return { tools };
     },
   };
 }
