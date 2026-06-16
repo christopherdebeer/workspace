@@ -15,6 +15,8 @@ import type { FunctionUrlEvent, FunctionUrlResponse } from '../platform/runtime'
 interface ValidatedToken {
   userId: string;
   scope: string;
+  effectiveScope?: string | null;
+  tokenId?: string;
   clientId: string | null;
 }
 
@@ -117,6 +119,9 @@ describe('resource cell (MCP gateway, read/act)', () => {
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
+      // A session whose grant includes cell creation but whose effective focus has
+      // been narrowed to nothing (incremental authorization).
+      reduced: { userId: 'carol', scope: 'platform:cells:create', effectiveScope: '', tokenId: 't1', clientId: null },
     });
   });
   afterEach(() => {
@@ -258,6 +263,24 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(lastCall).toBeUndefined(); // never forwarded
   });
 
+  it('incremental auth: within-grant-but-out-of-focus → scope_offer (self-serve widen); out-of-grant → scope_denied', async () => {
+    // `reduced` has platform:cells:create in its GRANT but its session focus is
+    // empty — so the gateway offers a self-serve widen rather than a hard denial.
+    const offer = await callTool('reduced', 'act', { target: 'cells.create', input: { name: 'n', code: 'c' } });
+    expect(offer.isError).toBe(true);
+    expect(offer.text).toMatch(/scope_offer/);
+    expect(offer.text).toMatch(/auth\.requestScope/);
+    expect(lastCall).toBeUndefined(); // not forwarded until widened
+
+    // `plain` lacks the scope in its grant entirely → hard scope_denied (re-consent).
+    const denied = await callTool('plain', 'act', { target: 'cells.create', input: { name: 'n', code: 'c' } });
+    expect(denied.text).toMatch(/scope_denied/);
+
+    // whoami reflects the split: effective focus is empty, grant still carries it.
+    const who = await callTool('reduced', 'whoami', {});
+    expect(who.parsed).toEqual({ user: 'carol', scopes: [], grant: ['platform:cells:create'] });
+  });
+
   it('refuses to cross the read/act boundary', async () => {
     const readAct = await callTool('creator', 'read', { target: 'workspace.remember' });
     expect(readAct.isError).toBe(true);
@@ -291,7 +314,8 @@ describe('resource cell (MCP gateway, read/act)', () => {
 
   it('whoami returns the identity (built-in tool)', async () => {
     const res = await callTool('creator', 'whoami', {});
-    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
+    // grant == scopes until a session narrows its effective focus (incremental auth).
+    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'] });
   });
 
   it('resolves identity from x-forwarded-authorization (edge preserves bearer past OAC)', async () => {
@@ -302,7 +326,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
       }),
     )) as FunctionUrlResponse;
     const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
-    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'] });
+    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'] });
   });
 
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {

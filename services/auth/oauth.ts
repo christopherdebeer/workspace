@@ -445,7 +445,12 @@ export async function handleDeviceApprove(req: ServiceHttpRequest, store: AuthSt
 
 export interface ValidatedToken {
   userId: string;
+  /** The token's granted scope (the ceiling). */
   scope: string;
+  /** The session's effective scope (≤ grant); null ⇒ the full grant is effective. */
+  effectiveScope: string | null;
+  /** The token id — the handle a session uses to mutate its own effective scope. */
+  tokenId: string;
   clientId: string | null;
 }
 
@@ -458,5 +463,11 @@ export async function validateBearer(token: string, store: AuthStore): Promise<V
   // credentials + token management; resolve it to the handle here. Falls back to
   // `mintedBy` when the account can't be resolved (e.g. a token minted by handle).
   const account = await store.getUserById(tok.mintedBy);
-  return { userId: account?.username ?? tok.mintedBy, scope: tok.scope, clientId: tok.clientId };
+  return {
+    userId: account?.username ?? tok.mintedBy,
+    scope: tok.scope,
+    effectiveScope: tok.effectiveScope ?? null,
+    tokenId: tok.id,
+    clientId: tok.clientId,
+  };
 }

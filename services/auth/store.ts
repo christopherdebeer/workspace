@@ -115,6 +115,9 @@ export interface TokenInfo {
   id: string;
   mintedBy: string;
   scope: string;
+  /** The session's effective scope (≤ `scope`); null ⇒ the full grant is effective.
+   *  Mutable via `setEffectiveScope` — incremental authorization. */
+  effectiveScope?: string | null;
   label: string | null;
   clientId: string | null;
   expiresAt: string | null;
@@ -201,6 +204,13 @@ export interface AuthStore {
   // tokens
   mintToken(params: MintTokenParams): Promise<MintedToken>;
   validateTokenByHash(hash: string): Promise<TokenInfo | null>;
+  /**
+   * Set (or clear, with null) a token's effective scope — the session's mutable
+   * focus within its grant ceiling (incremental authorization,
+   * docs/capability-consent.md). Keyed by the owner's account id so a session can
+   * only narrow/widen its own token. Returns false when no such token exists.
+   */
+  setEffectiveScope(tokenId: string, userId: string, effectiveScope: string | null): Promise<boolean>;
   refreshUnifiedToken(
     oldRefreshHash: string,
     newExpiresInSec?: number,

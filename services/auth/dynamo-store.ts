@@ -284,11 +284,28 @@ export function createDynamoStore(tableName: string): AuthStore {
         id: i.id,
         mintedBy: i.mintedBy,
         scope: i.scope,
+        effectiveScope: i.effectiveScope ?? null,
         label: i.label ?? null,
         clientId: i.clientId ?? null,
         expiresAt: i.expiresAt ?? null,
         createdAt: i.createdAt,
       };
+    },
+    async setEffectiveScope(tokenId, userId, effectiveScope): Promise<boolean> {
+      // The USERTOK index row carries the token's hash; the authoritative state
+      // lives on the TOKEN# row that validateTokenByHash reads.
+      const idx = await get(`USERTOK#${userId}`, tokenId);
+      if (!idx) return false;
+      await db
+        .update({
+          TableName: tableName,
+          Key: { pk: `TOKEN#${idx.tokenHash}`, sk: SK },
+          ...(effectiveScope === null
+            ? { UpdateExpression: 'REMOVE effectiveScope' }
+            : { UpdateExpression: 'SET effectiveScope = :e', ExpressionAttributeValues: { ':e': effectiveScope } }),
+        })
+        .promise();
+      return true;
     },
     async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600, newRefreshExpiresInSec): Promise<RefreshResult | null> {
       // Validate the REFRESH row on its OWN terms — an expired access token is

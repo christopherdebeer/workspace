@@ -54,7 +54,12 @@ const ANONYMOUS: Identity = { user: undefined, scopes: [] };
 /** Shape returned by the auth cell's `validateToken` command. */
 interface ValidatedToken {
   userId: string;
+  /** The token's granted scope (the ceiling). */
   scope: string;
+  /** The session's effective scope (≤ grant); absent ⇒ equals the grant. */
+  effectiveScope?: string | null;
+  /** The token id, so the session can mutate its own effective scope. */
+  tokenId?: string;
   clientId: string | null;
 }
 
@@ -128,9 +133,19 @@ async function resolveHttpIdentity(
       console.warn('[auth] bearer present but rejected by validateToken', { service: serviceName });
       return ANONYMOUS;
     }
+    const grant = validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [];
+    // Effective scope is what's enforced now; it defaults to the full grant but a
+    // session may have narrowed it (incremental authorization). The grant stays the
+    // ceiling so a denial within it is a self-serve widen, not a re-consent.
+    const effective =
+      validated.effectiveScope != null
+        ? validated.effectiveScope.split(/[\s,]+/).filter(Boolean)
+        : grant;
     return {
       user: validated.userId,
-      scopes: validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [],
+      scopes: effective,
+      grantScopes: grant,
+      ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
     };
   } catch (err) {
     // A validation failure (revoked/expired/unknown token, or auth unavailable)
@@ -179,6 +194,8 @@ export function defineService(definition: ServiceDefinition) {
       correlationId: opts.correlationId,
       user: opts.identity.user,
       scopes: opts.identity.scopes.length ? opts.identity.scopes : undefined,
+      grantScopes: opts.identity.grantScopes?.length ? opts.identity.grantScopes : undefined,
+      tokenId: opts.identity.tokenId,
     });
     return {
       logger,
@@ -234,7 +251,12 @@ export function defineService(definition: ServiceDefinition) {
       const ctx = buildContext({
         correlationId,
         traceId: correlationId,
-        identity: { user: event.user, scopes: event.scopes ?? [] },
+        identity: {
+          user: event.user,
+          scopes: event.scopes ?? [],
+          ...(event.grantScopes ? { grantScopes: event.grantScopes } : {}),
+          ...(event.tokenId ? { tokenId: event.tokenId } : {}),
+        },
       });
       try {
         const result = await runCommand(event.__command, event.payload, ctx);

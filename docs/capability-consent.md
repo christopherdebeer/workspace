@@ -19,7 +19,7 @@
 | 2e | Mint-path back-compat + client migration | ✅ shipped | `intersectScopes` honours `impliesScope`; `services/home` requests granular; consent SPA de-dupes aliases |
 | 5 | Consent-time grant lifetime | ✅ shipped | consent picker narrows the grant horizon (refresh TTL, or access on non-expiring), clamped to the server ceiling |
 | 6 | Third-party-cell author disclosure | ✅ shipped | `describeCellTools` discloses author + declared reads + write-back to non-owner callers; surfaced through the gateway catalog |
-| 3 | Incremental authorization | ⏳ outstanding | server-requested mid-session scope upgrades |
+| 3 | Incremental authorization | ✅ shipped | mutable **effective scope** ≤ grant ceiling; `auth.scope`/`focusScope`/`requestScope`; gateway raises `scope_offer` (self-serve widen) vs `scope_denied` (re-consent) |
 | 4 | Write-time delegation | ⏳ outstanding | cells acting on caller's behalf, bounded to caller's granted writes |
 
 Verified live (deploy #194): read-only token → workspace write returns
@@ -29,7 +29,8 @@ granular vocabulary. The in-repo browser client now requests the granular vocabu
 and the mint path (`intersectScopes`) is back-compat-hardened to match enforcement
 (see "Clients migrated" below). The consent screen now also lets the user pick a
 grant lifetime, and third-party-cell tools disclose their author + declared reads.
-231 tests pass.
+Incremental authorization (Phase 3) is shipped: a session's effective scope is a
+mutable subset of its grant. 235 tests pass.
 
 ## What actually shipped vs. the original design
 
@@ -158,11 +159,46 @@ notice (writing to your own cell's slice is writing to yourself). A consent/gran
 
 ## Outstanding work
 
-### Phase 3 — Incremental authorization
-Server-requested scope upgrades mid-session (`scope_request`/`offer`/`reduced`),
-per sync `agency-and-identity.md` Appendix A: effective scope mutable
-server-side, the OAuth grant remaining the ceiling. Lets a session start minimal
-and widen on demand instead of front-loading consent.
+### Phase 3 — Incremental authorization (✅ shipped)
+
+"Scope is the ceiling (OAuth, at consent); focus is the arbiter (runtime)" made
+real. A token's **grant** is the immutable ceiling; the session's **effective
+scope** is a mutable subset of it, so a session can start minimal and widen on
+demand — no re-consent, no new token.
+
+**Data:** a token row carries `effectiveScope` (null ⇒ the full grant is active),
+mutated by `setEffectiveScope(tokenId, userId, scope)` — keyed by the owner's
+account id, so a session only ever mutates its own token (`services/auth/{store,
+memory-store,dynamo-store}.ts`). `validateBearer` now returns `{ scope (grant),
+effectiveScope, tokenId, … }`.
+
+**Identity:** `Identity` gained `grantScopes` (the ceiling) and `tokenId`;
+`scopes` is the effective set that `hasScope`/enforcement reads. Both propagate on
+the Mode-1 command envelope (`service-client.ts`) so the auth cell, reached via the
+gateway, sees the caller's ceiling + token id. `grantScopesOf`/`hasGrantScope`
+(`platform/runtime/auth.ts`) read the ceiling; absent `grantScopes` ⇒ equals
+`scopes` (back-compat — nothing changes until a session narrows).
+
+**Protocol (the three terms):**
+- `auth.scope` (read) → `{ effective, grant }`.
+- `auth.focusScope` (act) → narrow to a minimal subset (`reduced`).
+- `auth.requestScope` (act) → widen toward requested, clamped to the ceiling
+  (`scope_request`); scopes outside the grant come back in `denied`.
+- The gateway's `enforceScope` raises **`scope_offer`** (the `offer`) when a
+  capability needs a scope within the grant but not the current focus — pointing
+  at `auth.requestScope`, a self-serve widen — vs **`scope_denied`** when it's
+  outside the grant entirely (the human re-consent / `auth.mintToken` path).
+
+**Default is opt-in:** new tokens start with effective == grant (so behaviour is
+unchanged), and a cautious client/agent calls `focusScope` at session start to
+shrink blast radius, widening only when a `scope_offer` says it's within reach.
+**Note:** a refresh mints a fresh access token whose effective resets to the grant
+(re-narrow after refresh) — acceptable for now; a future refinement could carry
+the focus across rotation.
+
+Tests: `tests/auth-incremental.test.ts` (end-to-end through the auth handler),
+`tests/auth-oauth.test.ts` (store: effective scope + token id),
+`tests/resource-cell.test.ts` (gateway `scope_offer` vs `scope_denied`).
 
 ### Phase 4 — Write-time delegation
 The write counterpart of the SSR read-proxy: when a cell acts on the caller's

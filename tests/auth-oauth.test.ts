@@ -104,6 +104,25 @@ describe('auth store (in-memory)', () => {
     expect(await store.validateTokenByHash(sha256(refreshed!.token))).toMatchObject({ scope: 's' });
   });
 
+  it('exposes effective scope + token id, and reflects a server-side narrowing (incremental auth)', async () => {
+    const store = createMemoryStore();
+    await store.createUser('uuid-1', 'alice');
+    const minted = await store.mintToken({ userId: 'uuid-1', scope: 'workspace:read workspace:write' });
+
+    // Fresh token: effective == grant (null sentinel), and the id is exposed.
+    const v1 = await validateBearer(minted.token, store);
+    expect(v1).toMatchObject({ userId: 'alice', scope: 'workspace:read workspace:write', effectiveScope: null, tokenId: minted.id });
+
+    // Narrow the session's effective focus to a subset of the grant.
+    expect(await store.setEffectiveScope(minted.id, 'uuid-1', 'workspace:read')).toBe(true);
+    const v2 = await validateBearer(minted.token, store);
+    expect(v2!.effectiveScope).toBe('workspace:read');
+    expect(v2!.scope).toBe('workspace:read workspace:write'); // grant (ceiling) is unchanged
+
+    // Only the token's own account may mutate it.
+    expect(await store.setEffectiveScope(minted.id, 'someone-else', '')).toBe(false);
+  });
+
   it('enforces single-use auth codes', async () => {
     const store = createMemoryStore();
     await store.saveAuthCode({

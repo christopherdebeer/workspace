@@ -36,6 +36,7 @@ interface TokenRow {
   refreshHash: string | null;
   mintedBy: string;
   scope: string;
+  effectiveScope?: string | null;
   label: string | null;
   clientId: string | null;
   revoked: boolean;
@@ -209,11 +210,21 @@ export function createMemoryStore(): AuthStore {
         id: t.id,
         mintedBy: t.mintedBy,
         scope: t.scope,
+        effectiveScope: t.effectiveScope ?? null,
         label: t.label,
         clientId: t.clientId,
         expiresAt: t.expiresAt,
         createdAt: t.createdAt,
       };
+    },
+    async setEffectiveScope(tokenId, userId, effectiveScope): Promise<boolean> {
+      for (const t of tokens.values()) {
+        if (t.id === tokenId && t.mintedBy === userId) {
+          t.effectiveScope = effectiveScope;
+          return true;
+        }
+      }
+      return false;
     },
     async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600, newRefreshExpiresInSec): Promise<RefreshResult | null> {
       // Validate the refresh row on its own (longer) expiry — not the access
