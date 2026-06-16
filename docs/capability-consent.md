@@ -22,7 +22,9 @@
 Verified live (deploy #194): read-only token → workspace write returns
 `scope_denied: requires write:workspace`; read+write token writes fine
 (coarse `workspace:write` satisfies `write:workspace`); AS metadata advertises the
-granular vocabulary. 224 tests pass.
+granular vocabulary. The in-repo browser client now requests the granular vocabulary
+and the mint path (`intersectScopes`) is back-compat-hardened to match enforcement
+(see "Clients migrated" below). 226 tests pass.
 
 ## What actually shipped vs. the original design
 
@@ -43,6 +45,43 @@ remain gated by **ownership + per-cell grants** (`workspace.requestGrant`/
 `approveGrant`), not OAuth scopes. That granularity is available later if needed
 but was not required to close the consent-integrity gap (a "read-only" token
 that could still write).
+
+### Why OAuth scopes are coarse — and where the fine-grained surface actually lives
+
+A fair question: a cell often only needs to write *one type* (`note`) or *one
+prefix* (`inbox/*`), so why does consent grant blanket `write:workspace`?
+
+Because there are **two distinct authority layers**, and per-type/per-prefix
+bounding belongs to the lower one:
+
+1. **The OAuth scope** is the *consent ceiling for a client acting AS the human,
+   inside the human's own slice.* Within your own slice the consequential axis is
+   read-vs-write (the Σ-calculus monotonicity asymmetry — reads are disclosure,
+   writes are the risk). Splitting *your own* writes into `write:type:note` vs
+   `write:type:todo` spends consent-UI budget on a distinction that doesn't change
+   the trust relationship (it's still you writing your slice), and it would bake a
+   fact-type taxonomy into the AS metadata / token grammar — static, redeploy to
+   change. So the OAuth layer deliberately stays coarse: read / write / create.
+
+2. **The substrate grant grammar** (`docs/scope-grants.md`) is where fine-grained,
+   prefix- and type-bounded capability already exists — for the cases that
+   actually need it: **one principal acting on *another's* slice, or a cell acting
+   under a bounded delegation.** Grants are addressed as
+   `workspace:<owner>:<keyPrefix|*>:<read|write>` and `cell:<owner>/<name>:<tool>`,
+   are *data* (requestable at runtime via `workspace.requestGrant` /
+   `approveGrant`, not baked into a scope vocabulary), and are enforced by
+   `requireWriteThrough` → `grantCovers(g.key, key)` — a write-through to
+   `alice`'s `inbox/*` requires exactly a `write` grant whose key pattern covers
+   `inbox/*`, nothing wider. That is precisely the "only write a specific prefix"
+   bound, living one layer down from OAuth.
+
+So a cell that should only touch `note` facts or `inbox/*` is expressed as a
+**bounded grant**, not a bespoke OAuth scope. The granular OAuth strings the
+original design sketched (`write:type:note`, `read:@c15r/lit`) remain available as
+a future *refinement of the ceiling* if a real consent-time need appears, but the
+prefix/type precision the question asks for is already achievable today through the
+grant grammar — and it's where Phase 4 (write-time delegation) will bind a cell's
+writes to `scope(caller, write)` rather than letting it write the whole slice.
 
 **Enforcement point:** the `/mcp` gateway (`enforceScope`/`hasScope`) for external
 callers. Internal Mode-1 `serviceClient` calls bypass scope checks (trusted,
@@ -85,11 +124,25 @@ behalf, it should exercise only the caller's **granted write** capabilities —
 delegated (the SSR-proxy); writes from cells go through the substrate-write event
 path, not a scoped delegation.
 
-### Optional — migrate clients to request granular
-`services/home/client/auth.ts` `DEFAULT_SCOPE` still requests the coarse buckets
-(`workspace:read workspace:write platform:cells:create`); these work via
-`impliesScope`. New browser tokens could request `read:workspace write:workspace`
-to be precise. Low priority — back-compat already covers it.
+### ✅ Clients migrated to request granular (+ mint-path back-compat hardened)
+`services/home/client/auth.ts` `DEFAULT_SCOPE` now requests the granular
+vocabulary (`read:workspace write:workspace cells:create`); legacy already-minted
+coarse tokens still work via `impliesScope`. (The ported `cells/home` client signs
+in through the `c15r/kernel` `login`, so its scope is the kernel's to set, not this
+repo's.)
+
+Making this safe required closing a back-compat asymmetry the original note missed:
+the coarse⊇granular table lived **only** in `impliesScope`/`hasScope` (the
+*enforcement* path), not in `intersectScopes`/`cellCeiling` (the *mint* path in
+`services/auth/oauth.ts`). `intersectScopePatterns('read:workspace','workspace:read')`
+is structurally `null` (disjoint grammars), so a cell-host (model-A) redirect that
+requested granular scopes would have intersected against the coarse `cellCeiling`
+to an **empty** scope — silently locking the token out. `intersectScopes` now falls
+back to `impliesScope` across the two grammars and keeps the **narrower** (granular)
+side, so the mint path agrees with enforcement (`tests/scope-grammar.test.ts`).
+The consent SPA also de-duplicates coarse/granular aliases that render identically
+(both families stay grantable for legacy requests; the picker shows each permission
+once, preferring the granular form).
 
 ---
 

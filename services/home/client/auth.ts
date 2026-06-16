@@ -19,8 +19,14 @@ const CLIENT_KEY = 'parc.client_id';
 const PKCE_KEY = 'parc.pkce_verifier';
 const STATE_KEY = 'parc.oauth_state';
 
-/** Scopes the web app asks for; the consent picker shows only what the user may grant. */
-export const DEFAULT_SCOPE = 'workspace:read workspace:write platform:cells:create';
+/**
+ * Scopes the web app asks for; the consent picker shows only what the user may grant.
+ * Granular vocabulary (docs/capability-consent.md) — `read:workspace`/`write:workspace`
+ * are the precise forms the gateway enforces. Legacy coarse tokens still work via
+ * `impliesScope`; new sign-ins are precise. `cells:create` stays admin-gated, so a
+ * non-admin user simply doesn't see it (it's filtered from grantable).
+ */
+export const DEFAULT_SCOPE = 'read:workspace write:workspace cells:create';
 
 interface Tokens {
   access_token: string;

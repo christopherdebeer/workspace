@@ -123,7 +123,19 @@ export function intersectScopes(a: string[], b: string[]): string[] {
   for (const sa of a) {
     for (const sb of b) {
       const meet = intersectScopePatterns(sa, sb);
-      if (meet !== null) out.add(meet);
+      if (meet !== null) {
+        out.add(meet);
+        continue;
+      }
+      // Structurally disjoint, but the coarse⊇granular back-compat (`impliesScope`)
+      // crosses the two grammars: a coarse ceiling (`workspace:write`) covers a
+      // granular request (`write:workspace`). The meet is then the NARROWER
+      // (granular) of the two — so a cell ceiling cannot zero out a token that
+      // legitimately asked for granular scopes. Mirrors `hasScope`, which already
+      // honours `impliesScope` on the enforcement side; without it here the mint
+      // path would silently drop migrated scopes (docs/capability-consent.md).
+      if (impliesScope(sa, sb)) out.add(sb);
+      else if (impliesScope(sb, sa)) out.add(sa);
     }
   }
   return [...out];

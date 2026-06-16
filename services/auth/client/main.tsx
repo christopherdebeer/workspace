@@ -45,6 +45,31 @@ function params(): Params {
   return Object.fromEntries(new URLSearchParams(location.search)) as Params;
 }
 
+/** Is this a granular (verb-first) scope, vs. a legacy coarse bucket? */
+function isGranular(scope: string): boolean {
+  return /^(read|write|act):/.test(scope) || scope === 'cells:create';
+}
+
+/**
+ * Collapse coarse/granular aliases that render identically (same verb + title) —
+ * e.g. `workspace:read` and `read:workspace` both read "Read your workspace".
+ * Both stay *grantable* (legacy clients still request the coarse form), but the
+ * picker should never show the same permission twice; we keep the granular alias.
+ * Only the no-scope fallback surfaces aliases; an explicit request is already a
+ * single vocabulary, so this is a no-op there.
+ */
+function dedupeAliases(scopes: string[], catalog: Record<string, ScopeMeta>): string[] {
+  const chosen = new Map<string, string>(); // verb+title -> preferred scope
+  for (const s of scopes) {
+    const m = catalog[s];
+    const key = m ? `${m.verb}::${m.title}` : s;
+    const cur = chosen.get(key);
+    if (!cur || (isGranular(s) && !isGranular(cur))) chosen.set(key, s);
+  }
+  const keep = new Set(chosen.values());
+  return scopes.filter((s) => keep.has(s));
+}
+
 async function postJson<T = Record<string, unknown>>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: 'POST',
@@ -106,7 +131,7 @@ function App(): React.JSX.Element {
       // user can deselect to grant a subset.
       const requested = (p.scope ?? '').split(/\s+/).filter(Boolean);
       const grant = new Set(g.scopes);
-      const shown = requested.length ? requested.filter((s) => grant.has(s)) : g.scopes;
+      const shown = dedupeAliases(requested.length ? requested.filter((s) => grant.has(s)) : g.scopes, g.catalog ?? {});
       setGrantable(shown);
       setSelected(new Set(requested.length ? shown : []));
       (window as unknown as { __sessionId: string }).__sessionId = sessionId;
