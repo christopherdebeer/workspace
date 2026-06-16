@@ -138,14 +138,24 @@ Code: `ConsentBody.expiresInSec` + `clampGrant`/`grantCeilingSecs` in
 ## Third-party-cell author disclosure (✅ shipped)
 
 The honest answer to "a cell writes data to another location — exfiltration?".
-A cell **receives no token** when invoked (only an `x-cell-caller` header); it
-writes back exclusively through the **organ path** (`substrate.write.requested`,
-IAM-pinned `events:source = cell-<id>`), which lands in the cell **owner's**
-(= author's) slice — never the caller's, never a third party's
-(`createSubstrateWriteHandler`). The exfiltration shape is therefore: *user B
-invokes author A's cell; dispatch runs A's declared SSR reads **as B** and hands
-the results to A's code, which can persist them into **A's** slice.* Gated (B must
-be owner/granted, or it's an anonymous public GET) but previously **undisclosed**.
+A cell **receives no token** when invoked (only an `x-cell-caller` header). It has
+two write paths, both server-mediated:
+
+1. **Organ path** (`substrate.write.requested`, IAM-pinned `events:source =
+   cell-<id>`) → lands in the cell **owner's** (= author's) slice only
+   (`createSubstrateWriteHandler`); a cell's own accumulation (e.g. reef-writer).
+2. **Caller-write delegation** (Phase 4, below) → the cell may *request* writes
+   into the **caller's** slice via the `x-parc-writes` header, but dispatch
+   applies them as the caller, bounded by `scope(caller, write)` + the cell's
+   declared manifest + reserved-namespace refusal. So a cell can never write
+   beyond the caller's own authority, and only under prefixes it declared.
+
+The exfiltration shape is therefore: *user B invokes author A's cell; dispatch
+runs A's declared SSR reads **as B** and hands the results to A's code, which can
+persist them into **A's** slice (organ path) — and, if A declared caller-writes
+and B holds write scope, into **B's own** slice under the declared prefixes.*
+Gated (B must be owner/granted, or it's an anonymous public GET) and disclosed via
+the `disclosure { author, reads, writes, note }` block on `describeCellTools`.
 
 This is **not** an OAuth-consent concern (that governs a client acting as *you*,
 in *your* slice); it's a third-party-app trust decision. So the disclosure rides
@@ -200,12 +210,40 @@ Tests: `tests/auth-incremental.test.ts` (end-to-end through the auth handler),
 `tests/auth-oauth.test.ts` (store: effective scope + token id),
 `tests/resource-cell.test.ts` (gateway `scope_offer` vs `scope_denied`).
 
-### Phase 4 — Write-time delegation
-The write counterpart of the SSR read-proxy: when a cell acts on the caller's
-behalf, it should exercise only the caller's **granted write** capabilities —
-`scope(caller, write)` enforced at the act boundary. Today only reads are
-delegated (the SSR-proxy); writes from cells go through the substrate-write event
-path, not a scoped delegation.
+### Phase 4 — Write-time delegation (✅ shipped, v1)
+
+The write counterpart of the SSR read-proxy. A cell may ask dispatch to persist
+facts into the **caller's** slice by returning an `x-parc-writes` response header
+(JSON `[{ key, value, type?, tags?, via? }]`); dispatch applies them **as the
+caller** via `workspace.remember` and strips the header. The cell never receives
+a token — it expresses *intent*; the platform decides whether the caller is
+allowed. Three guards, all enforced in dispatch (`applyCallerWrites`) — and this
+is genuinely the `scope(caller, write)` **act boundary**, because Mode-1
+`serviceClient` bypasses the gateway PEP, so the proxy must gate it itself:
+
+1. **`scope(caller, write)`** — the caller must hold `write:workspace`
+   (`hasScope`, satisfied by coarse `workspace:write`/`admin`/`platform:*` too).
+   A read-only caller's whole batch is denied (`x-parc-writes-denied: scope`).
+2. **Declared manifest** — each write must fall under a `keyPrefix` the cell
+   declared in `ssr.json` `writes: [{ keyPrefix, types? }]` (stored as
+   `CellRecord.callerWrites`, fetched via `cells.callerWritesFor`), and match its
+   optional `types` bound. Undeclared ⇒ refused. Empty manifest ⇒ writes nothing.
+3. **Reserved namespaces always refused** (`_actions/ _views/ _grants/ _groups/
+   _public/`) — a cell may not register the caller's vocabulary or rewrite its
+   authority — and the batch is capped (16).
+
+Provenance stamps the **caller** as `writer` (`via` defaults to `@owner/name`),
+so the write is attributable and supersede-able. v1 targets the **caller's own
+slice** only (no `owner` override) — cross-slice cell write-through (a cell using
+the caller's *grants* on another's slice) is a natural extension that drops
+through `requireWriteThrough` when wanted. Anonymous callers never write (the
+header is stripped). Disclosure: `describeCellTools` now adds `writes` (declared
+prefixes) to the third-party `disclosure` block.
+
+Code: `applyCallerWrites` + the route wiring in `services/dispatch/service.ts`;
+manifest parse + `callerWritesFor` + disclosure in `services/cells/service.ts`;
+`CellRecord.callerWrites` in `services/cells/registry.ts`.
+Tests: `tests/cell-caller-writes.test.ts` (end-to-end through dispatch).
 
 ### ✅ Clients migrated to request granular (+ mint-path back-compat hardened)
 `services/home/client/auth.ts` `DEFAULT_SCOPE` now requests the granular
