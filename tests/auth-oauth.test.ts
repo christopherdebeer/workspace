@@ -8,6 +8,7 @@ import {
   handleDeviceInit,
   handleDeviceApprove,
   validateBearer,
+  grantableScopes,
 } from '../services/auth/oauth';
 import { sha256 } from '../services/auth/store';
 import type { ServiceHttpRequest } from '../platform/runtime';
@@ -17,6 +18,23 @@ const CONFIG: OAuthConfig = {
   scopesSupported: ['workspace:read', 'workspace:write'],
   tokenExpirySecs: 3600,
 };
+
+describe('grantableScopes admin-gating (granular vocabulary)', () => {
+  const cfg: OAuthConfig = {
+    serverName: 'test',
+    tokenExpirySecs: 3600,
+    scopesSupported: ['workspace:read', 'write:workspace', 'read:workspace', 'platform:cells:create', 'cells:create', 'platform:*'],
+    adminUsernames: ['admin'],
+    adminScopePrefixes: ['platform:', 'cells:create'],
+  };
+  it('non-admins may grant workspace read/write (coarse + granular) but NOT cell creation or platform admin', () => {
+    expect(grantableScopes(cfg, 'bob')).toEqual(['workspace:read', 'write:workspace', 'read:workspace']);
+  });
+  it('admins may grant everything, including granular cells:create', () => {
+    expect(grantableScopes(cfg, 'admin')).toContain('cells:create');
+    expect(grantableScopes(cfg, 'admin')).toContain('platform:*');
+  });
+});
 
 function makeReq(opts: {
   method?: string;

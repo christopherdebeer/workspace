@@ -81,6 +81,10 @@ const SCOPE_CATALOG: Record<string, ScopeMeta> = {
   'workspace:admin': { verb: 'admin', title: 'Administer the workspace', description: 'Manage sharing and grant requests.' },
   'platform:cells:create': { verb: 'write', title: 'Create cells', description: 'Provision and deploy dynamic cells on your behalf.' },
   'platform:*': { verb: 'admin', title: 'Full platform control', description: 'Unrestricted admin across the platform.' },
+  // Granular vocabulary (docs/capability-consent.md).
+  'read:workspace': { verb: 'read', title: 'Read your workspace', description: 'See your facts, links, views, and activity.' },
+  'write:workspace': { verb: 'write', title: 'Write to your workspace', description: 'Create, edit, link, and retire facts in your slice.' },
+  'cells:create': { verb: 'write', title: 'Create cells', description: 'Provision and deploy dynamic cells on your behalf.' },
 };
 export function scopeMeta(scope: string): ScopeMeta {
   const known = SCOPE_CATALOG[scope];

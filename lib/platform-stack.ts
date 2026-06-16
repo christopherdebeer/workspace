@@ -86,10 +86,19 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
       environment: {
         AUTH_SERVER_NAME: 'workspace',
-        // Advertised scopes; `platform:*` are admin-gated to AUTH_ADMIN_USERNAMES,
-        // enforced at consent. The picker shows each user only what they may grant.
-        AUTH_SCOPES: 'workspace:read workspace:write workspace:admin platform:cells:create platform:*',
+        // Advertised scopes (docs/capability-consent.md). Coarse buckets stay for
+        // back-compat (existing clients request them); the granular vocabulary —
+        // read:workspace / write:workspace / cells:create — lets new clients
+        // request precise capabilities. Admin scopes (`platform:*`, and
+        // `cells:create`, gated below) are grantable only to AUTH_ADMIN_USERNAMES,
+        // enforced at consent. The picker shows each client only what it requested
+        // ∩ what the user may grant.
+        AUTH_SCOPES:
+          'workspace:read workspace:write workspace:admin platform:cells:create platform:* read:workspace write:workspace cells:create',
         AUTH_ADMIN_USERNAMES: 'c15r',
+        // cell creation stays admin-gated: the granular `cells:create` carries no
+        // `platform:` prefix, so name it explicitly alongside the prefix default.
+        AUTH_ADMIN_SCOPE_PREFIXES: 'platform: cells:create',
       },
       // PUBLIC_BASE_URL / WEBAUTHN_RP_ID are set below, once the router (and thus
       // the public domain) exists.
