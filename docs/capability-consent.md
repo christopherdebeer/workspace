@@ -16,6 +16,9 @@
 | 2b | `cells.create` → `cells:create` (granular, enforced) | ✅ shipped | `services/cells/service.ts`; legacy `platform:cells:create`/`platform:*` still satisfy it |
 | 2c | Workspace tools verb-enforced | ✅ shipped + verified | reads need `read:workspace`, acts need `write:workspace`; read-only token is **denied** writes |
 | 2d | Granular scopes offered at consent | ✅ shipped | `read:workspace`/`write:workspace`/`cells:create` in `AUTH_SCOPES`; live in AS metadata |
+| 2e | Mint-path back-compat + client migration | ✅ shipped | `intersectScopes` honours `impliesScope`; `services/home` requests granular; consent SPA de-dupes aliases |
+| 5 | Consent-time grant lifetime | ✅ shipped | consent picker narrows the grant horizon (refresh TTL, or access on non-expiring), clamped to the server ceiling |
+| 6 | Third-party-cell author disclosure | ✅ shipped | `describeCellTools` discloses author + declared reads + write-back to non-owner callers; surfaced through the gateway catalog |
 | 3 | Incremental authorization | ⏳ outstanding | server-requested mid-session scope upgrades |
 | 4 | Write-time delegation | ⏳ outstanding | cells acting on caller's behalf, bounded to caller's granted writes |
 
@@ -24,7 +27,9 @@ Verified live (deploy #194): read-only token → workspace write returns
 (coarse `workspace:write` satisfies `write:workspace`); AS metadata advertises the
 granular vocabulary. The in-repo browser client now requests the granular vocabulary
 and the mint path (`intersectScopes`) is back-compat-hardened to match enforcement
-(see "Clients migrated" below). 226 tests pass.
+(see "Clients migrated" below). The consent screen now also lets the user pick a
+grant lifetime, and third-party-cell tools disclose their author + declared reads.
+231 tests pass.
 
 ## What actually shipped vs. the original design
 
@@ -106,8 +111,50 @@ requirements via `impliesScope`.
 - **Cell-creation scope:** `services/cells/service.ts` `CREATE_SCOPE`.
 - **SSR read-only allowlist:** `services/dispatch/service.ts` `SSR_READ_TARGETS`.
 - **Tests:** `tests/workspace.test.ts` (describeTools verb scopes),
-  `tests/auth-oauth.test.ts` (`grantableScopes` admin-gating),
-  `tests/scope-grammar.*`/`platform` (matches/implies).
+  `tests/auth-oauth.test.ts` (`grantableScopes` admin-gating, grant lifetime),
+  `tests/scope-grammar.*`/`platform` (matches/implies),
+  `tests/forge-cell.test.ts` (cell author disclosure).
+
+## Consent-time grant lifetime (✅ shipped)
+
+A grant the user can time-box is the cheapest mitigation for the cell-write-back
+risk below — so the consent screen now offers a **"this access lasts…" picker**.
+It can only *narrow*: the chosen seconds are clamped server-side to a ceiling
+(`grantCeilingSecs` = the configured refresh TTL) and threaded as `grantSecs` on
+the auth code. At token exchange (`handleToken`):
+
+- **Expiring deployments** (the norm): the **refresh token** carries the chosen
+  horizon (the re-consent clock); the access token stays the short configured TTL.
+  A choice *shorter than* the access TTL collapses to a single short-lived token
+  with no refresh.
+- **Non-expiring deployments**: a finite choice makes the **access token** itself
+  finite (no refresh on that deployment); omitting it preserves non-expiry.
+
+Code: `ConsentBody.expiresInSec` + `clampGrant`/`grantCeilingSecs` in
+`services/auth/oauth.ts`; `AuthCode.grantSecs` through both stores; the picker in
+`services/auth/client/main.tsx` (fed `maxGrantSecs` from `/auth/grantable`).
+
+## Third-party-cell author disclosure (✅ shipped)
+
+The honest answer to "a cell writes data to another location — exfiltration?".
+A cell **receives no token** when invoked (only an `x-cell-caller` header); it
+writes back exclusively through the **organ path** (`substrate.write.requested`,
+IAM-pinned `events:source = cell-<id>`), which lands in the cell **owner's**
+(= author's) slice — never the caller's, never a third party's
+(`createSubstrateWriteHandler`). The exfiltration shape is therefore: *user B
+invokes author A's cell; dispatch runs A's declared SSR reads **as B** and hands
+the results to A's code, which can persist them into **A's** slice.* Gated (B must
+be owner/granted, or it's an anonymous public GET) but previously **undisclosed**.
+
+This is **not** an OAuth-consent concern (that governs a client acting as *you*,
+in *your* slice); it's a third-party-app trust decision. So the disclosure rides
+the discovery/first-invoke surface instead: `cells.describeCellTools` now attaches
+a `disclosure { author, reads, note }` to every tool whose cell the caller does
+**not** own, and the gateway carries it into the `$catalog` — so both humans and
+agents see "runs @author's code; it can observe these reads and persist results
+into @author's workspace" at the moment they choose to use it. Owners see no
+notice (writing to your own cell's slice is writing to yourself). A consent/grant
+**UI** can render this block at `approveGrant` time; the data is now exposed for it.
 
 ## Outstanding work
 

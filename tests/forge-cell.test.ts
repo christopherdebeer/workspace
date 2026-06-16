@@ -544,6 +544,34 @@ describe('cells: backend commands', () => {
     ]);
   });
 
+  it('describeCellTools discloses third-party authorship to non-owner callers (exfiltration surface)', async () => {
+    lambdaResponse = {
+      statusCode: 200,
+      body: JSON.stringify({ tools: [{ name: 'add', description: 'Add.', inputSchema: { type: 'object' }, kind: 'act' }] }),
+    };
+    await call('alice', 'create', { name: 'notes', code: cellCode, share: ['bob'] });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    // The cell declares SSR reads — exactly what its author's code can observe.
+    await reg.put({ ...cell, status: 'ACTIVE', ssrReads: [{ as: 'w', target: 'workspace.query' }, { as: 't', target: 'auth.tokens' }] });
+
+    // Non-owner (bob, a grantee) sees the disclosure: author + declared reads + note.
+    const bobs = await call<{ tools: Array<{ tool: string; disclosure?: { author: string; reads: string[]; note: string } }> }>(
+      'bob', 'describeCellTools', {},
+    );
+    const tool = bobs.result!.tools.find((t) => t.tool === 'add')!;
+    expect(tool.disclosure).toBeDefined();
+    expect(tool.disclosure!.author).toBe('alice');
+    expect(tool.disclosure!.reads.sort()).toEqual(['auth.tokens', 'workspace.query']);
+    expect(tool.disclosure!.note).toMatch(/alice/);
+
+    // The owner gets no notice — writing to your own cell's slice is writing to yourself.
+    const alices = await call<{ tools: Array<{ tool: string; disclosure?: unknown }> }>(
+      'alice', 'describeCellTools', { owner: 'alice', name: 'notes' },
+    );
+    expect(alices.result!.tools.find((t) => t.tool === 'add')!.disclosure).toBeUndefined();
+  });
+
   it('describeCellTools resolves a single cell when given an owner+name selector', async () => {
     lambdaResponse = {
       statusCode: 200,

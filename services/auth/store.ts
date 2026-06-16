@@ -74,6 +74,13 @@ export interface AuthCode {
   codeChallengeMethod: string;
   scope: string | null;
   resource: string | null;
+  /**
+   * Grant lifetime chosen by the user at consent (seconds), already clamped to the
+   * server ceiling. Bounds the issued grant's horizon — the refresh-token TTL in
+   * the usual short-access/long-refresh mode, or the access token itself on a
+   * non-expiring deployment. Null = use the server default (docs/capability-consent.md).
+   */
+  grantSecs?: number | null;
 }
 
 export interface SessionInfo {
@@ -184,6 +191,7 @@ export interface AuthStore {
     codeChallengeMethod: string;
     scope?: string;
     resource?: string;
+    grantSecs?: number | null;
   }): Promise<void>;
   consumeAuthCode(code: string): Promise<AuthCode | null>;
   // sessions

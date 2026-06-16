@@ -179,6 +179,7 @@ export function createDynamoStore(tableName: string): AuthStore {
         ...code,
         scope: code.scope ?? null,
         resource: code.resource ?? null,
+        grantSecs: code.grantSecs ?? null,
         used: false,
         expiresAt,
         ttl: ttlOf(expiresAt),
@@ -210,6 +211,7 @@ export function createDynamoStore(tableName: string): AuthStore {
         codeChallengeMethod: i.codeChallengeMethod,
         scope: i.scope ?? null,
         resource: i.resource ?? null,
+        grantSecs: i.grantSecs ?? null,
       };
     },
 

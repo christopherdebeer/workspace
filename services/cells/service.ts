@@ -1180,6 +1180,14 @@ interface CellToolDescriptor {
   cellId: string;
   /** The cell's own (un-namespaced) tool name, used to route the call. */
   tool: string;
+  /**
+   * Third-party-cell disclosure (docs/capability-consent.md). Present only when
+   * the caller is NOT the cell owner: invoking runs the author's code, which can
+   * observe the reads the cell declares (`ssr.json`) and persist results into the
+   * AUTHOR's slice (the organ-write path). The honest "may share data with its
+   * developer" surface, shown at discovery/first-invoke for humans and agents.
+   */
+  disclosure?: { author: string; reads: string[]; note: string };
 }
 
 /** Selector: omit to enumerate all accessible cells (catalog); give one to resolve a single target. */
@@ -1217,6 +1225,18 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
       const address = cellAddress(cell.owner, cell.name).slice(1); // `@<owner>/<slug>`
       // Advertise only what this caller may call (per-tool grants filter here).
       const visible = toolVisibility(cell, user);
+      // Disclose the third-party-author trust when the caller isn't the owner:
+      // the author's code runs, sees the reads it declares, and can persist into
+      // the author's own slice (docs/capability-consent.md). Owners see no notice
+      // (writing to your own cell's slice is writing to yourself).
+      const disclosure =
+        cell.owner !== user
+          ? {
+              author: cell.owner,
+              reads: Array.from(new Set((cell.ssrReads ?? []).map((r) => r.target))),
+              note: `Runs @${address}'s code: its author (${cell.owner}) can observe the reads it declares and persist results into ${cell.owner}'s workspace.`,
+            }
+          : undefined;
       try {
         const res = await invokeCell({
           functionName: cell.functionName,
@@ -1248,6 +1268,7 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
             kind: t.kind === 'read' ? 'read' : 'act',
             cellId: cell.cellId,
             tool,
+            ...(disclosure ? { disclosure } : {}),
           });
         }
       } catch (err) {

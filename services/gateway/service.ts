@@ -74,6 +74,8 @@ interface CellTool {
   kind: 'read' | 'act';
   cellId: string;
   tool: string;
+  /** Third-party-author disclosure (set by cells for non-owner callers). */
+  disclosure?: { author: string; reads: string[]; note: string };
 }
 
 /** A resolved, dispatchable capability. */
@@ -95,6 +97,8 @@ interface CatalogEntry {
   /** The declared result envelope — self-documentation's read direction. */
   resultSchema?: Record<string, unknown>;
   scope: string | null;
+  /** Third-party-author disclosure for cell tools (docs/capability-consent.md). */
+  disclosure?: { author: string; reads: string[]; note: string };
 }
 
 /** One capability in the summary catalog: enough to decide, not to call. */
@@ -202,6 +206,7 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
         inputSchema: t.inputSchema,
         ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
         scope: t.scope ?? null,
+        ...(t.disclosure ? { disclosure: t.disclosure } : {}),
       });
     }
   } catch (err) {

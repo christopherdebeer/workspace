@@ -41,6 +41,23 @@ const VERB_GROUPS: Array<{ verb: ScopeMeta['verb']; heading: string; note: strin
   { verb: 'admin', heading: 'Admin', note: 'Elevated control.' },
 ];
 
+/** Grant-lifetime presets (seconds) offered when shorter than the server ceiling. */
+const LIFETIME_PRESETS: Array<{ secs: number; label: string }> = [
+  { secs: 3600, label: '1 hour' },
+  { secs: 28800, label: '8 hours' },
+  { secs: 86400, label: '1 day' },
+  { secs: 604800, label: '7 days' },
+  { secs: 2592000, label: '30 days' },
+  { secs: 7776000, label: '90 days' },
+];
+
+function fmtDuration(secs: number): string {
+  const d = secs / 86400;
+  if (d >= 1) return Math.round(d) === 1 ? '1 day' : `${Math.round(d)} days`;
+  const h = Math.max(1, Math.round(secs / 3600));
+  return h === 1 ? '1 hour' : `${h} hours`;
+}
+
 function params(): Params {
   return Object.fromEntries(new URLSearchParams(location.search)) as Params;
 }
@@ -95,6 +112,9 @@ function App(): React.JSX.Element {
   const [catalog, setCatalog] = useState<Record<string, ScopeMeta>>({});
   const [clientName, setClientName] = useState<string>('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Grant lifetime: 0 = the server default (full ceiling); >0 = a user-chosen, shorter horizon.
+  const [maxGrantSecs, setMaxGrantSecs] = useState<number>(0);
+  const [grantSecs, setGrantSecs] = useState<number>(0);
 
   const fail = useCallback((msg: string) => {
     setError(msg);
@@ -118,7 +138,7 @@ function App(): React.JSX.Element {
       if (!oauthMode || !p.redirect_uri) return fail('Missing OAuth parameters');
 
       // Fetch the scopes this user is allowed to grant, then show the picker.
-      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; clientName?: string; error?: string }>('/auth/grantable', {
+      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; clientName?: string; maxGrantSecs?: number; error?: string }>('/auth/grantable', {
         sessionId,
         clientId: p.client_id,
       });
@@ -126,6 +146,7 @@ function App(): React.JSX.Element {
       setSignedInUser(g.username ?? '');
       setCatalog(g.catalog ?? {});
       setClientName(g.clientName ?? '');
+      setMaxGrantSecs(g.maxGrantSecs ?? 0);
       // Show only what the client actually REQUESTED (∩ what the user may grant) —
       // don't prompt for permissions the client never asked for. Pre-checked; the
       // user can deselect to grant a subset.
@@ -197,6 +218,7 @@ function App(): React.JSX.Element {
         scope: Array.from(selected).join(' '),
         state: p.state,
         resource: p.resource,
+        ...(grantSecs > 0 ? { expiresInSec: grantSecs } : {}),
       });
       if (r.error || !r.redirect) throw new Error(r.error ?? 'Consent failed');
       setOkMsg('Redirecting…');
@@ -207,7 +229,7 @@ function App(): React.JSX.Element {
     } catch (e) {
       fail((e as Error).message);
     }
-  }, [p, selected, fail]);
+  }, [p, selected, grantSecs, fail]);
 
   const toggle = (scope: string, on: boolean) => {
     setSelected((prev) => {
@@ -281,6 +303,31 @@ function App(): React.JSX.Element {
               })}
               {grantable.length === 0 ? <Badge tone="dim">No grantable scopes</Badge> : null}
             </div>
+            {maxGrantSecs > 0 ? (
+              <label style={{ display: 'grid', gap: '0.3rem' }}>
+                <span style={{ color: theme.dim, fontSize: '0.75rem' }}>This access lasts</span>
+                <select
+                  value={String(grantSecs)}
+                  onChange={(e) => setGrantSecs(Number((e.target as HTMLSelectElement).value))}
+                  style={{
+                    fontFamily: theme.mono,
+                    fontSize: '0.85rem',
+                    padding: '0.4rem 0.5rem',
+                    background: theme.bg,
+                    color: theme.text,
+                    border: `1px solid ${theme.dim}`,
+                    borderRadius: '6px',
+                  }}
+                >
+                  <option value="0">Until it expires ({fmtDuration(maxGrantSecs)} — default)</option>
+                  {LIFETIME_PRESETS.filter((o) => o.secs < maxGrantSecs).map((o) => (
+                    <option key={o.secs} value={String(o.secs)}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <Button onClick={submitConsent} disabled={selected.size === 0}>
               Authorize{selected.size ? ` (${selected.size})` : ''}
             </Button>

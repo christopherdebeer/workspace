@@ -130,6 +130,7 @@ export function createMemoryStore(): AuthStore {
         codeChallengeMethod: code.codeChallengeMethod,
         scope: code.scope ?? null,
         resource: code.resource ?? null,
+        grantSecs: code.grantSecs ?? null,
         expiresAt: isoIn(CODE_TTL_MS),
         used: false,
       });
@@ -147,6 +148,7 @@ export function createMemoryStore(): AuthStore {
         codeChallengeMethod: c.codeChallengeMethod,
         scope: c.scope,
         resource: c.resource,
+        grantSecs: c.grantSecs ?? null,
       };
     },
 
