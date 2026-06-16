@@ -15,6 +15,20 @@ import type { DynamoDB } from 'aws-sdk';
 
 export type CellStatus = 'CREATING' | 'ACTIVE' | 'FAILED' | 'DELETING';
 
+/** Bundling phase for a `cells.deploy`. Deploy runs asynchronously (the bundle
+ *  can outlast the synchronous request/edge timeout — see service.ts `deploy`),
+ *  so the phase is recorded here and callers poll `getCell` until it's terminal. */
+export type DeployPhase = 'DEPLOYING' | 'DEPLOYED' | 'FAILED';
+export interface DeployState {
+  phase: DeployPhase;
+  /** The deploy version (`Date.now()` string) — the requested one, and the
+   *  landed one once DEPLOYED. */
+  version: string;
+  requestedAt: string;
+  /** Present only when `phase === 'FAILED'`. */
+  error?: string;
+}
+
 export interface CellRecord {
   cellId: string;
   name: string;
@@ -40,7 +54,18 @@ export interface CellRecord {
    * and the anonymous landing — resolves a fact's open/edit path the same way.
    */
   types?: Array<Record<string, unknown>>;
+  /**
+   * Declared SSR reads (from the cell's `ssr.json`): substrate reads forge runs
+   * AS THE AUTHENTICATED CALLER (via its service client — shaped salience/vocab,
+   * no token handed to the cell) and injects into the cell's invocation, so a
+   * cell can server-render real content without holding a credential or touching
+   * storage. See `runSsrReads` in service.ts.
+   */
+  ssrReads?: Array<{ as: string; target: string; input?: Record<string, unknown> }>;
   status: CellStatus;
+  /** The last/in-flight async deploy's phase (set by `cells.deploy`; polled via
+   *  `getCell`). Absent until the cell has been deployed at least once. */
+  deploy?: DeployState;
   /** Lambda timeout override (seconds, 10–300). */
   timeoutSeconds?: number;
   createdAt: string;
@@ -77,8 +102,10 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
       ? { toolGrants: item.toolGrants as Record<string, string[]> }
       : {}),
     ...(Array.isArray(item.types) ? { types: item.types as Array<Record<string, unknown>> } : {}),
+    ...(Array.isArray(item.ssrReads) ? { ssrReads: item.ssrReads as CellRecord['ssrReads'] } : {}),
     public: !!item.public,
     status: item.status as CellStatus,
+    ...(item.deploy && typeof item.deploy === 'object' ? { deploy: item.deploy as DeployState } : {}),
     createdAt: String(item.createdAt),
     updatedAt: String(item.updatedAt),
   };
@@ -93,6 +120,8 @@ export interface CellRegistry {
   /** All ACTIVE cells — for the global type vocabulary (read-only, type decls are public). */
   listActive(): Promise<CellRecord[]>;
   setStatus(cellId: string, status: CellStatus): Promise<void>;
+  /** Record the async deploy phase (DEPLOYING → DEPLOYED/FAILED). */
+  setDeploy(cellId: string, deploy: DeployState): Promise<void>;
   /** Grant a principal: every tool (no `tools`), or just the named tool patterns. Re-granting replaces. */
   addGrant(cellId: string, principal: string, tools?: string[]): Promise<CellRecord | null>;
   /** Remove a principal's access entirely (full and per-tool). */
@@ -188,6 +217,17 @@ export function createRegistry(tableName: string): CellRegistry {
           UpdateExpression: 'SET #s = :s, updatedAt = :u',
           ExpressionAttributeNames: { '#s': 'status' },
           ExpressionAttributeValues: { ':s': status, ':u': new Date().toISOString() },
+        })
+        .promise();
+    },
+
+    async setDeploy(cellId: string, deploy: DeployState): Promise<void> {
+      await db
+        .update({
+          TableName: tableName,
+          Key: profileKey(cellId),
+          UpdateExpression: 'SET deploy = :d, updatedAt = :u',
+          ExpressionAttributeValues: { ':d': deploy, ':u': new Date().toISOString() },
         })
         .promise();
     },

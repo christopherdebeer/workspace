@@ -84,27 +84,113 @@ describe('observed state: supersede, not delete', () => {
 });
 
 describe('observed state: salience scoring', () => {
-  it('decays with age and rises with velocity/attention', () => {
+  it('decays with age and rises with velocity/attention/standing/centrality', () => {
     const s = {
       halfLifeMs: 3600000,
       windowMs: 3600000,
       velocitySaturation: 5,
       attentionSaturation: 5,
+      standingSaturation: 50,
+      centralitySaturation: 8,
+      recencyWeight: 0.45,
+      velocityWeight: 0.15,
+      attentionWeight: 0.1,
+      standingWeight: 0.2,
+      centralityWeight: 0.1,
       focusThreshold: 0.5,
       elideThreshold: 0.1,
     };
     const now = 1_000_000_000_000;
-    const fresh = computeScore({ updatedAtMs: now, writesInWindow: 5, readsInWindow: 5, nowMs: now }, s);
-    const stale = computeScore(
-      { updatedAtMs: now - 24 * 3600000, writesInWindow: 0, readsInWindow: 0, nowMs: now },
+    // Every term maxed → score approaches 1 (weights sum to 1).
+    const fresh = computeScore(
+      { updatedAtMs: now, windowWrites: 5, windowReads: 5, lifetimeReads: 50, lifetimeWrites: 50, degree: 8, nowMs: now },
+      s,
+    );
+    const cold = computeScore(
+      { updatedAtMs: now - 24 * 3600000, windowWrites: 0, windowReads: 0, nowMs: now },
       s,
     );
     expect(fresh).toBeGreaterThan(0.9);
-    expect(stale).toBeLessThan(0.05);
-    // recency-only fresh write sits between
-    const recentOnly = computeScore({ updatedAtMs: now, writesInWindow: 0, readsInWindow: 0, nowMs: now }, s);
-    expect(recentOnly).toBeGreaterThan(stale);
+    expect(cold).toBeLessThan(0.05);
+    // recency-only fresh write sits between cold and fully-saturated
+    const recentOnly = computeScore({ updatedAtMs: now, nowMs: now }, s);
+    expect(recentOnly).toBeGreaterThan(cold);
     expect(recentOnly).toBeLessThan(fresh);
+  });
+
+  it('import preserves timestamps and seeds standing from cumulative counts', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const oldIso = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString(); // 60d ago
+    // A migrated fact: old, but with deep earned history.
+    await state.put(
+      { scope: 'r', key: 'kb/x', value: 'ported', import: { createdAt: oldIso, updatedAt: oldIso, seedReads: 40, seedWrites: 10 } },
+      alice,
+    );
+    // A cold ported fact: old, no history.
+    await state.put({ scope: 'r', key: 'kb/y', value: 'cold', import: { createdAt: oldIso, updatedAt: oldIso } }, alice);
+    const got = await state.get('r', 'kb/x');
+    expect(got!._meta.updatedAt).toBe(oldIso); // real age preserved (recency reflects it)
+    expect(got!._meta.standing).toBeGreaterThan(0.5); // 50 lifetime → near-saturated standing
+    const res = await state.read('r', { elision: 'none' });
+    // Earned fact stays above the default elide threshold despite age; cold one is lower.
+    expect(res.entries['kb/x']._meta.score).toBeGreaterThan(0.1);
+    expect(res.entries['kb/y']._meta.score).toBeLessThan(res.entries['kb/x']._meta.score);
+  });
+
+  it('per-call lens/override recompute the score (ranking + tiers) and echo the lens', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: 'hub', value: 1 }, alice);
+    await state.put({ scope: 'r', key: 'leaf', value: 2 }, alice);
+    await state.put({ scope: 'r', key: 'iso', value: 3 }, alice);
+    await state.link('r', 'hub', 'rel', 'leaf', null, alice);
+    await state.link('r', 'hub', 'rel', 'iso', null, alice); // hub degree 2, leaf+iso degree 1
+    await state.link('r', 'leaf', 'rel', 'iso', null, alice); // leaf degree 2, iso degree 2... rebalance below
+    // Pure-centrality override: only graph degree contributes to the score.
+    const central = await state.read('r', {
+      elision: 'none',
+      salience: { recencyWeight: 0, velocityWeight: 0, attentionWeight: 0, standingWeight: 0, centralityWeight: 1 },
+    });
+    // hub (out:2) and iso (in:2) both have degree 2; leaf has degree 2 as well here,
+    // so assert the override took effect: scores are pure-centrality, not recency.
+    expect(central.entries.hub._meta.score).toBeCloseTo(2 / 5, 5); // degree 2 / centralitySaturation 5
+    expect(central.entries.hub._meta.centrality).toBeCloseTo(2 / 5, 5);
+    // The default read (recency-led) scores the same fresh facts much higher.
+    const def = await state.read('r', { elision: 'none' });
+    expect(def.entries.hub._meta.score).toBeGreaterThan(central.entries.hub._meta.score);
+    // A named lens echoes into _shaping.
+    const con = await state.read('r', { lens: 'connected' });
+    expect(con._shaping.lens).toBe('connected');
+  });
+
+  it('standing keeps an idle, earned fact above elision; centrality lifts a hub', () => {
+    const s = {
+      halfLifeMs: 3600000,
+      windowMs: 3600000,
+      velocitySaturation: 5,
+      attentionSaturation: 5,
+      standingSaturation: 50,
+      centralitySaturation: 8,
+      recencyWeight: 0.45,
+      velocityWeight: 0.15,
+      attentionWeight: 0.1,
+      standingWeight: 0.2,
+      centralityWeight: 0.1,
+      focusThreshold: 0.5,
+      elideThreshold: 0.1,
+    };
+    const now = 1_000_000_000_000;
+    const oldMs = now - 30 * 24 * 3600000; // a month idle → recency ≈ 0
+    // No recency/velocity/attention, but a deep cumulative history → not elided.
+    const earned = computeScore({ updatedAtMs: oldMs, lifetimeReads: 40, lifetimeWrites: 10, nowMs: now }, s);
+    expect(earned).toBeGreaterThan(s.elideThreshold);
+    // A well-connected hub gets an additional structural lift.
+    const hub = computeScore({ updatedAtMs: oldMs, lifetimeReads: 40, lifetimeWrites: 10, degree: 8, nowMs: now }, s);
+    expect(hub).toBeGreaterThan(earned);
+    // Genuinely cold junk (one touch, no edges, old) stays elided.
+    const junk = computeScore({ updatedAtMs: oldMs, lifetimeWrites: 1, nowMs: now }, s);
+    expect(junk).toBeLessThan(s.elideThreshold);
   });
 });
 

@@ -72,4 +72,5 @@ export type {
   AttentionResult,
   SupersedeOptions,
   SalienceOptions,
+  SalienceLens,
 } from './state';

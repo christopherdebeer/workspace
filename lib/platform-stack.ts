@@ -86,10 +86,19 @@ export class PlatformStack extends cdk.Stack {
       eventBus,
       environment: {
         AUTH_SERVER_NAME: 'workspace',
-        // Advertised scopes; `platform:*` are admin-gated to AUTH_ADMIN_USERNAMES,
-        // enforced at consent. The picker shows each user only what they may grant.
-        AUTH_SCOPES: 'workspace:read workspace:write workspace:admin platform:cells:create platform:*',
+        // Advertised scopes (docs/capability-consent.md). Coarse buckets stay for
+        // back-compat (existing clients request them); the granular vocabulary —
+        // read:workspace / write:workspace / cells:create — lets new clients
+        // request precise capabilities. Admin scopes (`platform:*`, and
+        // `cells:create`, gated below) are grantable only to AUTH_ADMIN_USERNAMES,
+        // enforced at consent. The picker shows each client only what it requested
+        // ∩ what the user may grant.
+        AUTH_SCOPES:
+          'workspace:read workspace:write workspace:admin platform:cells:create platform:* read:workspace write:workspace cells:create',
         AUTH_ADMIN_USERNAMES: 'c15r',
+        // cell creation stays admin-gated: the granular `cells:create` carries no
+        // `platform:` prefix, so name it explicitly alongside the prefix default.
+        AUTH_ADMIN_SCOPE_PREFIXES: 'platform: cells:create',
       },
       // PUBLIC_BASE_URL / WEBAUTHN_RP_ID are set below, once the router (and thus
       // the public domain) exists.
@@ -194,9 +203,17 @@ export class PlatformStack extends cdk.Stack {
       // index.js for isomorphic SSR — see transpile.ts SERVER_BUNDLED.
       bundlingNodeModules: ['esbuild-wasm', 'react', 'react-dom'],
       memorySize: 512,
-      timeoutSeconds: 60,
+      // The bundle (esm.sh dep fetches + esbuild) runs off the request path as an
+      // event-driven invocation now (cell.deploy.requested → onDeployRequested),
+      // so nothing in front caps it — give a cold cache headroom.
+      timeoutSeconds: 120,
     });
     controlPlane.grantControlPlane(cells);
+    // Async deploy: forge emits `cell.deploy.requested` and consumes it as a
+    // fresh event-driven invocation, so bundling never rides the synchronous
+    // request/edge timeout. Source-pinned to `cells` (the forge service emits as
+    // `cells`; dynamic cells emit as `cell-<id>`, which this prefix excludes).
+    eventBus.routeTo('CellDeployRoute', cells.fn, ['cell.deploy.requested'], 'cells');
 
     const dispatch = new HttpServiceCell(this, 'DispatchService', {
       name: 'dispatch',
@@ -221,6 +238,14 @@ export class PlatformStack extends cdk.Stack {
     // The gateway also aggregates the workspace cell's tools (remember/recall/
     // share/…): it calls workspace.describeTools and forwards tools/call to it.
     gateway.allow(workspace);
+    // SSR proxy (docs/dynamic-cells.md): for an authenticated navigation, dispatch
+    // reads the substrate AS THE CALLER (its service client carries the validated
+    // identity) and hands the shaped results to cells.call, which forwards them to
+    // the cell — so a public cell server-renders real content without ever holding
+    // a token. dispatch (not forge) does this: forge↔workspace would be a CDK
+    // dependency cycle (workspace already calls cells.resolveCell), but dispatch
+    // has no back-edge.
+    dispatch.allow(workspace);
     // (home no longer validates tokens or reads the registry server-side — its SPA
     // is a read/act client over /mcp — so it needs no allow() grants.)
 

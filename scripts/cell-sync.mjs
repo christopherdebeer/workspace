@@ -106,8 +106,30 @@ if (cmd === 'pull') {
     console.log('pushed', f, `(${content.length}b)`);
   }
   if (flags.includes('--deploy')) {
-    const out = await call('act', 'cells.deploy', { owner, name });
-    console.log(`✓ deployed ${out.cellId} v${out.version} (${out.files.length} files)`);
+    // Deploy is asynchronous: it returns DEPLOYING immediately (the bundle runs
+    // off the request path), so poll `cells.get` until the phase is terminal.
+    const started = await call('act', 'cells.deploy', { owner, name });
+    const cellId = started.cellId;
+    process.stdout.write(`deploying ${cellId} v${started.version}`);
+    const deadline = Date.now() + 180_000;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const cell = await call('read', 'cells.get', { cellId });
+      const phase = cell.deploy?.phase;
+      if (phase === 'DEPLOYED') {
+        console.log(`\n✓ deployed ${cellId} v${cell.deploy.version}`);
+        break;
+      }
+      if (phase === 'FAILED') {
+        console.error(`\n✗ deploy failed: ${cell.deploy.error ?? 'unknown error'}`);
+        process.exit(1);
+      }
+      if (Date.now() > deadline) {
+        console.error(`\n✗ deploy still ${phase ?? 'pending'} after 180s — check cells.get later`);
+        process.exit(1);
+      }
+      process.stdout.write('.');
+    }
   } else {
     console.log(`✓ ${local.length} files pushed (no deploy — pass --deploy)`);
   }

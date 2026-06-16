@@ -31,7 +31,11 @@ function memoryDocClient(): Record<string, unknown> {
     update: ({ Key, ExpressionAttributeValues }: { Key: { pk: string; sk: string }; ExpressionAttributeValues: Record<string, unknown> }) => ({
       promise: async () => {
         const item = store.get(key(Key));
-        if (item) { item.status = ExpressionAttributeValues[':s']; item.updatedAt = ExpressionAttributeValues[':u']; }
+        if (item) {
+          if (':s' in ExpressionAttributeValues) item.status = ExpressionAttributeValues[':s'];
+          if (':d' in ExpressionAttributeValues) item.deploy = ExpressionAttributeValues[':d'];
+          if (':u' in ExpressionAttributeValues) item.updatedAt = ExpressionAttributeValues[':u'];
+        }
         return {};
       },
     }),
@@ -82,6 +86,21 @@ const updateCodeCalls: Array<{ FunctionName: string; S3Key: string }> = [];
 interface CommandResult<T = unknown> { ok: boolean; result?: T; error?: string }
 async function call<T = unknown>(user: string | undefined, command: string, payload: unknown): Promise<CommandResult<T>> {
   return (await forge({ __command: command, payload, user })) as CommandResult<T>;
+}
+
+/** Drive the async deploy end-to-end: kick it off, then run the event-driven
+ *  worker (cell.deploy.requested → onDeployRequested) and return the terminal
+ *  deploy state surfaced by `get`. */
+async function deployAndRun(
+  user: string,
+  cellId: string,
+): Promise<{ phase: string; version: string; error?: string }> {
+  const started = await call<{ deploying: boolean }>(user, 'deploy', { cellId });
+  expect(started.ok).toBe(true);
+  expect(started.result!.deploying).toBe(true);
+  await forge({ 'detail-type': 'cell.deploy.requested', source: 'cells', detail: { cellId } } as unknown as Parameters<typeof forge>[0]);
+  const got = await call<{ deploy?: { phase: string; version: string; error?: string } }>(user, 'get', { cellId });
+  return got.result!.deploy!;
 }
 
 const cellCode = 'export const handler = async () => ({ statusCode: 200, body: "{}" });';
@@ -159,22 +178,21 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(res.error).toMatch(/invalid path/i);
   });
 
-  it('deploy bundles the src/ tree and points the cell Lambda at the new build', async () => {
+  it('deploy (async) bundles the src/ tree and points the cell Lambda at the new build', async () => {
     const cellId = await makeCell('alice');
     await call('alice', 'writeFile', { cellId, path: 'lib/util.ts', content: 'export const x = 1;' });
 
-    const res = await call<{ deployed: boolean; version: string; entry: string; files: string[] }>('alice', 'deploy', { cellId });
-    expect(res.ok).toBe(true);
-    expect(res.result!.deployed).toBe(true);
-    expect(res.result!.entry).toBe('index.ts');
-    expect(res.result!.files.sort()).toEqual(['index.ts', 'lib/util.ts']);
+    const deploy = await deployAndRun('alice', cellId);
+    expect(deploy.phase).toBe('DEPLOYED');
 
-    // Lambda was repointed at cells/<id>/build/<version>.zip
+    // Lambda was repointed at cells/<id>/build/<version>.zip (the landed version).
     expect(updateCodeCalls).toHaveLength(1);
-    expect(updateCodeCalls[0].S3Key).toBe(`cells/${cellId}/build/${res.result!.version}.zip`);
-    expect(s3mem.store.has(`code-bucket/cells/${cellId}/build/${res.result!.version}.zip`)).toBe(true);
-    // No client entry → no client bundle, no static assets.
-    expect(res.result!).toMatchObject({ clientEntry: null, staticFiles: [] });
+    expect(updateCodeCalls[0].S3Key).toBe(`cells/${cellId}/build/${deploy.version}.zip`);
+    expect(s3mem.store.has(`code-bucket/cells/${cellId}/build/${deploy.version}.zip`)).toBe(true);
+    // No client entry → server bundle only, no app.js in the package.
+    const zip = (s3mem.store.get(`code-bucket/cells/${cellId}/build/${deploy.version}.zip`) as Buffer).toString('latin1');
+    expect(zip).toContain('index.js');
+    expect(zip).not.toContain('app.js');
   });
 
   it('deploy browser-bundles a client/ entry and ships static/ assets (the tier-2 clientEntry)', async () => {
@@ -183,31 +201,24 @@ describe('forge: cell common layer (S3 files + data)', () => {
     await call('alice', 'writeFile', { cellId, path: 'client/imports.json', content: '{"yjs":"13.6.27"}' });
     await call('alice', 'writeFile', { cellId, path: 'static/style.css', content: 'body{margin:0}' });
 
-    const res = await call<{
-      deployed: boolean;
-      clientEntry: string | null;
-      staticFiles: string[];
-    }>('alice', 'deploy', { cellId });
-    expect(res.ok).toBe(true);
-    expect(res.result!.clientEntry).toBe('client/main.ts');
-    expect(res.result!.staticFiles).toEqual(['static/style.css']);
+    const deploy = await deployAndRun('alice', cellId);
+    expect(deploy.phase).toBe('DEPLOYED');
 
     // The package zip carries index.js + app.js + the static asset.
     const zipKey = [...s3mem.store.keys()].find((k) => k.includes('/build/'))!;
-    const zip = s3mem.store.get(zipKey) as Buffer;
-    const names = zip.toString('latin1');
+    const names = (s3mem.store.get(zipKey) as Buffer).toString('latin1');
     expect(names).toContain('index.js');
     expect(names).toContain('app.js');
     expect(names).toContain('static/style.css');
   });
 
-  it('deploy rejects a malformed client/imports.json', async () => {
+  it('deploy records FAILED with the cause for a malformed client/imports.json', async () => {
     const cellId = await makeCell('alice');
     await call('alice', 'writeFile', { cellId, path: 'client/main.ts', content: 'export {};' });
     await call('alice', 'writeFile', { cellId, path: 'client/imports.json', content: '{nope' });
-    const res = await call('alice', 'deploy', { cellId });
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/imports\.json/);
+    const deploy = await deployAndRun('alice', cellId);
+    expect(deploy.phase).toBe('FAILED');
+    expect(deploy.error).toMatch(/imports\.json/);
   });
 
   it('replaceInFile does targeted exact-string edits without resending the file', async () => {
@@ -235,12 +246,13 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(miss.error).toMatch(/not found/);
     expect((await call('mallory', 'replaceInFile', { cellId, path: 'lib/u.ts', old_str: 'let', new_str: 'x' })).ok).toBe(false);
 
-    // deploy:true fuses edit + rebuild (one round trip).
-    const fused = await call<{ deploy: { deployed: boolean } }>('alice', 'replaceInFile', {
+    // deploy:true fuses edit + async deploy kickoff (one round trip); the
+    // DEPLOYING marker rides back on `deploy`, and the worker finishes it.
+    const fused = await call<{ deploy: { phase: string } }>('alice', 'replaceInFile', {
       cellId, path: 'index.ts', old_str: 'handler', new_str: 'handler', replace_all: true, deploy: true,
     });
     expect(fused.ok).toBe(true);
-    expect(fused.result!.deploy.deployed).toBe(true);
+    expect(fused.result!.deploy.phase).toBe('DEPLOYING');
   });
 
   it('appendToFile extends (or creates) a source file', async () => {

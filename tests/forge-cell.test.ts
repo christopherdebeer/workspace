@@ -53,8 +53,9 @@ function memoryDocClient(): { store: Map<string, Item> } & Record<string, unknow
       promise: async () => {
         const item = store.get(key(Key));
         if (item) {
-          item.status = ExpressionAttributeValues[':s'];
-          item.updatedAt = ExpressionAttributeValues[':u'];
+          if (':s' in ExpressionAttributeValues) item.status = ExpressionAttributeValues[':s'];
+          if (':d' in ExpressionAttributeValues) item.deploy = ExpressionAttributeValues[':d'];
+          if (':u' in ExpressionAttributeValues) item.updatedAt = ExpressionAttributeValues[':u'];
         }
         return {};
       },
@@ -135,6 +136,11 @@ interface CommandResult<T = unknown> {
 }
 async function call<T = unknown>(user: string | undefined, command: string, payload: unknown): Promise<CommandResult<T>> {
   return (await forge({ __command: command, payload, user })) as CommandResult<T>;
+}
+
+// A bus event the way EventBridge delivers it (source IAM-attested by the route).
+async function emitEvent(detailType: string, detail: Record<string, unknown>): Promise<void> {
+  await forge({ 'detail-type': detailType, source: 'cells', detail } as unknown as Parameters<typeof forge>[0]);
 }
 
 describe('cells: zip framing', () => {
@@ -310,7 +316,7 @@ describe('cells: backend commands', () => {
     const res = await call<{ tools: Array<{ name: string; scope: string | null }> }>('alice', 'describeTools', {});
     expect(res.ok).toBe(true);
     const create = res.result!.tools.find((t) => t.name === 'create');
-    expect(create?.scope).toBe('platform:cells:create');
+    expect(create?.scope).toBe('cells:create');
     // callCell is ownership-gated, not scoped
     expect(res.result!.tools.find((t) => t.name === 'call')?.scope).toBeNull();
   });
@@ -331,6 +337,83 @@ describe('cells: backend commands', () => {
     expect(cfnCalls).toHaveLength(1);
     expect(cfnCalls[0].StackName).toBe(`cell-${res.result!.cellId}`);
     expect(cfnCalls[0].TemplateBody).toContain('arn:aws:iam::111:policy/boundary');
+  });
+
+  it('list reconciles a CREATING record to ACTIVE from the live stack', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode }); // record persists at CREATING
+    // The default CFN stub reports CREATE_COMPLETE, so listing should reconcile
+    // the stale status without a getCell round-trip.
+    const res = await call<{ cells: Array<{ cellId: string; status: string }> }>('alice', 'list', {});
+    expect(res.ok).toBe(true);
+    expect(res.result!.cells).toHaveLength(1);
+    expect(res.result!.cells[0].status).toBe('ACTIVE');
+    // The reconcile is persisted, not just reflected in the response.
+    const reg = createRegistry('forge-table');
+    expect((await reg.listByOwner('alice'))[0].status).toBe('ACTIVE');
+  });
+
+  it('create recreates over an orphaned record whose stack has vanished', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode }); // record at CREATING
+    const reg = createRegistry('forge-table');
+    const [before] = await reg.listByOwner('alice');
+    // Simulate a vanished stack: a failed create auto-deletes (OnFailure: DELETE),
+    // or a teardown finished — describeStacks then rejects with ValidationError,
+    // which describeStack maps to null. A CREATING record over no stack is an
+    // orphan; recreating the same name must succeed instead of "already exists".
+    __setCloudFormation({
+      createStack: (p: { StackName: string; TemplateBody: string }) => {
+        cfnCalls.push(p);
+        return { promise: async () => ({ StackId: 'id' }) };
+      },
+      describeStacks: () => ({
+        promise: async () => {
+          const e = new Error('Stack does not exist') as Error & { code?: string };
+          e.code = 'ValidationError';
+          throw e;
+        },
+      }),
+      deleteStack: () => ({ promise: async () => ({}) }),
+    } as unknown as Parameters<typeof __setCloudFormation>[0]);
+    const res = await call<{ cellId: string; status: string }>('alice', 'create', { name: 'notes', code: cellCode });
+    expect(res.ok).toBe(true);
+    expect(res.result!.cellId).toBe(before.cellId);
+    expect(res.result!.status).toBe('CREATING');
+  });
+
+  it('deploy is async: returns DEPLOYING and records the phase for polling', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    const res = await call<{ deploying: boolean; cellId: string; deploy: { phase: string; version: string } }>(
+      'alice',
+      'deploy',
+      { cellId: cell.cellId },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.result!.deploying).toBe(true);
+    expect(res.result!.deploy.phase).toBe('DEPLOYING');
+    // Persisted and surfaced by `get` — that's the poll target.
+    const got = await call<{ deploy?: { phase: string } }>('alice', 'get', { cellId: cell.cellId });
+    expect(got.result!.deploy?.phase).toBe('DEPLOYING');
+  });
+
+  it('the cell.deploy.requested handler records FAILED (and does not throw) when the bundle fails', async () => {
+    await call('alice', 'create', { name: 'notes', code: cellCode });
+    const reg = createRegistry('forge-table');
+    const [cell] = await reg.listByOwner('alice');
+    // Empty src listing → deployCell throws "no source files to deploy"; the
+    // worker must catch it and record FAILED rather than crash the invocation.
+    __setS3({
+      putObject: (p: { Bucket: string; Key: string }) => {
+        s3Calls.push({ Bucket: p.Bucket, Key: p.Key });
+        return { promise: async () => ({}) };
+      },
+      listObjectsV2: () => ({ promise: async () => ({ Contents: [] }) }),
+    } as unknown as Parameters<typeof __setS3>[0]);
+    await emitEvent('cell.deploy.requested', { cellId: cell.cellId });
+    const got = await reg.get(cell.cellId);
+    expect(got?.deploy?.phase).toBe('FAILED');
+    expect(got?.deploy?.error).toBeTruthy();
   });
 
   it('callCell invokes the cell for the owner and returns its parsed body', async () => {

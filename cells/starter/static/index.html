@@ -5,15 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>starter · parc.land</title>
   <style>
-    body { margin: 0; font: 16px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1c1c1a; background: #fbfbf8; }
-    main { max-width: 640px; margin: 0 auto; padding: 2rem 1.1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 .4rem; }
-    .note { color: #555; background: #f4f4ee; border: 1px solid #e4e4dc; border-radius: 10px; padding: .8rem 1rem; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; color: #2f6f4f; }
+    body { margin: 0; background: #f3edde; }
+    .boot { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem; color: #85795f; font: 16px/1.6 system-ui, sans-serif; }
   </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app"><p class="boot">loading…</p></div>
+  <div id="err-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#7a1f1f;color:#fff;font:12px/1.4 monospace;padding:6px 10px;z-index:9999;white-space:pre-wrap;"></div>
+  <script>
+    // Boot watchdog: a silent hang names the step it stuck on (reload ?debug=1).
+    setTimeout(function () {
+      var b = document.querySelector('#app .boot');
+      if (!b) return;
+      var eb = document.getElementById('err-banner');
+      eb.style.display = 'block';
+      eb.textContent = 'app.js never executed — the module failed to load (path/MIME/network); check the network tab for app.js';
+    }, 12000);
+    window.addEventListener('error', function (e) {
+      var b = document.getElementById('err-banner');
+      b.style.display = 'block';
+      b.textContent = 'error: ' + (e.message || e.type) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var b = document.getElementById('err-banner');
+      b.style.display = 'block';
+      b.textContent = 'rejection: ' + (e.reason && (e.reason.message || String(e.reason)));
+    });
+  </script>
   <script type="module" src="/@c15r/starter/app.js"></script>
 </body>
 </html>

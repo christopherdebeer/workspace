@@ -56,6 +56,8 @@ export function createDynamoStateStore(tableName: string): StateStore {
       tags: Array.isArray(item.tags) ? item.tags : [],
       timerExpiresAt: item.timerExpiresAt ?? null,
       timerEffect: item.timerEffect ?? null,
+      ...(item.seedReads !== undefined ? { seedReads: Number(item.seedReads) } : {}),
+      ...(item.seedWrites !== undefined ? { seedWrites: Number(item.seedWrites) } : {}),
     };
   }
 

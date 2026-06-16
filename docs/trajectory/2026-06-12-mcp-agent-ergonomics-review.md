@@ -239,3 +239,82 @@ supposed to fit the substrate into a bounded observer's attention computes
 the right answer and then ships the wrong bytes, and the agent — the
 bounded observer the MCP-native tenet exists for — is the participant who
 pays.
+
+---
+
+## Addendum — legacy workspace vs new substrate, from hands-on use (2026-06-14)
+
+> Method: during a salience tuning exercise I drove **both** surfaces in the
+> same session — the legacy workspace (the `c15r/workspace` val, exposed as the
+> `workspace_*` MCP, SQLite-backed) and the new substrate (`read`/`act`/`whoami`
+> on parc.land). These are the ergonomics deltas I felt as the agent, not a
+> design critique. The legacy surface is the prior art the substrate is
+> succeeding; worth keeping what it did well.
+
+**1. Tool surface: wide verb menu vs narrow verb + target.**
+Legacy exposes a named tool per capability (`workspace_search`,
+`workspace_salience`, `workspace_stats`, `workspace_tags`, `workspace_tending`,
+`workspace_add/update/supersede/link`, `workspace_run_start/complete/list`…) —
+self-documenting in the tool list, zero indirection to find a capability. New
+collapses to three verbs with capability in `target`; uniform and composable
+(new cells need no new tools), but discovery requires a `read("$catalog")`
+round-trip. Trade-off: legacy is faster to *start*; new *scales* without
+tool-list bloat. For an agent, the legacy menu had lower activation energy;
+the new catalog indirection is a one-time tax that pays off across many cells.
+
+**2. Salience: an action you take vs a filter applied to you.**
+Legacy `workspace_salience` is a *call the agent chooses* — it returns a ranking
+with `read_count`/`link_count`/`salience_score` exposed, so the attention
+landscape is inspectable on demand. New salience is computed into every read's
+`_meta` and *shapes the read itself* (focus/peripheral/elided). The new way
+gives attention-budgeting for free and bounds output size, but the ranking is
+less inspectable unless you reach for `query rankBy:salience`, and a mis-tuned
+score silently *hides* facts rather than just ranking them low. (Surfacing
+`standing`/`centrality` in `_meta` during this exercise was partly to recover
+the legacy's inspectability.)
+
+**3. Maintenance loop: first-class in legacy, absent (agent-facing) in new.**
+Legacy has `workspace_tending` (a JIT cron the agent calls at session start)
+**and** a whole protocol ecosystem encoded as *data* — tending → weave/fix/
+improve, a generic `protocol-execute` routine, a run lifecycle with
+`parent_run_id` and depth-1 dispatch. An agent can self-maintain the corpus by
+reading and following protocol entries. The new substrate has only a backend
+`TendSchedule` event; there is **no agent-facing tending tool**. To run a
+tending pass over the new corpus this session I had to reconstruct it by hand
+(query → bucket → analyze). This is the biggest ergonomic regression and the
+clearest thing to port: a `workspace.tending`-style read + protocol-as-data.
+
+**4. Output weight.** Legacy returns full content blobs with no budgeting (a
+`workspace_salience(12)` came back at 87KB; several calls overflowed the tool
+buffer and had to be parsed from disk). New elision/peripheral shaping bounds
+read size *by design* — strictly better for a bounded-context agent, and the
+whole point of getting salience right. (Both still overflow on deliberate
+large `limit`s; pagination is the escape hatch in both.)
+
+**5. Provenance & runs.** Both log every read/write as a retrieval signal
+(legacy `log`, new trajectory). Legacy additionally models the **agent run**
+as a first-class entity (`run_start/complete`, parent linkage, self-registration
+for cron-fired runs, audit-entry-per-run) — strong primitives for multi-agent
+orchestration and after-the-fact audit. New has events (`cell.deploy.requested`
+et al.) and trajectory but no surfaced run/audit entity; an agent-run ledger is
+a gap if the protocol ecosystem is to be ported.
+
+**6. Semantic vocabulary.** Legacy bakes a rich vocabulary into the tools/data:
+typed entries (knowledge/decision/concept/protocol/…) and a link-relation
+grammar (`depends-on`/`refines`/`implements`/`grounds`/…) that protocols lean on
+to reason. New has types (`_types`) and edges as first-class, but the link
+*relation* vocabulary and the protocol grammar live (if anywhere) at the
+data/cell layer, not surfaced as ergonomic affordances yet.
+
+**7. Capability/permission model (new wins).** Legacy is one val with broad
+flat access; mutating raw SQLite needed approval but the `workspace_*` verbs were
+unscoped. New has scoped tokens + cell-origin isolation — an agent's blast
+radius is bounded by construction (`workspace:read/write` + `cell:<o>/<n>:*`,
+never `platform:*`). More to understand (scopes, targets), but far safer for
+autonomous agents.
+
+**The carry-over list (what the new substrate should adopt from legacy):**
+an agent-facing **tending** read + **protocol-as-data** ecosystem (#3); a
+first-class **run/audit** entity (#5); and restored **salience inspectability**
+(#2, partly done via `_meta.standing/centrality`). The new substrate already
+wins on output budgeting (#4) and the capability model (#7); keep those.

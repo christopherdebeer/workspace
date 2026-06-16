@@ -6,8 +6,9 @@
       "label": "value.title",
       "manager": "@c15r/lit",
       "handlers": {
-        "open": [{ "surface": "/@c15r/lit?doc=${match}" }],
-        "edit": [{ "surface": "/@c15r/lit?doc=${match}&edit=1" }]
+        "open": [{ "path": "?doc=${match}" }],
+        "edit": [{ "path": "?doc=${match}&edit=1" }],
+        "render": [{ "hint": "markdown" }]
       }
     }
   ]

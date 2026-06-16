@@ -1,3 +1,6 @@
+/* GENERATED — synced from platform/ui/index.tsx by scripts/sync-platform-ui.mjs.
+ * Do NOT edit here; edit platform/ui/index.tsx and re-run the sync. Source-bundled so the
+ * cell renders platform/ui isomorphically with its own React. */
 /**
  * Shared, composable UI primitives for cell front-ends.
  *

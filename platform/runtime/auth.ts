@@ -130,13 +130,43 @@ export function intersectScopes(a: string[], b: string[]): string[] {
 }
 
 /**
+ * Back-compat for the granular scope vocabulary (Phase 2, docs/capability-consent.md):
+ * a coarse grant implies its granular family, so a legacy `workspace:read` token
+ * still satisfies a tool that has migrated to require `read:…`/`write:…`/`act:…`.
+ * Only fires for GRANULAR required scopes (which no tool declares yet), so it is
+ * inert today; and it only ever WIDENS what a held scope satisfies, so it can
+ * never lock out an existing token. Granular→coarse is deliberately NOT implied
+ * (granular tokens aren't issued until tools migrate).
+ */
+export function impliesScope(held: string, required: string): boolean {
+  const isRead = required.startsWith('read:');
+  const isWrite = required.startsWith('write:') || required.startsWith('act:');
+  if (!isRead && !isWrite && required !== 'cells:create') return false; // coarse req → matchesScope only
+  switch (held) {
+    case 'platform:*':
+      return true;
+    case 'workspace:admin':
+      return isRead || isWrite;
+    case 'workspace:read':
+      return isRead;
+    case 'workspace:write':
+      return isWrite;
+    case 'platform:cells:create':
+      return required === 'cells:create';
+    default:
+      return false;
+  }
+}
+
+/**
  * Whether the identity holds `scope` (or a broader wildcard parent). A held
- * scope `a:b:*` satisfies a required `a:b:c`; an exact match always satisfies.
- * Pure predicate — use for filtering (e.g. which tools to advertise); use
+ * scope `a:b:*` satisfies a required `a:b:c`; an exact match always satisfies;
+ * and a coarse grant satisfies its granular family (`impliesScope`). Pure
+ * predicate — use for filtering (e.g. which tools to advertise); use
  * `requireScope` to enforce.
  */
 export function hasScope(identity: Identity, scope: string): boolean {
-  return identity.scopes.some((held) => matchesScope(held, scope));
+  return identity.scopes.some((held) => matchesScope(held, scope) || impliesScope(held, scope));
 }
 
 /**

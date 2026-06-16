@@ -72,6 +72,10 @@ export interface EntryMeta {
   score: number;
   /** Recent write rate (writes per minute over the salience window). */
   velocity: number;
+  /** Cumulative earned importance in [0,1] (saturating log of lifetime reads+writes). */
+  standing: number;
+  /** Structural importance in [0,1] (saturating graph degree). */
+  centrality: number;
   /** True when the value was withheld because the entry fell below the tier. */
   elided: boolean;
 }
@@ -88,6 +92,8 @@ export interface ShapingSummary {
   focusThreshold: number;
   elideThreshold: number;
   elision: 'auto' | 'none';
+  /** The salience lens this read was computed under, when not the default. */
+  lens?: SalienceLens;
   counts: { focus: number; peripheral: number; elided: number; total: number };
 }
 
@@ -185,6 +191,14 @@ export interface StateRecord {
   /** ISO expiry when a timer is set, else null. Liveness is computed at read. */
   timerExpiresAt: string | null;
   timerEffect: 'delete' | 'enable' | null;
+  /**
+   * Import priors: cumulative read/write counts carried in from a migrated corpus
+   * (e.g. legacy `read_count`). Folded into `standing` at read time so a ported
+   * fact arrives with its earned importance instead of cold. Absent for native
+   * facts; never decays (it's a one-time floor on the cumulative term).
+   */
+  seedReads?: number;
+  seedWrites?: number;
 }
 
 /** A typed, directed edge between two located keys within one scope. */
@@ -248,14 +262,36 @@ export interface StateStore {
 // ── salience ───────────────────────────────────────────────────────
 
 export interface SalienceOptions {
-  /** Recency half-life (ms). Older writes decay toward 0. Default 1h. */
+  /** Recency half-life (ms). Older writes decay toward 0. Default 7d — a
+   *  personal-workspace cadence, where a week-old note can still matter (the
+   *  earlier 1h default decayed everything idle to ~0 within hours). */
   halfLifeMs?: number;
-  /** Window for counting recent reads/writes (ms). Default 1h. */
+  /** Window for counting recent reads/writes (ms) — the velocity/attention burst
+   *  window. Default 1h. */
   windowMs?: number;
   /** Writes-in-window that saturate the velocity term. Default 5. */
   velocitySaturation?: number;
   /** Reads-in-window that saturate the attention term. Default 5. */
   attentionSaturation?: number;
+  /** Lifetime reads+writes at which the cumulative `standing` term saturates
+   *  (log-compressed, so it can't run away the way the legacy unbounded score
+   *  did). Default 20 — tuned to personal scale: a "well-attended" fact is ~15–20
+   *  touches, not 50 (a tending-audit calibration over the live corpus, which is
+   *  read-light; 50 was too coarse to register accruing attention). */
+  standingSaturation?: number;
+  /** Graph degree at which the `centrality` term saturates. Default 5 — at personal
+   *  scale, being linked at all is signal (1 edge → 0.2). */
+  centralitySaturation?: number;
+  /** Score-term weights (should sum to ≤1 so the score stays in [0,1] and the
+   *  thresholds keep their meaning). Defaults: recency .45, velocity .10,
+   *  attention .15, standing .20, centrality .10 — velocity (recent writes) is a
+   *  rare, bursty signal already mostly captured by recency, so its weight goes
+   *  to attention (reads), the signal a used workspace actually accrues. */
+  recencyWeight?: number;
+  velocityWeight?: number;
+  attentionWeight?: number;
+  standingWeight?: number;
+  centralityWeight?: number;
   /** Score at/above which an entry is Focus (full value + meta). Default 0.5. */
   focusThreshold?: number;
   /** Score below which an entry is Elided (value withheld). Default 0.1. */
@@ -266,13 +302,63 @@ interface ResolvedSalience extends Required<SalienceOptions> {}
 
 function resolveSalience(o?: SalienceOptions): ResolvedSalience {
   return {
-    halfLifeMs: o?.halfLifeMs ?? 60 * 60 * 1000,
+    halfLifeMs: o?.halfLifeMs ?? 7 * 24 * 60 * 60 * 1000,
     windowMs: o?.windowMs ?? 60 * 60 * 1000,
     velocitySaturation: o?.velocitySaturation ?? 5,
     attentionSaturation: o?.attentionSaturation ?? 5,
+    standingSaturation: o?.standingSaturation ?? 20,
+    centralitySaturation: o?.centralitySaturation ?? 5,
+    // Re-tuned against the warm imported corpus (2026-06-15): at sw .20 the
+    // default elided ~95 earned (multi-read) knowledge entries once they aged;
+    // sw .30 / rw .35 keeps all standing≥0.3 knowledge above elision while still
+    // budgeting away the read-once tail, and leaves fresh native work visible
+    // (recency still leads for recent facts). See the trajectory doc.
+    recencyWeight: o?.recencyWeight ?? 0.35,
+    velocityWeight: o?.velocityWeight ?? 0.1,
+    attentionWeight: o?.attentionWeight ?? 0.15,
+    standingWeight: o?.standingWeight ?? 0.3,
+    centralityWeight: o?.centralityWeight ?? 0.1,
     focusThreshold: o?.focusThreshold ?? 0.5,
     elideThreshold: o?.elideThreshold ?? 0.1,
   };
+}
+
+/**
+ * Named salience lenses — ergonomic per-read biases over the tuned defaults, for
+ * the common "I want a particular view" cases. Each preset's weights sum to 1 so
+ * the score stays in [0,1] and the elision tiers keep their meaning. For precise
+ * control, pass a raw `salience: Partial<SalienceOptions>` instead (or as well —
+ * a raw override merges on top of the preset). Lensing recomputes the score, so
+ * it shifts BOTH the ranking and the focus/peripheral/elided tiers consistently —
+ * unlike `rankBy`, which only reorders an already-scored set.
+ */
+export type SalienceLens = 'salience' | 'recent' | 'connected' | 'durable' | 'active';
+
+const LENS_PRESETS: Record<SalienceLens, Partial<SalienceOptions>> = {
+  salience: {},
+  // Freshness: shorter half-life + heavier recency.
+  recent: {
+    halfLifeMs: 24 * 60 * 60 * 1000,
+    recencyWeight: 0.6,
+    velocityWeight: 0.15,
+    attentionWeight: 0.1,
+    standingWeight: 0.1,
+    centralityWeight: 0.05,
+  },
+  // Graph structure: what's well-connected.
+  connected: { recencyWeight: 0.25, velocityWeight: 0.05, attentionWeight: 0.1, standingWeight: 0.2, centralityWeight: 0.4 },
+  // Earned, cumulative importance — survives idleness.
+  durable: { recencyWeight: 0.2, velocityWeight: 0.05, attentionWeight: 0.1, standingWeight: 0.5, centralityWeight: 0.15 },
+  // What's being touched now (reads + writes in-window).
+  active: { recencyWeight: 0.3, velocityWeight: 0.25, attentionWeight: 0.25, standingWeight: 0.1, centralityWeight: 0.1 },
+};
+
+/** Resolve the salience params for one call: instance defaults ← lens preset ←
+ *  raw override. Returns the base unchanged when neither is set. A raw override
+ *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights). */
+function callSalience(base: ResolvedSalience, lens?: SalienceLens, override?: Partial<SalienceOptions>): ResolvedSalience {
+  if (!lens && !override) return base;
+  return resolveSalience({ ...base, ...(lens ? LENS_PRESETS[lens] : {}), ...override });
 }
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
@@ -280,21 +366,110 @@ const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 /** Salience figures are signals, not measurements — 4 decimals is already generous. */
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
+/** Per-key salience inputs, derived from the trajectory + edges in one pass. */
+export interface KeySignals {
+  /** Reads within the salience window (velocity/attention burst window). */
+  windowReads: number;
+  /** Non-read ops (write/supersede/link/unlink) within the window. */
+  windowWrites: number;
+  /** Lifetime read ops (cumulative — drives `standing`). */
+  lifetimeReads: number;
+  /** Lifetime non-read ops (cumulative — drives `standing`). */
+  lifetimeWrites: number;
+  /** Graph degree (in + out edges — drives `centrality`). */
+  degree: number;
+}
+
+const EMPTY_SIGNALS: KeySignals = { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: 0 };
+
+/** Per-key term breakdown, for `_meta` instrumentation (Q4: measure, don't assert). */
+export interface ScoreParts {
+  score: number;
+  recency: number;
+  velocity: number;
+  attention: number;
+  standing: number;
+  centrality: number;
+}
+
 /**
- * Salience score in [0,1] = a recency term (exponential decay since last write),
- * a velocity term (recent writes), and an attention term (recent reads). The
- * weights favour recency, then velocity, then attention — the substrate's
- * "what should you notice" signal, computed, not configured.
+ * Salience score in [0,1] — a weighted blend of five computed signals (never
+ * configured per fact):
+ *   - **recency**: exponential decay since last write (default 7d half-life);
+ *   - **velocity**: recent writes (burst window);
+ *   - **attention**: recent reads (burst window);
+ *   - **standing**: cumulative earned importance — saturating log of lifetime
+ *     reads+writes, so an old-but-loved fact keeps a floor (and a hub can't run
+ *     away unbounded the way the legacy additive score did);
+ *   - **centrality**: structural importance from graph degree, saturating.
+ * Recency leads but no longer dominates: standing + centrality give idle-yet-
+ * important facts (and a freshly-ported corpus) a non-zero floor above elision.
  */
 export function computeScore(
-  args: { updatedAtMs: number; writesInWindow: number; readsInWindow: number; nowMs: number },
+  args: { updatedAtMs: number; nowMs: number } & Partial<KeySignals>,
   s: ResolvedSalience,
 ): number {
+  return scoreParts(args, s).score;
+}
+
+/** `computeScore` with the term breakdown exposed (for `_meta` + tuning). */
+export function scoreParts(
+  args: { updatedAtMs: number; nowMs: number } & Partial<KeySignals>,
+  s: ResolvedSalience,
+): ScoreParts {
   const age = Math.max(0, args.nowMs - args.updatedAtMs);
   const recency = Math.pow(2, -age / s.halfLifeMs);
-  const velocity = Math.min(args.writesInWindow / s.velocitySaturation, 1);
-  const attention = Math.min(args.readsInWindow / s.attentionSaturation, 1);
-  return clamp01(0.5 * recency + 0.3 * velocity + 0.2 * attention);
+  const velocity = Math.min((args.windowWrites ?? 0) / s.velocitySaturation, 1);
+  const attention = Math.min((args.windowReads ?? 0) / s.attentionSaturation, 1);
+  const lifetime = (args.lifetimeReads ?? 0) + (args.lifetimeWrites ?? 0);
+  // log1p compression: each additional touch matters less; saturates at the
+  // configured lifetime total. lifetime 0 → 0, lifetime == standingSaturation → 1.
+  const standing = s.standingSaturation > 0 ? Math.min(Math.log1p(lifetime) / Math.log1p(s.standingSaturation), 1) : 0;
+  const centrality = s.centralitySaturation > 0 ? Math.min((args.degree ?? 0) / s.centralitySaturation, 1) : 0;
+  const score = clamp01(
+    s.recencyWeight * recency +
+      s.velocityWeight * velocity +
+      s.attentionWeight * attention +
+      s.standingWeight * standing +
+      s.centralityWeight * centrality,
+  );
+  return { score, recency, velocity, attention, standing, centrality };
+}
+
+/** Fold a scope's trajectory + edges into per-key salience signals in one pass. */
+export function buildSignals(
+  events: TrajectoryEvent[],
+  edges: EdgeRecord[],
+  nowMs: number,
+  windowMs: number,
+): Map<string, KeySignals> {
+  const m = new Map<string, KeySignals>();
+  const sig = (k: string): KeySignals => {
+    let v = m.get(k);
+    if (!v) {
+      v = { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: 0 };
+      m.set(k, v);
+    }
+    return v;
+  };
+  const windowStart = nowMs - windowMs;
+  for (const e of events) {
+    if (!e.key) continue; // scope-level reads (key=null) aren't per-fact attention
+    const v = sig(e.key);
+    const inWindow = Date.parse(e.at) >= windowStart;
+    if (e.op === 'read') {
+      v.lifetimeReads++;
+      if (inWindow) v.windowReads++;
+    } else {
+      v.lifetimeWrites++;
+      if (inWindow) v.windowWrites++;
+    }
+  }
+  for (const ed of edges) {
+    sig(ed.from).degree++;
+    if (ed.to !== ed.from) sig(ed.to).degree++;
+  }
+  return m;
 }
 
 function tierFor(score: number, s: ResolvedSalience): Tier {
@@ -325,6 +500,12 @@ export interface WriteInput {
    * CAS treats an expired-delete fact as absent — the crash-safe claim.
    */
   timer?: FactTimer;
+  /**
+   * Import-only: preserve a migrated fact's original timestamps (recency reflects
+   * true age) and carry its cumulative read/write counts as `standing` priors.
+   * `import.createdAt` only applies on first write (creation).
+   */
+  import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
 }
 
 export interface ReadOptions {
@@ -337,6 +518,10 @@ export interface ReadOptions {
   /** Per-read threshold overrides. */
   focusThreshold?: number;
   elideThreshold?: number;
+  /** Bias salience for this read via a named lens (recent/connected/durable/active). */
+  lens?: SalienceLens;
+  /** Precise per-read salience override (merges over the lens + instance defaults). */
+  salience?: Partial<SalienceOptions>;
 }
 
 export interface QueryOptions {
@@ -348,6 +533,10 @@ export interface QueryOptions {
   prefix?: string;
   /** Ranking: read-time salience (default) or last-write recency. */
   rankBy?: 'salience' | 'recency';
+  /** Bias salience for this query via a named lens (recent/connected/durable/active). */
+  lens?: SalienceLens;
+  /** Precise per-query salience override (merges over the lens + instance defaults). */
+  salience?: Partial<SalienceOptions>;
   limit?: number;
   /**
    * Resume token from a previous page's `nextCursor`. Pages are computed over
@@ -460,21 +649,34 @@ function assertEdgePart(label: string, v: string): void {
 export function createObservedState(store: StateStore, salience?: SalienceOptions): ObservedState {
   const s = resolveSalience(salience);
 
-  /** Wrap a stored record into a read-facing entry with a computed score. */
-  async function wrap(rec: StateRecord, nowMs: number, traj?: TrajectoryEvent[]): Promise<Entry> {
-    const events = traj ?? (await store.recentTrajectory(rec.scope, nowMs - s.windowMs));
-    let writes = 0;
-    let reads = 0;
-    for (const e of events) {
-      if (e.key !== rec.key) continue;
-      if (e.op === 'read') reads++;
-      else writes++;
-    }
-    const score = computeScore(
-      { updatedAtMs: Date.parse(rec.updatedAt), writesInWindow: writes, readsInWindow: reads, nowMs },
-      s,
+  /** Build per-key salience signals for a whole scope (one trajectory + edge
+   *  pass). Lifetime (cumulative) terms need the full trajectory, so this reads
+   *  from seq 0 — the price of `standing`. Callers in bulk paths build it once
+   *  and share it across `wrap`s. */
+  async function signalsFor(scope: string, nowMs: number, windowMs: number): Promise<Map<string, KeySignals>> {
+    const [events, edges] = await Promise.all([store.recentTrajectory(scope, 0), store.listEdges(scope)]);
+    return buildSignals(events, edges, nowMs, windowMs);
+  }
+
+  /** Wrap a stored record into a read-facing entry with a computed score. Pass a
+   *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan, and
+   *  `sCall` to score under a per-read lens (defaults to the instance settings). */
+  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s): Promise<Entry> {
+    const sig = (signals ?? (await signalsFor(rec.scope, nowMs, sCall.windowMs))).get(rec.key) ?? EMPTY_SIGNALS;
+    // Import priors fold into the cumulative (standing) counts only — never the
+    // recent window — so a ported fact's earned importance shows without faking
+    // current activity.
+    const parts = scoreParts(
+      {
+        updatedAtMs: Date.parse(rec.updatedAt),
+        nowMs,
+        ...sig,
+        lifetimeReads: sig.lifetimeReads + (rec.seedReads ?? 0),
+        lifetimeWrites: sig.lifetimeWrites + (rec.seedWrites ?? 0),
+      },
+      sCall,
     );
-    const windowMin = s.windowMs / 60000;
+    const windowMin = sCall.windowMs / 60000;
     return {
       value: rec.value,
       _meta: {
@@ -491,24 +693,26 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         tags: rec.tags,
         timer:
           rec.timerExpiresAt && rec.timerEffect ? { expiresAt: rec.timerExpiresAt, effect: rec.timerEffect } : null,
-        score: round4(score),
-        velocity: round4(windowMin > 0 ? writes / windowMin : 0),
+        score: round4(parts.score),
+        velocity: round4(windowMin > 0 ? sig.windowWrites / windowMin : 0),
+        standing: round4(parts.standing),
+        centrality: round4(parts.centrality),
         elided: false,
       },
     };
   }
 
   /** Pure salience shaping over an already-scored set (own + granted, merged). */
-  function shapeEntries(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
+  function shapeEntries(entries: Record<string, Entry>, opts?: ReadOptions, sCall: ResolvedSalience = s): ReadResult {
     const elision = opts?.elision ?? 'auto';
-    const focusThreshold = opts?.focusThreshold ?? s.focusThreshold;
-    const elideThreshold = opts?.elideThreshold ?? s.elideThreshold;
+    const focusThreshold = opts?.focusThreshold ?? sCall.focusThreshold;
+    const elideThreshold = opts?.elideThreshold ?? sCall.elideThreshold;
     const expand = new Set(opts?.expand ?? []);
     const out: Record<string, Entry> = {};
     const stubs: ElidedStub[] = [];
     const counts = { focus: 0, peripheral: 0, elided: 0, total: 0 };
     for (const [key, src] of Object.entries(entries)) {
-      let tier = tierFor(src._meta.score, { ...s, focusThreshold, elideThreshold });
+      let tier = tierFor(src._meta.score, { ...sCall, focusThreshold, elideThreshold });
       if (expand.has(key)) tier = 'focus';
       counts[tier]++;
       counts.total++;
@@ -524,7 +728,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     return {
       entries: out,
       ...(stubs.length ? { elided: stubs } : {}),
-      _shaping: { focusThreshold, elideThreshold, elision, counts },
+      _shaping: { focusThreshold, elideThreshold, elision, ...(opts?.lens ? { lens: opts.lens } : {}), counts },
     };
   }
 
@@ -573,8 +777,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         firstSeq: prev?.firstSeq ?? seq,
         writer,
         via: input.via ?? null,
-        createdAt: prev?.createdAt ?? nowIso,
-        updatedAt: nowIso,
+        // Import preserves the migrated fact's real timestamps (so recency
+        // reflects true age); native writes stamp now.
+        createdAt: prev?.createdAt ?? input.import?.createdAt ?? nowIso,
+        updatedAt: input.import?.updatedAt ?? nowIso,
         writers,
         // a fresh write to a superseded key revives it
         superseded: false,
@@ -584,9 +790,19 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         tags: input.tags !== undefined ? input.tags : (prev?.tags ?? []),
         timerExpiresAt: timer?.expiresAt ?? null,
         timerEffect: timer?.effect ?? null,
+        // Carry import priors (cumulative legacy reads/writes) so `standing`
+        // reflects earned importance; preserved across rewrites.
+        ...(input.import?.seedReads !== undefined || prev?.seedReads !== undefined
+          ? { seedReads: input.import?.seedReads ?? prev?.seedReads }
+          : {}),
+        ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
+          ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
+          : {}),
       };
       await store.put(record, hasCas ? { expectRevision: prev?.revision ?? null } : undefined);
-      await store.appendTrajectory({ op: 'write', scope: input.scope, key: input.key, at: nowIso, seq });
+      // The trajectory write event carries the (possibly historical) updatedAt so
+      // an import doesn't read as a recent burst.
+      await store.appendTrajectory({ op: 'write', scope: input.scope, key: input.key, at: record.updatedAt, seq });
       return wrap(record, nowMs);
     },
 
@@ -600,34 +816,38 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     },
 
     shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
-      return shapeEntries(entries, opts);
+      // Re-tiers an already-scored set, so a lens here only adjusts thresholds
+      // (it can't recompute scores without the scope's signals).
+      return shapeEntries(entries, opts, callSalience(s, opts?.lens, opts?.salience));
     },
 
     async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
       const nowMs = Date.now();
+      const sCall = callSalience(s, opts?.lens, opts?.salience);
       const records = await store.list(scope);
-      const traj = await store.recentTrajectory(scope, nowMs - s.windowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
 
       // Score every live entry (no elision yet); shape in one pass below.
       const scored: Record<string, Entry> = {};
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
         if (!isTimerLive(rec, nowMs)) continue;
-        scored[rec.key] = await wrap(rec, nowMs, traj);
+        scored[rec.key] = await wrap(rec, nowMs, signals, sCall);
       }
 
       // Reading the scope is itself attention on every surfaced key.
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'read', scope, key: null, at: new Date(nowMs).toISOString(), seq });
 
-      return shapeEntries(scored, opts);
+      return shapeEntries(scored, opts, sCall);
     },
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
+      const sCall = callSalience(s, opts?.lens, opts?.salience);
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      const traj = await store.recentTrajectory(scope, nowMs - s.windowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
@@ -635,7 +855,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (opts?.prefix && !rec.key.startsWith(opts.prefix)) return false;
         return true;
       });
-      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, traj)) })));
+      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall)) })));
       const rankBy = opts?.rankBy ?? 'salience';
       wrapped.sort((a, b) =>
         rankBy === 'recency'
@@ -701,7 +921,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
       ]);
       const nowMs = Date.now();
-      const traj = await store.recentTrajectory(scope, nowMs - s.windowMs);
+      const signals = await signalsFor(scope, nowMs, s.windowMs);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
@@ -709,7 +929,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
         const rec = await store.get(scope, nk);
-        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, traj);
+        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals);
       }
       return { outbound, inbound, entries };
     },

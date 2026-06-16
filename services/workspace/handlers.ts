@@ -38,6 +38,8 @@ import {
   type CommandHandler,
   type RegisteredCommand,
   type Identity,
+  type SalienceLens,
+  type SalienceOptions,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -115,6 +117,9 @@ export interface RememberInput {
   ifAbsent?: boolean;
   /** Lease/reveal timer, evaluated at read (no scheduler). */
   timer?: FactTimer;
+  /** Import-only: preserve a migrated fact's timestamps + cumulative read/write
+   *  counts (folded into `standing`). See WriteInput.import. */
+  import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
 }
 
 /** Bulk intake — imports and capture backfills land in one round trip. */
@@ -122,6 +127,8 @@ export interface IngestInput {
   facts: RememberInput[];
   /** Default `via` for facts that do not set their own. */
   via?: string;
+  /** Optional edges to write after the facts (bulk graph import). */
+  edges?: Array<{ from: string; rel: string; to: string; strength?: number }>;
 }
 
 export interface IngestResult {
@@ -133,6 +140,10 @@ export interface RecallInput {
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
+  /** Bias salience via a named lens (recent/connected/durable/active). */
+  lens?: SalienceLens;
+  /** Precise per-call salience override (merges over the lens + defaults). */
+  salience?: Partial<SalienceOptions>;
 }
 export interface PeekInput {
   key: string;
@@ -144,6 +155,10 @@ export interface QueryInput {
   tag?: string;
   prefix?: string;
   rankBy?: 'salience' | 'recency';
+  /** Bias salience via a named lens (recent/connected/durable/active). */
+  lens?: SalienceLens;
+  /** Precise per-call salience override (merges over the lens + defaults). */
+  salience?: Partial<SalienceOptions>;
   limit?: number;
   /** Resume token from a previous page's `nextCursor`. */
   cursor?: string;
@@ -329,7 +344,37 @@ interface ToolDescriptor {
 const META_SCHEMA = {
   type: 'object',
   description:
-    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, elided',
+    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided',
+} as const;
+
+/** Per-call salience lens — an ergonomic bias over the tuned defaults. */
+const LENS_SCHEMA = {
+  type: 'string',
+  enum: ['salience', 'recent', 'connected', 'durable', 'active'],
+  description:
+    'Salience lens (default salience): recent=freshness, connected=graph degree, durable=earned/cumulative, active=read/written now. Recomputes the score, so it shifts BOTH ranking and focus/peripheral/elided tiers.',
+} as const;
+
+/** Import-only provenance: preserve a migrated fact's timestamps + earned counts. */
+const IMPORT_SCHEMA = {
+  type: 'object',
+  description:
+    'Import-only: { createdAt?, updatedAt? (ISO — preserve true age for recency), seedReads?, seedWrites? (cumulative legacy counts, folded into standing) }.',
+  properties: {
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+    seedReads: { type: 'number' },
+    seedWrites: { type: 'number' },
+  },
+  additionalProperties: false,
+} as const;
+
+/** Raw per-call salience override (escape hatch); merges over the lens + defaults. */
+const SALIENCE_OVERRIDE_SCHEMA = {
+  type: 'object',
+  description:
+    'Precise salience override, merged over the lens + defaults: { halfLifeMs?, windowMs?, recencyWeight?, velocityWeight?, attentionWeight?, standingWeight?, centralityWeight?, standingSaturation?, centralitySaturation?, focusThreshold?, elideThreshold? }. Not auto-normalized — you own the weights.',
+  additionalProperties: true,
 } as const;
 
 const ENTRY_SCHEMA = {
@@ -356,9 +401,12 @@ const EDGE_SCHEMA = {
 
 /**
  * The workspace vocabulary as MCP tool descriptors. Every command operates on the
- * caller's own slice (or subsets explicitly granted to them), so ownership — not a
- * scope — is the gate: `scope: null` means any authenticated principal, isolated to
- * their own data, exactly as forge treats its per-owner commands.
+ * caller's own slice (or subsets explicitly granted to them) — ownership/slice
+ * isolation is the primary boundary. On top of that, `describeTools` derives a
+ * verb scope from `kind` (reads → `read:workspace`, acts → `write:workspace`) so
+ * a token's read/write consent is actually enforced; `scope: null` here means
+ * "no explicit scope — gate by verb". An explicit scope (e.g. `workspace:admin`)
+ * overrides the verb default.
  */
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
@@ -390,6 +438,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           required: ['effect'],
           additionalProperties: false,
         },
+        import: IMPORT_SCHEMA,
       },
       required: ['key', 'value'],
       additionalProperties: false,
@@ -417,12 +466,23 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               type: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
               ifAbsent: { type: 'boolean' },
+              import: IMPORT_SCHEMA,
             },
             required: ['key', 'value'],
             additionalProperties: false,
           },
         },
         via: { type: 'string', description: 'Default `via` for facts that do not set their own' },
+        edges: {
+          type: 'array',
+          description: 'Edges to write after the facts (bulk graph import): { from, rel, to, strength? }',
+          items: {
+            type: 'object',
+            properties: { from: { type: 'string' }, rel: { type: 'string' }, to: { type: 'string' }, strength: { type: 'number' } },
+            required: ['from', 'rel', 'to'],
+            additionalProperties: false,
+          },
+        },
       },
       required: ['facts'],
       additionalProperties: false,
@@ -447,6 +507,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         elision: { type: 'string', enum: ['auto', 'none'], description: "'auto' (default) collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
         expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
+        lens: LENS_SCHEMA,
+        salience: SALIENCE_OVERRIDE_SCHEMA,
       },
       additionalProperties: false,
     },
@@ -492,6 +554,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         tag: { type: 'string', description: 'Only facts carrying this tag' },
         prefix: { type: 'string', description: 'Only keys with this prefix' },
         rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
+        lens: LENS_SCHEMA,
+        salience: SALIENCE_OVERRIDE_SCHEMA,
         limit: { type: 'number', description: 'Max entries to return' },
         cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
@@ -1113,6 +1177,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           ifRevision: input.ifRevision,
           ifAbsent: input.ifAbsent,
           timer: input.timer,
+          import: input.import,
         },
         ctx.identity,
       );
@@ -1147,12 +1212,21 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
               tags: f.tags,
               ifAbsent: f.ifAbsent,
               timer: f.timer,
+              import: f.import,
             },
             ctx.identity,
           );
           ingested++;
         } catch (err) {
           errors.push({ key: f.key, error: (err as Error).message });
+        }
+      }
+      // Bulk edges (graph import) after the facts; dangling edges are allowed.
+      for (const e of input.edges ?? []) {
+        try {
+          if (e?.from && e?.rel && e?.to) await state.link(scope, e.from, e.rel, e.to, e.strength ?? null, ctx.identity);
+        } catch (err) {
+          errors.push({ key: `${e?.from}-[${e?.rel}]->${e?.to}`, error: (err as Error).message });
         }
       }
       // One announcement for the batch — intake should not storm the bus.
@@ -1166,8 +1240,11 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { state, grants } = build(ctx);
       const includeSuperseded = input?.includeSuperseded;
 
-      // Own slice, scored but not yet shaped (elision:'none' keeps values present).
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded }, ctx.identity);
+      // Own slice, scored (under the per-call lens) but not yet shaped
+      // (elision:'none' keeps values present so granted slices merge cleanly).
+      const lens = input?.lens;
+      const salience = input?.salience;
+      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -1176,7 +1253,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded }, ctx.identity);
+          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience }, ctx.identity);
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -1187,8 +1264,8 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         }
       }
 
-      // Shape the whole assembled view once.
-      return state.shape(merged, { elision: input?.elision, expand: input?.expand });
+      // Shape the whole assembled view once (lens echoes into _shaping).
+      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience });
     },
 
     async peek(input, ctx) {
@@ -1219,6 +1296,8 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           tag: input?.tag,
           prefix: input?.prefix,
           rankBy: input?.rankBy,
+          lens: input?.lens,
+          salience: input?.salience,
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
@@ -1531,8 +1610,18 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     },
 
     // How the `/mcp` gateway discovers this cell's tools (mirrors forge.describeTools).
+    // Verb scopes (docs/capability-consent.md): a tool with no explicit scope is
+    // gated by its kind — reads require `read:workspace`, acts `write:workspace` —
+    // so consent means what it says (a read-only token can't write). Slice
+    // isolation still applies in each handler; this adds the verb gate on top.
+    // Legacy coarse tokens satisfy these via impliesScope (workspace:read ⊇
+    // read:*, workspace:write ⊇ write:*), so nothing that worked breaks.
     async describeTools() {
-      return { tools: TOOL_DESCRIPTORS };
+      const tools = TOOL_DESCRIPTORS.map((t) => ({
+        ...t,
+        scope: t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+      }));
+      return { tools };
     },
   };
 }

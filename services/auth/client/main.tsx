@@ -28,13 +28,18 @@ interface Params {
   user_code?: string;
 }
 
-const SCOPE_HINTS: Record<string, string> = {
-  'workspace:read': 'Read your workspace data',
-  'workspace:write': 'Create and modify your workspace data',
-  'workspace:admin': 'Administer the workspace',
-  'platform:cells:create': 'Create and run dynamic cells',
-  'platform:*': 'Full platform control (admin)',
-};
+/** Capability metadata for a scope (served by /auth/grantable; see oauth.ts). */
+interface ScopeMeta {
+  verb: 'read' | 'write' | 'admin';
+  title: string;
+  description: string;
+}
+/** The consent groups, in order, with the read/write/admin distinction surfaced. */
+const VERB_GROUPS: Array<{ verb: ScopeMeta['verb']; heading: string; note: string }> = [
+  { verb: 'read', heading: 'Reads', note: 'Sees your data — no changes.' },
+  { verb: 'write', heading: 'Writes', note: 'Can change your data.' },
+  { verb: 'admin', heading: 'Admin', note: 'Elevated control.' },
+];
 
 function params(): Params {
   return Object.fromEntries(new URLSearchParams(location.search)) as Params;
@@ -62,6 +67,8 @@ function App(): React.JSX.Element {
   const [username, setUsername] = useState<string>('');
   const [signedInUser, setSignedInUser] = useState<string>('');
   const [grantable, setGrantable] = useState<string[]>([]);
+  const [catalog, setCatalog] = useState<Record<string, ScopeMeta>>({});
+  const [clientName, setClientName] = useState<string>('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const fail = useCallback((msg: string) => {
@@ -86,15 +93,22 @@ function App(): React.JSX.Element {
       if (!oauthMode || !p.redirect_uri) return fail('Missing OAuth parameters');
 
       // Fetch the scopes this user is allowed to grant, then show the picker.
-      const g = await postJson<{ username?: string; scopes?: string[]; error?: string }>('/auth/grantable', {
+      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; clientName?: string; error?: string }>('/auth/grantable', {
         sessionId,
+        clientId: p.client_id,
       });
       if (g.error || !g.scopes) return fail(g.error ?? 'Could not load scopes');
       setSignedInUser(g.username ?? '');
-      setGrantable(g.scopes);
-      const requested = new Set((p.scope ?? '').split(/\s+/).filter(Boolean));
-      // Pre-check the requested scopes the user can actually grant.
-      setSelected(new Set(g.scopes.filter((s) => requested.has(s))));
+      setCatalog(g.catalog ?? {});
+      setClientName(g.clientName ?? '');
+      // Show only what the client actually REQUESTED (∩ what the user may grant) —
+      // don't prompt for permissions the client never asked for. Pre-checked; the
+      // user can deselect to grant a subset.
+      const requested = (p.scope ?? '').split(/\s+/).filter(Boolean);
+      const grant = new Set(g.scopes);
+      const shown = requested.length ? requested.filter((s) => grant.has(s)) : g.scopes;
+      setGrantable(shown);
+      setSelected(new Set(requested.length ? shown : []));
       (window as unknown as { __sessionId: string }).__sessionId = sessionId;
       setStep('consent');
     },
@@ -215,19 +229,31 @@ function App(): React.JSX.Element {
         {step === 'consent' ? (
           <div style={{ display: 'grid', gap: '0.75rem', marginTop: '0.5rem' }}>
             <p style={{ color: theme.dim, fontSize: '0.85rem', margin: 0 }}>
-              Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>. Choose the
-              permissions to grant <strong style={{ color: theme.text }}>{p.client_id}</strong>:
+              Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
+              <strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:
             </p>
-            <div style={{ display: 'grid', gap: '0.5rem' }}>
-              {grantable.map((s) => (
-                <Checkbox
-                  key={s}
-                  checked={selected.has(s)}
-                  onChange={(on) => toggle(s, on)}
-                  label={s}
-                  hint={SCOPE_HINTS[s]}
-                />
-              ))}
+            <div style={{ display: 'grid', gap: '0.9rem' }}>
+              {VERB_GROUPS.map((g) => {
+                const inGroup = grantable.filter((s) => (catalog[s]?.verb ?? 'read') === g.verb);
+                if (!inGroup.length) return null;
+                return (
+                  <div key={g.verb} style={{ display: 'grid', gap: '0.45rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                      <strong style={{ fontFamily: theme.serif, fontSize: '0.95rem' }}>{g.heading}</strong>
+                      <span style={{ color: theme.dim, fontSize: '0.75rem' }}>{g.note}</span>
+                    </div>
+                    {inGroup.map((s) => (
+                      <Checkbox
+                        key={s}
+                        checked={selected.has(s)}
+                        onChange={(on) => toggle(s, on)}
+                        label={catalog[s]?.title ?? s}
+                        hint={catalog[s]?.description || s}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
               {grantable.length === 0 ? <Badge tone="dim">No grantable scopes</Badge> : null}
             </div>
             <Button onClick={submitConsent} disabled={selected.size === 0}>

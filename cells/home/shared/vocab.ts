@@ -1,3 +1,6 @@
+/* GENERATED — synced from platform/ui/vocab.ts by scripts/sync-platform-ui.mjs.
+ * Do NOT edit here; edit platform/ui/vocab.ts and re-run the sync. Source-bundled so the
+ * cell renders platform/ui isomorphically with its own React. */
 /**
  * Type vocabulary — the resolver (docs/type-vocabulary.md).
  *

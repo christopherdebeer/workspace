@@ -39,6 +39,28 @@ describe('hasScope (back-compat over the matcher)', () => {
   });
 });
 
+describe('granular scope back-compat (coarse grant ⊇ granular family)', () => {
+  it('coarse grant satisfies the granular family — only widens, never locks out', () => {
+    const reader = { user: 'u', scopes: ['workspace:read'] };
+    expect(hasScope(reader, 'read:workspace')).toBe(true); // migrated read tool
+    expect(hasScope(reader, 'read:@c15r/lit')).toBe(true);
+    expect(hasScope(reader, 'write:type:note')).toBe(false); // read ≠ write
+    const writer = { user: 'u', scopes: ['workspace:write'] };
+    expect(hasScope(writer, 'write:type:note')).toBe(true);
+    expect(hasScope(writer, 'act:@c15r/lit.publish')).toBe(true);
+    expect(hasScope(writer, 'read:workspace')).toBe(false); // write does not imply read
+    const maker = { user: 'u', scopes: ['platform:cells:create'] };
+    expect(hasScope(maker, 'cells:create')).toBe(true);
+    expect(hasScope({ user: 'u', scopes: ['platform:*'] }, 'write:type:note')).toBe(true);
+  });
+
+  it('is inert for coarse requirements (today: tools declare coarse) — no behavior change', () => {
+    const reader = { user: 'u', scopes: ['workspace:read'] };
+    expect(hasScope(reader, 'workspace:read')).toBe(true);
+    expect(hasScope(reader, 'workspace:write')).toBe(false); // unchanged
+  });
+});
+
 describe('intersectScopePatterns', () => {
   it('literal ∩ literal', () => {
     expect(intersectScopePatterns('a:b', 'a:b')).toBe('a:b');

@@ -20,7 +20,7 @@ import {
   ServiceContext,
   RegisteredCommand,
 } from '../../platform/runtime';
-import { createRegistry, CellRecord } from './registry';
+import { createRegistry, CellRecord, CellRegistry, DeployState } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
 import { transpileCell, bundleFiles, bundleClientFiles } from './transpile';
 import {
@@ -53,7 +53,7 @@ function sinceToMs(since: string | undefined): number {
   return n * unit;
 }
 
-const CREATE_SCOPE = 'platform:cells:create';
+const CREATE_SCOPE = 'cells:create';
 
 /** Normalise a cell name into an address/ARN-safe slug. */
 function slugify(name: string): string {
@@ -76,6 +76,26 @@ function statusFromStack(stackStatus: string): CellRecord['status'] {
   if (stackStatus.includes('ROLLBACK') || stackStatus.includes('FAILED')) return 'FAILED';
   if (stackStatus.startsWith('DELETE')) return 'DELETING';
   return 'CREATING';
+}
+
+/**
+ * Refresh a record's status from its live stack so callers see CREATING → ACTIVE
+ * (or → FAILED). Only non-terminal records (CREATING/DELETING) are probed — a
+ * stack describe per record is the cost, so terminal ACTIVE/FAILED records are
+ * left untouched. A vanished stack is left as-is (createCell treats it as an
+ * orphan and allows recreate). Mutates and returns the record.
+ */
+async function reconcileStatus(registry: CellRegistry, record: CellRecord): Promise<CellRecord> {
+  if (record.status !== 'CREATING' && record.status !== 'DELETING') return record;
+  const stack = await describeStack(record.stackName);
+  if (stack) {
+    const fresh = statusFromStack(stack.status);
+    if (fresh !== record.status) {
+      await registry.setStatus(record.cellId, fresh);
+      record.status = fresh;
+    }
+  }
+  return record;
 }
 
 /**
@@ -174,8 +194,9 @@ const clampTimeout = (n: unknown): number | undefined => {
 };
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
-  // Scope (platform:cells:create) is enforced at the /mcp gateway; forge is a
-  // backend reachable only via allow-listed invokes, and authorizes by ownership.
+  // Scope (cells:create) is enforced at the /mcp gateway; forge is a backend
+  // reachable only via allow-listed invokes, and authorizes by ownership. Legacy
+  // platform:cells:create / platform:* tokens still satisfy it (impliesScope).
   const owner = requireUser(ctx.identity);
   if (!input?.name?.trim()) throw new Error('A cell `name` is required');
   if (!input?.code?.trim()) throw new Error('Cell `code` (a TypeScript module exporting `handler`) is required');
@@ -188,11 +209,14 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
 
   const existing = await registry.get(cellId);
   if (existing && existing.status !== 'FAILED') {
-    // A DELETING record whose CloudFormation stack is already gone is an orphan
-    // (getCell only reconciles while the stack still exists) — recreating would
-    // otherwise be blocked forever. Treat a vanished stack as deletable and let
-    // this create overwrite the record.
-    const orphaned = existing.status === 'DELETING' && (await describeStack(existing.stackName)) === null;
+    // A record whose CloudFormation stack is already gone is an orphan — the
+    // registry never caught up (getCell/listCells only reconcile while the stack
+    // still exists), so recreating would otherwise be blocked forever. This covers
+    // both a DELETING record whose teardown finished AND a CREATING record whose
+    // create failed: deployStack uses `OnFailure: DELETE`, so a rolled-back create
+    // leaves no stack behind. Treat a vanished stack as recreatable and let this
+    // create overwrite the record.
+    const orphaned = (await describeStack(existing.stackName)) === null;
     if (!orphaned) {
       throw new Error(`Cell "${cellId}" already exists (status ${existing.status})`);
     }
@@ -271,6 +295,11 @@ async function listCells(_input: unknown, ctx: ServiceContext): Promise<unknown>
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
   const cells = await registry.listByOwner(user);
+  // Reconcile non-terminal records against their live stacks so the list reflects
+  // CREATING → ACTIVE without a getCell round-trip (the gotcha: a stack could be
+  // CREATE_COMPLETE while the registry still said CREATING). Only CREATING/DELETING
+  // records are probed; the describes run in parallel.
+  await Promise.all(cells.map((c) => reconcileStatus(registry, c)));
   return {
     cells: cells.map((c) => ({
       cellId: c.cellId,
@@ -322,17 +351,7 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
   if (!record) throw new Error(`Unknown cell "${input?.cellId}"`);
   authorizeAccess(record, user);
 
-  // Refresh status from the live stack so callers see CREATING → ACTIVE.
-  if (record.status === 'CREATING' || record.status === 'DELETING') {
-    const stack = await describeStack(record.stackName);
-    if (stack) {
-      const fresh = statusFromStack(stack.status);
-      if (fresh !== record.status) {
-        await registry.setStatus(record.cellId, fresh);
-        record.status = fresh;
-      }
-    }
-  }
+  await reconcileStatus(registry, record);
 
   return {
     cellId: record.cellId,
@@ -341,6 +360,7 @@ async function getCell(input: CellRefInput, ctx: ServiceContext): Promise<unknow
     status: record.status,
     grants: record.grants,
     ...(record.toolGrants ? { toolGrants: record.toolGrants } : {}),
+    ...(record.deploy ? { deploy: record.deploy } : {}),
     description: record.description,
     address: cellAddress(record.owner, record.name),
     createdAt: record.createdAt,
@@ -410,6 +430,9 @@ interface CallCellInput {
   body?: unknown;
   /** Raw query string to forward to the cell (no leading `?`). */
   query?: string;
+  /** SSR proxy: shaped substrate reads dispatch ran as the caller, forwarded to
+   *  the cell's invocation as `event.ssrData` (docs/dynamic-cells.md). */
+  ssrData?: Record<string, unknown>;
 }
 
 /** Resolve the input's target to an internal cellId. */
@@ -484,6 +507,10 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
       requestContext: { http: { method, path } },
       body: bodyStr,
       isBase64Encoded: false,
+      // SSR proxy: dispatch ran the cell's declared reads AS THE CALLER and passed
+      // the shaped results here; forward them so the cell can server-render real
+      // content. The cell never receives a token (docs/dynamic-cells.md).
+      ...(input.ssrData ? { ssrData: input.ssrData } : {}),
     },
   });
   return result;
@@ -509,6 +536,21 @@ async function resolveCell(input: ResolveInput, ctx: ServiceContext): Promise<un
     grants: record.grants,
     status: record.status,
   };
+}
+
+/**
+ * Internal: the cell's declared SSR reads (from its `ssr.json`), for dispatch to
+ * run as the caller before invoking the cell. Public-cell metadata only — no
+ * auth required (dispatch gates the navigation itself).
+ */
+async function ssrReadsFor(input: { owner?: string; name?: string; cellId?: string }, ctx: ServiceContext): Promise<unknown> {
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cellId = input.cellId ?? (input.owner && input.name ? makeCellId(input.owner, input.name) : undefined);
+  if (!cellId) return { reads: [] };
+  const record = await registry.get(cellId);
+  ctx.logger.info('ssrReadsFor', { cellId, reads: record?.ssrReads?.length ?? 0 });
+  return { reads: record?.ssrReads ?? [] };
 }
 
 interface DeleteInput {
@@ -664,7 +706,7 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
   const { record, bucket, env } = await resolveAuthorized(input, user);
   await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
   ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
-  if (input.deploy) return deployCell(record, env, ctx);
+  if (input.deploy) return requestDeploy(record, env, ctx);
   await emitFilesChanged(ctx, record, 'write', [cleanPath(input.path)]);
   return { ok: true, cellId: record.cellId, path: cleanPath(input.path) };
 }
@@ -723,7 +765,7 @@ interface ReplaceInFileInput extends CellRef {
   new_str: string;
   /** Replace every occurrence (default: first only). */
   replace_all?: boolean;
-  /** Fused verify: bundle + redeploy in the same call. */
+  /** Fused: kick off an async deploy in the same call (poll get for the phase). */
   deploy?: boolean;
 }
 
@@ -754,8 +796,8 @@ async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Pr
   ctx.logger.info('cell file edited', { cellId: record.cellId, path: cleanPath(input.path), replacements });
   const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), replacements, occurrences };
   if (input.deploy) {
-    const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
-    return { ...result, deploy: deployed };
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploy: started.deploy };
   }
   await emitFilesChanged(ctx, record, 'replace', [cleanPath(input.path)]);
   return result;
@@ -779,8 +821,8 @@ async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Prom
   ctx.logger.info('cell file appended', { cellId: record.cellId, path: cleanPath(input.path), created: existing === '' });
   const result = { ok: true as const, cellId: record.cellId, path: cleanPath(input.path), created: existing === '' };
   if (input.deploy) {
-    const deployed = (await deployCell(record, env, ctx)) as Record<string, unknown>;
-    return { ...result, deploy: deployed };
+    const started = await requestDeploy(record, env, ctx);
+    return { ...result, deploy: started.deploy };
   }
   await emitFilesChanged(ctx, record, 'append', [cleanPath(input.path)]);
   return result;
@@ -886,6 +928,19 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     }
   }
 
+  // SSR reads (docs/dynamic-cells.md): a cell declares substrate reads forge runs
+  // as the authenticated caller and injects into the invocation, so the cell can
+  // server-render real content without a token. Stored on the registry like types.
+  let ssrReads: CellRecord['ssrReads'];
+  if (files['ssr.json'] !== undefined) {
+    try {
+      const parsed = JSON.parse(files['ssr.json']) as { reads?: CellRecord['ssrReads'] };
+      if (Array.isArray(parsed.reads) && parsed.reads.length) ssrReads = parsed.reads;
+    } catch (err) {
+      ctx.logger.warn('cell ssr.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
+    }
+  }
+
   const version = `${Date.now()}`;
   const codeKey = buildKey(record.cellId, version);
   await uploadPackage({ bucket: env.codeBucket, key: codeKey, files: pkg });
@@ -893,6 +948,8 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   await createRegistry(env.registryTable).put({
     ...record,
     ...(declaredTypes ? { types: declaredTypes } : {}),
+    // Persist (or clear) the declared SSR reads each deploy.
+    ssrReads: ssrReads ?? undefined,
     updatedAt: new Date().toISOString(),
   });
 
@@ -926,10 +983,84 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   };
 }
 
+/**
+ * Kick off an **asynchronous** deploy. Bundling a cell (esm.sh dep fetches + two
+ * esbuild passes + package upload + `updateFunctionCode`) can outlast the
+ * synchronous request path — forge's Lambda has 60s+, but the `/mcp` gateway and
+ * CloudFront in front of it time out sooner, returning a misleading 502 while the
+ * work actually completes. So `deploy` records `DEPLOYING`, emits
+ * `cell.deploy.requested` (routed back to forge as a fresh event-driven
+ * invocation — see `onDeployRequested`), and returns immediately. Callers poll
+ * `get` until `deploy.phase` is `DEPLOYED` or `FAILED`. (Mirrors `createCell`,
+ * whose long work — CloudFormation — is likewise async.)
+ */
+interface DeployStarted {
+  deploying: true;
+  cellId: string;
+  version: string;
+  deploy: DeployState;
+  message: string;
+}
+
+/** Kick off the async deploy: record DEPLOYING, emit `cell.deploy.requested`
+ *  (routed back to `onDeployRequested`), and return the marker. Shared by the
+ *  `deploy` command and the write/edit `deploy:true` flags so every deploy path
+ *  is off the synchronous request/edge timeout. */
+async function requestDeploy(record: CellRecord, env: ForgeEnv, ctx: ServiceContext): Promise<DeployStarted> {
+  const version = `${Date.now()}`;
+  const deployState: DeployState = { phase: 'DEPLOYING', version, requestedAt: new Date().toISOString() };
+  await createRegistry(env.registryTable).setDeploy(record.cellId, deployState);
+  await ctx.events.emit('cell.deploy.requested', {
+    cellId: record.cellId,
+    owner: record.owner,
+    name: record.name,
+    version,
+  });
+  ctx.logger.info('cell deploy requested', { cellId: record.cellId, version });
+  return {
+    deploying: true,
+    cellId: record.cellId,
+    version,
+    deploy: deployState,
+    message: 'Bundling in the background. Poll `get` until `deploy.phase` is DEPLOYED (or FAILED).',
+  };
+}
+
 async function deploy(input: CellRef, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   const { record, env } = await resolveAuthorized(input, user);
-  return deployCell(record, env, ctx);
+  return requestDeploy(record, env, ctx);
+}
+
+/**
+ * Event-driven worker for `cell.deploy.requested` (routed back to forge). Runs the
+ * heavy bundle off the request path, then records the terminal deploy phase so a
+ * poller sees DEPLOYED/FAILED. Bus events carry no caller identity — trust comes
+ * from the IAM-attested `source` (pinned to `cells` by the route), and the deploy
+ * was already authorized by the `deploy` command that emitted it.
+ */
+async function onDeployRequested(detail: Record<string, unknown>, ctx: ServiceContext): Promise<void> {
+  const cellId = String(detail.cellId ?? '');
+  if (!cellId) {
+    ctx.logger.warn('cell.deploy.requested without cellId');
+    return;
+  }
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const record = await registry.get(cellId);
+  if (!record) {
+    ctx.logger.warn('cell.deploy.requested for unknown cell', { cellId });
+    return;
+  }
+  const requestedAt = record.deploy?.requestedAt ?? new Date().toISOString();
+  const version = record.deploy?.version ?? `${Date.now()}`;
+  try {
+    const result = (await deployCell(record, env, ctx)) as { version: string };
+    await registry.setDeploy(cellId, { phase: 'DEPLOYED', version: result.version, requestedAt });
+  } catch (err) {
+    ctx.logger.error('cell deploy failed', { cellId, error: (err as Error).message });
+    await registry.setDeploy(cellId, { phase: 'FAILED', version, requestedAt, error: (err as Error).message });
+  }
 }
 
 interface PutDataInput extends CellRef {
@@ -1331,7 +1462,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   writeFile: {
     description:
-      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to bundle + redeploy immediately, else call deploy.",
+      "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1342,7 +1473,7 @@ const TOOLS: Record<string, ToolSpec> = {
         name: { type: 'string' },
         path: { type: 'string', description: 'Relative path under src/, e.g. index.ts or lib/util.ts' },
         content: { type: 'string' },
-        deploy: { type: 'boolean', description: 'Bundle + redeploy after writing' },
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after writing (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -1351,7 +1482,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   replaceInFile: {
     description:
-      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to bundle + redeploy in the same call (edit + verify, one round trip). Use writeFile only when rewriting most of a file.",
+      "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete; replace_all replaces every occurrence (default: first). Returns `occurrences` so ambiguity is detectable. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1364,7 +1495,7 @@ const TOOLS: Record<string, ToolSpec> = {
         old_str: { type: 'string', description: 'Exact string to find (case-sensitive, including whitespace)' },
         new_str: { type: 'string', description: 'Replacement (empty string deletes)' },
         replace_all: { type: 'boolean', description: 'Replace every occurrence (default: first only)' },
-        deploy: { type: 'boolean', description: 'Bundle + redeploy after the edit' },
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after the edit (poll get for deploy.phase)' },
       },
       required: ['path', 'old_str', 'new_str'],
       additionalProperties: false,
@@ -1372,7 +1503,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: replaceInFile as RegisteredCommand,
   },
   appendToFile: {
-    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to bundle + redeploy in the same call.",
+    description: "Append content to the end of a cell source file (creates it when missing) — add a function or section without resending the file. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1383,7 +1514,7 @@ const TOOLS: Record<string, ToolSpec> = {
         name: { type: 'string' },
         path: { type: 'string' },
         content: { type: 'string', description: 'Content to append (lead with \\n for a separator)' },
-        deploy: { type: 'boolean', description: 'Bundle + redeploy after appending' },
+        deploy: { type: 'boolean', description: 'Kick off an async bundle + redeploy after appending (poll get for deploy.phase)' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -1451,7 +1582,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: deleteFile as RegisteredCommand,
   },
   deploy: {
-    description: "Bundle a cell's src/ tree (resolving relative imports) and point its Lambda at the new build — no cdk deploy.",
+    description: "Bundle a cell's src/ tree (resolving relative imports) and point its Lambda at the new build — no cdk deploy. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`).",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1551,6 +1682,7 @@ function describeTools(): { tools: Array<{ name: string; description: string; in
 
 const commands: Record<string, RegisteredCommand> = {
   resolveCell: resolveCell as RegisteredCommand,
+  ssrReadsFor: ssrReadsFor as RegisteredCommand,
   catalogCells: catalogCells as RegisteredCommand,
   describeTools: (() => describeTools()) as RegisteredCommand,
   // Registry-driven dynamic-cell tools (internal: the gateway aggregates and
@@ -1566,7 +1698,20 @@ for (const [name, spec] of Object.entries(TOOLS)) {
 export const handler = defineService({
   name: 'cells',
   commands,
-  events: { emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'] },
+  events: {
+    emits: [
+      'cell.create.requested',
+      'cell.deploy.requested',
+      'cell.shared',
+      'cell.unshared',
+      'cell.delete.requested',
+      'cell.deployed',
+      'cell.files.changed',
+    ],
+    // forge consumes its own `cell.deploy.requested` (routed back by the
+    // CellDeployRoute in platform-stack) to run the bundle asynchronously.
+    handles: { 'cell.deploy.requested': onDeployRequested },
+  },
 });
 
 export default handler;
