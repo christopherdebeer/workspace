@@ -99,11 +99,12 @@ async function runSsrReads(reads: SsrRead[], ctx: ServiceContext): Promise<Recor
 /**
  * Phase 4 — caller-write delegation (the write twin of the SSR read-proxy).
  *
- * A cell can ASK dispatch to persist facts into the *caller's* slice by setting
- * an `x-parc-writes` response header (a JSON array of `{ key, value, type?,
- * tags?, via? }`). dispatch applies them AS THE CALLER, never handing the cell a
- * token. The cell stays declarative: it expresses write intent; the platform
- * decides whether the caller is allowed.
+ * A cell can ASK dispatch to persist facts into the *caller's* slice (or, with
+ * `owner` + a declared `crossSlice` intent, into another slice the caller holds a
+ * write-grant on) by setting an `x-parc-writes` response header (a JSON array of
+ * `{ key, value, type?, tags?, via?, owner? }`). dispatch applies them AS THE
+ * CALLER, never handing the cell a token. The cell stays declarative: it expresses
+ * write intent; the platform decides whether the caller is allowed.
  *
  * Three guards, all enforced here (not in the cell, not at the gateway — Mode-1
  * `serviceClient` bypasses the gateway PEP, so this IS the `scope(caller, write)`
@@ -122,6 +123,10 @@ const WRITES_HEADER = 'x-parc-writes';
 interface CallerWriteIntent {
   keyPrefix: string;
   types?: string[];
+  /** Phase 4 v2: the cell may target ANOTHER owner's slice under this prefix —
+   *  bounded at the act by the caller's own write-grant (`requireWriteThrough`).
+   *  Absent/false ⇒ caller's own slice only. */
+  crossSlice?: boolean;
 }
 interface RequestedWrite {
   key: string;
@@ -129,6 +134,9 @@ interface RequestedWrite {
   type?: string;
   tags?: string[];
   via?: string;
+  /** Target slice. Absent or === caller ⇒ own slice; otherwise a cross-slice
+   *  write-through (requires `crossSlice` in the manifest AND a caller grant). */
+  owner?: string;
 }
 
 /** Parse + shape-validate the `x-parc-writes` header payload. Throws on malformed. */
@@ -143,6 +151,7 @@ function parseRequestedWrites(raw: string): RequestedWrite[] {
       ...(typeof w.type === 'string' ? { type: w.type } : {}),
       ...(Array.isArray(w.tags) && w.tags.every((t) => typeof t === 'string') ? { tags: w.tags } : {}),
       ...(typeof w.via === 'string' ? { via: w.via } : {}),
+      ...(typeof w.owner === 'string' && w.owner.length > 0 ? { owner: w.owner } : {}),
     }));
 }
 
@@ -180,27 +189,39 @@ export async function applyCallerWrites(
   }
   for (const w of requested.slice(0, MAX_CALLER_WRITES)) {
     const reserved = RESERVED_WRITE_PREFIXES.some((p) => w.key.startsWith(p));
-    // Guards 2+3: declared prefix (+ optional type bound), never a reserved namespace.
+    // A target slice other than the caller's own is a cross-slice write-through:
+    // allowed only when the cell DECLARED `crossSlice` for the prefix, and finally
+    // bounded at the act by the caller's own grant (workspace.requireWriteThrough).
+    const crossSlice = !!w.owner && w.owner !== ctx.identity.user;
+    // Guards 2+3: declared prefix (+ optional type bound, + crossSlice opt-in),
+    // never a reserved namespace.
     const declared = manifest.some(
-      (m) => w.key.startsWith(m.keyPrefix) && (!m.types || (w.type !== undefined && m.types.includes(w.type))),
+      (m) =>
+        w.key.startsWith(m.keyPrefix) &&
+        (!m.types || (w.type !== undefined && m.types.includes(w.type))) &&
+        (!crossSlice || m.crossSlice === true),
     );
     if (reserved || !declared) {
       refused++;
-      ctx.logger.warn('caller-write refused (reserved or not declared)', { key: w.key, type: w.type, reserved, cell: cellAddress });
+      ctx.logger.warn('caller-write refused (reserved or not declared)', { key: w.key, type: w.type, reserved, crossSlice, cell: cellAddress });
       continue;
     }
     try {
+      // requireWriteThrough (in workspace.remember) enforces the caller's grant on
+      // the target slice and re-refuses reserved namespaces — a grant_denied throws
+      // here and is counted as refused, never silently dropped.
       await ctx.serviceClient('workspace').command('remember', {
         key: w.key,
         value: w.value,
         ...(w.type ? { type: w.type } : {}),
         ...(w.tags ? { tags: w.tags } : {}),
+        ...(crossSlice ? { owner: w.owner } : {}),
         via: w.via ?? cellAddress,
       });
       applied++;
     } catch (err) {
       refused++;
-      ctx.logger.warn('caller-write apply failed', { key: w.key, error: (err as Error).message });
+      ctx.logger.warn('caller-write apply failed', { key: w.key, crossSlice, error: (err as Error).message });
     }
   }
   if (applied) ctx.logger.info('caller-writes applied', { applied, refused, cell: cellAddress });

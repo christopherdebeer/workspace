@@ -69,7 +69,7 @@ export interface CellRecord {
    * enforces requested writes ⊆ these AND `scope(caller, write)` at the act
    * boundary; the cell never receives a token. Persisted like `ssrReads`.
    */
-  callerWrites?: Array<{ keyPrefix: string; types?: string[] }>;
+  callerWrites?: Array<{ keyPrefix: string; types?: string[]; crossSlice?: boolean }>;
   status: CellStatus;
   /** The last/in-flight async deploy's phase (set by `cells.deploy`; polled via
    *  `getCell`). Absent until the cell has been deployed at least once. */

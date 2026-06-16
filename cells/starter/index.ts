@@ -77,9 +77,40 @@ export const handler = async (event: {
   requestContext?: { http?: { method?: string } };
   rawPath?: string;
   headers?: Record<string, string | undefined>;
+  body?: string;
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+
+  // Caller-write demo (Phase 4, docs/capability-consent.md): a signed-in visitor
+  // adds a note. The cell holds NO token — it returns an `x-parc-writes` header
+  // DECLARING the write; dispatch applies it AS THE CALLER, bounded by this cell's
+  // declared `ssr.json` writes manifest AND the caller's own write scope, then
+  // strips the header. A bare note lands in the caller's own slice (`note:`); an
+  // explicit `owner` targets a slice they've granted write on (`shared/`, the
+  // declared crossSlice prefix → workspace.requireWriteThrough enforces the grant).
+  if (method === 'POST' && (path === '/note' || path === '/notes')) {
+    const caller = event.headers?.['x-cell-caller'];
+    if (!caller || caller === 'anonymous') return respond(401, 'application/json', JSON.stringify({ error: 'sign in to add a note' }));
+    let text = '';
+    let owner: string | undefined;
+    try {
+      const parsed = event.body ? (JSON.parse(event.body) as { text?: unknown; owner?: unknown }) : {};
+      if (typeof parsed.text === 'string') text = parsed.text.trim();
+      if (typeof parsed.owner === 'string' && parsed.owner) owner = parsed.owner;
+    } catch {
+      /* malformed body → caught by the validation below */
+    }
+    if (!text) return respond(400, 'application/json', JSON.stringify({ error: 'text is required' }));
+    const crossSlice = !!owner && owner !== caller;
+    const key = crossSlice ? `shared/${Date.now()}` : `note:${Date.now()}`;
+    const write = { key, value: { text }, type: 'note', ...(crossSlice ? { owner } : {}) };
+    // 202: dispatch performs the persistence after the cell returns.
+    return respond(202, 'application/json', JSON.stringify({ accepted: true, key, ...(crossSlice ? { owner } : {}) }), {
+      'x-parc-writes': JSON.stringify([write]),
+    });
+  }
+
   if (method !== 'GET' && method !== 'HEAD') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     // ACAO:* so a host-isolated sibling cell could import this module if it wanted.

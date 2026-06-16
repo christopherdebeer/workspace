@@ -210,7 +210,7 @@ Tests: `tests/auth-incremental.test.ts` (end-to-end through the auth handler),
 `tests/auth-oauth.test.ts` (store: effective scope + token id),
 `tests/resource-cell.test.ts` (gateway `scope_offer` vs `scope_denied`).
 
-### Phase 4 — Write-time delegation (✅ shipped, v1)
+### Phase 4 — Write-time delegation (✅ shipped, v2: cross-slice)
 
 The write counterpart of the SSR read-proxy. A cell may ask dispatch to persist
 facts into the **caller's** slice by returning an `x-parc-writes` response header
@@ -225,7 +225,7 @@ is genuinely the `scope(caller, write)` **act boundary**, because Mode-1
    (`hasScope`, satisfied by coarse `workspace:write`/`admin`/`platform:*` too).
    A read-only caller's whole batch is denied (`x-parc-writes-denied: scope`).
 2. **Declared manifest** — each write must fall under a `keyPrefix` the cell
-   declared in `ssr.json` `writes: [{ keyPrefix, types? }]` (stored as
+   declared in `ssr.json` `writes: [{ keyPrefix, types?, crossSlice? }]` (stored as
    `CellRecord.callerWrites`, fetched via `cells.callerWritesFor`), and match its
    optional `types` bound. Undeclared ⇒ refused. Empty manifest ⇒ writes nothing.
 3. **Reserved namespaces always refused** (`_actions/ _views/ _grants/ _groups/
@@ -233,17 +233,28 @@ is genuinely the `scope(caller, write)` **act boundary**, because Mode-1
    authority — and the batch is capped (16).
 
 Provenance stamps the **caller** as `writer` (`via` defaults to `@owner/name`),
-so the write is attributable and supersede-able. v1 targets the **caller's own
-slice** only (no `owner` override) — cross-slice cell write-through (a cell using
-the caller's *grants* on another's slice) is a natural extension that drops
-through `requireWriteThrough` when wanted. Anonymous callers never write (the
-header is stripped). Disclosure: `describeCellTools` now adds `writes` (declared
-prefixes) to the third-party `disclosure` block.
+so the write is attributable and supersede-able. Anonymous callers never write
+(the header is stripped). Disclosure: `describeCellTools` adds `writes` (declared
+prefixes) — and a cross-slice note — to the third-party `disclosure` block.
+
+**Cross-slice write-through (✅ v2):** a requested write may carry an `owner`. When
+`owner !== caller` it is a *cross-slice* write, allowed only when (a) a matching
+manifest entry sets `crossSlice: true` — the cell explicitly opted in, kept off by
+default — and (b) `workspace.remember` → `requireWriteThrough` confirms the
+**caller** holds a write-grant covering the key on that slice (a `grant_denied`
+throw is counted as refused, never silently dropped). So a cell can act on the
+caller's behalf using only the caller's own granted write authority — exactly
+`scope(caller, write)`. `owner === caller` collapses to an own-slice write (no
+`crossSlice` needed). Reserved namespaces stay refused on both sides.
 
 Code: `applyCallerWrites` + the route wiring in `services/dispatch/service.ts`;
 manifest parse + `callerWritesFor` + disclosure in `services/cells/service.ts`;
-`CellRecord.callerWrites` in `services/cells/registry.ts`.
-Tests: `tests/cell-caller-writes.test.ts` (end-to-end through dispatch).
+`CellRecord.callerWrites` in `services/cells/registry.ts`. Reference opt-in:
+`cells/starter/ssr.json` (declares `note:` own-slice + `shared/` cross-slice) and
+the `POST /note` emitter in `cells/starter/index.ts`. Tests:
+`tests/cell-caller-writes.test.ts` (dispatch enforcement incl. cross-slice),
+`tests/starter-cell.test.ts` (emission), `tests/forge-cell.test.ts` (manifest →
+disclosure + `callerWritesFor`).
 
 ### ✅ Clients migrated to request granular (+ mint-path back-compat hardened)
 `services/home/client/auth.ts` `DEFAULT_SCOPE` now requests the granular

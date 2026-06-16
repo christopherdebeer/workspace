@@ -552,18 +552,34 @@ describe('cells: backend commands', () => {
     await call('alice', 'create', { name: 'notes', code: cellCode, share: ['bob'] });
     const reg = createRegistry('forge-table');
     const [cell] = await reg.listByOwner('alice');
-    // The cell declares SSR reads — exactly what its author's code can observe.
-    await reg.put({ ...cell, status: 'ACTIVE', ssrReads: [{ as: 'w', target: 'workspace.query' }, { as: 't', target: 'auth.tokens' }] });
+    // The cell declares SSR reads (what its author can observe) and caller-writes
+    // (what it may ask to persist into the caller's — or a granted — slice).
+    await reg.put({
+      ...cell,
+      status: 'ACTIVE',
+      ssrReads: [{ as: 'w', target: 'workspace.query' }, { as: 't', target: 'auth.tokens' }],
+      callerWrites: [{ keyPrefix: 'note:', types: ['note'] }, { keyPrefix: 'shared/', crossSlice: true }],
+    });
 
-    // Non-owner (bob, a grantee) sees the disclosure: author + declared reads + note.
-    const bobs = await call<{ tools: Array<{ tool: string; disclosure?: { author: string; reads: string[]; note: string } }> }>(
+    // Non-owner (bob, a grantee) sees the disclosure: author + declared reads/writes + note.
+    const bobs = await call<{ tools: Array<{ tool: string; disclosure?: { author: string; reads: string[]; writes?: string[]; note: string } }> }>(
       'bob', 'describeCellTools', {},
     );
     const tool = bobs.result!.tools.find((t) => t.tool === 'add')!;
     expect(tool.disclosure).toBeDefined();
     expect(tool.disclosure!.author).toBe('alice');
     expect(tool.disclosure!.reads.sort()).toEqual(['auth.tokens', 'workspace.query']);
+    expect(tool.disclosure!.writes!.sort()).toEqual(['note:', 'shared/']);
     expect(tool.disclosure!.note).toMatch(/alice/);
+    // The cross-slice intent is disclosed (it may target other granted slices).
+    expect(tool.disclosure!.note).toMatch(/grant/i);
+
+    // callerWritesFor exposes the declared write manifest dispatch uses to bound proxied writes.
+    const cw = await call<{ writes: Array<{ keyPrefix: string; crossSlice?: boolean }> }>(
+      'bob', 'callerWritesFor', { owner: 'alice', name: 'notes' },
+    );
+    expect(cw.result!.writes.map((w) => w.keyPrefix).sort()).toEqual(['note:', 'shared/']);
+    expect(cw.result!.writes.some((w) => w.crossSlice === true)).toBe(true);
 
     // The owner gets no notice — writing to your own cell's slice is writing to yourself.
     const alices = await call<{ tools: Array<{ tool: string; disclosure?: unknown }> }>(

@@ -18,11 +18,15 @@ interface RememberCall {
   type?: string;
   tags?: string[];
   via?: string;
+  owner?: string;
 }
 
 let remembered: RememberCall[] = [];
 let writeHeader: string | undefined; // what cells.call echoes as `x-parc-writes`
-let manifest: Array<{ keyPrefix: string; types?: string[] }> = [];
+let manifest: Array<{ keyPrefix: string; types?: string[]; crossSlice?: boolean }> = [];
+// Owners for which workspace.remember rejects with grant_denied (simulating
+// requireWriteThrough: the caller holds no write-grant on that slice).
+let writeThroughDenied = new Set<string>();
 
 function stub(tokens: Record<string, { userId: string; scope: string }>): void {
   __setLambda({
@@ -41,6 +45,13 @@ function stub(tokens: Record<string, { userId: string; scope: string }>): void {
         result = { writes: manifest };
       } else if (params.FunctionName === 'workspace-fn' && env.__command === 'remember') {
         const p = env.payload as unknown as RememberCall;
+        if (p.owner && writeThroughDenied.has(p.owner)) {
+          return {
+            promise: async () => ({
+              Payload: JSON.stringify({ ok: false, error: `grant_denied: no write grant from "${p.owner}"` }),
+            }),
+          };
+        }
         remembered.push(p);
         result = { value: p.value, _meta: { revision: 1 } };
       }
@@ -67,6 +78,7 @@ describe('dispatch caller-write delegation (Phase 4)', () => {
     remembered = [];
     writeHeader = undefined;
     manifest = [];
+    writeThroughDenied = new Set();
     stub({
       writer: { userId: 'alice', scope: 'workspace:write' },
       reader: { userId: 'bob', scope: 'workspace:read' },
@@ -148,5 +160,40 @@ describe('dispatch caller-write delegation (Phase 4)', () => {
     const res = (await dispatch(event('GET', '/@dave/blog', bearer('writer')))) as FunctionUrlResponse;
     expect(remembered).toHaveLength(0);
     expect(res.headers['x-parc-writes-applied']).toBeUndefined();
+  });
+
+  describe('cross-slice write-through (Phase 4 v2)', () => {
+    it('applies a cross-slice write when declared and granted (owner forwarded)', async () => {
+      manifest = [{ keyPrefix: 'shared/', crossSlice: true }];
+      writeHeader = JSON.stringify([{ key: 'shared/1', value: { ok: true }, owner: 'bob' }]);
+      const res = (await dispatch(event('POST', '/@dave/blog', bearer('writer')))) as FunctionUrlResponse;
+      expect(remembered).toEqual([{ key: 'shared/1', value: { ok: true }, owner: 'bob', via: '@dave/blog' }]);
+      expect(res.headers['x-parc-writes-applied']).toBe('1');
+    });
+
+    it('refuses a cross-slice write the manifest did not opt into', async () => {
+      manifest = [{ keyPrefix: 'shared/' }]; // no crossSlice
+      writeHeader = JSON.stringify([{ key: 'shared/1', value: 1, owner: 'bob' }]);
+      const res = (await dispatch(event('POST', '/@dave/blog', bearer('writer')))) as FunctionUrlResponse;
+      expect(remembered).toHaveLength(0);
+      expect(res.headers['x-parc-writes-refused']).toBe('1');
+    });
+
+    it('refuses a declared cross-slice write when the caller holds no grant (requireWriteThrough)', async () => {
+      manifest = [{ keyPrefix: 'shared/', crossSlice: true }];
+      writeThroughDenied = new Set(['carol']);
+      writeHeader = JSON.stringify([{ key: 'shared/1', value: 1, owner: 'carol' }]);
+      const res = (await dispatch(event('POST', '/@dave/blog', bearer('writer')))) as FunctionUrlResponse;
+      expect(remembered).toHaveLength(0);
+      expect(res.headers['x-parc-writes-applied']).toBe('0');
+      expect(res.headers['x-parc-writes-refused']).toBe('1');
+    });
+
+    it('treats owner === caller as an own-slice write (no owner forwarded, no crossSlice needed)', async () => {
+      manifest = [{ keyPrefix: 'notes/' }]; // no crossSlice
+      writeHeader = JSON.stringify([{ key: 'notes/1', value: 1, owner: 'alice' }]); // writer === alice
+      await dispatch(event('POST', '/@dave/blog', bearer('writer')));
+      expect(remembered).toEqual([{ key: 'notes/1', value: 1, via: '@dave/blog' }]);
+    });
   });
 });

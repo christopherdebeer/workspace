@@ -1,0 +1,6 @@
+{
+  "writes": [
+    { "keyPrefix": "note:", "types": ["note"] },
+    { "keyPrefix": "shared/", "types": ["note"], "crossSlice": true }
+  ]
+}

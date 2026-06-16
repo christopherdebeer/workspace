@@ -955,15 +955,16 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
     try {
       const parsed = JSON.parse(files['ssr.json']) as {
         reads?: CellRecord['ssrReads'];
-        writes?: Array<{ keyPrefix?: unknown; types?: unknown }>;
+        writes?: Array<{ keyPrefix?: unknown; types?: unknown; crossSlice?: unknown }>;
       };
       if (Array.isArray(parsed.reads) && parsed.reads.length) ssrReads = parsed.reads;
       if (Array.isArray(parsed.writes) && parsed.writes.length) {
         const cleaned = parsed.writes
-          .filter((w): w is { keyPrefix: string; types?: string[] } => !!w && typeof w.keyPrefix === 'string' && w.keyPrefix.length > 0)
+          .filter((w): w is { keyPrefix: string; types?: string[]; crossSlice?: boolean } => !!w && typeof w.keyPrefix === 'string' && w.keyPrefix.length > 0)
           .map((w) => ({
             keyPrefix: w.keyPrefix,
             ...(Array.isArray(w.types) && w.types.every((t) => typeof t === 'string') ? { types: w.types } : {}),
+            ...(w.crossSlice === true ? { crossSlice: true } : {}),
           }));
         if (cleaned.length) callerWrites = cleaned;
       }
@@ -1262,6 +1263,7 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
       // the author's own slice (docs/capability-consent.md). Owners see no notice
       // (writing to your own cell's slice is writing to yourself).
       const writePrefixes = Array.from(new Set((cell.callerWrites ?? []).map((w) => w.keyPrefix)));
+      const crossSlice = (cell.callerWrites ?? []).some((w) => w.crossSlice);
       const disclosure =
         cell.owner !== user
           ? {
@@ -1272,6 +1274,9 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
                 `Runs @${address}'s code: its author (${cell.owner}) can observe the reads it declares and persist results into ${cell.owner}'s workspace.` +
                 (writePrefixes.length
                   ? ` It may also ask to write facts into YOUR slice under: ${writePrefixes.join(', ')} (bounded by your own write access).`
+                  : '') +
+                (crossSlice
+                  ? ' Some of these writes may target other slices you have granted write access to.'
                   : ''),
             }
           : undefined;
