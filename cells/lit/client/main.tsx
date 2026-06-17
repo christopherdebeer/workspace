@@ -18,7 +18,7 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { ensureAuth, isAuthed } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
-import { Surface, renderMarkdown, type ViewModel, type BlockData, type DocValue } from '../shared';
+import { Surface, renderMarkdown, splitCells, seqBetween, type ViewModel, type BlockData, type DocValue } from '../shared';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -46,12 +46,55 @@ function contentOf(value: any): string {
   if (value && typeof value.content === 'string') return value.content;
   return '```json\n' + JSON.stringify(value, null, 2) + '\n```';
 }
-async function saveBlock(key: string, prior: any, content: string): Promise<void> {
-  const value = prior && typeof prior === 'object' && !Array.isArray(prior) ? { ...prior, content } : { content };
-  await act('workspace.remember', { key, value, via: 'lit' });
+const mintCell = (): string => `cell:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+type LoadedCell = { key: string; content: string; fold: boolean; seq: number; score: number };
+
+/** A document is a *view*: load its cell-facts via substrate-native ordering
+ *  decorations (`_doc/<id>/<key>` = {seq, fold}), migrating from the legacy
+ *  embedded array when no decorations exist. `projection` re-sorts the SAME
+ *  membership — narrative by seq, salience by the cell's score. */
+async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[] } | null> {
+  const docFact = await fetchFact(`doc:${docId}`);
+  if (!docFact) return null;
+  const meta = docFact.value as DocValue;
+  const prefix = `_doc/${docId}/`;
+  const deco = await read<{ entries: Entry[] }>('workspace.query', { prefix, limit: 500 });
+  let order = (deco.entries ?? []).map((e) => ({ key: e.key.slice(prefix.length), seq: Number((e.value as any)?.seq ?? 0), fold: !!(e.value as any)?.fold }));
+  if (!order.length) order = ((meta.cells ?? meta.blocks ?? []) as Array<{ key: string; fold?: boolean }>).map((r, i) => ({ key: r.key, seq: i + 1, fold: !!r.fold }));
+  const facts = await Promise.all(order.map((o) => fetchFact(o.key)));
+  const cells: LoadedCell[] = order.map((o, i) => ({
+    key: o.key, fold: o.fold, seq: o.seq,
+    content: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${o.key}*`,
+    score: Number((facts[i]?._meta as any)?.score) || 0,
+  }));
+  cells.sort((a, b) => (projection === 'salience' ? b.score - a.score : a.seq - b.seq));
+  return { meta, cells };
 }
-async function saveDoc(docId: string, doc: DocValue): Promise<void> {
-  await act('workspace.remember', { key: `doc:${docId}`, value: doc, via: 'lit', type: 'doc', tags: ['doc'] });
+async function saveCell(docId: string, key: string, content: string): Promise<void> {
+  await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'cell', tags: [`doc:${docId}`] });
+}
+async function writeOrder(docId: string, key: string, seq: number, fold: boolean): Promise<void> {
+  await act('workspace.remember', { key: `_doc/${docId}/${key}`, value: { seq, fold }, via: 'lit', type: 'doc-order', tags: [`doc:${docId}`] });
+}
+async function saveDocMeta(docId: string, meta: DocValue): Promise<void> {
+  await act('workspace.remember', { key: `doc:${docId}`, value: meta, via: 'lit', type: 'doc', tags: ['doc'] });
+}
+/** Save an edited cell, splitting only if the edit introduced structure (a
+ *  heading or a code fence): the first part keeps the fact's key (links/seq),
+ *  the rest become new facts placed with fractional seq between this cell and
+ *  the next — identity is inherent, never a whole-document reparse. */
+async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | null, source: string): Promise<void> {
+  const parts = splitCells(source);
+  if (parts.length <= 1) { await saveCell(docId, cell.key, (parts[0] ?? source).trim()); return; }
+  await saveCell(docId, cell.key, parts[0]);
+  let lo = cell.seq;
+  for (const part of parts.slice(1)) {
+    const seq = seqBetween(lo, nextSeq);
+    const k = mintCell();
+    await saveCell(docId, k, part);
+    await writeOrder(docId, k, seq, false);
+    lo = seq;
+  }
 }
 /** The renderer ladder: a fact whose type declares a viewer renders through
  *  @c15r/viewers instead of as markdown (el:demo-json reads as a TREE here). */
@@ -263,71 +306,61 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
 
 /* ── block (interactive) ───────────────────────────────────────────────── */
 
-interface BlockProps {
-  ref0: { key: string; fold?: boolean };
-  fact: Entry | null;
+interface CellProps {
+  cellKey: string;
+  content: string;
+  fold: boolean;
   editable: boolean;
-  onEdit: (text: string) => void;
+  onEdit: (src: string) => void;
   onFold: () => void;
   onMove: (dir: -1 | 1) => void;
-  onCut: () => void;
+  onAddAfter: () => void;
 }
-function BlockView({ ref0, fact, editable, onEdit, onFold, onMove, onCut }: BlockProps): React.JSX.Element {
+function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [editingText, setEditingText] = useState<string | null>(null);
-  const md = fact ? contentOf(fact.value) : `*missing fact — ${ref0.key}*`;
-  const viewer = fact ? viewerFor(fact._meta, fact.value) : null;
-  const folded = !!ref0.fold;
+  const [editing, setEditing] = useState<string | null>(null);
+  const md = content;
 
-  // Enhance fences (or apply the viewer ladder) after the body mounts/changes.
+  // After the body mounts/changes, enhance fences (executable / viewer / plugin).
   useEffect(() => {
     const host = bodyRef.current;
-    if (!host || folded || editingText !== null) return;
-    if (viewer && fact) {
-      host.textContent = '…';
-      import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
-        .then((m) => {
-          host.textContent = '';
-          const h = el('div'); host.appendChild(h);
-          if (!m.renderFence(h, viewer, contentOf(fact.value), fact.key)) { host.innerHTML = renderMarkdown(md); void enhanceFences(host); }
-        })
-        .catch(() => { host.innerHTML = renderMarkdown(md); void enhanceFences(host); });
-    } else {
-      void enhanceFences(host);
-    }
-  }, [md, viewer, folded, editingText]);
+    if (!host || fold || editing !== null) return;
+    void enhanceFences(host);
+  }, [md, fold, editing]);
 
-  if (editingText !== null) {
+  if (editing !== null) {
     return (
-      <article className="block" data-key={ref0.key}>
+      <article className="block" data-key={cellKey}>
         <div className="editor">
           <textarea
-            value={editingText}
-            rows={Math.min(24, Math.max(4, editingText.split('\n').length + 1))}
-            onChange={(e) => setEditingText(e.target.value)}
+            value={editing}
+            rows={Math.min(28, Math.max(3, editing.split('\n').length + 1))}
+            spellCheck={false}
+            onChange={(e) => setEditing(e.target.value)}
           />
           <div className="editor-bar">
-            <button className="btn primary" onClick={() => { onEdit(editingText); setEditingText(null); }}>save</button>
-            <button className="btn" onClick={() => setEditingText(null)}>cancel</button>
+            <button className="btn primary" onClick={() => { onEdit(editing); setEditing(null); }}>save</button>
+            <button className="btn" onClick={() => setEditing(null)}>cancel</button>
+            <span className="summary"> a heading or code fence splits this into new cells</span>
           </div>
         </div>
       </article>
     );
   }
 
-  const title = (md.match(/^#+\s*(.+)$/m) || [])[1] ?? md.split('\n').find((l) => l.trim()) ?? ref0.key;
+  const title = (md.match(/^#+\s*(.+)$/m) || [])[1] ?? md.split('\n').find((l) => l.trim()) ?? cellKey;
   return (
-    <article className={`block${folded ? ' is-folded' : ''}`} data-key={ref0.key}>
+    <article className={`block${fold ? ' is-folded' : ''}`} data-key={cellKey}>
       {editable ? (
         <div className="block-tools">
-          <button className="tool" onClick={onFold}>{folded ? '▸' : '▾'}</button>
-          <button className="tool" onClick={() => setEditingText(contentOf(fact?.value ?? ''))}>✎</button>
+          <button className="tool" onClick={onFold}>{fold ? '▸' : '▾'}</button>
+          <button className="tool" onClick={() => setEditing(md)}>✎</button>
           <button className="tool" onClick={() => onMove(-1)}>↑</button>
           <button className="tool" onClick={() => onMove(1)}>↓</button>
-          <button className="tool" onClick={onCut}>×</button>
+          <button className="tool" title="add a cell after" onClick={onAddAfter}>＋</button>
         </div>
       ) : null}
-      {folded ? (
+      {fold ? (
         <div className="block-body"><p className="folded">▸ {title.replace(/[#*_`]/g, '').trim()}</p></div>
       ) : (
         <div className="block-body" ref={bodyRef} dangerouslySetInnerHTML={{ __html: renderMarkdown(md) }} />
@@ -338,102 +371,63 @@ function BlockView({ ref0, fact, editable, onEdit, onFold, onMove, onCut }: Bloc
 
 /* ── doc editor ────────────────────────────────────────────────────────── */
 
-function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean; seed?: DocSeed }): React.JSX.Element {
-  // Seed from the SSR ViewModel so the first interactive render IS the server
-  // content — no "loading…" gap while load() refetches. load() refreshes in place.
-  const [doc, setDoc] = useState<DocValue | null>(seed?.doc ?? null);
-  const [facts, setFacts] = useState<Record<string, Entry | null>>(seed?.facts ?? {});
+function DocEditor({ docId, editable }: { docId: string; editable: boolean }): React.JSX.Element {
+  const [meta, setMeta] = useState<DocValue | null>(null);
+  const [cells, setCells] = useState<LoadedCell[]>([]);
   const [missing, setMissing] = useState(false);
-  const editingRef = useRef(0);
+  const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
 
   const load = useCallback(async () => {
-    const docFact = await fetchFact(`doc:${docId}`);
-    if (!docFact) { setMissing(true); return; }
-    const dv = docFact.value as DocValue;
-    const refs = Array.isArray(dv.blocks) ? dv.blocks : [];
-    const got = await Promise.all(refs.map((r) => fetchFact(r.key)));
-    const map: Record<string, Entry | null> = {};
-    refs.forEach((r, i) => { map[r.key] = got[i]; });
-    setFacts(map); setDoc(dv);
-  }, [docId]);
-
+    const res = await loadDoc(docId, projection);
+    if (!res) { setMissing(true); return; }
+    setMeta(res.meta); setCells(res.cells);
+  }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
 
-  // Live refresh: refetch when a block in this doc changes (suspended while editing).
-  useEffect(() => {
-    if (!editable) return;
-    let seq = 0; let stop = false;
-    const tick = async (): Promise<void> => {
-      try {
-        if (seq === 0) seq = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 0, limit: 0 })).seq;
-        else {
-          const res = await read<{ events: Array<{ key: string | null }>; seq: number }>('workspace.changes', { sinceSeq: seq });
-          seq = res.seq;
-          const mine = new Set([`doc:${docId}`, ...(doc?.blocks ?? []).map((b) => b.key)]);
-          if (editingRef.current === 0 && (res.events ?? []).some((e) => e.key && mine.has(e.key))) await load();
-        }
-      } catch { /* offline */ }
-      if (!stop) setTimeout(() => void tick(), 8000);
-    };
-    setTimeout(() => void tick(), 8000);
-    return () => { stop = true; };
-  }, [editable, docId, doc, load]);
-
   if (missing) return <ListEditor.MissingDoc docId={docId} />;
-  if (!doc) return <p className="boot">loading {docId}…</p>;
+  if (!meta) return <p className="boot">loading {docId}…</p>;
 
-  const refs = Array.isArray(doc.blocks) ? doc.blocks : [];
-  const mutate = async (next: DocValue): Promise<void> => { setDoc(next); await saveDoc(docId, next); };
+  // A doc is a view: cells are facts ordered by `_doc/` decorations. Editing one
+  // cell may split it (saveCellSplit); reorder/insert are one fractional-seq write.
+  const nextSeq = (i: number): number | null => (i + 1 < cells.length ? cells[i + 1].seq : null);
 
   return (
     <>
       <header>
         <a className="back" href={`/@${cellOwner()}/lit`}>← documents</a>
-        <h1>{doc.title || docId}</h1>
-        {doc.summary ? <p className="summary">{doc.summary}</p> : null}
+        <h1>{meta.title || docId}</h1>
+        {meta.summary ? <p className="summary">{meta.summary}</p> : null}
+        <p className="doc-controls summary">
+          <button className={`pill${projection === 'narrative' ? ' on' : ''}`} onClick={() => setProjection('narrative')}>narrative</button>{' '}
+          <button className={`pill${projection === 'salience' ? ' on' : ''}`} onClick={() => setProjection('salience')}>salience</button>
+        </p>
       </header>
       <main>
-        {refs.length === 0 ? <p className="boot">empty document</p> : refs.map((r, i) => (
-          <BlockView
-            key={r.key}
-            ref0={r}
-            fact={facts[r.key] ?? null}
-            editable={editable}
-            onEdit={async (text) => {
-              const prior = facts[r.key]?.value;
-              await saveBlock(r.key, prior, text);
-              setFacts((f) => ({ ...f, [r.key]: { key: r.key, value: typeof prior === 'object' && prior ? { ...prior, content: text } : { content: text } } }));
+        {cells.length === 0 ? (
+          editable
+            ? <button className="btn add-block" onClick={async () => { const k = mintCell(); await saveCell(docId, k, `# ${meta.title || docId}\n\nStart writing…`); await writeOrder(docId, k, 1, false); await load(); }}>＋ first cell</button>
+            : <p className="boot">empty document</p>
+        ) : cells.map((c, i) => (
+          <CellView
+            key={c.key}
+            cellKey={c.key}
+            content={c.content}
+            fold={c.fold}
+            editable={editable && projection === 'narrative'}
+            onEdit={async (src) => { await saveCellSplit(docId, c, nextSeq(i), src); await load(); }}
+            onFold={async () => { await writeOrder(docId, c.key, c.seq, !c.fold); setCells((cs) => cs.map((x) => (x.key === c.key ? { ...x, fold: !x.fold } : x))); }}
+            onMove={async (dir) => {
+              const j = i + dir; if (j < 0 || j >= cells.length) return;
+              const lower = dir < 0 ? (i - 2 >= 0 ? cells[i - 2].seq : null) : cells[i + 1].seq;
+              const upper = dir < 0 ? cells[i - 1].seq : (i + 2 < cells.length ? cells[i + 2].seq : null);
+              await writeOrder(docId, c.key, seqBetween(lower, upper), c.fold); await load();
             }}
-            onFold={() => { const blocks = refs.map((b, j) => (j === i ? { ...b, fold: !b.fold } : b)); void mutate({ ...doc, blocks }); }}
-            onMove={(dir) => { const j = i + dir; if (j < 0 || j >= refs.length) return; const blocks = refs.slice(); [blocks[i], blocks[j]] = [blocks[j], blocks[i]]; void mutate({ ...doc, blocks }); }}
-            onCut={() => { if (!confirm('Remove this block from the document? (the fact itself survives)')) return; void mutate({ ...doc, blocks: refs.filter((_, j) => j !== i) }); }}
+            onAddAfter={async () => { const k = mintCell(); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seqBetween(c.seq, nextSeq(i)), false); await load(); }}
           />
         ))}
-        {editable ? (
-          <AddBlock onAdd={async (text) => {
-            const key = `blk:${Date.now().toString(36)}`;
-            await act('workspace.remember', { key, value: { content: text }, via: 'lit', type: 'doc-block', tags: [`doc:${docId}`] });
-            await mutate({ ...doc, blocks: [...refs, { key }] });
-            setFacts((f) => ({ ...f, [key]: { key, value: { content: text } } }));
-          }} onOpen={(o) => { editingRef.current += o ? 1 : -1; }} />
-        ) : null}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}
       </main>
     </>
-  );
-}
-
-function AddBlock({ onAdd, onOpen }: { onAdd: (t: string) => void; onOpen: (open: boolean) => void }): React.JSX.Element {
-  const [text, setText] = useState<string | null>(null);
-  if (text === null) return <button className="btn add-block" onClick={() => { setText(''); onOpen(true); }}>+ block</button>;
-  return (
-    <div className="editor">
-      <textarea value={text} rows={Math.min(24, Math.max(4, text.split('\n').length + 1))} onChange={(e) => setText(e.target.value)} />
-      <div className="editor-bar">
-        <button className="btn primary" onClick={() => { if (text.trim()) onAdd(text); setText(null); onOpen(false); }}>save</button>
-        <button className="btn" onClick={() => { setText(null); onOpen(false); }}>cancel</button>
-      </div>
-    </div>
   );
 }
 
@@ -465,7 +459,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
           <a className="doc-card" href={`?doc=${encodeURIComponent(d.id)}`} key={d.id}>
             <h2>{d.v.title || d.id}</h2>
             {d.v.summary ? <p>{d.v.summary}</p> : null}
-            <span className="doc-meta">{(d.v.blocks ?? []).length} blocks · {(d.updated || '').slice(0, 10)}</span>
+            <span className="doc-meta">{(d.updated || '').slice(0, 10)}</span>
           </a>
         ))}
       </main>
@@ -473,7 +467,10 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
         <button className="btn add-block" onClick={async () => {
           const title = prompt('Title?'); if (!title) return;
           const id = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `d${Date.now().toString(36)}`;
-          await saveDoc(id, { title, blocks: [] });
+          await saveDocMeta(id, { title });
+          const k = mintCell();
+          await saveCell(id, k, `# ${title}\n\nStart writing…`);
+          await writeOrder(id, k, 1, false);
           location.search = `?doc=${encodeURIComponent(id)}`;
         }}>+ new document</button>
       ) : null}
@@ -595,8 +592,7 @@ function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewMode
   const docId = new URLSearchParams(location.search).get('doc');
   if (docId && /^log:/.test(docId)) return <LogView docId={docId} />;
   if (docId) {
-    const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? docSeed(initialVm) : undefined;
-    return <DocEditor docId={docId} editable={editable} seed={seed} />;
+    return <DocEditor docId={docId} editable={editable} />;
   }
   const seed = initialVm && initialVm.kind === 'list' ? listSeed(initialVm) : undefined;
   return <ListEditor editable={editable} seed={seed} />;

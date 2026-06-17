@@ -128,12 +128,18 @@ async function buildDocVM(id: string, patterns: string[], isOwner: boolean): Pro
   const docFact = await getFact(`doc:${id}`);
   if (!docFact) return null;
   const dv = docFact.value as DocValue;
-  const refs = Array.isArray(dv.blocks) ? dv.blocks : [];
-  const facts = await Promise.all(refs.map((r) => getFact(r.key)));
-  const blocks: BlockData[] = refs.map((r, i) => ({
-    key: r.key,
-    fold: r.fold,
-    md: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${r.key}*`,
+  // Membership + order are substrate-native `_doc/<id>/<key>` = {seq, fold}
+  // decorations; fall back to the legacy embedded array for un-migrated docs.
+  const prefix = `_doc/${id}/`;
+  const deco = await queryPrefix(prefix);
+  let order = deco.map((f) => ({ key: f.key.slice(prefix.length), seq: Number((f.value as { seq?: number })?.seq ?? 0), fold: !!(f.value as { fold?: boolean })?.fold }));
+  if (!order.length) order = ((dv.cells ?? dv.blocks ?? []) as Array<{ key: string; fold?: boolean }>).map((r, i) => ({ key: r.key, seq: i + 1, fold: !!r.fold }));
+  order.sort((a, b) => a.seq - b.seq);
+  const facts = await Promise.all(order.map((o) => getFact(o.key)));
+  const blocks: BlockData[] = order.map((o, i) => ({
+    key: o.key,
+    fold: o.fold,
+    md: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${o.key}*`,
   }));
   return { kind: 'doc', owner: OWNER, isOwner, id, title: dv.title || id, summary: dv.summary, blocks };
 }
