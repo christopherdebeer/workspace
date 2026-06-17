@@ -108,10 +108,13 @@ attribution (a cell → its doc tag).
 
 ## 7. Open decisions / plan
 
-1. **execute (`run`/`js`) output → cells.** `agent` now persists output as a
-   cell. `run`/`js` route through the external `@c15r/viewers` repl (it receives
-   `_factKey`); confirm whether it already persists outputs to a fact and, if so,
-   surface that fact as a doc cell the same way `onAgentOutput` does.
+1. **execute (`run`/`js`) output → cells — done.** The `@c15r/viewers` repl
+   already persists output on "⤓ output→fact" (an `out:<cellKey>:<ts>` fact,
+   `produced-by` the cell). It now also fires an `onOutput` hook; lit places that
+   existing fact as a cell after the source (one `_doc/` decoration, no
+   duplicate). So `agent` (creates a cell from text) and `run`/`js` (places the
+   `out:` fact) both land outputs as cells. *Validated:* an `out:` fact at seq
+   2.5 renders between cells at 2 and 3 on `sn-demo`.
 
 2. **run-as-caller (was "thread #1") — reframed, deferred.** For the owner using
    their own workspace, executed code *already* runs as the caller: SSR/reads are
