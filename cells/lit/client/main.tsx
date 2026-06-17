@@ -29,6 +29,12 @@ const appRoot = document.getElementById('app')!;
 const cellOwner = (): string => (cellAddress() as { owner?: string } | null)?.owner ?? 'c15r';
 let typeDecls: Record<string, { viewer?: string }> = {};
 
+// The shared @c15r/viewers `repl` view reaches the run organ (@c15r/run.exec /
+// .fetch) and persists outputs through these globals — reference, not copy, the
+// same seam canvas uses. Set once so a ```run/js/repl fence in a doc is live.
+(window as any).__parcAct = act;
+(window as any).__parcRead = read;
+
 /* ── substrate helpers ─────────────────────────────────────────────────── */
 
 async function fetchFact(key: string): Promise<Entry | null> {
@@ -77,6 +83,30 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
       import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
         .then((v) => v.renderFence(box, lang, arg))
         .catch((err) => { box.textContent = `${lang}: ${(err as Error).message}`; });
+      continue;
+    }
+    // Executable code cells — dotlit's cornerstone, realised on the substrate.
+    // ```run  → server execution via @c15r/run (the code organ; outputs→facts)
+    // ```js / ```repl → client execution, server-toggle available.
+    // Reuses the @c15r/viewers `repl` view (the same one canvas mounts) so
+    // execution + output→fact are one validated implementation, not a copy.
+    // An anonymous reader just sees the code (no session to execute as).
+    if (['run', 'js', 'repl'].includes(lang)) {
+      if (!isAuthed()) continue;
+      const factKey = (code.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+      const box = el('div', 'embed-repl'); box.textContent = '…'; pre.replaceWith(box);
+      import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
+        .then((v: any) => {
+          const node = v.repl.mount({
+            id: `litrepl-${factKey ?? Date.now().toString(36)}`,
+            content: arg,
+            lang: 'js',
+            server: lang === 'run',
+            _factKey: factKey,
+          });
+          box.replaceWith(node);
+        })
+        .catch((err) => { box.textContent = `run: ${(err as Error).message}`; });
       continue;
     }
     if (lang === 'board') {
