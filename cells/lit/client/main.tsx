@@ -209,7 +209,7 @@ function parseFence(info: string, body: string): Fence {
   return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
 }
 
-async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string) => void | Promise<void> }): Promise<void> {
+async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void> }): Promise<void> {
   // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
   // — not just the first-word lang — drives routing.
   for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
@@ -283,7 +283,7 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
             server,
             _factKey: factKey,
             // "⤓ output→fact" → place that output fact as a cell in this doc.
-            onOutput: factKey ? (key: string) => { void ctx?.placeOutput?.(factKey, key); } : undefined,
+            onOutput: factKey ? (key: string, content: string) => { void ctx?.placeOutput?.(factKey, key, content); } : undefined,
           });
           box.replaceWith(node);
         })
@@ -399,7 +399,7 @@ interface CellProps {
 }
 type FenceCtx = {
   onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>;
-  placeOutput?: (srcKey: string, cellKey: string) => void | Promise<void>;
+  placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void>;
 };
 function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -414,7 +414,7 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
     if (!host || fold || editing !== null) return;
     void enhanceFences(host, {
       onAgentOutput: (a, b, c) => ctxRef.current?.onAgentOutput?.(a, b, c),
-      placeOutput: (a, b) => ctxRef.current?.placeOutput?.(a, b),
+      placeOutput: (a, b, c) => ctxRef.current?.placeOutput?.(a, b, c),
     });
   }, [md, fold, editing]);
 
@@ -478,33 +478,36 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
 
-  // An agent cell's output becomes a real cell placed right after it (fractional
-  // seq), provenance-linked to the agent-run fact. Re-reads order live so
-  // placement is correct regardless of stale render state.
-  const onAgentOutput = useCallback(async (srcKey: string, text: string, factKey?: string) => {
-    const res = await loadDoc(docId, 'narrative');
-    const arr = res?.cells ?? [];
+  // Live mirror of cells so the output callbacks can place a new cell without a
+  // re-fetch (read-after-write lag was making outputs appear only on reload).
+  const cellsRef = useRef(cells); cellsRef.current = cells;
+  const seqAfter = (srcKey: string): number => {
+    const arr = cellsRef.current;
     const i = arr.findIndex((c) => c.key === srcKey);
     const lo = i >= 0 ? arr[i].seq : (arr.at(-1)?.seq ?? 0);
     const hi = i >= 0 && i + 1 < arr.length ? arr[i + 1].seq : null;
+    return seqBetween(lo, hi);
+  };
+
+  // An agent cell's output becomes a real cell placed right after it (fractional
+  // seq), provenance-linked to the agent-run fact. Optimistic insert → no reload.
+  const onAgentOutput = useCallback(async (srcKey: string, text: string, factKey?: string) => {
+    const seq = seqAfter(srcKey);
     const k = mintCell();
-    await saveCell(docId, k, text || '_(no output)_');
-    await writeOrder(docId, k, seqBetween(lo, hi), false);
+    const content = text || '_(no output)_';
+    await saveCell(docId, k, content);
+    await writeOrder(docId, k, seq, false);
     if (factKey) await act('workspace.link', { from: factKey, to: k, rel: 'produces' }).catch(() => {});
-    await load();
-  }, [docId, load]);
+    setCells((cs) => [...cs.filter((c) => c.key !== k), { key: k, content, fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq));
+  }, [docId]);
 
   // run/js "output→fact" already wrote an `out:` fact (produced-by the cell);
-  // place THAT fact as a cell after the source, no duplicate write.
-  const placeOutput = useCallback(async (srcKey: string, cellKey: string) => {
-    const res = await loadDoc(docId, 'narrative');
-    const arr = res?.cells ?? [];
-    const i = arr.findIndex((c) => c.key === srcKey);
-    const lo = i >= 0 ? arr[i].seq : (arr.at(-1)?.seq ?? 0);
-    const hi = i >= 0 && i + 1 < arr.length ? arr[i + 1].seq : null;
-    await writeOrder(docId, cellKey, seqBetween(lo, hi), false);
-    await load();
-  }, [docId, load]);
+  // place THAT fact as a cell after the source (one decoration), no duplicate.
+  const placeOutput = useCallback(async (srcKey: string, cellKey: string, content?: string) => {
+    const seq = seqAfter(srcKey);
+    await writeOrder(docId, cellKey, seq, false);
+    setCells((cs) => [...cs.filter((c) => c.key !== cellKey), { key: cellKey, content: content ?? '', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq));
+  }, [docId]);
   const fenceCtx = { onAgentOutput, placeOutput };
 
   if (missing) return <ListEditor.MissingDoc docId={docId} />;
