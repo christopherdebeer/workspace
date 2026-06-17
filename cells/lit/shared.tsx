@@ -77,6 +77,41 @@ marked.use({
     },
   },
 });
+// [[wiki-links]] — a link is a first-class substrate edge, not a bolted-on index.
+// `[[target]]` / `[[target|label]]`: a bare target resolves to `doc:<slug>`, an
+// explicit key (`doc:x`, `cell:y`) is used as-is. The inline extension runs in
+// the shared marked instance, so SSR and client render identically.
+const slug = (s: string): string => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+export function resolveWikiTarget(raw: string): { key: string; href: string; label: string } {
+  const [t, l] = raw.split('|');
+  const target = (t || '').trim();
+  const key = target.includes(':') ? target : `doc:${slug(target)}`;
+  const id = key.startsWith('doc:') ? key.slice(4) : key;
+  return { key, href: `?doc=${encodeURIComponent(id)}`, label: (l ?? target).trim() || target };
+}
+/** Resolved fact-keys a cell links to — used to sync edges on save. */
+export function extractWikiTargets(md: string): string[] {
+  const out = new Set<string>();
+  const re = /\[\[([^\]]+)\]\]/g; let m: RegExpExecArray | null;
+  while ((m = re.exec(md))) out.add(resolveWikiTarget(m[1]).key);
+  return [...out];
+}
+marked.use({
+  extensions: [{
+    name: 'wikilink',
+    level: 'inline',
+    start(src: string) { return src.indexOf('[['); },
+    tokenizer(src: string) {
+      const m = /^\[\[([^\]]+)\]\]/.exec(src);
+      return m ? { type: 'wikilink', raw: m[0], text: m[1] } : undefined;
+    },
+    renderer(tok: { text: string }) {
+      const { href, label } = resolveWikiTarget(tok.text);
+      return `<a class="wikilink" href="${escAttr(href)}">${escHtml(label)}</a>`;
+    },
+  }],
+} as Parameters<typeof marked.use>[0]);
+
 export function renderMarkdown(md: string): string {
   return marked.parse(md.replace(/\r\n/g, '\n'), { async: false }) as string;
 }

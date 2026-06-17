@@ -18,7 +18,7 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { ensureAuth, isAuthed } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
-import { Surface, renderMarkdown, splitCells, seqBetween, type ViewModel, type BlockData, type DocValue } from '../shared';
+import { Surface, renderMarkdown, splitCells, seqBetween, extractWikiTargets, type ViewModel, type BlockData, type DocValue } from '../shared';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -53,7 +53,7 @@ type LoadedCell = { key: string; content: string; fold: boolean; seq: number; sc
  *  decorations (`_doc/<id>/<key>` = {seq, fold}), migrating from the legacy
  *  embedded array when no decorations exist. `projection` re-sorts the SAME
  *  membership — narrative by seq, salience by the cell's score. */
-async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[] } | null> {
+async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[]; backlinks: Array<{ id: string; label: string }> } | null> {
   const docFact = await fetchFact(`doc:${docId}`);
   if (!docFact) return null;
   const meta = docFact.value as DocValue;
@@ -68,10 +68,39 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
     score: Number((facts[i]?._meta as any)?.score) || 0,
   }));
   cells.sort((a, b) => (projection === 'salience' ? b.score - a.score : a.seq - b.seq));
-  return { meta, cells };
+  // Backlinks: inbound edges to this doc, collapsed to distinct source docs
+  // (a link from a cell is attributed to the doc that cell belongs to).
+  const backlinks: Array<{ id: string; label: string }> = [];
+  try {
+    const nb = await read<{ inbound: Array<{ from: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key: `doc:${docId}` });
+    const seen = new Set<string>();
+    for (const e of nb.inbound ?? []) {
+      const ent = nb.entries?.[e.from];
+      const id = e.from.startsWith('doc:') ? e.from.slice(4) : (ent?._meta?.tags ?? []).find((t) => t.startsWith('doc:'))?.slice(4);
+      if (!id || id === docId || seen.has(id)) continue;
+      seen.add(id);
+      backlinks.push({ id, label: id });
+    }
+  } catch { /* best-effort */ }
+  return { meta, cells, backlinks };
 }
 async function saveCell(docId: string, key: string, content: string): Promise<void> {
   await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'cell', tags: [`doc:${docId}`] });
+  await syncCellLinks(key, content);
+}
+/** Reconcile a cell's [[wiki-links]] into substrate edges (rel `related`): link
+ *  newly-referenced targets, unlink ones the edit removed. Best-effort. */
+async function syncCellLinks(cellKey: string, content: string): Promise<void> {
+  try {
+    const want = new Set(extractWikiTargets(content));
+    const nb = await read<{ outbound: Array<{ to: string; rel: string }> }>('workspace.neighbors', { key: cellKey });
+    const have = (nb.outbound ?? []).filter((e) => e.rel === 'related');
+    const haveSet = new Set(have.map((e) => e.to));
+    await Promise.all([
+      ...[...want].filter((t) => !haveSet.has(t)).map((to) => act('workspace.link', { from: cellKey, to, rel: 'related' })),
+      ...have.filter((e) => !want.has(e.to)).map((e) => act('workspace.unlink', { from: cellKey, to: e.to, rel: 'related' })),
+    ]);
+  } catch { /* links are best-effort, never block the save */ }
 }
 async function writeOrder(docId: string, key: string, seq: number, fold: boolean): Promise<void> {
   await act('workspace.remember', { key: `_doc/${docId}/${key}`, value: { seq, fold }, via: 'lit', type: 'doc-order', tags: [`doc:${docId}`] });
@@ -381,11 +410,12 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   const [cells, setCells] = useState<LoadedCell[]>((seed?.blocks ?? []).map((b, i) => ({ key: b.key, content: b.md, fold: !!b.fold, seq: i + 1, score: 0 })));
   const [missing, setMissing] = useState(false);
   const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
+  const [backlinks, setBacklinks] = useState<Array<{ id: string; label: string }>>([]);
 
   const load = useCallback(async () => {
     const res = await loadDoc(docId, projection);
     if (!res) { setMissing(true); return; }
-    setMeta(res.meta); setCells(res.cells);
+    setMeta(res.meta); setCells(res.cells); setBacklinks(res.backlinks);
   }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
 
@@ -435,6 +465,12 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
           />
         ))}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}
+        {backlinks.length ? (
+          <section className="backlinks">
+            <h3>Linked from</h3>
+            <ul>{backlinks.map((b) => <li key={b.id}><a href={`?doc=${encodeURIComponent(b.id)}`}>[[{b.label}]]</a></li>)}</ul>
+          </section>
+        ) : null}
       </main>
     </>
   );
