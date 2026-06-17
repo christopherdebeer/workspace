@@ -130,3 +130,11 @@ header .summary { margin: 0.3rem 0 0; color: var(--faint); }
 
 /* — markdown fence (```md renders as markdown) — */
 .md-fence { border-left: 2px solid var(--line); padding-left: 0.9rem; margin: 0.6rem 0; }
+
+/* — agent cell (@c15r/models.agent) — */
+.embed-agent { border: 1px solid var(--line); border-radius: 10px; padding: 0.7rem 0.8rem; margin: 0.6rem 0; background: #fff; }
+.agent-head { font-size: 0.8rem; color: var(--faint); margin-bottom: 0.4rem; }
+.agent-prompt { background: #f4f4ee; margin: 0 0 0.5rem; white-space: pre-wrap; }
+.agent-out { margin-top: 0.5rem; }
+.agent-out:empty { display: none; }
+.vw-attrib { font-size: 0.72rem; color: var(--faint); margin-top: 0.5rem; }

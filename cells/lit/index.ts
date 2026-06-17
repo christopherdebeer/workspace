@@ -104,7 +104,8 @@ pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7
 img{max-width:100%}a{color:var(--accent)}
 .doc-controls{display:flex;gap:.4rem;margin-top:.5rem}.pill{border:1px solid var(--line);background:transparent;color:var(--faint);border-radius:999px;padding:.12rem .7rem;font-size:.8rem;cursor:pointer}.pill.on{color:var(--paper);background:var(--accent);border-color:var(--accent)}
 .wikilink{border-bottom:1px dotted var(--accent);text-decoration:none}.backlinks{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line)}.backlinks h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:0 0 .5rem}.backlinks ul{list-style:none;padding:0;margin:0;display:grid;gap:.3rem}
-.md-fence{border-left:2px solid var(--line);padding-left:.9rem;margin:.6rem 0}`;
+.md-fence{border-left:2px solid var(--line);padding-left:.9rem;margin:.6rem 0}
+.embed-agent{border:1px solid var(--line);border-radius:10px;padding:.7rem .8rem;margin:.6rem 0;background:#fff}.agent-head{font-size:.8rem;color:var(--faint);margin-bottom:.4rem}.agent-prompt{background:#f4f4ee;margin:0 0 .5rem;white-space:pre-wrap}.agent-out{margin-top:.5rem}.agent-out:empty{display:none}.vw-attrib{font-size:.72rem;color:var(--faint);margin-top:.5rem}`;
 
 /** Inject the SSR'd tree + its serialized state into the shell. `data-ssr` flags a
  *  server first paint, telling the client to hydrate (don't rebuild). The

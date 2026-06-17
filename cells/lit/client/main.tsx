@@ -288,6 +288,43 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
         .catch((err) => { box.textContent = `run: ${(err as Error).message}`; });
       continue;
     }
+    // 2b. agent cell — model-in-the-loop over the substrate (@c15r/models.agent),
+    // the generative tier. Always async: submit → poll fetch → render the result
+    // (persisted as an `agent-run` fact at factKey). `!write` grants substrate
+    // writes (default read-only). Anonymous readers just see the prompt.
+    if (lang === 'agent') {
+      const panel = el('div', 'embed-agent');
+      panel.appendChild(el('div', 'agent-head', '🤖 agent'));
+      const promptEl = el('pre', 'agent-prompt'); promptEl.textContent = body; panel.appendChild(promptEl);
+      pre.replaceWith(panel);
+      if (!isAuthed()) { panel.appendChild(el('div', 'vw-attrib', 'sign in to run')); continue; }
+      const canWrite = fence.directives.has('write');
+      const out = el('div', 'agent-out');
+      const run = el('button', 'btn primary', `run agent${canWrite ? ' · writes enabled' : ''}`) as HTMLButtonElement;
+      run.onclick = async () => {
+        run.disabled = true; out.textContent = 'submitting…';
+        try {
+          const sub = await act<{ jobId: string; factKey?: string }>('@c15r/models.agent', { prompt: body, grants: { read: true, write: canWrite } });
+          const deadline = Date.now() + 180_000;
+          for (;;) {
+            await new Promise((r) => setTimeout(r, 2500));
+            const job = await read<{ status: string; text?: string; error?: string; factKey?: string; turns?: number; toolCalls?: number }>('@c15r/models.fetch', { jobId: sub.jobId });
+            if (job.status === 'done') {
+              out.innerHTML = renderMarkdown(job.text || '*(no output)*'); void enhanceFences(out);
+              const fk = job.factKey ?? sub.factKey;
+              panel.appendChild(el('div', 'vw-attrib', `⚙ @c15r/models · agent · ${job.turns ?? '?'} turns · ${job.toolCalls ?? 0} tool calls${fk ? ` · ${fk}` : ''}`));
+              break;
+            }
+            if (job.status === 'error') { out.textContent = `agent error: ${job.error ?? 'failed'}`; break; }
+            if (Date.now() > deadline) { out.textContent = 'agent still running after 180s — it persists to its fact; reopen later'; break; }
+            out.textContent = `running… turn ${job.turns ?? 0} · ${job.toolCalls ?? 0} tool calls`;
+          }
+        } catch (err) { out.textContent = `agent: ${(err as Error).message}`; }
+        run.disabled = false;
+      };
+      panel.appendChild(run); panel.appendChild(out);
+      continue;
+    }
     if (lang === 'board') {
       const wrap = el('div', 'embed-board');
       const frame = document.createElement('iframe');
