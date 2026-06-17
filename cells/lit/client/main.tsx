@@ -453,6 +453,7 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
     const res = await loadDoc(docId, projection);
     if (!res) { setMissing(true); return; }
     setMeta(res.meta); setCells(res.cells); setBacklinks(res.backlinks);
+    cacheSet(`doc:${docId}`, { kind: 'doc', owner: cellOwner(), isOwner: true, id: docId, title: res.meta.title || docId, summary: res.meta.summary, blocks: res.cells.map((c) => ({ key: c.key, md: c.content, fold: c.fold })) });
   }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
 
@@ -525,6 +526,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
         .sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'))
         .map((e) => ({ id: e.key.slice(4), v: e.value as DocValue, updated: e._meta?.updatedAt ?? '' }));
       setDocs(list);
+      cacheSet('list', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list.map((d) => ({ id: d.id, title: d.v.title || d.id, summary: d.v.summary, blocks: 0, updated: d.updated })) });
     })();
   }, []);
 
@@ -709,6 +711,26 @@ function readInitialVm(): ViewModel | null {
   try { return JSON.parse(tag.textContent) as ViewModel; } catch { return null; }
 }
 
-const initialVm = readInitialVm();
-if (appRoot.dataset.ssr === '1' && initialVm) hydrateRoot(appRoot, <App initialVm={initialVm} />);
+/* Client VM cache — SSR only embeds a ViewModel when the request proves owner
+ * identity (bearer, or the dispatch tier's session-cookie → x-cell-caller). A
+ * plain navigation that misses that gets the bare shell, so the client would
+ * paint "loading…" before its first fetch. Caching the last-seen VM per route
+ * lets a repeat open paint instantly from cache; load() then refreshes it. */
+const VM_CACHE = 'parc.lit.vm.';
+function cacheGet(id: string): ViewModel | null {
+  try { const s = localStorage.getItem(VM_CACHE + id); return s ? (JSON.parse(s) as ViewModel) : null; } catch { return null; }
+}
+function cacheSet(id: string, vm: ViewModel): void {
+  try { localStorage.setItem(VM_CACHE + id, JSON.stringify(vm)); } catch { /* storage full/blocked */ }
+}
+function cachedVmForLocation(): ViewModel | null {
+  const docId = new URLSearchParams(location.search).get('doc');
+  if (docId && /^log:/.test(docId)) return null; // logs are derived views, not cached
+  return cacheGet(docId ? `doc:${docId}` : 'list');
+}
+
+const ssrVm = readInitialVm();
+// Fall back to the cached VM only on a bare shell (no SSR paint to hydrate).
+const initialVm = ssrVm ?? cachedVmForLocation();
+if (appRoot.dataset.ssr === '1' && ssrVm) hydrateRoot(appRoot, <App initialVm={ssrVm} />);
 else { appRoot.textContent = ''; createRoot(appRoot).render(<App initialVm={initialVm} />); }
