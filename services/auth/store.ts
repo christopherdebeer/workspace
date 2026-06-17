@@ -74,6 +74,13 @@ export interface AuthCode {
   codeChallengeMethod: string;
   scope: string | null;
   resource: string | null;
+  /**
+   * Grant lifetime chosen by the user at consent (seconds), already clamped to the
+   * server ceiling. Bounds the issued grant's horizon — the refresh-token TTL in
+   * the usual short-access/long-refresh mode, or the access token itself on a
+   * non-expiring deployment. Null = use the server default (docs/capability-consent.md).
+   */
+  grantSecs?: number | null;
 }
 
 export interface SessionInfo {
@@ -108,6 +115,9 @@ export interface TokenInfo {
   id: string;
   mintedBy: string;
   scope: string;
+  /** The session's effective scope (≤ `scope`); null ⇒ the full grant is effective.
+   *  Mutable via `setEffectiveScope` — incremental authorization. */
+  effectiveScope?: string | null;
   label: string | null;
   clientId: string | null;
   expiresAt: string | null;
@@ -184,6 +194,7 @@ export interface AuthStore {
     codeChallengeMethod: string;
     scope?: string;
     resource?: string;
+    grantSecs?: number | null;
   }): Promise<void>;
   consumeAuthCode(code: string): Promise<AuthCode | null>;
   // sessions
@@ -193,6 +204,13 @@ export interface AuthStore {
   // tokens
   mintToken(params: MintTokenParams): Promise<MintedToken>;
   validateTokenByHash(hash: string): Promise<TokenInfo | null>;
+  /**
+   * Set (or clear, with null) a token's effective scope — the session's mutable
+   * focus within its grant ceiling (incremental authorization,
+   * docs/capability-consent.md). Keyed by the owner's account id so a session can
+   * only narrow/widen its own token. Returns false when no such token exists.
+   */
+  setEffectiveScope(tokenId: string, userId: string, effectiveScope: string | null): Promise<boolean>;
   refreshUnifiedToken(
     oldRefreshHash: string,
     newExpiresInSec?: number,

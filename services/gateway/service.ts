@@ -32,7 +32,7 @@
 import {
   defineMcpService,
   hasScope,
-  requireScope,
+  hasGrantScope,
   ServiceAuthError,
   McpToolDefinition,
   ServiceContext,
@@ -74,6 +74,8 @@ interface CellTool {
   kind: 'read' | 'act';
   cellId: string;
   tool: string;
+  /** Third-party-author disclosure (set by cells for non-owner callers). */
+  disclosure?: { author: string; reads: string[]; note: string };
 }
 
 /** A resolved, dispatchable capability. */
@@ -95,6 +97,8 @@ interface CatalogEntry {
   /** The declared result envelope — self-documentation's read direction. */
   resultSchema?: Record<string, unknown>;
   scope: string | null;
+  /** Third-party-author disclosure for cell tools (docs/capability-consent.md). */
+  disclosure?: { author: string; reads: string[]; note: string };
 }
 
 /** One capability in the summary catalog: enough to decide, not to call. */
@@ -202,6 +206,7 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
         inputSchema: t.inputSchema,
         ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
         scope: t.scope ?? null,
+        ...(t.disclosure ? { disclosure: t.disclosure } : {}),
       });
     }
   } catch (err) {
@@ -255,22 +260,32 @@ interface DispatchInput {
 }
 
 /**
- * Enforce a capability's scope, and make the denial a teaching affordance
- * (docs/scope-grants.md §5): the token is the ceiling here, so the fix is a
- * wider credential — re-consent or a grant from an admin — not a grant
- * request to a resource owner (that case is `grant_denied`, raised by the
- * resource cells themselves).
+ * Enforce a capability's scope as a *teaching* denial, distinguishing three cases
+ * (docs/capability-consent.md, docs/scope-grants.md §5):
+ *
+ *  1. effective scope covers it           → allow.
+ *  2. within the token's GRANT ceiling but not the session's current focus
+ *     → `scope_offer`: a self-serve widen (`auth.requestScope`), no re-consent —
+ *       this is incremental authorization (a session starts minimal, widens on
+ *       demand).
+ *  3. outside the grant ceiling entirely   → `scope_denied`: the token is the
+ *       ceiling, so the fix is a wider credential (human re-consent at
+ *       /oauth/authorize, or `auth.mintToken`).
  */
 function enforceScope(ctx: ServiceContext, target: string, scope: string): void {
-  try {
-    requireScope(ctx.identity, scope);
-  } catch {
+  if (hasScope(ctx.identity, scope)) return;
+  if (hasGrantScope(ctx.identity, scope)) {
     throw new ServiceAuthError(
-      `scope_denied: "${target}" requires scope "${scope}" and your token carries [${
+      `scope_offer: "${target}" needs "${scope}", which is within your grant but not your session's active scope [${
         ctx.identity.scopes.join(' ') || 'none'
-      }]. A token is a ceiling — sign in again requesting the scope at /oauth/authorize (humans), or ask your human to re-consent / mint you a wider token via auth.mintToken (agents).`,
+      }]. Widen it (no re-consent): act("auth.requestScope", { scopes: ["${scope}"] }), then retry.`,
     );
   }
+  throw new ServiceAuthError(
+    `scope_denied: "${target}" requires scope "${scope}" and your grant is [${
+      (ctx.identity.grantScopes ?? ctx.identity.scopes).join(' ') || 'none'
+    }]. A token is a ceiling — sign in again requesting the scope at /oauth/authorize (humans), or ask your human to re-consent / mint you a wider token via auth.mintToken (agents).`,
+  );
 }
 
 /**
@@ -328,8 +343,14 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   return cap.forward(input?.input, ctx);
 }
 
-function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[] } {
-  return { user: ctx.identity.user ?? 'anonymous', scopes: ctx.identity.scopes };
+function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[]; grant: string[] } {
+  // `scopes` is the session's effective focus (what's enforced now); `grant` is the
+  // token ceiling. They differ once a session narrows/widens (incremental auth).
+  return {
+    user: ctx.identity.user ?? 'anonymous',
+    scopes: ctx.identity.scopes,
+    grant: ctx.identity.grantScopes ?? ctx.identity.scopes,
+  };
 }
 
 const TARGET_PROP = {

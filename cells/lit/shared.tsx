@@ -16,7 +16,18 @@ import * as React from 'react';
 import { marked } from 'marked';
 
 export interface BlockRef { key: string; fold?: boolean }
-export interface DocValue { title: string; summary?: string; blocks?: BlockRef[] }
+/** A document is a *view* over cell-facts: thin metadata; membership + order live
+ *  in substrate-native `_doc/<id>/<cellKey>={seq,fold}` decorations. `blocks`/
+ *  `cells` are the legacy embedded array, read only for migration. `cellCount`
+ *  is a denormalised count for the doc list; `projection` is the default lens. */
+export interface DocValue {
+  title: string;
+  summary?: string;
+  blocks?: BlockRef[];
+  cells?: BlockRef[];
+  cellCount?: number;
+  projection?: 'narrative' | 'salience';
+}
 /** A block resolved for render: its markdown (or a fold title) + identity. */
 export interface BlockData { key: string; md: string; fold?: boolean }
 export interface ListItem { id: string; title: string; summary?: string; blocks: number; updated: string }
@@ -37,8 +48,103 @@ export type ViewModel =
  * `language-<lang>` class so the client can later swap a fence for a live embed
  * (board/view/cell/json/csv/mermaid). */
 marked.setOptions({ gfm: true, breaks: false });
+// Fence meta-grammar (dotlit lineage): marked drops everything past the first
+// word of a fence info-string, but the declaration lives there (viewer=, repl=,
+// !directive, #tag, < in, > out). Preserve the FULL info-string on the <pre> as
+// `data-fence` so the client can parse it. Deterministic and identical on both
+// sides — the SSR/hydration parity contract is preserved.
+const escHtml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+marked.use({
+  renderer: {
+    // marked@12 passes positional args; guard for the token-object form too.
+    code(code: unknown, infostring?: string, escaped?: boolean): string {
+      if (code && typeof code === 'object') {
+        const tok = code as { lang?: string; escaped?: boolean; text?: string };
+        infostring = tok.lang; escaped = tok.escaped; code = tok.text;
+      }
+      const info = (infostring || '').trim();
+      const lang = info.split(/\s+/)[0] || '';
+      // A markdown fence names the markdown renderer: render its body as markdown
+      // (nested), so ```md / ```markdown is respected on both SSR and client.
+      if (lang === 'md' || lang === 'markdown') {
+        return `<div class="md-fence">${marked.parse(code as string, { async: false }) as string}</div>\n`;
+      }
+      const text = escaped ? (code as string) : escHtml(code as string);
+      const cls = lang ? ` class="language-${escAttr(lang)}"` : '';
+      const meta = info ? ` data-fence="${escAttr(info)}"` : '';
+      return `<pre${meta}><code${cls}>${text}\n</code></pre>\n`;
+    },
+  },
+});
+// [[wiki-links]] — a link is a first-class substrate edge, not a bolted-on index.
+// `[[target]]` / `[[target|label]]`: a bare target resolves to `doc:<slug>`, an
+// explicit key (`doc:x`, `cell:y`) is used as-is. The inline extension runs in
+// the shared marked instance, so SSR and client render identically.
+const slug = (s: string): string => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+export function resolveWikiTarget(raw: string): { key: string; href: string; label: string } {
+  const [t, l] = raw.split('|');
+  const target = (t || '').trim();
+  const key = target.includes(':') ? target : `doc:${slug(target)}`;
+  const id = key.startsWith('doc:') ? key.slice(4) : key;
+  return { key, href: `?doc=${encodeURIComponent(id)}`, label: (l ?? target).trim() || target };
+}
+/** Resolved fact-keys a cell links to — used to sync edges on save. */
+export function extractWikiTargets(md: string): string[] {
+  const out = new Set<string>();
+  const re = /\[\[([^\]]+)\]\]/g; let m: RegExpExecArray | null;
+  while ((m = re.exec(md))) out.add(resolveWikiTarget(m[1]).key);
+  return [...out];
+}
+marked.use({
+  extensions: [{
+    name: 'wikilink',
+    level: 'inline',
+    start(src: string) { return src.indexOf('[['); },
+    tokenizer(src: string) {
+      const m = /^\[\[([^\]]+)\]\]/.exec(src);
+      return m ? { type: 'wikilink', raw: m[0], text: m[1] } : undefined;
+    },
+    renderer(tok: { text: string }) {
+      const { href, label } = resolveWikiTarget(tok.text);
+      return `<a class="wikilink" href="${escAttr(href)}">${escHtml(label)}</a>`;
+    },
+  }],
+} as Parameters<typeof marked.use>[0]);
+
 export function renderMarkdown(md: string): string {
-  return marked.parse(md.replace(/\r\n/g, '\n'), { async: false });
+  return marked.parse(md.replace(/\r\n/g, '\n'), { async: false }) as string;
+}
+
+/* ── document ⇄ cells (the substrate-native decomposition) ─────────────────
+ * A document is authored as one markdown text; on save it decomposes into
+ * cell-facts (dotlit's sections+cells, simplified): a heading opens a prose
+ * cell that accretes following prose; a fenced code block is its own cell.
+ * Each cell keeps its own source (incl. the fence info-string), so a cell is
+ * the unit of authoring, execution, linking, and reuse — and the SAME cell-fact
+ * can appear in many documents/boards via per-surface ordering decorations. */
+export function splitCells(md: string): string[] {
+  const toks = (marked.lexer(md || '') as Array<{ type: string; raw: string }>);
+  const cells: string[] = [];
+  let cur = '';
+  const flush = (): void => { const s = cur.replace(/\s+$/, ''); if (s.trim()) cells.push(s); cur = ''; };
+  for (const t of toks) {
+    if (t.type === 'heading') { flush(); cur = t.raw; }
+    else if (t.type === 'code') { flush(); const s = t.raw.replace(/\s+$/, ''); if (s.trim()) cells.push(s); }
+    else cur += t.raw;
+  }
+  flush();
+  return cells;
+}
+
+/** Fractional ordering — placing a split-off fragment or moving a cell is a
+ *  single decoration write (no renumbering). Identity is inherent: you edit a
+ *  known cell-fact; only `splitCells` on its own new source can mint new cells. */
+export function seqBetween(a: number | null, b: number | null): number {
+  if (a == null && b == null) return 1;
+  if (a == null) return (b as number) - 1;
+  if (b == null) return (a as number) + 1;
+  return (a + b) / 2;
 }
 
 /* ── presentational components (read-only first paint) ─────────────────── */

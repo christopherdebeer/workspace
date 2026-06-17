@@ -18,7 +18,7 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { ensureAuth, isAuthed } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
-import { Surface, renderMarkdown, type ViewModel, type BlockData, type DocValue } from '../shared';
+import { Surface, renderMarkdown, splitCells, seqBetween, extractWikiTargets, type ViewModel, type BlockData, type DocValue } from '../shared';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -28,6 +28,12 @@ interface Entry { key: string; value: any; _meta?: Meta }
 const appRoot = document.getElementById('app')!;
 const cellOwner = (): string => (cellAddress() as { owner?: string } | null)?.owner ?? 'c15r';
 let typeDecls: Record<string, { viewer?: string }> = {};
+
+// The shared @c15r/viewers `repl` view reaches the run organ (@c15r/run.exec /
+// .fetch) and persists outputs through these globals — reference, not copy, the
+// same seam canvas uses. Set once so a ```run/js/repl fence in a doc is live.
+(window as any).__parcAct = act;
+(window as any).__parcRead = read;
 
 /* ── substrate helpers ─────────────────────────────────────────────────── */
 
@@ -40,12 +46,87 @@ function contentOf(value: any): string {
   if (value && typeof value.content === 'string') return value.content;
   return '```json\n' + JSON.stringify(value, null, 2) + '\n```';
 }
-async function saveBlock(key: string, prior: any, content: string): Promise<void> {
-  const value = prior && typeof prior === 'object' && !Array.isArray(prior) ? { ...prior, content } : { content };
-  await act('workspace.remember', { key, value, via: 'lit' });
+const mintCell = (): string => `cell:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+type LoadedCell = { key: string; content: string; fold: boolean; seq: number; score: number };
+
+/** A document is a *view*: load its cell-facts via substrate-native ordering
+ *  decorations (`_doc/<id>/<key>` = {seq, fold}), migrating from the legacy
+ *  embedded array when no decorations exist. `projection` re-sorts the SAME
+ *  membership — narrative by seq, salience by the cell's score. */
+async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[]; backlinks: Array<{ id: string; label: string }> } | null> {
+  const docFact = await fetchFact(`doc:${docId}`);
+  if (!docFact) return null;
+  const meta = docFact.value as DocValue;
+  const prefix = `_doc/${docId}/`;
+  const deco = await read<{ entries: Entry[] }>('workspace.query', { prefix, limit: 500 });
+  let order = (deco.entries ?? []).map((e) => ({ key: e.key.slice(prefix.length), seq: Number((e.value as any)?.seq ?? 0), fold: !!(e.value as any)?.fold }));
+  if (!order.length) order = ((meta.cells ?? meta.blocks ?? []) as Array<{ key: string; fold?: boolean }>).map((r, i) => ({ key: r.key, seq: i + 1, fold: !!r.fold }));
+  const facts = await Promise.all(order.map((o) => fetchFact(o.key)));
+  const cells: LoadedCell[] = order.map((o, i) => ({
+    key: o.key, fold: o.fold, seq: o.seq,
+    content: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${o.key}*`,
+    score: Number((facts[i]?._meta as any)?.score) || 0,
+  }));
+  cells.sort((a, b) => (projection === 'salience' ? b.score - a.score : a.seq - b.seq));
+  // Backlinks: inbound edges to this doc, collapsed to distinct source docs
+  // (a link from a cell is attributed to the doc that cell belongs to).
+  const backlinks: Array<{ id: string; label: string }> = [];
+  try {
+    const nb = await read<{ inbound: Array<{ from: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key: `doc:${docId}` });
+    const seen = new Set<string>();
+    for (const e of nb.inbound ?? []) {
+      const ent = nb.entries?.[e.from];
+      const id = e.from.startsWith('doc:') ? e.from.slice(4) : (ent?._meta?.tags ?? []).find((t) => t.startsWith('doc:'))?.slice(4);
+      if (!id || id === docId || seen.has(id)) continue;
+      seen.add(id);
+      backlinks.push({ id, label: id });
+    }
+  } catch { /* best-effort */ }
+  return { meta, cells, backlinks };
 }
-async function saveDoc(docId: string, doc: DocValue): Promise<void> {
-  await act('workspace.remember', { key: `doc:${docId}`, value: doc, via: 'lit', type: 'doc', tags: ['doc'] });
+async function saveCell(docId: string, key: string, content: string): Promise<void> {
+  await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'cell', tags: [`doc:${docId}`] });
+  await syncCellLinks(key, content);
+}
+/** Reconcile a cell's [[wiki-links]] into substrate edges (rel `related`): link
+ *  newly-referenced targets, unlink ones the edit removed. Best-effort. */
+async function syncCellLinks(cellKey: string, content: string): Promise<void> {
+  try {
+    const want = new Set(extractWikiTargets(content));
+    const nb = await read<{ outbound: Array<{ to: string; rel: string }> }>('workspace.neighbors', { key: cellKey });
+    const have = (nb.outbound ?? []).filter((e) => e.rel === 'related');
+    const haveSet = new Set(have.map((e) => e.to));
+    await Promise.all([
+      ...[...want].filter((t) => !haveSet.has(t)).map((to) => act('workspace.link', { from: cellKey, to, rel: 'related' })),
+      ...have.filter((e) => !want.has(e.to)).map((e) => act('workspace.unlink', { from: cellKey, to: e.to, rel: 'related' })),
+    ]);
+  } catch { /* links are best-effort, never block the save */ }
+}
+async function writeOrder(docId: string, key: string, seq: number, fold: boolean): Promise<void> {
+  await act('workspace.remember', { key: `_doc/${docId}/${key}`, value: { seq, fold }, via: 'lit', type: 'doc-order', tags: [`doc:${docId}`] });
+}
+async function saveDocMeta(docId: string, meta: DocValue): Promise<void> {
+  await act('workspace.remember', { key: `doc:${docId}`, value: meta, via: 'lit', type: 'doc', tags: ['doc'] });
+}
+/** Save an edited cell, splitting only if the edit introduced structure (a
+ *  heading or a code fence): the first part keeps the fact's key (links/seq),
+ *  the rest become new facts placed with fractional seq between this cell and
+ *  the next — identity is inherent, never a whole-document reparse. */
+async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | null, source: string): Promise<LoadedCell[]> {
+  const parts = splitCells(source);
+  if (parts.length <= 1) { const content = (parts[0] ?? source).trim(); await saveCell(docId, cell.key, content); return [{ ...cell, content }]; }
+  await saveCell(docId, cell.key, parts[0]);
+  const out: LoadedCell[] = [{ ...cell, content: parts[0] }];
+  let lo = cell.seq;
+  for (const part of parts.slice(1)) {
+    const seq = seqBetween(lo, nextSeq);
+    const k = mintCell();
+    await saveCell(docId, k, part);
+    await writeOrder(docId, k, seq, false);
+    out.push({ key: k, content: part, fold: false, seq, score: 0 });
+    lo = seq;
+  }
+  return out;
 }
 /** The renderer ladder: a fact whose type declares a viewer renders through
  *  @c15r/viewers instead of as markdown (el:demo-json reads as a TREE here). */
@@ -54,6 +135,43 @@ function viewerFor(meta: Meta | undefined, value: any): string | null {
     if (typeDecls[t]?.viewer) return typeDecls[t]!.viewer!;
   }
   return null;
+}
+
+/* ── plugins-as-content: author-defined viewers (dotlit lineage) ───────────
+ * `_renderers/<type>` facts whose JS `source` mounts an ElementView — the SAME
+ * contract canvas loads (one ecology: a viewer authored in a lit `!plugin` block
+ * works on the board too). The source is executed via a data-URI module import
+ * — author code runs in the reader's page, so rendered output carries an
+ * attribution chip (the renderer fact's writer); this is the consent/disclosure
+ * surface for the plugins-as-content trust posture. */
+const litRenderers: Record<string, { view: any; writer?: string }> = {};
+async function loadRenderers(): Promise<void> {
+  try {
+    const res = await read<{ entries: Array<{ key: string; value: any; _meta?: { writer?: string } }> }>('workspace.query', { prefix: '_renderers/', limit: 100 });
+    for (const e of res.entries ?? []) {
+      const def = e.value as { type?: string; source?: string };
+      if (!def?.type || !def?.source) continue;
+      try {
+        const b64 = btoa(unescape(encodeURIComponent(def.source)));
+        const mod: any = await import(/* @vite-ignore */ `data:text/javascript;base64,${b64}`);
+        let view = mod.view ?? mod.default ?? (mod.mount ? { mount: mod.mount, update: mod.update, unmount: mod.unmount } : null);
+        // dotlit-style `viewer({content, host, React})` is wrapped into an ElementView.
+        if (!view && typeof mod.viewer === 'function') {
+          view = {
+            mount: (elx: any): HTMLElement => {
+              const host = el('div', 'content');
+              const r = mod.viewer({ content: elx.content, host, React });
+              if (typeof r === 'string') host.innerHTML = r;
+              else if (r instanceof Node) host.appendChild(r);
+              return host;
+            },
+            update: () => {},
+          };
+        }
+        if (view?.mount) litRenderers[def.type] = { view, writer: e._meta?.writer };
+      } catch (err) { console.warn('[lit renderers] failed', e.key, err); }
+    }
+  } catch { /* offline or none declared */ }
 }
 
 /* ── fence enhancement (the transclusion ladder, post-hydration) ───────────
@@ -66,17 +184,156 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   if (text !== undefined) n.textContent = text;
   return n;
 }
-async function enhanceFences(root: HTMLElement): Promise<void> {
-  for (const code of Array.from(root.querySelectorAll('pre > code'))) {
-    const lang = (code.className.match(/language-(\w+)/) || [])[1];
-    const arg = (code.textContent || '').trim();
-    if (!lang || !arg) continue;
-    const pre = code.parentElement as HTMLElement;
-    if (['json', 'csv', 'mermaid', 'style'].includes(lang)) {
+interface Fence { lang: string; arg: string; file?: string; directives: Set<string>; attrs: Record<string, string>; tags: string[]; in?: string; out?: string }
+/** Parse a dotlit-style fence info-string: `lang [file|uri] !dir attr=val #tag < in > out`.
+ *  `arg` resolves the bare file/uri token, else the fence body — so both
+ *  `view open-claims` (id in the info-string) and the legacy `view\nopen-claims`
+ *  (id in the body) work. The metadata (viewer=, repl=, !dir, #tag, in/out) is
+ *  what turns a fence into a declaration — the seam to plugins/viewers/actions. */
+function parseFence(info: string, body: string): Fence {
+  const toks = info.trim().split(/\s+/).filter(Boolean);
+  const lang = toks.shift() ?? '';
+  const directives = new Set<string>();
+  const attrs: Record<string, string> = {};
+  const tags: string[] = [];
+  let file: string | undefined, inp: string | undefined, out: string | undefined;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === '<') inp = toks[++i];
+    else if (t === '>') out = toks[++i];
+    else if (t.startsWith('!')) directives.add(t.slice(1));
+    else if (t.startsWith('#')) tags.push(t.slice(1));
+    else if (t.includes('=')) attrs[t.slice(0, t.indexOf('='))] = t.slice(t.indexOf('=') + 1);
+    else if (file === undefined) file = t;
+  }
+  return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
+}
+
+async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void> }): Promise<void> {
+  // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
+  // — not just the first-word lang — drives routing.
+  for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
+    const body = (pre.querySelector('code')?.textContent || '').trim();
+    const fence = parseFence(pre.dataset.fence || '', body);
+    const lang = fence.lang;
+    if (!lang) continue;
+    const arg = fence.arg;
+    // 0a. plugin declaration: `js !plugin type=viewer of=foo` — the block's body
+    // IS the viewer source. The owner registers it as a `_renderers/foo` fact
+    // (available everywhere, canvas included); checked before the executable
+    // branch so a plugin def is not run as a plain js cell.
+    if (fence.directives.has('plugin') && fence.attrs.type === 'viewer' && fence.attrs.of) {
+      const of = fence.attrs.of;
+      const panel = el('div', 'plugin-panel');
+      panel.appendChild(el('div', 'plugin-head', `⚙ viewer plugin · ${of}`));
+      const src = el('pre', 'plugin-src'); src.textContent = body; panel.appendChild(src);
+      if (isAuthed()) {
+        const reg = el('button', 'btn', litRenderers[of] ? `update viewer “${of}”` : `register viewer “${of}”`) as HTMLButtonElement;
+        reg.onclick = async () => {
+          reg.textContent = '…';
+          try {
+            await act('workspace.remember', { key: `_renderers/${of}`, value: { type: of, source: body, kind: 'viewer' }, via: 'lit-plugin', type: 'renderer', tags: ['renderer'] });
+            await loadRenderers();
+            reg.textContent = `✓ registered ${of}`;
+          } catch (err) { reg.textContent = `failed: ${(err as Error).message}`; }
+        };
+        panel.appendChild(reg);
+      }
+      pre.replaceWith(panel);
+      continue;
+    }
+    // 0b. author-defined viewer (a registered `_renderers/<type>`), incl. via
+    // `viewer=`. Author JS executes here; output carries an attribution chip.
+    const customType = fence.attrs.viewer || lang;
+    if (litRenderers[customType]) {
+      const box = el('div', 'embed-custom'); pre.replaceWith(box);
+      try {
+        const { view, writer } = litRenderers[customType];
+        box.appendChild(view.mount({ id: `litvw-${Date.now().toString(36)}`, content: body }));
+        box.appendChild(el('div', 'vw-attrib', `⚙ ${customType}${writer && writer !== cellOwner() ? ` · by ${writer}` : ''}`));
+      } catch (err) { box.textContent = `viewer ${customType}: ${(err as Error).message}`; }
+      continue;
+    }
+    // 1. pure viewers (json/csv/mermaid/style) + any explicit `viewer=` — safe for anyone.
+    const pureLang = fence.attrs.viewer || lang;
+    if (['json', 'csv', 'mermaid', 'style'].includes(pureLang)) {
       const box = el('div', 'embed-view'); box.textContent = '…'; pre.replaceWith(box);
       import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
-        .then((v) => v.renderFence(box, lang, arg))
-        .catch((err) => { box.textContent = `${lang}: ${(err as Error).message}`; });
+        .then((v) => v.renderFence(box, pureLang, body))
+        .catch((err) => { box.textContent = `${pureLang}: ${(err as Error).message}`; });
+      continue;
+    }
+    // 2. executable cells — dotlit's cornerstone on the substrate.
+    //   run            → server execution via @c15r/run (outputs→facts)
+    //   js | repl      → client execution, server-toggle available
+    //   repl=server|run, !server → force the server organ
+    // Reuses the @c15r/viewers `repl` view (the one canvas mounts) — one
+    // validated implementation, not a copy. Anonymous readers just see the code.
+    if (['run', 'js', 'repl'].includes(lang) || fence.attrs.repl) {
+      if (!isAuthed()) continue;
+      const factKey = (pre.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+      const server = lang === 'run' || fence.directives.has('server') || ['server', 'run'].includes(fence.attrs.repl || '');
+      const box = el('div', 'embed-repl'); box.textContent = '…'; pre.replaceWith(box);
+      import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
+        .then((v: any) => {
+          const node = v.repl.mount({
+            id: `litrepl-${factKey ?? Date.now().toString(36)}`,
+            content: body,
+            lang: 'js',
+            server,
+            _factKey: factKey,
+            // "⤓ output→fact" → place that output fact as a cell in this doc.
+            onOutput: factKey ? (key: string, content: string) => { void ctx?.placeOutput?.(factKey, key, content); } : undefined,
+          });
+          box.replaceWith(node);
+        })
+        .catch((err) => { box.textContent = `run: ${(err as Error).message}`; });
+      continue;
+    }
+    // 2b. agent cell — model-in-the-loop over the substrate (@c15r/models.agent),
+    // the generative tier. Always async: submit → poll fetch → render the result
+    // (persisted as an `agent-run` fact at factKey). `!write` grants substrate
+    // writes (default read-only). Anonymous readers just see the prompt.
+    if (lang === 'agent') {
+      const panel = el('div', 'embed-agent');
+      panel.appendChild(el('div', 'agent-head', '🤖 agent'));
+      const promptEl = el('pre', 'agent-prompt'); promptEl.textContent = body; panel.appendChild(promptEl);
+      pre.replaceWith(panel);
+      const hostKey = (panel.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+      if (!isAuthed()) { panel.appendChild(el('div', 'vw-attrib', 'sign in to run')); continue; }
+      const canWrite = fence.directives.has('write');
+      const out = el('div', 'agent-out');
+      const run = el('button', 'btn primary', `run agent${canWrite ? ' · writes enabled' : ''}`) as HTMLButtonElement;
+      run.onclick = async () => {
+        run.disabled = true; out.textContent = 'submitting…';
+        try {
+          const sub = await act<{ jobId: string; factKey?: string }>('@c15r/models.agent', { prompt: body, grants: { read: true, write: canWrite } });
+          const deadline = Date.now() + 180_000;
+          for (;;) {
+            await new Promise((r) => setTimeout(r, 2500));
+            const job = await read<{ status: string; text?: string; error?: string; factKey?: string; turns?: number; toolCalls?: number }>('@c15r/models.fetch', { jobId: sub.jobId });
+            if (job.status === 'done') {
+              const fk = job.factKey ?? sub.factKey;
+              // Persist the output as a real cell in the doc (provenance-linked to
+              // the agent-run fact) rather than an ephemeral inline render. Falls
+              // back to inline when there's no doc context (log views, anon).
+              if (ctx?.onAgentOutput && hostKey) {
+                out.textContent = '✓ output added as a cell below';
+                await ctx.onAgentOutput(hostKey, job.text || '', fk);
+              } else {
+                out.innerHTML = renderMarkdown(job.text || '*(no output)*'); void enhanceFences(out);
+              }
+              panel.appendChild(el('div', 'vw-attrib', `⚙ @c15r/models · agent · ${job.turns ?? '?'} turns · ${job.toolCalls ?? 0} tool calls${fk ? ` · ${fk}` : ''}`));
+              break;
+            }
+            if (job.status === 'error') { out.textContent = `agent error: ${job.error ?? 'failed'}`; break; }
+            if (Date.now() > deadline) { out.textContent = 'agent still running after 180s — it persists to its fact; reopen later'; break; }
+            out.textContent = `running… turn ${job.turns ?? 0} · ${job.toolCalls ?? 0} tool calls`;
+          }
+        } catch (err) { out.textContent = `agent: ${(err as Error).message}`; }
+        run.disabled = false;
+      };
+      panel.appendChild(run); panel.appendChild(out);
       continue;
     }
     if (lang === 'board') {
@@ -129,71 +386,71 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
 
 /* ── block (interactive) ───────────────────────────────────────────────── */
 
-interface BlockProps {
-  ref0: { key: string; fold?: boolean };
-  fact: Entry | null;
+interface CellProps {
+  cellKey: string;
+  content: string;
+  fold: boolean;
   editable: boolean;
-  onEdit: (text: string) => void;
+  onEdit: (src: string) => void;
   onFold: () => void;
   onMove: (dir: -1 | 1) => void;
-  onCut: () => void;
+  onAddAfter: () => void;
+  fenceCtx?: FenceCtx;
 }
-function BlockView({ ref0, fact, editable, onEdit, onFold, onMove, onCut }: BlockProps): React.JSX.Element {
+type FenceCtx = {
+  onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>;
+  placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void>;
+};
+function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [editingText, setEditingText] = useState<string | null>(null);
-  const md = fact ? contentOf(fact.value) : `*missing fact — ${ref0.key}*`;
-  const viewer = fact ? viewerFor(fact._meta, fact.value) : null;
-  const folded = !!ref0.fold;
+  const [editing, setEditing] = useState<string | null>(null);
+  const md = content;
+  const ctxRef = useRef(fenceCtx); ctxRef.current = fenceCtx;
 
-  // Enhance fences (or apply the viewer ladder) after the body mounts/changes.
+  // After the body mounts/changes, enhance fences (executable / viewer / agent /
+  // plugin). agent and run/js outputs persist as doc cells via the fence ctx.
   useEffect(() => {
     const host = bodyRef.current;
-    if (!host || folded || editingText !== null) return;
-    if (viewer && fact) {
-      host.textContent = '…';
-      import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
-        .then((m) => {
-          host.textContent = '';
-          const h = el('div'); host.appendChild(h);
-          if (!m.renderFence(h, viewer, contentOf(fact.value), fact.key)) { host.innerHTML = renderMarkdown(md); void enhanceFences(host); }
-        })
-        .catch(() => { host.innerHTML = renderMarkdown(md); void enhanceFences(host); });
-    } else {
-      void enhanceFences(host);
-    }
-  }, [md, viewer, folded, editingText]);
+    if (!host || fold || editing !== null) return;
+    void enhanceFences(host, {
+      onAgentOutput: (a, b, c) => ctxRef.current?.onAgentOutput?.(a, b, c),
+      placeOutput: (a, b, c) => ctxRef.current?.placeOutput?.(a, b, c),
+    });
+  }, [md, fold, editing]);
 
-  if (editingText !== null) {
+  if (editing !== null) {
     return (
-      <article className="block" data-key={ref0.key}>
+      <article className="block" data-key={cellKey}>
         <div className="editor">
           <textarea
-            value={editingText}
-            rows={Math.min(24, Math.max(4, editingText.split('\n').length + 1))}
-            onChange={(e) => setEditingText(e.target.value)}
+            value={editing}
+            rows={Math.min(28, Math.max(3, editing.split('\n').length + 1))}
+            spellCheck={false}
+            onChange={(e) => setEditing(e.target.value)}
           />
           <div className="editor-bar">
-            <button className="btn primary" onClick={() => { onEdit(editingText); setEditingText(null); }}>save</button>
-            <button className="btn" onClick={() => setEditingText(null)}>cancel</button>
+            <button className="btn primary" onClick={() => { onEdit(editing); setEditing(null); }}>save</button>
+            <button className="btn" onClick={() => setEditing(null)}>cancel</button>
+            <span className="summary"> a heading or code fence splits this into new cells</span>
           </div>
         </div>
       </article>
     );
   }
 
-  const title = (md.match(/^#+\s*(.+)$/m) || [])[1] ?? md.split('\n').find((l) => l.trim()) ?? ref0.key;
+  const title = (md.match(/^#+\s*(.+)$/m) || [])[1] ?? md.split('\n').find((l) => l.trim()) ?? cellKey;
   return (
-    <article className={`block${folded ? ' is-folded' : ''}`} data-key={ref0.key}>
+    <article className={`block${fold ? ' is-folded' : ''}`} data-key={cellKey}>
       {editable ? (
         <div className="block-tools">
-          <button className="tool" onClick={onFold}>{folded ? '▸' : '▾'}</button>
-          <button className="tool" onClick={() => setEditingText(contentOf(fact?.value ?? ''))}>✎</button>
+          <button className="tool" onClick={onFold}>{fold ? '▸' : '▾'}</button>
+          <button className="tool" onClick={() => setEditing(md)}>✎</button>
           <button className="tool" onClick={() => onMove(-1)}>↑</button>
           <button className="tool" onClick={() => onMove(1)}>↓</button>
-          <button className="tool" onClick={onCut}>×</button>
+          <button className="tool" title="add a cell after" onClick={onAddAfter}>＋</button>
         </div>
       ) : null}
-      {folded ? (
+      {fold ? (
         <div className="block-body"><p className="folded">▸ {title.replace(/[#*_`]/g, '').trim()}</p></div>
       ) : (
         <div className="block-body" ref={bodyRef} dangerouslySetInnerHTML={{ __html: renderMarkdown(md) }} />
@@ -205,101 +462,109 @@ function BlockView({ ref0, fact, editable, onEdit, onFold, onMove, onCut }: Bloc
 /* ── doc editor ────────────────────────────────────────────────────────── */
 
 function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean; seed?: DocSeed }): React.JSX.Element {
-  // Seed from the SSR ViewModel so the first interactive render IS the server
-  // content — no "loading…" gap while load() refetches. load() refreshes in place.
-  const [doc, setDoc] = useState<DocValue | null>(seed?.doc ?? null);
-  const [facts, setFacts] = useState<Record<string, Entry | null>>(seed?.facts ?? {});
+  // Seed from the SSR ViewModel so the first interactive render equals the
+  // server paint — load() then refreshes in place (no "loading…" flash post-SSR).
+  const [meta, setMeta] = useState<DocValue | null>(seed ? { title: seed.title, summary: seed.summary } : null);
+  const [cells, setCells] = useState<LoadedCell[]>((seed?.blocks ?? []).map((b, i) => ({ key: b.key, content: b.md, fold: !!b.fold, seq: i + 1, score: 0 })));
   const [missing, setMissing] = useState(false);
-  const editingRef = useRef(0);
+  const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
+  const [backlinks, setBacklinks] = useState<Array<{ id: string; label: string }>>([]);
 
   const load = useCallback(async () => {
-    const docFact = await fetchFact(`doc:${docId}`);
-    if (!docFact) { setMissing(true); return; }
-    const dv = docFact.value as DocValue;
-    const refs = Array.isArray(dv.blocks) ? dv.blocks : [];
-    const got = await Promise.all(refs.map((r) => fetchFact(r.key)));
-    const map: Record<string, Entry | null> = {};
-    refs.forEach((r, i) => { map[r.key] = got[i]; });
-    setFacts(map); setDoc(dv);
-  }, [docId]);
-
+    const res = await loadDoc(docId, projection);
+    if (!res) { setMissing(true); return; }
+    setMeta(res.meta); setCells(res.cells); setBacklinks(res.backlinks);
+    cacheSet(`doc:${docId}`, { kind: 'doc', owner: cellOwner(), isOwner: true, id: docId, title: res.meta.title || docId, summary: res.meta.summary, blocks: res.cells.map((c) => ({ key: c.key, md: c.content, fold: c.fold })) });
+  }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
 
-  // Live refresh: refetch when a block in this doc changes (suspended while editing).
-  useEffect(() => {
-    if (!editable) return;
-    let seq = 0; let stop = false;
-    const tick = async (): Promise<void> => {
-      try {
-        if (seq === 0) seq = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 0, limit: 0 })).seq;
-        else {
-          const res = await read<{ events: Array<{ key: string | null }>; seq: number }>('workspace.changes', { sinceSeq: seq });
-          seq = res.seq;
-          const mine = new Set([`doc:${docId}`, ...(doc?.blocks ?? []).map((b) => b.key)]);
-          if (editingRef.current === 0 && (res.events ?? []).some((e) => e.key && mine.has(e.key))) await load();
-        }
-      } catch { /* offline */ }
-      if (!stop) setTimeout(() => void tick(), 8000);
-    };
-    setTimeout(() => void tick(), 8000);
-    return () => { stop = true; };
-  }, [editable, docId, doc, load]);
+  // Live mirror of cells so the output callbacks can place a new cell without a
+  // re-fetch (read-after-write lag was making outputs appear only on reload).
+  const cellsRef = useRef(cells); cellsRef.current = cells;
+  const seqAfter = (srcKey: string): number => {
+    const arr = cellsRef.current;
+    const i = arr.findIndex((c) => c.key === srcKey);
+    const lo = i >= 0 ? arr[i].seq : (arr.at(-1)?.seq ?? 0);
+    const hi = i >= 0 && i + 1 < arr.length ? arr[i + 1].seq : null;
+    return seqBetween(lo, hi);
+  };
+
+  // An agent cell's output becomes a real cell placed right after it (fractional
+  // seq), provenance-linked to the agent-run fact. Optimistic insert → no reload.
+  const onAgentOutput = useCallback(async (srcKey: string, text: string, factKey?: string) => {
+    const seq = seqAfter(srcKey);
+    const k = mintCell();
+    const content = text || '_(no output)_';
+    await saveCell(docId, k, content);
+    await writeOrder(docId, k, seq, false);
+    if (factKey) await act('workspace.link', { from: factKey, to: k, rel: 'produces' }).catch(() => {});
+    setCells((cs) => [...cs.filter((c) => c.key !== k), { key: k, content, fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq));
+  }, [docId]);
+
+  // run/js "output→fact" already wrote an `out:` fact (produced-by the cell);
+  // place THAT fact as a cell after the source (one decoration), no duplicate.
+  const placeOutput = useCallback(async (srcKey: string, cellKey: string, content?: string) => {
+    const seq = seqAfter(srcKey);
+    await writeOrder(docId, cellKey, seq, false);
+    setCells((cs) => [...cs.filter((c) => c.key !== cellKey), { key: cellKey, content: content ?? '', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq));
+  }, [docId]);
+  const fenceCtx = { onAgentOutput, placeOutput };
 
   if (missing) return <ListEditor.MissingDoc docId={docId} />;
-  if (!doc) return <p className="boot">loading {docId}…</p>;
+  if (!meta) return <p className="boot">loading {docId}…</p>;
 
-  const refs = Array.isArray(doc.blocks) ? doc.blocks : [];
-  const mutate = async (next: DocValue): Promise<void> => { setDoc(next); await saveDoc(docId, next); };
+  // A doc is a view: cells are facts ordered by `_doc/` decorations. Editing one
+  // cell may split it (saveCellSplit); reorder/insert are one fractional-seq write.
+  const nextSeq = (i: number): number | null => (i + 1 < cells.length ? cells[i + 1].seq : null);
 
   return (
     <>
       <header>
         <a className="back" href={`/@${cellOwner()}/lit`}>← documents</a>
-        <h1>{doc.title || docId}</h1>
-        {doc.summary ? <p className="summary">{doc.summary}</p> : null}
+        <h1>{meta.title || docId}</h1>
+        {meta.summary ? <p className="summary">{meta.summary}</p> : null}
+        <p className="doc-controls summary">
+          <button className={`pill${projection === 'narrative' ? ' on' : ''}`} onClick={() => setProjection('narrative')}>narrative</button>{' '}
+          <button className={`pill${projection === 'salience' ? ' on' : ''}`} onClick={() => setProjection('salience')}>salience</button>
+        </p>
       </header>
       <main>
-        {refs.length === 0 ? <p className="boot">empty document</p> : refs.map((r, i) => (
-          <BlockView
-            key={r.key}
-            ref0={r}
-            fact={facts[r.key] ?? null}
-            editable={editable}
-            onEdit={async (text) => {
-              const prior = facts[r.key]?.value;
-              await saveBlock(r.key, prior, text);
-              setFacts((f) => ({ ...f, [r.key]: { key: r.key, value: typeof prior === 'object' && prior ? { ...prior, content: text } : { content: text } } }));
+        {cells.length === 0 ? (
+          editable
+            ? <button className="btn add-block" onClick={async () => { const k = mintCell(); const content = `# ${meta.title || docId}\n\nStart writing…`; await saveCell(docId, k, content); await writeOrder(docId, k, 1, false); setCells([{ key: k, content, fold: false, seq: 1, score: 0 }]); }}>＋ first cell</button>
+            : <p className="boot">empty document</p>
+        ) : cells.map((c, i) => (
+          <CellView
+            key={c.key}
+            cellKey={c.key}
+            content={c.content}
+            fold={c.fold}
+            editable={editable && projection === 'narrative'}
+            // Optimistic: apply the known result locally (substrate reads are
+            // eventually consistent, so re-querying here would miss the write).
+            onEdit={async (src) => { const res = await saveCellSplit(docId, c, nextSeq(i), src); setCells((cs) => [...cs.filter((x) => x.key !== c.key), ...res].sort((a, b) => a.seq - b.seq)); }}
+            onFold={async () => { await writeOrder(docId, c.key, c.seq, !c.fold); setCells((cs) => cs.map((x) => (x.key === c.key ? { ...x, fold: !x.fold } : x))); }}
+            onMove={async (dir) => {
+              const j = i + dir; if (j < 0 || j >= cells.length) return;
+              const lower = dir < 0 ? (i - 2 >= 0 ? cells[i - 2].seq : null) : cells[i + 1].seq;
+              const upper = dir < 0 ? cells[i - 1].seq : (i + 2 < cells.length ? cells[i + 2].seq : null);
+              const seq = seqBetween(lower, upper);
+              await writeOrder(docId, c.key, seq, c.fold);
+              setCells((cs) => cs.map((x) => (x.key === c.key ? { ...x, seq } : x)).sort((a, b) => a.seq - b.seq));
             }}
-            onFold={() => { const blocks = refs.map((b, j) => (j === i ? { ...b, fold: !b.fold } : b)); void mutate({ ...doc, blocks }); }}
-            onMove={(dir) => { const j = i + dir; if (j < 0 || j >= refs.length) return; const blocks = refs.slice(); [blocks[i], blocks[j]] = [blocks[j], blocks[i]]; void mutate({ ...doc, blocks }); }}
-            onCut={() => { if (!confirm('Remove this block from the document? (the fact itself survives)')) return; void mutate({ ...doc, blocks: refs.filter((_, j) => j !== i) }); }}
+            onAddAfter={async () => { const k = mintCell(); const seq = seqBetween(c.seq, nextSeq(i)); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seq, false); setCells((cs) => [...cs, { key: k, content: '_new cell_', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq)); }}
+            fenceCtx={fenceCtx}
           />
         ))}
-        {editable ? (
-          <AddBlock onAdd={async (text) => {
-            const key = `blk:${Date.now().toString(36)}`;
-            await act('workspace.remember', { key, value: { content: text }, via: 'lit', type: 'doc-block', tags: [`doc:${docId}`] });
-            await mutate({ ...doc, blocks: [...refs, { key }] });
-            setFacts((f) => ({ ...f, [key]: { key, value: { content: text } } }));
-          }} onOpen={(o) => { editingRef.current += o ? 1 : -1; }} />
-        ) : null}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}
+        {backlinks.length ? (
+          <section className="backlinks">
+            <h3>Linked from</h3>
+            <ul>{backlinks.map((b) => <li key={b.id}><a href={`?doc=${encodeURIComponent(b.id)}`}>[[{b.label}]]</a></li>)}</ul>
+          </section>
+        ) : null}
       </main>
     </>
-  );
-}
-
-function AddBlock({ onAdd, onOpen }: { onAdd: (t: string) => void; onOpen: (open: boolean) => void }): React.JSX.Element {
-  const [text, setText] = useState<string | null>(null);
-  if (text === null) return <button className="btn add-block" onClick={() => { setText(''); onOpen(true); }}>+ block</button>;
-  return (
-    <div className="editor">
-      <textarea value={text} rows={Math.min(24, Math.max(4, text.split('\n').length + 1))} onChange={(e) => setText(e.target.value)} />
-      <div className="editor-bar">
-        <button className="btn primary" onClick={() => { if (text.trim()) onAdd(text); setText(null); onOpen(false); }}>save</button>
-        <button className="btn" onClick={() => { setText(null); onOpen(false); }}>cancel</button>
-      </div>
-    </div>
   );
 }
 
@@ -315,6 +580,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
         .sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'))
         .map((e) => ({ id: e.key.slice(4), v: e.value as DocValue, updated: e._meta?.updatedAt ?? '' }));
       setDocs(list);
+      cacheSet('list', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list.map((d) => ({ id: d.id, title: d.v.title || d.id, summary: d.v.summary, blocks: 0, updated: d.updated })) });
     })();
   }, []);
 
@@ -331,7 +597,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
           <a className="doc-card" href={`?doc=${encodeURIComponent(d.id)}`} key={d.id}>
             <h2>{d.v.title || d.id}</h2>
             {d.v.summary ? <p>{d.v.summary}</p> : null}
-            <span className="doc-meta">{(d.v.blocks ?? []).length} blocks · {(d.updated || '').slice(0, 10)}</span>
+            <span className="doc-meta">{(d.updated || '').slice(0, 10)}</span>
           </a>
         ))}
       </main>
@@ -339,7 +605,10 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
         <button className="btn add-block" onClick={async () => {
           const title = prompt('Title?'); if (!title) return;
           const id = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `d${Date.now().toString(36)}`;
-          await saveDoc(id, { title, blocks: [] });
+          await saveDocMeta(id, { title });
+          const k = mintCell();
+          await saveCell(id, k, `# ${title}\n\nStart writing…`);
+          await writeOrder(id, k, 1, false);
           location.search = `?doc=${encodeURIComponent(id)}`;
         }}>+ new document</button>
       ) : null}
@@ -436,17 +705,9 @@ function AnonView({ vm }: { vm: ViewModel }): React.JSX.Element {
 
 /** Seeds reconstructed from the SSR ViewModel so an interactive view's first
  *  render equals the server paint (killing the post-hydration "loading…" flash). */
-type DocSeed = { doc: DocValue; facts: Record<string, Entry | null> };
+type DocSeed = Extract<ViewModel, { kind: 'doc' }>;
 type ListSeed = Array<{ id: string; v: DocValue; updated: string }>;
 
-function docSeed(vm: Extract<ViewModel, { kind: 'doc' }>): DocSeed {
-  const facts: Record<string, Entry | null> = {};
-  for (const b of vm.blocks) facts[b.key] = { key: b.key, value: { content: b.md } };
-  return {
-    doc: { title: vm.title, summary: vm.summary, blocks: vm.blocks.map((b) => ({ key: b.key, fold: b.fold })) },
-    facts,
-  };
-}
 function listSeed(vm: Extract<ViewModel, { kind: 'list' }>): ListSeed {
   // Only `.length`, title, summary and updated are read for the cards; the real
   // BlockRef contents arrive with the background refresh.
@@ -461,7 +722,7 @@ function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewMode
   const docId = new URLSearchParams(location.search).get('doc');
   if (docId && /^log:/.test(docId)) return <LogView docId={docId} />;
   if (docId) {
-    const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? docSeed(initialVm) : undefined;
+    const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? initialVm : undefined;
     return <DocEditor docId={docId} editable={editable} seed={seed} />;
   }
   const seed = initialVm && initialVm.kind === 'list' ? listSeed(initialVm) : undefined;
@@ -477,7 +738,7 @@ function Workspace({ initialVm }: { initialVm: ViewModel | null }): React.JSX.El
     if (phase !== 'authing') return;
     let live = true;
     void (async () => {
-      try { await ensureAuth(); typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>; }
+      try { await ensureAuth(); typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>; await loadRenderers().catch(() => {}); }
       catch (err) { const b = document.getElementById('err-banner'); if (b) { b.style.display = 'block'; b.textContent = `sign-in failed: ${(err as Error).message}`; } }
       if (live) setPhase('ready');
     })();
@@ -504,6 +765,26 @@ function readInitialVm(): ViewModel | null {
   try { return JSON.parse(tag.textContent) as ViewModel; } catch { return null; }
 }
 
-const initialVm = readInitialVm();
-if (appRoot.dataset.ssr === '1' && initialVm) hydrateRoot(appRoot, <App initialVm={initialVm} />);
+/* Client VM cache — SSR only embeds a ViewModel when the request proves owner
+ * identity (bearer, or the dispatch tier's session-cookie → x-cell-caller). A
+ * plain navigation that misses that gets the bare shell, so the client would
+ * paint "loading…" before its first fetch. Caching the last-seen VM per route
+ * lets a repeat open paint instantly from cache; load() then refreshes it. */
+const VM_CACHE = 'parc.lit.vm.';
+function cacheGet(id: string): ViewModel | null {
+  try { const s = localStorage.getItem(VM_CACHE + id); return s ? (JSON.parse(s) as ViewModel) : null; } catch { return null; }
+}
+function cacheSet(id: string, vm: ViewModel): void {
+  try { localStorage.setItem(VM_CACHE + id, JSON.stringify(vm)); } catch { /* storage full/blocked */ }
+}
+function cachedVmForLocation(): ViewModel | null {
+  const docId = new URLSearchParams(location.search).get('doc');
+  if (docId && /^log:/.test(docId)) return null; // logs are derived views, not cached
+  return cacheGet(docId ? `doc:${docId}` : 'list');
+}
+
+const ssrVm = readInitialVm();
+// Fall back to the cached VM only on a bare shell (no SSR paint to hydrate).
+const initialVm = ssrVm ?? cachedVmForLocation();
+if (appRoot.dataset.ssr === '1' && ssrVm) hydrateRoot(appRoot, <App initialVm={ssrVm} />);
 else { appRoot.textContent = ''; createRoot(appRoot).render(<App initialVm={initialVm} />); }

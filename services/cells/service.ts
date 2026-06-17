@@ -553,6 +553,22 @@ async function ssrReadsFor(input: { owner?: string; name?: string; cellId?: stri
   return { reads: record?.ssrReads ?? [] };
 }
 
+/**
+ * Internal: the cell's declared caller-writes (from `ssr.json` `writes`), for
+ * dispatch to bound the writes it applies AS THE CALLER (Phase 4 — the write
+ * twin of `ssrReadsFor`). Metadata only; dispatch gates the navigation and
+ * enforces `scope(caller, write)` itself.
+ */
+async function callerWritesFor(input: { owner?: string; name?: string; cellId?: string }, ctx: ServiceContext): Promise<unknown> {
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cellId = input.cellId ?? (input.owner && input.name ? makeCellId(input.owner, input.name) : undefined);
+  if (!cellId) return { writes: [] };
+  const record = await registry.get(cellId);
+  ctx.logger.info('callerWritesFor', { cellId, writes: record?.callerWrites?.length ?? 0 });
+  return { writes: record?.callerWrites ?? [] };
+}
+
 interface DeleteInput {
   cellId: string;
 }
@@ -932,10 +948,26 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   // as the authenticated caller and injects into the invocation, so the cell can
   // server-render real content without a token. Stored on the registry like types.
   let ssrReads: CellRecord['ssrReads'];
+  // Phase 4: declared caller-writes (write twin of ssrReads). dispatch applies
+  // these AS THE CALLER, bounded to scope(caller, write) ∩ declared prefixes.
+  let callerWrites: CellRecord['callerWrites'];
   if (files['ssr.json'] !== undefined) {
     try {
-      const parsed = JSON.parse(files['ssr.json']) as { reads?: CellRecord['ssrReads'] };
+      const parsed = JSON.parse(files['ssr.json']) as {
+        reads?: CellRecord['ssrReads'];
+        writes?: Array<{ keyPrefix?: unknown; types?: unknown; crossSlice?: unknown }>;
+      };
       if (Array.isArray(parsed.reads) && parsed.reads.length) ssrReads = parsed.reads;
+      if (Array.isArray(parsed.writes) && parsed.writes.length) {
+        const cleaned = parsed.writes
+          .filter((w): w is { keyPrefix: string; types?: string[]; crossSlice?: boolean } => !!w && typeof w.keyPrefix === 'string' && w.keyPrefix.length > 0)
+          .map((w) => ({
+            keyPrefix: w.keyPrefix,
+            ...(Array.isArray(w.types) && w.types.every((t) => typeof t === 'string') ? { types: w.types } : {}),
+            ...(w.crossSlice === true ? { crossSlice: true } : {}),
+          }));
+        if (cleaned.length) callerWrites = cleaned;
+      }
     } catch (err) {
       ctx.logger.warn('cell ssr.json invalid — skipped', { cellId: record.cellId, error: (err as Error).message });
     }
@@ -948,8 +980,9 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   await createRegistry(env.registryTable).put({
     ...record,
     ...(declaredTypes ? { types: declaredTypes } : {}),
-    // Persist (or clear) the declared SSR reads each deploy.
+    // Persist (or clear) the declared SSR reads + caller-writes each deploy.
     ssrReads: ssrReads ?? undefined,
+    callerWrites: callerWrites ?? undefined,
     updatedAt: new Date().toISOString(),
   });
 
@@ -1180,6 +1213,14 @@ interface CellToolDescriptor {
   cellId: string;
   /** The cell's own (un-namespaced) tool name, used to route the call. */
   tool: string;
+  /**
+   * Third-party-cell disclosure (docs/capability-consent.md). Present only when
+   * the caller is NOT the cell owner: invoking runs the author's code, which can
+   * observe the reads the cell declares (`ssr.json`) and persist results into the
+   * AUTHOR's slice (the organ-write path). The honest "may share data with its
+   * developer" surface, shown at discovery/first-invoke for humans and agents.
+   */
+  disclosure?: { author: string; reads: string[]; writes?: string[]; note: string };
 }
 
 /** Selector: omit to enumerate all accessible cells (catalog); give one to resolve a single target. */
@@ -1217,6 +1258,28 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
       const address = cellAddress(cell.owner, cell.name).slice(1); // `@<owner>/<slug>`
       // Advertise only what this caller may call (per-tool grants filter here).
       const visible = toolVisibility(cell, user);
+      // Disclose the third-party-author trust when the caller isn't the owner:
+      // the author's code runs, sees the reads it declares, and can persist into
+      // the author's own slice (docs/capability-consent.md). Owners see no notice
+      // (writing to your own cell's slice is writing to yourself).
+      const writePrefixes = Array.from(new Set((cell.callerWrites ?? []).map((w) => w.keyPrefix)));
+      const crossSlice = (cell.callerWrites ?? []).some((w) => w.crossSlice);
+      const disclosure =
+        cell.owner !== user
+          ? {
+              author: cell.owner,
+              reads: Array.from(new Set((cell.ssrReads ?? []).map((r) => r.target))),
+              ...(writePrefixes.length ? { writes: writePrefixes } : {}),
+              note:
+                `Runs @${address}'s code: its author (${cell.owner}) can observe the reads it declares and persist results into ${cell.owner}'s workspace.` +
+                (writePrefixes.length
+                  ? ` It may also ask to write facts into YOUR slice under: ${writePrefixes.join(', ')} (bounded by your own write access).`
+                  : '') +
+                (crossSlice
+                  ? ' Some of these writes may target other slices you have granted write access to.'
+                  : ''),
+            }
+          : undefined;
       try {
         const res = await invokeCell({
           functionName: cell.functionName,
@@ -1248,6 +1311,7 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
             kind: t.kind === 'read' ? 'read' : 'act',
             cellId: cell.cellId,
             tool,
+            ...(disclosure ? { disclosure } : {}),
           });
         }
       } catch (err) {
@@ -1683,6 +1747,7 @@ function describeTools(): { tools: Array<{ name: string; description: string; in
 const commands: Record<string, RegisteredCommand> = {
   resolveCell: resolveCell as RegisteredCommand,
   ssrReadsFor: ssrReadsFor as RegisteredCommand,
+  callerWritesFor: callerWritesFor as RegisteredCommand,
   catalogCells: catalogCells as RegisteredCommand,
   describeTools: (() => describeTools()) as RegisteredCommand,
   // Registry-driven dynamic-cell tools (internal: the gateway aggregates and

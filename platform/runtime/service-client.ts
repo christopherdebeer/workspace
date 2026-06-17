@@ -23,6 +23,12 @@ export interface CommandEnvelope {
    * cell narrowing a minted token to the minter's own standing).
    */
   scopes?: string[];
+  /** The token's grant ceiling, propagated so the callee can tell a self-serve
+   *  widen (within grant) from a hard denial (incremental authorization). */
+  grantScopes?: string[];
+  /** The caller's token id, so a session can mutate its own effective scope
+   *  (`auth.focusScope`/`auth.requestScope`). */
+  tokenId?: string;
 }
 
 export interface ServiceClientOptions {
@@ -30,6 +36,8 @@ export interface ServiceClientOptions {
   correlationId?: string;
   user?: string;
   scopes?: string[];
+  grantScopes?: string[];
+  tokenId?: string;
 }
 
 export class ServiceInvokeError extends Error {
@@ -75,6 +83,8 @@ export function createServiceClient(options: ServiceClientOptions) {
           correlationId: options.correlationId,
           user: options.user,
           scopes: options.scopes,
+          grantScopes: options.grantScopes,
+          tokenId: options.tokenId,
         };
         const result = await getClient()
           .invoke({

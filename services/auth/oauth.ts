@@ -100,6 +100,25 @@ const DEFAULT_EXPIRY = 3600;
 const DEFAULT_REFRESH_EXPIRY = REFRESH_TTL_MS / 1000;
 const NO_STORE = { 'cache-control': 'no-store' };
 
+/** Below this a chosen grant lifetime is impractical (a token that dies on arrival). */
+const MIN_GRANT_SECS = 300;
+
+/**
+ * The server's grant-lifetime ceiling (seconds) — the most a user may pick at
+ * consent. The picker can only *narrow* the grant, never exceed policy; we use the
+ * configured refresh TTL as the horizon (it's what bounds re-consent in the usual
+ * short-access/long-refresh mode, and a sane cap on non-expiring deployments).
+ */
+function grantCeilingSecs(config: OAuthConfig): number {
+  return config.refreshExpirySecs ?? DEFAULT_REFRESH_EXPIRY;
+}
+
+/** Clamp a user-requested grant lifetime to [MIN_GRANT_SECS, ceiling]; null = use default. */
+function clampGrant(requested: number | undefined, config: OAuthConfig): number | null {
+  if (requested === undefined || !Number.isFinite(requested) || requested <= 0) return null;
+  return Math.min(Math.max(Math.floor(requested), MIN_GRANT_SECS), grantCeilingSecs(config));
+}
+
 /**
  * The browser-navigation session cookie. Carries the same opaque access token
  * the client also holds in localStorage, but as an httpOnly cookie so SSR/
@@ -191,6 +210,8 @@ interface ConsentBody {
   scope?: string;
   state?: string;
   resource?: string;
+  /** User-chosen grant lifetime (seconds); clamped server-side to the ceiling. */
+  expiresInSec?: number;
 }
 
 export async function handleConsent(
@@ -220,6 +241,7 @@ export async function handleConsent(
     codeChallengeMethod: b.codeChallengeMethod ?? 'S256',
     scope: granted || undefined,
     resource: b.resource,
+    grantSecs: clampGrant(b.expiresInSec, config),
   });
   await store.deleteSession(b.sessionId);
 
@@ -244,7 +266,15 @@ export async function handleGrantableScopes(
   const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
   // The client's human name (from DCR) so consent shows "parc.land", not a UUID.
   const client = clientId ? await store.getOAuthClient(clientId) : null;
-  return ok({ username: user?.username ?? null, scopes, catalog, clientName: client?.clientName ?? null });
+  // The grant-lifetime ceiling lets the consent screen offer a "this access lasts…"
+  // picker bounded by policy (docs/capability-consent.md).
+  return ok({
+    username: user?.username ?? null,
+    scopes,
+    catalog,
+    clientName: client?.clientName ?? null,
+    maxGrantSecs: grantCeilingSecs(config),
+  });
 }
 
 // ─── Token endpoint ──────────────────────────────────────────────
@@ -292,23 +322,40 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     // Cap to the cell ceiling when this token is for a host-isolated cell (model A).
     const ceiling = cellCeiling(authCode.redirectUri);
     const effectiveScope = ceiling ? intersectScopes(scope.split(/\s+/).filter(Boolean), ceiling).join(' ') : scope;
+
+    // Apply the user's chosen grant lifetime (already clamped at consent). It only
+    // ever narrows: in the usual expiring mode the refresh token carries the grant
+    // horizon and the access token stays short; on a non-expiring deployment a
+    // finite choice makes the access token itself finite. (docs/capability-consent.md)
+    const grant = authCode.grantSecs ?? null;
+    let accessExpiry: number | undefined;
+    let refreshLifetime = refreshExpiry;
+    let withRefresh: boolean;
+    if (neverExpires) {
+      accessExpiry = grant ?? undefined; // finite only if the user chose a lifetime
+      withRefresh = false;
+    } else {
+      accessExpiry = grant ? Math.min(grant, configuredExpiry) : configuredExpiry;
+      refreshLifetime = grant ? Math.min(grant, refreshExpiry) : refreshExpiry;
+      withRefresh = refreshLifetime > accessExpiry; // a sub-access grant is one short token
+    }
+
     const result = await store.mintToken({
       userId: authCode.userId,
       scope: effectiveScope,
       label: `OAuth: ${authCode.clientId}`,
       clientId: authCode.clientId,
-      expiresInSec: mintExpiry,
-      withRefresh: !neverExpires,
-      refreshExpiresInSec: refreshExpiry,
+      expiresInSec: accessExpiry,
+      withRefresh,
+      refreshExpiresInSec: refreshLifetime,
     });
-    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope: effectiveScope, capped: !!ceiling, resource: authCode.resource });
+    console.log('[oauth] token: issued', { clientId: authCode.clientId, scope: effectiveScope, capped: !!ceiling, grantSecs: grant, resource: authCode.resource });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
-    if (!neverExpires) {
-      response.expires_in = configuredExpiry;
-      response.refresh_token = result.refreshToken;
-    }
-    // Also set the httpOnly navigation cookie so SSR/page loads are identified.
-    const cookieMaxAge = neverExpires ? 30 * 24 * 3600 : configuredExpiry;
+    if (accessExpiry !== undefined) response.expires_in = accessExpiry;
+    if (withRefresh) response.refresh_token = result.refreshToken;
+    // Also set the httpOnly navigation cookie so SSR/page loads are identified; it
+    // tracks the access token's life (refresh rotates it client-side).
+    const cookieMaxAge = accessExpiry ?? 30 * 24 * 3600;
     return okWithCookies(response, [sessionCookie(result.token, cookieMaxAge)]);
   }
 
@@ -398,7 +445,12 @@ export async function handleDeviceApprove(req: ServiceHttpRequest, store: AuthSt
 
 export interface ValidatedToken {
   userId: string;
+  /** The token's granted scope (the ceiling). */
   scope: string;
+  /** The session's effective scope (≤ grant); null ⇒ the full grant is effective. */
+  effectiveScope: string | null;
+  /** The token id — the handle a session uses to mutate its own effective scope. */
+  tokenId: string;
   clientId: string | null;
 }
 
@@ -411,5 +463,11 @@ export async function validateBearer(token: string, store: AuthStore): Promise<V
   // credentials + token management; resolve it to the handle here. Falls back to
   // `mintedBy` when the account can't be resolved (e.g. a token minted by handle).
   const account = await store.getUserById(tok.mintedBy);
-  return { userId: account?.username ?? tok.mintedBy, scope: tok.scope, clientId: tok.clientId };
+  return {
+    userId: account?.username ?? tok.mintedBy,
+    scope: tok.scope,
+    effectiveScope: tok.effectiveScope ?? null,
+    tokenId: tok.id,
+    clientId: tok.clientId,
+  };
 }

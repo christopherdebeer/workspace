@@ -101,7 +101,11 @@ header{margin:.6rem 0 1.4rem}header h1{margin:.2rem 0 0;font-size:1.6rem;line-he
 .doc-card h2{margin:0;font-size:1.05rem}.doc-card p{margin:.25rem 0 0;color:var(--faint);font-size:.9rem}.doc-meta{display:block;margin-top:.4rem;color:var(--faint);font-size:.75rem}
 .block{padding:.2rem 0 .4rem}.block+.block{border-top:1px solid var(--line)}.block-body :first-child{margin-top:0}
 pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
-img{max-width:100%}a{color:var(--accent)}`;
+img{max-width:100%}a{color:var(--accent)}
+.doc-controls{display:flex;gap:.4rem;margin-top:.5rem}.pill{border:1px solid var(--line);background:transparent;color:var(--faint);border-radius:999px;padding:.12rem .7rem;font-size:.8rem;cursor:pointer}.pill.on{color:var(--paper);background:var(--accent);border-color:var(--accent)}
+.wikilink{border-bottom:1px dotted var(--accent);text-decoration:none}.backlinks{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line)}.backlinks h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:0 0 .5rem}.backlinks ul{list-style:none;padding:0;margin:0;display:grid;gap:.3rem}
+.md-fence{border-left:2px solid var(--line);padding-left:.9rem;margin:.6rem 0}
+.embed-agent{border:1px solid var(--line);border-radius:10px;padding:.7rem .8rem;margin:.6rem 0;background:#fff}.agent-head{font-size:.8rem;color:var(--faint);margin-bottom:.4rem}.agent-prompt{background:#f4f4ee;margin:0 0 .5rem;white-space:pre-wrap}.agent-out{margin-top:.5rem}.agent-out:empty{display:none}.vw-attrib{font-size:.72rem;color:var(--faint);margin-top:.5rem}`;
 
 /** Inject the SSR'd tree + its serialized state into the shell. `data-ssr` flags a
  *  server first paint, telling the client to hydrate (don't rebuild). The
@@ -128,12 +132,18 @@ async function buildDocVM(id: string, patterns: string[], isOwner: boolean): Pro
   const docFact = await getFact(`doc:${id}`);
   if (!docFact) return null;
   const dv = docFact.value as DocValue;
-  const refs = Array.isArray(dv.blocks) ? dv.blocks : [];
-  const facts = await Promise.all(refs.map((r) => getFact(r.key)));
-  const blocks: BlockData[] = refs.map((r, i) => ({
-    key: r.key,
-    fold: r.fold,
-    md: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${r.key}*`,
+  // Membership + order are substrate-native `_doc/<id>/<key>` = {seq, fold}
+  // decorations; fall back to the legacy embedded array for un-migrated docs.
+  const prefix = `_doc/${id}/`;
+  const deco = await queryPrefix(prefix);
+  let order = deco.map((f) => ({ key: f.key.slice(prefix.length), seq: Number((f.value as { seq?: number })?.seq ?? 0), fold: !!(f.value as { fold?: boolean })?.fold }));
+  if (!order.length) order = ((dv.cells ?? dv.blocks ?? []) as Array<{ key: string; fold?: boolean }>).map((r, i) => ({ key: r.key, seq: i + 1, fold: !!r.fold }));
+  order.sort((a, b) => a.seq - b.seq);
+  const facts = await Promise.all(order.map((o) => getFact(o.key)));
+  const blocks: BlockData[] = order.map((o, i) => ({
+    key: o.key,
+    fold: o.fold,
+    md: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${o.key}*`,
   }));
   return { kind: 'doc', owner: OWNER, isOwner, id, title: dv.title || id, summary: dv.summary, blocks };
 }

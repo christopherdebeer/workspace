@@ -108,4 +108,23 @@ describe('intersectScopes (effective access)', () => {
       'workspace:read',
     ]);
   });
+
+  it('a coarse ceiling covers a granular request — the narrower (granular) survives', () => {
+    // The cell-host ceiling is coarse (`workspace:read/write`); a client may now
+    // request the granular vocabulary. Without the impliesScope crossover the
+    // meet would be empty and the cell token would carry no scope at all.
+    const ceiling = ['workspace:read', 'workspace:write', 'cell:o/n:*'];
+    expect(intersectScopes(['read:workspace', 'write:workspace'], ceiling).sort()).toEqual([
+      'read:workspace',
+      'write:workspace',
+    ]);
+    // Read-only request against the same ceiling stays read-only (no write leak).
+    expect(intersectScopes(['read:workspace'], ceiling)).toEqual(['read:workspace']);
+  });
+
+  it('does not let the crossover widen a disjoint pair', () => {
+    // platform:* and workspace:read remain disjoint — impliesScope only fires for
+    // GRANULAR requirements, so coarse∩coarse is unaffected.
+    expect(intersectScopes(['platform:*'], ['workspace:read'])).toEqual([]);
+  });
 });

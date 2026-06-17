@@ -17,8 +17,23 @@
 export interface Identity {
   /** Authenticated principal, e.g. a username. Undefined for anonymous calls. */
   user?: string;
-  /** Free-form scopes/roles forwarded by the edge auth layer. */
+  /**
+   * The session's **effective** scopes — what is enforced now. Defaults to the
+   * token's full grant, but a session may narrow it (`auth.focusScope`) and widen
+   * back up to the ceiling on demand (`auth.requestScope`) — incremental
+   * authorization (docs/capability-consent.md). Enforcement (`hasScope`) reads
+   * this; the grant ceiling lives in `grantScopes`.
+   */
   scopes: string[];
+  /**
+   * The token's **granted** scopes — the immutable ceiling set at consent. The
+   * effective scope can never exceed this. Absent ⇒ equal to `scopes` (the common
+   * case, and back-compat for callers that never narrowed). Use `grantScopesOf`.
+   */
+  grantScopes?: string[];
+  /** The id of the bearer token backing this session, when known — the handle the
+   *  session uses to mutate its own effective scope. Absent for internal/event calls. */
+  tokenId?: string;
 }
 
 const ANONYMOUS: Identity = { user: undefined, scopes: [] };
@@ -123,7 +138,19 @@ export function intersectScopes(a: string[], b: string[]): string[] {
   for (const sa of a) {
     for (const sb of b) {
       const meet = intersectScopePatterns(sa, sb);
-      if (meet !== null) out.add(meet);
+      if (meet !== null) {
+        out.add(meet);
+        continue;
+      }
+      // Structurally disjoint, but the coarse⊇granular back-compat (`impliesScope`)
+      // crosses the two grammars: a coarse ceiling (`workspace:write`) covers a
+      // granular request (`write:workspace`). The meet is then the NARROWER
+      // (granular) of the two — so a cell ceiling cannot zero out a token that
+      // legitimately asked for granular scopes. Mirrors `hasScope`, which already
+      // honours `impliesScope` on the enforcement side; without it here the mint
+      // path would silently drop migrated scopes (docs/capability-consent.md).
+      if (impliesScope(sa, sb)) out.add(sb);
+      else if (impliesScope(sb, sa)) out.add(sa);
     }
   }
   return [...out];
@@ -167,6 +194,22 @@ export function impliesScope(held: string, required: string): boolean {
  */
 export function hasScope(identity: Identity, scope: string): boolean {
   return identity.scopes.some((held) => matchesScope(held, scope) || impliesScope(held, scope));
+}
+
+/** The grant ceiling for an identity — `grantScopes` when present, else the
+ *  effective `scopes` (back-compat: a session that never narrowed). */
+export function grantScopesOf(identity: Identity): string[] {
+  return identity.grantScopes ?? identity.scopes;
+}
+
+/**
+ * Whether the identity's **grant ceiling** covers `scope` — i.e. the token was
+ * consented for it, even if the session has narrowed it out of the effective set.
+ * This is the line between a self-serve widen (`scope_offer` → `auth.requestScope`,
+ * within the ceiling) and a hard `scope_denied` (outside it → human re-consent).
+ */
+export function hasGrantScope(identity: Identity, scope: string): boolean {
+  return grantScopesOf(identity).some((held) => matchesScope(held, scope) || impliesScope(held, scope));
 }
 
 /**

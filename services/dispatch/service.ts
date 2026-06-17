@@ -12,6 +12,7 @@ import {
   ServiceContext,
   ServiceHttpRequest,
   ServiceHttpResponse,
+  hasScope,
 } from '../../platform/runtime';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -95,6 +96,138 @@ async function runSsrReads(reads: SsrRead[], ctx: ServiceContext): Promise<Recor
   return out;
 }
 
+/**
+ * Phase 4 — caller-write delegation (the write twin of the SSR read-proxy).
+ *
+ * A cell can ASK dispatch to persist facts into the *caller's* slice (or, with
+ * `owner` + a declared `crossSlice` intent, into another slice the caller holds a
+ * write-grant on) by setting an `x-parc-writes` response header (a JSON array of
+ * `{ key, value, type?, tags?, via?, owner? }`). dispatch applies them AS THE
+ * CALLER, never handing the cell a token. The cell stays declarative: it expresses
+ * write intent; the platform decides whether the caller is allowed.
+ *
+ * Three guards, all enforced here (not in the cell, not at the gateway — Mode-1
+ * `serviceClient` bypasses the gateway PEP, so this IS the `scope(caller, write)`
+ * act boundary):
+ *   1. The caller must hold write authority (`write:workspace`, satisfied by the
+ *      coarse `workspace:write`/`admin` too). A read-only caller writes nothing.
+ *   2. Each write must fall under a prefix the cell DECLARED (`ssr.json` `writes`)
+ *      and match its optional `types` bound — consented surface, not arbitrary.
+ *   3. Reserved namespaces are always refused (a cell may not register the
+ *      caller's vocabulary or rewrite its authority), and the batch is capped.
+ */
+const RESERVED_WRITE_PREFIXES = ['_actions/', '_views/', '_grants/', '_groups/', '_public/'];
+const MAX_CALLER_WRITES = 16;
+const WRITES_HEADER = 'x-parc-writes';
+
+interface CallerWriteIntent {
+  keyPrefix: string;
+  types?: string[];
+  /** Phase 4 v2: the cell may target ANOTHER owner's slice under this prefix —
+   *  bounded at the act by the caller's own write-grant (`requireWriteThrough`).
+   *  Absent/false ⇒ caller's own slice only. */
+  crossSlice?: boolean;
+}
+interface RequestedWrite {
+  key: string;
+  value: unknown;
+  type?: string;
+  tags?: string[];
+  via?: string;
+  /** Target slice. Absent or === caller ⇒ own slice; otherwise a cross-slice
+   *  write-through (requires `crossSlice` in the manifest AND a caller grant). */
+  owner?: string;
+}
+
+/** Parse + shape-validate the `x-parc-writes` header payload. Throws on malformed. */
+function parseRequestedWrites(raw: string): RequestedWrite[] {
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('x-parc-writes must be a JSON array');
+  return parsed
+    .filter((w): w is RequestedWrite => !!w && typeof w === 'object' && typeof (w as RequestedWrite).key === 'string' && (w as RequestedWrite).key.length > 0 && 'value' in (w as object))
+    .map((w) => ({
+      key: w.key,
+      value: w.value,
+      ...(typeof w.type === 'string' ? { type: w.type } : {}),
+      ...(Array.isArray(w.tags) && w.tags.every((t) => typeof t === 'string') ? { tags: w.tags } : {}),
+      ...(typeof w.via === 'string' ? { via: w.via } : {}),
+      ...(typeof w.owner === 'string' && w.owner.length > 0 ? { owner: w.owner } : {}),
+    }));
+}
+
+interface WriteOutcome {
+  applied: number;
+  refused: number;
+  /** Caller lacked write authority — the whole batch was denied. */
+  denied?: boolean;
+}
+
+/** Apply a cell's requested caller-writes, bounded by scope + manifest. Exported for tests. */
+export async function applyCallerWrites(
+  raw: string,
+  manifest: CallerWriteIntent[],
+  cellAddress: string,
+  ctx: ServiceContext,
+): Promise<WriteOutcome> {
+  if (!ctx.identity.user) return { applied: 0, refused: 0 };
+  // Guard 1: scope(caller, write) — the security-critical line.
+  if (!hasScope(ctx.identity, 'write:workspace')) {
+    ctx.logger.warn('caller-writes denied: caller lacks write scope', { user: ctx.identity.user, cell: cellAddress });
+    return { applied: 0, refused: 0, denied: true };
+  }
+  let requested: RequestedWrite[];
+  try {
+    requested = parseRequestedWrites(raw);
+  } catch (err) {
+    ctx.logger.warn('caller-writes header invalid — ignored', { error: (err as Error).message });
+    return { applied: 0, refused: 0 };
+  }
+  let applied = 0;
+  let refused = 0;
+  if (requested.length > MAX_CALLER_WRITES) {
+    ctx.logger.warn('caller-writes batch capped', { requested: requested.length, cap: MAX_CALLER_WRITES });
+  }
+  for (const w of requested.slice(0, MAX_CALLER_WRITES)) {
+    const reserved = RESERVED_WRITE_PREFIXES.some((p) => w.key.startsWith(p));
+    // A target slice other than the caller's own is a cross-slice write-through:
+    // allowed only when the cell DECLARED `crossSlice` for the prefix, and finally
+    // bounded at the act by the caller's own grant (workspace.requireWriteThrough).
+    const crossSlice = !!w.owner && w.owner !== ctx.identity.user;
+    // Guards 2+3: declared prefix (+ optional type bound, + crossSlice opt-in),
+    // never a reserved namespace.
+    const declared = manifest.some(
+      (m) =>
+        w.key.startsWith(m.keyPrefix) &&
+        (!m.types || (w.type !== undefined && m.types.includes(w.type))) &&
+        (!crossSlice || m.crossSlice === true),
+    );
+    if (reserved || !declared) {
+      refused++;
+      ctx.logger.warn('caller-write refused (reserved or not declared)', { key: w.key, type: w.type, reserved, crossSlice, cell: cellAddress });
+      continue;
+    }
+    try {
+      // requireWriteThrough (in workspace.remember) enforces the caller's grant on
+      // the target slice and re-refuses reserved namespaces — a grant_denied throws
+      // here and is counted as refused, never silently dropped.
+      await ctx.serviceClient('workspace').command('remember', {
+        key: w.key,
+        value: w.value,
+        ...(w.type ? { type: w.type } : {}),
+        ...(w.tags ? { tags: w.tags } : {}),
+        ...(crossSlice ? { owner: w.owner } : {}),
+        via: w.via ?? cellAddress,
+      });
+      applied++;
+    } catch (err) {
+      refused++;
+      ctx.logger.warn('caller-write apply failed', { key: w.key, crossSlice, error: (err as Error).message });
+    }
+  }
+  if (applied) ctx.logger.info('caller-writes applied', { applied, refused, cell: cellAddress });
+  return { applied, refused };
+}
+
 async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<ServiceHttpResponse> {
   // Anonymous GET/HEAD flow through so *public* cells can serve pages and
   // assets to a plain browser; `cells.call` is the gate — it only honours
@@ -154,11 +287,40 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
       body,
       ...(ssrData ? { ssrData } : {}),
     });
+    // Phase 4: a cell may request caller-slice writes via the `x-parc-writes`
+    // response header. Apply them AS THE CALLER (bounded by the cell's declared
+    // manifest AND scope(caller, write)), then strip the header so it never
+    // reaches the browser. Anonymous callers never write (the header is dropped).
+    let outHeaders = result.headers ?? JSON_HEADERS;
+    const writeHeaderKey = result.headers && Object.keys(result.headers).find((h) => h.toLowerCase() === WRITES_HEADER);
+    if (writeHeaderKey) {
+      const raw = result.headers![writeHeaderKey];
+      outHeaders = { ...result.headers };
+      delete outHeaders[writeHeaderKey];
+      if (ctx.identity.user) {
+        let manifest: CallerWriteIntent[] = [];
+        try {
+          const meta = await ctx.serviceClient('cells').command<{ writes?: CallerWriteIntent[] }>('callerWritesFor', {
+            owner: parsed.owner,
+            name: parsed.name,
+          });
+          manifest = meta?.writes ?? [];
+        } catch (err) {
+          ctx.logger.warn('callerWritesFor failed', { error: (err as Error).message });
+        }
+        const outcome = await applyCallerWrites(raw, manifest, `@${parsed.owner}/${parsed.name}`, ctx);
+        if (outcome.denied) outHeaders['x-parc-writes-denied'] = 'scope';
+        else {
+          outHeaders['x-parc-writes-applied'] = String(outcome.applied);
+          if (outcome.refused) outHeaders['x-parc-writes-refused'] = String(outcome.refused);
+        }
+      }
+    }
     // Pass the cell's response through faithfully: its headers (content-type
     // for HTML/JS/CSS), its body encoding, its status.
     return {
       statusCode: result.statusCode ?? 200,
-      headers: result.headers ?? JSON_HEADERS,
+      headers: outHeaders,
       body: result.body,
       isBase64Encoded: result.isBase64Encoded,
     };

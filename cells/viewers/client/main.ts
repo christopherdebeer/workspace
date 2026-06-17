@@ -231,7 +231,7 @@ export const style = {
 
 /* ── repl: editor + run + output (outputs-as-facts gateway) ─────── */
 
-interface ReplEl { id: string; content?: string; lang?: string; server?: boolean; width?: number; height?: number; scale?: number; _factKey?: string }
+interface ReplEl { id: string; content?: string; lang?: string; server?: boolean; width?: number; height?: number; scale?: number; _factKey?: string; onOutput?: (key: string, content: string) => void }
 
 function renderRepl(host: HTMLElement, el: ReplEl, controller?: any): void {
   injectCss();
@@ -300,8 +300,10 @@ function renderRepl(host: HTMLElement, el: ReplEl, controller?: any): void {
     const act = (window as any).__parcAct;
     if (!act) return;
     const key = `out:${el._factKey ?? el.id}:${Date.now().toString(36)}`;
-    await act('workspace.remember', { key, value: { content: typeof lastResult === 'string' ? lastResult : JSON.stringify(lastResult, null, 2), producedBy: el._factKey ?? `el:${el.id}` }, via: 'repl', type: 'output' });
+    const content = typeof lastResult === 'string' ? lastResult : JSON.stringify(lastResult, null, 2);
+    await act('workspace.remember', { key, value: { content, producedBy: el._factKey ?? `el:${el.id}` }, via: 'repl', type: 'output' });
     await act('workspace.link', { from: key, rel: 'produced-by', to: el._factKey ?? `el:${el.id}` }).catch(() => {});
+    el.onOutput?.(key, content); // host hook: e.g. lit places this fact as a doc cell
     saveBtn.textContent = '✓ saved ' + key;
     setTimeout(() => { saveBtn.textContent = '⤓ output→fact'; }, 2500);
   };

@@ -16,13 +16,21 @@
 | 2b | `cells.create` → `cells:create` (granular, enforced) | ✅ shipped | `services/cells/service.ts`; legacy `platform:cells:create`/`platform:*` still satisfy it |
 | 2c | Workspace tools verb-enforced | ✅ shipped + verified | reads need `read:workspace`, acts need `write:workspace`; read-only token is **denied** writes |
 | 2d | Granular scopes offered at consent | ✅ shipped | `read:workspace`/`write:workspace`/`cells:create` in `AUTH_SCOPES`; live in AS metadata |
-| 3 | Incremental authorization | ⏳ outstanding | server-requested mid-session scope upgrades |
+| 2e | Mint-path back-compat + client migration | ✅ shipped | `intersectScopes` honours `impliesScope`; `services/home` requests granular; consent SPA de-dupes aliases |
+| 5 | Consent-time grant lifetime | ✅ shipped | consent picker narrows the grant horizon (refresh TTL, or access on non-expiring), clamped to the server ceiling |
+| 6 | Third-party-cell author disclosure | ✅ shipped | `describeCellTools` discloses author + declared reads + write-back to non-owner callers; surfaced through the gateway catalog |
+| 3 | Incremental authorization | ✅ shipped | mutable **effective scope** ≤ grant ceiling; `auth.scope`/`focusScope`/`requestScope`; gateway raises `scope_offer` (self-serve widen) vs `scope_denied` (re-consent) |
 | 4 | Write-time delegation | ⏳ outstanding | cells acting on caller's behalf, bounded to caller's granted writes |
 
 Verified live (deploy #194): read-only token → workspace write returns
 `scope_denied: requires write:workspace`; read+write token writes fine
 (coarse `workspace:write` satisfies `write:workspace`); AS metadata advertises the
-granular vocabulary. 224 tests pass.
+granular vocabulary. The in-repo browser client now requests the granular vocabulary
+and the mint path (`intersectScopes`) is back-compat-hardened to match enforcement
+(see "Clients migrated" below). The consent screen now also lets the user pick a
+grant lifetime, and third-party-cell tools disclose their author + declared reads.
+Incremental authorization (Phase 3) is shipped: a session's effective scope is a
+mutable subset of its grant. 235 tests pass.
 
 ## What actually shipped vs. the original design
 
@@ -43,6 +51,43 @@ remain gated by **ownership + per-cell grants** (`workspace.requestGrant`/
 `approveGrant`), not OAuth scopes. That granularity is available later if needed
 but was not required to close the consent-integrity gap (a "read-only" token
 that could still write).
+
+### Why OAuth scopes are coarse — and where the fine-grained surface actually lives
+
+A fair question: a cell often only needs to write *one type* (`note`) or *one
+prefix* (`inbox/*`), so why does consent grant blanket `write:workspace`?
+
+Because there are **two distinct authority layers**, and per-type/per-prefix
+bounding belongs to the lower one:
+
+1. **The OAuth scope** is the *consent ceiling for a client acting AS the human,
+   inside the human's own slice.* Within your own slice the consequential axis is
+   read-vs-write (the Σ-calculus monotonicity asymmetry — reads are disclosure,
+   writes are the risk). Splitting *your own* writes into `write:type:note` vs
+   `write:type:todo` spends consent-UI budget on a distinction that doesn't change
+   the trust relationship (it's still you writing your slice), and it would bake a
+   fact-type taxonomy into the AS metadata / token grammar — static, redeploy to
+   change. So the OAuth layer deliberately stays coarse: read / write / create.
+
+2. **The substrate grant grammar** (`docs/scope-grants.md`) is where fine-grained,
+   prefix- and type-bounded capability already exists — for the cases that
+   actually need it: **one principal acting on *another's* slice, or a cell acting
+   under a bounded delegation.** Grants are addressed as
+   `workspace:<owner>:<keyPrefix|*>:<read|write>` and `cell:<owner>/<name>:<tool>`,
+   are *data* (requestable at runtime via `workspace.requestGrant` /
+   `approveGrant`, not baked into a scope vocabulary), and are enforced by
+   `requireWriteThrough` → `grantCovers(g.key, key)` — a write-through to
+   `alice`'s `inbox/*` requires exactly a `write` grant whose key pattern covers
+   `inbox/*`, nothing wider. That is precisely the "only write a specific prefix"
+   bound, living one layer down from OAuth.
+
+So a cell that should only touch `note` facts or `inbox/*` is expressed as a
+**bounded grant**, not a bespoke OAuth scope. The granular OAuth strings the
+original design sketched (`write:type:note`, `read:@c15r/lit`) remain available as
+a future *refinement of the ceiling* if a real consent-time need appears, but the
+prefix/type precision the question asks for is already achievable today through the
+grant grammar — and it's where Phase 4 (write-time delegation) will bind a cell's
+writes to `scope(caller, write)` rather than letting it write the whole slice.
 
 **Enforcement point:** the `/mcp` gateway (`enforceScope`/`hasScope`) for external
 callers. Internal Mode-1 `serviceClient` calls bypass scope checks (trusted,
@@ -67,29 +112,169 @@ requirements via `impliesScope`.
 - **Cell-creation scope:** `services/cells/service.ts` `CREATE_SCOPE`.
 - **SSR read-only allowlist:** `services/dispatch/service.ts` `SSR_READ_TARGETS`.
 - **Tests:** `tests/workspace.test.ts` (describeTools verb scopes),
-  `tests/auth-oauth.test.ts` (`grantableScopes` admin-gating),
-  `tests/scope-grammar.*`/`platform` (matches/implies).
+  `tests/auth-oauth.test.ts` (`grantableScopes` admin-gating, grant lifetime),
+  `tests/scope-grammar.*`/`platform` (matches/implies),
+  `tests/forge-cell.test.ts` (cell author disclosure).
+
+## Consent-time grant lifetime (✅ shipped)
+
+A grant the user can time-box is the cheapest mitigation for the cell-write-back
+risk below — so the consent screen now offers a **"this access lasts…" picker**.
+It can only *narrow*: the chosen seconds are clamped server-side to a ceiling
+(`grantCeilingSecs` = the configured refresh TTL) and threaded as `grantSecs` on
+the auth code. At token exchange (`handleToken`):
+
+- **Expiring deployments** (the norm): the **refresh token** carries the chosen
+  horizon (the re-consent clock); the access token stays the short configured TTL.
+  A choice *shorter than* the access TTL collapses to a single short-lived token
+  with no refresh.
+- **Non-expiring deployments**: a finite choice makes the **access token** itself
+  finite (no refresh on that deployment); omitting it preserves non-expiry.
+
+Code: `ConsentBody.expiresInSec` + `clampGrant`/`grantCeilingSecs` in
+`services/auth/oauth.ts`; `AuthCode.grantSecs` through both stores; the picker in
+`services/auth/client/main.tsx` (fed `maxGrantSecs` from `/auth/grantable`).
+
+## Third-party-cell author disclosure (✅ shipped)
+
+The honest answer to "a cell writes data to another location — exfiltration?".
+A cell **receives no token** when invoked (only an `x-cell-caller` header). It has
+two write paths, both server-mediated:
+
+1. **Organ path** (`substrate.write.requested`, IAM-pinned `events:source =
+   cell-<id>`) → lands in the cell **owner's** (= author's) slice only
+   (`createSubstrateWriteHandler`); a cell's own accumulation (e.g. reef-writer).
+2. **Caller-write delegation** (Phase 4, below) → the cell may *request* writes
+   into the **caller's** slice via the `x-parc-writes` header, but dispatch
+   applies them as the caller, bounded by `scope(caller, write)` + the cell's
+   declared manifest + reserved-namespace refusal. So a cell can never write
+   beyond the caller's own authority, and only under prefixes it declared.
+
+The exfiltration shape is therefore: *user B invokes author A's cell; dispatch
+runs A's declared SSR reads **as B** and hands the results to A's code, which can
+persist them into **A's** slice (organ path) — and, if A declared caller-writes
+and B holds write scope, into **B's own** slice under the declared prefixes.*
+Gated (B must be owner/granted, or it's an anonymous public GET) and disclosed via
+the `disclosure { author, reads, writes, note }` block on `describeCellTools`.
+
+This is **not** an OAuth-consent concern (that governs a client acting as *you*,
+in *your* slice); it's a third-party-app trust decision. So the disclosure rides
+the discovery/first-invoke surface instead: `cells.describeCellTools` now attaches
+a `disclosure { author, reads, note }` to every tool whose cell the caller does
+**not** own, and the gateway carries it into the `$catalog` — so both humans and
+agents see "runs @author's code; it can observe these reads and persist results
+into @author's workspace" at the moment they choose to use it. Owners see no
+notice (writing to your own cell's slice is writing to yourself). A consent/grant
+**UI** can render this block at `approveGrant` time; the data is now exposed for it.
 
 ## Outstanding work
 
-### Phase 3 — Incremental authorization
-Server-requested scope upgrades mid-session (`scope_request`/`offer`/`reduced`),
-per sync `agency-and-identity.md` Appendix A: effective scope mutable
-server-side, the OAuth grant remaining the ceiling. Lets a session start minimal
-and widen on demand instead of front-loading consent.
+### Phase 3 — Incremental authorization (✅ shipped)
 
-### Phase 4 — Write-time delegation
-The write counterpart of the SSR read-proxy: when a cell acts on the caller's
-behalf, it should exercise only the caller's **granted write** capabilities —
-`scope(caller, write)` enforced at the act boundary. Today only reads are
-delegated (the SSR-proxy); writes from cells go through the substrate-write event
-path, not a scoped delegation.
+"Scope is the ceiling (OAuth, at consent); focus is the arbiter (runtime)" made
+real. A token's **grant** is the immutable ceiling; the session's **effective
+scope** is a mutable subset of it, so a session can start minimal and widen on
+demand — no re-consent, no new token.
 
-### Optional — migrate clients to request granular
-`services/home/client/auth.ts` `DEFAULT_SCOPE` still requests the coarse buckets
-(`workspace:read workspace:write platform:cells:create`); these work via
-`impliesScope`. New browser tokens could request `read:workspace write:workspace`
-to be precise. Low priority — back-compat already covers it.
+**Data:** a token row carries `effectiveScope` (null ⇒ the full grant is active),
+mutated by `setEffectiveScope(tokenId, userId, scope)` — keyed by the owner's
+account id, so a session only ever mutates its own token (`services/auth/{store,
+memory-store,dynamo-store}.ts`). `validateBearer` now returns `{ scope (grant),
+effectiveScope, tokenId, … }`.
+
+**Identity:** `Identity` gained `grantScopes` (the ceiling) and `tokenId`;
+`scopes` is the effective set that `hasScope`/enforcement reads. Both propagate on
+the Mode-1 command envelope (`service-client.ts`) so the auth cell, reached via the
+gateway, sees the caller's ceiling + token id. `grantScopesOf`/`hasGrantScope`
+(`platform/runtime/auth.ts`) read the ceiling; absent `grantScopes` ⇒ equals
+`scopes` (back-compat — nothing changes until a session narrows).
+
+**Protocol (the three terms):**
+- `auth.scope` (read) → `{ effective, grant }`.
+- `auth.focusScope` (act) → narrow to a minimal subset (`reduced`).
+- `auth.requestScope` (act) → widen toward requested, clamped to the ceiling
+  (`scope_request`); scopes outside the grant come back in `denied`.
+- The gateway's `enforceScope` raises **`scope_offer`** (the `offer`) when a
+  capability needs a scope within the grant but not the current focus — pointing
+  at `auth.requestScope`, a self-serve widen — vs **`scope_denied`** when it's
+  outside the grant entirely (the human re-consent / `auth.mintToken` path).
+
+**Default is opt-in:** new tokens start with effective == grant (so behaviour is
+unchanged), and a cautious client/agent calls `focusScope` at session start to
+shrink blast radius, widening only when a `scope_offer` says it's within reach.
+**Note:** a refresh mints a fresh access token whose effective resets to the grant
+(re-narrow after refresh) — acceptable for now; a future refinement could carry
+the focus across rotation.
+
+Tests: `tests/auth-incremental.test.ts` (end-to-end through the auth handler),
+`tests/auth-oauth.test.ts` (store: effective scope + token id),
+`tests/resource-cell.test.ts` (gateway `scope_offer` vs `scope_denied`).
+
+### Phase 4 — Write-time delegation (✅ shipped, v2: cross-slice)
+
+The write counterpart of the SSR read-proxy. A cell may ask dispatch to persist
+facts into the **caller's** slice by returning an `x-parc-writes` response header
+(JSON `[{ key, value, type?, tags?, via? }]`); dispatch applies them **as the
+caller** via `workspace.remember` and strips the header. The cell never receives
+a token — it expresses *intent*; the platform decides whether the caller is
+allowed. Three guards, all enforced in dispatch (`applyCallerWrites`) — and this
+is genuinely the `scope(caller, write)` **act boundary**, because Mode-1
+`serviceClient` bypasses the gateway PEP, so the proxy must gate it itself:
+
+1. **`scope(caller, write)`** — the caller must hold `write:workspace`
+   (`hasScope`, satisfied by coarse `workspace:write`/`admin`/`platform:*` too).
+   A read-only caller's whole batch is denied (`x-parc-writes-denied: scope`).
+2. **Declared manifest** — each write must fall under a `keyPrefix` the cell
+   declared in `ssr.json` `writes: [{ keyPrefix, types?, crossSlice? }]` (stored as
+   `CellRecord.callerWrites`, fetched via `cells.callerWritesFor`), and match its
+   optional `types` bound. Undeclared ⇒ refused. Empty manifest ⇒ writes nothing.
+3. **Reserved namespaces always refused** (`_actions/ _views/ _grants/ _groups/
+   _public/`) — a cell may not register the caller's vocabulary or rewrite its
+   authority — and the batch is capped (16).
+
+Provenance stamps the **caller** as `writer` (`via` defaults to `@owner/name`),
+so the write is attributable and supersede-able. Anonymous callers never write
+(the header is stripped). Disclosure: `describeCellTools` adds `writes` (declared
+prefixes) — and a cross-slice note — to the third-party `disclosure` block.
+
+**Cross-slice write-through (✅ v2):** a requested write may carry an `owner`. When
+`owner !== caller` it is a *cross-slice* write, allowed only when (a) a matching
+manifest entry sets `crossSlice: true` — the cell explicitly opted in, kept off by
+default — and (b) `workspace.remember` → `requireWriteThrough` confirms the
+**caller** holds a write-grant covering the key on that slice (a `grant_denied`
+throw is counted as refused, never silently dropped). So a cell can act on the
+caller's behalf using only the caller's own granted write authority — exactly
+`scope(caller, write)`. `owner === caller` collapses to an own-slice write (no
+`crossSlice` needed). Reserved namespaces stay refused on both sides.
+
+Code: `applyCallerWrites` + the route wiring in `services/dispatch/service.ts`;
+manifest parse + `callerWritesFor` + disclosure in `services/cells/service.ts`;
+`CellRecord.callerWrites` in `services/cells/registry.ts`. Reference opt-in:
+`cells/starter/ssr.json` (declares `note:` own-slice + `shared/` cross-slice) and
+the `POST /note` emitter in `cells/starter/index.ts`. Tests:
+`tests/cell-caller-writes.test.ts` (dispatch enforcement incl. cross-slice),
+`tests/starter-cell.test.ts` (emission), `tests/forge-cell.test.ts` (manifest →
+disclosure + `callerWritesFor`).
+
+### ✅ Clients migrated to request granular (+ mint-path back-compat hardened)
+`services/home/client/auth.ts` `DEFAULT_SCOPE` now requests the granular
+vocabulary (`read:workspace write:workspace cells:create`); legacy already-minted
+coarse tokens still work via `impliesScope`. (The ported `cells/home` client signs
+in through the `c15r/kernel` `login`, so its scope is the kernel's to set, not this
+repo's.)
+
+Making this safe required closing a back-compat asymmetry the original note missed:
+the coarse⊇granular table lived **only** in `impliesScope`/`hasScope` (the
+*enforcement* path), not in `intersectScopes`/`cellCeiling` (the *mint* path in
+`services/auth/oauth.ts`). `intersectScopePatterns('read:workspace','workspace:read')`
+is structurally `null` (disjoint grammars), so a cell-host (model-A) redirect that
+requested granular scopes would have intersected against the coarse `cellCeiling`
+to an **empty** scope — silently locking the token out. `intersectScopes` now falls
+back to `impliesScope` across the two grammars and keeps the **narrower** (granular)
+side, so the mint path agrees with enforcement (`tests/scope-grammar.test.ts`).
+The consent SPA also de-duplicates coarse/granular aliases that render identically
+(both families stay grantable for legacy requests; the picker shows each permission
+once, preferring the granular form).
 
 ---
 

@@ -18,6 +18,8 @@ import {
   requireUser,
   getOptional,
   intersectScopes,
+  grantScopesOf,
+  hasGrantScope,
 } from '../../platform/runtime';
 import { AuthStore } from './store';
 import { createMemoryStore } from './memory-store';
@@ -135,11 +137,15 @@ async function mintToken(input: MintTokenInput, ctx: ServiceContext) {
   // narrow, never widen (docs/scope-grants.md §3). Callers whose identity
   // arrives without scopes (no PEP on the path) cannot mint at all.
   const requested = input.scope.split(/[\s,]+/).filter(Boolean);
-  const effective = intersectScopes(requested, ctx.identity.scopes);
+  // The ceiling is the minter's GRANT, not its (possibly narrowed) session focus —
+  // a minted credential may carry anything the human consented to, regardless of
+  // how the current session has temporarily reduced its effective scope.
+  const ceiling = grantScopesOf(ctx.identity);
+  const effective = intersectScopes(requested, ceiling);
   if (!effective.length) {
     throw new Error(
       `scope_denied: none of the requested scopes (${requested.join(' ')}) are within your token's ceiling (${
-        ctx.identity.scopes.join(' ') || 'none'
+        ceiling.join(' ') || 'none'
       }). A token can only narrow, never widen.`,
     );
   }
@@ -174,6 +180,61 @@ async function revokeToken(input: RevokeTokenInput, ctx: ServiceContext) {
   const ok = await store.revokeToken(input.tokenId, userId);
   if (ok) await ctx.events.emit('auth.token.revoked', { userId, id: input.tokenId });
   return { revoked: ok };
+}
+
+// ─── Incremental authorization: a session's mutable effective scope ──────────
+// The token's grant is the ceiling (set at consent); the session's *effective*
+// scope is a mutable subset of it, so a session can start minimal and widen on
+// demand without re-consent (docs/capability-consent.md). `scope` reports both;
+// `focusScope` narrows ("reduced"); `requestScope` widens back up to the ceiling.
+
+/** The session's effective scope + its grant ceiling. */
+function scopeView(_input: unknown, ctx: ServiceContext): { effective: string[]; grant: string[] } {
+  requireUser(ctx.identity);
+  return { effective: ctx.identity.scopes, grant: grantScopesOf(ctx.identity) };
+}
+
+interface ScopeInput {
+  scopes: string[];
+}
+
+/** Narrow the session to a minimal effective set (within the grant) — "start minimal". */
+async function focusScope(input: ScopeInput, ctx: ServiceContext): Promise<{ effective: string[]; grant: string[] }> {
+  requireUser(ctx.identity);
+  const tokenId = ctx.identity.tokenId;
+  if (!tokenId) throw new Error('focusScope needs a bearer-authenticated session (no token id on this identity)');
+  const requested = (input?.scopes ?? []).filter(Boolean);
+  if (!requested.length) throw new Error('`scopes` (a non-empty array) is required');
+  const grant = grantScopesOf(ctx.identity);
+  const effective = intersectScopes(requested, grant); // can only narrow within the ceiling
+  await store.setEffectiveScope(tokenId, await callerAccountId(ctx), effective.join(' '));
+  await ctx.events.emit('auth.scope.focused', { tokenId, effective });
+  return { effective, grant };
+}
+
+/**
+ * Widen the session's effective scope toward `scopes`, clamped to the grant
+ * ceiling — the self-serve half of incremental authorization (the `scope_offer`
+ * the gateway raises points here). Scopes outside the ceiling come back in
+ * `denied`: those need human re-consent (the `scope_denied` elevation path), not
+ * a self-serve widen.
+ */
+async function requestScope(
+  input: ScopeInput,
+  ctx: ServiceContext,
+): Promise<{ effective: string[]; grant: string[]; granted: boolean; denied: string[] }> {
+  requireUser(ctx.identity);
+  const tokenId = ctx.identity.tokenId;
+  if (!tokenId) throw new Error('requestScope needs a bearer-authenticated session (no token id on this identity)');
+  const requested = (input?.scopes ?? []).filter(Boolean);
+  if (!requested.length) throw new Error('`scopes` (a non-empty array) is required');
+  const grant = grantScopesOf(ctx.identity);
+  const denied = requested.filter((s) => !hasGrantScope(ctx.identity, s));
+  // Union the current focus with the requested-within-ceiling, then re-clamp to grant.
+  const widened = intersectScopes([...ctx.identity.scopes, ...requested.filter((s) => hasGrantScope(ctx.identity, s))], grant);
+  await store.setEffectiveScope(tokenId, await callerAccountId(ctx), widened.join(' '));
+  await ctx.events.emit('auth.scope.requested', { tokenId, effective: widened, denied });
+  return { effective: widened, grant, granted: denied.length === 0, denied };
 }
 
 /**
@@ -253,6 +314,60 @@ function describeTools() {
         },
         resultSchema: { type: 'object', properties: { revoked: { type: 'boolean' } } },
       },
+      {
+        name: 'scope',
+        description:
+          "Your session's effective scope (what's enforced right now) and its grant ceiling (what you consented to). Incremental authorization: the effective set can be narrowed and widened within the ceiling without re-consent.",
+        scope: null,
+        kind: 'read' as const,
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            effective: { type: 'array', items: { type: 'string' }, description: 'Scopes enforced now' },
+            grant: { type: 'array', items: { type: 'string' }, description: 'The token ceiling (consented)' },
+          },
+        },
+      },
+      {
+        name: 'focusScope',
+        description:
+          'Narrow your session to a minimal effective scope (a subset of your grant) — start minimal, widen on demand. Shrinks blast radius without minting a new token. Reversible via requestScope.',
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: { scopes: { type: 'array', items: { type: 'string' }, description: 'The scopes to keep active (intersected with your grant)' } },
+          required: ['scopes'],
+          additionalProperties: false,
+        },
+        resultSchema: {
+          type: 'object',
+          properties: { effective: { type: 'array', items: { type: 'string' } }, grant: { type: 'array', items: { type: 'string' } } },
+        },
+      },
+      {
+        name: 'requestScope',
+        description:
+          "Widen your session's effective scope toward the requested scopes, up to your grant ceiling — the self-serve answer to a `scope_offer`. No re-consent. Scopes outside your grant come back in `denied` (those need your human to re-consent / mint a wider token).",
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: { scopes: { type: 'array', items: { type: 'string' }, description: 'The scopes to activate (clamped to your grant)' } },
+          required: ['scopes'],
+          additionalProperties: false,
+        },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            effective: { type: 'array', items: { type: 'string' } },
+            grant: { type: 'array', items: { type: 'string' } },
+            granted: { type: 'boolean', description: 'True when every requested scope is now effective' },
+            denied: { type: 'array', items: { type: 'string' }, description: 'Requested scopes outside your grant — need re-consent' },
+          },
+        },
+      },
     ],
   };
 }
@@ -289,9 +404,12 @@ export const handler = defineService({
     listTokens,
     tokens,
     revokeToken,
+    scope: scopeView,
+    focusScope,
+    requestScope,
     describeTools: () => describeTools(),
   },
-  events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'] },
+  events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked', 'auth.scope.focused', 'auth.scope.requested'] },
   http: [
     { method: 'GET', path: '/.well-known/oauth-protected-resource', handler: (req) => handlePRM(req, OAUTH_CONFIG) },
     // RFC 9728 / MCP 2025-06-18: clients construct the PRM URL by inserting the

@@ -104,6 +104,25 @@ describe('auth store (in-memory)', () => {
     expect(await store.validateTokenByHash(sha256(refreshed!.token))).toMatchObject({ scope: 's' });
   });
 
+  it('exposes effective scope + token id, and reflects a server-side narrowing (incremental auth)', async () => {
+    const store = createMemoryStore();
+    await store.createUser('uuid-1', 'alice');
+    const minted = await store.mintToken({ userId: 'uuid-1', scope: 'workspace:read workspace:write' });
+
+    // Fresh token: effective == grant (null sentinel), and the id is exposed.
+    const v1 = await validateBearer(minted.token, store);
+    expect(v1).toMatchObject({ userId: 'alice', scope: 'workspace:read workspace:write', effectiveScope: null, tokenId: minted.id });
+
+    // Narrow the session's effective focus to a subset of the grant.
+    expect(await store.setEffectiveScope(minted.id, 'uuid-1', 'workspace:read')).toBe(true);
+    const v2 = await validateBearer(minted.token, store);
+    expect(v2!.effectiveScope).toBe('workspace:read');
+    expect(v2!.scope).toBe('workspace:read workspace:write'); // grant (ceiling) is unchanged
+
+    // Only the token's own account may mutate it.
+    expect(await store.setEffectiveScope(minted.id, 'someone-else', '')).toBe(false);
+  });
+
   it('enforces single-use auth codes', async () => {
     const store = createMemoryStore();
     await store.saveAuthCode({
@@ -232,6 +251,59 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     } finally {
       delete process.env.CELL_DOMAIN_SUFFIX;
     }
+  });
+
+  /** Run consent → token for a freshly-registered user, returning the token body. */
+  async function consentAndToken(
+    store: ReturnType<typeof createMemoryStore>,
+    consentBody: Record<string, unknown>,
+    config: OAuthConfig = CONFIG,
+  ): Promise<{ access_token: string; refresh_token?: string; expires_in?: number; scope: string }> {
+    await store.createUser('u1', 'alice');
+    const sessionId = await store.createSession('u1');
+    const verifier = 'verifier-grant-test';
+    const consent = await handleConsent(
+      makeReq({
+        path: '/oauth/consent',
+        body: { sessionId, clientId: 'cl', redirectUri: 'https://app/cb', codeChallenge: sha256(verifier), codeChallengeMethod: 'S256', scope: 'workspace:read', ...consentBody },
+      }),
+      store,
+      config,
+    );
+    const code = new URL((consent.body as { redirect: string }).redirect).searchParams.get('code')!;
+    const res = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: 'authorization_code', code, redirect_uri: 'https://app/cb', code_verifier: verifier, client_id: 'cl' } }),
+      store,
+      config,
+    );
+    return res.body as { access_token: string; refresh_token?: string; expires_in?: number; scope: string };
+  }
+
+  it('a chosen grant lifetime shorter than the refresh ceiling keeps short access + a bounded refresh', async () => {
+    const store = createMemoryStore();
+    const tok = await consentAndToken(store, { expiresInSec: 86400 }); // 1 day
+    expect(tok.expires_in).toBe(3600); // access stays the configured short TTL
+    expect(tok.refresh_token).toBeTruthy(); // refresh carries the 1-day grant horizon
+  });
+
+  it('a sub-access grant lifetime collapses to a single short-lived token (no refresh)', async () => {
+    const store = createMemoryStore();
+    const tok = await consentAndToken(store, { expiresInSec: 600 }); // 10 min < 1h access
+    expect(tok.expires_in).toBe(600);
+    expect(tok.refresh_token).toBeUndefined();
+  });
+
+  it('omitting the lifetime is unchanged: short access + refresh at the default ceiling', async () => {
+    const store = createMemoryStore();
+    const tok = await consentAndToken(store, {});
+    expect(tok.expires_in).toBe(3600);
+    expect(tok.refresh_token).toBeTruthy();
+  });
+
+  it('a below-minimum lifetime is clamped up (a token must outlive its own issuance)', async () => {
+    const store = createMemoryStore();
+    const tok = await consentAndToken(store, { expiresInSec: 5 }); // < MIN_GRANT_SECS (300)
+    expect(tok.expires_in).toBe(300);
   });
 
   it('rejects a bad PKCE verifier', async () => {

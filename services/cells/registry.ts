@@ -62,6 +62,14 @@ export interface CellRecord {
    * storage. See `runSsrReads` in service.ts.
    */
   ssrReads?: Array<{ as: string; target: string; input?: Record<string, unknown> }>;
+  /**
+   * Declared caller-writes (Phase 4, docs/capability-consent.md): write intents a
+   * cell may ask dispatch to apply AS THE CALLER — the write twin of `ssrReads`.
+   * Each entry bounds an allowed key prefix and optional fact types. dispatch
+   * enforces requested writes ⊆ these AND `scope(caller, write)` at the act
+   * boundary; the cell never receives a token. Persisted like `ssrReads`.
+   */
+  callerWrites?: Array<{ keyPrefix: string; types?: string[]; crossSlice?: boolean }>;
   status: CellStatus;
   /** The last/in-flight async deploy's phase (set by `cells.deploy`; polled via
    *  `getCell`). Absent until the cell has been deployed at least once. */
@@ -103,6 +111,7 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
       : {}),
     ...(Array.isArray(item.types) ? { types: item.types as Array<Record<string, unknown>> } : {}),
     ...(Array.isArray(item.ssrReads) ? { ssrReads: item.ssrReads as CellRecord['ssrReads'] } : {}),
+    ...(Array.isArray(item.callerWrites) ? { callerWrites: item.callerWrites as CellRecord['callerWrites'] } : {}),
     public: !!item.public,
     status: item.status as CellStatus,
     ...(item.deploy && typeof item.deploy === 'object' ? { deploy: item.deploy as DeployState } : {}),

@@ -16,6 +16,8 @@ export {
   requireUser,
   requireScope,
   hasScope,
+  hasGrantScope,
+  grantScopesOf,
   matchesScope,
   intersectScopePatterns,
   intersectScopes,
