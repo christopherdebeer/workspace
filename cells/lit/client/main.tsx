@@ -62,6 +62,43 @@ function viewerFor(meta: Meta | undefined, value: any): string | null {
   return null;
 }
 
+/* ── plugins-as-content: author-defined viewers (dotlit lineage) ───────────
+ * `_renderers/<type>` facts whose JS `source` mounts an ElementView — the SAME
+ * contract canvas loads (one ecology: a viewer authored in a lit `!plugin` block
+ * works on the board too). The source is executed via a data-URI module import
+ * — author code runs in the reader's page, so rendered output carries an
+ * attribution chip (the renderer fact's writer); this is the consent/disclosure
+ * surface for the plugins-as-content trust posture. */
+const litRenderers: Record<string, { view: any; writer?: string }> = {};
+async function loadRenderers(): Promise<void> {
+  try {
+    const res = await read<{ entries: Array<{ key: string; value: any; _meta?: { writer?: string } }> }>('workspace.query', { prefix: '_renderers/', limit: 100 });
+    for (const e of res.entries ?? []) {
+      const def = e.value as { type?: string; source?: string };
+      if (!def?.type || !def?.source) continue;
+      try {
+        const b64 = btoa(unescape(encodeURIComponent(def.source)));
+        const mod: any = await import(/* @vite-ignore */ `data:text/javascript;base64,${b64}`);
+        let view = mod.view ?? mod.default ?? (mod.mount ? { mount: mod.mount, update: mod.update, unmount: mod.unmount } : null);
+        // dotlit-style `viewer({content, host, React})` is wrapped into an ElementView.
+        if (!view && typeof mod.viewer === 'function') {
+          view = {
+            mount: (elx: any): HTMLElement => {
+              const host = el('div', 'content');
+              const r = mod.viewer({ content: elx.content, host, React });
+              if (typeof r === 'string') host.innerHTML = r;
+              else if (r instanceof Node) host.appendChild(r);
+              return host;
+            },
+            update: () => {},
+          };
+        }
+        if (view?.mount) litRenderers[def.type] = { view, writer: e._meta?.writer };
+      } catch (err) { console.warn('[lit renderers] failed', e.key, err); }
+    }
+  } catch { /* offline or none declared */ }
+}
+
 /* ── fence enhancement (the transclusion ladder, post-hydration) ───────────
  * Runs imperatively over a block body the server rendered as markdown: a
  * ```board / view / cell / json / csv / mermaid``` fence becomes a live embed.
@@ -106,6 +143,42 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
     const lang = fence.lang;
     if (!lang) continue;
     const arg = fence.arg;
+    // 0a. plugin declaration: `js !plugin type=viewer of=foo` — the block's body
+    // IS the viewer source. The owner registers it as a `_renderers/foo` fact
+    // (available everywhere, canvas included); checked before the executable
+    // branch so a plugin def is not run as a plain js cell.
+    if (fence.directives.has('plugin') && fence.attrs.type === 'viewer' && fence.attrs.of) {
+      const of = fence.attrs.of;
+      const panel = el('div', 'plugin-panel');
+      panel.appendChild(el('div', 'plugin-head', `⚙ viewer plugin · ${of}`));
+      const src = el('pre', 'plugin-src'); src.textContent = body; panel.appendChild(src);
+      if (isAuthed()) {
+        const reg = el('button', 'btn', litRenderers[of] ? `update viewer “${of}”` : `register viewer “${of}”`) as HTMLButtonElement;
+        reg.onclick = async () => {
+          reg.textContent = '…';
+          try {
+            await act('workspace.remember', { key: `_renderers/${of}`, value: { type: of, source: body, kind: 'viewer' }, via: 'lit-plugin', type: 'renderer', tags: ['renderer'] });
+            await loadRenderers();
+            reg.textContent = `✓ registered ${of}`;
+          } catch (err) { reg.textContent = `failed: ${(err as Error).message}`; }
+        };
+        panel.appendChild(reg);
+      }
+      pre.replaceWith(panel);
+      continue;
+    }
+    // 0b. author-defined viewer (a registered `_renderers/<type>`), incl. via
+    // `viewer=`. Author JS executes here; output carries an attribution chip.
+    const customType = fence.attrs.viewer || lang;
+    if (litRenderers[customType]) {
+      const box = el('div', 'embed-custom'); pre.replaceWith(box);
+      try {
+        const { view, writer } = litRenderers[customType];
+        box.appendChild(view.mount({ id: `litvw-${Date.now().toString(36)}`, content: body }));
+        box.appendChild(el('div', 'vw-attrib', `⚙ ${customType}${writer && writer !== cellOwner() ? ` · by ${writer}` : ''}`));
+      } catch (err) { box.textContent = `viewer ${customType}: ${(err as Error).message}`; }
+      continue;
+    }
     // 1. pure viewers (json/csv/mermaid/style) + any explicit `viewer=` — safe for anyone.
     const pureLang = fence.attrs.viewer || lang;
     if (['json', 'csv', 'mermaid', 'style'].includes(pureLang)) {
@@ -538,7 +611,7 @@ function Workspace({ initialVm }: { initialVm: ViewModel | null }): React.JSX.El
     if (phase !== 'authing') return;
     let live = true;
     void (async () => {
-      try { await ensureAuth(); typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>; }
+      try { await ensureAuth(); typeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { viewer?: string }>; await loadRenderers().catch(() => {}); }
       catch (err) { const b = document.getElementById('err-banner'); if (b) { b.style.display = 'block'; b.textContent = `sign-in failed: ${(err as Error).message}`; } }
       if (live) setPhase('ready');
     })();
