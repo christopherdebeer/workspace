@@ -374,9 +374,11 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
 
 /* ── doc editor ────────────────────────────────────────────────────────── */
 
-function DocEditor({ docId, editable }: { docId: string; editable: boolean }): React.JSX.Element {
-  const [meta, setMeta] = useState<DocValue | null>(null);
-  const [cells, setCells] = useState<LoadedCell[]>([]);
+function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean; seed?: DocSeed }): React.JSX.Element {
+  // Seed from the SSR ViewModel so the first interactive render equals the
+  // server paint — load() then refreshes in place (no "loading…" flash post-SSR).
+  const [meta, setMeta] = useState<DocValue | null>(seed ? { title: seed.title, summary: seed.summary } : null);
+  const [cells, setCells] = useState<LoadedCell[]>((seed?.blocks ?? []).map((b, i) => ({ key: b.key, content: b.md, fold: !!b.fold, seq: i + 1, score: 0 })));
   const [missing, setMissing] = useState(false);
   const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
 
@@ -574,17 +576,9 @@ function AnonView({ vm }: { vm: ViewModel }): React.JSX.Element {
 
 /** Seeds reconstructed from the SSR ViewModel so an interactive view's first
  *  render equals the server paint (killing the post-hydration "loading…" flash). */
-type DocSeed = { doc: DocValue; facts: Record<string, Entry | null> };
+type DocSeed = Extract<ViewModel, { kind: 'doc' }>;
 type ListSeed = Array<{ id: string; v: DocValue; updated: string }>;
 
-function docSeed(vm: Extract<ViewModel, { kind: 'doc' }>): DocSeed {
-  const facts: Record<string, Entry | null> = {};
-  for (const b of vm.blocks) facts[b.key] = { key: b.key, value: { content: b.md } };
-  return {
-    doc: { title: vm.title, summary: vm.summary, blocks: vm.blocks.map((b) => ({ key: b.key, fold: b.fold })) },
-    facts,
-  };
-}
 function listSeed(vm: Extract<ViewModel, { kind: 'list' }>): ListSeed {
   // Only `.length`, title, summary and updated are read for the cards; the real
   // BlockRef contents arrive with the background refresh.
@@ -599,7 +593,8 @@ function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewMode
   const docId = new URLSearchParams(location.search).get('doc');
   if (docId && /^log:/.test(docId)) return <LogView docId={docId} />;
   if (docId) {
-    return <DocEditor docId={docId} editable={editable} />;
+    const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? initialVm : undefined;
+    return <DocEditor docId={docId} editable={editable} seed={seed} />;
   }
   const seed = initialVm && initialVm.kind === 'list' ? listSeed(initialVm) : undefined;
   return <ListEditor editable={editable} seed={seed} />;
