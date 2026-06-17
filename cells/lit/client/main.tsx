@@ -83,18 +83,21 @@ async function saveDocMeta(docId: string, meta: DocValue): Promise<void> {
  *  heading or a code fence): the first part keeps the fact's key (links/seq),
  *  the rest become new facts placed with fractional seq between this cell and
  *  the next — identity is inherent, never a whole-document reparse. */
-async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | null, source: string): Promise<void> {
+async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | null, source: string): Promise<LoadedCell[]> {
   const parts = splitCells(source);
-  if (parts.length <= 1) { await saveCell(docId, cell.key, (parts[0] ?? source).trim()); return; }
+  if (parts.length <= 1) { const content = (parts[0] ?? source).trim(); await saveCell(docId, cell.key, content); return [{ ...cell, content }]; }
   await saveCell(docId, cell.key, parts[0]);
+  const out: LoadedCell[] = [{ ...cell, content: parts[0] }];
   let lo = cell.seq;
   for (const part of parts.slice(1)) {
     const seq = seqBetween(lo, nextSeq);
     const k = mintCell();
     await saveCell(docId, k, part);
     await writeOrder(docId, k, seq, false);
+    out.push({ key: k, content: part, fold: false, seq, score: 0 });
     lo = seq;
   }
+  return out;
 }
 /** The renderer ladder: a fact whose type declares a viewer renders through
  *  @c15r/viewers instead of as markdown (el:demo-json reads as a TREE here). */
@@ -405,7 +408,7 @@ function DocEditor({ docId, editable }: { docId: string; editable: boolean }): R
       <main>
         {cells.length === 0 ? (
           editable
-            ? <button className="btn add-block" onClick={async () => { const k = mintCell(); await saveCell(docId, k, `# ${meta.title || docId}\n\nStart writing…`); await writeOrder(docId, k, 1, false); await load(); }}>＋ first cell</button>
+            ? <button className="btn add-block" onClick={async () => { const k = mintCell(); const content = `# ${meta.title || docId}\n\nStart writing…`; await saveCell(docId, k, content); await writeOrder(docId, k, 1, false); setCells([{ key: k, content, fold: false, seq: 1, score: 0 }]); }}>＋ first cell</button>
             : <p className="boot">empty document</p>
         ) : cells.map((c, i) => (
           <CellView
@@ -414,15 +417,19 @@ function DocEditor({ docId, editable }: { docId: string; editable: boolean }): R
             content={c.content}
             fold={c.fold}
             editable={editable && projection === 'narrative'}
-            onEdit={async (src) => { await saveCellSplit(docId, c, nextSeq(i), src); await load(); }}
+            // Optimistic: apply the known result locally (substrate reads are
+            // eventually consistent, so re-querying here would miss the write).
+            onEdit={async (src) => { const res = await saveCellSplit(docId, c, nextSeq(i), src); setCells((cs) => [...cs.filter((x) => x.key !== c.key), ...res].sort((a, b) => a.seq - b.seq)); }}
             onFold={async () => { await writeOrder(docId, c.key, c.seq, !c.fold); setCells((cs) => cs.map((x) => (x.key === c.key ? { ...x, fold: !x.fold } : x))); }}
             onMove={async (dir) => {
               const j = i + dir; if (j < 0 || j >= cells.length) return;
               const lower = dir < 0 ? (i - 2 >= 0 ? cells[i - 2].seq : null) : cells[i + 1].seq;
               const upper = dir < 0 ? cells[i - 1].seq : (i + 2 < cells.length ? cells[i + 2].seq : null);
-              await writeOrder(docId, c.key, seqBetween(lower, upper), c.fold); await load();
+              const seq = seqBetween(lower, upper);
+              await writeOrder(docId, c.key, seq, c.fold);
+              setCells((cs) => cs.map((x) => (x.key === c.key ? { ...x, seq } : x)).sort((a, b) => a.seq - b.seq));
             }}
-            onAddAfter={async () => { const k = mintCell(); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seqBetween(c.seq, nextSeq(i)), false); await load(); }}
+            onAddAfter={async () => { const k = mintCell(); const seq = seqBetween(c.seq, nextSeq(i)); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seq, false); setCells((cs) => [...cs, { key: k, content: '_new cell_', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq)); }}
           />
         ))}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}

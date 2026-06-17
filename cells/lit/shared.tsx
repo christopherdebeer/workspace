@@ -65,6 +65,11 @@ marked.use({
       }
       const info = (infostring || '').trim();
       const lang = info.split(/\s+/)[0] || '';
+      // A markdown fence names the markdown renderer: render its body as markdown
+      // (nested), so ```md / ```markdown is respected on both SSR and client.
+      if (lang === 'md' || lang === 'markdown') {
+        return `<div class="md-fence">${marked.parse(code as string, { async: false }) as string}</div>\n`;
+      }
       const text = escaped ? (code as string) : escHtml(code as string);
       const cls = lang ? ` class="language-${escAttr(lang)}"` : '';
       const meta = info ? ` data-fence="${escAttr(info)}"` : '';
