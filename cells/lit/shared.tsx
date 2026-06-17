@@ -37,8 +37,32 @@ export type ViewModel =
  * `language-<lang>` class so the client can later swap a fence for a live embed
  * (board/view/cell/json/csv/mermaid). */
 marked.setOptions({ gfm: true, breaks: false });
+// Fence meta-grammar (dotlit lineage): marked drops everything past the first
+// word of a fence info-string, but the declaration lives there (viewer=, repl=,
+// !directive, #tag, < in, > out). Preserve the FULL info-string on the <pre> as
+// `data-fence` so the client can parse it. Deterministic and identical on both
+// sides — the SSR/hydration parity contract is preserved.
+const escHtml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+marked.use({
+  renderer: {
+    // marked@12 passes positional args; guard for the token-object form too.
+    code(code: unknown, infostring?: string, escaped?: boolean): string {
+      if (code && typeof code === 'object') {
+        const tok = code as { lang?: string; escaped?: boolean; text?: string };
+        infostring = tok.lang; escaped = tok.escaped; code = tok.text;
+      }
+      const info = (infostring || '').trim();
+      const lang = info.split(/\s+/)[0] || '';
+      const text = escaped ? (code as string) : escHtml(code as string);
+      const cls = lang ? ` class="language-${escAttr(lang)}"` : '';
+      const meta = info ? ` data-fence="${escAttr(info)}"` : '';
+      return `<pre${meta}><code${cls}>${text}\n</code></pre>\n`;
+    },
+  },
+});
 export function renderMarkdown(md: string): string {
-  return marked.parse(md.replace(/\r\n/g, '\n'), { async: false });
+  return marked.parse(md.replace(/\r\n/g, '\n'), { async: false }) as string;
 }
 
 /* ── presentational components (read-only first paint) ─────────────────── */

@@ -72,36 +72,67 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   if (text !== undefined) n.textContent = text;
   return n;
 }
+interface Fence { lang: string; arg: string; file?: string; directives: Set<string>; attrs: Record<string, string>; tags: string[]; in?: string; out?: string }
+/** Parse a dotlit-style fence info-string: `lang [file|uri] !dir attr=val #tag < in > out`.
+ *  `arg` resolves the bare file/uri token, else the fence body — so both
+ *  `view open-claims` (id in the info-string) and the legacy `view\nopen-claims`
+ *  (id in the body) work. The metadata (viewer=, repl=, !dir, #tag, in/out) is
+ *  what turns a fence into a declaration — the seam to plugins/viewers/actions. */
+function parseFence(info: string, body: string): Fence {
+  const toks = info.trim().split(/\s+/).filter(Boolean);
+  const lang = toks.shift() ?? '';
+  const directives = new Set<string>();
+  const attrs: Record<string, string> = {};
+  const tags: string[] = [];
+  let file: string | undefined, inp: string | undefined, out: string | undefined;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === '<') inp = toks[++i];
+    else if (t === '>') out = toks[++i];
+    else if (t.startsWith('!')) directives.add(t.slice(1));
+    else if (t.startsWith('#')) tags.push(t.slice(1));
+    else if (t.includes('=')) attrs[t.slice(0, t.indexOf('='))] = t.slice(t.indexOf('=') + 1);
+    else if (file === undefined) file = t;
+  }
+  return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
+}
+
 async function enhanceFences(root: HTMLElement): Promise<void> {
-  for (const code of Array.from(root.querySelectorAll('pre > code'))) {
-    const lang = (code.className.match(/language-(\w+)/) || [])[1];
-    const arg = (code.textContent || '').trim();
-    if (!lang || !arg) continue;
-    const pre = code.parentElement as HTMLElement;
-    if (['json', 'csv', 'mermaid', 'style'].includes(lang)) {
+  // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
+  // — not just the first-word lang — drives routing.
+  for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
+    const body = (pre.querySelector('code')?.textContent || '').trim();
+    const fence = parseFence(pre.dataset.fence || '', body);
+    const lang = fence.lang;
+    if (!lang) continue;
+    const arg = fence.arg;
+    // 1. pure viewers (json/csv/mermaid/style) + any explicit `viewer=` — safe for anyone.
+    const pureLang = fence.attrs.viewer || lang;
+    if (['json', 'csv', 'mermaid', 'style'].includes(pureLang)) {
       const box = el('div', 'embed-view'); box.textContent = '…'; pre.replaceWith(box);
       import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
-        .then((v) => v.renderFence(box, lang, arg))
-        .catch((err) => { box.textContent = `${lang}: ${(err as Error).message}`; });
+        .then((v) => v.renderFence(box, pureLang, body))
+        .catch((err) => { box.textContent = `${pureLang}: ${(err as Error).message}`; });
       continue;
     }
-    // Executable code cells — dotlit's cornerstone, realised on the substrate.
-    // ```run  → server execution via @c15r/run (the code organ; outputs→facts)
-    // ```js / ```repl → client execution, server-toggle available.
-    // Reuses the @c15r/viewers `repl` view (the same one canvas mounts) so
-    // execution + output→fact are one validated implementation, not a copy.
-    // An anonymous reader just sees the code (no session to execute as).
-    if (['run', 'js', 'repl'].includes(lang)) {
+    // 2. executable cells — dotlit's cornerstone on the substrate.
+    //   run            → server execution via @c15r/run (outputs→facts)
+    //   js | repl      → client execution, server-toggle available
+    //   repl=server|run, !server → force the server organ
+    // Reuses the @c15r/viewers `repl` view (the one canvas mounts) — one
+    // validated implementation, not a copy. Anonymous readers just see the code.
+    if (['run', 'js', 'repl'].includes(lang) || fence.attrs.repl) {
       if (!isAuthed()) continue;
-      const factKey = (code.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+      const factKey = (pre.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+      const server = lang === 'run' || fence.directives.has('server') || ['server', 'run'].includes(fence.attrs.repl || '');
       const box = el('div', 'embed-repl'); box.textContent = '…'; pre.replaceWith(box);
       import(/* @vite-ignore */ 'https://parc.land/@c15r/viewers/app.js')
         .then((v: any) => {
           const node = v.repl.mount({
             id: `litrepl-${factKey ?? Date.now().toString(36)}`,
-            content: arg,
+            content: body,
             lang: 'js',
-            server: lang === 'run',
+            server,
             _factKey: factKey,
           });
           box.replaceWith(node);
