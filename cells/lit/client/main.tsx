@@ -209,7 +209,7 @@ function parseFence(info: string, body: string): Fence {
   return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
 }
 
-async function enhanceFences(root: HTMLElement): Promise<void> {
+async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void> }): Promise<void> {
   // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
   // — not just the first-word lang — drives routing.
   for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
@@ -297,6 +297,7 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
       panel.appendChild(el('div', 'agent-head', '🤖 agent'));
       const promptEl = el('pre', 'agent-prompt'); promptEl.textContent = body; panel.appendChild(promptEl);
       pre.replaceWith(panel);
+      const hostKey = (panel.closest('[data-key]') as HTMLElement | null)?.dataset.key;
       if (!isAuthed()) { panel.appendChild(el('div', 'vw-attrib', 'sign in to run')); continue; }
       const canWrite = fence.directives.has('write');
       const out = el('div', 'agent-out');
@@ -310,8 +311,16 @@ async function enhanceFences(root: HTMLElement): Promise<void> {
             await new Promise((r) => setTimeout(r, 2500));
             const job = await read<{ status: string; text?: string; error?: string; factKey?: string; turns?: number; toolCalls?: number }>('@c15r/models.fetch', { jobId: sub.jobId });
             if (job.status === 'done') {
-              out.innerHTML = renderMarkdown(job.text || '*(no output)*'); void enhanceFences(out);
               const fk = job.factKey ?? sub.factKey;
+              // Persist the output as a real cell in the doc (provenance-linked to
+              // the agent-run fact) rather than an ephemeral inline render. Falls
+              // back to inline when there's no doc context (log views, anon).
+              if (ctx?.onAgentOutput && hostKey) {
+                out.textContent = '✓ output added as a cell below';
+                await ctx.onAgentOutput(hostKey, job.text || '', fk);
+              } else {
+                out.innerHTML = renderMarkdown(job.text || '*(no output)*'); void enhanceFences(out);
+              }
               panel.appendChild(el('div', 'vw-attrib', `⚙ @c15r/models · agent · ${job.turns ?? '?'} turns · ${job.toolCalls ?? 0} tool calls${fk ? ` · ${fk}` : ''}`));
               break;
             }
@@ -384,17 +393,20 @@ interface CellProps {
   onFold: () => void;
   onMove: (dir: -1 | 1) => void;
   onAddAfter: () => void;
+  onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>;
 }
-function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter }: CellProps): React.JSX.Element {
+function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, onAgentOutput }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const md = content;
+  const cbRef = useRef(onAgentOutput); cbRef.current = onAgentOutput;
 
-  // After the body mounts/changes, enhance fences (executable / viewer / plugin).
+  // After the body mounts/changes, enhance fences (executable / viewer / agent /
+  // plugin). The agent fence persists its output as a doc cell via onAgentOutput.
   useEffect(() => {
     const host = bodyRef.current;
     if (!host || fold || editing !== null) return;
-    void enhanceFences(host);
+    void enhanceFences(host, { onAgentOutput: (a, b, c) => cbRef.current?.(a, b, c) });
   }, [md, fold, editing]);
 
   if (editing !== null) {
@@ -457,6 +469,22 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
 
+  // An agent cell's output becomes a real cell placed right after it (fractional
+  // seq), provenance-linked to the agent-run fact. Re-reads order live so
+  // placement is correct regardless of stale render state.
+  const onAgentOutput = useCallback(async (srcKey: string, text: string, factKey?: string) => {
+    const res = await loadDoc(docId, 'narrative');
+    const arr = res?.cells ?? [];
+    const i = arr.findIndex((c) => c.key === srcKey);
+    const lo = i >= 0 ? arr[i].seq : (arr.at(-1)?.seq ?? 0);
+    const hi = i >= 0 && i + 1 < arr.length ? arr[i + 1].seq : null;
+    const k = mintCell();
+    await saveCell(docId, k, text || '_(no output)_');
+    await writeOrder(docId, k, seqBetween(lo, hi), false);
+    if (factKey) await act('workspace.link', { from: factKey, to: k, rel: 'produces' }).catch(() => {});
+    await load();
+  }, [docId, load]);
+
   if (missing) return <ListEditor.MissingDoc docId={docId} />;
   if (!meta) return <p className="boot">loading {docId}…</p>;
 
@@ -500,6 +528,7 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
               setCells((cs) => cs.map((x) => (x.key === c.key ? { ...x, seq } : x)).sort((a, b) => a.seq - b.seq));
             }}
             onAddAfter={async () => { const k = mintCell(); const seq = seqBetween(c.seq, nextSeq(i)); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seq, false); setCells((cs) => [...cs, { key: k, content: '_new cell_', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq)); }}
+            onAgentOutput={onAgentOutput}
           />
         ))}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}
