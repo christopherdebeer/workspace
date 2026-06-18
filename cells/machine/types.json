@@ -1,0 +1,40 @@
+{
+  "types": [
+    {
+      "type": "machine",
+      "icon": "🔄",
+      "label": "value.title",
+      "manager": "@c15r/machine",
+      "handlers": {
+        "render": [{ "hint": "fields" }]
+      }
+    },
+    {
+      "type": "machine-node",
+      "icon": "⬡",
+      "label": "value.name",
+      "manager": "@c15r/machine",
+      "handlers": {
+        "render": [{ "hint": "fields" }]
+      }
+    },
+    {
+      "type": "rail",
+      "icon": "🛤️",
+      "label": "value.from",
+      "manager": "@c15r/machine",
+      "handlers": {
+        "render": [{ "hint": "fields" }]
+      }
+    },
+    {
+      "type": "meta-tool",
+      "icon": "🔧",
+      "label": "value.name",
+      "manager": "@c15r/machine",
+      "handlers": {
+        "render": [{ "hint": "fields" }]
+      }
+    }
+  ]
+}
