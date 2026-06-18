@@ -129,6 +129,51 @@ per-user overrides now and become canonical once the cell is deployed):
   (concept_skills_system); `claims/rails-are-declared-actions → grounded-in`
   the rails concept and `claims/world-models-outside-weights`.
 
+## Rendering in canvas & lit (the native-fact surfaces)
+
+Checked both cells' fact-handling. Machine facts are **already renderable** — the
+substrate's surfaces are type-driven with a generic floor — and there is a clean,
+code-free path to first-class *diagram* rendering through the existing `viewers`
+mermaid renderer.
+
+**Canvas (`@c15r/canvas`) — DyGram's literal home.** The renderer ladder
+(`cells/canvas/client/lib/elements/substrateTypes.ts`) is: `_renderers/<type>`
+facts (custom drawing) → `view`/`surface` tiles → the **`fact` floor** (any fact
+becomes a card: icon + title + meta + open-link + an `⊕` that expands its links
+onto the board). Canvas also has an SVG **edges layer** that draws substrate
+edges between placed elements. So once a `machine`/`machine-node` fact is placed
+or expanded, it renders natively as a **connected graph** — nodes as cards,
+arrow-edges (the 7 rels) as drawn edges. A machine *is* a diagram, and canvas is
+"parcland hoisted as a substrate view": the fit is exact.
+- *First-class enhancement (vocabulary-as-data, no canvas code change):* a
+  `_renderers/machine` fact whose source adapts the machine value
+  `{ nodes, arrows }` → mermaid text and delegates to the `viewers` cell's
+  `mermaid` ElementView (`cells/viewers/client/main.ts` exports it for exactly
+  this re-export contract). The machine then draws as a real diagram tile.
+
+**Lit (`@c15r/lit`) — the narrative surface.** Lit renders docs with a dotlit
+fence meta-grammar (`cells/lit/client/main.tsx`): ` ```mermaid|json|csv|style `
+fences render via `viewers.renderFence`; ` ```run|js|repl ` are live; `!plugin
+type=viewer of=…` registers viewers; and `[[wiki-links]]` reconcile into
+substrate edges (rel `related`). So a doc can already embed a machine as a
+` ```mermaid ` fence and reference `[[machine/<name>]]` / node facts as links.
+- *First-class enhancement:* teach the `viewers` cell a `dygram` (or `machine`)
+  fence lang that converts a machine fact (or raw `.dy`) to mermaid, so
+  ` ```machine machine/<name> ` renders the diagram straight from the fact.
+
+**The loop:** DyGram already generates Graphviz/Mermaid
+(`src/language/diagram/graphviz-dot-diagram.ts`); the `viewers` cell renders
+mermaid; so one machine fact draws inline in **both** canvas tiles and lit docs
+through the same renderer. The seven arrow rels can carry edge styling (canvas
+edge labels) so composition/causation/inheritance read distinctly.
+
+> Net: nothing in lit or canvas needs to change to *hold* machine facts — the
+> floor + edges + fence grammar already do. The single substrate-native seed that
+> makes them first-class *diagrams* is a `_renderers/machine` mermaid adapter
+> (and, optionally, a `dygram` lit fence). Both are facts/cell-exports, not
+> platform edits — the same "vocabulary as data" discipline as the rest of this
+> design.
+
 ## Sequencing
 
 1. **v1 — vocabulary + recorder** *(this doc; cell scaffolded; facts seeded).*
