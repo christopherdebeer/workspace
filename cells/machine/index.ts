@@ -27,7 +27,53 @@ const ARROW_RELS = {
   '<-->': 'relates',
 };
 
+/**
+ * The cell-required `_renderers/machine` source (a canvas ElementView): adapts a
+ * machine fact's value (spread onto the element as el.nodes / el.arrows by the
+ * canvas storage seam) into mermaid and renders it via the mermaid CDN — the
+ * same engine the viewers cell uses. Backtick-free so it nests cleanly here.
+ * Seeded by the `bootstrap` tool — a cell seeding its own required facts, which
+ * is categorically distinct from organic knowledge accretion (see docs).
+ */
+const RENDERER_SRC = `
+let M;
+function loadMermaid(){
+  if(!M){ M = import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then(function(m){ m.default.initialize({startOnLoad:false,securityLevel:'strict',theme:'neutral'}); return m.default; }); }
+  return M;
+}
+function sid(s){ return String(s||'n').replace(/[^A-Za-z0-9_]/g,'_'); }
+function toMermaid(el){
+  var nodes = Array.isArray(el.nodes)?el.nodes:[];
+  var arrows = Array.isArray(el.arrows)?el.arrows:[];
+  var lines = ['graph TD'];
+  for(var i=0;i<nodes.length;i++){ var n=nodes[i]||{}; lines.push('  '+sid(n.name)+'["'+String(n.title||n.name||'').replace(/"/g,"'")+'"]'); }
+  for(var j=0;j<arrows.length;j++){ var a=arrows[j]||{}; lines.push('  '+sid(a.from)+' -->|'+String(a.rel||a.arrow||'').replace(/[|"\\n]/g,'')+'| '+sid(a.to)); }
+  return lines.join('\\n');
+}
+var seq=0;
+function render(host,el){
+  try{
+    host.textContent='…';
+    var src=toMermaid(el);
+    loadMermaid().then(function(m){ return m.render('mm'+(++seq), src); }).then(function(r){ host.innerHTML=r.svg; }).catch(function(e){ host.textContent='machine: '+((e&&e.message)||e); });
+  }catch(e){ host.textContent='machine render error'; }
+}
+function size(el,h){ var s=el.scale||1; if(typeof el.width==='number') h.style.width=(el.width*s)+'px'; if(typeof el.height==='number') h.style.height=(el.height*s)+'px'; }
+export const view = {
+  mount: function(el){ var h=document.createElement('div'); h.className='content'; size(el,h); render(h,el); return h; },
+  update: function(el,dom){ if(!dom) return; size(el,dom); render(dom,el); }
+};
+`;
+
 const TOOLS = [
+  {
+    name: 'bootstrap',
+    description:
+      "Seed this cell's required facts (its renderer). Idempotent: re-writes _renderers/machine, a canvas ElementView that draws a machine fact as a mermaid diagram. Cell-required infrastructure, distinct from organic knowledge.",
+    kind: 'act',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    scope: null,
+  },
   {
     name: 'define_machine',
     description:
@@ -98,6 +144,17 @@ export const handler = async (event) => {
 
   if (method === 'GET' && path === '/_tools') {
     return json(200, { tools: TOOLS });
+  }
+
+  if (method === 'POST' && path === '/_tools/bootstrap') {
+    await emit({
+      key: '_renderers/machine',
+      value: { type: 'machine', source: RENDERER_SRC },
+      type: 'renderer',
+      tags: ['_renderers', 'machine-cell', 'cell-required'],
+      via: 'machine.bootstrap',
+    });
+    return json(200, { bootstrapped: true, renderer: '_renderers/machine' });
   }
 
   if (method === 'POST' && path === '/_tools/define_machine') {

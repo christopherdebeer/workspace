@@ -111,6 +111,28 @@ the organ write-path writes facts, not edges, and reads belong to the caller.
 Execution is sequenced below — it is a *projection to declared actions*, not a
 port of DyGram's runtime.
 
+## Two kinds of seeding (a discipline)
+
+Not all facts a cell touches are the same kind of thing, and conflating them
+muddies the substrate:
+
+- **Cell-required facts** — a cell's own infrastructure: its **types**
+  (declared canonically via `types.json` → `describeTypes` → `$types`), its
+  **renderers** (`_renderers/<type>`), and any **views** (`_views/<id>`) it needs
+  to be legible. A cell should *seed these itself* as part of its definition —
+  here, the `bootstrap` tool writes `_renderers/machine`. They are deterministic,
+  idempotent, versioned with the cell, and carry no salience claim about the
+  world. Tagged `cell-required`, never `seed`/`world-model`.
+- **Organic knowledge** — concepts, claims, captures, the graph that accretes
+  through *use*. This is where an agent should bias toward seeding (recording
+  what it learns), and where salience, confidence, and tending do their work.
+
+The split matters: cell-required facts are *part of the program* (they belong in
+the cell's source/bootstrap and redeploy with it); organic knowledge is *content*
+(it belongs to the slice's evolving model and must never be silently overwritten
+by a redeploy). `@c15r/machine` keeps them apart — `types.json` + `bootstrap` own
+the first; `record_idea` and hand/agent capture grow the second.
+
 ## First-class facts seeded this session
 
 Planted live via the gateway (vocabulary-as-data; the `_types/*` entries act as
