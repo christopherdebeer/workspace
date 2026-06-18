@@ -127,3 +127,21 @@ Land Tier A together (one PR — all additive, all touch the same descriptors),
 then B1+B2, then take C1 and C2 as separate designed changes. A is the bulk of
 the felt friction (recall weight, batch peek, namespace orientation) at the
 lowest risk; #6 needs only a doc nudge.
+
+## Appendix — directional layer (world-model substrate)
+
+The tiers above make the surface *usable*; this layer makes it a *world-model
+substrate*, drawn from `2026-06-18-elicit-world-models-and-the-substrate.md`
+(Elicit's lived experience as roadmap pressure). Ranked by keystone-ness ÷ cost:
+
+| Seed | Builds on | Touch-points |
+| --- | --- | --- |
+| **`claim` type** `{statement, confidence, support[]}` + value `schema` | B1 (per-type schema) | `_types/claim` (data), `vocab.ts`, a cell `types.json` once it has a manager |
+| **Certificate edges** — `evidence`/`grounded-in`/`derived-from` + `conclusion` convention | trajectory (process half exists) | link-relation vocabulary + a declared view |
+| **Semantic tending** — `contradiction` relation + a tending category over claims | C-tier `attention` | `state.ts:attention`, `runTend` |
+| **Routines + escalation** — compose actions, `map` over query, precondition-fail → `grantRequests` | C1 (query filters), declared actions | `actions.ts`, grant-request flow |
+| **Causal/probabilistic edges + world-model view** | edges, views | own decision doc first (causal semantics, counterfactual surface) |
+| **Salience v2** — weight type/namespace/source; split attention from standing | `_meta.standing/centrality` (shipped) | `state.ts` salience; own design doc |
+
+`claim` is the keystone (certificate, salience, semantic-tending all lean on it)
+and is the cheapest — seeded as living facts this session.
