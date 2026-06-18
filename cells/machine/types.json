@@ -5,6 +5,12 @@
       "icon": "🔄",
       "label": "value.title",
       "manager": "@c15r/machine",
+      "schema": {
+        "title": "string",
+        "source": "string? — original .dy text",
+        "nodes": "node[]",
+        "arrows": "arrow[] — {from, arrow, to} where arrow → edge rel"
+      },
       "handlers": {
         "render": [{ "hint": "fields" }]
       }
@@ -14,6 +20,11 @@
       "icon": "⬡",
       "label": "value.name",
       "manager": "@c15r/machine",
+      "schema": {
+        "name": "string",
+        "kind": "string — Task/State/Input/Output/Context/Resource/Process/Concept/Implementation/Result/tool",
+        "attributes": "object?"
+      },
       "handlers": {
         "render": [{ "hint": "fields" }]
       }
@@ -23,6 +34,12 @@
       "icon": "🛤️",
       "label": "value.from",
       "manager": "@c15r/machine",
+      "schema": {
+        "from": "string",
+        "to": "string",
+        "mode": "'auto' (deterministic, no LLM) | 'agent' (reasoning required)",
+        "condition": "string?"
+      },
       "handlers": {
         "render": [{ "hint": "fields" }]
       }
@@ -32,6 +49,11 @@
       "icon": "🔧",
       "label": "value.name",
       "manager": "@c15r/machine",
+      "schema": {
+        "name": "string",
+        "strategy": "'agent_backed' | 'code_generation' | 'composition'",
+        "implementation": "string"
+      },
       "handlers": {
         "render": [{ "hint": "fields" }]
       }

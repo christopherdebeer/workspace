@@ -174,7 +174,7 @@ export const handler = async (event) => {
       key: `machine/${a.name}`,
       value,
       type: 'machine',
-      tags: ['machine', 'dygram', ...(Array.isArray(a.tags) ? a.tags : [])],
+      tags: [...new Set(['machine', 'dygram', ...(Array.isArray(a.tags) ? a.tags : [])])],
       via: 'machine.define_machine',
     });
     return json(200, { defined: true, key: `machine/${a.name}`, nodes: nodes.length, arrows: arrows.length });
@@ -192,7 +192,7 @@ export const handler = async (event) => {
       key,
       value,
       type: a.kind,
-      tags: [a.kind, 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])],
+      tags: [...new Set([a.kind, 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])])],
       via: 'machine.record_idea',
     });
     return json(200, { recorded: true, key });
