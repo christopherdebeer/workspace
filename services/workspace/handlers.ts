@@ -1302,7 +1302,13 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // fields (per the type's schema), or that a typed-but-schemaless type could
       // declare one. Never for system facts (`_…` plumbing) or untyped values.
       if (input.type && !input.key.startsWith('_')) {
-        const hints = schemaHints({ type: input.type, value: input.value, decl: (await typeDeclsFor(ctx))[input.type] });
+        // Resolve the type's declaration exactly as `$types` does: the canonical
+        // cell vocabulary, overridden by the writer's own `_types/<type>` fact
+        // (where seeded/slice-local schemas like `claim` live).
+        const canonical = (await typeDeclsFor(ctx))[input.type];
+        const override = (await state.get(scope, `_types/${input.type}`, ctx.identity))?.value;
+        const decl = { ...(canonical ?? {}), ...(override && typeof override === 'object' ? (override as Record<string, unknown>) : {}) };
+        const hints = schemaHints({ type: input.type, value: input.value, decl: Object.keys(decl).length ? decl : undefined });
         if (hints.length) return { ...entry, hints };
       }
       return entry;
