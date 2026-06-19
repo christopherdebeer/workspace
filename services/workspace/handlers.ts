@@ -40,6 +40,7 @@ import {
   type Identity,
   type SalienceLens,
   type SalienceOptions,
+  schemaHints,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -111,25 +112,34 @@ export const dynamoDeps: DepsBuilder = (ctx) => {
 };
 
 /**
- * The canonical type→manager map (`cells.describeTypes`), so the derived backbone
- * can link a cell-managed type to its cell (docs/type-vocabulary.md). It is global
- * (not per-user) and changes only on cell deploy, so a short process-wide cache
- * keeps it off the hot read path; a fetch failure degrades to `{}` (the backbone
- * still links facts to their types, just not types to cells).
+ * The canonical type vocabulary (`cells.describeTypes`): `{ <type>: decl }` with
+ * `manager`, render hints, and any declared `schema`/`fields`. Global (not
+ * per-user) and changes only on cell deploy, so a short process-wide cache keeps
+ * it off the hot path; a fetch failure degrades to `{}` (the backbone still links
+ * facts to their types, schema hints simply go quiet).
  */
-const TYPE_MANAGERS_TTL_MS = 60_000;
-let typeManagersCache: { at: number; map: Record<string, string> } | null = null;
-async function typeManagersFor(ctx: ServiceContext): Promise<Record<string, string>> {
-  if (typeManagersCache && Date.now() - typeManagersCache.at < TYPE_MANAGERS_TTL_MS) return typeManagersCache.map;
-  const map: Record<string, string> = {};
+const TYPE_DECLS_TTL_MS = 60_000;
+let typeDeclsCache: { at: number; decls: Record<string, Record<string, unknown>> } | null = null;
+async function typeDeclsFor(ctx: ServiceContext): Promise<Record<string, Record<string, unknown>>> {
+  if (typeDeclsCache && Date.now() - typeDeclsCache.at < TYPE_DECLS_TTL_MS) return typeDeclsCache.decls;
+  let decls: Record<string, Record<string, unknown>> = {};
   try {
-    const res = await ctx.serviceClient('cells').command<{ types?: Record<string, { manager?: unknown }> }>('describeTypes', {});
-    for (const [type, decl] of Object.entries(res?.types ?? {})) {
-      if (decl && typeof decl.manager === 'string') map[type] = decl.manager;
-    }
-    typeManagersCache = { at: Date.now(), map };
+    const res = await ctx.serviceClient('cells').command<{ types?: Record<string, Record<string, unknown>> }>('describeTypes', {});
+    decls = res?.types ?? {};
+    typeDeclsCache = { at: Date.now(), decls };
   } catch (err) {
-    ctx.logger.warn('type manager map unavailable — backbone cell links skipped', { error: (err as Error).message });
+    ctx.logger.warn('type vocabulary unavailable — backbone cell links + schema hints skipped', { error: (err as Error).message });
+  }
+  return decls;
+}
+
+/** The canonical type→manager map, derived from the cached vocabulary (for the
+ *  derived backbone's `managedBy` edges). */
+async function typeManagersFor(ctx: ServiceContext): Promise<Record<string, string>> {
+  const decls = await typeDeclsFor(ctx);
+  const map: Record<string, string> = {};
+  for (const [type, decl] of Object.entries(decls)) {
+    if (typeof decl?.manager === 'string') map[type] = decl.manager;
   }
   return map;
 }
@@ -328,7 +338,7 @@ export interface DenyGrantInput {
 // Index signature so it satisfies defineService's `Record<string, RegisteredCommand>`,
 // while keeping precise per-command types for the unit tests.
 export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
-  remember: CommandHandler<RememberInput, Entry>;
+  remember: CommandHandler<RememberInput, Entry & { hints?: string[] }>;
   ingest: CommandHandler<IngestInput, IngestResult>;
   recall: CommandHandler<RecallInput | undefined, ReadResult>;
   peek: CommandHandler<PeekInput, Entry | null>;
@@ -487,7 +497,18 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key', 'value'],
       additionalProperties: false,
     },
-    resultSchema: { ...ENTRY_SCHEMA, description: 'The written fact' },
+    resultSchema: {
+      ...ENTRY_SCHEMA,
+      description: 'The written fact, plus optional advisory `hints` (the write always succeeds)',
+      properties: {
+        ...((ENTRY_SCHEMA as { properties?: Record<string, unknown> }).properties ?? {}),
+        hints: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Advisory notes — missing recommended fields for the type, or that the type could declare a schema. Never blocks the write.',
+        },
+      },
+    },
   },
   {
     name: 'ingest',
@@ -1277,6 +1298,13 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       );
       await ctx.events.emit('workspace.fact.written', { scope, key: input.key, revision: entry._meta.revision });
       ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision, writer: caller });
+      // Advisory only: the write already happened. Nudge missing recommended
+      // fields (per the type's schema), or that a typed-but-schemaless type could
+      // declare one. Never for system facts (`_…` plumbing) or untyped values.
+      if (input.type && !input.key.startsWith('_')) {
+        const hints = schemaHints({ type: input.type, value: input.value, decl: (await typeDeclsFor(ctx))[input.type] });
+        if (hints.length) return { ...entry, hints };
+      }
       return entry;
     },
 

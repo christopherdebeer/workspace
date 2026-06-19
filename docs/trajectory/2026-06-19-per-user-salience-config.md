@@ -189,11 +189,32 @@ home list was a dead end. Fixed at both rungs of the resolution ladder:
 Deployed to the home cell (`cell-sync push home --deploy`, v1781909036084) and
 verified: `$types` now serves the 14 new types globally; anon SSR renders 200.
 
-## Open thread: should types carry a (machine-readable) schema?
+## Type schemas — advisory validation on `remember` (shipped)
 
-Some types already declare a `schema`, but as prose (`"confidence": "number 0..1
-— calibrated belief"`) — legible, not validatable. The natural next rung is a
-lightweight structured field-spec so the generic editor becomes a *form* (not raw
-JSON), `remember` can validate, and agents get a **create** contract (the shape to
-fill), completing render/open/edit → construct. Optional/additive: the generic
-floor stays the fallback for schemaless types. Designed, not yet built.
+Types can declare a schema; `remember` checks it but **never blocks** — the write
+always lands, and advisory `hints` come back. Two declaration shapes
+(`platform/runtime/type-schema.ts`, pure + unit-tested):
+- structured `{ fields: [{ name, type?, required?, description? }] }`;
+- the legacy prose map `{ schema: { name: "type? — prose" } }`, where the `?` (or
+  "optional"/"DEPRECATED") marks a field optional — so the existing `claim`/`doc`/
+  `machine` schemas validate as-is, no re-declaration.
+
+`workspace.remember` now returns `{ …entry, hints? }`:
+- schema present → one hint per missing **recommended** field
+  (`Fact of type "claim" is missing recommended field "statement" — the asserted
+  proposition.`);
+- typed-but-schemaless with a structured value → a single nudge that the type
+  could declare a schema (this is the "allow undefined, but hint the type may
+  benefit from improvement" the design called for);
+- silent for system (`_…`) keys, untyped facts, and trivial values.
+
+The canonical schema comes from the same cached `cells.describeTypes` vocabulary
+the backbone uses (now cached as full decls, not just managers). Validation is
+prescriptive nowhere and advisory everywhere — the substrate suggests structure,
+it never refuses a thought.
+
+### Next
+- Make the home `FactEditor` render a **form** from the schema (fields instead of
+  raw JSON) and surface `remember`'s `hints` inline — the create/edit dividend.
+- Backfill structured `fields` onto the home content types so their facts get
+  validated + form-edited.

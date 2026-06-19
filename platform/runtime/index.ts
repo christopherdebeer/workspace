@@ -48,6 +48,8 @@ export type {
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
 export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError, isTimerLive } from './state';
+export { parseTypeSchema, missingRequired, schemaHints } from './type-schema';
+export type { FieldSpec, FieldType } from './type-schema';
 export type {
   ObservedState,
   StateStore,
