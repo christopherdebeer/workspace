@@ -1758,10 +1758,14 @@ async function runTend(
     unlinkedSample: att.unlinked.slice(0, 5),
     danglingSample: att.dangling.slice(0, 3),
   };
-  await state.put(
+  const entry = await state.put(
     { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },
     writer,
   );
+  // A tending pass is a fact change like any other — announce it so reactions
+  // (e.g. a tending machine's trigger) fire. Without this the audit is invisible
+  // to the reactor.
+  await ctx.events.emit('workspace.fact.written', { scope, key: 'tending/latest', revision: entry._meta.revision });
   await ctx.events.emit('workspace.tended', {
     scope,
     stale: report.stale,
