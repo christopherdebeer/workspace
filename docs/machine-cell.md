@@ -198,16 +198,38 @@ edge labels) so composition/causation/inheritance read distinctly.
 
 ## Sequencing
 
-1. **v1 — vocabulary + recorder** *(this doc; cell scaffolded; facts seeded).*
-   The ideas are first-class and managed; machines can be recorded as facts.
-2. **v2 — machine → declared-action projection.** A deterministic rail becomes
-   an invokable `registerAction`; arrows project to edges automatically.
-3. **v3 — execution as substrate.** The step loop runs over declared actions;
-   agent-decision rails invoke `@c15r/models.agent`; the trajectory is the
-   certificate; chosen branches are `claim` facts.
-4. **v4 — meta-tools as registered substrate tools.** Constructed tools persist
-   as `meta-tool` facts / declared actions — the vocabulary grows during use,
-   audited by provenance.
+1. **v1 — vocabulary + recorder** *(done).* The ideas are first-class and
+   managed; machines can be recorded as facts.
+2. **v2 — machine → declared-action projection** *(done).* `define_machine` now
+   derives **rails** from arrows (`->` auto, `=>` agent) and projects them into
+   **cell-required declared actions** in the owner's slice: a `start`, an auto-rail
+   `<from>-to-<to>` advance per flow (guarded by the run being at `from`), and a
+   `decide-<from>` per agent node. The cell also seeds a `machine-runs` view. This
+   required a platform unblock — the organ write-path now permits a cell to seed
+   its own cell-required `_actions/`/`_views/` (routed through the same validated,
+   contested-detected registries; tagged `cell-required`), the same category as
+   the `_renderers/*` it already seeded.
+3. **v3 — execution as substrate** *(done, as declarative invocation).* Execution
+   **is** invoking the projected actions via `workspace.invoke`: each advances the
+   `machine-run/<run>` fact, whose revision history is the trajectory (effects-as-
+   data; checkpoints = supersede + revisions). Reasoning is spent only at agent
+   rails — the driver calls `@c15r/models.agent` (or reasons), then invokes
+   `decide-<from>`, which records the chosen branch as a `claim` *and* advances.
+   This is the substrate-native realisation of "the step loop runs over declared
+   actions": no bespoke runtime, just the declarative tier the platform already
+   has. *(A future enhancement — the cell autonomously invoking `@c15r/models.agent`
+   server-side at agent rails — needs cross-cell IAM, deferred.)*
+4. **v4 — meta-tools as registered substrate tools** *(done).* `register_meta_tool`
+   persists a constructed tool as a `meta-tool` fact and, when it carries a declared
+   `action`, projects that as cell-required vocabulary — instantly invocable, so the
+   vocabulary grows during use, audited by provenance.
+
+> **Still open: arrows → substrate edges.** v1 stored arrows in the machine value
+> with their resolved `rel`; projecting them to real substrate edges
+> (`workspace.link`) so `neighbors`/`links` walk a machine remains a gap — the
+> organ write-path writes facts, not edges, and edge-projection wasn't part of the
+> cell-required-vocabulary unblock. The caller can `workspace.link` them today; an
+> organ `substrate.link.requested` path is the clean follow-on.
 
 ## Open decisions
 

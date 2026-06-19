@@ -69,7 +69,7 @@ const TOOLS = [
   {
     name: 'bootstrap',
     description:
-      "Seed this cell's required facts (its renderer). Idempotent: re-writes _renderers/machine, a canvas ElementView that draws a machine fact as a mermaid diagram. Cell-required infrastructure, distinct from organic knowledge.",
+      "Seed this cell's required facts. Idempotent: re-writes _renderers/machine (a canvas ElementView drawing a machine as a mermaid diagram) and _views/machine-runs (the runs dashboard). Cell-required infrastructure — versioned with the cell, distinct from organic knowledge.",
     kind: 'act',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     scope: null,
@@ -77,7 +77,7 @@ const TOOLS = [
   {
     name: 'define_machine',
     description:
-      'Record a DyGram machine as a substrate fact at machine/<name>. A machine is a named subgraph: typed nodes (Task/State/Context/…) and typed arrows. Arrows are stored in the value and meant to be projected to substrate edges via workspace.link (see ARROW_RELS). Pass `source` to keep the original .dy text.',
+      'Record a DyGram machine as a fact at machine/<name> (typed nodes + arrows) AND project its rails into invokable, guarded declared actions: a `start`, an auto-rail advance per `->` flow, and a `decide-*` per `=>` agent node. Execution is then invoking those via workspace.invoke; the run fact (machine-run/<run>) advances, its revision history the trajectory. Pass explicit `rails` to override the arrow-derived ones, `project:false` to skip projection, `source` to keep the .dy text.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -95,6 +95,12 @@ const TOOLS = [
           description: 'Arrows: [{ from, arrow, to, label? }] where arrow is one of -> --> => <|-- *--> o--> <-->',
           items: { type: 'object' },
         },
+        rails: {
+          type: 'array',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent", condition?(CEL) }]. Default: derived from arrows (-> auto, => agent).',
+          items: { type: 'object' },
+        },
+        project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
         tags: { type: 'array', items: { type: 'string' } },
       },
       required: ['name'],
@@ -120,6 +126,24 @@ const TOOLS = [
     },
     scope: null,
   },
+  {
+    name: 'register_meta_tool',
+    description:
+      'v4 — persist a tool constructed mid-run as a meta-tool fact (strategy: agent_backed | code_generation | composition), so the vocabulary grows during use, audited by provenance. If it carries a declared `action` ({id, writes[], if?, params?}), that action is also projected as cell-required vocabulary — instantly invocable.',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Tool name (becomes key meta-tool/<name>)' },
+        strategy: { type: 'string', enum: ['agent_backed', 'code_generation', 'composition'] },
+        implementation: { type: 'string', description: 'How the tool is realised (prose, code, or a composition spec)' },
+        action: { type: 'object', description: 'Optional declared action to project: { id, writes[], if?, enabled?, params? }' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'strategy'],
+    },
+    scope: null,
+  },
 ];
 
 async function emit(detail) {
@@ -138,6 +162,99 @@ async function emit(detail) {
   );
 }
 
+/** A safe `_actions/` id segment — declared-action ids must not contain "/". */
+const seg = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '_');
+
+/**
+ * Rails from arrows (when not declared explicitly): a plain flow (`->`) is a
+ * deterministic (auto) transition; a causation arrow (`=>`) is an agent-decision
+ * rail — the doc's "escalate when reasoning needed". Other arrows (`-->`, `*-->`,
+ * …) are structure, not transitions, so they don't become rails.
+ */
+function railsFrom(arrows, explicit) {
+  if (Array.isArray(explicit) && explicit.length) {
+    return explicit.map((r) => ({
+      from: r.from,
+      to: r.to,
+      mode: r.mode === 'agent' ? 'agent' : 'auto',
+      ...(r.condition ? { condition: r.condition } : {}),
+    }));
+  }
+  const rails = [];
+  for (const e of arrows) {
+    if (e.arrow === '->') rails.push({ from: e.from, to: e.to, mode: 'auto' });
+    else if (e.arrow === '=>') rails.push({ from: e.from, to: e.to, mode: 'agent' });
+  }
+  return rails;
+}
+
+/**
+ * Project a machine's rails into cell-required declared actions in the owner's
+ * slice (now permitted on the organ path). Each rail becomes an invokable,
+ * guarded transition over a `machine-run/<run>` fact — execution IS invoking
+ * these via the gateway, and the run fact's revision history is the trajectory
+ * (effects-as-data). Spend reasoning only at agent rails:
+ *   - start              seed a run at the entry node (no incoming rail)
+ *   - <from>-to-<to>      auto rail: advance when the run is at `from`, no LLM
+ *   - decide-<from>       agent rail: record the chosen branch as a `claim`,
+ *                         then advance — the only place a model is invoked
+ */
+function projectionActions(name, nodes, rails) {
+  const m = seg(name);
+  const runKey = 'machine-run/${params.run}';
+  const tags = ['machine', `machine:${name}`];
+  const hasOut = (node) => rails.some((r) => r.from === node);
+  const hasIn = (node) => rails.some((r) => r.to === node);
+  const entry = (nodes.find((n) => !hasIn(n.name)) ?? nodes[0])?.name;
+  const actions = [];
+
+  if (entry) {
+    actions.push({
+      id: `machine.${m}.start`,
+      description: `Start a run of "${name}" at ${entry}.`,
+      params: { run: { type: 'string', required: true, description: 'Run id → machine-run/<run>' } },
+      writes: [{ key: runKey, value: { machine: name, node: entry, status: 'running', startedAt: '${now}' }, type: 'machine-run', tags, ifAbsent: true }],
+    });
+  }
+
+  for (const r of rails.filter((x) => x.mode === 'auto')) {
+    const ifConds = [{ key: runKey, path: 'node', op: 'eq', value: r.from }];
+    if (r.condition) ifConds.push({ cel: r.condition, key: runKey });
+    actions.push({
+      id: `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`,
+      description: `Auto rail ${r.from} → ${r.to}${hasOut(r.to) ? '' : ' (terminal)'}.`,
+      params: { run: { type: 'string', required: true } },
+      if: ifConds,
+      writes: [{ key: runKey, value: { machine: name, node: r.to, status: hasOut(r.to) ? 'running' : 'done', at: '${now}', via: `${r.from}->${r.to}` }, type: 'machine-run', tags }],
+    });
+  }
+
+  for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
+    const branches = rails.filter((x) => x.mode === 'agent' && x.from === from).map((x) => x.to);
+    actions.push({
+      id: `machine.${m}.decide-${seg(from)}`,
+      description: `Agent rail at ${from}: record the chosen branch as a claim and advance. Branches: ${branches.join(', ')}.`,
+      params: {
+        run: { type: 'string', required: true },
+        to: { type: 'string', required: true, enum: branches, description: 'The chosen branch' },
+        statement: { type: 'string', description: 'Why this branch — becomes the claim' },
+        confidence: { type: 'number', description: 'Calibrated belief 0..1' },
+      },
+      if: [{ key: runKey, path: 'node', op: 'eq', value: from }],
+      writes: [
+        { key: 'claims/${params.run}.' + seg(from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
+        { key: runKey, value: { machine: name, node: '${params.to}', status: 'running', at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
+      ],
+    });
+  }
+  return actions;
+}
+
+/** Emit one cell-required declared action through the organ path. */
+async function emitAction(def, name) {
+  await emit({ key: `_actions/${def.id}`, value: def, type: 'action', tags: ['machine', `machine:${name}`], via: 'machine.project' });
+}
+
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
@@ -154,7 +271,14 @@ export const handler = async (event) => {
       tags: ['_renderers', 'machine-cell', 'cell-required'],
       via: 'machine.bootstrap',
     });
-    return json(200, { bootstrapped: true, renderer: '_renderers/machine' });
+    // A cell-required VIEW over runs — the executor's dashboard. Cells seed
+    // their own actions/views now, the same as their renderers.
+    await emit({
+      key: '_views/machine-runs',
+      value: { id: 'machine-runs', description: 'Machine runs — active and completed', query: { type: 'machine-run', rankBy: 'recency', limit: 50 }, render: { type: 'fields' } },
+      via: 'machine.bootstrap',
+    });
+    return json(200, { bootstrapped: true, renderer: '_renderers/machine', view: '_views/machine-runs' });
   }
 
   if (method === 'POST' && path === '/_tools/define_machine') {
@@ -162,11 +286,13 @@ export const handler = async (event) => {
     if (!a.name) return json(400, { error: 'name is required' });
     const nodes = Array.isArray(a.nodes) ? a.nodes : [];
     const arrows = Array.isArray(a.arrows) ? a.arrows : [];
+    const rails = railsFrom(arrows, a.rails);
     const value = {
       title: a.title ?? a.name,
       ...(a.source ? { source: a.source } : {}),
       nodes,
       arrows: arrows.map((e) => ({ ...e, rel: ARROW_RELS[e.arrow] ?? 'flows-to' })),
+      rails,
       nodeCount: nodes.length,
       arrowCount: arrows.length,
     };
@@ -177,7 +303,21 @@ export const handler = async (event) => {
       tags: [...new Set(['machine', 'dygram', ...(Array.isArray(a.tags) ? a.tags : [])])],
       via: 'machine.define_machine',
     });
-    return json(200, { defined: true, key: `machine/${a.name}`, nodes: nodes.length, arrows: arrows.length });
+    // Project the rails into invokable, guarded declared actions (v2 → v3).
+    // The run advances by invoking these; agent rails surface as `decide-*`.
+    let projected = [];
+    if (a.project !== false && rails.length) {
+      projected = projectionActions(a.name, nodes, rails);
+      for (const def of projected) await emitAction(def, a.name);
+    }
+    return json(200, {
+      defined: true,
+      key: `machine/${a.name}`,
+      nodes: nodes.length,
+      arrows: arrows.length,
+      rails: rails.length,
+      actions: projected.map((d) => d.id),
+    });
   }
 
   if (method === 'POST' && path === '/_tools/record_idea') {
@@ -196,6 +336,28 @@ export const handler = async (event) => {
       via: 'machine.record_idea',
     });
     return json(200, { recorded: true, key });
+  }
+
+  if (method === 'POST' && path === '/_tools/register_meta_tool') {
+    // v4 — meta-tools as registered substrate tools: a tool constructed during
+    // a run persists as a `meta-tool` fact, and (when it carries a declared
+    // `action`) is projected as a cell-required declared action, so the
+    // vocabulary grows during use, audited by provenance.
+    const a = event.body ? JSON.parse(event.body) : {};
+    if (!a.name || !a.strategy) return json(400, { error: 'name and strategy are required' });
+    await emit({
+      key: `meta-tool/${seg(a.name)}`,
+      value: { name: a.name, strategy: a.strategy, ...(a.implementation ? { implementation: a.implementation } : {}) },
+      type: 'meta-tool',
+      tags: [...new Set(['meta-tool', 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])])],
+      via: 'machine.register_meta_tool',
+    });
+    let action;
+    if (a.action && a.action.id && Array.isArray(a.action.writes)) {
+      action = a.action.id;
+      await emitAction(a.action, a.name);
+    }
+    return json(200, { registered: true, key: `meta-tool/${seg(a.name)}`, ...(action ? { action } : {}) });
   }
 
   return json(404, { error: `no route for ${method} ${path}` });

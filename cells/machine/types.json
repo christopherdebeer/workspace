@@ -9,7 +9,8 @@
         "title": "string",
         "source": "string? — original .dy text",
         "nodes": "node[]",
-        "arrows": "arrow[] — {from, arrow, to} where arrow → edge rel"
+        "arrows": "arrow[] — {from, arrow, to} where arrow → edge rel",
+        "rails": "rail[] — {from, to, mode, condition?} the executable transitions; projected to _actions/machine.<name>.* declared actions"
       },
       "handlers": {
         "render": [{ "hint": "fields" }]
@@ -24,6 +25,21 @@
         "name": "string",
         "kind": "string — Task/State/Input/Output/Context/Resource/Process/Concept/Implementation/Result/tool",
         "attributes": "object?"
+      },
+      "handlers": {
+        "render": [{ "hint": "fields" }]
+      }
+    },
+    {
+      "type": "machine-run",
+      "icon": "▶️",
+      "label": "value.node",
+      "manager": "@c15r/machine",
+      "schema": {
+        "machine": "string — the machine being run",
+        "node": "string — the run's current node",
+        "status": "'running' | 'done'",
+        "at": "string? — ISO time of the last transition"
       },
       "handlers": {
         "render": [{ "hint": "fields" }]
