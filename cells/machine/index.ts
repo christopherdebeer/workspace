@@ -102,7 +102,7 @@ const TOOLS = [
         },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
         reactive: { type: 'boolean', description: 'Also register subscriptions so auto rails advance themselves on run changes (default false — driven only)' },
-        trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel? } that STARTS a run (run id = the matched key suffix)' },
+        trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel?, runId? } that STARTS a run. runId templates the run id from the event (default "${keySuffix}"); use e.g. "${value.at}" so a recurring source like tending gets a fresh run each time.' },
         tags: { type: 'array', items: { type: 'string' } },
       },
       required: ['name'],
@@ -398,9 +398,13 @@ export const handler = async (event) => {
           subscriptions.push(s.id);
         }
       }
-      // Optional trigger: a fact pattern that STARTS a run (e.g. a new capture).
+      // Optional trigger: a fact pattern that STARTS a run (e.g. a new capture,
+      // or a tending audit). `runId` templates the run id from the event so each
+      // occurrence gets its own run (default `${keySuffix}`); point it at a
+      // unique field (e.g. `${value.at}`) for a recurring source like tending.
       if (a.trigger && typeof a.trigger === 'object') {
-        const trig = { id: `machine.${seg(a.name)}.trigger`, match: a.trigger, invoke: `machine.${seg(a.name)}.start`, params: { run: '${keySuffix}' } };
+        const { runId, ...match } = a.trigger;
+        const trig = { id: `machine.${seg(a.name)}.trigger`, match, invoke: `machine.${seg(a.name)}.start`, params: { run: typeof runId === 'string' ? runId : '${keySuffix}' } };
         await emitSubscription(trig, a.name);
         subscriptions.push(trig.id);
       }
