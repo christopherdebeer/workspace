@@ -324,6 +324,58 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
 }
 
 /**
+ * Reserved key for a scope's salience policy. A fact written here whose value is
+ * a `Partial<SalienceOptions>` (e.g. `{ focusThreshold: 0.62, elideThreshold: 0.62 }`)
+ * re-tunes that owner's *own* `recall`/`query` shaping without a redeploy — the
+ * substrate-native, per-user config seam. The whole `_config/*` namespace is
+ * system plumbing (excluded from tending), so the fact itself stays out of the way.
+ */
+export const SALIENCE_CONFIG_KEY = '_config/salience';
+
+/** Numeric `SalienceOptions` fields a config fact may set, and which are unit [0,1]. */
+const SALIENCE_NUMERIC_KEYS = [
+  'halfLifeMs',
+  'windowMs',
+  'velocitySaturation',
+  'attentionSaturation',
+  'standingSaturation',
+  'centralitySaturation',
+  'recencyWeight',
+  'velocityWeight',
+  'attentionWeight',
+  'standingWeight',
+  'centralityWeight',
+  'focusThreshold',
+  'elideThreshold',
+] as const satisfies ReadonlyArray<keyof SalienceOptions>;
+const SALIENCE_UNIT_KEYS = new Set<keyof SalienceOptions>(['focusThreshold', 'elideThreshold']);
+
+/**
+ * Extract a sanitized `Partial<SalienceOptions>` from a stored config fact's value
+ * — best-effort and defensive: only known numeric fields survive, non-finite or
+ * negative values are dropped, and thresholds are clamped to [0,1]. Accepts the
+ * options object directly or wrapped under a `salience` key (so a config fact can
+ * be `{ focusThreshold }` or `{ salience: { focusThreshold } }`). Returns `null`
+ * when nothing usable is present, so the caller falls back to instance defaults.
+ */
+export function parseSalienceConfig(value: unknown): Partial<SalienceOptions> | null {
+  const wrapped = value as { salience?: unknown } | null | undefined;
+  const src =
+    wrapped && typeof wrapped === 'object' && wrapped.salience && typeof wrapped.salience === 'object'
+      ? wrapped.salience
+      : value;
+  if (!src || typeof src !== 'object') return null;
+  const rec = src as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const k of SALIENCE_NUMERIC_KEYS) {
+    const v = rec[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
+    out[k] = SALIENCE_UNIT_KEYS.has(k) ? Math.min(v, 1) : v;
+  }
+  return Object.keys(out).length ? (out as Partial<SalienceOptions>) : null;
+}
+
+/**
  * Named salience lenses — ergonomic per-read biases over the tuned defaults, for
  * the common "I want a particular view" cases. Each preset's weights sum to 1 so
  * the score stays in [0,1] and the elision tiers keep their meaning. For precise
@@ -522,6 +574,15 @@ export interface ReadOptions {
   lens?: SalienceLens;
   /** Precise per-read salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
+  /**
+   * The scope's stored salience policy (a `_config/salience` fact), layered over
+   * the instance defaults as the *base* — so it sits below the lens and the
+   * per-call `salience` override (defaults ← config ← lens ← override). `read`
+   * and `query` load this themselves from their scope; the scopeless `shape`
+   * (used by `recall` to tier a merged view) takes it explicitly so the viewer's
+   * policy governs the assembled result. Pass `null` to force instance defaults.
+   */
+  salienceConfig?: Partial<SalienceOptions> | null;
 }
 
 export interface QueryOptions {
@@ -624,6 +685,9 @@ export interface ObservedState {
   shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult;
   /** Projection over the slice: filter by type/tag/prefix, rank, limit. */
   query(scope: string, opts?: QueryOptions, identity?: Identity): Promise<QueryResult>;
+  /** The scope's stored salience policy (`_config/salience`), sanitized — or `null`
+   *  when unset/malformed. Recall loads the viewer's once to shape the merged view. */
+  salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null>;
   /** Add a typed, directed edge `from --rel--> to` within the scope. */
   link(scope: string, from: string, rel: string, to: string, strength: number | null, identity?: Identity): Promise<LinkResult>;
   unlink(scope: string, from: string, rel: string, to: string, identity?: Identity): Promise<{ ok: true }>;
@@ -657,6 +721,25 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     const [events, edges] = await Promise.all([store.recentTrajectory(scope, 0), store.listEdges(scope)]);
     return buildSignals(events, edges, nowMs, windowMs);
   }
+
+  /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
+   *  malformed fact yields `null` and the read proceeds on instance defaults — a
+   *  config fact must never be able to break a read). */
+  async function loadSalienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
+    let rec: StateRecord | null;
+    try {
+      rec = await store.get(scope, SALIENCE_CONFIG_KEY);
+    } catch {
+      return null;
+    }
+    if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+    return parseSalienceConfig(rec.value);
+  }
+
+  /** The per-call base: a scope's config layered over the instance defaults, sitting
+   *  below the lens + per-call override (defaults ← config ← lens ← override). */
+  const baseSalience = (cfg?: Partial<SalienceOptions> | null): ResolvedSalience =>
+    cfg ? resolveSalience({ ...s, ...cfg }) : s;
 
   /** Wrap a stored record into a read-facing entry with a computed score. Pass a
    *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan, and
@@ -817,13 +900,17 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
       // Re-tiers an already-scored set, so a lens here only adjusts thresholds
-      // (it can't recompute scores without the scope's signals).
-      return shapeEntries(entries, opts, callSalience(s, opts?.lens, opts?.salience));
+      // (it can't recompute scores without the scope's signals). Being scopeless,
+      // it takes the salience config explicitly (recall passes the viewer's).
+      return shapeEntries(entries, opts, callSalience(baseSalience(opts?.salienceConfig), opts?.lens, opts?.salience));
     },
 
     async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
       const nowMs = Date.now();
-      const sCall = callSalience(s, opts?.lens, opts?.salience);
+      // Honor a handler-supplied config (recall scores granted slices under the
+      // viewer's policy); otherwise load this scope's own `_config/salience`.
+      const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
+      const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
       const records = await store.list(scope);
       const signals = await signalsFor(scope, nowMs, sCall.windowMs);
 
@@ -844,7 +931,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
-      const sCall = callSalience(s, opts?.lens, opts?.salience);
+      const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience);
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
       const signals = await signalsFor(scope, nowMs, sCall.windowMs);
@@ -874,6 +961,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         total: wrapped.length,
         ...(consumed < wrapped.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
       };
+    },
+
+    async salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
+      return loadSalienceConfig(scope);
     },
 
     async link(scope, from, rel, to, strength, identity?: Identity): Promise<LinkResult> {

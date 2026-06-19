@@ -11,6 +11,8 @@ import {
   createObservedState,
   createMemoryStateStore,
   computeScore,
+  parseSalienceConfig,
+  SALIENCE_CONFIG_KEY,
 } from '../platform/runtime/state';
 import type { Identity } from '../platform/runtime';
 
@@ -257,5 +259,88 @@ describe('observed state: salience-shaped reads', () => {
       // a 4-decimal signal, not a 17-digit measurement
       expect(stub.score).toBe(Math.round(stub.score * 1e4) / 1e4);
     }
+  });
+});
+
+describe('salience config: parseSalienceConfig', () => {
+  it('keeps known numeric fields, drops junk, clamps thresholds to [0,1]', () => {
+    expect(
+      parseSalienceConfig({
+        focusThreshold: 0.62,
+        elideThreshold: 0.62,
+        recencyWeight: 0.3,
+        bogus: 'nope',
+        velocityWeight: -1, // negative dropped
+        windowMs: Infinity, // non-finite dropped
+        standingWeight: 5, // weights aren't unit-clamped (caller owns the budget)
+      }),
+    ).toEqual({ focusThreshold: 0.62, elideThreshold: 0.62, recencyWeight: 0.3, standingWeight: 5 });
+    // thresholds above 1 clamp to 1
+    expect(parseSalienceConfig({ focusThreshold: 3 })).toEqual({ focusThreshold: 1 });
+  });
+
+  it('unwraps a { salience: {...} } envelope and rejects empty/non-object', () => {
+    expect(parseSalienceConfig({ salience: { focusThreshold: 0.5 } })).toEqual({ focusThreshold: 0.5 });
+    expect(parseSalienceConfig({})).toBeNull();
+    expect(parseSalienceConfig({ nothing: 1 })).toBeNull();
+    expect(parseSalienceConfig(null)).toBeNull();
+    expect(parseSalienceConfig('x')).toBeNull();
+  });
+});
+
+describe('salience config: per-scope policy fact', () => {
+  // Isolate recency so scores are deterministic: a fresh fact scores ~recencyWeight
+  // (0.35 default) → peripheral under defaults (focus 0.5 / elide 0.1), but a
+  // config fact can push the thresholds around it.
+  const freshScore = async (): Promise<number> => {
+    const probe = createObservedState(createMemoryStateStore());
+    await probe.put({ scope: 'r', key: 'k', value: 1 }, alice);
+    const r = await probe.read('r', { elision: 'none' });
+    return r.entries.k._meta.score;
+  };
+
+  it('a _config/salience fact re-tiers the owner\'s read without a redeploy', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: 'note', value: 'hi' }, alice);
+
+    // Default thresholds: a fresh fact (~0.35) is peripheral → present in full.
+    const before = await state.read('r');
+    expect(before.entries.note?.value).toBe('hi');
+
+    // Writing the policy fact lifts the elide threshold above the fact's score,
+    // so the same read now collapses it to a stub — the data-dump knob, per user.
+    await state.put({ scope: 'r', key: SALIENCE_CONFIG_KEY, value: { focusThreshold: 0.9, elideThreshold: 0.9 } }, alice);
+    const after = await state.read('r');
+    expect(after.entries.note).toBeUndefined();
+    expect(after.elided?.some((s) => s.key === 'note')).toBe(true);
+    expect(after._shaping.focusThreshold).toBe(0.9);
+    expect(after._shaping.elideThreshold).toBe(0.9);
+  });
+
+  it('config is the base; a per-call salience override still wins over it', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: 'note', value: 'hi' }, alice);
+    await state.put({ scope: 'r', key: SALIENCE_CONFIG_KEY, value: { elideThreshold: 0.9 } }, alice);
+
+    // Config would elide it…
+    expect((await state.read('r')).entries.note).toBeUndefined();
+    // …but an explicit per-call override sits above the config and brings it back.
+    const overridden = await state.read('r', { salience: { elideThreshold: 0.01 } });
+    expect(overridden.entries.note?.value).toBe('hi');
+  });
+
+  it('query honors the scope config too, and salienceConfig() reads it back', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const score = await freshScore();
+    await state.put({ scope: 'r', key: 'note', value: 'hi' }, alice);
+    await state.put({ scope: 'r', key: SALIENCE_CONFIG_KEY, value: { focusThreshold: score + 0.1, elideThreshold: score + 0.1 } }, alice);
+
+    expect(await state.salienceConfig('r')).toEqual({ focusThreshold: score + 0.1, elideThreshold: score + 0.1 });
+    // query ranks but does not elide; the config still resolves cleanly (no throw)
+    const q = await state.query('r', { limit: 10 });
+    expect(q.entries.find((e) => e.key === 'note')).toBeDefined();
   });
 });

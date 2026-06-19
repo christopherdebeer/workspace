@@ -517,7 +517,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'recall',
     description:
-      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`.',
+      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`. Tune your own default shaping by writing a `_config/salience` fact (e.g. `{ focusThreshold: 0.62, elideThreshold: 0.62 }` for a focused <30-item view); precedence is defaults ← that config ← `lens` ← per-call `salience`.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -1313,7 +1313,12 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // (elision:'none' keeps values present so granted slices merge cleanly).
       const lens = input?.lens;
       const salience = input?.salience;
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience }, ctx.identity);
+      // The viewer's stored salience policy (`_config/salience`) governs the whole
+      // assembled view — scoring (read) and tiering (shape) alike — so granted
+      // slices are scored under the viewer's policy, not each owner's. Precedence:
+      // instance defaults ← viewer config ← lens ← per-call `salience` override.
+      const salienceConfig = await state.salienceConfig(viewer);
+      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, salienceConfig }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -1322,7 +1327,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience }, ctx.identity);
+          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, salienceConfig }, ctx.identity);
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -1334,7 +1339,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       }
 
       // Shape the whole assembled view once (lens echoes into _shaping).
-      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience });
+      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
     },
 
     async peek(input, ctx) {
