@@ -118,7 +118,7 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
     });
@@ -137,6 +137,12 @@ export class PlatformStack extends cdk.Stack {
       ['cell.create.requested', 'cell.deployed', 'cell.files.changed', 'cell.delete.requested'],
       'cells',
     );
+    // The reaction reactor: deliver every fact change back to the workspace so
+    // the slice's `_subscriptions/*` can invoke matching declared actions. The
+    // source is pinned to the workspace itself (it emits workspace.fact.written),
+    // so only first-party fact events drive reactions. This is the generic
+    // primitive reactive machines ride on.
+    eventBus.routeTo('FactReactionRoute', workspace.fn, ['workspace.fact.written'], 'workspace');
     // Autonomous tending (the legacy workspace's signature loop): a daily
     // schedule delivers workspace.tend.requested; the handler distills
     // attention() into a tending/latest audit fact per scope.

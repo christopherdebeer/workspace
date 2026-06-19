@@ -44,6 +44,7 @@ import {
 import {
   createDeclarativeActions,
   ACTIONS_PREFIX,
+  ActionInvokeError,
   type ActionDefinition,
   type RegisterResult,
   type InvokeResult,
@@ -54,6 +55,15 @@ import {
   type ViewDefinition,
   type ViewResult,
 } from './views';
+import {
+  createSubscriptions,
+  SUBSCRIPTIONS_PREFIX,
+  matches as subscriptionMatches,
+  resolveParams,
+  parseCellTarget,
+  type SubscriptionDefinition,
+} from './subscriptions';
+import { createServiceClient } from '../../platform/runtime/service-client';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
 import {
@@ -216,6 +226,12 @@ export interface ViewInput {
   id: string;
 }
 export type DeleteViewInput = ViewInput;
+export interface RegisterSubscriptionInput {
+  subscription: SubscriptionDefinition;
+}
+export interface DeleteSubscriptionInput {
+  id: string;
+}
 export interface ShareInput {
   /** The user to share with. */
   to: string;
@@ -308,6 +324,9 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   views: CommandHandler<undefined, { views: ViewDefinition[] }>;
   deleteView: CommandHandler<DeleteViewInput, { ok: true }>;
   view: CommandHandler<ViewInput, ViewResult>;
+  registerSubscription: CommandHandler<RegisterSubscriptionInput, SubscriptionDefinition>;
+  subscriptions: CommandHandler<undefined, { subscriptions: SubscriptionDefinition[] }>;
+  deleteSubscription: CommandHandler<DeleteSubscriptionInput, { ok: true }>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
@@ -880,6 +899,56 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
   },
   {
+    name: 'registerSubscription',
+    description:
+      'Register a reaction: `{ id, match:{type?,keyPrefix?,cel?}, invoke|deliver, params?, maxDepth? }` stored as a fact at `_subscriptions/<id>`. When a fact write matches `match`, the reactor fires — either `invoke` (a declared action id, in-process) or `deliver` (a cell tool "@owner/name.tool", called AS you, for reactions that need a cell, e.g. a model deciding an agent rail) — with `params` templated from the event (${key} ${keySuffix} ${scope} ${value.<path>}). The generic primitive behind reactive machines — a tier-2 cell makes a process reactive by registering subscriptions, no platform change needed.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        subscription: {
+          type: 'object',
+          description: 'The subscription definition',
+          properties: {
+            id: { type: 'string' },
+            match: { type: 'object', description: 'Predicate over the changed fact: { type?, keyPrefix?, cel? }' },
+            invoke: { type: 'string', description: 'Declared action id to invoke when matched (exactly one of invoke/deliver)' },
+            deliver: { type: 'string', description: 'Cell tool address "@owner/name.tool" to call as the slice owner (exactly one of invoke/deliver)' },
+            params: { type: 'object', description: 'Arg templates over the event: { name: "${keySuffix}" | "${value.x}" | … }' },
+            maxDepth: { type: 'number', description: 'Loop bound: skip when the triggering fact revision exceeds this (default 50)' },
+            label: { type: 'string' },
+          },
+          required: ['id', 'match'],
+        },
+      },
+      required: ['subscription'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', description: 'The registered subscription definition, echoed' },
+  },
+  {
+    name: 'subscriptions',
+    description: 'List the reaction subscriptions in your slice.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { subscriptions: { type: 'array', items: { type: 'object', description: 'Subscription definitions' } } } },
+  },
+  {
+    name: 'deleteSubscription',
+    description: 'Retire a reaction subscription (supersedes its `_subscriptions/<id>` fact).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+  {
     name: 'supersede',
     description:
       'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot. Returns the retired fact, or null when the key never existed.',
@@ -1384,6 +1453,11 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { state } = build(ctx);
       const result = await createDeclarativeActions(state).invoke(scope, input.action, input.params ?? {}, ctx.identity);
       await ctx.events.emit('workspace.action.invoked', { scope, action: input.action });
+      // Each write is a fact change — surface it so subscriptions react to a
+      // manual step exactly as they do to a reactive one.
+      for (const w of result.writes) {
+        await ctx.events.emit('workspace.fact.written', { scope, key: w.key, revision: w._meta.revision });
+      }
       ctx.logger.info('workspace action invoked', { scope, action: input.action, writes: result.writes.length });
       return result;
     },
@@ -1421,6 +1495,28 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       if (!input?.id) throw new Error('id is required');
       const { state } = build(ctx);
       return createRegisteredViews(state).evaluate(scope, input.id, ctx.identity);
+    },
+
+    async registerSubscription(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.subscription) throw new Error('subscription is required');
+      const { state } = build(ctx);
+      const sub = await createSubscriptions(state).register(scope, input.subscription, ctx.identity);
+      ctx.logger.info('workspace subscription registered', { scope, subscription: sub.id, invoke: sub.invoke });
+      return sub;
+    },
+
+    async subscriptions(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return { subscriptions: await createSubscriptions(state).list(scope) };
+    },
+
+    async deleteSubscription(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.id) throw new Error('id is required');
+      const { state } = build(ctx);
+      return createSubscriptions(state).remove(scope, input.id, ctx.identity);
     },
 
     async supersede(input, ctx) {
@@ -1662,10 +1758,14 @@ async function runTend(
     unlinkedSample: att.unlinked.slice(0, 5),
     danglingSample: att.dangling.slice(0, 3),
   };
-  await state.put(
+  const entry = await state.put(
     { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },
     writer,
   );
+  // A tending pass is a fact change like any other — announce it so reactions
+  // (e.g. a tending machine's trigger) fire. Without this the audit is invisible
+  // to the reactor.
+  await ctx.events.emit('workspace.fact.written', { scope, key: 'tending/latest', revision: entry._meta.revision });
   await ctx.events.emit('workspace.tended', {
     scope,
     stale: report.stale,
@@ -1715,8 +1815,10 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       ctx.logger.warn('substrate write without a key refused', { source: meta.source });
       return;
     }
-    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
-      ctx.logger.warn('substrate write to reserved vocabulary refused', { source: meta.source, key });
+    if (key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
+      // Sharing/visibility authority (who-can-see) is the caller's, never an
+      // organ's — these stay refused on the organ path.
+      ctx.logger.warn('substrate write to sharing namespace refused', { source: meta.source, key });
       return;
     }
     const resolved = (await ctx.serviceClient('cells').command('resolveCell', { cellId })) as {
@@ -1727,30 +1829,150 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       ctx.logger.warn('substrate write from unknown cell refused', { cellId });
       return;
     }
+    const scope = resolved.owner;
     const writerAddress = `@${resolved.owner}/${resolved.name ?? cellId}`;
+    const identity: Identity = { user: writerAddress, scopes: [] };
     const { state } = build(ctx);
-    const entry = await state.put(
-      {
-        scope: resolved.owner,
-        key,
-        value: detail.value,
-        via: typeof detail.via === 'string' ? detail.via : writerAddress,
-        type: typeof detail.type === 'string' ? detail.type : undefined,
-        tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
-      },
-      { user: writerAddress, scopes: [] },
-    );
-    await ctx.events.emit('workspace.fact.written', {
-      scope: resolved.owner,
-      key,
-      revision: entry._meta.revision,
-    });
-    ctx.logger.info('substrate write applied for organ', {
-      cell: writerAddress,
-      scope: resolved.owner,
-      key,
-      revision: entry._meta.revision,
-    });
+
+    // A cell may seed its own **cell-required** vocabulary — declared actions
+    // and views, the same category as the `_renderers/*` it already seeds and
+    // exactly the "two kinds of seeding" discipline (cell-required vs. organic).
+    // These route through the same validated registries as caller registration
+    // (still type-checked and contested-detected), attributed to the cell and
+    // tagged `cell-required` so they read as program — versioned with the cell,
+    // refreshed on redeploy — not organic, caller-authored vocabulary.
+    try {
+      if (key.startsWith(ACTIONS_PREFIX)) {
+        const def = { ...(detail.value as ActionDefinition), id: key.slice(ACTIONS_PREFIX.length) };
+        const tags = [...new Set(['cell-required', ...(Array.isArray(detail.tags) ? (detail.tags as string[]) : [])])];
+        const result = await createDeclarativeActions(state).register(scope, def, identity, { via: writerAddress, tags });
+        if (result.contested.length) {
+          ctx.logger.warn('organ action contests existing targets', { cell: writerAddress, action: def.id, contested: result.contested });
+        }
+      } else if (key.startsWith(VIEWS_PREFIX)) {
+        const def = { ...(detail.value as ViewDefinition), id: key.slice(VIEWS_PREFIX.length) };
+        const tags = [...new Set(['cell-required', ...(Array.isArray(detail.tags) ? (detail.tags as string[]) : [])])];
+        await createRegisteredViews(state).register(scope, def, identity, { via: writerAddress, tags });
+      } else if (key.startsWith(SUBSCRIPTIONS_PREFIX)) {
+        const def = { ...(detail.value as SubscriptionDefinition), id: key.slice(SUBSCRIPTIONS_PREFIX.length) };
+        const tags = [...new Set(['cell-required', ...(Array.isArray(detail.tags) ? (detail.tags as string[]) : [])])];
+        await createSubscriptions(state).register(scope, def, identity, { via: writerAddress, tags });
+      } else {
+        await state.put(
+          {
+            scope,
+            key,
+            value: detail.value,
+            via: typeof detail.via === 'string' ? detail.via : writerAddress,
+            type: typeof detail.type === 'string' ? detail.type : undefined,
+            tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
+          },
+          identity,
+        );
+      }
+    } catch (err) {
+      // Validation/contested failures must not crash the event consumer.
+      ctx.logger.warn('organ substrate write refused', { cell: writerAddress, key, error: (err as Error).message });
+      return;
+    }
+
+    const entry = await state.get(scope, key);
+    const revision = entry?._meta.revision ?? 1;
+    await ctx.events.emit('workspace.fact.written', { scope, key, revision });
+    ctx.logger.info('substrate write applied for organ', { cell: writerAddress, scope, key, revision });
+  };
+}
+
+/**
+ * The reaction reactor: the generic tier-1 half of "machines react to the
+ * substrate". Every fact change emits `workspace.fact.written`; this handler
+ * loads the changed fact, finds the slice's matching `_subscriptions/*`, and
+ * invokes each one's declared action with params templated from the event.
+ *
+ * Reactions invoke *declared actions*, so the action's own `if` guard decides
+ * whether it actually fires (an auto-rail action whose `from` ≠ the run's node
+ * fails the precondition — an expected no-op). A write that does fire re-emits
+ * `workspace.fact.written`, so the next rail reacts in turn — a bounded fixpoint
+ * (capped by the triggering fact's revision vs. the subscription's maxDepth).
+ *
+ * A subscription either `invoke`s a declared action (in-process, the bounded
+ * default) or `deliver`s to a cell tool — called AS the slice owner — for
+ * reactions that need a cell's capabilities (e.g. a model deciding an agent
+ * rail, then writing the decision back, which re-triggers the deterministic
+ * rails). Nothing here knows about machines: the same primitive lets any cell
+ * react to captures, claims, tending reports, etc.
+ */
+export type CellDelivery = (
+  target: { owner: string; name: string; tool: string },
+  args: Record<string, unknown>,
+  asUser: string,
+  ctx: ServiceContext,
+) => Promise<void>;
+
+/** Default delivery: call cells.callCellTool as the slice owner (a trusted peer). */
+const deliverViaCells: CellDelivery = async (target, args, asUser, ctx) => {
+  const cells = createServiceClient({ registry: ctx.config.registry, user: asUser })('cells');
+  await cells.command('callCellTool', { owner: target.owner, name: target.name, tool: target.tool, args });
+};
+
+export function createFactReactionHandler(build: DepsBuilder, deliver: CellDelivery = deliverViaCells): EventBridgeHandler {
+  return async (detail, ctx) => {
+    const scope = typeof detail.scope === 'string' ? detail.scope : '';
+    const key = typeof detail.key === 'string' ? detail.key : '';
+    const revision = typeof detail.revision === 'number' ? detail.revision : 0;
+    // Never react to vocabulary/system writes (subscriptions, actions, tending…).
+    if (!scope || !key || key.startsWith('_')) return;
+
+    const { state } = build(ctx);
+    const subs = await createSubscriptions(state).list(scope);
+    if (!subs.length) return;
+
+    const entry = await state.get(scope, key);
+    if (!entry || entry._meta.superseded) return;
+    const fact = { key, value: entry.value, type: entry._meta.type ?? undefined, meta: entry._meta };
+
+    const hits = subs.filter((s) => subscriptionMatches(s, fact));
+    if (!hits.length) return;
+
+    const actions = createDeclarativeActions(state);
+    const identity: Identity = { user: 'platform/reaction', scopes: [] };
+    for (const sub of hits) {
+      if (revision > (sub.maxDepth ?? 50)) {
+        ctx.logger.warn('reaction skipped: depth cap', { scope, key, revision, subscription: sub.id });
+        continue;
+      }
+      const params = resolveParams(sub, key, scope, entry.value);
+
+      if (sub.deliver) {
+        // Cross-cell reaction: hand the event to a cell tool as the slice owner.
+        const target = parseCellTarget(sub.deliver);
+        if (!target) {
+          ctx.logger.warn('reaction skipped: bad deliver address', { scope, subscription: sub.id, deliver: sub.deliver });
+          continue;
+        }
+        try {
+          await deliver(target, params, scope, ctx);
+          ctx.logger.info('reaction delivered', { scope, key, subscription: sub.id, deliver: sub.deliver });
+        } catch (err) {
+          ctx.logger.warn('reaction deliver failed', { scope, subscription: sub.id, deliver: sub.deliver, error: (err as Error).message });
+        }
+        continue;
+      }
+
+      try {
+        const result = await actions.invoke(scope, sub.invoke as string, params, identity);
+        // Re-surface the writes so a downstream subscription (the next rail) reacts.
+        for (const w of result.writes) {
+          await ctx.events.emit('workspace.fact.written', { scope, key: w.key, revision: w._meta.revision });
+        }
+        ctx.logger.info('reaction fired', { scope, key, subscription: sub.id, invoke: sub.invoke, writes: result.writes.length });
+      } catch (err) {
+        // A failed `if`/`enabled` guard is the expected no-op (the rail whose
+        // `from` ≠ the current node). Anything else is a real fault.
+        if (err instanceof ActionInvokeError && (err.code === 'precondition_failed' || err.code === 'action_disabled')) continue;
+        ctx.logger.warn('reaction invoke failed', { scope, subscription: sub.id, invoke: sub.invoke, error: (err as Error).message });
+      }
+    }
   };
 }
 
