@@ -17,6 +17,7 @@ import { act, read } from './substrate.ts';
 import { ensureAuth, accessToken, isAuthed } from './auth.ts';
 import { startSalience } from './salience.ts';
 import { registerSubstrateTypes, loadRendererFacts } from '../elements/substrateTypes.ts';
+import { elementRegistry } from '../elements/elementRegistry.ts';
 import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
@@ -53,9 +54,15 @@ let factTypeDecls: Record<string, { icon?: string }> = {};
  *  as fallback — a new type's routing is one fact, no deploys. */
 function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[] } | undefined): void {
   if (el.type) return;
+  const metaType = meta?.type ?? null;
+  // A fact whose _meta.type has a registered renderer routes to that renderer
+  // (the renderer ladder), instead of collapsing to the floor 'fact' card. The
+  // fact's semantic type lives in _meta.type, not value.type, so without this
+  // bridge every imported fact floors. Renderers register at board boot
+  // (loadRendererFacts) before any element is decorated, so viewFor() is ready.
+  if (metaType && elementRegistry.viewFor(metaType)) { el.type = metaType; return; }
   el.type = 'fact';
   el._factCard = true;
-  const metaType = meta?.type ?? null;
   const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
   el._factTitle = titleOf(entry);
   el._factHref = hrefOf(entry);
