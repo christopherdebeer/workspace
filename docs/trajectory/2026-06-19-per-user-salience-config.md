@@ -134,11 +134,29 @@ Verified live (deploy #205, branch head): `neighbors("_types/cell")` returns all
 `_types/*` facts moved from `centrality 0` / score 0.167 to `centrality 0.8–1.0` /
 score ~0.52 — the weak vocabulary became the hubs it always implied.
 
-## Catalogue: types with no manager
+## Census: managed / unmanaged / undeclared types
 
-After the canonical wiring, the types that *still* have no manager are the
-ownerless ones — built-in viewers and convention types with no managing cell.
-Catalogued for holistic reasoning at `kb/types-unmanaged` (substrate) — see below.
+Catalogued live at `kb/type-vocabulary-census` (substrate), three tiers from the
+distinct fact-types (35) ⨯ canonical `$types` (24 declared):
+
+1. **Declared + managed (12):** 11 to a cell, `claim`→`platform`.
+2. **Declared + unmanaged (12):** 5 pure viewers (`csv/json/mermaid/repl/style` →
+   should adopt `@c15r/viewers`), 3 cell-owned-but-undeclared (`log`→lit,
+   `canvas-element`→canvas, `output`→run), 4 platform built-ins (`action/view/
+   audit/cell` → explicit `"platform"` manager like `claim`).
+3. **Undeclared entirely (21)** — facts exist but there's no `_types/<type>` and
+   it isn't canonical. This is the real gap and it's the *content*: the legacy KB
+   corpus (`knowledge` 72, `decision` 54, `todo` 42, `project` 38, `question` 38,
+   `concept` 21, `pattern`/`source` 13…), the system meta-types (`type-decl` 13,
+   `renderer` 8, `subscription` 4), and cell outputs (`agent-run`, `transcript`).
+   Even `type-decl` (the type *of* the `_types/*` facts) and `renderer` are
+   undeclared. The backbone already rescues them in the **graph** (every typed
+   fact gets `instanceOf → _types/<type>` via a virtual anchor — the census fact
+   itself, brand-new and unlinked, scored `centrality 0.2` on write), but they
+   carry no icon/label/handler/manager, so they're opaque to surfaces and agents.
+
+The fix is a `_types/<type>` declaration per undeclared type — the worklist the
+census fact enumerates with suggested managers.
 
 ## Outstanding / next
 
