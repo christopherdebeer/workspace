@@ -1134,21 +1134,50 @@ function FactEmbed({ src, href, title }: { src: string; href: string | null; tit
   );
 }
 
+/** Hints whose bodies can run long — clamped in a card, shown whole in the modal. */
+const LONGFORM_HINTS = new Set(['md', 'markdown', 'code', 'fields']);
+
+/** Truncate a rendered body to a few lines with a fade — the card preview. The
+ *  modal (full) shows it untruncated, which is what the peek escalates to. */
+function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div style={{ position: 'relative', maxHeight: '4.5em', overflow: 'hidden' }}>
+      {children}
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: '1.6em', background: `linear-gradient(transparent, ${theme.panel})` }} />
+    </div>
+  );
+}
+
 /**
  * A fact's inline body, from the type's declared default viewer: a built-in
  * `render` hint, or (when `embed` is allowed, e.g. a pinned single fact) the
  * cell's `embed` thumbnail — falling back to the heuristic text preview. Pure
  * presentation over `typeDecls`, so it renders identically server + client.
+ *
+ * `full` is the modal read: long-form bodies render whole. Without it (the list
+ * card) a long-form body is clamped to a few lines — the card is a preview now
+ * that the peek modal carries the full content.
  */
-function FactBody({ e, embed = false }: { e: ListEntry; embed?: boolean }): React.JSX.Element | null {
+function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
   const hint = resolve(e, 'render', typeDecls)?.hint;
   if (hint) {
     const el = HintBody({ kind: hint, e });
-    if (el) return el;
+    if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
   }
   if (embed) {
     const src = handlerUrl(resolve(e, 'embed', typeDecls));
     if (src) return <FactEmbed src={src} href={factHref(e)} title={factTitle(e)} />;
+  }
+  // The modal read of a fact with no declared viewer: show the whole body
+  // (markdown), or the raw value, rather than the clamped heuristic preview.
+  if (full) {
+    const body = bodyText(e.value);
+    if (body) {
+      const html = marked.parse(body.replace(/\r\n/g, '\n'), { async: false }) as string;
+      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+    }
+    if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
+    if (e.value != null && typeof e.value === 'object') return <CodeBlock>{JSON.stringify(e.value, null, 2)}</CodeBlock>;
   }
   const preview = factPreview(e);
   return preview ? (
@@ -1300,7 +1329,7 @@ function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-            <FactBody e={entry} />
+            <FactBody e={entry} full />
           </div>
           <div style={{ display: 'grid', gap: '0.3rem' }}>
             <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
