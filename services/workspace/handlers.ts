@@ -60,8 +60,10 @@ import {
   SUBSCRIPTIONS_PREFIX,
   matches as subscriptionMatches,
   resolveParams,
+  parseCellTarget,
   type SubscriptionDefinition,
 } from './subscriptions';
+import { createServiceClient } from '../../platform/runtime/service-client';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
 import {
@@ -899,7 +901,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'registerSubscription',
     description:
-      'Register a reaction: `{ id, match:{type?,keyPrefix?,cel?}, invoke, params?, maxDepth? }` stored as a fact at `_subscriptions/<id>`. When a fact write matches `match`, the reactor invokes the declared action `invoke` with `params` templated from the event (${key} ${keySuffix} ${scope} ${value.<path>}). The generic primitive behind reactive machines — a tier-2 cell makes a process reactive by registering subscriptions, no platform change needed.',
+      'Register a reaction: `{ id, match:{type?,keyPrefix?,cel?}, invoke|deliver, params?, maxDepth? }` stored as a fact at `_subscriptions/<id>`. When a fact write matches `match`, the reactor fires — either `invoke` (a declared action id, in-process) or `deliver` (a cell tool "@owner/name.tool", called AS you, for reactions that need a cell, e.g. a model deciding an agent rail) — with `params` templated from the event (${key} ${keySuffix} ${scope} ${value.<path>}). The generic primitive behind reactive machines — a tier-2 cell makes a process reactive by registering subscriptions, no platform change needed.',
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -911,12 +913,13 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           properties: {
             id: { type: 'string' },
             match: { type: 'object', description: 'Predicate over the changed fact: { type?, keyPrefix?, cel? }' },
-            invoke: { type: 'string', description: 'Declared action id to invoke when matched' },
-            params: { type: 'object', description: 'Param templates over the event: { name: "${keySuffix}" | "${value.x}" | … }' },
+            invoke: { type: 'string', description: 'Declared action id to invoke when matched (exactly one of invoke/deliver)' },
+            deliver: { type: 'string', description: 'Cell tool address "@owner/name.tool" to call as the slice owner (exactly one of invoke/deliver)' },
+            params: { type: 'object', description: 'Arg templates over the event: { name: "${keySuffix}" | "${value.x}" | … }' },
             maxDepth: { type: 'number', description: 'Loop bound: skip when the triggering fact revision exceeds this (default 50)' },
             label: { type: 'string' },
           },
-          required: ['id', 'match', 'invoke'],
+          required: ['id', 'match'],
         },
       },
       required: ['subscription'],
@@ -1888,11 +1891,27 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
  * `workspace.fact.written`, so the next rail reacts in turn — a bounded fixpoint
  * (capped by the triggering fact's revision vs. the subscription's maxDepth).
  *
- * Nothing here knows about machines: the same primitive lets any cell react to
- * captures, claims, tending reports, etc. Authority is the slice's: the
- * subscription is a fact in the owner's slice, and the action writes there.
+ * A subscription either `invoke`s a declared action (in-process, the bounded
+ * default) or `deliver`s to a cell tool — called AS the slice owner — for
+ * reactions that need a cell's capabilities (e.g. a model deciding an agent
+ * rail, then writing the decision back, which re-triggers the deterministic
+ * rails). Nothing here knows about machines: the same primitive lets any cell
+ * react to captures, claims, tending reports, etc.
  */
-export function createFactReactionHandler(build: DepsBuilder): EventBridgeHandler {
+export type CellDelivery = (
+  target: { owner: string; name: string; tool: string },
+  args: Record<string, unknown>,
+  asUser: string,
+  ctx: ServiceContext,
+) => Promise<void>;
+
+/** Default delivery: call cells.callCellTool as the slice owner (a trusted peer). */
+const deliverViaCells: CellDelivery = async (target, args, asUser, ctx) => {
+  const cells = createServiceClient({ registry: ctx.config.registry, user: asUser })('cells');
+  await cells.command('callCellTool', { owner: target.owner, name: target.name, tool: target.tool, args });
+};
+
+export function createFactReactionHandler(build: DepsBuilder, deliver: CellDelivery = deliverViaCells): EventBridgeHandler {
   return async (detail, ctx) => {
     const scope = typeof detail.scope === 'string' ? detail.scope : '';
     const key = typeof detail.key === 'string' ? detail.key : '';
@@ -1919,8 +1938,25 @@ export function createFactReactionHandler(build: DepsBuilder): EventBridgeHandle
         continue;
       }
       const params = resolveParams(sub, key, scope, entry.value);
+
+      if (sub.deliver) {
+        // Cross-cell reaction: hand the event to a cell tool as the slice owner.
+        const target = parseCellTarget(sub.deliver);
+        if (!target) {
+          ctx.logger.warn('reaction skipped: bad deliver address', { scope, subscription: sub.id, deliver: sub.deliver });
+          continue;
+        }
+        try {
+          await deliver(target, params, scope, ctx);
+          ctx.logger.info('reaction delivered', { scope, key, subscription: sub.id, deliver: sub.deliver });
+        } catch (err) {
+          ctx.logger.warn('reaction deliver failed', { scope, subscription: sub.id, deliver: sub.deliver, error: (err as Error).message });
+        }
+        continue;
+      }
+
       try {
-        const result = await actions.invoke(scope, sub.invoke, params, identity);
+        const result = await actions.invoke(scope, sub.invoke as string, params, identity);
         // Re-surface the writes so a downstream subscription (the next rail) reacts.
         for (const w of result.writes) {
           await ctx.events.emit('workspace.fact.written', { scope, key: w.key, revision: w._meta.revision });

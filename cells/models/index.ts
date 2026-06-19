@@ -701,7 +701,114 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'decide',
+    description:
+      'Resolve a machine run\'s agent rail: read machine-run/<run> + its rails, choose one branch with the model, and write the decision back — a claim (the certificate of reasoning) + the run advance, which re-triggers the deterministic rails. When no provider is configured (or {defer:true}), instead expose the decision as a claimable `task/<run>.<node>` fact for any substrate agent (a human via the decide-<node> action, or an autonomous loop) to complete. Idempotent per node. Typically fired by a reactive machine\'s subscription, not called by hand.',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run: { type: 'string', description: 'run id → machine-run/<run>' },
+        defer: { type: 'boolean', description: 'force the claimable-task path even when a provider exists' },
+      },
+      required: ['run'],
+      additionalProperties: false,
+    },
+  },
 ];
+
+/* ── decide: resolve an agent rail ────────────────────────────────
+ * The autonomous half of a machine's agent rail. Read the run + its rails,
+ * and EITHER (a model is available) choose a branch and write the decision
+ * back — a claim (the certificate of reasoning) + the run advance, which
+ * re-triggers the deterministic rails — OR (no provider, or {defer:true})
+ * expose the decision as a claimable `task/<run>.<node>` fact that any agent
+ * over the substrate can pick up and complete. Idempotent per node. */
+
+interface MachineArrow { from: string; to: string; arrow?: string; label?: string }
+interface MachineNode { name: string; title?: string; kind?: string }
+
+async function readFact<T = unknown>(key: string): Promise<T | null> {
+  const res = await ddb.send(new GetCommand({ TableName: SUBSTRATE, Key: { pk: `STATE#${OWNER}`, sk: `KEY#${key}` } }));
+  const item = res.Item as { value?: T; superseded?: boolean } | undefined;
+  return item && !item.superseded ? (item.value as T) : null;
+}
+
+function extractJson(text: string): Record<string, unknown> | null {
+  const m = /\{[\s\S]*\}/.exec(text);
+  if (!m) return null;
+  try { return JSON.parse(m[0]) as Record<string, unknown>; } catch { return null; }
+}
+
+async function firstAgentProvider(): Promise<{ provider: 'anthropic' | 'openai'; rec: ProviderRec } | null> {
+  for (const provider of ['anthropic', 'openai'] as const) {
+    const rec = await getProvider(provider);
+    if (rec) return { provider, rec };
+  }
+  return null;
+}
+
+async function openDecisionTask(run: string, machineName: string, node: string, title: string, branches: string[], reason: string, extra?: Record<string, unknown>): Promise<unknown> {
+  if (await readFact(`task/${run}.${node}`)) return { task: true, status: 'already-open', run, node };
+  await emitFact(
+    `task/${run}.${node}`,
+    { kind: 'decision', run, machine: machineName, node, title, branches, status: 'open', reason, createdAt: new Date().toISOString(), ...extra },
+    'task',
+    ['task', 'machine', `machine:${machineName}`],
+  );
+  return { task: true, run, node, branches, reason };
+}
+
+async function decide(args: Record<string, unknown>): Promise<unknown> {
+  const run = String(args.run ?? '');
+  if (!run) throw new Error('run is required');
+  const defer = args.defer === true;
+
+  const runFact = await readFact<{ machine?: string; node?: string; status?: string }>(`machine-run/${run}`);
+  if (!runFact?.machine || !runFact.node) return { skipped: 'no-active-run', run };
+  if (runFact.status === 'done') return { skipped: 'run-done', run };
+  const node = runFact.node;
+  const machineName = runFact.machine;
+
+  // Idempotency: never decide a node twice (the run also advances past it, but a
+  // race could double-deliver before the advance lands).
+  if (await readFact(`claims/${run}.${node}`)) return { skipped: 'already-decided', run, node };
+
+  const machine = await readFact<{ arrows?: MachineArrow[]; nodes?: MachineNode[]; title?: string }>(`machine/${machineName}`);
+  if (!machine?.arrows) return { skipped: 'no-machine', machine: machineName };
+  const branches = machine.arrows.filter((a) => a.from === node && a.arrow === '=>').map((a) => a.to);
+  if (!branches.length) return { skipped: 'not-an-agent-node', node };
+
+  const titleOf = (n: string) => machine.nodes?.find((x) => x.name === n)?.title ?? n;
+
+  const found = defer ? null : await firstAgentProvider();
+  if (!found) return openDecisionTask(run, machineName, node, titleOf(node), branches, defer ? 'deferred' : 'no-provider');
+
+  const system =
+    'You are resolving a decision point of a process running on the parc.land substrate. ' +
+    'Choose exactly ONE branch. Respond with ONLY a JSON object: ' +
+    '{"to": "<branch node name>", "statement": "<one sentence justification>", "confidence": <number 0..1>}.';
+  const prompt =
+    `Process: ${machine.title ?? machineName}\n` +
+    `Current node: ${node} (${titleOf(node)})\n` +
+    `Run state: ${JSON.stringify(runFact)}\n\n` +
+    `Branches:\n${branches.map((b) => `- ${b}: ${titleOf(b)}`).join('\n')}\n\n` +
+    'Pick the best branch by node name.';
+  const out = found.provider === 'anthropic'
+    ? await runAnthropic(found.rec, { prompt, system, mode: 'text', maxTokens: 512 })
+    : await runOpenAI(found.rec, { prompt, system, mode: 'text', maxTokens: 512 });
+  const parsed = extractJson(out.text ?? '');
+  const to = parsed && typeof parsed.to === 'string' ? parsed.to : '';
+  // Model didn't return a usable branch — leave a claimable task rather than guess.
+  if (!branches.includes(to)) return openDecisionTask(run, machineName, node, titleOf(node), branches, 'model-uncertain', { modelText: out.text });
+
+  const statement = parsed && typeof parsed.statement === 'string' ? parsed.statement : `Chose ${to}`;
+  const confidence = parsed && typeof parsed.confidence === 'number' ? parsed.confidence : null;
+  await emitFact(`claims/${run}.${node}`, { statement, chose: to, at: node, machine: machineName, confidence, by: `@${OWNER}/models` }, 'claim', ['claim', 'machine', `machine:${machineName}`]);
+  await emitFact(`machine-run/${run}`, { node: to, at: new Date().toISOString(), machine: machineName, status: 'running', via: `${node}=>decide` }, 'machine-run', ['machine', `machine:${machineName}`]);
+  return { decided: true, run, from: node, to, confidence, statement };
+}
 
 /** Set per-invocation so toolCall can self-invoke for async jobs. */
 let SELF_FUNCTION = '';
@@ -759,6 +866,9 @@ async function toolCall(name: string, args: Record<string, unknown>, caller: str
       turns: agent.turns,
       toolCalls: agent.toolCalls,
     };
+  }
+  if (name === 'decide') {
+    return decide(args);
   }
   if (name === 'agent') {
     const input = args as unknown as AgentInput;

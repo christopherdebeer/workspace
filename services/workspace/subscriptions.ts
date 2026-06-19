@@ -35,10 +35,17 @@ export interface SubscriptionDefinition {
   id: string;
   /** When this holds for a changed fact, the reaction fires. */
   match: SubscriptionMatch;
-  /** The declared action id to invoke (in the same slice). */
-  invoke: string;
   /**
-   * Params for the action, each a template over the event:
+   * What to fire. Exactly one of:
+   *   invoke  — a declared action id in the same slice (in-process, no I/O)
+   *   deliver — a cell tool address "@owner/name.tool" (called AS the slice
+   *             owner via cells.callCellTool, for reactions that need a cell's
+   *             capabilities, e.g. a model deciding an agent rail)
+   */
+  invoke?: string;
+  deliver?: string;
+  /**
+   * Args for the action/tool, each a template over the event:
    *   ${key} ${keySuffix} ${scope} ${value} ${value.<dotpath>}
    * A value that is exactly one placeholder keeps the source's JSON type.
    */
@@ -103,12 +110,25 @@ export function resolveParams(
   return out;
 }
 
+/** Parse a `deliver` address "@owner/name.tool" into its parts (null if malformed). */
+export function parseCellTarget(address: string): { owner: string; name: string; tool: string } | null {
+  const m = /^@([^/]+)\/([^.]+)\.(.+)$/.exec(address);
+  return m ? { owner: m[1], name: m[2], tool: m[3] } : null;
+}
+
 // ── validation ─────────────────────────────────────────────────────
 
 function validateSubscription(def: SubscriptionDefinition): void {
   if (!def?.id || typeof def.id !== 'string') throw new Error('subscription requires a string `id`');
   if (def.id.includes('/')) throw new Error('subscription `id` must not contain "/"');
-  if (!def.invoke || typeof def.invoke !== 'string') throw new Error('subscription requires a string `invoke` (a declared action id)');
+  const hasInvoke = typeof def.invoke === 'string' && def.invoke.length > 0;
+  const hasDeliver = typeof def.deliver === 'string' && def.deliver.length > 0;
+  if (hasInvoke === hasDeliver) {
+    throw new Error('subscription requires exactly one of `invoke` (a declared action id) or `deliver` (a cell tool "@owner/name.tool")');
+  }
+  if (hasDeliver && !parseCellTarget(def.deliver as string)) {
+    throw new Error('subscription `deliver` must be a cell tool address "@owner/name.tool"');
+  }
   if (!def.match || typeof def.match !== 'object') throw new Error('subscription requires a `match` object');
   const { type, keyPrefix, cel } = def.match;
   if (type === undefined && keyPrefix === undefined && cel === undefined) {

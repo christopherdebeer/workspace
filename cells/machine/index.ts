@@ -262,26 +262,40 @@ async function emitSubscription(def, name) {
   await emit({ key: `_subscriptions/${def.id}`, value: def, type: 'subscription', tags: ['machine', `machine:${name}`], via: 'machine.project' });
 }
 
+/** The owner whose slice this cell serves — used to address sibling cells. */
+const OWNER = process.env.CELL_OWNER ?? 'c15r';
+
 /**
- * Subscriptions that make a machine reactive: one per AUTO rail, tying its
- * transition action to changes of this machine's runs. The generic reactor
- * invokes the action; the action's own `if` guard fires only the rail whose
- * `from` = the run's current node, so the deterministic prefix advances itself.
- * Agent rails get NO subscription — a run pauses there for a decision.
+ * Subscriptions that make a machine reactive:
+ *  - one per AUTO rail: invoke the transition action in-process; its `if` guard
+ *    fires only the rail whose `from` = the run's current node, so the
+ *    deterministic prefix advances itself.
+ *  - one per AGENT node: when a run reaches it, deliver to `@owner/models.decide`
+ *    — the model picks a branch and writes the decision back (re-triggering the
+ *    rails), or, with no provider configured, leaves a claimable `task` fact for
+ *    any substrate agent to complete. Reasoning is spent only here.
  */
 function projectionSubscriptions(name, rails) {
   const m = seg(name);
-  return rails
-    .filter((x) => x.mode === 'auto')
-    .map((r) => {
-      const id = `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`;
-      return {
-        id,
-        match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)}` },
-        invoke: id,
-        params: { run: '${keySuffix}' },
-      };
+  const subs = [];
+  for (const r of rails.filter((x) => x.mode === 'auto')) {
+    const id = `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`;
+    subs.push({
+      id,
+      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)}` },
+      invoke: id,
+      params: { run: '${keySuffix}' },
     });
+  }
+  for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
+    subs.push({
+      id: `machine.${m}.decide-${seg(from)}`,
+      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)}` },
+      deliver: `@${OWNER}/models.decide`,
+      params: { run: '${keySuffix}' },
+    });
+  }
+  return subs;
 }
 
 export const handler = async (event) => {

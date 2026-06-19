@@ -1179,6 +1179,38 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
     expect((await cmds.peek({ key: 'gate/i1' }, alice))?.value).toEqual({ open: true }); // cel true → fired
   });
 
+  it('delivers to a cell tool (as the slice owner) when a subscription uses `deliver`', async () => {
+    const delivered: Array<{ target: unknown; args: unknown; asUser: string }> = [];
+    const reactDeliver = createFactReactionHandler(
+      () => ({ state, grants }),
+      async (target, args, asUser) => {
+        delivered.push({ target, args, asUser });
+      },
+    );
+    const alice = ctxFor('alice').ctx;
+    // No declared action needed — the reaction hands off to a cell tool.
+    await cmds.registerSubscription(
+      { subscription: { id: 'agent-rail', match: { keyPrefix: 'arun/', cel: 'value.node == "decide"' }, deliver: '@alice/models.decide', params: { run: '${keySuffix}' } } },
+      alice,
+    );
+    await cmds.remember({ key: 'arun/x9', value: { node: 'decide', machine: 'm' }, type: 'machine-run' }, alice);
+    await reactDeliver({ scope: 'alice', key: 'arun/x9', revision: 1 }, ctxFor('alice').ctx, { source: 'workspace', detailType: 'workspace.fact.written' });
+
+    expect(delivered).toEqual([
+      { target: { owner: 'alice', name: 'models', tool: 'decide' }, args: { run: 'x9' }, asUser: 'alice' },
+    ]);
+  });
+
+  it('rejects a subscription that sets neither or both of invoke/deliver', async () => {
+    const alice = ctxFor('alice').ctx;
+    await expect(
+      cmds.registerSubscription({ subscription: { id: 'bad-none', match: { type: 'x' } } as never }, alice),
+    ).rejects.toThrow(/exactly one of/);
+    await expect(
+      cmds.registerSubscription({ subscription: { id: 'bad-both', match: { type: 'x' }, invoke: 'a', deliver: '@o/c.t' } as never }, alice),
+    ).rejects.toThrow(/exactly one of/);
+  });
+
   it('a cell may register a subscription as cell-required via the organ path', async () => {
     const handler = createSubstrateWriteHandler(() => ({ state, grants }));
     const orgCtx = {
