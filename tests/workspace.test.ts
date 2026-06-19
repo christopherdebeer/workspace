@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler } from '../services/workspace/handlers';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -180,6 +180,7 @@ describe('workspace sharing / view layer', () => {
         'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
+        'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
       ].sort(),
     );
@@ -1097,5 +1098,102 @@ describe('workspace granular grants (write-through / prefix / request loop)', ()
     await expect(
       cmds.requestGrant({ resource: 'workspace:bob:*:read' }, bob),
     ).rejects.toThrow(/you own this resource/);
+  });
+});
+
+describe('workspace reactions (subscriptions → declared actions, the generic reactive primitive)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const react = createFactReactionHandler(() => ({ state, grants }));
+
+  const busCtx = () =>
+    ({ ...(ctxFor(null).ctx as unknown as Record<string, unknown>), identity: { scopes: [] } } as unknown as ServiceContext);
+  const fire = (scope: string, key: string, revision: number) =>
+    react({ scope, key, revision }, busCtx(), { source: 'workspace', detailType: 'workspace.fact.written' });
+
+  it('registers an auto-rail action + a subscription, then a fact change advances the run', async () => {
+    const alice = ctxFor('alice').ctx;
+    // Two auto rails as declared actions, guarded by the run's current node.
+    await cmds.registerAction(
+      { action: { id: 'A-to-B', if: [{ key: 'run/${params.run}', path: 'node', op: 'eq', value: 'A' }], writes: [{ key: 'run/${params.run}', value: { node: 'B' }, type: 'run' }], params: { run: { type: 'string', required: true } } } },
+      alice,
+    );
+    await cmds.registerAction(
+      { action: { id: 'B-to-C', if: [{ key: 'run/${params.run}', path: 'node', op: 'eq', value: 'B' }], writes: [{ key: 'run/${params.run}', value: { node: 'C' }, type: 'run' }], params: { run: { type: 'string', required: true } } } },
+      alice,
+    );
+    // Both rails subscribe to run/* changes; each fires only when its guard holds.
+    await cmds.registerSubscription({ subscription: { id: 'r-A-to-B', match: { keyPrefix: 'run/' }, invoke: 'A-to-B', params: { run: '${keySuffix}' } } }, alice);
+    await cmds.registerSubscription({ subscription: { id: 'r-B-to-C', match: { keyPrefix: 'run/' }, invoke: 'B-to-C', params: { run: '${keySuffix}' } } }, alice);
+
+    await cmds.remember({ key: 'run/r1', value: { node: 'A' }, type: 'run' }, alice);
+    // Reacting to the run's changes drives the deterministic prefix to its
+    // terminal node: each pass fires whichever rail's guard holds, converging
+    // at C (no rail leaves C). Extra fires at C are clean no-ops.
+    for (let rev = 1; rev <= 4; rev++) await fire('alice', 'run/r1', rev);
+    expect((await cmds.peek({ key: 'run/r1' }, alice))?.value).toEqual({ node: 'C' });
+  });
+
+  it('re-emits fact.written for each reactive write so the next rail can react', async () => {
+    const { ctx: alice, emitted } = ctxFor('alice');
+    await cmds.registerAction(
+      { action: { id: 'mark', writes: [{ key: 'flag/${params.id}', value: { done: true }, type: 'flag' }], params: { id: { type: 'string', required: true } } } },
+      alice,
+    );
+    await cmds.registerSubscription({ subscription: { id: 'on-thing', match: { type: 'thing' }, invoke: 'mark', params: { id: '${keySuffix}' } } }, alice);
+    await cmds.remember({ key: 'thing/x', value: 1, type: 'thing' }, alice);
+
+    const { ctx: busc, emitted: busEmitted } = ctxFor('alice');
+    await react({ scope: 'alice', key: 'thing/x', revision: 1 }, busc, { source: 'workspace', detailType: 'workspace.fact.written' });
+    expect((await cmds.peek({ key: 'flag/thing/x' }, alice))?.value).toEqual({ done: true });
+    // The reaction's write is itself announced, so downstream subscriptions chain.
+    expect(busEmitted).toContainEqual({ type: 'workspace.fact.written', payload: { scope: 'alice', key: 'flag/thing/x', revision: 1 } });
+    void emitted;
+  });
+
+  it('honours the depth cap (loop bound) and the cel match', async () => {
+    const alice = ctxFor('alice').ctx;
+    await cmds.registerAction(
+      { action: { id: 'bump', writes: [{ key: 'ctr/${params.id}', value: { n: 1 }, type: 'ctr' }], params: { id: { type: 'string', required: true } } } },
+      alice,
+    );
+    // maxDepth 2: a fact change at revision 3 must not fire.
+    await cmds.registerSubscription({ subscription: { id: 'capped', match: { keyPrefix: 'ctr/' }, invoke: 'bump', params: { id: '${keySuffix}' }, maxDepth: 2 } }, alice);
+    await cmds.remember({ key: 'ctr/c1', value: { n: 0 }, type: 'ctr' }, alice);
+    await fire('alice', 'ctr/c1', 3); // over the cap → skipped
+    expect((await cmds.peek({ key: 'ctr/c1' }, alice))?.value).toEqual({ n: 0 });
+
+    // cel match: only fire when value.ready is true.
+    await cmds.registerAction(
+      { action: { id: 'go', writes: [{ key: 'gate/${params.id}', value: { open: true }, type: 'gate' }], params: { id: { type: 'string', required: true } } } },
+      alice,
+    );
+    await cmds.registerSubscription({ subscription: { id: 'cel-gate', match: { keyPrefix: 'item/', cel: 'value.ready == true' }, invoke: 'go', params: { id: '${keySuffix}' } } }, alice);
+    await cmds.remember({ key: 'item/i1', value: { ready: false }, type: 'item' }, alice);
+    await fire('alice', 'item/i1', 1);
+    expect(await cmds.peek({ key: 'gate/i1' }, alice)).toBeNull(); // cel false → no fire
+    await cmds.remember({ key: 'item/i1', value: { ready: true }, type: 'item' }, alice);
+    await fire('alice', 'item/i1', 2);
+    expect((await cmds.peek({ key: 'gate/i1' }, alice))?.value).toEqual({ open: true }); // cel true → fired
+  });
+
+  it('a cell may register a subscription as cell-required via the organ path', async () => {
+    const handler = createSubstrateWriteHandler(() => ({ state, grants }));
+    const orgCtx = {
+      ...(ctxFor(null).ctx as unknown as Record<string, unknown>),
+      identity: { scopes: [] },
+      serviceClient: () => ({ command: async (c: string) => (c === 'resolveCell' ? { owner: 'alice', name: 'machine' } : null) }),
+    } as unknown as ServiceContext;
+    await handler(
+      { key: '_subscriptions/machine.demo', value: { id: 'machine.demo', match: { keyPrefix: 'machine-run/' }, invoke: 'machine.demo.start', params: { run: '${keySuffix}' } } },
+      orgCtx,
+      { source: 'cell-machine-xyz', detailType: 'substrate.write.requested' },
+    );
+    const sub = await cmds.peek({ key: '_subscriptions/machine.demo' }, ctxFor('alice').ctx);
+    expect(sub?._meta.type).toBe('subscription');
+    expect(sub?._meta.writer).toBe('@alice/machine');
+    expect(sub?._meta.tags).toContain('cell-required');
   });
 });
