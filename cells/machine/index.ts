@@ -101,6 +101,8 @@ const TOOLS = [
           items: { type: 'object' },
         },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
+        reactive: { type: 'boolean', description: 'Also register subscriptions so auto rails advance themselves on run changes (default false — driven only)' },
+        trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel? } that STARTS a run (run id = the matched key suffix)' },
         tags: { type: 'array', items: { type: 'string' } },
       },
       required: ['name'],
@@ -255,6 +257,33 @@ async function emitAction(def, name) {
   await emit({ key: `_actions/${def.id}`, value: def, type: 'action', tags: ['machine', `machine:${name}`], via: 'machine.project' });
 }
 
+/** Emit one cell-required reaction subscription through the organ path. */
+async function emitSubscription(def, name) {
+  await emit({ key: `_subscriptions/${def.id}`, value: def, type: 'subscription', tags: ['machine', `machine:${name}`], via: 'machine.project' });
+}
+
+/**
+ * Subscriptions that make a machine reactive: one per AUTO rail, tying its
+ * transition action to changes of this machine's runs. The generic reactor
+ * invokes the action; the action's own `if` guard fires only the rail whose
+ * `from` = the run's current node, so the deterministic prefix advances itself.
+ * Agent rails get NO subscription — a run pauses there for a decision.
+ */
+function projectionSubscriptions(name, rails) {
+  const m = seg(name);
+  return rails
+    .filter((x) => x.mode === 'auto')
+    .map((r) => {
+      const id = `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`;
+      return {
+        id,
+        match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)}` },
+        invoke: id,
+        params: { run: '${keySuffix}' },
+      };
+    });
+}
+
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
@@ -306,9 +335,25 @@ export const handler = async (event) => {
     // Project the rails into invokable, guarded declared actions (v2 → v3).
     // The run advances by invoking these; agent rails surface as `decide-*`.
     let projected = [];
+    const subscriptions = [];
     if (a.project !== false && rails.length) {
       projected = projectionActions(a.name, nodes, rails);
       for (const def of projected) await emitAction(def, a.name);
+      // Opt-in reactivity: subscribe each auto rail to this machine's runs, so
+      // the deterministic prefix advances itself. Without `reactive`, the same
+      // actions remain drivable by hand via workspace.invoke.
+      if (a.reactive) {
+        for (const s of projectionSubscriptions(a.name, rails)) {
+          await emitSubscription(s, a.name);
+          subscriptions.push(s.id);
+        }
+      }
+      // Optional trigger: a fact pattern that STARTS a run (e.g. a new capture).
+      if (a.trigger && typeof a.trigger === 'object') {
+        const trig = { id: `machine.${seg(a.name)}.trigger`, match: a.trigger, invoke: `machine.${seg(a.name)}.start`, params: { run: '${keySuffix}' } };
+        await emitSubscription(trig, a.name);
+        subscriptions.push(trig.id);
+      }
     }
     return json(200, {
       defined: true,
@@ -317,6 +362,8 @@ export const handler = async (event) => {
       arrows: arrows.length,
       rails: rails.length,
       actions: projected.map((d) => d.id),
+      reactive: !!a.reactive,
+      subscriptions,
     });
   }
 
