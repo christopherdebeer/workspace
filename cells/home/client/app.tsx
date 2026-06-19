@@ -11,7 +11,7 @@
  */
 import * as React from 'react';
 import { marked } from 'marked';
-import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../shared/ui';
+import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme } from '../shared/ui';
 import { resolve, declFor, type TypeDecl } from '../shared/vocab';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './bridge';
@@ -1160,6 +1160,190 @@ interface Edge {
   from: string;
   rel: string;
   to: string;
+  derived?: boolean;
+}
+
+// ─── progressive fact detail (peek modal → edit / escalate) ─────────
+//
+// Every fact opens a peek modal first (so the long tail — orphaned/undeclared
+// types with no `open` surface — finally has a detail view). A type's declared
+// `open`/`edit` handlers become escalation links inside it; the generic editor
+// is the fallback so any fact is editable, gated by the write succeeding.
+
+const FACT_DETAIL_EVENT = 'home:fact-detail';
+
+/** Open the progressive detail modal for a fact (or a bare {key}; hydrated by peek). */
+function openFact(e: ListEntry): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry>(FACT_DETAIL_EVENT, { detail: e }));
+}
+
+const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
+
+/** A fact's one-hop neighbourhood — authored edges plus the derived backbone
+ *  (instanceOf → its type, managedBy → its cell, inView → views). Derived edges
+ *  render dashed/dim; every chip is itself a peek into that neighbour. */
+function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
+  const [n, setN] = useState<{ outbound: Edge[]; inbound: Edge[] } | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let live = true;
+    mcpCall('read', 'workspace.neighbors', { key: keyName })
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) setN(r.value as { outbound: Edge[]; inbound: Edge[] });
+        else setErr(true);
+      })
+      .catch(() => live && setErr(true));
+    return () => {
+      live = false;
+    };
+  }, [keyName]);
+  if (err) return <span style={{ color: theme.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
+  if (!n) return <span style={{ color: theme.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
+  const chip = (ed: Edge, other: string, label: string): React.JSX.Element => (
+    <button
+      key={`${ed.from}-${ed.rel}-${ed.to}`}
+      onClick={() => openFact({ key: other })}
+      title={`${ed.from} ${ed.rel} ${ed.to}`}
+      style={{
+        fontSize: '0.66rem',
+        color: ed.derived ? theme.dim : theme.accent,
+        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${theme.border}`,
+        borderRadius: 999,
+        padding: '0.05rem 0.45rem',
+        fontFamily: theme.mono,
+        cursor: 'pointer',
+        background: 'none',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </button>
+  );
+  const chips = [
+    ...n.outbound.map((ed) => chip(ed, ed.to, `${ed.rel}→${shortKey(ed.to)}`)),
+    ...n.inbound.map((ed) => chip(ed, ed.from, `${shortKey(ed.from)}→${ed.rel}`)),
+  ];
+  return chips.length ? (
+    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>{chips}</div>
+  ) : (
+    <span style={{ color: theme.dim, fontSize: '0.72rem' }}>No edges yet.</span>
+  );
+}
+
+/** Generic editor: a string value edits as text; any other value edits as its
+ *  JSON. Saved with `workspace.remember` (preserving the fact's type). A type's
+ *  own `edit` surface, when declared, takes precedence over this (see FactDetail). */
+function FactEditor({ e, onSaved, onCancel }: { e: ListEntry; onSaved: (v: unknown) => void; onCancel: () => void }): React.JSX.Element {
+  const isStr = typeof e.value === 'string';
+  const [text, setText] = useState(isStr ? (e.value as string) : JSON.stringify(e.value ?? {}, null, 2));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const save = async (): Promise<void> => {
+    let value: unknown = text;
+    if (!isStr) {
+      try {
+        value = JSON.parse(text);
+      } catch {
+        setErr('Invalid JSON');
+        return;
+      }
+    }
+    setBusy(true);
+    setErr(null);
+    const r = await mcpCall('act', 'workspace.remember', { key: e.key, value, ...(e._meta?.type ? { type: e._meta.type } : {}) });
+    setBusy(false);
+    if (r.ok) onSaved(value);
+    else setErr(typeof r.value === 'string' ? r.value : 'Save failed');
+  };
+  return (
+    <div style={{ display: 'grid', gap: '0.5rem' }}>
+      <textarea
+        value={text}
+        onChange={(ev) => setText(ev.target.value)}
+        rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
+        spellCheck={false}
+        style={{ width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontFamily: theme.mono, fontSize: '0.8rem', border: `1px solid ${theme.border}`, borderRadius: 8, background: theme.panel, color: theme.text }}
+      />
+      {!isStr ? <span style={{ color: theme.dim, fontSize: '0.68rem' }}>Editing the raw JSON value.</span> : null}
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <Button onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.dim, padding: '0.3rem 0.8rem', cursor: 'pointer' }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/** The peek body: the fact rendered by its viewer (full, not clamped), its
+ *  provenance line, its neighbourhood, and the actions — escalate to the type's
+ *  page/editor when declared, else edit generically in place. */
+function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
+  const [entry, setEntry] = useState<ListEntry>(e);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    setEntry(e);
+    setEditing(false);
+  }, [e]);
+  const open = factHref(entry);
+  const edit = factEdit(entry);
+  const meta = entry._meta;
+  const system = entry.key.startsWith('_');
+  return (
+    <div style={{ display: 'grid', gap: '0.7rem' }}>
+      <div style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
+        {[meta?.type, entry.key].filter(Boolean).join(' · ')}
+        {meta?.tags?.length ? '  ·  ' + meta.tags.map((t) => '#' + t).join(' ') : ''}
+      </div>
+      {editing ? (
+        <FactEditor e={entry} onCancel={() => setEditing(false)} onSaved={(v) => { setEntry({ ...entry, value: v }); setEditing(false); }} />
+      ) : (
+        <>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
+            <FactBody e={entry} />
+          </div>
+          <div style={{ display: 'grid', gap: '0.3rem' }}>
+            <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
+            <Neighbourhood keyName={entry.key} />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            {open ? <Anchor href={open}>Open ↗</Anchor> : null}
+            {edit ? <Anchor href={edit}>Edit in cell ↗</Anchor> : !system ? <Button onClick={() => setEditing(true)}>Edit</Button> : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
+ *  via peek, and renders the modal. Returns null when nothing is open. */
+function FactDetailHost(): React.JSX.Element | null {
+  const [entry, setEntry] = useState<ListEntry | null>(null);
+  useEffect(() => {
+    const onOpen = (ev: Event): void => {
+      const detail = (ev as CustomEvent<ListEntry>).detail;
+      if (!detail?.key) return;
+      setEntry(detail);
+      if (detail.value === undefined) {
+        mcpCall('read', 'workspace.peek', { key: detail.key })
+          .then((r) => {
+            const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
+            if (r.ok && f) setEntry({ key: detail.key, value: f.value, _meta: f._meta });
+          })
+          .catch(() => undefined);
+      }
+    };
+    window.addEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
+    return () => window.removeEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
+  }, []);
+  if (!entry) return null;
+  const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
+  return (
+    <Modal open onClose={() => setEntry(null)} title={title}>
+      <FactDetail e={entry} />
+    </Modal>
+  );
 }
 
 // ─── the workspace window (phase 2c) ───────────────────────────────
@@ -1313,11 +1497,19 @@ function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: WorkspaceSe
             const out = edges.get(e.key) ?? [];
             return (
               <li key={e.key} style={{ lineHeight: 1.4, display: 'grid', gap: '0.25rem' }}>
-                {to ? (
-                  <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{title}</a>
-                ) : (
-                  <strong style={{ fontWeight: 600 }}>{title}</strong>
-                )}
+                {/* Peek every fact in the modal first; cmd/ctrl-click still deep-links
+                    to the type's own surface when it has one. */}
+                <a
+                  href={to ?? undefined}
+                  onClick={(ev) => {
+                    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+                    ev.preventDefault();
+                    openFact(e);
+                  }}
+                  style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {title}
+                </a>
                 {/* The type's declared default viewer (hint), else a text preview. */}
                 <FactBody e={e} />
                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2627,6 +2819,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>
         <Wordmark /> · a personal substrate · <Anchor href="https://parc.land/mcp">agents start here</Anchor>
       </p>
+      <FactDetailHost />
     </Page>
   );
 }

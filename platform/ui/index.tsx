@@ -272,3 +272,73 @@ export function CodeBlock({ children }: { children: React.ReactNode }): React.JS
     </pre>
   );
 }
+
+/**
+ * A mobile-first bottom-sheet modal — the progressive-disclosure layer: a fact
+ * is peeked here before (optionally) escalating to its own page. Backdrop click
+ * and Escape close it; the panel stops propagation so inner clicks don't.
+ */
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  actions,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: React.ReactNode;
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+}): React.JSX.Element | null {
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(13,43,51,0.45)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        style={{
+          background: theme.bg,
+          color: theme.text,
+          width: '100%',
+          maxWidth: 680,
+          maxHeight: '88vh',
+          overflowY: 'auto',
+          borderTopLeftRadius: 16,
+          borderTopRightRadius: 16,
+          border: `1px solid ${theme.border}`,
+          boxShadow: '0 -8px 40px rgba(13,43,51,0.28)',
+          padding: '1rem 1.1rem calc(1rem + env(safe-area-inset-bottom))',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.6rem' }}>
+          <div style={{ fontFamily: theme.serif, fontWeight: 600, fontSize: '1rem', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+          <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', color: theme.dim, fontSize: '1.4rem', lineHeight: 1, cursor: 'pointer', padding: '0 0.2rem' }}>×</button>
+        </div>
+        {children}
+        {actions ? <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.9rem' }}>{actions}</div> : null}
+      </div>
+    </div>
+  );
+}

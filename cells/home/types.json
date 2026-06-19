@@ -1,0 +1,90 @@
+{
+  "types": [
+    {
+      "type": "knowledge",
+      "icon": "🧠",
+      "manager": "@c15r/home",
+      "note": "A durable note/fact in the personal knowledge base. Opens in the home peek modal; no bespoke editor, so it edits generically.",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "decision",
+      "icon": "⚖️",
+      "manager": "@c15r/home",
+      "note": "A recorded decision (what was chosen and why).",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "project",
+      "icon": "📦",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "question",
+      "icon": "❓",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "concept",
+      "icon": "💡",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "pattern",
+      "icon": "🧩",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "protocol",
+      "icon": "📐",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "source",
+      "icon": "🔗",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "reading",
+      "icon": "📖",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "prompt",
+      "icon": "💬",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "todo",
+      "icon": "☑️",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "bug",
+      "icon": "🐞",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "fixed",
+      "icon": "✅",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "shipped",
+      "icon": "🚀",
+      "manager": "@c15r/home",
+      "handlers": { "render": [{ "hint": "markdown" }] }
+    }
+  ]
+}
