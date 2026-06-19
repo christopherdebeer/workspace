@@ -415,6 +415,7 @@ const EDGE_SCHEMA = {
     strength: { type: ['number', 'null'] },
     createdAt: { type: 'string' },
     writer: { type: ['string', 'null'] },
+    derived: { type: 'boolean', description: 'Present and true for a derived structural-backbone edge (instanceOf/managedBy/rendersWith/inView); absent for authored edges' },
   },
 } as const;
 
@@ -636,7 +637,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'neighbors',
-    description: 'The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop.',
+    description: "The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop. Includes the derived structural backbone (edges flagged `derived:true`): a fact `instanceOf` its `_types/<type>`, a type `managedBy` its cell and `rendersWith` its renderer, and a fact `inView` any view whose query selects it — so even an unlinked fact has a direction to explore.",
     scope: null,
     kind: 'read',
     inputSchema: {

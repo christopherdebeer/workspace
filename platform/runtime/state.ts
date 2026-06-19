@@ -530,6 +530,115 @@ function tierFor(score: number, s: ResolvedSalience): Tier {
   return 'elided';
 }
 
+// ── derived structural backbone ────────────────────────────────────
+//
+// Authored edges are sparse — most facts are written without anyone linking
+// them, so they score `centrality: 0` and sit near the elision floor even when
+// they are perfectly real (the `_types/*` vocabulary, freshly-captured notes).
+// But a fact is never *structurally* alone: it is an instance of its type, that
+// type is managed by a cell and drawn by a renderer, and a view is the set of
+// facts its query selects. Those relationships are already implied by fields the
+// fact (and the vocabulary) carry — so we **derive** them at read time as virtual
+// edges rather than materialising (and having to maintain) real ones. They lift
+// weak-but-typed facts off the floor and make the graph navigable
+// (`neighbors("_types/doc")` → every doc; a type → its cell), while the authored
+// graph — what `links`, `changes`, and `attention.unlinked` report — stays clean.
+
+export const TYPES_PREFIX = '_types/';
+export const RENDERERS_PREFIX = '_renderers/';
+export const VIEWS_PREFIX = '_views/';
+
+/** Backbone edge relations (distinct from authored rels; never persisted). */
+export const BACKBONE_RELS = {
+  instanceOf: 'instanceOf', // fact → its type declaration (`_types/<type>`)
+  managedBy: 'managedBy', // type → the cell that manages it
+  rendersWith: 'rendersWith', // type → its renderer (`_renderers/<type>`)
+  inView: 'inView', // fact → a view whose query selects it
+} as const;
+
+/** Derived edges carry less structural weight than authored ones, so a hand-drawn
+ *  link still dominates a fact's centrality. */
+const BACKBONE_STRENGTH = 0.25;
+
+/** An edge plus whether it was derived (vs authored). Stored edges omit the flag. */
+export type AnnotatedEdge = EdgeRecord & { derived?: boolean };
+
+/** Normalise a cell address/manager handle for matching: `/@c15r/lit`, `@c15r/lit`
+ *  and a bare name all collapse so a type's `manager` resolves to its cell fact. */
+function normalizeCellHandle(h: string): string {
+  return h.replace(/^\//, '');
+}
+
+/**
+ * Compute the virtual backbone edges implied by a scope's own facts — pure, and
+ * conditioned on the target fact existing in the scope, so a backbone edge never
+ * dangles. Targets: a fact's `_types/<type>` anchor; that anchor's managing cell
+ * (matched via the type-decl's `manager` against `cell` facts' address/name) and
+ * its `_renderers/<type>`; and `_views/<id>` for any view whose query selects the
+ * fact. Edges are timeless (`createdAt: ''`, `writer: null`) and flagged derived.
+ */
+export function deriveBackboneEdges(records: StateRecord[]): AnnotatedEdge[] {
+  const live = records.filter((r) => !r.superseded);
+  const present = new Set(live.map((r) => r.key));
+
+  // Index cells by every handle they answer to, and the views with a usable query.
+  const cellByHandle = new Map<string, string>();
+  const views: Array<{ key: string; type?: string; tag?: string; prefix?: string }> = [];
+  for (const r of live) {
+    if (r.type === 'cell') {
+      const v = (r.value ?? {}) as { address?: unknown; name?: unknown };
+      for (const h of [v.address, v.name]) {
+        if (typeof h === 'string' && h) cellByHandle.set(normalizeCellHandle(h), r.key);
+      }
+    }
+    if (r.key.startsWith(VIEWS_PREFIX)) {
+      const q = ((r.value ?? {}) as { query?: unknown }).query;
+      if (q && typeof q === 'object') {
+        const { type, tag, prefix } = q as { type?: unknown; tag?: unknown; prefix?: unknown };
+        // An unfiltered view selects everything — too coarse to be a useful edge.
+        if (typeof type === 'string' || typeof tag === 'string' || typeof prefix === 'string') {
+          views.push({
+            key: r.key,
+            type: typeof type === 'string' ? type : undefined,
+            tag: typeof tag === 'string' ? tag : undefined,
+            prefix: typeof prefix === 'string' ? prefix : undefined,
+          });
+        }
+      }
+    }
+  }
+
+  const edges: AnnotatedEdge[] = [];
+  const add = (scope: string, from: string, rel: string, to: string): void => {
+    if (from === to || !present.has(to)) return;
+    edges.push({ scope, from, rel, to, strength: BACKBONE_STRENGTH, createdAt: '', writer: null, derived: true });
+  };
+
+  for (const r of live) {
+    const isType = r.key.startsWith(TYPES_PREFIX);
+    // fact → its type anchor (a type-decl is not an instance of itself)
+    if (r.type && !isType) add(r.scope, r.key, BACKBONE_RELS.instanceOf, `${TYPES_PREFIX}${r.type}`);
+    // type → managing cell + renderer
+    if (isType) {
+      const v = (r.value ?? {}) as { manager?: unknown };
+      if (typeof v.manager === 'string') {
+        const cellKey = cellByHandle.get(normalizeCellHandle(v.manager));
+        if (cellKey) add(r.scope, r.key, BACKBONE_RELS.managedBy, cellKey);
+      }
+      add(r.scope, r.key, BACKBONE_RELS.rendersWith, `${RENDERERS_PREFIX}${r.key.slice(TYPES_PREFIX.length)}`);
+    }
+    // fact → each view whose query selects it
+    for (const view of views) {
+      if (view.key === r.key) continue;
+      if (view.type && r.type !== view.type) continue;
+      if (view.tag && !r.tags.includes(view.tag)) continue;
+      if (view.prefix && !r.key.startsWith(view.prefix)) continue;
+      add(r.scope, r.key, BACKBONE_RELS.inView, view.key);
+    }
+  }
+  return edges;
+}
+
 // ── the observed-state API ─────────────────────────────────────────
 
 export interface WriteInput {
@@ -624,8 +733,10 @@ export interface NeighborsOptions {
 }
 
 export interface NeighborsResult {
-  outbound: EdgeRecord[];
-  inbound: EdgeRecord[];
+  /** One-hop edges. Authored edges and the derived structural backbone are both
+   *  included; backbone edges carry `derived: true`. */
+  outbound: AnnotatedEdge[];
+  inbound: AnnotatedEdge[];
   /** Wrapped entries for every distinct neighbor key that exists. */
   entries: Record<string, Entry>;
 }
@@ -717,9 +828,20 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
    *  pass). Lifetime (cumulative) terms need the full trajectory, so this reads
    *  from seq 0 — the price of `standing`. Callers in bulk paths build it once
    *  and share it across `wrap`s. */
-  async function signalsFor(scope: string, nowMs: number, windowMs: number): Promise<Map<string, KeySignals>> {
-    const [events, edges] = await Promise.all([store.recentTrajectory(scope, 0), store.listEdges(scope)]);
-    return buildSignals(events, edges, nowMs, windowMs);
+  async function signalsFor(
+    scope: string,
+    nowMs: number,
+    windowMs: number,
+    records?: StateRecord[],
+  ): Promise<Map<string, KeySignals>> {
+    const [events, edges, recs] = await Promise.all([
+      store.recentTrajectory(scope, 0),
+      store.listEdges(scope),
+      records ? Promise.resolve(records) : store.list(scope),
+    ]);
+    // Centrality counts the derived backbone alongside authored edges, so a
+    // typed-but-unlinked fact earns a structural floor instead of scoring zero.
+    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs)], nowMs, windowMs);
   }
 
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
@@ -912,7 +1034,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
       const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
       const records = await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records);
 
       // Score every live entry (no elision yet); shape in one pass below.
       const scored: Record<string, Entry> = {};
@@ -1007,19 +1129,25 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async neighbors(scope, key, opts?, _identity?: Identity): Promise<NeighborsResult> {
       const dir = opts?.dir ?? 'both';
-      const [outbound, inbound] = await Promise.all([
+      const nowMs = Date.now();
+      const [authoredOut, authoredIn, records] = await Promise.all([
         dir !== 'in' ? store.edgesFrom(scope, key, opts?.rel) : Promise.resolve([]),
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
+        store.list(scope),
       ]);
-      const nowMs = Date.now();
-      const signals = await signalsFor(scope, nowMs, s.windowMs);
+      // The derived backbone is one hop too: a fact's type/cell/renderer/views.
+      const derived = deriveBackboneEdges(records).filter((e) => !opts?.rel || e.rel === opts.rel);
+      const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
+      const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
+      const signals = await signalsFor(scope, nowMs, s.windowMs, records);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
       neighborKeys.delete(key);
+      const byKey = new Map(records.map((r) => [r.key, r]));
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
-        const rec = await store.get(scope, nk);
+        const rec = byKey.get(nk) ?? (await store.get(scope, nk));
         if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals);
       }
       return { outbound, inbound, entries };

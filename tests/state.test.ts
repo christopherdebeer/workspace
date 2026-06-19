@@ -12,8 +12,10 @@ import {
   createMemoryStateStore,
   computeScore,
   parseSalienceConfig,
+  deriveBackboneEdges,
   SALIENCE_CONFIG_KEY,
 } from '../platform/runtime/state';
+import type { StateRecord } from '../platform/runtime/state';
 import type { Identity } from '../platform/runtime';
 
 const alice: Identity = { user: 'alice', scopes: [] };
@@ -342,5 +344,88 @@ describe('salience config: per-scope policy fact', () => {
     // query ranks but does not elide; the config still resolves cleanly (no throw)
     const q = await state.query('r', { limit: 10 });
     expect(q.entries.find((e) => e.key === 'note')).toBeDefined();
+  });
+});
+
+describe('derived structural backbone', () => {
+  // A minimal StateRecord factory — only the fields the backbone reads.
+  const rec = (key: string, type: string | null, value: unknown, tags: string[] = []): StateRecord => ({
+    scope: 'r', key, value, revision: 1, seq: 1, firstSeq: 1, writer: 'alice', via: null,
+    createdAt: '', updatedAt: '', writers: ['alice'], superseded: false, supersededBy: null,
+    type, tags, timerExpiresAt: null, timerEffect: null,
+  });
+
+  it('links a fact to its type anchor, the type to its cell + renderer, and a fact to matching views', () => {
+    const records = [
+      rec('kb/1', 'note', { text: 'hi' }, ['journal']),
+      rec('_types/note', 'type-decl', { manager: '@c15r/lit' }),
+      rec('_renderers/note', 'renderer', { mount: '…' }),
+      rec('cells/lit-abc', 'cell', { address: '/@c15r/lit', name: 'lit' }),
+      rec('_views/journal', 'view', { query: { tag: 'journal' } }),
+    ];
+    const edges = deriveBackboneEdges(records);
+    const has = (from: string, rel: string, to: string) =>
+      edges.some((e) => e.from === from && e.rel === rel && e.to === to && e.derived === true);
+
+    expect(has('kb/1', 'instanceOf', '_types/note')).toBe(true);
+    expect(has('_types/note', 'managedBy', 'cells/lit-abc')).toBe(true); // address normalised across the leading slash
+    expect(has('_types/note', 'rendersWith', '_renderers/note')).toBe(true);
+    expect(has('kb/1', 'inView', '_views/journal')).toBe(true); // tag query selects the fact
+    // a type-decl is not an instance of itself
+    expect(edges.some((e) => e.from === '_types/note' && e.rel === 'instanceOf')).toBe(false);
+  });
+
+  it('never dangles: an edge is dropped when its target fact is absent', () => {
+    const edges = deriveBackboneEdges([rec('kb/1', 'note', { text: 'hi' })]); // no _types/note present
+    expect(edges).toHaveLength(0);
+  });
+
+  it('ignores unfiltered views (a query with no type/tag/prefix would select everything)', () => {
+    const edges = deriveBackboneEdges([
+      rec('kb/1', 'note', {}),
+      rec('_types/note', 'type-decl', {}),
+      rec('_views/all', 'view', { query: {} }),
+    ]);
+    expect(edges.some((e) => e.rel === 'inView')).toBe(false);
+  });
+
+  it('gives a typed-but-unauthored-linked fact a centrality floor in read', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: '_types/note', value: { icon: '📝' }, type: 'type-decl' }, alice);
+    await state.put({ scope: 'r', key: 'kb/1', value: { text: 'hi' }, type: 'note' }, alice);
+
+    const res = await state.read('r', { elision: 'none' });
+    // degree 1 (→ its type) / centralitySaturation 5 = 0.2 — no authored edge needed.
+    expect(res.entries['kb/1']._meta.centrality).toBeCloseTo(0.2, 5);
+    // the type anchor is a hub: its instance points at it, so it too clears zero.
+    expect(res.entries['_types/note']._meta.centrality).toBeGreaterThan(0);
+  });
+
+  it('neighbors surfaces backbone edges (derived:true) alongside authored ones', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: '_types/note', value: { icon: '📝' }, type: 'type-decl' }, alice);
+    await state.put({ scope: 'r', key: 'kb/1', value: { text: 'hi' }, type: 'note' }, alice);
+
+    const n = await state.neighbors('r', 'kb/1', { dir: 'out' });
+    const e = n.outbound.find((x) => x.to === '_types/note');
+    expect(e).toMatchObject({ rel: 'instanceOf', derived: true });
+    expect(n.entries['_types/note']).toBeDefined(); // the anchor entry is wrapped
+
+    // …and the reverse: the type lists its instances.
+    const back = await state.neighbors('r', '_types/note', { dir: 'in' });
+    expect(back.inbound.some((x) => x.from === 'kb/1' && x.derived)).toBe(true);
+  });
+
+  it('attention.unlinked stays authored-only — the backbone does not mask the weave signal', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: '_types/note', value: {}, type: 'type-decl' }, alice);
+    await state.put({ scope: 'r', key: 'kb/1', value: { text: 'hi' }, type: 'note' }, alice);
+
+    // kb/1 has a derived edge to its type but no *authored* edge → still flagged.
+    const att = await state.attention('r', { includeSystem: false });
+    expect(att.unlinked).toContain('kb/1');
   });
 });

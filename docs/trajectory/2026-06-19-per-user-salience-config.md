@@ -80,13 +80,45 @@ read("workspace.recall")
 `query { rankBy:"salience", limit:25 }` remains the bounded, cursor-paged primitive
 for iterative exploration; `neighbors(key)` is the item-focused latent-space walk.
 
+## Derived structural backbone (shipped, same branch)
+
+Weak-but-real facts (the `_types/*` vocabulary, fresh captures) score
+`centrality: 0` and hug the elision floor purely because no one has *authored* an
+edge to them. But a fact is never structurally alone — so the runtime now
+**derives** the implied edges at read time (pure, never stored), conditioned on
+the target fact existing so a backbone edge can't dangle:
+
+- `fact —instanceOf→ _types/<type>` — every typed fact;
+- `_types/<type> —managedBy→ <cell>` — matched via the type-decl's `manager`
+  against `cell` facts' `address`/`name` (so `@c15r/lit` ↔ `/@c15r/lit` ↔ `lit`);
+- `_types/<type> —rendersWith→ _renderers/<type>`;
+- `fact —inView→ _views/<id>` — for any view whose `query` (type/tag/prefix)
+  selects the fact (unfiltered views are skipped — they'd select everything).
+
+These fold into `centrality` (so a typed-but-unauthored-linked fact earns the
+degree-1 floor, 0.2, and the `_types/*`/cell facts become the hubs they always
+were) and surface in `neighbors` flagged `derived:true` — every fact now has a
+direction to explore (its type → its cell → its siblings). The **authored** graph
+is untouched: `links`, `changes`, and `attention.unlinked` stay authored-only, so
+the "this fact isn't woven into your thinking yet" tending signal survives — the
+backbone is structure, not a substitute for authored connection.
+
+`deriveBackboneEdges` is exported and unit-tested (fact→type, type→cell across the
+slash-normalised handle, type→renderer, fact→view, no-dangle, unfiltered-view
+skip, the centrality floor, `neighbors` surfacing, and authored-only `unlinked`).
+
+### Cell-managed types — the general seam
+
+`managedBy` resolves through the type-decl's `manager` field, which is the same
+declaration `docs/type-vocabulary.md` has cells writing on deploy. Where a slice's
+`_types/<type>` already carries a `manager`, the cell link lights up for free;
+elsewhere it's a one-field backfill (or the next cell-declares-its-types pass),
+not a code change. So this is general: any cell that declares the types it manages
+makes its facts walkable to it, and its cell fact accrues centrality from them.
+
 ## Outstanding / next
 
-- **Implicit type/renderer/view backbone** (raised in review): weak-but-typed
-  facts elide partly because they have 0 `centrality`. A derived backbone — treat
-  a fact's `type`/renderer/view membership as virtual edges in `neighbors`/
-  centrality — would give every typed fact a structural floor and navigability
-  (type → its instances) without write amplification, while `attention().unlinked`
-  is redefined to mean "no *authored* edge." Designed, not yet built.
-- `neighbors`/`attention` still score on instance defaults (not the per-scope
-  config); fine for now (incidental scoring), worth aligning if it matters.
+- `neighbors`/`attention` still *score* on instance defaults (not the per-scope
+  salience config); fine for now (incidental scoring), worth aligning if it matters.
+- `managedBy` only fires where `_types/<type>.manager` is set in-slice; folding the
+  gateway's cell-declared `$types` canonical into the resolver would complete it.
