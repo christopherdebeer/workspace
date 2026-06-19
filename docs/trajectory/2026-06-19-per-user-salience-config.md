@@ -164,3 +164,36 @@ census fact enumerates with suggested managers.
   salience config); fine for now (incidental scoring), worth aligning if it matters.
 - Unmanaged types (the catalogue) want a home: either a `platform`/`viewers` cell
   adopting them, or an explicit "built-in" manager so the vocabulary is complete.
+
+## Progressive fact-detail + canonical content vocabulary (shipped, home cell)
+
+The long tail of facts had no detail view: `factHref` resolved `null` for any type
+without an `open` handler (every undeclared type, and the KB content types), so the
+home list was a dead end. Fixed at both rungs of the resolution ladder:
+
+- **Generic floor (the correctness guarantee).** A `Modal` bottom-sheet in
+  `platform/ui` (source-bundled into cells) + a peek-first `FactDetail` in
+  `cells/home`: every fact opens a modal showing its viewer (full), provenance, and
+  its **backbone neighbourhood** (authored + derived edges, each chip a peek into
+  the neighbour). A type's declared `open`/`edit` become escalation links inside it;
+  otherwise a generic `FactEditor` (text for string values, JSON otherwise) writes
+  back via `workspace.remember`. So orphaned/undeclared/future types are always
+  viewable and editable — no declaration required.
+- **Canonical rung (for all users, not my slice).** `cells/home/types.json` now
+  declares the core content vocabulary (`knowledge/decision/project/question/
+  concept/pattern/protocol/source/reading/prompt/todo/bug/fixed/shipped`) with
+  `manager: @c15r/home` + a markdown viewer. Via `cells.describeTypes` this is
+  **global** — a brand-new user's `decision` fact resolves ⚖️ + a viewer for free.
+  Slice `_types/*` stays purely for per-user overrides; nothing seeded per-slice.
+
+Deployed to the home cell (`cell-sync push home --deploy`, v1781909036084) and
+verified: `$types` now serves the 14 new types globally; anon SSR renders 200.
+
+## Open thread: should types carry a (machine-readable) schema?
+
+Some types already declare a `schema`, but as prose (`"confidence": "number 0..1
+— calibrated belief"`) — legible, not validatable. The natural next rung is a
+lightweight structured field-spec so the generic editor becomes a *form* (not raw
+JSON), `remember` can validate, and agents get a **create** contract (the shape to
+fill), completing render/open/edit → construct. Optional/additive: the generic
+floor stays the fallback for schemaless types. Designed, not yet built.
