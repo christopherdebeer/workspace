@@ -704,7 +704,7 @@ const TOOLS = [
   {
     name: 'decide',
     description:
-      'Resolve a machine run\'s agent rail: read machine-run/<run> + its rails, choose one branch with the model, and write the decision back — a claim (the certificate of reasoning) + the run advance, which re-triggers the deterministic rails. When no provider is configured (or {defer:true}), instead expose the decision as a claimable `task/<run>.<node>` fact for any substrate agent (a human via the decide-<node> action, or an autonomous loop) to complete. Idempotent per node. Typically fired by a reactive machine\'s subscription, not called by hand.',
+      'Resolve a machine run\'s decision rail: read machine-run/<run> + its rails (and any machine `context` facts), choose one branch with the model, and write the decision back — a claim (the certificate of reasoning) + the run advance, which re-triggers the deterministic rails. When no provider can deliver (none enabled, all error) or {defer:true}, park the run as awaiting-decision — a claimable task any substrate agent (a human via the decide-<node> action, or an autonomous loop) completes. Idempotent per node. Typically fired by a reactive machine\'s subscription, not called by hand.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -750,21 +750,10 @@ async function agentProviders(): Promise<Array<{ provider: 'anthropic' | 'openai
   return out;
 }
 
-async function openDecisionTask(run: string, machineName: string, node: string, title: string, branches: string[], reason: string, extra?: Record<string, unknown>): Promise<unknown> {
-  if (await readFact(`task/${run}.${node}`)) return { task: true, status: 'already-open', run, node };
-  await emitFact(
-    `task/${run}.${node}`,
-    { kind: 'decision', run, machine: machineName, node, title, branches, status: 'open', reason, createdAt: new Date().toISOString(), ...extra },
-    'task',
-    ['task', 'machine', `machine:${machineName}`],
-  );
-  return { task: true, run, node, branches, reason };
-}
-
 async function decide(args: Record<string, unknown>): Promise<unknown> {
   const run = String(args.run ?? '');
   if (!run) throw new Error('run is required');
-  const defer = args.defer === true;
+  const defer = args.defer === true || args.defer === 'true';
 
   const runFact = await readFact<{ machine?: string; node?: string; status?: string }>(`machine-run/${run}`);
   if (!runFact?.machine || !runFact.node) return { skipped: 'no-active-run', run };
@@ -776,14 +765,36 @@ async function decide(args: Record<string, unknown>): Promise<unknown> {
   // race could double-deliver before the advance lands).
   if (await readFact(`claims/${run}.${node}`)) return { skipped: 'already-decided', run, node };
 
-  const machine = await readFact<{ arrows?: MachineArrow[]; nodes?: MachineNode[]; title?: string }>(`machine/${machineName}`);
+  const machine = await readFact<{ arrows?: MachineArrow[]; nodes?: MachineNode[]; title?: string; context?: string[] }>(`machine/${machineName}`);
   if (!machine?.arrows) return { skipped: 'no-machine', machine: machineName };
-  const branches = machine.arrows.filter((a) => a.from === node && a.arrow === '=>').map((a) => a.to);
-  if (!branches.length) return { skipped: 'not-an-agent-node', node };
-
+  // `=>` (agent) and `~>` (task) arrows are both decision branches.
+  const branches = machine.arrows.filter((a) => a.from === node && (a.arrow === '=>' || a.arrow === '~>')).map((a) => a.to);
+  if (!branches.length) return { skipped: 'not-a-decision-node', node };
   const titleOf = (n: string) => machine.nodes?.find((x) => x.name === n)?.title ?? n;
+  const terminal = (n: string) => !machine.arrows!.some((a) => a.from === n);
+
+  // Park the run as a claimable task: any substrate agent (a human via
+  // decide-<node>, or an autonomous loop) picks it up. The `awaiting` tag is
+  // what the open-tasks view keys off; completion advances the run and clears it.
+  const park = (reason: string, extra?: Record<string, unknown>) =>
+    emitFact(`machine-run/${run}`, { machine: machineName, node, status: 'awaiting-decision', branches, reason, at: new Date().toISOString(), via: `${node}:awaiting`, ...extra }, 'machine-run', ['machine', `machine:${machineName}`, 'awaiting']);
 
   const providers = defer ? [] : await agentProviders();
+  if (!providers.length) {
+    await park(defer ? 'deferred' : 'no-provider');
+    return { task: true, run, node, branches, reason: defer ? 'deferred' : 'no-provider' };
+  }
+
+  // Context the machine asked the decider to read (e.g. tending/latest).
+  let contextStr = '';
+  if (Array.isArray(machine.context) && machine.context.length) {
+    const parts: string[] = [];
+    for (const k of machine.context.slice(0, 8)) {
+      const v = await readFact(k);
+      if (v != null) parts.push(`${k}: ${JSON.stringify(v)}`);
+    }
+    if (parts.length) contextStr = `\nContext:\n${parts.join('\n')}\n`;
+  }
 
   const system =
     'You are resolving a decision point of a process running on the parc.land substrate. ' +
@@ -792,7 +803,7 @@ async function decide(args: Record<string, unknown>): Promise<unknown> {
   const prompt =
     `Process: ${machine.title ?? machineName}\n` +
     `Current node: ${node} (${titleOf(node)})\n` +
-    `Run state: ${JSON.stringify(runFact)}\n\n` +
+    `Run state: ${JSON.stringify(runFact)}\n${contextStr}\n` +
     `Branches:\n${branches.map((b) => `- ${b}: ${titleOf(b)}`).join('\n')}\n\n` +
     'Pick the best branch by node name.';
 
@@ -821,14 +832,13 @@ async function decide(args: Record<string, unknown>): Promise<unknown> {
     // The decision becomes a claim (the certificate of reasoning) + the run
     // advance, which re-triggers the deterministic rails toward the branch.
     await emitFact(`claims/${run}.${node}`, { statement, chose: to, at: node, machine: machineName, confidence, by: `@${OWNER}/models`, model: provider }, 'claim', ['claim', 'machine', `machine:${machineName}`]);
-    await emitFact(`machine-run/${run}`, { node: to, at: new Date().toISOString(), machine: machineName, status: 'running', via: `${node}=>decide` }, 'machine-run', ['machine', `machine:${machineName}`]);
-    return { decided: true, run, from: node, to, confidence, statement, model: provider };
+    await emitFact(`machine-run/${run}`, { node: to, at: new Date().toISOString(), machine: machineName, status: terminal(to) ? 'done' : 'running', via: `${node}=>decide` }, 'machine-run', ['machine', `machine:${machineName}`]);
+    return { decided: true, run, from: node, to, confidence, statement, model: provider, done: terminal(to) };
   }
 
-  // No model could decide (none enabled, or all failed) — expose a claimable
-  // task for any substrate agent (a human, or an autonomous loop) to complete.
-  const reason = defer ? 'deferred' : providers.length ? 'provider-error' : 'no-provider';
-  return openDecisionTask(run, machineName, node, titleOf(node), branches, reason, lastErr ? { error: lastErr } : undefined);
+  // All providers failed — leave it as a claimable task rather than guess.
+  await park('provider-error', lastErr ? { error: lastErr } : undefined);
+  return { task: true, run, node, branches, reason: 'provider-error', error: lastErr };
 }
 
 /** Set per-invocation so toolCall can self-invoke for async jobs. */

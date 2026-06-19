@@ -178,7 +178,7 @@ function railsFrom(arrows, explicit) {
     return explicit.map((r) => ({
       from: r.from,
       to: r.to,
-      mode: r.mode === 'agent' ? 'agent' : 'auto',
+      mode: r.mode === 'agent' ? 'agent' : r.mode === 'task' ? 'task' : 'auto',
       ...(r.condition ? { condition: r.condition } : {}),
     }));
   }
@@ -186,6 +186,7 @@ function railsFrom(arrows, explicit) {
   for (const e of arrows) {
     if (e.arrow === '->') rails.push({ from: e.from, to: e.to, mode: 'auto' });
     else if (e.arrow === '=>') rails.push({ from: e.from, to: e.to, mode: 'agent' });
+    else if (e.arrow === '~>') rails.push({ from: e.from, to: e.to, mode: 'task' });
   }
   return rails;
 }
@@ -231,11 +232,15 @@ function projectionActions(name, nodes, rails) {
     });
   }
 
-  for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
-    const branches = rails.filter((x) => x.mode === 'agent' && x.from === from).map((x) => x.to);
+  // Agent (`=>`) and task (`~>`) rails both resolve at `from` by recording a
+  // chosen branch as a claim + advancing — the same completion action, whether
+  // the chooser is a model (agent) or a claimant working an open task (task).
+  const isDecision = (x) => x.mode === 'agent' || x.mode === 'task';
+  for (const from of [...new Set(rails.filter(isDecision).map((x) => x.from))]) {
+    const branches = rails.filter((x) => isDecision(x) && x.from === from).map((x) => x.to);
     actions.push({
       id: `machine.${m}.decide-${seg(from)}`,
-      description: `Agent rail at ${from}: record the chosen branch as a claim and advance. Branches: ${branches.join(', ')}.`,
+      description: `Decision at ${from}: record the chosen branch as a claim and advance. Branches: ${branches.join(', ')}.`,
       params: {
         run: { type: 'string', required: true },
         to: { type: 'string', required: true, enum: branches, description: 'The chosen branch' },
@@ -287,12 +292,19 @@ function projectionSubscriptions(name, rails) {
       params: { run: '${keySuffix}' },
     });
   }
-  for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
+  // Decision nodes deliver to the model. `=>` agent rails let it decide (falling
+  // back to a claimable task if no provider); `~>` task rails always defer to a
+  // claimable task. The `status != awaiting-decision` guard makes the run fire
+  // the decision once on arrival, not again when it parks awaiting a claimant.
+  const agentNodes = new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from));
+  const taskNodes = new Set(rails.filter((x) => x.mode === 'task').map((x) => x.from));
+  for (const from of new Set([...agentNodes, ...taskNodes])) {
+    const defer = taskNodes.has(from) && !agentNodes.has(from);
     subs.push({
       id: `machine.${m}.decide-${seg(from)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)}` },
+      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
       deliver: `@${OWNER}/models.decide`,
-      params: { run: '${keySuffix}' },
+      params: defer ? { run: '${keySuffix}', defer: 'true' } : { run: '${keySuffix}' },
     });
   }
   return subs;
@@ -321,7 +333,27 @@ export const handler = async (event) => {
       value: { id: 'machine-runs', description: 'Machine runs — active and completed', query: { type: 'machine-run', rankBy: 'recency', limit: 50 }, render: { type: 'fields' } },
       via: 'machine.bootstrap',
     });
-    return json(200, { bootstrapped: true, renderer: '_renderers/machine', view: '_views/machine-runs' });
+    // Generic claimable-task vocabulary (not machine-specific): an atomic,
+    // lease-bound claim — sync's canonical hand-off — so one agent works a task
+    // at a time, plus the queue of runs awaiting a decision/work.
+    await emit({
+      key: '_actions/task.claim',
+      value: {
+        id: 'task.claim',
+        description: 'Atomically claim an awaiting task (a machine run in awaiting-decision) with a 5-minute lease, so only one agent works it. Fails if a live claim already exists; the lease auto-expires so a crashed claimant releases it.',
+        params: { run: { type: 'string', required: true, description: 'the run id (task) to claim' }, by: { type: 'string', required: true, description: 'who is claiming' } },
+        writes: [{ key: 'task-claim/${params.run}', ifAbsent: true, value: { by: '${params.by}', at: '${now}' }, type: 'task-claim', timer: { ms: 300000, effect: 'delete' } }],
+      },
+      type: 'action',
+      tags: ['cell-required', 'machine', 'tasks'],
+      via: 'machine.bootstrap',
+    });
+    await emit({
+      key: '_views/open-tasks',
+      value: { id: 'open-tasks', description: 'Runs awaiting a decision or work — the claimable task queue', query: { tag: 'awaiting', rankBy: 'recency', limit: 50 }, render: { type: 'fields' } },
+      via: 'machine.bootstrap',
+    });
+    return json(200, { bootstrapped: true, renderer: '_renderers/machine', views: ['_views/machine-runs', '_views/open-tasks'], actions: ['task.claim'] });
   }
 
   if (method === 'POST' && path === '/_tools/define_machine') {
@@ -336,6 +368,10 @@ export const handler = async (event) => {
       nodes,
       arrows: arrows.map((e) => ({ ...e, rel: ARROW_RELS[e.arrow] ?? 'flows-to' })),
       rails,
+      // Substrate keys a decision at an agent rail should read for context
+      // (e.g. a tending machine points at `tending/latest`). models.decide
+      // includes their current values in the prompt.
+      ...(Array.isArray(a.context) ? { context: a.context } : {}),
       nodeCount: nodes.length,
       arrowCount: arrows.length,
     };
