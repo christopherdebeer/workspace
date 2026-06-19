@@ -741,12 +741,13 @@ function extractJson(text: string): Record<string, unknown> | null {
   try { return JSON.parse(m[0]) as Record<string, unknown>; } catch { return null; }
 }
 
-async function firstAgentProvider(): Promise<{ provider: 'anthropic' | 'openai'; rec: ProviderRec } | null> {
+async function agentProviders(): Promise<Array<{ provider: 'anthropic' | 'openai'; rec: ProviderRec }>> {
+  const out: Array<{ provider: 'anthropic' | 'openai'; rec: ProviderRec }> = [];
   for (const provider of ['anthropic', 'openai'] as const) {
     const rec = await getProvider(provider);
-    if (rec) return { provider, rec };
+    if (rec) out.push({ provider, rec });
   }
-  return null;
+  return out;
 }
 
 async function openDecisionTask(run: string, machineName: string, node: string, title: string, branches: string[], reason: string, extra?: Record<string, unknown>): Promise<unknown> {
@@ -782,8 +783,7 @@ async function decide(args: Record<string, unknown>): Promise<unknown> {
 
   const titleOf = (n: string) => machine.nodes?.find((x) => x.name === n)?.title ?? n;
 
-  const found = defer ? null : await firstAgentProvider();
-  if (!found) return openDecisionTask(run, machineName, node, titleOf(node), branches, defer ? 'deferred' : 'no-provider');
+  const providers = defer ? [] : await agentProviders();
 
   const system =
     'You are resolving a decision point of a process running on the parc.land substrate. ' +
@@ -795,19 +795,40 @@ async function decide(args: Record<string, unknown>): Promise<unknown> {
     `Run state: ${JSON.stringify(runFact)}\n\n` +
     `Branches:\n${branches.map((b) => `- ${b}: ${titleOf(b)}`).join('\n')}\n\n` +
     'Pick the best branch by node name.';
-  const out = found.provider === 'anthropic'
-    ? await runAnthropic(found.rec, { prompt, system, mode: 'text', maxTokens: 512 })
-    : await runOpenAI(found.rec, { prompt, system, mode: 'text', maxTokens: 512 });
-  const parsed = extractJson(out.text ?? '');
-  const to = parsed && typeof parsed.to === 'string' ? parsed.to : '';
-  // Model didn't return a usable branch — leave a claimable task rather than guess.
-  if (!branches.includes(to)) return openDecisionTask(run, machineName, node, titleOf(node), branches, 'model-uncertain', { modelText: out.text });
 
-  const statement = parsed && typeof parsed.statement === 'string' ? parsed.statement : `Chose ${to}`;
-  const confidence = parsed && typeof parsed.confidence === 'number' ? parsed.confidence : null;
-  await emitFact(`claims/${run}.${node}`, { statement, chose: to, at: node, machine: machineName, confidence, by: `@${OWNER}/models` }, 'claim', ['claim', 'machine', `machine:${machineName}`]);
-  await emitFact(`machine-run/${run}`, { node: to, at: new Date().toISOString(), machine: machineName, status: 'running', via: `${node}=>decide` }, 'machine-run', ['machine', `machine:${machineName}`]);
-  return { decided: true, run, from: node, to, confidence, statement };
+  // Try each enabled provider in turn; a model that can't deliver (no credits,
+  // refusal, unparseable, off-menu branch) is not a dead end — fall through.
+  let lastErr = '';
+  for (const { provider, rec } of providers) {
+    let text = '';
+    try {
+      const out = provider === 'anthropic'
+        ? await runAnthropic(rec, { prompt, system, mode: 'text', maxTokens: 512 })
+        : await runOpenAI(rec, { prompt, system, mode: 'text', maxTokens: 512 });
+      text = out.text ?? '';
+    } catch (e) {
+      lastErr = `${provider}: ${(e as Error).message}`;
+      continue;
+    }
+    const parsed = extractJson(text);
+    const to = parsed && typeof parsed.to === 'string' ? parsed.to : '';
+    if (!branches.includes(to)) {
+      lastErr = `${provider}: no usable branch in response`;
+      continue;
+    }
+    const statement = parsed && typeof parsed.statement === 'string' ? parsed.statement : `Chose ${to}`;
+    const confidence = parsed && typeof parsed.confidence === 'number' ? parsed.confidence : null;
+    // The decision becomes a claim (the certificate of reasoning) + the run
+    // advance, which re-triggers the deterministic rails toward the branch.
+    await emitFact(`claims/${run}.${node}`, { statement, chose: to, at: node, machine: machineName, confidence, by: `@${OWNER}/models`, model: provider }, 'claim', ['claim', 'machine', `machine:${machineName}`]);
+    await emitFact(`machine-run/${run}`, { node: to, at: new Date().toISOString(), machine: machineName, status: 'running', via: `${node}=>decide` }, 'machine-run', ['machine', `machine:${machineName}`]);
+    return { decided: true, run, from: node, to, confidence, statement, model: provider };
+  }
+
+  // No model could decide (none enabled, or all failed) — expose a claimable
+  // task for any substrate agent (a human, or an autonomous loop) to complete.
+  const reason = defer ? 'deferred' : providers.length ? 'provider-error' : 'no-provider';
+  return openDecisionTask(run, machineName, node, titleOf(node), branches, reason, lastErr ? { error: lastErr } : undefined);
 }
 
 /** Set per-invocation so toolCall can self-invoke for async jobs. */
