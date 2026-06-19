@@ -238,6 +238,11 @@ function projectionActions(name, nodes, rails) {
   const isDecision = (x) => x.mode === 'agent' || x.mode === 'task';
   for (const from of [...new Set(rails.filter(isDecision).map((x) => x.from))]) {
     const branches = rails.filter((x) => isDecision(x) && x.from === from).map((x) => x.to);
+    // The advance can't know the runtime-chosen branch's terminality, but when
+    // every branch is terminal the result is `done` regardless of choice — the
+    // common "decide/task → a terminal Result" case (mixed nodes resolve `done`
+    // correctly via models.decide, which sees the chosen branch).
+    const decisionStatus = branches.every((b) => !hasOut(b)) ? 'done' : 'running';
     actions.push({
       id: `machine.${m}.decide-${seg(from)}`,
       description: `Decision at ${from}: record the chosen branch as a claim and advance. Branches: ${branches.join(', ')}.`,
@@ -250,7 +255,7 @@ function projectionActions(name, nodes, rails) {
       if: [{ key: runKey, path: 'node', op: 'eq', value: from }],
       writes: [
         { key: 'claims/${params.run}.' + seg(from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
-        { key: runKey, value: { machine: name, node: '${params.to}', status: 'running', at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
+        { key: runKey, value: { machine: name, node: '${params.to}', status: decisionStatus, at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
       ],
     });
   }
