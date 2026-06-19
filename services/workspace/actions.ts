@@ -240,8 +240,20 @@ function validateDefinition(def: ActionDefinition): void {
   validateConditions('enabled', def.enabled);
 }
 
+/**
+ * Provenance options for a registration. Caller registration uses the
+ * defaults (`via: 'registerAction'`, untagged); an **organ** registering its
+ * own cell-required vocabulary passes its address as `via` and tags the fact
+ * `cell-required`, so it reads as part of the cell's program (refreshed on
+ * redeploy) rather than organic, caller-authored vocabulary.
+ */
+export interface RegisterOptions {
+  via?: string;
+  tags?: string[];
+}
+
 export interface DeclarativeActions {
-  register(scope: string, def: ActionDefinition, identity?: Identity): Promise<RegisterResult>;
+  register(scope: string, def: ActionDefinition, identity?: Identity, opts?: RegisterOptions): Promise<RegisterResult>;
   list(scope: string): Promise<ActionDefinition[]>;
   remove(scope: string, id: string, identity?: Identity): Promise<{ ok: true }>;
   invoke(scope: string, id: string, params: Record<string, unknown>, identity?: Identity): Promise<InvokeResult>;
@@ -254,7 +266,7 @@ export function createDeclarativeActions(state: ObservedState): DeclarativeActio
   }
 
   return {
-    async register(scope, def, identity): Promise<RegisterResult> {
+    async register(scope, def, identity, opts): Promise<RegisterResult> {
       validateDefinition(def);
       // Contested-target detection: declared writes make conflict a registry
       // scan — surfaced, not blocked (sync's stance: hold the tension visibly).
@@ -268,7 +280,7 @@ export function createDeclarativeActions(state: ObservedState): DeclarativeActio
         if (targets[w.key]?.length) contested.push({ target: w.key, actions: [...targets[w.key], def.id] });
       }
       await state.put(
-        { scope, key: `${ACTIONS_PREFIX}${def.id}`, value: def, via: 'registerAction', type: 'action' },
+        { scope, key: `${ACTIONS_PREFIX}${def.id}`, value: def, via: opts?.via ?? 'registerAction', type: 'action', tags: opts?.tags },
         identity,
       );
       return { action: def, contested };

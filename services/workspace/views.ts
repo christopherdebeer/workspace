@@ -90,8 +90,14 @@ function validateView(def: ViewDefinition): void {
   }
 }
 
+/** Provenance options, mirroring the actions registry (cell-required vs. caller). */
+export interface RegisterViewOptions {
+  via?: string;
+  tags?: string[];
+}
+
 export interface RegisteredViews {
-  register(scope: string, def: ViewDefinition, identity?: Identity): Promise<ViewDefinition>;
+  register(scope: string, def: ViewDefinition, identity?: Identity, opts?: RegisterViewOptions): Promise<ViewDefinition>;
   list(scope: string): Promise<ViewDefinition[]>;
   remove(scope: string, id: string, identity?: Identity): Promise<{ ok: true }>;
   /** Evaluate one registered view against the current slice. */
@@ -106,10 +112,10 @@ export function createRegisteredViews(state: ObservedState): RegisteredViews {
   }
 
   return {
-    async register(scope, def, identity): Promise<ViewDefinition> {
+    async register(scope, def, identity, opts): Promise<ViewDefinition> {
       validateView(def);
       await state.put(
-        { scope, key: `${VIEWS_PREFIX}${def.id}`, value: def, via: 'registerView', type: 'view' },
+        { scope, key: `${VIEWS_PREFIX}${def.id}`, value: def, via: opts?.via ?? 'registerView', type: 'view', tags: opts?.tags },
         identity,
       );
       return def;

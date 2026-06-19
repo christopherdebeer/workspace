@@ -1715,8 +1715,10 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       ctx.logger.warn('substrate write without a key refused', { source: meta.source });
       return;
     }
-    if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
-      ctx.logger.warn('substrate write to reserved vocabulary refused', { source: meta.source, key });
+    if (key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
+      // Sharing/visibility authority (who-can-see) is the caller's, never an
+      // organ's — these stay refused on the organ path.
+      ctx.logger.warn('substrate write to sharing namespace refused', { source: meta.source, key });
       return;
     }
     const resolved = (await ctx.serviceClient('cells').command('resolveCell', { cellId })) as {
@@ -1727,30 +1729,53 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
       ctx.logger.warn('substrate write from unknown cell refused', { cellId });
       return;
     }
+    const scope = resolved.owner;
     const writerAddress = `@${resolved.owner}/${resolved.name ?? cellId}`;
+    const identity: Identity = { user: writerAddress, scopes: [] };
     const { state } = build(ctx);
-    const entry = await state.put(
-      {
-        scope: resolved.owner,
-        key,
-        value: detail.value,
-        via: typeof detail.via === 'string' ? detail.via : writerAddress,
-        type: typeof detail.type === 'string' ? detail.type : undefined,
-        tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
-      },
-      { user: writerAddress, scopes: [] },
-    );
-    await ctx.events.emit('workspace.fact.written', {
-      scope: resolved.owner,
-      key,
-      revision: entry._meta.revision,
-    });
-    ctx.logger.info('substrate write applied for organ', {
-      cell: writerAddress,
-      scope: resolved.owner,
-      key,
-      revision: entry._meta.revision,
-    });
+
+    // A cell may seed its own **cell-required** vocabulary — declared actions
+    // and views, the same category as the `_renderers/*` it already seeds and
+    // exactly the "two kinds of seeding" discipline (cell-required vs. organic).
+    // These route through the same validated registries as caller registration
+    // (still type-checked and contested-detected), attributed to the cell and
+    // tagged `cell-required` so they read as program — versioned with the cell,
+    // refreshed on redeploy — not organic, caller-authored vocabulary.
+    try {
+      if (key.startsWith(ACTIONS_PREFIX)) {
+        const def = { ...(detail.value as ActionDefinition), id: key.slice(ACTIONS_PREFIX.length) };
+        const tags = [...new Set(['cell-required', ...(Array.isArray(detail.tags) ? (detail.tags as string[]) : [])])];
+        const result = await createDeclarativeActions(state).register(scope, def, identity, { via: writerAddress, tags });
+        if (result.contested.length) {
+          ctx.logger.warn('organ action contests existing targets', { cell: writerAddress, action: def.id, contested: result.contested });
+        }
+      } else if (key.startsWith(VIEWS_PREFIX)) {
+        const def = { ...(detail.value as ViewDefinition), id: key.slice(VIEWS_PREFIX.length) };
+        const tags = [...new Set(['cell-required', ...(Array.isArray(detail.tags) ? (detail.tags as string[]) : [])])];
+        await createRegisteredViews(state).register(scope, def, identity, { via: writerAddress, tags });
+      } else {
+        await state.put(
+          {
+            scope,
+            key,
+            value: detail.value,
+            via: typeof detail.via === 'string' ? detail.via : writerAddress,
+            type: typeof detail.type === 'string' ? detail.type : undefined,
+            tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
+          },
+          identity,
+        );
+      }
+    } catch (err) {
+      // Validation/contested failures must not crash the event consumer.
+      ctx.logger.warn('organ substrate write refused', { cell: writerAddress, key, error: (err as Error).message });
+      return;
+    }
+
+    const entry = await state.get(scope, key);
+    const revision = entry?._meta.revision ?? 1;
+    await ctx.events.emit('workspace.fact.written', { scope, key, revision });
+    ctx.logger.info('substrate write applied for organ', { cell: writerAddress, scope, key, revision });
   };
 }
 

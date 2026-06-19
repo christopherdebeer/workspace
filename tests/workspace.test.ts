@@ -853,18 +853,53 @@ describe('workspace substrate-write handler (the organ-to-reef path)', () => {
     expect(fact._meta.type).toBe('reading');
   });
 
-  it('refuses non-cell sources, missing keys, unknown cells, and vocabulary writes', async () => {
+  it('refuses non-cell sources, missing keys, unknown cells, malformed vocabulary, and sharing namespaces', async () => {
     // None of these should write anything.
     await handler({ key: 'x', value: 1 }, busCtx({ owner: 'alice' }), { source: 'rogue', detailType: 'substrate.write.requested' });
     await handler({ value: 1 }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
     await handler({ key: 'x', value: 1 }, busCtx(null), { source: 'cell-a', detailType: 'substrate.write.requested' });
+    // Malformed vocabulary is refused by the registry's own validation.
     await handler({ key: '_actions/evil', value: 1 }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
     await handler({ key: '_views/evil', value: 1 }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
+    // Sharing/visibility authority is the caller's, never an organ's.
+    await handler({ key: '_groups/evil', value: { members: ['mallory'] } }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
+    await handler({ key: '_public/evil', value: {} }, busCtx({ owner: 'alice' }), { source: 'cell-a', detailType: 'substrate.write.requested' });
 
     const view = await cmds.recall({ elision: 'none' }, ctxFor('alice').ctx);
     expect(view.entries['x']).toBeUndefined();
     expect(view.entries['_actions/evil']).toBeUndefined();
     expect(view.entries['_views/evil']).toBeUndefined();
+    expect(view.entries['_groups/evil']).toBeUndefined();
+    expect(view.entries['_public/evil']).toBeUndefined();
+  });
+
+  it('lets a cell seed its own cell-required actions and views (validated, contested-detected, tagged)', async () => {
+    // A well-formed declared action via the organ path — the cell's program,
+    // not organic knowledge: routed through the same registry as caller
+    // registration, attributed to the cell, tagged `cell-required`.
+    await handler(
+      { key: '_actions/machine.advance', value: { description: 'advance a run', writes: [{ key: 'machine-run/${params.id}', value: { at: '${now}' } }], params: { id: { type: 'string', required: true } } } },
+      busCtx({ owner: 'alice', name: 'machine' }),
+      { source: 'cell-machine-xyz', detailType: 'substrate.write.requested' },
+    );
+    await handler(
+      { key: '_views/machine.runs', value: { description: 'all machine runs', query: { type: 'machine-run' } } },
+      busCtx({ owner: 'alice', name: 'machine' }),
+      { source: 'cell-machine-xyz', detailType: 'substrate.write.requested' },
+    );
+
+    const action = await cmds.peek({ key: '_actions/machine.advance' }, ctxFor('alice').ctx);
+    expect(action?._meta.type).toBe('action');
+    expect(action?._meta.writer).toBe('@alice/machine');
+    expect(action?._meta.tags).toContain('cell-required');
+    expect((action?.value as { id: string }).id).toBe('machine.advance');
+    // It is a first-class declared action: listable and invocable like any other.
+    const listed = await cmds.actions({}, ctxFor('alice').ctx);
+    expect(listed.actions.some((a) => a.id === 'machine.advance')).toBe(true);
+
+    const viewFact = await cmds.peek({ key: '_views/machine.runs' }, ctxFor('alice').ctx);
+    expect(viewFact?._meta.type).toBe('view');
+    expect(viewFact?._meta.tags).toContain('cell-required');
   });
 });
 
