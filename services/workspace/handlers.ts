@@ -110,6 +110,30 @@ export const dynamoDeps: DepsBuilder = (ctx) => {
   return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table) };
 };
 
+/**
+ * The canonical type→manager map (`cells.describeTypes`), so the derived backbone
+ * can link a cell-managed type to its cell (docs/type-vocabulary.md). It is global
+ * (not per-user) and changes only on cell deploy, so a short process-wide cache
+ * keeps it off the hot read path; a fetch failure degrades to `{}` (the backbone
+ * still links facts to their types, just not types to cells).
+ */
+const TYPE_MANAGERS_TTL_MS = 60_000;
+let typeManagersCache: { at: number; map: Record<string, string> } | null = null;
+async function typeManagersFor(ctx: ServiceContext): Promise<Record<string, string>> {
+  if (typeManagersCache && Date.now() - typeManagersCache.at < TYPE_MANAGERS_TTL_MS) return typeManagersCache.map;
+  const map: Record<string, string> = {};
+  try {
+    const res = await ctx.serviceClient('cells').command<{ types?: Record<string, { manager?: unknown }> }>('describeTypes', {});
+    for (const [type, decl] of Object.entries(res?.types ?? {})) {
+      if (decl && typeof decl.manager === 'string') map[type] = decl.manager;
+    }
+    typeManagersCache = { at: Date.now(), map };
+  } catch (err) {
+    ctx.logger.warn('type manager map unavailable — backbone cell links skipped', { error: (err as Error).message });
+  }
+  return map;
+}
+
 export interface RememberInput {
   key: string;
   value: unknown;
@@ -1319,7 +1343,8 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, salienceConfig }, ctx.identity);
+      const typeManagers = await typeManagersFor(ctx);
+      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeManagers }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -1328,7 +1353,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, salienceConfig }, ctx.identity);
+          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeManagers }, ctx.identity);
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -1376,6 +1401,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
+          typeManagers: await typeManagersFor(ctx),
         },
         ctx.identity,
       );
@@ -1401,7 +1427,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel }, ctx.identity);
+      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeManagers: await typeManagersFor(ctx) }, ctx.identity);
     },
 
     async links(input, ctx) {

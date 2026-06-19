@@ -358,8 +358,9 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     await cmds.link({ from: 'd2', rel: 'refines', to: 'd1' }, alice());
 
     const around = await cmds.neighbors({ key: 'd1' }, alice());
-    expect(around.inbound.map((e) => `${e.from}-${e.rel}`).sort()).toEqual(['d2-refines', 't1-grounds']);
-    expect(around.outbound).toEqual([]);
+    // Authored edges only here; the derived backbone (instanceOf → _types/decision) is asserted separately.
+    expect(around.inbound.filter((e) => !e.derived).map((e) => `${e.from}-${e.rel}`).sort()).toEqual(['d2-refines', 't1-grounds']);
+    expect(around.outbound.filter((e) => !e.derived)).toEqual([]);
     expect(Object.keys(around.entries).sort()).toEqual(['d2', 't1']); // neighbor entries included
 
     const onlyGrounds = await cmds.neighbors({ key: 'd1', dir: 'in', rel: 'grounds' }, alice());

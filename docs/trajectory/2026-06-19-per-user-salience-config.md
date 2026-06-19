@@ -107,18 +107,42 @@ backbone is structure, not a substitute for authored connection.
 slash-normalised handle, type→renderer, fact→view, no-dangle, unfiltered-view
 skip, the centrality floor, `neighbors` surfacing, and authored-only `unlinked`).
 
-### Cell-managed types — the general seam
+### Cell-managed types — the general seam (canonical, not per-slice)
 
-`managedBy` resolves through the type-decl's `manager` field, which is the same
-declaration `docs/type-vocabulary.md` has cells writing on deploy. Where a slice's
-`_types/<type>` already carries a `manager`, the cell link lights up for free;
-elsewhere it's a one-field backfill (or the next cell-declares-its-types pass),
-not a code change. So this is general: any cell that declares the types it manages
-makes its facts walkable to it, and its cell fact accrues centrality from them.
+`cells.describeTypes` already stamps `manager` (the declaring cell's address) on
+every cell-declared type — the canonical vocabulary `docs/type-vocabulary.md`
+describes. So "cells declare their manager on deploy" is *already true* at the
+registry; the only missing wire was the runtime backbone consuming it. The
+workspace handlers now fetch that canonical **type→manager** map
+(`cells.describeTypes`, process-cached 60s, `workspace.allow(cells)` already
+granted) and pass it into `read`/`query`/`neighbors`; `deriveBackboneEdges` takes
+a slice type-decl's own `manager` when set, else the canonical map. No per-slice
+backfill, no `types.json` change — any cell that declares the types it manages
+makes its facts walk to it.
+
+**Virtual type anchors.** Most cell-managed *content* types (`doc`, `note`,
+`capture`, `machine-node`…) are canonical-only — no `_types/<type>` fact in the
+slice. So `instanceOf` is emitted **even when the anchor isn't materialised** (the
+anchor is a well-known node), and the anchor→cell/renderer bridge is derived for
+every type that appears, not just materialised type-decls. That's what lets a
+`doc` fact reach `_types/doc → @c15r/lit` with neither anchor nor manager stored
+in the slice. Edges to *real* targets (cell, renderer, view) still require the
+target to exist, so nothing dangles.
+
+Verified live (deploy #205, branch head): `neighbors("_types/cell")` returns all
+16 cells as `derived instanceOf` edges, and under the `connected` lens the
+`_types/*` facts moved from `centrality 0` / score 0.167 to `centrality 0.8–1.0` /
+score ~0.52 — the weak vocabulary became the hubs it always implied.
+
+## Catalogue: types with no manager
+
+After the canonical wiring, the types that *still* have no manager are the
+ownerless ones — built-in viewers and convention types with no managing cell.
+Catalogued for holistic reasoning at `kb/types-unmanaged` (substrate) — see below.
 
 ## Outstanding / next
 
 - `neighbors`/`attention` still *score* on instance defaults (not the per-scope
   salience config); fine for now (incidental scoring), worth aligning if it matters.
-- `managedBy` only fires where `_types/<type>.manager` is set in-slice; folding the
-  gateway's cell-declared `$types` canonical into the resolver would complete it.
+- Unmanaged types (the catalogue) want a home: either a `platform`/`viewers` cell
+  adopting them, or an explicit "built-in" manager so the vocabulary is complete.

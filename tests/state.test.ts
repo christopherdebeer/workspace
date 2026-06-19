@@ -375,9 +375,47 @@ describe('derived structural backbone', () => {
     expect(edges.some((e) => e.from === '_types/note' && e.rel === 'instanceOf')).toBe(false);
   });
 
-  it('never dangles: an edge is dropped when its target fact is absent', () => {
-    const edges = deriveBackboneEdges([rec('kb/1', 'note', { text: 'hi' })]); // no _types/note present
-    expect(edges).toHaveLength(0);
+  it('resolves managedBy from the canonical type→manager map when the anchor omits manager', () => {
+    const records = [
+      rec('kb/1', 'doc', { title: 'x' }),
+      rec('_types/doc', 'type-decl', { icon: '📄' }), // no manager in-slice
+      rec('cells/lit-abc', 'cell', { address: '/@c15r/lit', name: 'lit' }),
+    ];
+    // Without the canonical map, the type cannot reach its cell…
+    expect(deriveBackboneEdges(records).some((e) => e.rel === 'managedBy')).toBe(false);
+    // …with it (as a cell stamps on deploy), the link resolves.
+    const edges = deriveBackboneEdges(records, { doc: '@c15r/lit' });
+    expect(edges.some((e) => e.from === '_types/doc' && e.rel === 'managedBy' && e.to === 'cells/lit-abc')).toBe(true);
+  });
+
+  it('an in-slice manager on the anchor overrides the canonical map', () => {
+    const records = [
+      rec('_types/doc', 'type-decl', { manager: '@c15r/lit' }),
+      rec('cells/lit-abc', 'cell', { address: '/@c15r/lit', name: 'lit' }),
+      rec('cells/other-xyz', 'cell', { address: '/@c15r/other', name: 'other' }),
+    ];
+    const edges = deriveBackboneEdges(records, { doc: '@c15r/other' });
+    expect(edges.some((e) => e.rel === 'managedBy' && e.to === 'cells/lit-abc')).toBe(true);
+    expect(edges.some((e) => e.to === 'cells/other-xyz')).toBe(false);
+  });
+
+  it('anchors instanceOf to a virtual type node, but drops cell/renderer/view edges with no target', () => {
+    const edges = deriveBackboneEdges([rec('kb/1', 'note', { text: 'hi' })]); // no _types/note, cell, renderer, or view
+    // instanceOf is emitted even with no materialised anchor — the floor every typed fact gets.
+    expect(edges).toEqual([
+      expect.objectContaining({ from: 'kb/1', rel: 'instanceOf', to: '_types/note', derived: true }),
+    ]);
+    // …but managedBy/rendersWith need a real cell/renderer target, so neither appears.
+    expect(edges.some((e) => e.rel === 'managedBy' || e.rel === 'rendersWith')).toBe(false);
+  });
+
+  it('still reaches a canonical-only content type — instanceOf needs no slice anchor', () => {
+    // `doc` is cell-managed and has no `_types/doc` fact in this slice.
+    const records = [rec('kb/1', 'doc', { title: 'x' }), rec('cells/lit-abc', 'cell', { address: '/@c15r/lit' })];
+    const edges = deriveBackboneEdges(records, { doc: '@c15r/lit' });
+    expect(edges.some((e) => e.from === 'kb/1' && e.rel === 'instanceOf' && e.to === '_types/doc')).toBe(true);
+    // and the virtual anchor still bridges to its cell
+    expect(edges.some((e) => e.from === '_types/doc' && e.rel === 'managedBy' && e.to === 'cells/lit-abc')).toBe(true);
   });
 
   it('ignores unfiltered views (a query with no type/tag/prefix would select everything)', () => {

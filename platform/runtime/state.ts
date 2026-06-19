@@ -573,23 +573,42 @@ function normalizeCellHandle(h: string): string {
  * Compute the virtual backbone edges implied by a scope's own facts — pure, and
  * conditioned on the target fact existing in the scope, so a backbone edge never
  * dangles. Targets: a fact's `_types/<type>` anchor; that anchor's managing cell
- * (matched via the type-decl's `manager` against `cell` facts' address/name) and
- * its `_renderers/<type>`; and `_views/<id>` for any view whose query selects the
- * fact. Edges are timeless (`createdAt: ''`, `writer: null`) and flagged derived.
+ * (matched against `cell` facts' address/name) and its `_renderers/<type>`; and
+ * `_views/<id>` for any view whose query selects the fact. Edges are timeless
+ * (`createdAt: ''`, `writer: null`) and flagged derived.
+ *
+ * A type's manager comes from the type-decl's own `manager` field when set, else
+ * from `typeManagers` — the canonical type→manager map a cell stamps on deploy
+ * (`cells.describeTypes`), so a cell-managed type links to its cell without the
+ * per-slice anchor having to carry the manager itself.
  */
-export function deriveBackboneEdges(records: StateRecord[]): AnnotatedEdge[] {
+export function deriveBackboneEdges(
+  records: StateRecord[],
+  typeManagers?: Record<string, string>,
+): AnnotatedEdge[] {
   const live = records.filter((r) => !r.superseded);
   const present = new Set(live.map((r) => r.key));
+  const scope = live[0]?.scope ?? '';
 
-  // Index cells by every handle they answer to, and the views with a usable query.
+  // Index cells by every handle they answer to, the views with a usable query, and
+  // the manager a slice type-decl declares for itself (overrides the canonical map).
   const cellByHandle = new Map<string, string>();
   const views: Array<{ key: string; type?: string; tag?: string; prefix?: string }> = [];
+  const sliceTypeManager = new Map<string, string>();
+  const typeNames = new Set<string>(); // every type that appears, anchored or not
   for (const r of live) {
+    if (r.type && !r.key.startsWith(TYPES_PREFIX)) typeNames.add(r.type);
     if (r.type === 'cell') {
       const v = (r.value ?? {}) as { address?: unknown; name?: unknown };
       for (const h of [v.address, v.name]) {
         if (typeof h === 'string' && h) cellByHandle.set(normalizeCellHandle(h), r.key);
       }
+    }
+    if (r.key.startsWith(TYPES_PREFIX)) {
+      const t = r.key.slice(TYPES_PREFIX.length);
+      typeNames.add(t);
+      const m = ((r.value ?? {}) as { manager?: unknown }).manager;
+      if (typeof m === 'string') sliceTypeManager.set(t, m);
     }
     if (r.key.startsWith(VIEWS_PREFIX)) {
       const q = ((r.value ?? {}) as { query?: unknown }).query;
@@ -609,32 +628,40 @@ export function deriveBackboneEdges(records: StateRecord[]): AnnotatedEdge[] {
   }
 
   const edges: AnnotatedEdge[] = [];
-  const add = (scope: string, from: string, rel: string, to: string): void => {
-    if (from === to || !present.has(to)) return;
+  // The `_types/<type>` anchor is a well-known node, so `instanceOf` is emitted
+  // even when the anchor isn't materialised as a fact (most cell-managed content
+  // types are canonical-only) — that's what gives every typed fact its floor.
+  // Edges to *other* targets (a cell, renderer, view) still require the target to
+  // exist, so they never dangle.
+  const push = (from: string, rel: string, to: string, requireTarget = true): void => {
+    if (from === to || (requireTarget && !present.has(to))) return;
     edges.push({ scope, from, rel, to, strength: BACKBONE_STRENGTH, createdAt: '', writer: null, derived: true });
   };
 
   for (const r of live) {
-    const isType = r.key.startsWith(TYPES_PREFIX);
     // fact → its type anchor (a type-decl is not an instance of itself)
-    if (r.type && !isType) add(r.scope, r.key, BACKBONE_RELS.instanceOf, `${TYPES_PREFIX}${r.type}`);
-    // type → managing cell + renderer
-    if (isType) {
-      const v = (r.value ?? {}) as { manager?: unknown };
-      if (typeof v.manager === 'string') {
-        const cellKey = cellByHandle.get(normalizeCellHandle(v.manager));
-        if (cellKey) add(r.scope, r.key, BACKBONE_RELS.managedBy, cellKey);
-      }
-      add(r.scope, r.key, BACKBONE_RELS.rendersWith, `${RENDERERS_PREFIX}${r.key.slice(TYPES_PREFIX.length)}`);
-    }
+    if (r.type && !r.key.startsWith(TYPES_PREFIX)) push(r.key, BACKBONE_RELS.instanceOf, `${TYPES_PREFIX}${r.type}`, false);
     // fact → each view whose query selects it
     for (const view of views) {
       if (view.key === r.key) continue;
       if (view.type && r.type !== view.type) continue;
       if (view.tag && !r.tags.includes(view.tag)) continue;
       if (view.prefix && !r.key.startsWith(view.prefix)) continue;
-      add(r.scope, r.key, BACKBONE_RELS.inView, view.key);
+      push(r.key, BACKBONE_RELS.inView, view.key);
     }
+  }
+
+  // type anchor → its managing cell + renderer. The anchor itself may be virtual,
+  // so this runs over every type that appears (not just materialised type-decls);
+  // manager is the slice decl's own field when set, else the canonical map.
+  for (const t of typeNames) {
+    const anchor = `${TYPES_PREFIX}${t}`;
+    const manager = sliceTypeManager.get(t) ?? typeManagers?.[t];
+    if (manager) {
+      const cellKey = cellByHandle.get(normalizeCellHandle(manager));
+      if (cellKey) push(anchor, BACKBONE_RELS.managedBy, cellKey);
+    }
+    push(anchor, BACKBONE_RELS.rendersWith, `${RENDERERS_PREFIX}${t}`);
   }
   return edges;
 }
@@ -692,6 +719,9 @@ export interface ReadOptions {
    * policy governs the assembled result. Pass `null` to force instance defaults.
    */
   salienceConfig?: Partial<SalienceOptions> | null;
+  /** Canonical type→manager map (`cells.describeTypes`) so the derived backbone
+   *  can link a cell-managed type to its cell. Injected by the handler. */
+  typeManagers?: Record<string, string>;
 }
 
 export interface QueryOptions {
@@ -714,6 +744,9 @@ export interface QueryOptions {
    */
   cursor?: string;
   includeSuperseded?: boolean;
+  /** Canonical type→manager map (`cells.describeTypes`) for the derived backbone's
+   *  `managedBy` edges. Injected by the handler. */
+  typeManagers?: Record<string, string>;
 }
 
 export interface QueryResult {
@@ -730,6 +763,9 @@ export interface QueryResult {
 export interface NeighborsOptions {
   dir?: 'in' | 'out' | 'both';
   rel?: string;
+  /** Canonical type→manager map (`cells.describeTypes`) so a type's derived
+   *  `managedBy` edge to its cell shows up in traversal. Injected by the handler. */
+  typeManagers?: Record<string, string>;
 }
 
 export interface NeighborsResult {
@@ -833,6 +869,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     nowMs: number,
     windowMs: number,
     records?: StateRecord[],
+    typeManagers?: Record<string, string>,
   ): Promise<Map<string, KeySignals>> {
     const [events, edges, recs] = await Promise.all([
       store.recentTrajectory(scope, 0),
@@ -841,7 +878,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     ]);
     // Centrality counts the derived backbone alongside authored edges, so a
     // typed-but-unlinked fact earns a structural floor instead of scoring zero.
-    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs)], nowMs, windowMs);
+    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs, typeManagers)], nowMs, windowMs);
   }
 
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
@@ -1034,7 +1071,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
       const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
       const records = await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeManagers);
 
       // Score every live entry (no elision yet); shape in one pass below.
       const scored: Record<string, Entry> = {};
@@ -1054,9 +1091,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
       const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience);
+      const queryTypeManagers = opts?.typeManagers;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, queryTypeManagers);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
@@ -1136,10 +1174,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         store.list(scope),
       ]);
       // The derived backbone is one hop too: a fact's type/cell/renderer/views.
-      const derived = deriveBackboneEdges(records).filter((e) => !opts?.rel || e.rel === opts.rel);
+      const derived = deriveBackboneEdges(records, opts?.typeManagers).filter((e) => !opts?.rel || e.rel === opts.rel);
       const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
       const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
-      const signals = await signalsFor(scope, nowMs, s.windowMs, records);
+      const signals = await signalsFor(scope, nowMs, s.windowMs, records, opts?.typeManagers);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
