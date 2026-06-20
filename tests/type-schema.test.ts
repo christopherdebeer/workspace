@@ -3,7 +3,7 @@
  * yields hints that nudge a fact (missing a recommended field) or a type (no
  * schema yet) toward improvement.
  */
-import { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl } from '../platform/runtime/type-schema';
+import { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl, resolveType } from '../platform/runtime/type-schema';
 
 describe('mergeTypeDecl (the one type-kind resolver)', () => {
   it('merges per facet, slice wins — keeps canonical facets the slice omits', () => {
@@ -75,11 +75,39 @@ describe('missingRequired', () => {
   });
 });
 
-describe('schemaHints (advisory, never blocks)', () => {
-  const claimDecl = { schema: { statement: 'string — the asserted proposition', confidence: 'number 0..1 — calibrated belief' } };
+describe('resolveType (the Type facets)', () => {
+  it('maps a flat decl into shape / present / manager / handlers, slice keys already merged', () => {
+    const t = resolveType(
+      {
+        manager: '@c15r/lit',
+        icon: '📄',
+        label: 'value.title',
+        handlers: { open: [{ path: '?doc=x' }] },
+        schema: { title: 'string — the title' },
+      },
+      'doc',
+    );
+    expect(t.kind).toBe('doc');
+    expect(t.manager).toBe('@c15r/lit');
+    expect(t.present).toEqual({ icon: '📄', label: 'value.title', render: undefined });
+    expect(t.handlers).toEqual({ open: [{ path: '?doc=x' }] });
+    expect(t.shape.fields?.[0]).toMatchObject({ name: 'title', type: 'string', required: true });
+    expect(t.declared).toBe(true);
+  });
+
+  it('reads legacy present keys (titlePath / viewer) and marks a bare type undeclared', () => {
+    const t = resolveType({ titlePath: 'name', viewer: 'json' }, 'json');
+    expect(t.present.label).toBe('name');
+    expect(t.present.render).toEqual({ viewer: 'json' });
+    expect(resolveType(undefined, 'gizmo').declared).toBe(false);
+  });
+});
+
+describe('schemaHints (advisory, never blocks) — over resolveType facets', () => {
+  const claim = resolveType({ schema: { statement: 'string — the asserted proposition', confidence: 'number 0..1 — calibrated belief' } }, 'claim');
 
   it('hints each missing recommended field when the type has a schema', () => {
-    const hints = schemaHints({ type: 'claim', value: { confidence: 0.9 }, decl: claimDecl });
+    const hints = schemaHints({ type: 'claim', value: { confidence: 0.9 }, fields: claim.shape.fields, declared: claim.declared });
     expect(hints).toHaveLength(1);
     expect(hints[0]).toContain('"claim"');
     expect(hints[0]).toContain('"statement"');
@@ -87,19 +115,20 @@ describe('schemaHints (advisory, never blocks)', () => {
   });
 
   it('is silent when all recommended fields are present', () => {
-    expect(schemaHints({ type: 'claim', value: { statement: 'x', confidence: 0.9 }, decl: claimDecl })).toEqual([]);
+    expect(schemaHints({ type: 'claim', value: { statement: 'x', confidence: 0.9 }, fields: claim.shape.fields, declared: true })).toEqual([]);
   });
 
   it('nudges a schemaless type with a structured value to declare one', () => {
-    const hints = schemaHints({ type: 'decision', value: { choice: 'dynamo', rationale: 'one table' }, decl: { icon: '⚖️', manager: '@c15r/home' } });
+    const t = resolveType({ icon: '⚖️', manager: '@c15r/home' }, 'decision');
+    const hints = schemaHints({ type: 'decision', value: { choice: 'dynamo', rationale: 'one table' }, fields: t.shape.fields, declared: t.declared });
     expect(hints).toHaveLength(1);
     expect(hints[0]).toContain('has no schema');
     expect(hints[0]).not.toContain('undeclared'); // a declared type
   });
 
   it('marks an undeclared type as such, and stays quiet for trivial/untyped values', () => {
-    expect(schemaHints({ type: 'gizmo', value: { a: 1 }, decl: undefined })[0]).toContain('undeclared');
-    expect(schemaHints({ type: 'note', value: 'just a string', decl: undefined })).toEqual([]); // not structured
-    expect(schemaHints({ type: null, value: { a: 1 } })).toEqual([]); // untyped
+    expect(schemaHints({ type: 'gizmo', value: { a: 1 }, fields: null, declared: false })[0]).toContain('undeclared');
+    expect(schemaHints({ type: 'note', value: 'just a string', fields: null, declared: false })).toEqual([]); // not structured
+    expect(schemaHints({ type: null, value: { a: 1 }, fields: null })).toEqual([]); // untyped
   });
 });

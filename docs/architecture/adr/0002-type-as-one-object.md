@@ -122,6 +122,25 @@ No data migration: `_types/*`, `_renderers/*`, and prose schemas stay on disk; o
 - `_renderers` resolution-through-Type must match canvas's current direct read; covered by
   render parity.
 
+## Implementation log
+
+- **2026-06-19 — the `Type` object + `resolveType` landed** (`platform/runtime/type-schema.ts`).
+  A pure resolver maps a merged decl (`mergeTypeDecl`, ADR-0001) into the four facets
+  (`shape.fields`/`keyPattern`, `present.icon/label/render`, `handlers`, `manager`), reading
+  legacy `titlePath`/`viewer` too, and a `declared` flag. **First consumer:** `remember` now
+  resolves the Type once and validates against `type.shape.fields` (`schemaHints` refactored
+  to take `fields`/`declared` instead of re-parsing a decl) — behaviour-identical
+  (`shape.fields === parseTypeSchema`). Unit-tested; suite 291 green. No deploy needed (output
+  unchanged; prod runs the equivalent path from ADR-0001 #209).
+- **Backbone already aligned:** `deriveBackboneEdges` resolves a type's manager as
+  `sliceManager ?? canonicalManager` — the same slice-wins precedence as `resolveType.manager`
+  — so no change was required (recorded so the map stays honest).
+- **Still to do (the client-coupled chunk, own review):** point `gateway buildTypes` /
+  `home resolve` / `canvas` at `resolveType` (the `$types` payload gains facets, additive); fold
+  `_renderers/<type>` resolution through `present.render`; the home **form editor** reads
+  `shape.fields`. These touch the home cell + canvas and warrant a focused, separately-reviewed
+  change with a home-cell deploy — not folded into the server-side foundation above.
+
 ## Out of scope
 - Reference rules from `shape` (ADR-0003).
 - Whether `_renderers/*` facts eventually move *into* the `_types/<type>` value (a later data

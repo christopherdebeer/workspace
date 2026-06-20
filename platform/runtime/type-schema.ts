@@ -105,10 +105,9 @@ export function missingRequired(value: unknown, fields: FieldSpec[]): FieldSpec[
  *  - no schema but a structured value → a single nudge that the type could
  *    declare a schema (so future facts can be validated).
  */
-export function schemaHints(opts: { type?: string | null; value: unknown; decl?: unknown }): string[] {
-  const { type, value, decl } = opts;
+export function schemaHints(opts: { type?: string | null; value: unknown; fields: FieldSpec[] | null; declared?: boolean }): string[] {
+  const { type, value, fields, declared } = opts;
   if (!type) return [];
-  const fields = parseTypeSchema(decl);
   if (fields) {
     return missingRequired(value, fields).map(
       (f) => `Fact of type "${type}" is missing recommended field "${f.name}"${f.description ? ` — ${f.description}` : ''}.`,
@@ -116,10 +115,50 @@ export function schemaHints(opts: { type?: string | null; value: unknown; decl?:
   }
   const structured = !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length > 0;
   if (structured) {
-    const declared = !!decl && typeof decl === 'object';
     return [
       `Type "${type}" has no schema${declared ? '' : ' (and is undeclared)'} — declaring its fields (and which are required) would let remember validate facts like this.`,
     ];
   }
   return [];
+}
+
+/**
+ * The Type object (ADR-0002): one Declaration resolved into its **facets**. A flat
+ * decl's top-level keys *are* its facets, so this is a typed view over the merged
+ * decl (`mergeTypeDecl`), not a second source. Consumers read a facet (a form reads
+ * `shape.fields`; `remember` validates against it; the backbone reads `manager`;
+ * a surface reads `present`/`handlers`) instead of re-deriving from the raw decl.
+ */
+export interface Type {
+  /** The type name, when known. */
+  kind?: string;
+  /** Owning cell address (→ backbone `managedBy`). */
+  manager?: string;
+  /** What its facts contain (validation · form · Reference inputs). */
+  shape: { fields: FieldSpec[] | null; keyPattern?: string };
+  /** How a fact of this kind looks. */
+  present: { icon?: string; label?: string; render?: unknown };
+  /** The affordance table (open/edit/create/render/embed → surface|act|renderer|hint). */
+  handlers?: Record<string, unknown>;
+  /** Whether any declaration backed this resolve (vs a bare/undeclared type). */
+  declared: boolean;
+}
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+/** Resolve a (merged) declaration into the typed `Type` facets. Pure. */
+export function resolveType(decl: unknown, kind?: string): Type {
+  const d = decl && typeof decl === 'object' && !Array.isArray(decl) ? (decl as Record<string, unknown>) : {};
+  return {
+    kind,
+    manager: str(d.manager),
+    shape: { fields: parseTypeSchema(d), keyPattern: str(d.keyPattern) },
+    present: {
+      icon: str(d.icon),
+      label: str(d.label) ?? str(d.titlePath),
+      render: d.render ?? (str(d.viewer) ? { viewer: d.viewer } : undefined),
+    },
+    handlers: d.handlers && typeof d.handlers === 'object' ? (d.handlers as Record<string, unknown>) : undefined,
+    declared: Object.keys(d).length > 0,
+  };
 }
