@@ -5,12 +5,11 @@
       "icon": "📄",
       "label": "value.title",
       "manager": "@c15r/lit",
-      "note": "A document is a VIEW over cell-facts. Membership + order are NOT in the doc value — they live in `_doc/<docId>/<blockKey>` decorations (type `doc-order`, value {seq, fold}). The doc value holds only {id, title, summary}. The inline `blocks` array is a deprecated fallback the loader honours only when no `_doc/` decorations exist.",
+      "note": "A document is a VIEW over cell-facts. Membership + order live in `_doc/<docId>/<blockKey>` decorations (type doc-order). The doc value holds only {id, title, summary}.",
       "schema": {
         "id": "string — the doc key, doc:<slug>",
         "title": "string",
-        "summary": "string — one-line abstract",
-        "blocks": "DEPRECATED — legacy inline array [{key, fold?}]; substrate-native docs order block-facts via _doc/<id>/<key> doc-order decorations instead"
+        "summary": "string — one-line abstract"
       },
       "handlers": {
         "open": [
@@ -35,7 +34,7 @@
       "icon": "🧱",
       "label": "value.id",
       "manager": "@c15r/lit",
-      "note": "A document block: markdown + lit fences (```mermaid/json/csv/run/js/repl, [[wiki-links]]). Any fact can be a block; it is placed into a doc by a `_doc/` doc-order decoration, not by living inside the doc.",
+      "note": "A document block: markdown + lit fences. Placed into a doc by a `_doc/` doc-order decoration.",
       "schema": {
         "id": "string — the block key",
         "content": "string — markdown with lit fences"
@@ -53,7 +52,7 @@
       "icon": "🔢",
       "label": "value.seq",
       "manager": "@c15r/lit",
-      "note": "Ordering decoration. Key `_doc/<docId>/<blockKey>`; places that block-fact in the doc at `seq` (fractional for insertion between neighbours). This is the substrate-native doc membership — a doc is the set of facts decorated for it.",
+      "note": "Ordering decoration. Key `_doc/<docId>/<blockKey>`; the key-encoded rule (ADR-0003) projects it into a `block inDoc doc:<docId>` Reference edge — doc membership as graph.",
       "schema": {
         "seq": "number — narrative position (fractional, e.g. 2.25, allows insertion)",
         "fold": "boolean? — collapsed by default"
@@ -63,7 +62,7 @@
         {
           "from": "{block}",
           "rel": "inDoc",
-          "to": "{doc}"
+          "to": "doc:{doc}"
         }
       ]
     }
