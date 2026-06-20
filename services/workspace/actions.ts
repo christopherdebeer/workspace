@@ -23,7 +23,8 @@
  * canonical task-queue claim: an atomic, lease-bound, crash-safe hand-off.
  */
 import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
-import type { Identity } from '../../platform/runtime';
+import { createDeclarationRegistry } from '../../platform/runtime';
+import type { Identity, DeclarationKind } from '../../platform/runtime';
 import type { ObservedState, Entry, FactTimer } from '../../platform/runtime';
 
 /** Reserved key prefix where a slice's declared vocabulary lives. */
@@ -259,54 +260,54 @@ export interface DeclarativeActions {
   invoke(scope: string, id: string, params: Record<string, unknown>, identity?: Identity): Promise<InvokeResult>;
 }
 
-// NOTE (ADR-0001): unlike views/subscriptions, actions are deliberately NOT a thin
-// wrapper over the Declaration registry. `register` returns a `RegisterResult`
-// (surfacing competing write targets) and `remove`/`invoke` throw a typed
-// `ActionInvokeError` — semantics beyond storage. Per the ADR's storage-vs-evaluate
-// boundary, that extra behaviour stays bespoke here; only the storage shape (key /
-// type / supersede) is shared in spirit, not forced through the generic registry.
+/** The action *kind* (ADR-0001): storage + validation. The `evaluate` side — contested
+ *  detection, the typed `ActionInvokeError`, and the interpreter — stays bespoke below. */
+const actionKind: DeclarationKind<ActionDefinition> = {
+  ns: ACTIONS_PREFIX,
+  factType: 'action',
+  defaultVia: 'registerAction',
+  idOf: (def) => def.id,
+  validate: validateDefinition,
+  isStored: (value): value is ActionDefinition => !!(value as ActionDefinition | undefined)?.id,
+};
+
+// ADR-0014 (teardown): actions now share the Declaration registry for storage
+// (validate → put → list → get → supersede), closing the ADR-0001 exception. Only the
+// behaviour *beyond* storage stays here — contested detection (`RegisterResult`), the typed
+// `ActionInvokeError`, and the interpreter (`invoke`) — per the storage-vs-evaluate boundary.
 export function createDeclarativeActions(state: ObservedState): DeclarativeActions {
-  async function loadAll(scope: string): Promise<ActionDefinition[]> {
-    const res = await state.query(scope, { prefix: ACTIONS_PREFIX, rankBy: 'recency' });
-    return res.entries.map((e) => e.value as ActionDefinition).filter((d): d is ActionDefinition => !!d?.id);
-  }
+  const registry = createDeclarationRegistry(state, actionKind);
 
   return {
     async register(scope, def, identity, opts): Promise<RegisterResult> {
-      validateDefinition(def);
-      // Contested-target detection: declared writes make conflict a registry
-      // scan — surfaced, not blocked (sync's stance: hold the tension visibly).
-      const existing = (await loadAll(scope)).filter((d) => d.id !== def.id);
+      await registry.register(scope, def, identity, opts); // validates + writes
+      // Contested-target detection: declared writes make conflict a registry scan —
+      // surfaced, not blocked (sync's stance: hold the tension visibly).
+      const others = (await registry.list(scope)).filter((d) => d.id !== def.id);
       const targets: Record<string, string[]> = {};
-      for (const other of existing) {
+      for (const other of others) {
         for (const w of other.writes) (targets[w.key] ??= []).push(other.id);
       }
       const contested: RegisterResult['contested'] = [];
       for (const w of def.writes) {
         if (targets[w.key]?.length) contested.push({ target: w.key, actions: [...targets[w.key], def.id] });
       }
-      await state.put(
-        { scope, key: `${ACTIONS_PREFIX}${def.id}`, value: def, via: opts?.via ?? 'registerAction', type: 'action', tags: opts?.tags },
-        identity,
-      );
       return { action: def, contested };
     },
 
     list(scope): Promise<ActionDefinition[]> {
-      return loadAll(scope);
+      return registry.list(scope);
     },
 
     async remove(scope, id, identity): Promise<{ ok: true }> {
-      const entry = await state.get(scope, `${ACTIONS_PREFIX}${id}`);
-      if (!entry || entry._meta.superseded) throw new ActionInvokeError('not_found', `action "${id}" not found`);
-      await state.supersede(scope, `${ACTIONS_PREFIX}${id}`, null, identity);
-      return { ok: true };
+      // The typed error is the bespoke part; the supersede is the registry's.
+      if (!(await registry.get(scope, id))) throw new ActionInvokeError('not_found', `action "${id}" not found`);
+      return registry.remove(scope, id, identity);
     },
 
     async invoke(scope, id, params, identity): Promise<InvokeResult> {
-      const entry = await state.get(scope, `${ACTIONS_PREFIX}${id}`);
-      if (!entry || entry._meta.superseded) throw new ActionInvokeError('not_found', `action "${id}" not found`);
-      const def = entry.value as ActionDefinition;
+      const def = await registry.get(scope, id);
+      if (!def) throw new ActionInvokeError('not_found', `action "${id}" not found`);
       const self = identity?.user ?? '';
       const now = new Date().toISOString();
       const args = params ?? {};

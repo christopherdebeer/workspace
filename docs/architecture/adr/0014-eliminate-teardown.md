@@ -29,7 +29,7 @@ decorations → delete the inline-`blocks` fallback. That is the template for th
 
 | # | Strangled-out seam | Action | Gate |
 |---|---|---|---|
-| 1 | `actions.ts` is **not** wrapped in `createDeclarationRegistry` (the documented ADR-0001 exception) | wrap it; keep `RegisterResult`/`ActionInvokeError` semantics | existing action tests green |
+| 1 | ~~`actions.ts` not wrapped in `createDeclarationRegistry` (ADR-0001 exception)~~ | ✅ **DONE** — storage (validate→put→list→get→supersede) routed through the registry; contested detection, `ActionInvokeError`, and the interpreter stay bespoke | action tests green (329) |
 | 2 | lit/canvas/home **bespoke membership + ordering** loaders | route through `workspace.members` (ADR-0005); delete the copies | doc/board render parity (live diff) |
 | 3 | home/kernel/lit/canvas **default-viewer / label** logic | call `resolvePresent` (ADR-0012); delete the per-cell copies | render parity per type |
 | 4 | `neighbors`/`members` **score on instance defaults**, not the scope's `_config/salience` (ADR-0006 open item) | thread the config into every salience-scoring path | salience-config test extended to these reads |

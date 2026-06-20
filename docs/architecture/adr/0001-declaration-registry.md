@@ -198,10 +198,13 @@ internal refactor.
   wrappers (`subscriptionKind` / `viewKind`); their evaluate sides (`matches`/`resolveParams`;
   `evaluate`/CEL) are untouched. Parity proven in `tests/declaration-registry.test.ts`; full
   suite green (287).
-- **actions — principled exception.** `register` returns a conflict-surfacing `RegisterResult`
-  and errors are a typed `ActionInvokeError`; these are evaluate-adjacent semantics, so per the
-  storage-vs-evaluate boundary actions stays bespoke (documented in `actions.ts`). A later
-  refinement may extract just its storage step, but it is *not* a thin wrap.
+- **actions — exception now closed (ADR-0014 row 1).** Originally kept bespoke because
+  `register` returns a conflict-surfacing `RegisterResult` and errors are a typed
+  `ActionInvokeError`. The Eliminate-phase teardown routed its **storage** step
+  (validate→put→list→get→supersede) through `createDeclarationRegistry` — exactly the "extract
+  just its storage step" refinement anticipated here — while the evaluate-adjacent parts
+  (contested detection, `ActionInvokeError`, the interpreter) stay bespoke, honouring the
+  storage-vs-evaluate boundary. So every declaration kind now shares the one storage lifecycle.
 - **2026-06-19 — type-kind resolve unified (first non-no-op).** Extracted
   `mergeTypeDecl(canonical, slice)` (`platform/runtime/type-schema.ts`) — the per-facet
   merge (slice wins). `remember` (workspace) and `buildTypes` (gateway) now both call it,
