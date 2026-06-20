@@ -584,3 +584,49 @@ describe('collections: members (ADR-0005)', () => {
     expect(res.members.map((m) => m.key)).toEqual(['x1']);
   });
 });
+
+describe('salience: explain breakdown (ADR-0006)', () => {
+  it('omits the breakdown by default and attaches it under explain', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: 'k', value: 1, type: 'note' }, alice);
+
+    const plain = await state.read('r', { elision: 'none' });
+    expect(plain.entries['k']._meta.explain).toBeUndefined();
+
+    const res = await state.read('r', { elision: 'none', explain: true });
+    const ex = res.entries['k']._meta.explain;
+    expect(ex).toBeDefined();
+    expect(Object.keys(ex!.signals).sort()).toEqual(['attention', 'centrality', 'recency', 'standing', 'velocity']);
+    // contribution = signal × weight, term by term
+    for (const term of ['recency', 'velocity', 'attention', 'standing', 'centrality'] as const) {
+      expect(ex!.contribution[term]).toBeCloseTo(ex!.signals[term] * ex!.weights[term], 4);
+    }
+    // and the contributions sum (pre-clamp) to the published score
+    const sum = Object.values(ex!.contribution).reduce((a, b) => a + b, 0);
+    expect(sum).toBeCloseTo(res.entries['k']._meta.score, 3);
+  });
+
+  it('the explained weights honor the per-call lens (connected ⇒ centrality-heavy)', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: 'k', value: 1, type: 'note' }, alice);
+    const res = await state.read('r', { elision: 'none', explain: true, lens: 'connected' });
+    const w = res.entries['k']._meta.explain!.weights;
+    // 'connected' biases the blend toward centrality (see LENS presets)
+    expect(w.centrality).toBeGreaterThan(w.recency);
+  });
+
+  it('centrality feed includes the whole Reference projection — an embedded ref raises degree', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    // claim.support is an embedded ref rule: claim --support--> each key.
+    const typeRules = { claim: { refs: [{ name: 'support', rel: 'supports', list: true }] } };
+    await state.put({ scope: 'r', key: 'kb/a', value: { text: 'cited' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'claims/c', value: { statement: 's', support: ['kb/a'] }, type: 'claim' }, alice);
+
+    const withRules = await state.read('r', { elision: 'none', explain: true, typeRules });
+    const without = await state.read('r', { elision: 'none', explain: true });
+    // the cited note's centrality degree must count the derived `supports` edge
+    expect(withRules.entries['kb/a']._meta.explain!.degree).toBeGreaterThan(
+      without.entries['kb/a']._meta.explain!.degree,
+    );
+  });
+});

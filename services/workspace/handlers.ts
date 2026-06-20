@@ -202,6 +202,8 @@ export interface RecallInput {
   lens?: SalienceLens;
   /** Precise per-call salience override (merges over the lens + defaults). */
   salience?: Partial<SalienceOptions>;
+  /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
+  explain?: boolean;
 }
 export interface PeekInput {
   key: string;
@@ -221,6 +223,8 @@ export interface QueryInput {
   /** Resume token from a previous page's `nextCursor`. */
   cursor?: string;
   includeSuperseded?: boolean;
+  /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
+  explain?: boolean;
 }
 export interface LinkInput {
   from: string;
@@ -413,7 +417,7 @@ interface ToolDescriptor {
 const META_SCHEMA = {
   type: 'object',
   description:
-    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided',
+    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided. With a read `explain:true`, also `explain: { signals, weights, contribution, degree }` — the score breakdown for tuning.',
 } as const;
 
 /** Per-call salience lens — an ergonomic bias over the tuned defaults. */
@@ -590,6 +594,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
+        explain: { type: 'boolean', description: 'Attach `_meta.explain` to each entry — the salience breakdown (signals · weights · contributions · degree) so you can see *why* a fact scored, and tune accordingly' },
       },
       additionalProperties: false,
     },
@@ -637,6 +642,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
+        explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
         limit: { type: 'number', description: 'Max entries to return' },
         cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
@@ -1419,13 +1425,14 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // (elision:'none' keeps values present so granted slices merge cleanly).
       const lens = input?.lens;
       const salience = input?.salience;
+      const explain = input?.explain;
       // The viewer's stored salience policy (`_config/salience`) governs the whole
       // assembled view — scoring (read) and tiering (shape) alike — so granted
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
       const typeRules = await typeRulesFor(ctx);
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeRules }, ctx.identity);
+      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -1434,7 +1441,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeRules }, ctx.identity);
+          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -1479,6 +1486,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           rankBy: input?.rankBy,
           lens: input?.lens,
           salience: input?.salience,
+          explain: input?.explain,
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,

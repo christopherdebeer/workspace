@@ -79,6 +79,21 @@ export interface EntryMeta {
   centrality: number;
   /** True when the value was withheld because the entry fell below the tier. */
   elided: boolean;
+  /** Full salience breakdown, attached only when a read sets `explain` — the
+   *  score stage made inspectable for tuning (which signal, at which weight,
+   *  contributed what). Absent on normal reads. */
+  explain?: ScoreExplain;
+}
+
+/** The score stage made legible: each normalized signal, the weight it was
+ *  blended by (resolved defaults ← config ← lens ← override), and its weighted
+ *  contribution to the final score — so a tuner can see *why* a fact scored. */
+export interface ScoreExplain {
+  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  /** Raw inbound+outbound graph degree feeding centrality (pre-saturation). */
+  degree: number;
 }
 
 export interface Entry<V = unknown> {
@@ -830,6 +845,9 @@ export interface ReadOptions {
   lens?: SalienceLens;
   /** Precise per-read salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
+  /** Attach `_meta.explain` (signals · weights · contributions) to every entry —
+   *  the score stage made inspectable for tuning. Off by default. */
+  explain?: boolean;
   /**
    * The scope's stored salience policy (a `_config/salience` fact), layered over
    * the instance defaults as the *base* — so it sits below the lens and the
@@ -857,6 +875,8 @@ export interface QueryOptions {
   lens?: SalienceLens;
   /** Precise per-query salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
+  /** Attach `_meta.explain` (signals · weights · contributions) to each entry. */
+  explain?: boolean;
   limit?: number;
   /**
    * Resume token from a previous page's `nextCursor`. Pages are computed over
@@ -1044,7 +1064,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   /** Wrap a stored record into a read-facing entry with a computed score. Pass a
    *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan, and
    *  `sCall` to score under a per-read lens (defaults to the instance settings). */
-  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s): Promise<Entry> {
+  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s, explain = false): Promise<Entry> {
     const sig = (signals ?? (await signalsFor(rec.scope, nowMs, sCall.windowMs))).get(rec.key) ?? EMPTY_SIGNALS;
     // Import priors fold into the cumulative (standing) counts only — never the
     // recent window — so a ported fact's earned importance shows without faking
@@ -1081,7 +1101,39 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         standing: round4(parts.standing),
         centrality: round4(parts.centrality),
         elided: false,
+        ...(explain ? { explain: explainScore(parts, sig, sCall) } : {}),
       },
+    };
+  }
+
+  /** Build the inspectable breakdown for a scored entry: the five signals, the
+   *  weights they were blended by, and each one's weighted contribution. */
+  function explainScore(parts: ScoreParts, sig: KeySignals, sCall: ResolvedSalience): ScoreExplain {
+    const signals = {
+      recency: round4(parts.recency),
+      velocity: round4(parts.velocity),
+      attention: round4(parts.attention),
+      standing: round4(parts.standing),
+      centrality: round4(parts.centrality),
+    };
+    const weights = {
+      recency: sCall.recencyWeight,
+      velocity: sCall.velocityWeight,
+      attention: sCall.attentionWeight,
+      standing: sCall.standingWeight,
+      centrality: sCall.centralityWeight,
+    };
+    return {
+      signals,
+      weights,
+      contribution: {
+        recency: round4(parts.recency * weights.recency),
+        velocity: round4(parts.velocity * weights.velocity),
+        attention: round4(parts.attention * weights.attention),
+        standing: round4(parts.standing * weights.standing),
+        centrality: round4(parts.centrality * weights.centrality),
+      },
+      degree: sig.degree ?? 0,
     };
   }
 
@@ -1219,7 +1271,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
         if (!isTimerLive(rec, nowMs)) continue;
-        scored[rec.key] = await wrap(rec, nowMs, signals, sCall);
+        scored[rec.key] = await wrap(rec, nowMs, signals, sCall, opts?.explain);
       }
 
       // Reading the scope is itself attention on every surfaced key.
@@ -1243,7 +1295,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (opts?.prefix && !rec.key.startsWith(opts.prefix)) return false;
         return true;
       });
-      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall)) })));
+      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain)) })));
       const rankBy = opts?.rankBy ?? 'salience';
       wrapped.sort((a, b) =>
         rankBy === 'recency'

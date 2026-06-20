@@ -1,6 +1,8 @@
 # ADR-0006 — Salience as the Projection's score stage
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted — the invariant is audited and locked, parameter resolution is
+  already one merge, and the score stage is now **inspectable** via a per-read `explain`
+  flag. Remaining open items (per-rule `BACKBONE_STRENGTH`) tracked below.
 - **Date:** 2026-06-19
 - **Context:** [`breathe.md`](../breathe.md) Wave 4/14 — Salience is the `score` stage
   of the Projection; it consumes References and is tuned by a Declaration.
@@ -45,23 +47,46 @@ flowchart LR
 lands, a claim's `supports` and a doc's `inDoc` edges count toward centrality exactly like
 authored links (discounted by `BACKBONE_STRENGTH`). No other structural signal exists.
 
-## Migration (sketch)
-1. Confirm/guarantee every read path that computes salience passes `typeRules` (so the
-   embedded/key-encoded edges always feed centrality, not just when a handler remembers to).
-   Audit `recall`/`query`/`neighbors`; `attention`/`neighbors` currently score on instance
-   defaults — align or document.
-2. Express the salience parameters purely through ADR-0001 Resolution (already true for
-   `_config/salience`; fold `lens` presets into the same merge).
-3. Optionally expose the score *breakdown* (`scoreParts`) on `_meta` under a debug flag, so
-   the score stage is inspectable (it already returns parts internally).
+## Implemented
+
+1. **The centrality-feed invariant, audited + locked.** `signalsFor` is the single
+   chokepoint: it always feeds `buildSignals` `authored ∪ deriveBackboneEdges(recs,
+   typeRules)`. `deriveBackboneEdges` parses a scope's own `_types/<type>` facts
+   autonomously, so **slice**-declared embedded/key-encoded rules feed centrality on every
+   path; **canonical** (cell-published) rules feed it on the ranked surfaces (`recall`,
+   `query`, `neighbors`, `members`), all of which thread `typeRules`. A regression test
+   proves an embedded `support` ref raises the cited fact's `degree`. **Deliberate
+   exception:** `attention.unlinked` reads authored edges only — the backbone must not mask
+   the weave signal (its own test guards this); `attention` computes no per-fact salience.
+
+2. **Parameters are one Resolution.** Scoring resolves `callSalience(baseSalience(cfg),
+   lens, override)` = defaults ← `_config/salience` ← lens preset ← per-call `salience`.
+   The lens presets are already folded into the same merge — no separate code path.
+
+3. **The score stage is inspectable** (`ReadOptions.explain`). A read/recall/query with
+   `explain:true` attaches `_meta.explain = { signals, weights, contribution, degree }` to
+   each entry — each normalized signal, the weight it was blended by (post-Resolution), and
+   its weighted contribution. The contributions sum (pre-clamp) to the published `score`,
+   so a tuner sees *why* a fact scored and which weight to turn. Off by default (no cost on
+   normal reads). This directly serves the original "tune recall" intent.
+
+```mermaid
+flowchart LR
+  R["read · recall · query (explain:true)"] --> W["wrap → explainScore(parts, sig, sCall)"]
+  W --> M["_meta.explain<br/>{ signals · weights · contribution · degree }"]
+  M --> T["tuner: see the term that dominates → adjust _config/salience"]
+```
 
 ## Consequences
 - Centrality stops being "authored + backbone" and becomes "the graph" — embedded evidence
   and doc membership make the right facts salient (a heavily-cited claim rises).
 - Salience tuning is one Resolution (defaults ← config ← lens ← override), no special cases.
+- The score stage is no longer a black box: `explain` turns the blend into data, so tuning
+  `_config/salience` is evidence-driven rather than guesswork.
 
-## Open questions
+## Open / deferred
 - Should `BACKBONE_STRENGTH` be per-rule (structural vs embedded vs key-encoded), so e.g.
-  authored > embedded `supports` > structural `instanceOf` in centrality weight?
-- `attention`/`neighbors` scoring on instance defaults vs the per-scope config — unify, or
-  keep incidental?
+  authored > embedded `supports` > structural `instanceOf` in centrality weight? (This is
+  the natural ADR-0009 — strength as a per-rule facet of the Reference projection.)
+- `neighbors`/`members` score on instance defaults rather than the scope's `_config/salience`
+  (only `recall`/`query` load the config) — unify, or keep incidental?

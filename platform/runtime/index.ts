@@ -61,6 +61,7 @@ export type {
   TrajectoryEvent,
   Entry,
   EntryMeta,
+  ScoreExplain,
   Tier,
   ReadResult,
   ElidedStub,
