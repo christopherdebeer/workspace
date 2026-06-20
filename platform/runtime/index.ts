@@ -50,6 +50,8 @@ export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manife
 export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError, isTimerLive } from './state';
 export { parseTypeSchema, missingRequired, schemaHints } from './type-schema';
 export type { FieldSpec, FieldType } from './type-schema';
+export { createDeclarationRegistry } from './declarations';
+export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {
   ObservedState,
   StateStore,

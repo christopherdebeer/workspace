@@ -16,7 +16,8 @@
  * a bounded fixpoint. tier-1 stays generic; the machine concept stays tier-2.
  */
 import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
-import type { Identity, ObservedState, Entry } from '../../platform/runtime';
+import type { Identity, ObservedState } from '../../platform/runtime';
+import { createDeclarationRegistry, type DeclarationKind } from '../../platform/runtime';
 
 /** Reserved key prefix where a slice's reaction subscriptions live. */
 export const SUBSCRIPTIONS_PREFIX = '_subscriptions/';
@@ -172,27 +173,26 @@ export interface Subscriptions {
   remove(scope: string, id: string, identity?: Identity): Promise<{ ok: true }>;
 }
 
+/**
+ * The subscription *kind* (ADR-0001): storage + validation only. `match`/`invoke`
+ * (the evaluate side) stay the exported `matches`/`resolveParams` helpers above.
+ */
+const subscriptionKind: DeclarationKind<SubscriptionDefinition> = {
+  ns: SUBSCRIPTIONS_PREFIX,
+  factType: 'subscription',
+  defaultVia: 'registerSubscription',
+  idOf: (d) => d.id,
+  validate: validateSubscription,
+  isStored: (v): v is SubscriptionDefinition => !!(v as { id?: unknown })?.id,
+};
+
 export function createSubscriptions(state: ObservedState): Subscriptions {
+  // Thin wrapper over the shared Declaration registry — the storage lifecycle is
+  // identical for every declaration kind; only `subscriptionKind` is bespoke.
+  const reg = createDeclarationRegistry(state, subscriptionKind);
   return {
-    async register(scope, def, identity, opts): Promise<SubscriptionDefinition> {
-      validateSubscription(def);
-      await state.put(
-        { scope, key: `${SUBSCRIPTIONS_PREFIX}${def.id}`, value: def, via: opts?.via ?? 'registerSubscription', type: 'subscription', tags: opts?.tags },
-        identity,
-      );
-      return def;
-    },
-
-    async list(scope): Promise<SubscriptionDefinition[]> {
-      const res = await state.query(scope, { prefix: SUBSCRIPTIONS_PREFIX, rankBy: 'recency', limit: 200 });
-      return res.entries.map((e: Entry) => e.value as SubscriptionDefinition).filter((d): d is SubscriptionDefinition => !!d?.id);
-    },
-
-    async remove(scope, id, identity): Promise<{ ok: true }> {
-      const entry = await state.get(scope, `${SUBSCRIPTIONS_PREFIX}${id}`);
-      if (!entry || entry._meta.superseded) throw new Error(`not_found: subscription "${id}" not found`);
-      await state.supersede(scope, `${SUBSCRIPTIONS_PREFIX}${id}`, null, identity);
-      return { ok: true };
-    },
+    register: (scope, def, identity, opts) => reg.register(scope, def, identity, opts),
+    list: (scope) => reg.list(scope),
+    remove: (scope, id, identity) => reg.remove(scope, id, identity),
   };
 }
