@@ -321,12 +321,18 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
     const t = e.key.slice('_types/'.length);
     types[t] = mergeTypeDecl(types[t], e.value);
   }
-  // Additively attach the resolved `shape.fields` (ADR-0002) so clients (the home
-  // form editor) get a type's fields without re-parsing prose schemas. Flat keys
-  // are retained — existing consumers are unaffected.
+  // Additively attach the resolved `shape.fields` (ADR-0002) and `present` facet
+  // (ADR-0012: { icon, label, render } — the legacy `{icon,titlePath,href}` normalised
+  // once, server-side) so clients consume one resolved shape instead of re-deriving it.
+  // Flat keys are retained — existing consumers are unaffected (ADR-0014 row 3 enabler).
   for (const [t, decl] of Object.entries(types)) {
-    const fields = resolveType(decl, t).shape.fields;
-    if (fields) types[t] = { ...(decl as Record<string, unknown>), fields };
+    const resolved = resolveType(decl, t);
+    const extra: Record<string, unknown> = {};
+    if (resolved.shape.fields) extra.fields = resolved.shape.fields;
+    if (resolved.present.icon !== undefined || resolved.present.label !== undefined || resolved.present.render !== undefined) {
+      extra.present = resolved.present;
+    }
+    if (Object.keys(extra).length) types[t] = { ...(decl as Record<string, unknown>), ...extra };
   }
   return {
     types,
