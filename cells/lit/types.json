@@ -13,9 +13,21 @@
         "blocks": "DEPRECATED — legacy inline array [{key, fold?}]; substrate-native docs order block-facts via _doc/<id>/<key> doc-order decorations instead"
       },
       "handlers": {
-        "open": [{ "path": "?doc=${match}" }],
-        "edit": [{ "path": "?doc=${match}&edit=1" }],
-        "render": [{ "hint": "markdown" }]
+        "open": [
+          {
+            "path": "?doc=${match}"
+          }
+        ],
+        "edit": [
+          {
+            "path": "?doc=${match}&edit=1"
+          }
+        ],
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
       }
     },
     {
@@ -29,7 +41,11 @@
         "content": "string — markdown with lit fences"
       },
       "handlers": {
-        "render": [{ "hint": "markdown" }]
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
       }
     },
     {
@@ -41,7 +57,15 @@
       "schema": {
         "seq": "number — narrative position (fractional, e.g. 2.25, allows insertion)",
         "fold": "boolean? — collapsed by default"
-      }
+      },
+      "keyPattern": "_doc/{doc}/{block}",
+      "keyEdges": [
+        {
+          "from": "{block}",
+          "rel": "inDoc",
+          "to": "{doc}"
+        }
+      ]
     }
   ]
 }
