@@ -78,3 +78,11 @@ aliases `$grants` exactly as it does `$graph`. So the four self-model surfaces n
   existing three checks — decide when it reaches the front.
 - Cells' `ssrReads`/`callerWrites` (declared, bounded substrate access) are a Grant-adjacent
   facet of the **Cell** axis — relate them here vs. in a Cell ADR.
+- **Scope granularity gap (observed 2026-06-20):** ownership-gated (`scope: null`) ops are
+  *invisible* to the scope layer, so they can't be delegated at fine grain. Concretely, only
+  `cells.create` carries a scope (`cells:create`); `writeFile`/`deploy`/`configure`/`delete`
+  on an owned cell gate on partition+ownership alone. There is therefore no *minimal* scope
+  for "deploy my cells" — a deploy token must over-ask (`cells:create`, semantically wrong, or
+  a wildcard). The three layers collapse cell-edit authority into partition, leaving Layer 1
+  unable to express it. Fix: granular cell-lifecycle scopes (`cells:write`, `cells:deploy`)
+  distinct from `cells:create`. (Tracked: `kb/scope-cell-lifecycle-granularity`.)

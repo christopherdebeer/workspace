@@ -1,6 +1,9 @@
 # ADR-0011 — Reactivity: a Subscription is a Collection over the change stream
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted (first increment) — the shared structural predicate ships as
+  `matchesSelector` (ADR-0011's "share the select path"); View membership, `query`, and
+  Subscription `match` now route their type/tag/prefix check through it. CEL stays the
+  subscription-side clause; the reactor stays a fixed tier-1 component (naming, not rewrite).
 - **Date:** 2026-06-20
 - **Context:** [`breathe.md`](../breathe.md) Wave 10 — reactivity is not a new primitive;
   a Subscription is a standing predicate that fires an Action, evaluated over *writes*
@@ -65,6 +68,21 @@ flowchart TD
 - **Boundedness is intrinsic, not bolted on.** The depth cap that stops write→react→write
   loops is the temporal analogue of a Collection's page limit — both keep a standing
   predicate from running away. State that as the invariant.
+
+## Implemented (first increment)
+
+`platform/runtime/selector.ts` — `matchesSelector(fact, { type?, tag?, prefix? })`, the one
+structural predicate, dependency-free. The three hand-rolled testers now share it:
+
+- **View membership** (`deriveBackboneEdges`) — `if (!matchesSelector(r, view)) continue`.
+- **`query`** — `matchesSelector(rec, { tag, prefix })` (type stays index-served).
+- **Subscription `match`** (`subscriptions.ts`) — `matchesSelector({key,type}, { type, prefix: keyPrefix })`,
+  then the CEL clause on top.
+
+So "matches a view", "matches a query", and "triggers a subscription" can no longer drift in
+their structural semantics — they are one function over two streams (state vs. the change
+stream). CEL remains the subscription's richer temporal clause, where its evaluator lives.
+317 tests green; the view/query/subscription suites are the behaviour-preservation gate.
 
 ## Consequences
 - "View vs subscription" collapses to **predicate × {state, changes}** — the same way

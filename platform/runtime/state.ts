@@ -42,6 +42,7 @@
 import type { Identity } from './auth';
 import { resolveType } from './type-schema';
 import { layer } from './resolution';
+import { matchesSelector } from './selector';
 
 // ── wrapped entry (the read-facing shape) ──────────────────────────
 
@@ -762,9 +763,7 @@ export function deriveBackboneEdges(
     // fact → each view whose query selects it
     for (const view of views) {
       if (view.key === r.key) continue;
-      if (view.type && r.type !== view.type) continue;
-      if (view.tag && !r.tags.includes(view.tag)) continue;
-      if (view.prefix && !r.key.startsWith(view.prefix)) continue;
+      if (!matchesSelector(r, view)) continue; // the one structural predicate (ADR-0011)
       push(r.key, BACKBONE_RELS.inView, view.key, true, MEMBERSHIP_STRENGTH);
     }
     // ── declared Reference rules (ADR-0003), from the fact's own type ──
@@ -1297,8 +1296,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
-        if (opts?.tag && !rec.tags.includes(opts.tag)) return false;
-        if (opts?.prefix && !rec.key.startsWith(opts.prefix)) return false;
+        // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
+        if (!matchesSelector(rec, { tag: opts?.tag, prefix: opts?.prefix })) return false;
         return true;
       });
       const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain)) })));

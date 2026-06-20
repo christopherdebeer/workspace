@@ -17,7 +17,7 @@
  */
 import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
 import type { Identity, ObservedState } from '../../platform/runtime';
-import { createDeclarationRegistry, type DeclarationKind } from '../../platform/runtime';
+import { createDeclarationRegistry, matchesSelector, type DeclarationKind } from '../../platform/runtime';
 
 /** Reserved key prefix where a slice's reaction subscriptions live. */
 export const SUBSCRIPTIONS_PREFIX = '_subscriptions/';
@@ -150,11 +150,12 @@ function validateSubscription(def: SubscriptionDefinition): void {
   }
 }
 
-/** Does a subscription's match hold for a changed fact? Total (eval errors → false). */
+/** Does a subscription's match hold for a changed fact? Total (eval errors → false).
+ *  The structural part (type / keyPrefix) is the shared Selector predicate (ADR-0011) —
+ *  the same one View membership and `query` use; CEL is the subscription-side clause on top. */
 export function matches(def: SubscriptionDefinition, fact: { key: string; value: unknown; type?: string; meta?: unknown }): boolean {
   const m = def.match;
-  if (m.type !== undefined && fact.type !== m.type) return false;
-  if (m.keyPrefix !== undefined && !fact.key.startsWith(m.keyPrefix)) return false;
+  if (!matchesSelector({ key: fact.key, type: fact.type }, { type: m.type, prefix: m.keyPrefix })) return false;
   if (m.cel !== undefined) {
     try {
       return celEvaluate(m.cel, { key: fact.key, value: fact.value, meta: fact.meta ?? null }) === true;
