@@ -1366,6 +1366,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     async neighbors(scope, key, opts?, _identity?: Identity): Promise<NeighborsResult> {
       const dir = opts?.dir ?? 'both';
       const nowMs = Date.now();
+      // Honor the scope's `_config/salience` so neighbor scores match recall (ADR-0006).
+      const sCall = baseSalience(await loadSalienceConfig(scope));
       const [authoredOut, authoredIn, records] = await Promise.all([
         dir !== 'in' ? store.edgesFrom(scope, key, opts?.rel) : Promise.resolve([]),
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
@@ -1375,7 +1377,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const derived = deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel);
       const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
       const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
-      const signals = await signalsFor(scope, nowMs, s.windowMs, records, opts?.typeRules);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
@@ -1384,7 +1386,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
         const rec = byKey.get(nk) ?? (await store.get(scope, nk));
-        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals);
+        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals, sCall);
       }
       return { outbound, inbound, entries };
     },
@@ -1424,13 +1426,15 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
           if (e.source) decorationOf.set(e.from, e.source);
         }
       }
-      const signals = await signalsFor(scope, nowMs, s.windowMs, undefined, opts?.typeRules);
+      // Honor the scope's `_config/salience` (the intensional branch already does, via query).
+      const sCall = baseSalience(await loadSalienceConfig(scope));
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, opts?.typeRules);
       const members: Array<{ key: string } & Entry> = [];
       const seqOf = new Map<string, number>();
       for (const k of memberKeys) {
         const rec = await store.get(scope, k);
         if (!rec || rec.superseded || !isTimerLive(rec, nowMs)) continue;
-        members.push({ key: k, ...(await wrap(rec, nowMs, signals)) });
+        members.push({ key: k, ...(await wrap(rec, nowMs, signals, sCall)) });
         const decKey = decorationOf.get(k);
         if (decKey) {
           const dec = await store.get(scope, decKey);

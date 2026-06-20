@@ -32,7 +32,7 @@ decorations → delete the inline-`blocks` fallback. That is the template for th
 | 1 | ~~`actions.ts` not wrapped in `createDeclarationRegistry` (ADR-0001 exception)~~ | ✅ **DONE** — storage (validate→put→list→get→supersede) routed through the registry; contested detection, `ActionInvokeError`, and the interpreter stay bespoke | action tests green (329) |
 | 2 | lit/canvas/home **bespoke membership + ordering** loaders | route through `workspace.members` (ADR-0005); delete the copies | doc/board render parity (live diff) |
 | 3 | home/kernel/lit/canvas **default-viewer / label** logic | call `resolvePresent` (ADR-0012); delete the per-cell copies | render parity per type |
-| 4 | `neighbors`/`members` **score on instance defaults**, not the scope's `_config/salience` (ADR-0006 open item) | thread the config into every salience-scoring path | salience-config test extended to these reads |
+| 4 | ~~`neighbors`/`members` score on instance defaults, not the scope's `_config/salience` (ADR-0006 open item)~~ | ✅ **DONE** — both load `baseSalience(loadSalienceConfig(scope))` and score under it; intensional `members` already honored it via `query` | new test: neighbors/members score == read score under a config |
 | 5 | Declaration **CRUD surface** — `registerView/Action/Subscription` + `views/actions/subscriptions` + `delete*` are 9 verbs over one registry | **decision, not deletion**: keep the per-kind ergonomic verbs (a surface unification is client-breaking and out of scope for a model refactor); document the rationale and stop | n/a — recorded as resolved |
 | 6 | CEL lives only on `subscription.match`, not `query`/`view` (ADR-0011 open) | decide: lift CEL to the shared selector, or keep it subscription-only | recorded either way |
 

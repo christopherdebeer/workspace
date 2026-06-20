@@ -84,9 +84,9 @@ flowchart LR
 - The score stage is no longer a black box: `explain` turns the blend into data, so tuning
   `_config/salience` is evidence-driven rather than guesswork.
 
-## Open / deferred
-- Should `BACKBONE_STRENGTH` be per-rule (structural vs embedded vs key-encoded), so e.g.
-  authored > embedded `supports` > structural `instanceOf` in centrality weight? (This is
-  the natural ADR-0009 — strength as a per-rule facet of the Reference projection.)
-- `neighbors`/`members` score on instance defaults rather than the scope's `_config/salience`
-  (only `recall`/`query` load the config) — unify, or keep incidental?
+## Resolved
+- ~~Should `BACKBONE_STRENGTH` be per-rule?~~ → **ADR-0009** (authored > embedded `supports`
+  > membership > structural `instanceOf`), feeding weighted centrality.
+- ~~`neighbors`/`members` score on instance defaults rather than the scope's
+  `_config/salience`?~~ → **unified (ADR-0014 row 4)**: both now load
+  `baseSalience(loadSalienceConfig(scope))`; every salience-scoring read honors the policy.

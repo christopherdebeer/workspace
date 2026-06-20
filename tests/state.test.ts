@@ -345,6 +345,31 @@ describe('salience config: per-scope policy fact', () => {
     const q = await state.query('r', { limit: 10 });
     expect(q.entries.find((e) => e.key === 'note')).toBeDefined();
   });
+
+  it('neighbors and extensional members honor the scope config too (ADR-0014 row 2)', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    // a config that diverges sharply from instance defaults (pure centrality)
+    await state.put(
+      { scope: 'r', key: SALIENCE_CONFIG_KEY, value: { recencyWeight: 0, velocityWeight: 0, attentionWeight: 0, standingWeight: 0, centralityWeight: 1 } },
+      alice,
+    );
+    // a doc (extensional collection) + a neighbor edge, sharing the member fact
+    await state.put({ scope: 'r', key: '_types/doc-order', value: { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: 'doc:{doc}' }] }, type: 'type-decl' }, alice);
+    await state.put({ scope: 'r', key: 'doc:g', value: { title: 'G' }, type: 'doc' }, alice);
+    await state.put({ scope: 'r', key: 'blk:1', value: { content: 'x' }, type: 'doc-block' }, alice);
+    await state.put({ scope: 'r', key: '_doc/g/blk:1', value: { seq: 1 }, type: 'doc-order' }, alice);
+    await state.link('r', 'blk:1', 'rel', 'doc:g', null, alice);
+
+    // read() honors the config; neighbors + members must score the same fact identically.
+    const view = await state.read('r', { elision: 'none' });
+    const expected = view.entries['blk:1']._meta.score;
+    const n = await state.neighbors('r', 'doc:g', { dir: 'in' });
+    const m = await state.members('r', 'doc:g');
+    expect(n.entries['blk:1']._meta.score).toBeCloseTo(expected, 5);
+    expect(m.members.find((x) => x.key === 'blk:1')!._meta.score).toBeCloseTo(expected, 5);
+    // and the config is actually in force (pure-centrality ⇒ not the recency-led default)
+    expect(expected).toBeCloseTo(view.entries['blk:1']._meta.centrality, 5);
+  });
 });
 
 describe('derived structural backbone', () => {
