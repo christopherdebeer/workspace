@@ -1,6 +1,9 @@
 # ADR-0013 — Fact: the monotonic floor
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted — the floor *already is* one representation (`Entry`/`StateRecord`
+  over `createObservedState`), so there was nothing to fold; this names it and pins the
+  contract as an executable spec (`tests/fact.test.ts`), including the one invariant it adds
+  (one trajectory, two readers). **This closes the naming set — primitives 0001–0013.**
 - **Date:** 2026-06-20
 - **Context:** [`breathe.md`](../breathe.md) Wave 16 — the base noun. Reference (0003) and
   Declaration (0001) have ADRs; **Fact** — the observed-state primitive everything else
@@ -62,6 +65,22 @@ flowchart TD
   rules) is stated once here; no component re-defines "what a fact is."
 - **The trajectory is one primitive with two readers** — state that as an invariant so a
   future "what changed" or "how salient" never grows a second event log.
+
+## Implemented
+
+No code fold — the Fact *is* the single representation already (`Entry`/`StateRecord` +
+`EntryMeta`, resolved by `createObservedState`). ADR-0013 names it and pins the contract as
+one executable spec, `tests/fact.test.ts`: wrapping + provenance, monotonic revision
+(immutable birth, accumulating writers), supersede-not-delete (history retrievable, write
+revives), CAS (`ifAbsent`/`ifRevision`), read-time timers (lease vanishes / reveal wakes),
+and **the named invariant** — one trajectory feeds both `changes` (reader A) and Salience
+(reader B), so no second event log can grow. 329 tests green.
+
+With this, every primitive in the breathe set has an Accepted ADR + implementation:
+Fact(0013) · Reference(0003) · Declaration(0001) · Type(0002) · Collections(0005) ·
+Resolution(0010) · Projection/select(0004)+score(0006)+present(0012) · Salience(0006) ·
+edge-strength(0009) · Grant(0007) · Cell(0008) · Reactivity(0011). **Naming is closed**; the
+remaining work is Eliminate-phase teardown (ADR-0014).
 
 ## Consequences
 - The three nouns are all named: **Fact** (this) · **Reference** (0003) · **Declaration**
