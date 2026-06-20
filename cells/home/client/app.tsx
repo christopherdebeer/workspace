@@ -919,10 +919,16 @@ interface ListEntry {
  */
 let typeDecls: Record<string, TypeDecl> = { ...DEFAULT_TYPE_DECLS };
 
-interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; manager?: string; label?: string; handlers?: TypeDecl['handlers'] }
+interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; manager?: string; label?: string; handlers?: TypeDecl['handlers']; present?: { icon?: string; label?: string; render?: unknown } }
 function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
-  if (d.handlers || !d.href) return d as TypeDecl; // already new-shape
-  return { icon: d.icon, manager: d.manager, label: d.label ?? d.titlePath, handlers: { open: [{ surface: d.href }] } };
+  // Prefer the gateway-resolved `present` facet (ADR-0012/0014 row 3): the legacy
+  // {icon,titlePath} → {icon,label} normalisation now happens once, server-side via
+  // resolveType, so home consumes it instead of re-deriving. (The per-fact label is still
+  // applied client-side by `pathInto` — Present runs where the fact's value is.)
+  const icon = d.present?.icon ?? d.icon;
+  const label = d.present?.label ?? d.label ?? d.titlePath;
+  if (d.handlers || !d.href) return { ...(d as TypeDecl), icon, label }; // new-shape (+ served present)
+  return { icon, manager: d.manager, label, handlers: { open: [{ surface: d.href }] } };
 }
 
 /** Build the type vocabulary from a raw `$types`/`describeTypes` map: normalise
