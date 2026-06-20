@@ -39,6 +39,7 @@ import {
   ServiceHttpRequest,
   ServiceHttpResponse,
   mergeTypeDecl,
+  resolveType,
 } from '../../platform/runtime';
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -316,6 +317,13 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
   for (const e of slice?.entries ?? []) {
     const t = e.key.slice('_types/'.length);
     types[t] = mergeTypeDecl(types[t], e.value);
+  }
+  // Additively attach the resolved `shape.fields` (ADR-0002) so clients (the home
+  // form editor) get a type's fields without re-parsing prose schemas. Flat keys
+  // are retained — existing consumers are unaffected.
+  for (const [t, decl] of Object.entries(types)) {
+    const fields = resolveType(decl, t).shape.fields;
+    if (fields) types[t] = { ...(decl as Record<string, unknown>), fields };
   }
   return {
     types,

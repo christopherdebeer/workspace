@@ -1263,14 +1263,80 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
 /** Generic editor: a string value edits as text; any other value edits as its
  *  JSON. Saved with `workspace.remember` (preserving the fact's type). A type's
  *  own `edit` surface, when declared, takes precedence over this (see FactDetail). */
-function FactEditor({ e, onSaved, onCancel }: { e: ListEntry; onSaved: (v: unknown) => void; onCancel: () => void }): React.JSX.Element {
+/** A type's schema field (from `$types[type].fields`, ADR-0002 `shape.fields`). */
+interface FormField {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
+const editInput: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '0.4rem 0.5rem',
+  fontSize: '0.8rem',
+  border: `1px solid ${theme.border}`,
+  borderRadius: 6,
+  background: theme.panel,
+  color: theme.text,
+};
+
+const isJsonField = (t?: string): boolean => t === 'ref' || t === 'array' || t === 'object';
+
+/**
+ * Generic editor (ADR-0002). When the type declares `fields`, render a **form**
+ * (one input per field, required marked) — schema declared once drives validate +
+ * form + agent `create`. Otherwise fall back to text (string value) / raw JSON.
+ * `workspace.remember`'s advisory `hints` flow back via `onSaved`.
+ */
+function FactEditor({
+  e,
+  fields,
+  onSaved,
+  onCancel,
+}: {
+  e: ListEntry;
+  fields?: FormField[];
+  onSaved: (v: unknown, hints?: string[]) => void;
+  onCancel: () => void;
+}): React.JSX.Element {
   const isStr = typeof e.value === 'string';
+  const base = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
+  const useForm = !isStr && Array.isArray(fields) && fields.length > 0;
+
+  const [form, setForm] = useState<Record<string, unknown>>(() => {
+    const o: Record<string, unknown> = {};
+    if (useForm) for (const f of fields!) o[f.name] = isJsonField(f.type) && base[f.name] != null && typeof base[f.name] !== 'string' ? JSON.stringify(base[f.name]) : base[f.name];
+    return o;
+  });
   const [text, setText] = useState(isStr ? (e.value as string) : JSON.stringify(e.value ?? {}, null, 2));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const set = (name: string, v: unknown): void => setForm((f) => ({ ...f, [name]: v }));
+
   const save = async (): Promise<void> => {
-    let value: unknown = text;
-    if (!isStr) {
+    let value: unknown;
+    if (useForm) {
+      const out: Record<string, unknown> = { ...base };
+      for (const f of fields!) {
+        let v = form[f.name];
+        if (isJsonField(f.type) && typeof v === 'string') {
+          try {
+            v = v.trim() ? JSON.parse(v) : undefined;
+          } catch {
+            setErr(`Field "${f.name}" must be valid JSON`);
+            return;
+          }
+        }
+        if (v === undefined || v === '') delete out[f.name];
+        else out[f.name] = v;
+      }
+      value = out;
+    } else if (isStr) {
+      value = text;
+    } else {
       try {
         value = JSON.parse(text);
       } catch {
@@ -1282,19 +1348,52 @@ function FactEditor({ e, onSaved, onCancel }: { e: ListEntry; onSaved: (v: unkno
     setErr(null);
     const r = await mcpCall('act', 'workspace.remember', { key: e.key, value, ...(e._meta?.type ? { type: e._meta.type } : {}) });
     setBusy(false);
-    if (r.ok) onSaved(value);
-    else setErr(typeof r.value === 'string' ? r.value : 'Save failed');
+    if (!r.ok) {
+      setErr(typeof r.value === 'string' ? r.value : 'Save failed');
+      return;
+    }
+    const hints = (r.value as { hints?: string[] })?.hints;
+    onSaved(value, Array.isArray(hints) ? hints : undefined);
   };
+
+  const fieldInput = (f: FormField): React.JSX.Element => {
+    const v = form[f.name];
+    if (f.type === 'boolean') return <input type="checkbox" checked={!!v} onChange={(ev) => set(f.name, ev.target.checked)} />;
+    if (f.type === 'number')
+      return <input type="number" value={v == null ? '' : String(v)} onChange={(ev) => set(f.name, ev.target.value === '' ? undefined : Number(ev.target.value))} style={editInput} />;
+    if (f.type === 'markdown' || isJsonField(f.type))
+      return <textarea value={typeof v === 'string' ? v : ''} onChange={(ev) => set(f.name, ev.target.value)} rows={f.type === 'markdown' ? 4 : 2} spellCheck={false} style={{ ...editInput, fontFamily: isJsonField(f.type) ? theme.mono : 'inherit' }} />;
+    return <input value={typeof v === 'string' ? v : ''} onChange={(ev) => set(f.name, ev.target.value)} style={editInput} />;
+  };
+
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
-      <textarea
-        value={text}
-        onChange={(ev) => setText(ev.target.value)}
-        rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
-        spellCheck={false}
-        style={{ width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontFamily: theme.mono, fontSize: '0.8rem', border: `1px solid ${theme.border}`, borderRadius: 8, background: theme.panel, color: theme.text }}
-      />
-      {!isStr ? <span style={{ color: theme.dim, fontSize: '0.68rem' }}>Editing the raw JSON value.</span> : null}
+      {useForm ? (
+        <div style={{ display: 'grid', gap: '0.55rem' }}>
+          {fields!.map((f) => (
+            <label key={f.name} style={{ display: 'grid', gap: '0.2rem' }}>
+              <span style={{ fontSize: '0.72rem', color: theme.dim, fontFamily: theme.mono }}>
+                {f.name}
+                {f.required ? <span style={{ color: theme.accent }}> *</span> : null}
+                {f.type ? <span style={{ opacity: 0.6 }}> · {f.type}</span> : null}
+              </span>
+              {fieldInput(f)}
+              {f.description ? <span style={{ fontSize: '0.68rem', color: theme.dim }}>{f.description}</span> : null}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <>
+          <textarea
+            value={text}
+            onChange={(ev) => setText(ev.target.value)}
+            rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
+            spellCheck={false}
+            style={{ ...editInput, padding: '0.55rem', fontFamily: theme.mono }}
+          />
+          {!isStr ? <span style={{ color: theme.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
+        </>
+      )}
       {err ? <Badge tone="danger">{err}</Badge> : null}
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <Button onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
@@ -1310,14 +1409,18 @@ function FactEditor({ e, onSaved, onCancel }: { e: ListEntry; onSaved: (v: unkno
 function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(false);
+  const [hints, setHints] = useState<string[] | null>(null);
   useEffect(() => {
     setEntry(e);
     setEditing(false);
+    setHints(null);
   }, [e]);
   const open = factHref(entry);
   const edit = factEdit(entry);
   const meta = entry._meta;
   const system = entry.key.startsWith('_');
+  // The type's declared fields (ADR-0002 shape.fields), additively on $types.
+  const fields = (declFor(entry, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
       <div style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
@@ -1325,12 +1428,29 @@ function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
         {meta?.tags?.length ? '  ·  ' + meta.tags.map((t) => '#' + t).join(' ') : ''}
       </div>
       {editing ? (
-        <FactEditor e={entry} onCancel={() => setEditing(false)} onSaved={(v) => { setEntry({ ...entry, value: v }); setEditing(false); }} />
+        <FactEditor
+          e={entry}
+          fields={fields}
+          onCancel={() => setEditing(false)}
+          onSaved={(v, h) => {
+            setEntry({ ...entry, value: v });
+            setHints(h ?? null);
+            setEditing(false);
+          }}
+        />
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
             <FactBody e={entry} full />
           </div>
+          {hints?.length ? (
+            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: theme.panel }}>
+              <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
+              {hints.map((h, i) => (
+                <span key={i} style={{ fontSize: '0.76rem', color: theme.text }}>· {h}</span>
+              ))}
+            </div>
+          ) : null}
           <div style={{ display: 'grid', gap: '0.3rem' }}>
             <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
             <Neighbourhood keyName={entry.key} />
