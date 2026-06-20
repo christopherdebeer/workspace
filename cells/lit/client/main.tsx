@@ -7,8 +7,9 @@
  * enhances: fences become live embeds, and the owner gets the editing surface.
  *
  * A document is an ordered path through the SAME facts the canvas places:
- *   doc:<id>   — { title, summary?, blocks: [{ key, fold? }] }
- *   blocks     — plain markdown facts; removal from a doc never deletes the fact.
+ *   doc:<id>            — { title, summary? } — thin metadata; a doc is a view
+ *   _doc/<id>/<factKey> — { seq, fold? } — membership + order (any fact key)
+ *   blocks are plain facts; removal from a doc never deletes the fact.
  * Editing is ephemera until saved; saves go through workspace.remember via:'lit'.
  * ------------------------------------------------------------------------- */
 import './main.css';
@@ -50,17 +51,16 @@ const mintCell = (): string => `cell:${Date.now().toString(36)}${Math.random().t
 type LoadedCell = { key: string; content: string; fold: boolean; seq: number; score: number };
 
 /** A document is a *view*: load its cell-facts via substrate-native ordering
- *  decorations (`_doc/<id>/<key>` = {seq, fold}), migrating from the legacy
- *  embedded array when no decorations exist. `projection` re-sorts the SAME
- *  membership — narrative by seq, salience by the cell's score. */
+ *  decorations (`_doc/<id>/<key>` = {seq, fold}) — membership is any fact key the
+ *  decorations point at. `projection` re-sorts the SAME membership — narrative by
+ *  seq, salience by the cell's score. */
 async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[]; backlinks: Array<{ id: string; label: string }> } | null> {
   const docFact = await fetchFact(`doc:${docId}`);
   if (!docFact) return null;
   const meta = docFact.value as DocValue;
   const prefix = `_doc/${docId}/`;
   const deco = await read<{ entries: Entry[] }>('workspace.query', { prefix, limit: 500 });
-  let order = (deco.entries ?? []).map((e) => ({ key: e.key.slice(prefix.length), seq: Number((e.value as any)?.seq ?? 0), fold: !!(e.value as any)?.fold }));
-  if (!order.length) order = ((meta.cells ?? meta.blocks ?? []) as Array<{ key: string; fold?: boolean }>).map((r, i) => ({ key: r.key, seq: i + 1, fold: !!r.fold }));
+  const order = (deco.entries ?? []).map((e) => ({ key: e.key.slice(prefix.length), seq: Number((e.value as any)?.seq ?? 0), fold: !!(e.value as any)?.fold }));
   const facts = await Promise.all(order.map((o) => fetchFact(o.key)));
   const cells: LoadedCell[] = order.map((o, i) => ({
     key: o.key, fold: o.fold, seq: o.seq,

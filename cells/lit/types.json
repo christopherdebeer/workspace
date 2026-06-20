@@ -5,7 +5,7 @@
       "icon": "📄",
       "label": "value.title",
       "manager": "@c15r/lit",
-      "note": "A document is a VIEW over cell-facts. Membership + order live in `_doc/<docId>/<blockKey>` decorations (type doc-order). The doc value holds only {id, title, summary}.",
+      "note": "A document is a VIEW over facts — it holds only {title, summary}. Membership + order live entirely in `_doc/<docId>/<factKey>` decorations (type doc-order); a member can be ANY fact (a doc-block, a canvas `el:`, a `cell:`, a claim), so 'blocks ARE facts' (no graduation). There is no inline block array — order is one fractional-seq write per decoration.",
       "schema": {
         "id": "string — the doc key, doc:<slug>",
         "title": "string",
@@ -34,9 +34,8 @@
       "icon": "🧱",
       "label": "value.id",
       "manager": "@c15r/lit",
-      "note": "A document block: markdown + lit fences. Placed into a doc by a `_doc/` doc-order decoration.",
+      "note": "The DEFAULT type for prose authored directly in lit (markdown + lit fences) — a convenience, NOT a requirement for doc membership. A doc is a view over facts, so any fact of any type becomes a block when a `_doc/<docId>/<factKey>` decoration places it (lit renders it via its own type's renderer). Reach for doc-block only when minting fresh prose with no better home.",
       "schema": {
-        "id": "string — the block key",
         "content": "string — markdown with lit fences"
       },
       "handlers": {
