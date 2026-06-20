@@ -658,3 +658,79 @@ Projection of the trajectory.
 Everything else is behaviour-preserving re-homing. This completes the system map; the next
 artifact is the migration ADR (which contraction lands first, and its behaviour-preservation
 test), not more mapping.
+
+---
+
+## Wave 17 — Migration status (the audit, L1)
+
+The mapping became ADRs and the ADRs became code. This wave records *where the breathe
+contraction actually stands in the running system* — the exhale, measured. (Companion to the
+ADR set `docs/architecture/adr/0001–0012`.)
+
+```mermaid
+flowchart TD
+  subgraph DONE["LANDED + live (behaviour-verified)"]
+    D1["Declaration registry · ADR-0001"]
+    D2["Type as one object · ADR-0002"]
+    D3["Reference projection — 4 rules · ADR-0003<br/>(lossy graph recovered)"]
+    D4["$graph / Projection.select · ADR-0004<br/>(missing surface added)"]
+    D5["Collections × {intensional,extensional} · ADR-0005"]
+    D6["Salience = score stage + explain · ADR-0006"]
+    D7["Grant axis — $grants · ADR-0007"]
+    D8["Cell axis — $cells · ADR-0008"]
+    D9["Per-rule edge strength → centrality · ADR-0009"]
+  end
+  subgraph FLIGHT["in flight (drafted, not folded)"]
+    R10["Resolution — layer() primitive · ADR-0010"]
+    R11["Reactivity = Collection over the change stream · ADR-0011"]
+    R12["Present — the affordance stage · ADR-0012"]
+  end
+  DONE -->|~80% of the invariant| INV["one representation · one resolver · re-implement nothing"]
+  FLIGHT -.last 20%.-> INV
+```
+
+### The three substantive changes — all landed
+
+The map named three changes that were *not* mere renames (Wave 16). Status:
+
+1. **Lossy Reference graph recovered** — `claim.support`, `_doc` membership, `machine.arrows`
+   are now derived edges in `$graph` **and feed centrality** (ADR-0003/0009). Verified live.
+2. **`$graph` added** — the self-model's Reference surface ships, beside `$catalog`/`$types`
+   (ADR-0004). Verified live.
+3. **Six concepts → one registry** — `createDeclarationRegistry(kind)` backs views,
+   subscriptions, (and the pattern for) the rest (ADR-0001). Landed.
+
+### Is the surface more or less complicated?
+
+Three axes, moving in different directions — the honest answer:
+
+| Axis | Direction | Grounding |
+|---|---|---|
+| **Verbs (entry cost)** | unchanged | still `whoami`/`read`/`act`; still "start at `$catalog`" |
+| **Conceptual model** | **simpler** | N near-duplicates → 1 primitive each (collections, references, declarations, reactivity, lit blocks) |
+| **Legibility** | **more** | self-model 2 → 5 surfaces (`$catalog · $types · $graph · $grants · $cells`); each replaces reverse-engineering with a read |
+| **Command count** | +3 | workspace 36 cmds; added `graph`/`members`/`grants` (behaviour-preserving, so additive) |
+
+Net: **no harder to enter or use; the model underneath is simpler; the system is markedly
+more legible.** The +3 reads and +3 surfaces each pay for themselves by making something
+previously implicit answerable as data.
+
+### The honest remaining gap (the last 20%)
+
+A strangler-fig in flight carries transient double-representation:
+
+- **Resolution is still three hand-rolled merges** — `mergeTypeDecl`, `effectiveRules`,
+  `callSalience` — of one pattern (per-facet, last-wins). ADR-0010 folds the two object-merge
+  sites onto a shared `layer()`; the numeric (salience) and set (grant) siblings stay
+  documented-as-Resolution, not forced.
+- **The Declaration *surface* did not contract with its implementation** — `registerView` /
+  `registerAction` / `registerSubscription` remain three MCP verbs over one registry. Kept
+  for ergonomics + behaviour-preservation; a surface unification would be a client-breaking
+  change, deliberately out of scope for the model refactor.
+- **Projection.present is unADR'd** — `select`→`score`→`shape` are named (0004/0006); the
+  affordance stage (how a fact resolves to open/edit/render via its Type's handlers + the
+  renderer ladder) is ADR-0012.
+
+Invariant met at ~80%. The exercise's claim — *expressive surface = three nouns, two
+mechanisms, one signal, two axes* — holds in the running system; the residue is naming the
+two mechanisms (Resolution, Reactivity) and the present stage.

@@ -41,6 +41,7 @@
  */
 import type { Identity } from './auth';
 import { resolveType } from './type-schema';
+import { layer } from './resolution';
 
 // ── wrapped entry (the read-facing shape) ──────────────────────────
 
@@ -740,17 +741,9 @@ export function deriveBackboneEdges(
   }
 
   // A type's effective rules: its slice `_types/<type>` decl wins per facet over the
-  // canonical (cell-declared) rules — the same precedence as `$types`/`mergeTypeDecl`.
-  const effectiveRules = (t: string): TypeRules => {
-    const canon = typeRules?.[t];
-    const slice = sliceRules.get(t);
-    return {
-      manager: slice?.manager ?? canon?.manager,
-      refs: slice?.refs ?? canon?.refs,
-      keyPattern: slice?.keyPattern ?? canon?.keyPattern,
-      keyEdges: slice?.keyEdges ?? canon?.keyEdges,
-    };
-  };
+  // canonical (cell-declared) rules — Resolution (ADR-0010), the same per-facet
+  // last-wins merge as `$types`/`mergeTypeDecl`.
+  const effectiveRules = (t: string): TypeRules => layer<TypeRules>(typeRules?.[t], sliceRules.get(t));
 
   const edges: AnnotatedEdge[] = [];
   // The `_types/<type>` anchor is a well-known node, so `instanceOf` is emitted

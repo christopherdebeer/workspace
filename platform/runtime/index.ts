@@ -48,6 +48,7 @@ export type {
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
 export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError, isTimerLive } from './state';
+export { layer } from './resolution';
 export { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl, resolveType } from './type-schema';
 export type { FieldSpec, FieldType, Type, KeyEdge } from './type-schema';
 export { createDeclarationRegistry } from './declarations';

@@ -12,6 +12,7 @@
  *    leading type token (or the word "optional"/"DEPRECATED") marks it optional;
  *    every other field is treated as recommended.
  */
+import { layer } from './resolution';
 
 export type FieldType = 'string' | 'number' | 'boolean' | 'object' | 'array' | 'markdown' | 'ref';
 
@@ -27,7 +28,9 @@ export type FieldType = 'string' | 'number' | 'boolean' | 'object' | 'array' | '
 export function mergeTypeDecl(canonical: unknown, slice: unknown): Record<string, unknown> {
   const c = canonical && typeof canonical === 'object' && !Array.isArray(canonical) ? (canonical as Record<string, unknown>) : {};
   const s = slice && typeof slice === 'object' && !Array.isArray(slice) ? (slice as Record<string, unknown>) : {};
-  return { ...c, ...s };
+  // Resolution (ADR-0010): canonical ← slice, per facet, slice wins; a facet the
+  // slice is silent about (undefined) keeps the canonical value.
+  return layer<Record<string, unknown>>(c, s);
 }
 
 export interface FieldSpec {

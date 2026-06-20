@@ -1,6 +1,8 @@
 # ADR-0010 — Resolution: the layered per-facet merge, named once
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted — `layer(...parts)` ships as the named primitive; the two object-merge
+  sites (`mergeTypeDecl`, `effectiveRules`) fold onto it (behaviour-preserving). The numeric
+  (salience) and set (grant) siblings stay documented-as-Resolution, not forced through it.
 - **Date:** 2026-06-20
 - **Context:** [`breathe.md`](../breathe.md) — the read primitives are **Resolution ·
   Projection**. Projection got its ADR (0004); Resolution is the other half and is
@@ -55,6 +57,32 @@ flowchart LR
   override — same "layered, most-specific-aware" shape, different monoid (∪ vs last-wins).
   Document it as Resolution-over-sets so the family is complete, but don't force it into
   the scalar helper.
+
+## Implemented
+
+`platform/runtime/resolution.ts` exports the primitive:
+
+```ts
+layer<T>(...parts: Array<Partial<T> | undefined | null>): T
+// folds an ordered stack, later wins per facet; `undefined` is silent (never clobbers)
+```
+
+The two genuine object-merge sites now share it (the ADR's "≥2 sites" bar for a real helper):
+
+- `mergeTypeDecl(canonical, slice)` → `layer(c, s)` (was a `{...c, ...s}` spread — `layer`
+  additionally treats an explicit `undefined` facet as silent, which is the ADR-0002 fix made
+  defensive).
+- `effectiveRules(t)` → `layer(typeRules[t], sliceRules[t])` (was four hand-written
+  `slice?.X ?? canon?.X` lines).
+
+Left as **documented Resolution, not folded** (different monoids — forcing them through
+`layer` would obscure more than it saves):
+
+- **Salience** — `callSalience(baseSalience(cfg), lens, override)` clamps and re-derives a
+  `ResolvedSalience` (numeric), so it resolves *values* not *facets*.
+- **Grant** — `applicableGrants` resolves a **union** of layers, not last-wins.
+
+311 tests green; the `mergeTypeDecl`/backbone suites are the behaviour-preservation gate.
 
 ## Consequences
 - The read side has both halves named: **Resolution** (how a layered value is computed)
