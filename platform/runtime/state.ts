@@ -557,6 +557,11 @@ export const BACKBONE_RELS = {
   inView: 'inView', // fact → a view whose query selects it
 } as const;
 
+/** Reference relations that express *membership in a collection* (ADR-0005): a fact
+ *  `inView` a view, `inDoc` a doc. A collection's extensional members are the facts
+ *  with one of these edges pointing at it. */
+export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc']);
+
 /** Derived edges carry less structural weight than authored ones, so a hand-drawn
  *  link still dominates a fact's centrality. */
 const BACKBONE_STRENGTH = 0.25;
@@ -885,6 +890,12 @@ export interface NeighborsResult {
   entries: Record<string, Entry>;
 }
 
+export interface MembersResult {
+  key: string;
+  membership: 'intensional' | 'extensional';
+  members: Array<{ key: string } & Entry>;
+}
+
 export interface ChangesResult {
   events: TrajectoryEvent[];
   /** The scope's current sequence head (resume from here next time). */
@@ -953,6 +964,11 @@ export interface ObservedState {
   /** The full Reference projection (ADR-0003/0004): authored edges + the derived rule
    *  edges (structural backbone + embedded `ref` + key-encoded). The `$graph` surface. */
   graph(scope: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<{ edges: AnnotatedEdge[] }>;
+  /** A collection's member facts (ADR-0005): **intensional** when the collection fact
+   *  carries a `query` (a view) — evaluated via `query`; else **extensional** — the
+   *  facts with an inbound membership edge (`inView`/`inDoc`) in the projection.
+   *  Salience-ranked; ordered extensional membership (by decoration `seq`) is a follow-on. */
+  members(scope: string, key: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<MembersResult>;
   /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call. */
   changes(scope: string, sinceSeq: number | 'head', limit?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
@@ -1085,7 +1101,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     };
   }
 
-  return {
+  const api: ObservedState = {
     async put(input: WriteInput, identity?: Identity): Promise<Entry> {
       if (!input?.scope || !input?.key) throw new Error('state.put requires `scope` and `key`');
       const writer = identity?.user ?? null;
@@ -1314,6 +1330,35 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return { edges: [...authored, ...derived] };
     },
 
+    async members(scope, key, opts): Promise<MembersResult> {
+      const nowMs = Date.now();
+      const fact = await store.get(scope, key);
+      const q = (fact?.value as { query?: unknown } | undefined)?.query;
+      // Intensional: the collection IS a query (a view) — evaluate it.
+      if (q && typeof q === 'object') {
+        const res = await api.query(scope, { ...(q as QueryOptions), typeRules: opts?.typeRules });
+        return { key, membership: 'intensional', members: res.entries };
+      }
+      // Extensional: the facts with an inbound membership edge in the projection.
+      const { edges } = await api.graph(scope, { typeRules: opts?.typeRules });
+      const memberKeys: string[] = [];
+      const seen = new Set<string>();
+      for (const e of edges) {
+        if (e.to === key && MEMBERSHIP_RELS.has(e.rel) && !seen.has(e.from)) {
+          seen.add(e.from);
+          memberKeys.push(e.from);
+        }
+      }
+      const signals = await signalsFor(scope, nowMs, s.windowMs, undefined, opts?.typeRules);
+      const members: Array<{ key: string } & Entry> = [];
+      for (const k of memberKeys) {
+        const rec = await store.get(scope, k);
+        if (rec && !rec.superseded && isTimerLive(rec, nowMs)) members.push({ key: k, ...(await wrap(rec, nowMs, signals)) });
+      }
+      members.sort((a, b) => b._meta.score - a._meta.score);
+      return { key, membership: 'extensional', members };
+    },
+
     async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
       const head = await store.currentSeq(scope);
       // 'head' = "where do I start tailing from?" — answered without paying
@@ -1401,6 +1446,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return wrap(updated, now.getTime());
     },
   };
+  return api;
 }
 
 // ── in-memory store (tests / local; no AWS) ────────────────────────

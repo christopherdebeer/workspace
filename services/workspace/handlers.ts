@@ -30,6 +30,7 @@ import {
   type ReadResult,
   type QueryResult,
   type NeighborsResult,
+  type MembersResult,
   type ChangesResult,
   type AttentionResult,
   type EdgeRecord,
@@ -361,6 +362,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[] }>;
   graph: CommandHandler<undefined, { edges: EdgeRecord[] }>;
+  members: CommandHandler<{ key: string }, MembersResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
@@ -740,6 +742,27 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+  },
+  {
+    name: 'members',
+    description:
+      "A collection's member facts (ADR-0005). **Intensional** when the fact carries a `query` (a view) — its query is evaluated; **extensional** otherwise — the facts with an inbound membership edge (`inView`/`inDoc`) in the Reference projection (e.g. a doc's blocks). Salience-ranked. One read for 'a view's facts' and 'a doc's members' alike.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'The collection fact key (a view, a doc, …)' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        membership: { type: 'string', enum: ['intensional', 'extensional'] },
+        members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta)' },
+      },
+    },
   },
   {
     name: 'changes',
@@ -1501,6 +1524,13 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
       return state.graph(scope, { typeRules: await typeRulesFor(ctx) });
+    },
+
+    async members(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.key) throw new Error('key is required');
+      const { state } = build(ctx);
+      return state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
     },
 
     async changes(input, ctx) {

@@ -73,6 +73,7 @@ export type {
   QueryResult,
   NeighborsOptions,
   NeighborsResult,
+  MembersResult,
   ChangesResult,
   AttentionOptions,
   AttentionResult,

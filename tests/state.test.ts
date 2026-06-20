@@ -519,3 +519,35 @@ describe('derived structural backbone', () => {
     expect(deriveBackboneEdges(records)).toEqual(deriveBackboneEdges(records, {}));
   });
 });
+
+describe('collections: members (ADR-0005)', () => {
+  it('intensional — a view fact evaluates its query', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: '_views/todos', value: { id: 'todos', query: { type: 'todo' } }, type: 'view' }, alice);
+    await state.put({ scope: 'r', key: 't1', value: { text: 'a' }, type: 'todo' }, alice);
+    await state.put({ scope: 'r', key: 't2', value: { text: 'b' }, type: 'todo' }, alice);
+    await state.put({ scope: 'r', key: 'n1', value: { text: 'x' }, type: 'note' }, alice);
+
+    const res = await state.members('r', '_views/todos');
+    expect(res.membership).toBe('intensional');
+    expect(res.members.map((m) => m.key).sort()).toEqual(['t1', 't2']);
+  });
+
+  it('extensional — a doc fact gathers its inbound inDoc members', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    // doc-order type declares the key-encoded inDoc rule (slice-declared here)
+    await state.put(
+      { scope: 'r', key: '_types/doc-order', value: { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: 'doc:{doc}' }] }, type: 'type-decl' },
+      alice,
+    );
+    await state.put({ scope: 'r', key: 'doc:guide', value: { title: 'Guide' }, type: 'doc' }, alice);
+    await state.put({ scope: 'r', key: 'blk:1', value: { content: 'one' }, type: 'doc-block' }, alice);
+    await state.put({ scope: 'r', key: 'blk:2', value: { content: 'two' }, type: 'doc-block' }, alice);
+    await state.put({ scope: 'r', key: '_doc/guide/blk:1', value: { seq: 1 }, type: 'doc-order' }, alice);
+    await state.put({ scope: 'r', key: '_doc/guide/blk:2', value: { seq: 2 }, type: 'doc-order' }, alice);
+
+    const res = await state.members('r', 'doc:guide');
+    expect(res.membership).toBe('extensional');
+    expect(res.members.map((m) => m.key).sort()).toEqual(['blk:1', 'blk:2']);
+  });
+});
