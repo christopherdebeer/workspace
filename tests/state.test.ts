@@ -503,6 +503,17 @@ describe('derived structural backbone', () => {
     expect(has(edges, 'cell:x', 'inDoc', 'doc:demo')).toBe(true);
   });
 
+  it('slice-declared refs apply too: a _types/<type> fact with a ref field drives the rule', () => {
+    // claim is slice-declared (not canonical); its ref must still be picked up.
+    const records = [
+      rec('_types/claim', 'type-decl', { fields: [{ name: 'support', type: 'ref', list: true, rel: 'supports' }] }),
+      rec('claim/1', 'claim', { statement: 'x', support: ['kb/a'] }),
+      rec('kb/a', 'knowledge', {}),
+    ];
+    const edges = deriveBackboneEdges(records); // no canonical typeRules passed
+    expect(has(edges, 'claim/1', 'supports', 'kb/a')).toBe(true);
+  });
+
   it('rules are additive — with none declared, the structural backbone is unchanged', () => {
     const records = [rec('kb/1', 'note', { text: 'hi' }), rec('_types/note', 'type-decl', {})];
     expect(deriveBackboneEdges(records)).toEqual(deriveBackboneEdges(records, {}));

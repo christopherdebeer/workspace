@@ -40,6 +40,7 @@
  * mirroring how the `auth` cell separates `AuthStore` from its backends).
  */
 import type { Identity } from './auth';
+import { resolveType } from './type-schema';
 
 // ── wrapped entry (the read-facing shape) ──────────────────────────
 
@@ -617,6 +618,23 @@ function substGroups(tpl: string, groups: Record<string, string>): string {
   return tpl.replace(/\{([A-Za-z0-9_]+)\}/g, (_m, n: string) => groups[n] ?? '');
 }
 
+/** Extract the Reference rules a type declaration carries (its `ref` fields,
+ *  manager, key-encoded edges) — used to fold a *slice* `_types/<type>` decl into
+ *  the rules, so a slice-declared type (e.g. `claim`) contributes rules just like a
+ *  cell-canonical one. Mirrors the handler's `typeRulesFor`. */
+function rulesFromDecl(decl: unknown): TypeRules {
+  const t = resolveType(decl);
+  const refs = (t.shape.fields ?? []).filter((f) => f.type === 'ref').map((f) => ({ name: f.name, rel: f.rel, list: f.list }));
+  const r: TypeRules = {};
+  if (t.manager) r.manager = t.manager;
+  if (refs.length) r.refs = refs;
+  if (t.shape.keyPattern && t.shape.keyEdges?.length) {
+    r.keyPattern = t.shape.keyPattern;
+    r.keyEdges = t.shape.keyEdges;
+  }
+  return r;
+}
+
 /** An edge plus whether it was derived (vs authored). Stored edges omit the flag. */
 export type AnnotatedEdge = EdgeRecord & { derived?: boolean };
 
@@ -651,7 +669,7 @@ export function deriveBackboneEdges(
   // the manager a slice type-decl declares for itself (overrides the canonical map).
   const cellByHandle = new Map<string, string>();
   const views: Array<{ key: string; type?: string; tag?: string; prefix?: string }> = [];
-  const sliceTypeManager = new Map<string, string>();
+  const sliceRules = new Map<string, TypeRules>();
   const typeNames = new Set<string>(); // every type that appears, anchored or not
   for (const r of live) {
     if (r.type && !r.key.startsWith(TYPES_PREFIX)) typeNames.add(r.type);
@@ -664,8 +682,7 @@ export function deriveBackboneEdges(
     if (r.key.startsWith(TYPES_PREFIX)) {
       const t = r.key.slice(TYPES_PREFIX.length);
       typeNames.add(t);
-      const m = ((r.value ?? {}) as { manager?: unknown }).manager;
-      if (typeof m === 'string') sliceTypeManager.set(t, m);
+      sliceRules.set(t, rulesFromDecl(r.value));
     }
     if (r.key.startsWith(VIEWS_PREFIX)) {
       const q = ((r.value ?? {}) as { query?: unknown }).query;
@@ -683,6 +700,19 @@ export function deriveBackboneEdges(
       }
     }
   }
+
+  // A type's effective rules: its slice `_types/<type>` decl wins per facet over the
+  // canonical (cell-declared) rules — the same precedence as `$types`/`mergeTypeDecl`.
+  const effectiveRules = (t: string): TypeRules => {
+    const canon = typeRules?.[t];
+    const slice = sliceRules.get(t);
+    return {
+      manager: slice?.manager ?? canon?.manager,
+      refs: slice?.refs ?? canon?.refs,
+      keyPattern: slice?.keyPattern ?? canon?.keyPattern,
+      keyEdges: slice?.keyEdges ?? canon?.keyEdges,
+    };
+  };
 
   const edges: AnnotatedEdge[] = [];
   // The `_types/<type>` anchor is a well-known node, so `instanceOf` is emitted
@@ -707,7 +737,7 @@ export function deriveBackboneEdges(
       push(r.key, BACKBONE_RELS.inView, view.key);
     }
     // ── declared Reference rules (ADR-0003), from the fact's own type ──
-    const rules = r.type ? typeRules?.[r.type] : undefined;
+    const rules = r.type ? effectiveRules(r.type) : undefined;
     if (rules) {
       // embedded: a `ref` field's value(s) are fact keys → fact —rel→ key
       const value = (r.value ?? {}) as Record<string, unknown>;
@@ -734,7 +764,7 @@ export function deriveBackboneEdges(
   // manager is the slice decl's own field when set, else the canonical map.
   for (const t of typeNames) {
     const anchor = `${TYPES_PREFIX}${t}`;
-    const manager = sliceTypeManager.get(t) ?? typeRules?.[t]?.manager;
+    const manager = effectiveRules(t).manager;
     if (manager) {
       const cellKey = cellByHandle.get(normalizeCellHandle(manager));
       if (cellKey) push(anchor, BACKBONE_RELS.managedBy, cellKey);
