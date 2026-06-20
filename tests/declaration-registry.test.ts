@@ -11,6 +11,7 @@ import {
 } from '../platform/runtime';
 import type { Identity } from '../platform/runtime';
 import { createSubscriptions, SUBSCRIPTIONS_PREFIX, type SubscriptionDefinition } from '../services/workspace/subscriptions';
+import { createRegisteredViews, VIEWS_PREFIX, type ViewDefinition } from '../services/workspace/views';
 
 const alice: Identity = { user: 'alice', scopes: [] };
 
@@ -86,5 +87,26 @@ describe('subscriptions are a thin wrapper (parity, ADR-0001 step 2)', () => {
     const state = createObservedState(createMemoryStateStore());
     const subs = createSubscriptions(state);
     await expect(subs.register('r', { id: 'x', match: { type: 't' } } as SubscriptionDefinition, alice)).rejects.toThrow(/exactly one of/);
+  });
+});
+
+describe('views are a thin wrapper (parity, ADR-0001 step 2)', () => {
+  const view = (id: string): ViewDefinition => ({ id, query: { type: 'todo' }, reduce: 'count' });
+
+  it('register/list/remove behave as before, evaluate still works', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    const views = createRegisteredViews(state);
+
+    await views.register('r', view('open'), alice);
+    const raw = await state.get('r', `${VIEWS_PREFIX}open`);
+    expect(raw?._meta.type).toBe('view');
+    expect(raw?._meta.via).toBe('registerView');
+
+    await state.put({ scope: 'r', key: 'a', value: 1, type: 'todo' }, alice);
+    expect((await views.evaluate('r', 'open')).value).toBe(1); // reduce: count
+
+    expect(await views.remove('r', 'open', alice)).toEqual({ ok: true });
+    await expect(views.remove('r', 'open', alice)).rejects.toThrow('not_found: view "open" not found');
+    expect((await views.list('r')).length).toBe(0);
   });
 });

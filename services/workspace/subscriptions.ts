@@ -184,6 +184,7 @@ const subscriptionKind: DeclarationKind<SubscriptionDefinition> = {
   idOf: (d) => d.id,
   validate: validateSubscription,
   isStored: (v): v is SubscriptionDefinition => !!(v as { id?: unknown })?.id,
+  listLimit: 200,
 };
 
 export function createSubscriptions(state: ObservedState): Subscriptions {

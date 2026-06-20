@@ -29,6 +29,8 @@ export interface DeclarationKind<D> {
   validate(def: D): void;
   /** List filter / type guard for stored values (e.g. has an id). */
   isStored(value: unknown): value is D;
+  /** Cap on `list` (subscriptions used 200; views/actions list unbounded). */
+  listLimit?: number;
 }
 
 export interface RegisterOptions {
@@ -58,7 +60,7 @@ export function createDeclarationRegistry<D>(state: ObservedState, kind: Declara
     },
 
     async list(scope): Promise<D[]> {
-      const res = await state.query(scope, { prefix: kind.ns, rankBy: 'recency', limit: 200 });
+      const res = await state.query(scope, { prefix: kind.ns, rankBy: 'recency', ...(kind.listLimit !== undefined ? { limit: kind.listLimit } : {}) });
       return res.entries.map((e) => e.value).filter(kind.isStored);
     },
 

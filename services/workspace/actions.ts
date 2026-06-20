@@ -259,6 +259,12 @@ export interface DeclarativeActions {
   invoke(scope: string, id: string, params: Record<string, unknown>, identity?: Identity): Promise<InvokeResult>;
 }
 
+// NOTE (ADR-0001): unlike views/subscriptions, actions are deliberately NOT a thin
+// wrapper over the Declaration registry. `register` returns a `RegisterResult`
+// (surfacing competing write targets) and `remove`/`invoke` throw a typed
+// `ActionInvokeError` — semantics beyond storage. Per the ADR's storage-vs-evaluate
+// boundary, that extra behaviour stays bespoke here; only the storage shape (key /
+// type / supersede) is shared in spirit, not forced through the generic registry.
 export function createDeclarativeActions(state: ObservedState): DeclarativeActions {
   async function loadAll(scope: string): Promise<ActionDefinition[]> {
     const res = await state.query(scope, { prefix: ACTIONS_PREFIX, rankBy: 'recency' });

@@ -190,3 +190,20 @@ internal refactor.
 2. Should `list` for `type` return canonical ∪ slice (the `$types` view) or slice-only
    (today's `query _types`)? Proposal: add `resolve`-backed `listResolved` for the merged
    view, keep `list` slice-only so existing callers are unchanged.
+
+## Implementation log
+
+- **2026-06-19** — `createDeclarationRegistry` + `DeclarationKind` landed
+  (`platform/runtime/declarations.ts`). **subscriptions** and **views** are now thin
+  wrappers (`subscriptionKind` / `viewKind`); their evaluate sides (`matches`/`resolveParams`;
+  `evaluate`/CEL) are untouched. Parity proven in `tests/declaration-registry.test.ts`; full
+  suite green (287).
+- **actions — principled exception.** `register` returns a conflict-surfacing `RegisterResult`
+  and errors are a typed `ActionInvokeError`; these are evaluate-adjacent semantics, so per the
+  storage-vs-evaluate boundary actions stays bespoke (documented in `actions.ts`). A later
+  refinement may extract just its storage step, but it is *not* a thin wrap.
+- **`_config/salience` — out of the handler registry.** It is read *inside* the salience
+  runtime (`state.loadSalienceConfig`, over the raw `StateStore` during `createObservedState`),
+  not by a handler, so it can't route through an `ObservedState`-level registry without a
+  cycle. It already is the minimal form (`store.get` + `parseSalienceConfig`); it adopts the
+  *descriptor pattern* conceptually but keeps its direct read. Recorded so the map stays honest.
