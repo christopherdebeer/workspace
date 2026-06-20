@@ -94,6 +94,10 @@ stream). CEL remains the subscription's richer temporal clause, where its evalua
   (a Subscription + an Action), inspectable in `$catalog`/`$graph`.
 
 ## Out of scope / open
+- **Resolved (ADR-0014 row 6) — CEL stays subscription-only.** The structural Selector is the
+  shared floor; CEL is a per-fact clause. A subscription runs CEL over *one* changed fact per
+  event; a view/query runs its predicate over *many* facts — CEL-per-fact would be costly and
+  would pull `cel-js` into `platform/runtime`. Justified asymmetry, not drift.
 - The reactor stays a fixed tier-1 component (it must — something has to run the loop);
   this ADR names *what it evaluates*, not a rewrite of how.
 - Whether a Subscription should be able to range over the **derived** projection (fire when
