@@ -746,7 +746,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'members',
     description:
-      "A collection's member facts (ADR-0005). **Intensional** when the fact carries a `query` (a view) — its query is evaluated; **extensional** otherwise — the facts with an inbound membership edge (`inView`/`inDoc`) in the Reference projection (e.g. a doc's blocks). Salience-ranked. One read for 'a view's facts' and 'a doc's members' alike.",
+      "A collection's member facts (ADR-0005). **Intensional** when the fact carries a `query` (a view) — its query is evaluated (`order:\"query\"`); **extensional** otherwise — the facts with an inbound membership edge (`inView`/`inDoc`) in the Reference projection (e.g. a doc's blocks). Extensional members come back in **narrative order** when placed by an ordering decoration (a doc-order `seq` → `order:\"seq\"`), else salience-ranked (`order:\"salience\"`). One read for 'a view's facts' and 'a doc's members' alike.",
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -760,6 +760,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         key: { type: 'string' },
         membership: { type: 'string', enum: ['intensional', 'extensional'] },
+        order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
         members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta)' },
       },
     },

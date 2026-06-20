@@ -550,4 +550,37 @@ describe('collections: members (ADR-0005)', () => {
     expect(res.membership).toBe('extensional');
     expect(res.members.map((m) => m.key).sort()).toEqual(['blk:1', 'blk:2']);
   });
+
+  it('extensional — members are ordered by the decoration seq, not salience', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put(
+      { scope: 'r', key: '_types/doc-order', value: { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: 'doc:{doc}' }] }, type: 'type-decl' },
+      alice,
+    );
+    await state.put({ scope: 'r', key: 'doc:guide', value: { title: 'Guide' }, type: 'doc' }, alice);
+    // blk:a is written first (lower salience by recency) but placed LAST by seq;
+    // blk:b is written last (higher salience) but placed FIRST by seq — so a pure
+    // salience sort would invert the narrative order.
+    await state.put({ scope: 'r', key: 'blk:a', value: { content: 'first written' }, type: 'doc-block' }, alice);
+    await state.put({ scope: 'r', key: 'blk:b', value: { content: 'last written' }, type: 'doc-block' }, alice);
+    await state.put({ scope: 'r', key: '_doc/guide/blk:a', value: { seq: 2 }, type: 'doc-order' }, alice);
+    await state.put({ scope: 'r', key: '_doc/guide/blk:b', value: { seq: 1 }, type: 'doc-order' }, alice);
+
+    const res = await state.members('r', 'doc:guide');
+    expect(res.order).toBe('seq');
+    expect(res.members.map((m) => m.key)).toEqual(['blk:b', 'blk:a']);
+  });
+
+  it('extensional — falls back to salience order when no decoration carries a seq', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: '_views/board', value: { id: 'board' }, type: 'collection' }, alice);
+    await state.put({ scope: 'r', key: 'x1', value: { text: 'a' }, type: 'note' }, alice);
+    // an authored membership edge, no ordering decoration behind it
+    await state.link('r', 'x1', 'inView', '_views/board', 1, alice);
+
+    const res = await state.members('r', '_views/board');
+    expect(res.membership).toBe('extensional');
+    expect(res.order).toBe('salience');
+    expect(res.members.map((m) => m.key)).toEqual(['x1']);
+  });
 });

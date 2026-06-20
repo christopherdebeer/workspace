@@ -1,6 +1,9 @@
 # ADR-0005 — Collections (intensional + extensional, one primitive)
 
-- **Status:** Proposed (next-but-one; queued behind ADR-0003/0004)
+- **Status:** Accepted — `workspace.members` ships the unified read (intensional ∪
+  extensional), with extensional members ordered by decoration `seq` (narrative order)
+  and a graceful salience fallback. Remaining: fold `View`/`Doc` storage into one
+  `Collection` Declaration kind (migration steps below).
 - **Date:** 2026-06-19
 - **Context:** [`breathe.md`](../breathe.md) — "a Collection is a set of facts:
   intensional (a query) or extensional (explicit membership edges)."
@@ -47,6 +50,24 @@ flowchart TD
   `_doc/<doc>/<block>` decoration (already a `doc-order` fact).
 - A collection may be **both** (a query *plus* pinned extras) — union of the two member
   sources.
+
+## Implemented — the unified read (`workspace.members`)
+
+`state.members(scope, key)` resolves a collection through one path:
+
+- **intensional** when the fact carries a `query` → `Projection.select` (reuses
+  `api.query`); reports `order: "query"`.
+- **extensional** otherwise → the facts with an inbound `inDoc`/`inView` edge in the
+  `$graph` projection. **Narrative order:** a key-encoded membership edge now carries
+  `source` — the `_doc/<doc>/<block>` decoration that placed the member — so `members`
+  recovers its `seq` and sorts by it (`order: "seq"`). When no member is placed by a
+  `seq` decoration (e.g. a board with only authored `inView` edges), it falls back to
+  salience rank (`order: "salience"`) so nothing is lost. `MEMBERSHIP_RELS = {inView,
+  inDoc}` is the single membership vocabulary.
+
+This is behaviour-preserving — lit/canvas keep their own stores — but gives every
+collection one resolution surface (`read("workspace.members", {key})`) ahead of the
+storage fold below.
 
 ## Migration (sketch — to detail when it reaches the front)
 1. Define `Collection` as a Declaration kind (ADR-0001 registry) with `membership:

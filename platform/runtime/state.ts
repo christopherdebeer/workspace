@@ -641,7 +641,12 @@ function rulesFromDecl(decl: unknown): TypeRules {
 }
 
 /** An edge plus whether it was derived (vs authored). Stored edges omit the flag. */
-export type AnnotatedEdge = EdgeRecord & { derived?: boolean };
+export type AnnotatedEdge = EdgeRecord & {
+  derived?: boolean;
+  /** For a key-encoded edge (ADR-0003), the decoration fact whose key produced it.
+   *  Lets a consumer recover the decoration's payload (e.g. a doc-order `seq`). */
+  source?: string;
+};
 
 /** Normalise a cell address/manager handle for matching: `/@c15r/lit`, `@c15r/lit`
  *  and a bare name all collapse so a type's `manager` resolves to its cell fact. */
@@ -725,9 +730,9 @@ export function deriveBackboneEdges(
   // types are canonical-only) — that's what gives every typed fact its floor.
   // Edges to *other* targets (a cell, renderer, view) still require the target to
   // exist, so they never dangle.
-  const push = (from: string, rel: string, to: string, requireTarget = true): void => {
+  const push = (from: string, rel: string, to: string, requireTarget = true, source?: string): void => {
     if (from === to || (requireTarget && !present.has(to))) return;
-    edges.push({ scope, from, rel, to, strength: BACKBONE_STRENGTH, createdAt: '', writer: null, derived: true });
+    edges.push({ scope, from, rel, to, strength: BACKBONE_STRENGTH, createdAt: '', writer: null, derived: true, source });
   };
 
   for (const r of live) {
@@ -758,7 +763,9 @@ export function deriveBackboneEdges(
         if (compiled && groups) {
           const g: Record<string, string> = {};
           compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
-          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g));
+          // `source: r.key` = the decoration that ordered/placed the member, so
+          // extensional membership can recover its narrative `seq` (ADR-0005).
+          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, r.key);
         }
       }
     }
@@ -893,6 +900,13 @@ export interface NeighborsResult {
 export interface MembersResult {
   key: string;
   membership: 'intensional' | 'extensional';
+  /**
+   * How the extensional members are ordered: `seq` when at least one member is
+   * placed by an ordering decoration (a doc-order `seq` — narrative position),
+   * else `salience`. Intensional results inherit the query's own ordering and
+   * report `query`.
+   */
+  order: 'seq' | 'salience' | 'query';
   members: Array<{ key: string } & Entry>;
 }
 
@@ -1337,26 +1351,52 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Intensional: the collection IS a query (a view) — evaluate it.
       if (q && typeof q === 'object') {
         const res = await api.query(scope, { ...(q as QueryOptions), typeRules: opts?.typeRules });
-        return { key, membership: 'intensional', members: res.entries };
+        return { key, membership: 'intensional', order: 'query', members: res.entries };
       }
       // Extensional: the facts with an inbound membership edge in the projection.
+      // A key-encoded membership edge carries `source` — the decoration that placed
+      // the member — so we can recover its narrative `seq` and order by it.
       const { edges } = await api.graph(scope, { typeRules: opts?.typeRules });
       const memberKeys: string[] = [];
       const seen = new Set<string>();
+      const decorationOf = new Map<string, string>();
       for (const e of edges) {
         if (e.to === key && MEMBERSHIP_RELS.has(e.rel) && !seen.has(e.from)) {
           seen.add(e.from);
           memberKeys.push(e.from);
+          if (e.source) decorationOf.set(e.from, e.source);
         }
       }
       const signals = await signalsFor(scope, nowMs, s.windowMs, undefined, opts?.typeRules);
       const members: Array<{ key: string } & Entry> = [];
+      const seqOf = new Map<string, number>();
       for (const k of memberKeys) {
         const rec = await store.get(scope, k);
-        if (rec && !rec.superseded && isTimerLive(rec, nowMs)) members.push({ key: k, ...(await wrap(rec, nowMs, signals)) });
+        if (!rec || rec.superseded || !isTimerLive(rec, nowMs)) continue;
+        members.push({ key: k, ...(await wrap(rec, nowMs, signals)) });
+        const decKey = decorationOf.get(k);
+        if (decKey) {
+          const dec = await store.get(scope, decKey);
+          const seq = (dec?.value as { seq?: unknown } | undefined)?.seq;
+          if (typeof seq === 'number' && Number.isFinite(seq)) seqOf.set(k, seq);
+        }
       }
-      members.sort((a, b) => b._meta.score - a._meta.score);
-      return { key, membership: 'extensional', members };
+      // Narrative order when any member is placed by a `seq` decoration; the rest
+      // (and ties) fall back to salience so nothing is lost.
+      const ordered = seqOf.size > 0;
+      if (ordered) {
+        members.sort((a, b) => {
+          const sa = seqOf.get(a.key);
+          const sb = seqOf.get(b.key);
+          if (sa !== undefined && sb !== undefined && sa !== sb) return sa - sb;
+          if (sa !== undefined && sb === undefined) return -1;
+          if (sa === undefined && sb !== undefined) return 1;
+          return b._meta.score - a._meta.score;
+        });
+      } else {
+        members.sort((a, b) => b._meta.score - a._meta.score);
+      }
+      return { key, membership: 'extensional', order: ordered ? 'seq' : 'salience', members };
     },
 
     async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
