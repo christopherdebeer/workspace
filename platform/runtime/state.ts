@@ -533,9 +533,14 @@ export function buildSignals(
       if (inWindow) v.windowWrites++;
     }
   }
+  // Centrality is *weighted* degree (ADR-0009): each edge contributes its strength,
+  // so authored evidence (default 1.0; a `null` authored strength = 1.0) outweighs a
+  // derived `supports` (0.6), which outweighs plumbing like `instanceOf` (0.2). A flat
+  // count would let type-anchor edges dominate the signal.
   for (const ed of edges) {
-    sig(ed.from).degree++;
-    if (ed.to !== ed.from) sig(ed.to).degree++;
+    const w = ed.strength ?? 1;
+    sig(ed.from).degree += w;
+    if (ed.to !== ed.from) sig(ed.to).degree += w;
   }
   return m;
 }
@@ -577,9 +582,17 @@ export const BACKBONE_RELS = {
  *  with one of these edges pointing at it. */
 export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc']);
 
-/** Derived edges carry less structural weight than authored ones, so a hand-drawn
- *  link still dominates a fact's centrality. */
-const BACKBONE_STRENGTH = 0.25;
+/**
+ * Per-rule Reference strength (ADR-0009). Derived edges carry graded weight so a
+ * hand-drawn (authored) link still dominates a fact's centrality, and *evidence*
+ * edges (an embedded `supports`/`grounds` ref) outweigh mere *plumbing*
+ * (`instanceOf`/`managedBy`). Authored edges default to 1.0 (a `null` authored
+ * strength = 1.0 in `buildSignals`); these are the derived tiers below it:
+ *   authored 1.0  >  embedded 0.6  >  membership 0.4  >  structural 0.2
+ */
+const STRUCTURAL_STRENGTH = 0.2; // instanceOf / managedBy / rendersWith — type plumbing
+const MEMBERSHIP_STRENGTH = 0.4; // inView / inDoc — collection membership (ADR-0005)
+const EMBEDDED_STRENGTH = 0.6; // a `ref` field (supports / grounds) — embedded evidence
 
 /** A `ref` field on a type → an embedded Reference rule (ADR-0003): the value(s)
  *  at `name` are fact keys; emit `fact —(rel ?? name)→ key` (each, when `list`). */
@@ -745,9 +758,9 @@ export function deriveBackboneEdges(
   // types are canonical-only) — that's what gives every typed fact its floor.
   // Edges to *other* targets (a cell, renderer, view) still require the target to
   // exist, so they never dangle.
-  const push = (from: string, rel: string, to: string, requireTarget = true, source?: string): void => {
+  const push = (from: string, rel: string, to: string, requireTarget = true, strength = STRUCTURAL_STRENGTH, source?: string): void => {
     if (from === to || (requireTarget && !present.has(to))) return;
-    edges.push({ scope, from, rel, to, strength: BACKBONE_STRENGTH, createdAt: '', writer: null, derived: true, source });
+    edges.push({ scope, from, rel, to, strength, createdAt: '', writer: null, derived: true, source });
   };
 
   for (const r of live) {
@@ -759,7 +772,7 @@ export function deriveBackboneEdges(
       if (view.type && r.type !== view.type) continue;
       if (view.tag && !r.tags.includes(view.tag)) continue;
       if (view.prefix && !r.key.startsWith(view.prefix)) continue;
-      push(r.key, BACKBONE_RELS.inView, view.key);
+      push(r.key, BACKBONE_RELS.inView, view.key, true, MEMBERSHIP_STRENGTH);
     }
     // ── declared Reference rules (ADR-0003), from the fact's own type ──
     const rules = r.type ? effectiveRules(r.type) : undefined;
@@ -769,7 +782,7 @@ export function deriveBackboneEdges(
       for (const ref of rules.refs ?? []) {
         const raw = value[ref.name];
         const keys = ref.list ? (Array.isArray(raw) ? raw : []) : raw != null ? [raw] : [];
-        for (const k of keys) if (typeof k === 'string') push(r.key, ref.rel ?? ref.name, k);
+        for (const k of keys) if (typeof k === 'string') push(r.key, ref.rel ?? ref.name, k, true, EMBEDDED_STRENGTH);
       }
       // key-encoded: parse this fact's key, emit the declared edge(s)
       if (rules.keyPattern && rules.keyEdges?.length) {
@@ -780,7 +793,7 @@ export function deriveBackboneEdges(
           compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
           // `source: r.key` = the decoration that ordered/placed the member, so
           // extensional membership can recover its narrative `seq` (ADR-0005).
-          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, r.key);
+          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, MEMBERSHIP_STRENGTH, r.key);
         }
       }
     }

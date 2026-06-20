@@ -1,6 +1,9 @@
 # ADR-0009 — Edge strength as a per-rule facet of the Reference projection
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted — centrality is now weighted degree (`Σ strength`), and the single
+  `BACKBONE_STRENGTH` is replaced by per-rule strengths (authored 1.0 > embedded 0.6 >
+  membership 0.4 > structural 0.2). Authored-edge centrality is unchanged; only derived
+  contribution is graded.
 - **Date:** 2026-06-20
 - **Context:** [`breathe.md`](../breathe.md) Wave 7/14 — References are not all equal;
   an authored `grounds` is stronger evidence than a derived `instanceOf`. Salience's

@@ -434,8 +434,9 @@ describe('derived structural backbone', () => {
     await state.put({ scope: 'r', key: 'kb/1', value: { text: 'hi' }, type: 'note' }, alice);
 
     const res = await state.read('r', { elision: 'none' });
-    // degree 1 (→ its type) / centralitySaturation 5 = 0.2 — no authored edge needed.
-    expect(res.entries['kb/1']._meta.centrality).toBeCloseTo(0.2, 5);
+    // weighted degree: one structural `instanceOf` edge (strength 0.2) / centralitySaturation 5
+    // = 0.04 — a floor above zero, but discounted vs an authored link (ADR-0009).
+    expect(res.entries['kb/1']._meta.centrality).toBeCloseTo(0.2 / 5, 5);
     // the type anchor is a hub: its instance points at it, so it too clears zero.
     expect(res.entries['_types/note']._meta.centrality).toBeGreaterThan(0);
   });
@@ -488,6 +489,28 @@ describe('derived structural backbone', () => {
     const records = [rec('t/1', 'task', { owner: 'kb/p' }), rec('kb/p', 'knowledge', {})];
     const edges = deriveBackboneEdges(records, { task: { refs: [{ name: 'owner' }] } });
     expect(has(edges, 't/1', 'owner', 'kb/p')).toBe(true);
+  });
+
+  it('stamps per-rule strength: embedded evidence > membership > structural plumbing (ADR-0009)', () => {
+    const records = [
+      rec('claim/1', 'claim', { statement: 'x', support: ['kb/a'] }),
+      rec('kb/a', 'knowledge', {}),
+      rec('_types/claim', 'type-decl', {}),
+      rec('_views/all-claims', 'view', { query: { type: 'claim' } }),
+      rec('blk:1', 'doc-block', {}),
+      rec('_doc/d/blk:1', 'doc-order', { seq: 1 }),
+      rec('doc:d', 'doc', {}),
+    ];
+    const rules = {
+      claim: { refs: [{ name: 'support', rel: 'supports', list: true }] },
+      'doc-order': { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: 'doc:{doc}' }] },
+    };
+    const edges = deriveBackboneEdges(records, rules);
+    const strengthOf = (rel: string) => edges.find((e) => e.rel === rel)?.strength;
+    expect(strengthOf('supports')).toBe(0.6); // embedded evidence (a ref field)
+    expect(strengthOf('inView')).toBe(0.4); // collection membership
+    expect(strengthOf('inDoc')).toBe(0.4); // key-encoded membership
+    expect(strengthOf('instanceOf')).toBe(0.2); // structural plumbing
   });
 
   it('key-encoded rule: a keyPattern + keyEdges emits membership from the key', () => {
