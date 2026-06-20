@@ -227,6 +227,11 @@ export class PlatformStack extends cdk.Stack {
       routes: ['/@*'],
       eventBus,
     });
+    // The "home demotion" (retiring the tier-1 SPA): with dispatch as the router
+    // default (below), an unmatched apex GET `/` routes here and is served by the
+    // tier-2 home cell — the platform face is now a dynamic cell. Staged cutover:
+    // the tier-1 HomeService stays deployed (unused) until the live apex is verified.
+    dispatch.fn.addEnvironment('DISPATCH_DEFAULT_CELL', 'c15r/home');
 
     // Any cell that protects routes asks the auth service to validate the
     // bearer token (the in-cell alternative to edge validation).
@@ -292,7 +297,10 @@ export class PlatformStack extends cdk.Stack {
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.
       cells: [home, auth, workspace, gateway, dispatch],
-      defaultCell: home,
+      // Apex `/*` → dispatch → DISPATCH_DEFAULT_CELL (c15r/home, the tier-2 cell).
+      // Staged retirement of tier-1 home: this routing flip is verified live before
+      // the HomeService construct + services/home are removed (rollback = restore `home`).
+      defaultCell: dispatch,
       domainNames: props?.domainNames,
       certificate,
       // dispatch already path-routes `/@<owner>/<name>`; the cell distribution
