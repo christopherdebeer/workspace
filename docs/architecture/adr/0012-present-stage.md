@@ -1,6 +1,8 @@
 # ADR-0012 — Present: the affordance stage of the Projection
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted (first increment) — `resolvePresent(fact, decl) → Affordance`
+  ships as the named present resolver. Routing home/lit/canvas through it (deleting their
+  bespoke default-viewer logic) is the Eliminate-phase follow-on (ADR-0014).
 - **Date:** 2026-06-20
 - **Context:** [`breathe.md`](../breathe.md) Wave 4/12 — the Projection is
   `select → score → shape → present`. `select` (ADR-0004) and `score` (ADR-0006) are
@@ -59,6 +61,20 @@ flowchart LR
 - **Affordances are data.** The Affordance set is exactly what `$types[T].handlers` already
   serves; this names *the act of resolving it for a concrete fact* (with renderer + surface
   overrides folded in), so an agent handed a fact resolves "open/edit/render" uniformly.
+
+## Implemented (first increment)
+
+`platform/runtime/present.ts` — `resolvePresent(fact, decl): Affordance` where
+`Affordance = { icon, label, render, handlers }`. It resolves the per-fact present: the
+Type's `present` facet (via `resolveType`, ADR-0002/0010) + the `label` path evaluated
+against the fact (`value.title` envelope-rooted, or a bare `titlePath` value-rooted), with
+the **key as the floor** when no label resolves and no handlers for an undeclared type. So
+`select`→`score`→`shape`→**`present`** is now named end to end, each a pure function.
+
+Consumer migration — home's `FactBody`/default-viewer, the kernel's fact presentation,
+lit/canvas renderers calling `resolvePresent` and deleting their own copies — is the
+Eliminate-phase work (ADR-0014); this increment provides the resolver they converge on.
+322 tests green.
 
 ## Consequences
 - The "default viewer for an orphaned/undefined type" problem (the early floor-renderer work)

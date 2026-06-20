@@ -51,6 +51,8 @@ export { createObservedState, createMemoryStateStore, computeScore, StatePrecond
 export { layer } from './resolution';
 export { matchesSelector } from './selector';
 export type { Selector, Selectable } from './selector';
+export { resolvePresent, resolveLabel } from './present';
+export type { Affordance, Presentable } from './present';
 export { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl, resolveType } from './type-schema';
 export type { FieldSpec, FieldType, Type, KeyEdge } from './type-schema';
 export { createDeclarationRegistry } from './declarations';
