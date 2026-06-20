@@ -15,6 +15,21 @@
 
 export type FieldType = 'string' | 'number' | 'boolean' | 'object' | 'array' | 'markdown' | 'ref';
 
+/**
+ * Resolve a type's declaration (ADR-0001 type-kind resolve / breathe Wave 5): the
+ * canonical (cell-declared) decl with the slice `_types/<type>` override merged
+ * **per facet** — the flat decl's top-level keys (icon/label/manager/handlers/
+ * schema/render/…) ARE its facets, so a shallow merge is the per-facet merge, and
+ * the slice wins. One resolver for every consumer (gateway `$types`, `remember`,
+ * the backbone), replacing the two divergent merges (gateway wholesale-replaced;
+ * `remember` shallow-merged — this unifies them on the per-facet form).
+ */
+export function mergeTypeDecl(canonical: unknown, slice: unknown): Record<string, unknown> {
+  const c = canonical && typeof canonical === 'object' && !Array.isArray(canonical) ? (canonical as Record<string, unknown>) : {};
+  const s = slice && typeof slice === 'object' && !Array.isArray(slice) ? (slice as Record<string, unknown>) : {};
+  return { ...c, ...s };
+}
+
 export interface FieldSpec {
   name: string;
   /** Best-effort primitive expectation. */

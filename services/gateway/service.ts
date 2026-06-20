@@ -38,6 +38,7 @@ import {
   ServiceContext,
   ServiceHttpRequest,
   ServiceHttpResponse,
+  mergeTypeDecl,
 } from '../../platform/runtime';
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -309,8 +310,13 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
           .catch(() => ({ entries: [] }))
       : Promise.resolve({ entries: [] }),
   ]);
+  // Per-facet resolve (mergeTypeDecl): a slice `_types/<type>` override wins facet
+  // by facet, so overriding only `icon` no longer drops the canonical handlers/schema.
   const types: Record<string, unknown> = { ...(global?.types ?? {}) };
-  for (const e of slice?.entries ?? []) types[e.key.slice('_types/'.length)] = e.value; // user override wins
+  for (const e of slice?.entries ?? []) {
+    const t = e.key.slice('_types/'.length);
+    types[t] = mergeTypeDecl(types[t], e.value);
+  }
   return {
     types,
     hint: 'A fact of type T resolves through types[T].handlers[intent] (open/edit/render/create) — a surface (a cell URL), an act target, or a renderer; templated with ${id}/${match}/${value.path}.',

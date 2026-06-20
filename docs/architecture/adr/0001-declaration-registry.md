@@ -202,6 +202,15 @@ internal refactor.
   and errors are a typed `ActionInvokeError`; these are evaluate-adjacent semantics, so per the
   storage-vs-evaluate boundary actions stays bespoke (documented in `actions.ts`). A later
   refinement may extract just its storage step, but it is *not* a thin wrap.
+- **2026-06-19 — type-kind resolve unified (first non-no-op).** Extracted
+  `mergeTypeDecl(canonical, slice)` (`platform/runtime/type-schema.ts`) — the per-facet
+  merge (slice wins). `remember` (workspace) and `buildTypes` (gateway) now both call it,
+  replacing two *divergent* merges: `remember` shallow-merged, but the gateway
+  *wholesale-replaced* (a slice `_types/<type>` overriding only `icon` dropped the canonical
+  `handlers`/`schema`). Unified on the per-facet form (ADR-0002's resolution). Behaviour-
+  identical on the live slice (no slice `_types/*` overlaps a cell-declared type); the change
+  is a dedup + latent-bug fix. Unit-tested (`mergeTypeDecl`); suite 289 green. **Requires a
+  CDK deploy** (touches gateway + workspace).
 - **`_config/salience` — out of the handler registry.** It is read *inside* the salience
   runtime (`state.loadSalienceConfig`, over the raw `StateStore` during `createObservedState`),
   not by a handler, so it can't route through an `ObservedState`-level registry without a

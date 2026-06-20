@@ -3,7 +3,28 @@
  * yields hints that nudge a fact (missing a recommended field) or a type (no
  * schema yet) toward improvement.
  */
-import { parseTypeSchema, missingRequired, schemaHints } from '../platform/runtime/type-schema';
+import { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl } from '../platform/runtime/type-schema';
+
+describe('mergeTypeDecl (the one type-kind resolver)', () => {
+  it('merges per facet, slice wins — keeps canonical facets the slice omits', () => {
+    const canonical = { manager: '@c15r/lit', handlers: { open: [{ path: '?doc=x' }] }, schema: { title: 'string' }, icon: '📄' };
+    const slice = { icon: '⭐' }; // override only the icon
+    // The latent-bug fix: gateway used to wholesale-replace (dropping handlers/schema);
+    // now the override keeps them.
+    expect(mergeTypeDecl(canonical, slice)).toEqual({
+      manager: '@c15r/lit',
+      handlers: { open: [{ path: '?doc=x' }] },
+      schema: { title: 'string' },
+      icon: '⭐',
+    });
+  });
+
+  it('handles either side absent / non-object', () => {
+    expect(mergeTypeDecl({ icon: '📄' }, undefined)).toEqual({ icon: '📄' });
+    expect(mergeTypeDecl(undefined, { icon: '⭐' })).toEqual({ icon: '⭐' });
+    expect(mergeTypeDecl('nope', ['nope'])).toEqual({});
+  });
+});
 
 describe('parseTypeSchema', () => {
   it('reads the structured `fields` form', () => {

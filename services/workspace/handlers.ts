@@ -41,6 +41,7 @@ import {
   type SalienceLens,
   type SalienceOptions,
   schemaHints,
+  mergeTypeDecl,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -1307,7 +1308,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         // (where seeded/slice-local schemas like `claim` live).
         const canonical = (await typeDeclsFor(ctx))[input.type];
         const override = (await state.get(scope, `_types/${input.type}`, ctx.identity))?.value;
-        const decl = { ...(canonical ?? {}), ...(override && typeof override === 'object' ? (override as Record<string, unknown>) : {}) };
+        const decl = mergeTypeDecl(canonical, override); // the one type-kind resolver (gateway uses the same)
         const hints = schemaHints({ type: input.type, value: input.value, decl: Object.keys(decl).length ? decl : undefined });
         if (hints.length) return { ...entry, hints };
       }
