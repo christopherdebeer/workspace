@@ -263,13 +263,152 @@ recall/query/neighbors/view are all **Projection**.
 
 ---
 
+## Wave 6 — L2 · Declaration (inhale, grounded)
+
+Every reserved `_`-namespace, read from the source. Three already share an **identical
+registry object** (`register · list · remove · [evaluate/invoke]` over a fact at `_ns/<id>`);
+the rest are read **ad hoc** — the same idea, hand-rolled per consumer.
+
+| Namespace | Constant / file | How it's read today | Registry? |
+|---|---|---|---|
+| `_views/<id>` | `services/workspace/views.ts:22` | `createRegisteredViews(state)` · register/list/remove/**evaluate** | ✅ object |
+| `_actions/<id>` | `services/workspace/actions.ts:30` | `createDeclarativeActions(state)` · register/list/remove/**invoke** | ✅ object |
+| `_subscriptions/<id>` | `services/workspace/subscriptions.ts:22` | register/list/remove (reaction match) | ✅ object |
+| `_types/<type>` | `platform/runtime/state.ts:547` | plain `remember`; read 4× — `describeTypes` + `query _types` + backbone + `remember` | ⚠ none |
+| `_renderers/<type>` | `platform/runtime/state.ts:548` | facts read by canvas + backbone `rendersWith` | ⚠ none |
+| `_config/salience` | `platform/runtime/state.ts:333` | `state.loadSalienceConfig` (direct get) | ⚠ none |
+| `_home/layout` | `cells/home/client/app.tsx:2445` | home `peek`/`remember` (direct) | ⚠ none |
+
+```mermaid
+flowchart TD
+  subgraph have["Have a registry object — same shape, written 3×"]
+    V["_views · createRegisteredViews"]
+    A["_actions · createDeclarativeActions"]
+    S["_subscriptions · createSubscriptions"]
+  end
+  subgraph adhoc["Declarations read ad hoc — no registry"]
+    T["_types (4 readers)"]
+    R["_renderers"]
+    C["_config/salience"]
+    L["_home/layout"]
+  end
+  have == identical CRUD+resolve ==> DECLREG["Declaration.registry(kind)<br/>register · list · remove · resolve · evaluate"]
+  adhoc -. should join .-> DECLREG
+  subgraph resist["Resist — not Declarations"]
+    DOC["_doc/* → membership = Reference"]
+    G["_grants/* · _groups/* → Grant axis"]
+  end
+```
+
+**Exhale:** one `Declaration.registry(kind)` — the three registry objects collapse into one
+parameterised by kind, the four ad-hoc readers become callers. **Two genuine hold-outs**
+confirm the orthogonal axes: `_doc/*` is *membership* (→ **Reference**, Wave 7),
+`_grants/_groups` is the **Grant** axis. So the namespace zoo is exactly: most → Declaration,
+`_doc` → Reference, `_grants` → Grant. No fourth thing.
+
+**Ledger delta:** 3 registries + 4 ad-hoc readers → 1 registry + 7 usages.
+
+---
+
+## Wave 7 — L2 · Reference (inhale, grounded — the graph is *lossy* today)
+
+From the source: only **two** of the four representations actually reach
+`neighbors`/`centrality`. The other two are real relations **invisible to the graph**.
+
+| Representation | Where it lives | In the graph? |
+|---|---|---|
+| authored | `workspace.link` → `store.putEdge` | ✅ stored |
+| structural | `deriveBackboneEdges` (read-time, `state.ts`) | ✅ derived |
+| **embedded** | `claim.support[]` in the value (`cells/machine/index.ts:435`); `machine` `el.arrows` | ❌ **absent** |
+| **key-encoded** | `_doc/<id>/<key>` = `{seq,fold}` (`cells/lit/index.ts:137`) | ❌ **absent** |
+
+```mermaid
+flowchart LR
+  subgraph present["Reach neighbors / centrality"]
+    AUTH["authored — putEdge"]
+    BB["structural — deriveBackboneEdges"]
+  end
+  subgraph absent["Real relations NOT in the graph ⚠"]
+    SUP["claim.support[] (evidence)"]
+    ARR["machine arrows (the machine's own graph)"]
+    DOCm["_doc membership (doc ↔ blocks)"]
+  end
+  AUTH --> G(("Reference graph"))
+  BB --> G
+  SUP -. invisible .-> G
+  ARR -. invisible .-> G
+  DOCm -. invisible .-> G
+```
+
+The sharpest grounded finding: a **claim's evidence**, a **machine's arrows**, and a
+**doc's membership** are genuine references the substrate already stores — as value arrays
+and key patterns — yet `neighbors`/centrality can't see them. The Wave-3 contraction
+(declared reference *rules* → one projection) isn't just tidier; it **recovers relations
+currently dropped on the floor.**
+
+**Exhale:** one projection, four rules — `authored` (store), `structural` (Type facets),
+`embedded` (value fields typed `ref` — `support`, `arrows`), `key-encoded` (namespace grammar
+— `_doc/<id>/<key>`). Behaviour-preserving for stored + structural; **additive** for the two
+absent classes.
+
+**Ledger delta:** 2 effective stitchers + 2 stranded representations → 1 projection + 4 rules,
+**0 stranded**.
+
+---
+
+## Wave 8 — L3 · two flows, traced through real code (proof of composition)
+
+The primitives are only real if the actual flows decompose into them. Both do.
+
+**Flow A — "home renders a fact"** (`cells/home/client/app.tsx` + `services/gateway/service.ts` `buildTypes`):
+
+```mermaid
+sequenceDiagram
+  participant Home as home app.tsx
+  participant GW as gateway buildTypes
+  participant Cells as cells.describeTypes
+  participant WS as workspace.query _types
+  Home->>GW: read("$types")
+  GW->>Cells: describeTypes() — canonical
+  GW->>WS: query(prefix _types) — overrides
+  GW-->>Home: merged decls = Resolution(canonical ← override)
+  Note over Home: resolve(fact,'render').hint → FactBody/HintBody (Affordance → present)
+  Note over Home: resolve(fact,'open').surface → handlerUrl → cellUrl
+```
+
+Decomposes to **Declaration**(Type) via **Resolution**(canonical←override) → **Affordance** →
+the `present` stage of **Projection**. No new concepts.
+
+**Flow B — "remember validates"** (`services/workspace/handlers.ts` `remember`):
+
+```mermaid
+sequenceDiagram
+  participant C as caller
+  participant WS as workspace.remember
+  participant ST as state.put
+  participant CY as cells.describeTypes (cached)
+  C->>WS: remember(key, value, type)
+  WS->>ST: put(...) — the write ALWAYS lands (Fact)
+  WS->>CY: typeDeclsFor() — canonical decl
+  WS->>ST: get(_types/&lt;type&gt;) — slice override
+  Note over WS: schemaHints(parseTypeSchema → missingRequired) — Type.shape
+  WS-->>C: { value, _meta, hints? }
+```
+
+Decomposes to **Fact** (unconditional write) + **Declaration**(Type.shape) via
+**Resolution**(canonical←override) → advisory. The write path is untouched by the type
+layer — exactly the behaviour-preservation a contraction requires.
+
+---
+
 ## Next waves (todo)
 
-- **L2 · Declaration** — enumerate every `_`-namespace (`_types _views _actions _subscriptions
-  _config _renderers _home _doc _groups`) and confirm each is `Declaration(kind)` under one
-  registry; find any that resist.
-- **L2 · Reference** — pin the `ref` field-type and the key-encoded rule grammar; check
-  `machine` arrows/rails and `_doc` order fold in cleanly.
-- **L3 · flows** — trace "home renders a fact" and "remember validates" through the target
-  primitives to prove behaviour-preservation before any code moves.
-- **Salience inputs** — confirm centrality-from-projection is the only structural feed.
+- **L2 · Reference grammar** — specify the `ref` field-type marker and the key-encoded
+  pattern grammar (`_doc/<id>/<key>`, `_actions/machine.<name>.*`) so rules are declarative
+  data, not code.
+- **L3 · invoke / react** — trace `invoke` (Action) and a subscription firing, to confirm
+  Action/Subscription are Declarations whose *evaluate* runs through one path.
+- **Salience inputs** — confirm `centrality` is the only structural feed and that it reads the
+  Wave-7 projection (so embedded/key-encoded edges start counting once projected).
+- **Cell ↔ Declaration seam** — formalise "a cell *supplies* Declarations on deploy"
+  (`describeTypes`) as the one publish path, retiring per-consumer parsing.
