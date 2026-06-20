@@ -1,6 +1,9 @@
 # ADR-0008 — The Cell axis: the infra that *supplies* Declarations
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted — `read("$cells")` ships the Cell-axis self-model (each accessible
+  cell's contract: publishes · backs · substrate). Deploy/isolation mechanics unchanged.
+  Answers ADR-0007's deferred `ssrReads`/`callerWrites` question: declared cell-side
+  (surfaced here), gated grant-side.
 - **Date:** 2026-06-20
 - **Context:** [`breathe.md`](../breathe.md) Wave 12 — a Cell is the orthogonal **infra**
   axis that supplies Declarations and backs Affordances; like Grant (ADR-0007) it is not
@@ -63,6 +66,33 @@ flowchart TD
 - **Transformers** (`models`, `run`, `viewers`) are a Cell *kind*, not a new primitive
   (breathe Wave 13): their outputs are Facts by construction (`agent-run`, `transcript`,
   `output`) via `remember(out, …, via) + produces`.
+
+## Implemented
+
+`read("$cells")` → `cells.contracts` returns, for each cell the caller can reach (owns or
+was granted), the cell's **contract** — a pure projection over the registry record:
+
+```jsonc
+{
+  "cells": [{
+    "address": "/@c15r/lit", "name": "lit", "owner": "c15r", "status": "ACTIVE",
+    "publishes": ["doc", "doc-block", "doc-order"],   // Type Declarations → $types
+    "backs":     ["open", "edit", "render"],          // affordance intents these types resolve here
+    "substrate": {                                     // declared bounded access (ADR-0007 gates it)
+      "ssrReads":     ["workspace.query"],
+      "callerWrites": [{ "keyPrefix": "blk:" }, { "keyPrefix": "doc:", "crossSlice": true }]
+    }
+  }],
+  "hint": "A Cell supplies Declarations (publishes → $types) and backs Affordances…"
+}
+```
+
+This is the parallel of `$grants`: `$catalog` lists a cell's *capabilities*; `$cells` names
+its whole *contract* in one place — what vocabulary it adds, which surfaces it backs, and
+which substrate keys it may touch. The two orthogonal axes are now both legible
+(`$grants` = authority, `$cells` = infra). The gateway aliases `$cells` exactly as `$graph`/
+`$grants`; no deploy/isolation change. The five self-model surfaces:
+`$catalog` · `$types` · `$graph` · `$grants` · `$cells`.
 
 ## Consequences
 - The orthogonal axes line up: **Grant** gates the nouns (authority), **Cell** supplies

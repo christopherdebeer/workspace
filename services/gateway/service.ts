@@ -55,6 +55,7 @@ const CATALOG = '$catalog';
 const TYPES = '$types';
 const GRAPH = '$graph';
 const GRANTS = '$grants';
+const CELLS = '$cells';
 
 /** A tier-1 tool as returned by a provider's `describeTools`. */
 interface ProviderTool {
@@ -347,6 +348,9 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   // $grants — the authority self-model (ADR-0007), the self-model's fourth surface:
   // what the caller may see and do (scope · grant · partition).
   if (target === GRANTS) return ctx.serviceClient('workspace').command('grants', {});
+  // $cells — the Cell axis (ADR-0008): each accessible cell's contract — what it
+  // publishes (types), backs (surfaces), and may touch (ssr/caller). The infra axis.
+  if (target === CELLS) return ctx.serviceClient('cells').command('contracts', {});
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
@@ -410,7 +414,7 @@ const tools: Record<string, McpToolDefinition> = {
   read: {
     title: 'Observe the substrate',
     description:
-      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The four self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), and "$grants" (the authority self-model — what you may see and do).',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch).',
     inputSchema: READ_SCHEMA,
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],

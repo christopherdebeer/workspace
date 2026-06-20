@@ -1346,6 +1346,57 @@ async function describeTypes(_input: unknown, ctx: ServiceContext): Promise<{ ty
   return { types: out };
 }
 
+/**
+ * The Cell axis as a self-model surface (ADR-0008) — powers `read("$cells")`. For
+ * each cell the caller can reach (owns or was granted), its **contract**: what it
+ * *publishes* (the Type Declarations it supplies — the `describeTypes` seam), what
+ * it *backs* (the affordance surfaces those types name it for), and the *substrate
+ * access* it declares (`ssrReads`/`callerWrites` — bounded, and gated by the Grant
+ * axis). `$catalog` lists a cell's capabilities; this names the cell's whole
+ * contract in one place. Mirrors `$grants`: the two orthogonal axes, made legible.
+ */
+async function cellContracts(_input: unknown, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cells = await registry.listAccessibleBy(user);
+  return {
+    cells: cells
+      .sort((a, b) => cellAddress(a.owner, a.name).localeCompare(cellAddress(b.owner, b.name)))
+      .map((c) => {
+        const declared = c.types ?? [];
+        const typeNames = declared
+          .map((t) => (typeof t.type === 'string' ? t.type : ''))
+          .filter((t) => t && !t.startsWith('_'));
+        // the affordance surfaces those types back (open/edit/render/create…)
+        const backs = Array.from(
+          new Set(
+            declared.flatMap((t) =>
+              t.handlers && typeof t.handlers === 'object' ? Object.keys(t.handlers as Record<string, unknown>) : [],
+            ),
+          ),
+        ).sort();
+        return {
+          address: cellAddress(c.owner, c.name),
+          name: c.name,
+          owner: c.owner,
+          status: c.status,
+          public: c.public,
+          ...(c.owner !== user ? { shared: true } : {}),
+          ...(c.description ? { description: c.description } : {}),
+          publishes: typeNames, // → $types vocabulary
+          backs, // affordance intents these types resolve through this cell
+          substrate: {
+            ssrReads: (c.ssrReads ?? []).map((r) => r.target),
+            callerWrites: (c.callerWrites ?? []).map((w) => ({ keyPrefix: w.keyPrefix, ...(w.crossSlice ? { crossSlice: true } : {}) })),
+          },
+        };
+      }),
+    hint:
+      'A Cell supplies Declarations (publishes → $types) and backs Affordances (open/edit/render). Its `substrate` access is declared cell-side and gated by the Grant axis ($grants). The infra axis beside the authority axis; $catalog lists capabilities, this names the contract.',
+  };
+}
+
 interface CallCellToolInput {
   /** Target the cell by id, or by owner + name (the `@owner/name` address form). */
   cellId?: string;
@@ -1755,6 +1806,7 @@ const commands: Record<string, RegisteredCommand> = {
   describeCellTools: describeCellTools as RegisteredCommand,
   callCellTool: callCellTool as RegisteredCommand,
   describeTypes: describeTypes as RegisteredCommand,
+  contracts: cellContracts as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {
   commands[name] = spec.handler;

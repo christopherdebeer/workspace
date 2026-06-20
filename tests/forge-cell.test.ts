@@ -719,4 +719,36 @@ describe('cells: backend commands', () => {
     // missing manager defaults to the declaring cell's address
     expect(types.capture.manager).toBe('/@alice/input');
   });
+
+  it('contracts ($cells) reports each accessible cell\'s publish + backs + substrate access', async () => {
+    const reg = createRegistry('forge-table');
+    const base = {
+      description: 'a cell', functionName: 'fn', stackName: 'stk', grants: ['alice'],
+      createdAt: 't', updatedAt: 't',
+    };
+    await reg.put({
+      cellId: 'lit-1', name: 'lit', owner: 'alice', status: 'ACTIVE', ...base,
+      types: [
+        { type: 'doc', manager: '@alice/lit', handlers: { open: [], edit: [], render: [] } },
+        { type: '_internal', icon: '🔧' }, // reserved — not a published type
+      ],
+      ssrReads: [{ as: 'owner', target: 'workspace.query' }],
+      callerWrites: [{ keyPrefix: 'blk:', crossSlice: false }, { keyPrefix: 'doc:', crossSlice: true }],
+    });
+
+    const res = await call<{ cells: Array<Record<string, unknown>>; hint: string }>('alice', 'contracts', {});
+    expect(res.ok).toBe(true);
+    const cell = res.result!.cells.find((c) => c.name === 'lit')!;
+    expect(cell.address).toBe('/@alice/lit');
+    // publishes: only the non-reserved type
+    expect(cell.publishes).toEqual(['doc']);
+    // backs: the affordance intents its types resolve through this cell
+    expect(cell.backs).toEqual(['edit', 'open', 'render']);
+    // substrate: declared bounded access, crossSlice flagged only when true
+    expect(cell.substrate).toEqual({
+      ssrReads: ['workspace.query'],
+      callerWrites: [{ keyPrefix: 'blk:' }, { keyPrefix: 'doc:', crossSlice: true }],
+    });
+    expect(typeof res.result!.hint).toBe('string');
+  });
 });
