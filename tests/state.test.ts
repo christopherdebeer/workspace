@@ -384,7 +384,7 @@ describe('derived structural backbone', () => {
     // Without the canonical map, the type cannot reach its cell…
     expect(deriveBackboneEdges(records).some((e) => e.rel === 'managedBy')).toBe(false);
     // …with it (as a cell stamps on deploy), the link resolves.
-    const edges = deriveBackboneEdges(records, { doc: '@c15r/lit' });
+    const edges = deriveBackboneEdges(records, { doc: { manager: '@c15r/lit' } });
     expect(edges.some((e) => e.from === '_types/doc' && e.rel === 'managedBy' && e.to === 'cells/lit-abc')).toBe(true);
   });
 
@@ -394,7 +394,7 @@ describe('derived structural backbone', () => {
       rec('cells/lit-abc', 'cell', { address: '/@c15r/lit', name: 'lit' }),
       rec('cells/other-xyz', 'cell', { address: '/@c15r/other', name: 'other' }),
     ];
-    const edges = deriveBackboneEdges(records, { doc: '@c15r/other' });
+    const edges = deriveBackboneEdges(records, { doc: { manager: '@c15r/other' } });
     expect(edges.some((e) => e.rel === 'managedBy' && e.to === 'cells/lit-abc')).toBe(true);
     expect(edges.some((e) => e.to === 'cells/other-xyz')).toBe(false);
   });
@@ -412,7 +412,7 @@ describe('derived structural backbone', () => {
   it('still reaches a canonical-only content type — instanceOf needs no slice anchor', () => {
     // `doc` is cell-managed and has no `_types/doc` fact in this slice.
     const records = [rec('kb/1', 'doc', { title: 'x' }), rec('cells/lit-abc', 'cell', { address: '/@c15r/lit' })];
-    const edges = deriveBackboneEdges(records, { doc: '@c15r/lit' });
+    const edges = deriveBackboneEdges(records, { doc: { manager: '@c15r/lit' } });
     expect(edges.some((e) => e.from === 'kb/1' && e.rel === 'instanceOf' && e.to === '_types/doc')).toBe(true);
     // and the virtual anchor still bridges to its cell
     expect(edges.some((e) => e.from === '_types/doc' && e.rel === 'managedBy' && e.to === 'cells/lit-abc')).toBe(true);
@@ -465,5 +465,46 @@ describe('derived structural backbone', () => {
     // kb/1 has a derived edge to its type but no *authored* edge → still flagged.
     const att = await state.attention('r', { includeSystem: false });
     expect(att.unlinked).toContain('kb/1');
+  });
+
+  // ── ADR-0003: declared Reference rules ──────────────────────────
+  const has = (edges: ReturnType<typeof deriveBackboneEdges>, from: string, rel: string, to: string): boolean =>
+    edges.some((e) => e.from === from && e.rel === rel && e.to === to && e.derived === true);
+
+  it('embedded ref rule: a ref[] field becomes edges to each present key', () => {
+    const records = [
+      rec('claim/1', 'claim', { statement: 'x', support: ['kb/a', 'kb/b', 'kb/gone'] }),
+      rec('kb/a', 'knowledge', {}),
+      rec('kb/b', 'knowledge', {}),
+    ];
+    const rules = { claim: { refs: [{ name: 'support', rel: 'supports', list: true }] } };
+    const edges = deriveBackboneEdges(records, rules);
+    expect(has(edges, 'claim/1', 'supports', 'kb/a')).toBe(true);
+    expect(has(edges, 'claim/1', 'supports', 'kb/b')).toBe(true);
+    expect(edges.some((e) => e.to === 'kb/gone')).toBe(false); // no-dangle: absent target dropped
+  });
+
+  it('embedded ref rule: a single (non-list) ref uses the field name when no rel', () => {
+    const records = [rec('t/1', 'task', { owner: 'kb/p' }), rec('kb/p', 'knowledge', {})];
+    const edges = deriveBackboneEdges(records, { task: { refs: [{ name: 'owner' }] } });
+    expect(has(edges, 't/1', 'owner', 'kb/p')).toBe(true);
+  });
+
+  it('key-encoded rule: a keyPattern + keyEdges emits membership from the key', () => {
+    const records = [
+      rec('_doc/doc:demo/cell:x', 'doc-order', { seq: 1 }),
+      rec('doc:demo', 'doc', { title: 'Demo' }),
+      rec('cell:x', 'doc-block', { content: 'hi' }),
+    ];
+    const rules = {
+      'doc-order': { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: '{doc}' }] },
+    };
+    const edges = deriveBackboneEdges(records, rules);
+    expect(has(edges, 'cell:x', 'inDoc', 'doc:demo')).toBe(true);
+  });
+
+  it('rules are additive — with none declared, the structural backbone is unchanged', () => {
+    const records = [rec('kb/1', 'note', { text: 'hi' }), rec('_types/note', 'type-decl', {})];
+    expect(deriveBackboneEdges(records)).toEqual(deriveBackboneEdges(records, {}));
   });
 });

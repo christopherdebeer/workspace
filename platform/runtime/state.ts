@@ -560,6 +560,63 @@ export const BACKBONE_RELS = {
  *  link still dominates a fact's centrality. */
 const BACKBONE_STRENGTH = 0.25;
 
+/** A `ref` field on a type → an embedded Reference rule (ADR-0003): the value(s)
+ *  at `name` are fact keys; emit `fact —(rel ?? name)→ key` (each, when `list`). */
+export interface RefRule {
+  name: string;
+  rel?: string;
+  list?: boolean;
+}
+
+/** A key-encoded Reference rule (ADR-0003): a `from/rel/to` edge whose endpoints are
+ *  `{group}` captures from a type's `keyPattern` (or literals). */
+export interface KeyEdgeRule {
+  from: string;
+  rel: string;
+  to: string;
+}
+
+/** The Reference-rule inputs a type contributes (resolved from its declaration by the
+ *  handler): its managing cell, its `ref` fields, and its key-encoded edges. */
+export interface TypeRules {
+  manager?: string;
+  refs?: RefRule[];
+  keyPattern?: string;
+  keyEdges?: KeyEdgeRule[];
+}
+
+/** Compile a `keyPattern` (`_doc/{doc}/{block}`) into a total matcher; `null` if malformed. */
+function compileKeyPattern(pattern: string): { rx: RegExp; names: string[] } | null {
+  const names: string[] = [];
+  let rx = '^';
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === '{') {
+      const end = pattern.indexOf('}', i);
+      if (end < 0) return null;
+      const name = pattern.slice(i + 1, end);
+      if (!/^[A-Za-z0-9_]+$/.test(name)) return null;
+      names.push(name);
+      rx += '([^/]+)';
+      i = end + 1;
+    } else {
+      rx += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      i++;
+    }
+  }
+  try {
+    return { rx: new RegExp(rx + '$'), names };
+  } catch {
+    return null;
+  }
+}
+
+/** Substitute `{group}` placeholders in an endpoint/rel template. */
+function substGroups(tpl: string, groups: Record<string, string>): string {
+  return tpl.replace(/\{([A-Za-z0-9_]+)\}/g, (_m, n: string) => groups[n] ?? '');
+}
+
 /** An edge plus whether it was derived (vs authored). Stored edges omit the flag. */
 export type AnnotatedEdge = EdgeRecord & { derived?: boolean };
 
@@ -584,7 +641,7 @@ function normalizeCellHandle(h: string): string {
  */
 export function deriveBackboneEdges(
   records: StateRecord[],
-  typeManagers?: Record<string, string>,
+  typeRules?: Record<string, TypeRules>,
 ): AnnotatedEdge[] {
   const live = records.filter((r) => !r.superseded);
   const present = new Set(live.map((r) => r.key));
@@ -649,6 +706,27 @@ export function deriveBackboneEdges(
       if (view.prefix && !r.key.startsWith(view.prefix)) continue;
       push(r.key, BACKBONE_RELS.inView, view.key);
     }
+    // ── declared Reference rules (ADR-0003), from the fact's own type ──
+    const rules = r.type ? typeRules?.[r.type] : undefined;
+    if (rules) {
+      // embedded: a `ref` field's value(s) are fact keys → fact —rel→ key
+      const value = (r.value ?? {}) as Record<string, unknown>;
+      for (const ref of rules.refs ?? []) {
+        const raw = value[ref.name];
+        const keys = ref.list ? (Array.isArray(raw) ? raw : []) : raw != null ? [raw] : [];
+        for (const k of keys) if (typeof k === 'string') push(r.key, ref.rel ?? ref.name, k);
+      }
+      // key-encoded: parse this fact's key, emit the declared edge(s)
+      if (rules.keyPattern && rules.keyEdges?.length) {
+        const compiled = compileKeyPattern(rules.keyPattern);
+        const groups = compiled?.rx.exec(r.key);
+        if (compiled && groups) {
+          const g: Record<string, string> = {};
+          compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
+          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g));
+        }
+      }
+    }
   }
 
   // type anchor → its managing cell + renderer. The anchor itself may be virtual,
@@ -656,7 +734,7 @@ export function deriveBackboneEdges(
   // manager is the slice decl's own field when set, else the canonical map.
   for (const t of typeNames) {
     const anchor = `${TYPES_PREFIX}${t}`;
-    const manager = sliceTypeManager.get(t) ?? typeManagers?.[t];
+    const manager = sliceTypeManager.get(t) ?? typeRules?.[t]?.manager;
     if (manager) {
       const cellKey = cellByHandle.get(normalizeCellHandle(manager));
       if (cellKey) push(anchor, BACKBONE_RELS.managedBy, cellKey);
@@ -719,9 +797,9 @@ export interface ReadOptions {
    * policy governs the assembled result. Pass `null` to force instance defaults.
    */
   salienceConfig?: Partial<SalienceOptions> | null;
-  /** Canonical type→manager map (`cells.describeTypes`) so the derived backbone
-   *  can link a cell-managed type to its cell. Injected by the handler. */
-  typeManagers?: Record<string, string>;
+  /** Resolved per-type Reference rules (`cells.describeTypes` → resolveType): manager
+   *  (managedBy), `ref` fields (embedded edges), keyPattern/keyEdges. Injected by the handler. */
+  typeRules?: Record<string, TypeRules>;
 }
 
 export interface QueryOptions {
@@ -744,9 +822,9 @@ export interface QueryOptions {
    */
   cursor?: string;
   includeSuperseded?: boolean;
-  /** Canonical type→manager map (`cells.describeTypes`) for the derived backbone's
-   *  `managedBy` edges. Injected by the handler. */
-  typeManagers?: Record<string, string>;
+  /** Resolved per-type Reference rules (managedBy + embedded `ref` + key-encoded).
+   *  Injected by the handler. */
+  typeRules?: Record<string, TypeRules>;
 }
 
 export interface QueryResult {
@@ -763,9 +841,9 @@ export interface QueryResult {
 export interface NeighborsOptions {
   dir?: 'in' | 'out' | 'both';
   rel?: string;
-  /** Canonical type→manager map (`cells.describeTypes`) so a type's derived
-   *  `managedBy` edge to its cell shows up in traversal. Injected by the handler. */
-  typeManagers?: Record<string, string>;
+  /** Resolved per-type Reference rules (managedBy + embedded + key-encoded), so a
+   *  type's derived edges show up in traversal. Injected by the handler. */
+  typeRules?: Record<string, TypeRules>;
 }
 
 export interface NeighborsResult {
@@ -869,7 +947,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     nowMs: number,
     windowMs: number,
     records?: StateRecord[],
-    typeManagers?: Record<string, string>,
+    typeRules?: Record<string, TypeRules>,
   ): Promise<Map<string, KeySignals>> {
     const [events, edges, recs] = await Promise.all([
       store.recentTrajectory(scope, 0),
@@ -878,7 +956,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     ]);
     // Centrality counts the derived backbone alongside authored edges, so a
     // typed-but-unlinked fact earns a structural floor instead of scoring zero.
-    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs, typeManagers)], nowMs, windowMs);
+    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs, typeRules)], nowMs, windowMs);
   }
 
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
@@ -1071,7 +1149,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
       const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
       const records = await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeManagers);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
 
       // Score every live entry (no elision yet); shape in one pass below.
       const scored: Record<string, Entry> = {};
@@ -1091,10 +1169,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
       const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience);
-      const queryTypeManagers = opts?.typeManagers;
+      const queryTypeRules = opts?.typeRules;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, queryTypeManagers);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, queryTypeRules);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
@@ -1174,10 +1252,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         store.list(scope),
       ]);
       // The derived backbone is one hop too: a fact's type/cell/renderer/views.
-      const derived = deriveBackboneEdges(records, opts?.typeManagers).filter((e) => !opts?.rel || e.rel === opts.rel);
+      const derived = deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel);
       const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
       const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
-      const signals = await signalsFor(scope, nowMs, s.windowMs, records, opts?.typeManagers);
+      const signals = await signalsFor(scope, nowMs, s.windowMs, records, opts?.typeRules);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);

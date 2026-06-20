@@ -38,6 +38,10 @@ export interface FieldSpec {
   required?: boolean;
   /** Human note (the legacy prose becomes this). */
   description?: string;
+  /** `ref` fields: the value(s) are fact keys → an embedded Reference rule (ADR-0003). */
+  list?: boolean;
+  /** `ref` fields: the edge relation to emit (default: the field name). */
+  rel?: string;
 }
 
 const TYPE_TOKENS = new Set<FieldType>(['string', 'number', 'boolean', 'object', 'array', 'markdown', 'ref']);
@@ -61,6 +65,8 @@ export function parseTypeSchema(decl: unknown): FieldSpec[] | null {
         type: typeof f.type === 'string' && TYPE_TOKENS.has(f.type as FieldType) ? (f.type as FieldType) : undefined,
         required: f.required === true,
         description: typeof f.description === 'string' ? f.description : undefined,
+        ...(f.list === true ? { list: true } : {}),
+        ...(typeof f.rel === 'string' ? { rel: f.rel } : {}),
       }));
     return fields.length ? fields : null;
   }
@@ -135,7 +141,7 @@ export interface Type {
   /** Owning cell address (→ backbone `managedBy`). */
   manager?: string;
   /** What its facts contain (validation · form · Reference inputs). */
-  shape: { fields: FieldSpec[] | null; keyPattern?: string };
+  shape: { fields: FieldSpec[] | null; keyPattern?: string; keyEdges?: KeyEdge[] };
   /** How a fact of this kind looks. */
   present: { icon?: string; label?: string; render?: unknown };
   /** The affordance table (open/edit/create/render/embed → surface|act|renderer|hint). */
@@ -144,7 +150,23 @@ export interface Type {
   declared: boolean;
 }
 
+/** A key-encoded Reference rule (ADR-0003): from a `keyPattern` match, emit an edge.
+ *  Endpoints/rel are `{group}` captures or literals. */
+export interface KeyEdge {
+  from: string;
+  rel: string;
+  to: string;
+}
+
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+function keyEdgesOf(v: unknown): KeyEdge[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.filter(
+    (e): e is KeyEdge => !!e && typeof e === 'object' && typeof (e as KeyEdge).from === 'string' && typeof (e as KeyEdge).rel === 'string' && typeof (e as KeyEdge).to === 'string',
+  );
+  return out.length ? out : undefined;
+}
 
 /** Resolve a (merged) declaration into the typed `Type` facets. Pure. */
 export function resolveType(decl: unknown, kind?: string): Type {
@@ -152,7 +174,7 @@ export function resolveType(decl: unknown, kind?: string): Type {
   return {
     kind,
     manager: str(d.manager),
-    shape: { fields: parseTypeSchema(d), keyPattern: str(d.keyPattern) },
+    shape: { fields: parseTypeSchema(d), keyPattern: str(d.keyPattern), keyEdges: keyEdgesOf(d.keyEdges) },
     present: {
       icon: str(d.icon),
       label: str(d.label) ?? str(d.titlePath),

@@ -43,6 +43,7 @@ import {
   schemaHints,
   mergeTypeDecl,
   resolveType,
+  type TypeRules,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -135,15 +136,25 @@ async function typeDeclsFor(ctx: ServiceContext): Promise<Record<string, Record<
   return decls;
 }
 
-/** The canonical type→manager map, derived from the cached vocabulary (for the
- *  derived backbone's `managedBy` edges). */
-async function typeManagersFor(ctx: ServiceContext): Promise<Record<string, string>> {
+/** Per-type Reference rules (ADR-0003), resolved from the cached vocabulary: the
+ *  manager (`managedBy`), the `ref` fields (embedded edges), and key-encoded edges.
+ *  One `resolveType` per declared type. */
+async function typeRulesFor(ctx: ServiceContext): Promise<Record<string, TypeRules>> {
   const decls = await typeDeclsFor(ctx);
-  const map: Record<string, string> = {};
+  const rules: Record<string, TypeRules> = {};
   for (const [type, decl] of Object.entries(decls)) {
-    if (typeof decl?.manager === 'string') map[type] = decl.manager;
+    const t = resolveType(decl, type);
+    const refs = (t.shape.fields ?? []).filter((f) => f.type === 'ref').map((f) => ({ name: f.name, rel: f.rel, list: f.list }));
+    const r: TypeRules = {};
+    if (t.manager) r.manager = t.manager;
+    if (refs.length) r.refs = refs;
+    if (t.shape.keyPattern && t.shape.keyEdges?.length) {
+      r.keyPattern = t.shape.keyPattern;
+      r.keyEdges = t.shape.keyEdges;
+    }
+    if (r.manager || r.refs || r.keyPattern) rules[type] = r;
   }
-  return map;
+  return rules;
 }
 
 export interface RememberInput {
@@ -1379,8 +1390,8 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
-      const typeManagers = await typeManagersFor(ctx);
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeManagers }, ctx.identity);
+      const typeRules = await typeRulesFor(ctx);
+      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeRules }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -1389,7 +1400,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeManagers }, ctx.identity);
+          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, salienceConfig, typeRules }, ctx.identity);
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -1437,7 +1448,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
-          typeManagers: await typeManagersFor(ctx),
+          typeRules: await typeRulesFor(ctx),
         },
         ctx.identity,
       );
@@ -1463,7 +1474,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeManagers: await typeManagersFor(ctx) }, ctx.identity);
+      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
     },
 
     async links(input, ctx) {
