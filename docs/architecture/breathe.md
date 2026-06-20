@@ -401,14 +401,260 @@ layer — exactly the behaviour-preservation a contraction requires.
 
 ---
 
-## Next waves (todo)
+## Wave 9 — L2 · Reference grammar (the rules as data)
 
-- **L2 · Reference grammar** — specify the `ref` field-type marker and the key-encoded
-  pattern grammar (`_doc/<id>/<key>`, `_actions/machine.<name>.*`) so rules are declarative
-  data, not code.
-- **L3 · invoke / react** — trace `invoke` (Action) and a subscription firing, to confirm
-  Action/Subscription are Declarations whose *evaluate* runs through one path.
-- **Salience inputs** — confirm `centrality` is the only structural feed and that it reads the
-  Wave-7 projection (so embedded/key-encoded edges start counting once projected).
-- **Cell ↔ Declaration seam** — formalise "a cell *supplies* Declarations on deploy"
-  (`describeTypes`) as the one publish path, retiring per-consumer parsing.
+The Wave-7 rules become a small **declarative grammar** — a rule is data a Type carries, not
+code. Four rule kinds, each a `(from, rel, to)` extractor:
+
+| Rule | Source | Extraction | Example |
+|---|---|---|---|
+| `authored` | edge store | the row itself | `link(a, grounds, b)` |
+| `structural` | Type facets | `key —instanceOf→ _types/<type>`; `_types/<T>.manager —managedBy→ cell`; `—rendersWith→ _renderers/<T>` | every typed fact |
+| `embedded` | value field marked `ref`/`ref[]` in the Type **shape** | `key —<rel>→ value[field][]` | `claim.support: ref[]` → `supports`; `machine.arrows: [{from,rel,to}]` |
+| `key-encoded` | a Type's **key pattern** with capture groups | parse `key`, map groups → `(from, rel, to)` | `_doc/<doc>/<block>` → `block —inDoc→ doc` |
+
+```mermaid
+flowchart LR
+  subgraph decl["Declared on the Type (data)"]
+    SH["shape: field 'support' = ref[] (rel supports)"]
+    KP["keyPattern: _doc/(doc)/(block) ⇒ block inDoc doc"]
+  end
+  SH --> RULE["Reference rule registry"]
+  KP --> RULE
+  STRUCT["structural (built-in)"] --> RULE
+  AUTH["authored (store)"] --> RULE
+  RULE --> PROJ(("one Reference projection"))
+```
+
+So the **same Type primitive** that defines shape/affordances *also* declares which of its
+fields and key-shape are references — and the graph falls out. `deriveBackboneEdges` is the
+`structural` rule; nothing is hand-coded per relation.
+
+---
+
+## Wave 10 — L3 · Execution & reaction (the active side is Declarations over the feed)
+
+Grounded in `services/workspace/subscriptions.ts` (*"a subscription is **data, not code**:
+`{match, invoke, params}`"*) and `actions.ts` (`{id, if?, writes[], params?}`), wired by
+`lib/platform-stack.ts` (`workspace.fact.written → FactReactionRoute`).
+
+```mermaid
+flowchart LR
+  WR["Fact write"] --> TR["trajectory / change-feed<br/>(emit workspace.fact.written)"]
+  TR --> SUB["Subscription (Declaration)<br/>match: type · prefix · CEL"]
+  SUB --> INV["invoke Action (Declaration)<br/>writes[] templated · CEL if-guard"]
+  INV --> WR
+  classDef d fill:#f3edde,stroke:#2e5e43,stroke-width:2px;
+  class SUB,INV d
+```
+
+- **Action** = a Declaration whose `evaluate` is *templated Fact writes, guarded by `if`*.
+- **Subscription** = a Declaration whose `evaluate` is *match a change-feed event → invoke an
+  Action*. The reactor re-emits the write, so rails chain (machine's auto-rails are exactly an
+  Action + a Subscription; `models.decide` resolves the agent rails).
+- The EventBridge bus (`substrate.write.requested`, `workspace.fact.written`,
+  `workspace.tend.requested`, `cell.deploy.requested`) is **transport** — semantically this is
+  the **trajectory** (a **Projection** of Facts over time) driving Subscriptions.
+
+**No new noun.** "Trigger/event/reaction/rail" all reduce to **Declaration.evaluate over a
+Projection of the trajectory.** Tending (`attention`/`tend`) is the same shape: a scheduled
+Projection emitting an audit Fact.
+
+---
+
+## Wave 11 — Grant / Scope (the orthogonal authority axis — complete)
+
+`share/unshare/shared`, `group/groups`, `requestGrant/grantRequests/approve/deny`
+(`handlers.ts:1016–1187`), `enforceScope` at the gateway (`gateway/service.ts:275`),
+`requireWriteThrough` (`handlers.ts:1196`), and IAM `LeadingKeys` per scope partition
+(`substrate-table.ts`).
+
+```mermaid
+flowchart TD
+  subgraph grant["Grant / Scope — authority (NOT a noun)"]
+    TOK["auth: tokens · scopes (mint ⊆ standing · focus/request)"]
+    SH["share / unshare — fact · prefix · whole-slice → user / public / group"]
+    GRP["group / groups — named audience"]
+    REQ["requestGrant → approve / deny"]
+  end
+  TOK -. enforceScope (gateway) .-> CAPS["every capability (read/act)"]
+  SH -. what appears in recall / who may write-through .-> N["Fact · Reference · Declaration"]
+  IAM["DynamoDB LeadingKeys = scope#"] -. partition isolation .-> N
+```
+
+It *gates* the nouns at three layers (token scope → grant visibility → IAM partition) but is
+none of them. Confirmed orthogonal; nothing here wants to fold into Fact/Reference/Declaration.
+
+---
+
+## Wave 12 — Cell (the infra axis that *supplies* Declarations — complete)
+
+`cells.create/deploy` (forge bundle), `writeFile`, `callCellTool`, `putData/getData` (blobs),
+and the **publish seam**: `types.json → describeTypes` (Type Declarations) + `ssr.json →
+ssrReads/callerWrites` (`service.ts:950–985`).
+
+```mermaid
+flowchart TD
+  SRC["cell src: code · types.json · ssr.json"] --> DEP["cells.deploy → forge bundle"]
+  DEP --> REG["registry record"]
+  DEP --> LAM["isolated Lambda + table + origin"]
+  REG --> PUB["describeTypes ⇒ Type Declarations (canonical, global)"]
+  REG --> SSR["ssrReads / callerWrites ⇒ bounded substrate access"]
+  PUB --> VOCAB["the Type registry (Waves 2 / 6)"]
+  LAM --> AFF["backs Affordances (open/edit/render surfaces)"]
+```
+
+A Cell = **code · table · scope · a publish seam for Declarations · a backing for
+Affordances.** `describeTypes` is *the one publish path* — the contraction of Wave 2 is "every
+consumer reads the registry that this seam fills," so cells stop being re-parsed per consumer.
+Infra, not part of the expressive surface.
+
+---
+
+## Wave 13 — Transformers (a Cell *kind*, not a new primitive)
+
+`models.agent` is *"a tool-use loop whose tools are the substrate itself"* —
+`substrate_query/read/emit` (`models/index.ts:187`); `run.exec` is server JS with substrate
+access; both produce **outputs that are Facts by construction** (`agent-run`, `transcript`,
+`output`); `viewers` are pure render.
+
+```mermaid
+flowchart LR
+  IN["Facts (owner slice)"] --> T
+  subgraph T["Transformer cells (Cell kind)"]
+    M["models — run · agent · decide"]
+    R["run — exec"]
+    V["viewers — pure render"]
+  end
+  T --> OUT["Facts by construction (agent-run · transcript · output)"]
+  T -. tools = read/act .-> SUB["the substrate"]
+```
+
+A Transformer reads Facts and writes Facts; the substrate is its toolbox. It is **read + act
+over the nouns**, packaged as a Cell — no new primitive. (Generative/code/pure are just
+which engine the Cell wraps.)
+
+---
+
+## Wave 14 — Storage floor (how the nouns are physically realised)
+
+One DynamoDB table, scope-partitioned (`substrate-table.ts`, `dynamo-state-store.ts`):
+
+```mermaid
+flowchart TD
+  subgraph tbl["One table — pk repeats scope (IAM LeadingKeys)"]
+    ITEM["item  pk=&lt;scope&gt;#&lt;key&gt;  ⇒  Fact {value,_meta}"]
+    GIN["gsi-in  IN#scope#to / rel#from  ⇒  Reference (inbound edges)"]
+    GTYPE["gsi-type  TYPE#scope#type / updatedAt  ⇒  typed + recency reads"]
+    TRAJ["TRAJ#scope / iso#seq  (TTL)  ⇒  Salience input only"]
+  end
+  ITEM -. timerExpiresAt (lazy at read) .-> LEASE["lease / scheduled reveal"]
+  ITEM --> FACT(("Fact"))
+  GIN --> REF(("Reference"))
+  TRAJ --> SAL["Salience"]
+  GTYPE -. serves .-> PROJ["Projection.select"]
+```
+
+The nouns are not an abstraction over storage — they *are* the storage shape: an item is a
+Fact, the inbound GSI is the Reference index, the TTL'd trajectory is the only Salience feed,
+the type GSI serves `Projection.select`. Facts are durable (supersede ≠ delete); only the
+trajectory is ephemeral. Timers are the lease/reveal primitive, evaluated lazily at read.
+
+---
+
+## Wave 15 — The verbs & the self-model (the discovery surface closes the loop)
+
+The gateway exposes exactly three verbs — `whoami`, `read`, `act` (`gateway/service.ts:5`) —
+plus two discovery targets, `$catalog` and `$types`.
+
+```mermaid
+flowchart LR
+  subgraph verbs["3 verbs"]
+    WHO["whoami → Identity"]
+    READ["read → Projection"]
+    ACT["act → mutate"]
+  end
+  ACT --> MUT["Fact write · Reference (link) · Declaration.register · Action.invoke"]
+  READ --> CAT["$catalog ⇒ capabilities (cells' Declarations)"]
+  READ --> TYP["$types ⇒ vocabulary (Type Declarations)"]
+  READ -. the missing third .-> GR["$graph ⇒ Reference projection (Wave 7)"]
+```
+
+`read` is **Projection**; `act` is **mutation of a noun** (write a Fact, a Reference, register
+a Declaration, or invoke an Action — which is itself a Declaration that writes Facts);
+`whoami` is **Identity** (the Grant axis). The self-model is already two-thirds built:
+`$catalog` and `$types` are **Declarations projected back as data** — and the grounded gap from
+Wave 7 names the missing third surface, **`$graph`** (the unified Reference projection). When
+it exists, the substrate fully describes itself in its own primitives.
+
+---
+
+## The complete map
+
+```mermaid
+flowchart TB
+  subgraph NOUNS["NOUNS — stored facts"]
+    FACT(("Fact"))
+    REF(("Reference"))
+    DECL(("Declaration<br/>Type is chief"))
+  end
+  subgraph MECH["MECHANISMS — pure"]
+    RES["Resolution<br/>generic ← canonical ← override ← call"]
+    PROJ["Projection<br/>select → score → shape → present"]
+  end
+  SAL["Salience (signal)"]
+  subgraph AXES["ORTHOGONAL AXES"]
+    GRANT["Grant / Scope — authority"]
+    CELL["Cell — code · table · scope · publish"]
+  end
+  STORE["Storage floor — 1 table: item · gsi-in · gsi-type · trajectory"]
+
+  DECL --> RES
+  PROJ --> FACT
+  PROJ --> REF
+  PROJ --> SAL
+  SAL --> REF
+  SAL --> DECL
+  DECL -->|kinds| DK["Type · View · Action · Subscription · Config · Renderer · Layout"]
+  REF -->|rules| RK["authored · structural · embedded · key-encoded"]
+  GRANT -. gates .-> NOUNS
+  CELL -. supplies .-> DECL
+  CELL -. backs .-> PROJ
+  STORE --- NOUNS
+```
+
+### Coverage — every part accounted for
+
+| System part (grounded) | Reduces to |
+|---|---|
+| `remember` / `peek` / facts | **Fact** |
+| `link` / `neighbors` / `links` / backbone / `claim.support` / `machine.arrows` / `_doc` | **Reference** (4 rules) |
+| `_types _renderers _config _home/layout` · `_views _actions _subscriptions` | **Declaration** (one registry) |
+| `recall` / `query` / `neighbors` / `view` / `$catalog` / `$types` | **Projection** |
+| salience config · type merge · schema resolve | **Resolution** |
+| `_meta.score` (recency/velocity/attention/standing/centrality) | **Salience** |
+| `invoke` / subscriptions / events / machine rails / tend | **Declaration.evaluate over a Projection of the trajectory** |
+| `share/group/requestGrant` · auth tokens/scopes · IAM LeadingKeys | **Grant** (orthogonal) |
+| `cells.create/deploy/describeTypes` · dispatch · isolation · ssr/data | **Cell** (orthogonal) |
+| `models` / `run` / `viewers` | **Cell** that reads+writes **Facts** |
+| DynamoDB table · GSIs · trajectory · timers | **Storage floor** for the nouns |
+| `whoami` | **Identity** (Grant axis) |
+
+**Nothing unmapped.** The expressive surface is **three nouns** (Fact · Reference ·
+Declaration), read through **two mechanisms** (Resolution · Projection) over **one signal**
+(Salience), with **two orthogonal axes** (Grant · Cell) on a **single-table storage floor** —
+and the active/reactive system is not a separate machine but `Declaration.evaluate` over a
+Projection of the trajectory.
+
+### The three things the mapping *changes* (not just renames)
+
+1. **The Reference graph is lossy** (Wave 7) — `claim.support`, `machine.arrows`, `_doc`
+   membership are stored but unseen; the rule-grammar recovers them.
+2. **`$graph` is missing** (Wave 15) — the self-model has `$catalog`/`$types` but no Reference
+   surface; it's the same unification.
+3. **Six concepts are one registry** (Wave 6) — three hand-written registries + four ad-hoc
+   readers collapse to `Declaration.registry(kind)`.
+
+Everything else is behaviour-preserving re-homing. This completes the system map; the next
+artifact is the migration ADR (which contraction lands first, and its behaviour-preservation
+test), not more mapping.
