@@ -170,12 +170,26 @@ describe('workspace sharing / view layer', () => {
     expect(bobShared.shared).toEqual([]);
   });
 
+  it('grants() is the authority self-model: scope, slice, and the grant layer in one read', async () => {
+    const me = await cmds.grants(undefined, ctxFor('bob').ctx);
+    expect(me.principal).toBe('bob');
+    expect(me.slice).toBe('bob'); // own partition — full authority
+    // layer 1 — token scope (active + ceiling); ctxFor stamps workspace:read/write
+    expect(me.scope.active).toEqual(expect.arrayContaining(['workspace:read', 'workspace:write']));
+    expect(me.scope.ceiling).toEqual(expect.arrayContaining(['workspace:read', 'workspace:write']));
+    // layer 2 — the grant subsets: bob receives alice's whole-slice share
+    expect(me.grant.receiving.some((g) => g.owner === 'alice' && g.key === '*')).toBe(true);
+    expect(Array.isArray(me.grant.shared)).toBe(true);
+    expect(Array.isArray(me.grant.groups)).toBe(true);
+    expect(typeof me.hint).toBe('string');
+  });
+
   it('describeTools advertises the whole vocabulary for the /mcp gateway', async () => {
     const { tools } = await cmds.describeTools(undefined, ctxFor('alice').ctx);
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
-        'peek', 'recall', 'remember', 'ingest', 'shared', 'share', 'supersede', 'unshare',
+        'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
         'query', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',

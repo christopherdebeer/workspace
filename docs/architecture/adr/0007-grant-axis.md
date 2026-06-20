@@ -1,6 +1,8 @@
 # ADR-0007 — The Grant axis, made explicit
 
-- **Status:** Proposed (two-forward buffer)
+- **Status:** Accepted — `read("$grants")` ships the authority self-model (the fourth
+  surface beside `$catalog`/`$types`/`$graph`). Enforcement is unchanged; `may(...)` stays
+  a documented contract over the existing three checks.
 - **Date:** 2026-06-19
 - **Context:** [`breathe.md`](../breathe.md) Wave 11 — Grant/Scope is the orthogonal
   authority axis that *gates* the nouns; it is not one of them.
@@ -43,6 +45,27 @@ flowchart TD
 - A read like `read("$grants")` (mirroring `$catalog`/`$types`/`$graph`) returns *what the
   caller may see and do* — the authority self-model surface, completing the set.
 - `requestGrant`/`approveGrant` already make the axis *negotiable* as data; this just names it.
+
+## Implemented
+
+`read("$grants")` → `workspace.grants` returns the authority self-model, a pure projection
+over the existing machinery (identity scopes + the grant store) — no enforcement changed:
+
+```jsonc
+{
+  "principal": "<you>",
+  "scope":  { "active": [...], "ceiling": [...] },   // layer 1 — token (enforced / ceiling)
+  "slice":  "<you>",                                  // layer 3 — your own partition (full authority)
+  "grant":  { "shared": [...], "receiving": [...], "groups": [...] }, // layer 2 — grant subsets
+  "hint":   "may(you, verb, resource) holds when all three gates pass: scope ∧ grant ∧ partition…"
+}
+```
+
+`may(principal, verb, resource)` is **documented as the contract** the three layers compose
+to (in `hint`), not re-implemented — the existing checks (`enforceScope`, `applicableGrants`/
+`requireWriteThrough`, IAM `LeadingKeys`) remain the single enforcement path. The gateway
+aliases `$grants` exactly as it does `$graph`. So the four self-model surfaces now line up:
+`$catalog` · `$types` · `$graph` · `$grants`.
 
 ## Consequences
 - The four self-model surfaces line up: `$catalog` (capabilities), `$types` (vocabulary),

@@ -24,6 +24,7 @@
 import {
   ServiceContext,
   requireUser,
+  grantScopesOf,
   createObservedState,
   type ObservedState,
   type Entry,
@@ -299,6 +300,26 @@ export interface SharedResult {
   /** Grants others have made to you. */
   receiving: Grant[];
 }
+/**
+ * The authority self-model (ADR-0007): *what the caller may see and do*, resolving
+ * the three enforcement layers into one inspectable surface — beside `$catalog`
+ * (capabilities), `$types` (vocabulary), and `$graph` (references). No new
+ * enforcement; this names the axis that gates Fact · Reference · Declaration.
+ */
+export interface GrantsSelfModel {
+  /** The authenticated principal this authority belongs to. */
+  principal: string;
+  /** Layer 1 — token scope. `active` = what is enforced now; `ceiling` = the
+   *  immutable grant set at consent (`active` can be widened up to it). */
+  scope: { active: string[]; ceiling: string[] };
+  /** Layer 3 — partition: the caller's own slice, where they hold full authority. */
+  slice: string;
+  /** Layer 2 — grant: the subsets you expose (`shared`) and receive (`receiving`),
+   *  plus the named audiences you belong to or define (`groups`). */
+  grant: { shared: Grant[]; receiving: Grant[]; groups: GroupResult[] };
+  /** The contract the three layers compose to, as prose. */
+  hint: string;
+}
 export interface GroupValue {
   /** Principals in this audience. */
   members: string[];
@@ -385,6 +406,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
   shared: CommandHandler<undefined, SharedResult>;
+  grants: CommandHandler<undefined, GrantsSelfModel>;
   group: CommandHandler<GroupInput, GroupResult>;
   groups: CommandHandler<undefined, GroupsResult>;
   requestGrant: CommandHandler<RequestGrantInput, RequestGrantResult>;
@@ -1117,6 +1139,24 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'grants',
+    description:
+      'The authority self-model (also `read("$grants")`): *what you may see and do*, resolving the three enforcement layers into one surface — `scope` (token: active + ceiling), `slice` (your own partition, full authority), and `grant` (the subsets you `shared`/`receiving` + the `groups` you belong to or define). The authority surface beside `$catalog` (capabilities), `$types` (vocabulary), and `$graph` (references). Inspect-only — it reports authority, it does not change it.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        principal: { type: 'string' },
+        scope: { type: 'object', description: '{ active: enforced now, ceiling: the grant max }' },
+        slice: { type: 'string', description: 'Your own slice — full authority' },
+        grant: { type: 'object', description: '{ shared[], receiving[], groups[] }' },
+        hint: { type: 'string' },
+      },
+    },
+  },
+  {
     name: 'group',
     description:
       'Define or patch a named audience (a group of principals) you can then `share` to with `to: "group:<name>"`. Pass `members` to set the membership wholesale, or `add`/`remove` to patch it. The group is stored as a `_groups/<name>` fact in your slice; recall resolves group shares for members without scanning. You are always implicitly in your own audiences.',
@@ -1708,6 +1748,34 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { grants } = build(ctx);
       const [shared, receiving] = await Promise.all([grants.listByOwner(me), grants.listForGrantee(me)]);
       return { shared, receiving };
+    },
+
+    /**
+     * The authority self-model (ADR-0007): one read that resolves the three
+     * enforcement layers — token scope, the grant subsets, and the caller's own
+     * partition — into "what may I see and do." Pure projection over the existing
+     * machinery (identity scopes + the grant store); changes no enforcement.
+     */
+    async grants(_input, ctx) {
+      const me = requireUser(ctx.identity);
+      const { state, grants } = build(ctx);
+      const [shared, receiving, groupsRes] = await Promise.all([
+        grants.listByOwner(me),
+        grants.listForGrantee(me),
+        state.query(me, { prefix: GROUPS_NS, limit: 200 }, ctx.identity),
+      ]);
+      const groups = groupsRes.entries.map((e) => {
+        const v = e.value as GroupValue;
+        return { name: e.key.slice(GROUPS_NS.length), members: v.members ?? [], ...(v.label ? { label: v.label } : {}), ...(v.note ? { note: v.note } : {}) };
+      });
+      return {
+        principal: me,
+        scope: { active: ctx.identity.scopes ?? [], ceiling: grantScopesOf(ctx.identity) },
+        slice: me,
+        grant: { shared, receiving, groups },
+        hint:
+          'may(you, verb, resource) holds when all three gates pass: (1) scope — your active token covers the capability; (2) grant — the resource is your own slice, or a grant in `receiving` covers it (read) or grants write; (3) partition — IAM isolates each slice. Widen scope with auth.requestScope; ask for access with workspace.requestGrant.',
+      };
     },
 
     /**
