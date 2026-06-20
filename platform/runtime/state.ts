@@ -920,6 +920,9 @@ export interface ObservedState {
   neighbors(scope: string, key: string, opts?: NeighborsOptions, identity?: Identity): Promise<NeighborsResult>;
   /** Every edge in the scope (bounded; boards project their edges from this). */
   edges(scope: string): Promise<EdgeRecord[]>;
+  /** The full Reference projection (ADR-0003/0004): authored edges + the derived rule
+   *  edges (structural backbone + embedded `ref` + key-encoded). The `$graph` surface. */
+  graph(scope: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<{ edges: AnnotatedEdge[] }>;
   /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call. */
   changes(scope: string, sinceSeq: number | 'head', limit?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
@@ -1271,6 +1274,14 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async edges(scope): Promise<EdgeRecord[]> {
       return store.listEdges(scope);
+    },
+
+    async graph(scope, opts): Promise<{ edges: AnnotatedEdge[] }> {
+      const nowMs = Date.now();
+      const [records, authored] = await Promise.all([store.list(scope), store.listEdges(scope)]);
+      const live = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
+      const derived = deriveBackboneEdges(live, opts?.typeRules);
+      return { edges: [...authored, ...derived] };
     },
 
     async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {

@@ -177,7 +177,7 @@ describe('workspace sharing / view layer', () => {
       [
         'peek', 'recall', 'remember', 'ingest', 'shared', 'share', 'supersede', 'unshare',
         'group', 'groups',
-        'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
+        'query', 'link', 'unlink', 'neighbors', 'graph', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',

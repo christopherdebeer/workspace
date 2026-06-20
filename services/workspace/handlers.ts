@@ -360,6 +360,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[] }>;
+  graph: CommandHandler<undefined, { edges: EdgeRecord[] }>;
   changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
@@ -729,6 +730,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       },
       additionalProperties: false,
     },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+  },
+  {
+    name: 'graph',
+    description:
+      "The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary).",
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
   },
   {
@@ -1485,6 +1495,12 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       return {
         edges: prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all,
       };
+    },
+
+    async graph(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return state.graph(scope, { typeRules: await typeRulesFor(ctx) });
     },
 
     async changes(input, ctx) {

@@ -53,6 +53,7 @@ const PROVIDERS = ['workspace', 'cells', 'auth'] as const;
 const CATALOG = '$catalog';
 /** Sentinel target for the type vocabulary (docs/type-vocabulary.md). */
 const TYPES = '$types';
+const GRAPH = '$graph';
 
 /** A tier-1 tool as returned by a provider's `describeTools`. */
 interface ProviderTool {
@@ -340,6 +341,8 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     return { capabilities: caps };
   }
   if (target === TYPES) return buildTypes(ctx);
+  // $graph — the Reference projection (authored + derived), the self-model's third surface.
+  if (target === GRAPH) return ctx.serviceClient('workspace').command('graph', {});
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
