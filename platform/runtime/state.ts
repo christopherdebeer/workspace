@@ -40,7 +40,7 @@
  * mirroring how the `auth` cell separates `AuthStore` from its backends).
  */
 import type { Identity } from './auth';
-import { resolveType } from './type-schema';
+import { resolveType, type Type } from './type-schema';
 import { layer } from './resolution';
 import { matchesSelector } from './selector';
 
@@ -621,6 +621,24 @@ export interface TypeRules {
   keyEdges?: KeyEdgeRule[];
 }
 
+/** The Reference rules a *resolved* Type carries (ADR-0003): its `ref` fields
+ *  (embedded edges), `manager`, and key-encoded edges. The single extractor —
+ *  both the read-time backbone synthesis (`rulesFromDecl`) and the per-request
+ *  rule map (`typeRulesFor` in workspace handlers) fold a decl through this, so
+ *  a slice-declared type contributes rules identically to a cell-canonical one.
+ *  Returns the (possibly empty) rules; callers decide whether to keep an empty. */
+export function extractTypeRules(t: Type): TypeRules {
+  const refs = (t.shape.fields ?? []).filter((f) => f.type === 'ref').map((f) => ({ name: f.name, rel: f.rel, list: f.list }));
+  const r: TypeRules = {};
+  if (t.manager) r.manager = t.manager;
+  if (refs.length) r.refs = refs;
+  if (t.shape.keyPattern && t.shape.keyEdges?.length) {
+    r.keyPattern = t.shape.keyPattern;
+    r.keyEdges = t.shape.keyEdges;
+  }
+  return r;
+}
+
 /** Compile a `keyPattern` (`_doc/{doc}/{block}`) into a total matcher; `null` if malformed. */
 function compileKeyPattern(pattern: string): { rx: RegExp; names: string[] } | null {
   const names: string[] = [];
@@ -653,21 +671,11 @@ function substGroups(tpl: string, groups: Record<string, string>): string {
   return tpl.replace(/\{([A-Za-z0-9_]+)\}/g, (_m, n: string) => groups[n] ?? '');
 }
 
-/** Extract the Reference rules a type declaration carries (its `ref` fields,
- *  manager, key-encoded edges) — used to fold a *slice* `_types/<type>` decl into
- *  the rules, so a slice-declared type (e.g. `claim`) contributes rules just like a
- *  cell-canonical one. Mirrors the handler's `typeRulesFor`. */
+/** Fold a *slice* `_types/<type>` decl into Reference rules, so a slice-declared
+ *  type (e.g. `claim`) contributes rules just like a cell-canonical one. The
+ *  extraction is the shared `extractTypeRules`; this just resolves the decl. */
 function rulesFromDecl(decl: unknown): TypeRules {
-  const t = resolveType(decl);
-  const refs = (t.shape.fields ?? []).filter((f) => f.type === 'ref').map((f) => ({ name: f.name, rel: f.rel, list: f.list }));
-  const r: TypeRules = {};
-  if (t.manager) r.manager = t.manager;
-  if (refs.length) r.refs = refs;
-  if (t.shape.keyPattern && t.shape.keyEdges?.length) {
-    r.keyPattern = t.shape.keyPattern;
-    r.keyEdges = t.shape.keyEdges;
-  }
-  return r;
+  return extractTypeRules(resolveType(decl));
 }
 
 /** An edge plus whether it was derived (vs authored). Stored edges omit the flag. */

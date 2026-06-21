@@ -45,6 +45,7 @@ import {
   schemaHints,
   mergeTypeDecl,
   resolveType,
+  extractTypeRules,
   type TypeRules,
 } from '../../platform/runtime';
 import {
@@ -145,15 +146,7 @@ async function typeRulesFor(ctx: ServiceContext): Promise<Record<string, TypeRul
   const decls = await typeDeclsFor(ctx);
   const rules: Record<string, TypeRules> = {};
   for (const [type, decl] of Object.entries(decls)) {
-    const t = resolveType(decl, type);
-    const refs = (t.shape.fields ?? []).filter((f) => f.type === 'ref').map((f) => ({ name: f.name, rel: f.rel, list: f.list }));
-    const r: TypeRules = {};
-    if (t.manager) r.manager = t.manager;
-    if (refs.length) r.refs = refs;
-    if (t.shape.keyPattern && t.shape.keyEdges?.length) {
-      r.keyPattern = t.shape.keyPattern;
-      r.keyEdges = t.shape.keyEdges;
-    }
+    const r = extractTypeRules(resolveType(decl, type));
     if (r.manager || r.refs || r.keyPattern) rules[type] = r;
   }
   return rules;
