@@ -61,7 +61,20 @@
       // Retrieve / clear the persisted crash log from the console.
       window.__canvasErrors = function () { try { return JSON.parse(localStorage.getItem(ERRKEY) || '[]'); } catch (e) { return []; } };
       window.__canvasErrorsClear = function () { try { localStorage.removeItem(ERRKEY); } catch (e) {} };
-      window.addEventListener('error', function (e) { show('⚠ ' + e.message + ' @ ' + (e.filename || '').split('/').pop() + ':' + e.lineno); });
+      // The red banner is for REAL app failures (app.js). Element content scripts
+      // (board elements often carry legacy inline scripts referencing a global
+      // `controller`, and renderer modules load from data-URIs) throw expected,
+      // non-fatal errors — those are logged + persisted + attributed to their
+      // element, but must NOT raise the jarring full-width banner.
+      function isAppError(fn) { return (fn || '').indexOf('/app.js') >= 0; }
+      window.addEventListener('error', function (e) {
+        var where = (e.filename || '').split('/').pop() + ':' + e.lineno;
+        if (isAppError(e.filename)) { show('⚠ ' + e.message + ' @ ' + where); return; }
+        var el = window.__canvasScriptEl;
+        var msg = 'element script: ' + e.message + (el ? '  [' + el + ']' : '') + ' @ ' + where;
+        console.warn('[canvas] ' + msg);
+        persist(msg); // retrievable via __canvasErrors(), no banner
+      });
       window.addEventListener('unhandledrejection', function (e) { show('⚠ (async) ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
       document.addEventListener('DOMContentLoaded', function () {
         var copy = document.getElementById('err-copy');

@@ -767,6 +767,14 @@ class CanvasController {
         // defer execution
         await new Promise(r => requestAnimationFrame(r));
         const scriptElements = Array.from(node.querySelectorAll('script')) as HTMLScriptElement[];
+        if (!scriptElements.length) return;
+        // Which fact's content is running, so a script error names its element
+        // (these are user content — often legacy scripts referencing a global
+        // `controller` that no longer exists; expected + non-fatal). A module/src
+        // script executes globally and its error escapes to window.onerror, where
+        // the shell reads this to attribute it.
+        const elKey = (el && (el._factKey || el.id)) || '(unknown element)';
+        (window as any).__canvasScriptEl = elKey;
 
         const loadScript = (script: HTMLScriptElement) => {
             return new Promise((resolve, reject) => {
@@ -791,12 +799,17 @@ ${script.getAttribute('src')}`);
                         scriptElement.textContent || '');
                     fn(el, this, node);
                 } catch (err: any) {
-                    console.warn('Inline script error', err);
-                    this._showElementError(node.closest('.canvas-element') as HTMLElement, err.message);
+                    // Non-fatal: badge the element + log WHICH element, no global banner.
+                    console.warn('[canvas] element script error', { element: elKey, error: err.message });
+                    this._showElementError(node.closest('.canvas-element') as HTMLElement, `script: ${err.message}`);
                 }
 
             } else {
-                await loadScript(scriptElement);
+                try {
+                    await loadScript(scriptElement);
+                } catch (err: any) {
+                    console.warn('[canvas] element script load failed', { element: elKey, error: err && err.message });
+                }
             }
         }
     }
