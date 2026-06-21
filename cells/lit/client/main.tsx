@@ -58,15 +58,21 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   const docFact = await fetchFact(`doc:${docId}`);
   if (!docFact) return null;
   const meta = docFact.value as DocValue;
-  const prefix = `_doc/${docId}/`;
-  const deco = await read<{ entries: Entry[] }>('workspace.query', { prefix, limit: 500 });
-  const order = (deco.entries ?? []).map((e) => ({ key: e.key.slice(prefix.length), seq: Number((e.value as any)?.seq ?? 0), fold: !!(e.value as any)?.fold }));
-  const facts = await Promise.all(order.map((o) => fetchFact(o.key)));
-  const cells: LoadedCell[] = order.map((o, i) => ({
-    key: o.key, fold: o.fold, seq: o.seq,
-    content: facts[i] ? contentOf(facts[i]!.value) : `*missing fact — ${o.key}*`,
-    score: Number((facts[i]?._meta as any)?.score) || 0,
+  // Membership + order + content + presentation in ONE read (workspace.members,
+  // ADR-0005/0014 row 2): each extensional member carries its placing decoration's
+  // {seq, fold}, so lit no longer re-scans `_doc/<id>/` + fetches each fact itself.
+  const res = await read<{ members: Array<{ key: string; value: unknown; _meta?: { score?: number }; placement?: { seq?: number; fold?: boolean } }> }>(
+    'workspace.members',
+    { key: `doc:${docId}` },
+  );
+  const cells: LoadedCell[] = (res.members ?? []).map((m) => ({
+    key: m.key,
+    fold: !!m.placement?.fold,
+    seq: Number(m.placement?.seq ?? 0),
+    content: contentOf(m.value),
+    score: Number(m._meta?.score) || 0,
   }));
+  // members returns narrative (seq) order; the salience projection re-sorts by score.
   cells.sort((a, b) => (projection === 'salience' ? b.score - a.score : a.seq - b.seq));
   // Backlinks: inbound edges to this doc, collapsed to distinct source docs
   // (a link from a cell is attributed to the doc that cell belongs to).
