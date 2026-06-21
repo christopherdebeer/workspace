@@ -586,15 +586,34 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       trayIdx++;
     }
 
-    // Camera: pinned by the view declaration (or fit) — device free-roam wins otherwise.
-    if (viewport) {
-      const xs = elements.map((e: any) => e.x).filter((n: unknown) => typeof n === 'number');
-      const ys = elements.map((e: any) => e.y).filter((n: unknown) => typeof n === 'number');
-      const bbox = xs.length
-        ? { minX: Math.min(...xs) - 180, minY: Math.min(...ys) - 120, maxX: Math.max(...xs) + 180, maxY: Math.max(...ys) + 120 }
-        : null;
-      applyViewport(viewport, bbox);
+    // Camera: a view declaration pins it; an embed fits. For a bare board we fit
+    // to content whenever the device camera (saved pan/zoom, or the origin
+    // default) doesn't actually frame ANY element — otherwise the client reset to
+    // the origin and the elements (at their real coordinates) fell off-screen, so
+    // the SSR board "flashed" then went blank. A saved camera that DOES show
+    // content is respected (free-roam persists).
+    const xs = elements.map((e: any) => e.x).filter((n: unknown) => typeof n === 'number') as number[];
+    const ys = elements.map((e: any) => e.y).filter((n: unknown) => typeof n === 'number') as number[];
+    const bbox = xs.length
+      ? { minX: Math.min(...xs) - 180, minY: Math.min(...ys) - 120, maxX: Math.max(...xs) + 180, maxY: Math.max(...ys) + 120 }
+      : null;
+    let cam: ViewRenderHint['viewport'] | null = viewport;
+    if (!cam && !embed && bbox) {
+      let saved: { scale?: number; translateX?: number; translateY?: number } | null = null;
+      try { const s = localStorage.getItem('canvasViewState_' + cid); if (s) saved = JSON.parse(s); } catch { /* storage blocked */ }
+      const W = window.innerWidth, H = window.innerHeight;
+      const framesContent = !!saved && typeof saved.scale === 'number' && saved.scale > 0 && (() => {
+        const s = saved!.scale as number;
+        const vMinX = -(saved!.translateX ?? 0) / s, vMinY = -(saved!.translateY ?? 0) / s;
+        const vMaxX = vMinX + W / s, vMaxY = vMinY + H / s;
+        return vMaxX > bbox.minX && vMinX < bbox.maxX && vMaxY > bbox.minY && vMinY < bbox.maxY;
+      })();
+      if (!framesContent) {
+        cam = 'fit';
+        console.info('[canvas] camera does not frame content — fitting to board', { canvasId: cid, hadSavedView: !!saved });
+      }
     }
+    if (cam) applyViewport(cam, bbox);
 
     // An embed is a still picture: render once, start nothing. The background
     // services (salience polling, the change-feed live-sync, the flight
