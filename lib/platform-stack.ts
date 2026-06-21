@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as awsevents from 'aws-cdk-lib/aws-events';
 import * as eventTargets from 'aws-cdk-lib/aws-events-targets';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   HttpServiceCell,
   ServiceRouter,
@@ -288,6 +289,28 @@ export class PlatformStack extends cdk.Stack {
       // Cap tokens minted for a cell-host redirect to the cell ceiling (model A).
       auth.fn.addEnvironment('CELL_DOMAIN_SUFFIX', `.${props.cellDomain}`);
     }
+
+    // platform.logs (admin diagnostics, gated platform:admin at the gateway): let the
+    // cells service read the TIER-1 services' CloudWatch logs. Scoped by STACK-NAME
+    // wildcard (no per-function ARN → no gateway↔cells dependency cycle); the cells
+    // handler discovers the exact auto-named group by prefix. DescribeLogGroups can't be
+    // resource-scoped, so it stays account-wide (read-only metadata). Redaction is in-handler.
+    cells.fn.addEnvironment('PLATFORM_STACK_NAME', this.stackName);
+    const platformLogGroups = `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/lambda/${this.stackName}-*`;
+    cells.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ReadPlatformLogs',
+        actions: ['logs:FilterLogEvents', 'logs:GetLogEvents', 'logs:DescribeLogStreams'],
+        resources: [platformLogGroups, `${platformLogGroups}:*`],
+      }),
+    );
+    cells.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DiscoverPlatformLogGroups',
+        actions: ['logs:DescribeLogGroups'],
+        resources: [`arn:aws:logs:${this.region}:${this.account}:log-group:*`],
+      }),
+    );
 
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.

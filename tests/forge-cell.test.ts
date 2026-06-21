@@ -9,7 +9,7 @@
  * that `callCell` invokes only for authorised principals, and that
  * `describeTools` advertises the create scope for the gateway to enforce.
  */
-import { handler as forge } from '../services/cells/service';
+import { handler as forge, redactLogLine } from '../services/cells/service';
 import { crc32, zipStore } from '../services/cells/zip';
 import { buildCellTemplate, cellResourceName } from '../services/cells/cell-template';
 import { createRegistry, __setDocumentClient, CellRecord } from '../services/cells/registry';
@@ -114,13 +114,22 @@ function installAwsStubs(): void {
   __setCloudWatchLogs({
     filterLogEvents: (p: { logGroupName: string }) => ({
       promise: async () => ({
-        events:
-          p.logGroupName.startsWith('/aws/lambda/cell-')
-            ? [{ timestamp: 1_700_000_000_000, message: 'hello from cell\n' }]
+        events: p.logGroupName.startsWith('/aws/lambda/cell-')
+          ? [{ timestamp: 1_700_000_000_000, message: 'hello from cell\n' }]
+          : p.logGroupName.includes('DispatchServiceFunction')
+            ? [{ timestamp: 1_700_000_000_000, message: 'GET / 404 — Authorization: Bearer abc.def.ghijkl token=secret123\n' }]
             : [],
       }),
     }),
+    describeLogGroups: (p: { logGroupNamePrefix?: string }) => ({
+      promise: async () => ({
+        logGroups: p.logGroupNamePrefix?.includes('DispatchServiceFunction')
+          ? [{ logGroupName: '/aws/lambda/teststack-DispatchServiceFunctionABC123-XYZ', creationTime: 1 }]
+          : [],
+      }),
+    }),
   } as unknown as Parameters<typeof __setCloudWatchLogs>[0]);
+  process.env.PLATFORM_STACK_NAME = 'teststack';
   __setEsbuild({
     initialize: async () => undefined,
     transform: async (code: string) => ({ code: `/*compiled*/ ${code}`, warnings: [], map: '' }),
@@ -443,6 +452,35 @@ describe('cells: backend commands', () => {
     expect(res.ok).toBe(true);
     expect(res.result!.count).toBe(1);
     expect(res.result!.events[0].message).toBe('hello from cell');
+  });
+
+  it('platformLogs tails a tier-1 service, discovered by prefix, with secrets redacted', async () => {
+    const res = await call<{ service: string; logGroup: string; count: number; events: Array<{ message: string }> }>(
+      'alice',
+      'platformLogs',
+      { service: 'dispatch', since: '1h' },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.result!.count).toBe(1);
+    expect(res.result!.logGroup).toContain('DispatchServiceFunction'); // resolved by prefix
+    const msg = res.result!.events[0].message;
+    expect(msg).toContain('[REDACTED]'); // credentials scrubbed
+    expect(msg).not.toContain('abc.def.ghijkl'); // the bearer value is gone
+    expect(msg).not.toContain('secret123'); // the token value is gone
+    expect(msg).toContain('404'); // diagnostic content survives
+  });
+
+  it('platformLogs rejects an unknown service and lists the known ones', async () => {
+    const res = await call<{ services?: string[] }>('alice', 'platformLogs', { service: 'nope' });
+    expect(res.ok).toBe(false);
+    const listed = await call<{ services: string[] }>('alice', 'platformLogs', {});
+    expect(listed.result!.services).toContain('dispatch');
+  });
+
+  it('redactLogLine scrubs credentials but leaves prose intact', () => {
+    expect(redactLogLine('x Bearer abc.def.ghijkl y')).toBe('x Bearer [REDACTED] y');
+    expect(redactLogLine('password=hunter2 ok')).toBe('password=[REDACTED] ok');
+    expect(redactLogLine('the token expired and the secret sauce')).toBe('the token expired and the secret sauce');
   });
 
   it('catalogCells returns the caller-accessible cells (own + granted), scoped per caller', async () => {

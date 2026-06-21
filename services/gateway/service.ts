@@ -56,6 +56,9 @@ const TYPES = '$types';
 const GRAPH = '$graph';
 const GRANTS = '$grants';
 const CELLS = '$cells';
+const PLATFORM_LOGS = 'platform.logs';
+/** Admin scope gating `platform.logs` — `platform:*` (held by operators) implies it. */
+const PLATFORM_ADMIN_SCOPE = 'platform:admin';
 
 /** A tier-1 tool as returned by a provider's `describeTools`. */
 interface ProviderTool {
@@ -357,6 +360,13 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   // $cells — the Cell axis (ADR-0008): each accessible cell's contract — what it
   // publishes (types), backs (surfaces), and may touch (ssr/caller). The infra axis.
   if (target === CELLS) return ctx.serviceClient('cells').command('contracts', {});
+  // platform.logs — admin diagnostics: tail a TIER-1 service's CloudWatch logs
+  // (the analogue of cells.logs for gateway/dispatch/workspace/auth/cells/home).
+  // Gated on platform:admin; the cells service resolves + redacts.
+  if (target === PLATFORM_LOGS) {
+    enforceScope(ctx, target, PLATFORM_ADMIN_SCOPE);
+    return ctx.serviceClient('cells').command('platformLogs', (input?.input as Record<string, unknown>) ?? {});
+  }
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
@@ -420,7 +430,7 @@ const tools: Record<string, McpToolDefinition> = {
   read: {
     title: 'Observe the substrate',
     description:
-      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch).',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (home/auth/workspace/gateway/dispatch/cells), redacted.',
     inputSchema: READ_SCHEMA,
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],

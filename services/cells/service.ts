@@ -32,6 +32,8 @@ import {
   deleteStack,
   invokeCell,
   getCellLogs,
+  getLogsByGroupName,
+  findLogGroup,
   putObject,
   getObject,
   getObjectRaw,
@@ -1397,6 +1399,71 @@ async function cellContracts(_input: unknown, ctx: ServiceContext): Promise<unkn
   };
 }
 
+/** Scrub bearer tokens / JWTs / labelled secrets from a log line — platform logs
+ *  can carry credentials, and `platform.logs` is diagnostic, not an exfil path. */
+export function redactLogLine(s: string): string {
+  return s
+    .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [REDACTED]')
+    .replace(/eyJ[A-Za-z0-9._\-]{20,}/g, '[REDACTED-JWT]')
+    // labelled secrets — require an assignment separator (`:`/`=`), not a bare space,
+    // so prose like "token expired" / "secret sauce" is left intact.
+    .replace(/\b(authorization|access_token|refresh_token|token|password|secret|api[_-]?key)(\s*[:=]\s*)["']?[^\s"',}]+/gi, '$1$2[REDACTED]');
+}
+
+interface PlatformLogsInput {
+  /** A tier-1 platform service: home/auth/workspace/gateway/dispatch/cells. */
+  service?: string;
+  since?: string;
+  limit?: number;
+  filter?: string;
+}
+
+/** service → its HttpServiceCell construct id; the CFN log group is
+ *  `/aws/lambda/<stack>-<ConstructId>Function…` (resolved by prefix at runtime, so
+ *  no per-function CDK reference is needed — avoids a gateway↔cells dependency cycle). */
+const PLATFORM_SERVICE_LABELS: Record<string, string> = {
+  home: 'HomeService',
+  auth: 'AuthService',
+  workspace: 'WorkspaceService',
+  gateway: 'GatewayService',
+  dispatch: 'DispatchService',
+  cells: 'CellsService',
+};
+
+/**
+ * Internal: tail a TIER-1 platform service's CloudWatch logs — the analogue of
+ * `cells.logs` for the services that route/gate everything (the home-demotion
+ * incident's blind spot, `kb/platform-observability-gap`). Reached only via the
+ * gateway's `platform.logs` target, which enforces `platform:admin` first. The
+ * service's Lambda is auto-named, so the log group is discovered by prefix; every
+ * line is redacted (platform logs can carry credentials).
+ */
+async function platformLogs(input: PlatformLogsInput, ctx: ServiceContext): Promise<unknown> {
+  requireUser(ctx.identity);
+  const known = Object.keys(PLATFORM_SERVICE_LABELS);
+  const service = (input?.service ?? '').trim();
+  if (!service) return { services: known, hint: 'Pass `service` (one of services[]) + optional since/limit/filter.' };
+  const label = PLATFORM_SERVICE_LABELS[service];
+  if (!label) throw new Error(`Unknown platform service "${service}". Known: ${known.join(', ')}`);
+  const stack = process.env.PLATFORM_STACK_NAME;
+  if (!stack) throw new Error('platform.logs unavailable: PLATFORM_STACK_NAME not configured');
+  const prefix = `/aws/lambda/${stack}-${label}Function`;
+  const logGroupName = await findLogGroup(prefix);
+  if (!logGroupName) return { service, count: 0, events: [], note: `no log group matching "${prefix}"` };
+  const events = await getLogsByGroupName(logGroupName, {
+    startTimeMs: Date.now() - sinceToMs(input.since),
+    limit: input.limit ?? 100,
+    filterPattern: input.filter,
+  });
+  ctx.logger.info('platform logs read', { service, logGroup: logGroupName, count: events.length });
+  return {
+    service,
+    logGroup: logGroupName,
+    count: events.length,
+    events: events.map((e) => ({ time: new Date(e.timestamp).toISOString(), message: redactLogLine(e.message) })),
+  };
+}
+
 interface CallCellToolInput {
   /** Target the cell by id, or by owner + name (the `@owner/name` address form). */
   cellId?: string;
@@ -1807,6 +1874,7 @@ const commands: Record<string, RegisteredCommand> = {
   callCellTool: callCellTool as RegisteredCommand,
   describeTypes: describeTypes as RegisteredCommand,
   contracts: cellContracts as RegisteredCommand,
+  platformLogs: platformLogs as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {
   commands[name] = spec.handler;
