@@ -15,7 +15,10 @@
        zoom/pan belong to the app, not the browser. */
     html, body { touch-action: none; -webkit-user-select: none; user-select: none; overflow: hidden; overscroll-behavior: none; }
     #canvas { touch-action: none; }
-    #err-banner { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999; background: crimson; color: #fff; font: 12px monospace; padding: 6px 10px; white-space: pre-wrap; }
+    #err-banner { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999; background: crimson; color: #fff; font: 12px monospace; max-height: 45vh; overflow: auto; }
+    #err-banner-text { padding: 6px 10px; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+    #err-banner-bar { display: flex; gap: 8px; justify-content: flex-end; padding: 4px 8px; background: rgba(0,0,0,0.25); position: sticky; top: 0; }
+    #err-banner-bar button { font: 11px monospace; color: #fff; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.4); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
   </style>
   <script>
     // iOS Safari: double-tap smart-zoom rides TOUCH events and survives
@@ -30,21 +33,46 @@
         if (now - last < 350) e.preventDefault();
         last = now;
       }, { passive: false, capture: true });
-      // Surface runtime errors on-device (tap the banner to dismiss).
+      // Surface runtime errors on-device. The banner is now SELECTABLE + has
+      // copy/dismiss controls (a tap no longer wipes the message before you can
+      // read it), and every error is appended to a localStorage ring buffer so
+      // a crash survives dismissal — retrieve with window.__canvasErrors().
+      var ERRKEY = 'parc.canvas.errlog';
+      function persist(msg) {
+        try {
+          var log = JSON.parse(localStorage.getItem(ERRKEY) || '[]');
+          log.push({ t: new Date().toISOString(), url: location.href, msg: String(msg) });
+          while (log.length > 50) log.shift();
+          localStorage.setItem(ERRKEY, JSON.stringify(log));
+        } catch (e) { /* storage blocked */ }
+      }
       function show(msg) {
+        persist(msg);
         var b = document.getElementById('err-banner');
-        if (!b) return;
-        b.textContent = String(msg).slice(0, 500);
+        var t = document.getElementById('err-banner-text');
+        if (!b || !t) return;
+        // Stack newest-on-top; keep prior messages so a cascade is all readable.
+        t.textContent = (new Date().toLocaleTimeString() + '  ' + String(msg) + '\n' + t.textContent).slice(0, 8000);
         b.style.display = 'block';
       }
       // Exposed so the app can surface *caught* failures too — a swallowed load
       // error (e.g. a blank board after the SSR paint) is otherwise invisible.
       window.__canvasReport = show;
+      // Retrieve / clear the persisted crash log from the console.
+      window.__canvasErrors = function () { try { return JSON.parse(localStorage.getItem(ERRKEY) || '[]'); } catch (e) { return []; } };
+      window.__canvasErrorsClear = function () { try { localStorage.removeItem(ERRKEY); } catch (e) {} };
       window.addEventListener('error', function (e) { show('⚠ ' + e.message + ' @ ' + (e.filename || '').split('/').pop() + ':' + e.lineno); });
-      window.addEventListener('unhandledrejection', function (e) { show('⚠ (async) ' + (e.reason && e.reason.message || e.reason)); });
+      window.addEventListener('unhandledrejection', function (e) { show('⚠ (async) ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
       document.addEventListener('DOMContentLoaded', function () {
+        var copy = document.getElementById('err-copy');
+        var clear = document.getElementById('err-close');
         var b = document.getElementById('err-banner');
-        if (b) b.addEventListener('click', function () { b.style.display = 'none'; });
+        var t = document.getElementById('err-banner-text');
+        if (copy) copy.addEventListener('click', function () {
+          var text = (t && t.textContent) || '';
+          if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { copy.textContent = 'copied'; setTimeout(function () { copy.textContent = 'copy'; }, 1200); });
+        });
+        if (clear) clear.addEventListener('click', function () { if (t) t.textContent = ''; b.style.display = 'none'; });
       });
     })();
   </script>
@@ -75,7 +103,7 @@
     })();
   </script>
 
-  <div id="err-banner"></div>
+  <div id="err-banner"><div id="err-banner-bar"><button id="err-copy">copy</button><button id="err-close">dismiss</button></div><div id="err-banner-text"></div></div>
 
   <button id="drillUp">↑ Drill Up</button>
 

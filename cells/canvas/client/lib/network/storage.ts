@@ -333,6 +333,21 @@ function applyViewport(
   setTimeout(tick, 150);
 }
 
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** A read with network timing + payload size, so a slow load shows WHICH call
+ *  cost what (the substrate round-trips, not the local assembly). Logged under
+ *  `[canvas] net` — visible with ?debug=1. */
+async function timedRead<T>(label: string, target: string, input: unknown): Promise<{ value: T; ms: number; bytes: number }> {
+  const t = nowMs();
+  const value = await read<T>(target, input);
+  const ms = Math.round(nowMs() - t);
+  let bytes = -1;
+  try { bytes = JSON.stringify(value).length; } catch { /* circular */ }
+  console.info(`[canvas] net ${label}`, { ms, kb: bytes >= 0 ? Math.round(bytes / 1024) : '?', target });
+  return { value, ms, bytes };
+}
+
 /** Surface a load-stage failure on the shell's err-banner. A caught error here
  *  is otherwise invisible — the board just blanks with the reason hidden in a
  *  `console.error` no one has open. Pairs with `?debug=1` (eruda) for the stack. */
@@ -397,20 +412,34 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   const localCopy = localStorage.getItem(localKey);
   // Breadcrumb of the load phase, so a thrown error names *where* it died
   // (read vs assembly vs layout) instead of blanking the board anonymously.
+  // `tRead`/`tAsm` time the network vs local-compute split — the substrate
+  // round-trips are the part we want to elide once SSR can hydrate the client.
+  const tStart = nowMs();
   let stage = 'membership-query';
   try {
-    const els = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', membership);
+    const { value: els, ms: msMembers } = await timedRead<{ entries: QueryEntry[]; count: number }>('membership', 'workspace.query', membership);
     stage = 'placement-query';
-    const deco = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', { prefix: `_canvas/${cid}/` });
-    console.info('[canvas] read', { canvasId: cid, members: els.count ?? els.entries?.length ?? 0, placements: deco.count ?? deco.entries?.length ?? 0 });
+    const { value: deco, ms: msPlace } = await timedRead<{ entries: QueryEntry[]; count: number }>('placements', 'workspace.query', { prefix: `_canvas/${cid}/` });
     stage = 'links';
     let links: LinkEdge[] = [];
+    let msLinks = 0;
     try {
-      links = (await read<{ edges: LinkEdge[] }>('workspace.links', {})).edges ?? [];
+      const r = await timedRead<{ edges: LinkEdge[] }>('links', 'workspace.links', {});
+      links = r.value.edges ?? [];
+      msLinks = r.ms;
     } catch (err) {
       console.warn('[substrate] links unavailable; decoration edges only', err);
     }
     stage = 'assemble';
+    const tAsm = nowMs();
+    console.info('[canvas] net total', {
+      canvasId: cid,
+      members: els.count ?? els.entries?.length ?? 0,
+      placements: deco.count ?? deco.entries?.length ?? 0,
+      links: links.length,
+      readMs: Math.round(tAsm - tStart),
+      breakdown: { membership: msMembers, placements: msPlace, links: msLinks },
+    });
 
     if ((els.count ?? 0) === 0 && (deco.count ?? 0) === 0 && localCopy && !viewId) {
       const seeded = JSON.parse(localCopy);
@@ -631,7 +660,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const d = (ev as CustomEvent).detail as { key: string; id: string };
       if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
     });
-    console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length });
+    console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length, assembleMs: Math.round(nowMs() - tAsm) });
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
     // Make the swallowed failure visible (it was a silent console.error before),
