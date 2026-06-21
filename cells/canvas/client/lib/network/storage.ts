@@ -415,21 +415,23 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   // `tRead`/`tAsm` time the network vs local-compute split — the substrate
   // round-trips are the part we want to elide once SSR can hydrate the client.
   const tStart = nowMs();
-  let stage = 'membership-query';
+  let stage = 'reads';
   try {
-    const { value: els, ms: msMembers } = await timedRead<{ entries: QueryEntry[]; count: number }>('membership', 'workspace.query', membership);
-    stage = 'placement-query';
-    const { value: deco, ms: msPlace } = await timedRead<{ entries: QueryEntry[]; count: number }>('placements', 'workspace.query', { prefix: `_canvas/${cid}/` });
-    stage = 'links';
-    let links: LinkEdge[] = [];
-    let msLinks = 0;
-    try {
-      const r = await timedRead<{ edges: LinkEdge[] }>('links', 'workspace.links', {});
-      links = r.value.edges ?? [];
-      msLinks = r.ms;
-    } catch (err) {
-      console.warn('[substrate] links unavailable; decoration edges only', err);
-    }
+    // The three reads are independent — fire them concurrently so the slow
+    // gateway queries (membership + placements were ~4s EACH, serial) overlap
+    // instead of summing. Links is optional: a failure degrades to decoration
+    // edges, it must not fail the whole load.
+    const [elsR, decoR, linksR] = await Promise.all([
+      timedRead<{ entries: QueryEntry[]; count: number }>('membership', 'workspace.query', membership),
+      timedRead<{ entries: QueryEntry[]; count: number }>('placements', 'workspace.query', { prefix: `_canvas/${cid}/` }),
+      timedRead<{ edges: LinkEdge[] }>('links', 'workspace.links', {}).catch((err) => {
+        console.warn('[substrate] links unavailable; decoration edges only', err);
+        return { value: { edges: [] as LinkEdge[] }, ms: 0, bytes: 0 };
+      }),
+    ]);
+    const els = elsR.value, deco = decoR.value;
+    const msMembers = elsR.ms, msPlace = decoR.ms, msLinks = linksR.ms;
+    const links: LinkEdge[] = linksR.value.edges ?? [];
     stage = 'assemble';
     const tAsm = nowMs();
     console.info('[canvas] net total', {
