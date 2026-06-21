@@ -4,8 +4,8 @@
  * Reference, not copy (the dotlit lesson, applied to ourselves): auth (PKCE,
  * ONE parc.session.* namespace for the whole origin — sign in once, every
  * surface and embed is authed), the /mcp read/act client, boot narration,
- * and fact presentation (titleOf/hrefOf, driven by `_types/<type>` facts
- * with convention fallbacks).
+ * and fact presentation (titleOf/hrefOf, driven by the gateway-served `$types`
+ * Present facet with convention fallbacks).
  *
  * Served as an ESM module at /@c15r/kernel/app.js; cells import the URL.
  * Git truth: cells/kernel/client/main.ts in the platform repo.
@@ -329,7 +329,7 @@ export function moduleAlive(): void {
   (window as unknown as Record<string, unknown>).__lit_module = true;
 }
 
-/* ── fact presentation: _types/<type> facts, convention fallbacks ─ */
+/* ── fact presentation: gateway $types Present facet, convention fallbacks ─ */
 
 export interface FactEntry {
   key: string;
@@ -338,25 +338,27 @@ export interface FactEntry {
 }
 
 interface TypeDecl {
-  /** Dot-path into the value for the display title (e.g. "title"). */
+  /** Dot-path into the value for the display title (e.g. "title"). Legacy flat key. */
   titlePath?: string;
   /** Href template: ${key}, ${id} (key after first prefix), ${value.*}. */
   href?: string;
   icon?: string;
+  /** The gateway-resolved Present facet (ADR-0012): `{icon,label,render}` — the
+   *  legacy `{icon,titlePath}` normalised once, server-side. `label` is a path. */
+  present?: { icon?: string; label?: string; render?: unknown };
 }
 
 let typeDecls: Record<string, TypeDecl> | null = null;
 
-/** Load `_types/` declarations once per page; safe to call repeatedly. */
+/** Load the type vocabulary once per page; safe to call repeatedly. Consumes the
+ *  gateway-served `$types` (ADR-0014 row 3): canonical cell-registry types merged
+ *  under the caller's `_types/` overrides, each carrying the resolved `present`
+ *  facet — strictly richer than the old raw `_types/` scan, which saw overrides only. */
 export async function loadTypes(): Promise<Record<string, TypeDecl>> {
   if (typeDecls) return typeDecls;
   try {
-    const res = await read<{ entries: Array<{ key: string; value: TypeDecl }> }>('workspace.query', {
-      prefix: '_types/',
-      limit: 100,
-    });
-    typeDecls = {};
-    for (const e of res.entries ?? []) typeDecls[e.key.slice('_types/'.length)] = e.value ?? {};
+    const res = await read<{ types: Record<string, TypeDecl> }>('$types');
+    typeDecls = res.types ?? {};
   } catch {
     typeDecls = {};
   }
@@ -374,9 +376,20 @@ function pathInto(value: unknown, path: string): unknown {
 
 export function titleOf(e: FactEntry): string {
   const decl = typeDecls?.[e._meta?.type ?? ''];
-  if (decl?.titlePath) {
-    const v = pathInto(e.value, decl.titlePath);
+  // Prefer the gateway-resolved Present facet (ADR-0012): its `label` is the
+  // normalised path — legacy `titlePath` folded in once, server-side. Reading
+  // the path against the fact is the irreducible client half (Present resolves
+  // where the value is). `value.*`/`key`/`meta.*` read the envelope; a bare
+  // token reads the value (legacy `titlePath` rooting) — mirrors `resolveLabel`.
+  const labelPath = decl?.present?.label ?? decl?.titlePath;
+  if (labelPath) {
+    const head = labelPath.split('.')[0];
+    const root = head === 'value' || head === 'key' || head === 'meta'
+      ? { value: e.value, key: e.key, meta: e._meta }
+      : e.value;
+    const v = pathInto(root, labelPath);
     if (typeof v === 'string' && v) return v.slice(0, 80);
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   }
   const v = e.value;
   if (typeof v === 'string') return v.slice(0, 80) || e.key;
