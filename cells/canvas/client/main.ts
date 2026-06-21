@@ -8,6 +8,7 @@ import { generateContent, regenerateImage } from './lib/network/generation.ts';
 import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/network/storage.ts';
 import { showModal } from './lib/modal.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
+import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -1345,6 +1346,51 @@ function clearSsrPaint() {
     }
 }
 
+/** Construct the live board from the SSR-embedded state (`#canvas-hydrate`) so it's
+ *  interactive immediately, then run the full load in the background and reconcile.
+ *  Returns true if it hydrated (caller should stop), false to fall back to the
+ *  normal load path. Built-in element types render at once; custom renderers,
+ *  edges, unplaced elements and any changes since SSR arrive with the refresh. */
+async function tryHydrate(canvasId: string, token: string | null, t0: number): Promise<boolean> {
+    try {
+        const node = document.getElementById('canvas-hydrate');
+        if (!node?.textContent) return false;
+        const h = JSON.parse(node.textContent) as { canvasId?: string; cam?: { scale: number; translateX: number; translateY: number }; elements?: any[] };
+        if (h.canvasId !== canvasId || !Array.isArray(h.elements) || !h.elements.length) return false;
+
+        registerSubstrateTypes(); // built-in element renderers (text/markdown/html/img/…)
+        clearSsrPaint();
+        const cc = new CanvasController({ canvasId, elements: h.elements, edges: [], versionHistory: [] } as any);
+        if (h.cam && typeof h.cam.scale === 'number') {
+            cc.viewState.scale = h.cam.scale;
+            cc.viewState.translateX = h.cam.translateX;
+            cc.viewState.translateY = h.cam.translateY;
+            cc.updateCanvasTransform();
+        }
+        updateCanvasController(cc);
+        const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+        console.info('[canvas] hydrated from SSR', { elements: h.elements.length, ms });
+
+        // Background refresh: the authoritative full load (auth, renderer facts,
+        // links/edges, unplaced elements, salience, live-sync), then reconcile the
+        // controller's state in place. The render reconciler (elementNodesMap)
+        // adds/updates/removes diffs without a flash.
+        void loadInitialCanvas({ canvasId, elements: [], edges: [], versionHistory: [] }, token)
+            .then((full) => {
+                cc.canvasState.elements = full.elements ?? cc.canvasState.elements;
+                cc.canvasState.edges = full.edges ?? [];
+                cc.requestRender();
+                cc.requestEdgeUpdate();
+                console.info('[canvas] background refresh reconciled', { elements: cc.canvasState.elements.length, edges: cc.canvasState.edges.length });
+            })
+            .catch((e) => console.warn('[canvas] background refresh failed (hydrated board stays live)', e));
+        return true;
+    } catch (e) {
+        console.warn('[canvas] hydration failed — falling back to normal load', e);
+        return false;
+    }
+}
+
 (async function main() {
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
@@ -1357,6 +1403,14 @@ function clearSsrPaint() {
     // Boot narration (visible under ?debug=1). The previous boot logged nothing,
     // so a board that loaded then vanished gave no clue where it went.
     console.info('[canvas] boot', { canvasId, ssr: !!document.getElementById('canvas-container')?.dataset.ssr });
+
+    // SSR hydration fast-path (?hydrate=1): the server already read + painted this
+    // board, so consume its embedded JSON to go INTERACTIVE in ~50ms instead of
+    // the multi-second API re-fetch, then refresh from the substrate in the
+    // background (edges, unplaced elements, custom renderers, freshness) and
+    // reconcile. Any failure falls through to the normal load — no regression.
+    if (params.get('hydrate') === '1' && await tryHydrate(canvasId, token, t0)) return;
+
     let rootCanvasState: { canvasId: string; elements: any[]; edges: any[]; versionHistory: any[] } = {
         canvasId: canvasId,
         elements: [],

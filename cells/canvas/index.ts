@@ -218,6 +218,9 @@ interface ShellOpts {
   isOwner?: boolean;
   /** `_public/` patterns; a non-owner may only SSR a board these cover. */
   patterns?: string[];
+  /** Embed the board state as JSON so the client hydrates instantly (?hydrate=1)
+   *  instead of re-fetching through the API. The server already read it. */
+  hydrate?: boolean;
 }
 
 /**
@@ -262,6 +265,27 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
         `<div id="canvas-container" data-ssr="1" style="${transform}">${dynamic}</div>`,
       )
       .replace('<div id="static-container"></div>', `<div id="static-container" data-ssr="1">${stat}</div>`);
+    // Hydration payload (?hydrate=1): the same board the server just read, in the
+    // client's element shape, so the client constructs the live board from this
+    // instead of the multi-second API re-fetch. `<` escaped so the JSON can't
+    // break the <script>. Never for embeds (zero-JS), never the default path.
+    if (opts.hydrate && !opts.embed) {
+      const elements = els.map((e) => ({
+        ...(e.content as Record<string, unknown>),
+        ...(e.placement as Record<string, unknown>),
+        id: e.id,
+        _factKey: `el:${e.id}`,
+      }));
+      const payload = JSON.stringify({
+        canvasId: board,
+        cam: { scale: cam.scale, translateX: cam.tx, translateY: cam.ty },
+        elements,
+      }).replace(/</g, '\\u003c');
+      html = html.replace(
+        '<script type="module" src="/@c15r/canvas/app.js"></script>',
+        `<script id="canvas-hydrate" type="application/json">${payload}</script>\n  <script type="module" src="/@c15r/canvas/app.js"></script>`,
+      );
+    }
     if (opts.embed) {
       // Zero-JS: the board is fully rendered server-side, so strip *every*
       // script — app.js, the editor libraries, AND the inline iOS touch-guard
@@ -304,7 +328,8 @@ export const handler = async (event: any) => {
       // SSR a board (?canvas=) or a view (?view=, with its declared camera);
       // the bare app (no target) keeps the static shell.
       const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
-      const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns }) : read('static/index.html');
+      const hydrate = qs.get('hydrate') === '1';
+      const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate }) : read('static/index.html');
       // Static embeds are safe to cache briefly at the edge — many thumbnails
       // on one page then cost one render, and refresh within a minute.
       const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
