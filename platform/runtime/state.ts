@@ -1322,7 +1322,11 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const queryTypeRules = opts?.typeRules;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, queryTypeRules);
+      // Reuse the full-partition read for signals when there's no type filter —
+      // otherwise `signalsFor` issues a SECOND `store.list(scope)` (a duplicate
+      // multi-page DDB scan, ~half the query's latency). With a type filter the
+      // candidates are a subset, so signals still need the whole graph.
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, opts?.type ? undefined : records, queryTypeRules);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
@@ -1447,7 +1451,16 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Extensional: the facts with an inbound membership edge in the projection.
       // A key-encoded membership edge carries `source` — the decoration that placed
       // the member — so we can recover its narrative `seq` and order by it.
-      const { edges } = await api.graph(scope, { typeRules: opts?.typeRules });
+      //
+      // ONE partition read serves it all: the membership edges (from the records +
+      // authored edges), the member records, the decoration records, AND signals.
+      // The previous shape did `api.graph` (list + listEdges) + a duplicate
+      // `signalsFor` list + listEdges + an N+1 `store.get` PER member and PER
+      // decoration — pathological for a doc with many blocks.
+      const [records, authored] = await Promise.all([store.list(scope), store.listEdges(scope)]);
+      const byKey = new Map(records.map((r) => [r.key, r]));
+      const live = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
+      const edges: AnnotatedEdge[] = [...authored, ...deriveBackboneEdges(live, opts?.typeRules)];
       const memberKeys: string[] = [];
       const seen = new Set<string>();
       const decorationOf = new Map<string, string>();
@@ -1460,18 +1473,18 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       }
       // Honor the scope's `_config/salience` (the intensional branch already does, via query).
       const sCall = baseSalience(await loadSalienceConfig(scope));
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, opts?.typeRules);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
       const members: MemberEntry[] = [];
       const seqOf = new Map<string, number>();
       for (const k of memberKeys) {
-        const rec = await store.get(scope, k);
+        const rec = byKey.get(k);
         if (!rec || rec.superseded || !isTimerLive(rec, nowMs)) continue;
         // Surface the placing decoration (`_doc/<doc>/<key>` = {seq, fold}) so a consumer
         // gets membership + order + presentation in one read, not a second decoration scan.
         let placement: MemberEntry['placement'];
         const decKey = decorationOf.get(k);
         if (decKey) {
-          const dv = ((await store.get(scope, decKey))?.value ?? {}) as { seq?: unknown; fold?: unknown };
+          const dv = (byKey.get(decKey)?.value ?? {}) as { seq?: unknown; fold?: unknown };
           const seq = typeof dv.seq === 'number' && Number.isFinite(dv.seq) ? dv.seq : undefined;
           if (seq !== undefined) seqOf.set(k, seq);
           if (seq !== undefined || typeof dv.fold === 'boolean') {
