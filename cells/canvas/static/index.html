@@ -67,15 +67,43 @@
       // non-fatal errors — those are logged + persisted + attributed to their
       // element, but must NOT raise the jarring full-width banner.
       function isAppError(fn) { return (fn || '').indexOf('/app.js') >= 0; }
+      // Deep stacks so a recursion/stack-overflow crash shows its CYCLE, not a
+      // bare "Maximum call stack size exceeded" with no frames.
+      try { Error.stackTraceLimit = 100; } catch (e) { /* not configurable */ }
+      // Collapse a runaway repeated frame (A→B→A→B…) to "frame ×N" so a stack
+      // overflow's signal — which function is recursing — is readable, not 10k lines.
+      function summarizeStack(stack) {
+        if (!stack) return '';
+        var lines = String(stack).split('\n'), out = [], prev = null, n = 0;
+        for (var i = 0; i < lines.length; i++) {
+          var L = lines[i].trim();
+          if (L === prev) { n++; continue; }
+          if (prev !== null) out.push(n > 1 ? prev + '   ×' + n : prev);
+          prev = L; n = 1;
+        }
+        if (prev !== null) out.push(n > 1 ? prev + '   ×' + n : prev);
+        return out.slice(0, 40).join('\n');
+      }
       window.addEventListener('error', function (e) {
         var where = (e.filename || '').split('/').pop() + ':' + e.lineno;
-        if (isAppError(e.filename)) { show('⚠ ' + e.message + ' @ ' + where); return; }
+        var stack = summarizeStack(e.error && e.error.stack);
+        var overflow = /call stack|recursion|stack size/i.test(e.message || '');
+        if (isAppError(e.filename) || overflow) {
+          var head = (overflow ? '💥 STACK OVERFLOW: ' : '⚠ ') + e.message + ' @ ' + where;
+          persist(head + (stack ? '\n' + stack : ''));   // full cycle to the ring buffer
+          show(head + (stack ? '\n' + stack : ''));
+          return;
+        }
         var el = window.__canvasScriptEl;
         var msg = 'element script: ' + e.message + (el ? '  [' + el + ']' : '') + ' @ ' + where;
         console.warn('[canvas] ' + msg);
         persist(msg); // retrievable via __canvasErrors(), no banner
       });
-      window.addEventListener('unhandledrejection', function (e) { show('⚠ (async) ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason || {};
+        var msg = '⚠ (async) ' + (r.message || r) + (r.stack ? '\n' + summarizeStack(r.stack) : '');
+        persist(msg); show(msg);
+      });
       document.addEventListener('DOMContentLoaded', function () {
         var copy = document.getElementById('err-copy');
         var clear = document.getElementById('err-close');

@@ -1007,12 +1007,12 @@ function startFlightRecorder(): void {
     if (prev) {
       const p = JSON.parse(prev);
       if (!p.clean) {
-        const banner = document.getElementById('err-banner');
-        if (banner) {
-          banner.style.display = 'block';
-          banner.textContent = `previous session died uncleanly — last vitals: ${JSON.stringify(p)} (dismiss: tap)`;
-          banner.onclick = () => { banner.style.display = 'none'; };
-        }
+        // Route through the new copyable/persisted banner (window.__canvasReport)
+        // — the old code poked banner.textContent/onclick, which the restructured
+        // banner broke, so these crash vitals were no longer reaching anyone.
+        const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
+        const msg = `💥 previous session died uncleanly — last vitals before the crash:\n${JSON.stringify(p, null, 2)}`;
+        if (typeof report === 'function') report(msg);
         console.warn('[flight] unclean exit, last vitals', p);
       }
     }
@@ -1034,12 +1034,25 @@ function startFlightRecorder(): void {
       }));
     } catch { /* storage unavailable */ }
   };
+  // Live vitals on demand — watch what grows WHILE panning (heapMB/dom/svg/lw)
+  // instead of waiting for the crash: call window.__canvasVitals() in the console.
+  (window as unknown as { __canvasVitals?: () => unknown }).__canvasVitals = () => {
+    try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; }
+  };
   setInterval(() => record(false), 1000);
   window.addEventListener('pagehide', () => record(true));
 }
 
 export function startLiveSync(cid: string): void {
   if (liveSyncStarted || typeof window === 'undefined') return;
+  // Diagnostic kill-switch: ?nosync=1 disables the change-feed poller so a crash
+  // can be bisected (is the live merge implicated, or purely local render?).
+  try {
+    if (new URLSearchParams(location.search).get('nosync') === '1') {
+      console.warn('[canvas] live-sync OFF (?nosync=1) — change-feed poller disabled');
+      return;
+    }
+  } catch { /* no URL */ }
   liveSyncStarted = true;
   const tick = async (): Promise<void> => {
     const cc = (window as { CC?: any }).CC;
