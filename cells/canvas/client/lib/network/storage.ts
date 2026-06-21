@@ -41,12 +41,11 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 /** Read-time salience per fact key, for the presentation channel. */
 export const salienceByKey = new Map<string, number>();
 
-const FACT_ICONS: Record<string, string> = {
-  cell: '🔋', doc: '📄', capture: '📥', audit: '🔎', 'type-decl': '🏷️', view: '📊', action: '⚡', log: '🗓️',
-};
-
-/** `_types/<type>` declarations, loaded once per board (kernel-cached). */
-let factTypeDecls: Record<string, { icon?: string }> = {};
+/** The type vocabulary (`$types`), loaded once per board (kernel-cached). Carries
+ *  the gateway-resolved Present facet (ADR-0012) — `present.icon` is the canonical
+ *  type glyph, served from the type declaration, so a new type ships its icon as
+ *  data (no canvas recompile). The legacy flat `icon` is the fallback. */
+let factTypeDecls: Record<string, { icon?: string; present?: { icon?: string } }> = {};
 
 /** A fact with no renderable type becomes a 'fact' CARD — presentation only
  *  (_fact* transients + a type the persister strips), value untouched.
@@ -66,7 +65,8 @@ function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[]
   const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
   el._factTitle = titleOf(entry);
   el._factHref = hrefOf(entry);
-  el._factIcon = factTypeDecls[metaType ?? '']?.icon ?? FACT_ICONS[metaType ?? ''] ?? '•';
+  const td = factTypeDecls[metaType ?? ''];
+  el._factIcon = td?.present?.icon ?? td?.icon ?? '•';
   el._factMeta = [metaType ?? 'fact', entry.key].join(' · ');
   if (typeof el.items === 'number') el._factMeta += ` · ${el.items} item${el.items === 1 ? '' : 's'}`;
   if (el.width === 240 && el.height === 120) { el.width = 270; el.height = 92; }
@@ -355,7 +355,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   (window as any).__parcAct = act;
   (window as any).__parcRead = read;
   await loadRendererFacts();
-  factTypeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { icon?: string }>;
+  factTypeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { icon?: string; present?: { icon?: string } }>;
   installImagePaste();
 
   // View-backed board: membership from the view's query; placements from its
