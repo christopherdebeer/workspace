@@ -789,7 +789,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         key: { type: 'string' },
         membership: { type: 'string', enum: ['intensional', 'extensional'] },
         order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
-        members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta)' },
+        members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta); extensional members also carry `placement` {seq, fold} from their ordering decoration' },
       },
     },
   },

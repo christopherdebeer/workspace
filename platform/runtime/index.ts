@@ -80,6 +80,7 @@ export type {
   NeighborsOptions,
   NeighborsResult,
   MembersResult,
+  MemberEntry,
   ChangesResult,
   AttentionOptions,
   AttentionResult,

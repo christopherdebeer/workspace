@@ -611,12 +611,14 @@ describe('collections: members (ADR-0005)', () => {
     // salience sort would invert the narrative order.
     await state.put({ scope: 'r', key: 'blk:a', value: { content: 'first written' }, type: 'doc-block' }, alice);
     await state.put({ scope: 'r', key: 'blk:b', value: { content: 'last written' }, type: 'doc-block' }, alice);
-    await state.put({ scope: 'r', key: '_doc/guide/blk:a', value: { seq: 2 }, type: 'doc-order' }, alice);
+    await state.put({ scope: 'r', key: '_doc/guide/blk:a', value: { seq: 2, fold: true }, type: 'doc-order' }, alice);
     await state.put({ scope: 'r', key: '_doc/guide/blk:b', value: { seq: 1 }, type: 'doc-order' }, alice);
 
     const res = await state.members('r', 'doc:guide');
     expect(res.order).toBe('seq');
     expect(res.members.map((m) => m.key)).toEqual(['blk:b', 'blk:a']);
+    // each member carries its placing decoration's {seq, fold} (so lit needs no 2nd read)
+    expect(res.members.map((m) => m.placement)).toEqual([{ seq: 1 }, { seq: 2, fold: true }]);
   });
 
   it('extensional — falls back to salience order when no decoration carries a seq', async () => {

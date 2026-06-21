@@ -922,6 +922,11 @@ export interface NeighborsResult {
   entries: Record<string, Entry>;
 }
 
+/** A collection member: the fact (key + value + _meta) plus, for an extensional
+ *  member, the `placement` from its ordering decoration (`_doc/<doc>/<key>` = {seq,
+ *  fold}) — so a consumer (lit) gets membership + order + presentation in one read. */
+export type MemberEntry = { key: string; placement?: { seq?: number; fold?: boolean } } & Entry;
+
 export interface MembersResult {
   key: string;
   membership: 'intensional' | 'extensional';
@@ -932,7 +937,7 @@ export interface MembersResult {
    * report `query`.
    */
   order: 'seq' | 'salience' | 'query';
-  members: Array<{ key: string } & Entry>;
+  members: MemberEntry[];
 }
 
 export interface ChangesResult {
@@ -1429,18 +1434,24 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Honor the scope's `_config/salience` (the intensional branch already does, via query).
       const sCall = baseSalience(await loadSalienceConfig(scope));
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, undefined, opts?.typeRules);
-      const members: Array<{ key: string } & Entry> = [];
+      const members: MemberEntry[] = [];
       const seqOf = new Map<string, number>();
       for (const k of memberKeys) {
         const rec = await store.get(scope, k);
         if (!rec || rec.superseded || !isTimerLive(rec, nowMs)) continue;
-        members.push({ key: k, ...(await wrap(rec, nowMs, signals, sCall)) });
+        // Surface the placing decoration (`_doc/<doc>/<key>` = {seq, fold}) so a consumer
+        // gets membership + order + presentation in one read, not a second decoration scan.
+        let placement: MemberEntry['placement'];
         const decKey = decorationOf.get(k);
         if (decKey) {
-          const dec = await store.get(scope, decKey);
-          const seq = (dec?.value as { seq?: unknown } | undefined)?.seq;
-          if (typeof seq === 'number' && Number.isFinite(seq)) seqOf.set(k, seq);
+          const dv = ((await store.get(scope, decKey))?.value ?? {}) as { seq?: unknown; fold?: unknown };
+          const seq = typeof dv.seq === 'number' && Number.isFinite(dv.seq) ? dv.seq : undefined;
+          if (seq !== undefined) seqOf.set(k, seq);
+          if (seq !== undefined || typeof dv.fold === 'boolean') {
+            placement = { ...(seq !== undefined ? { seq } : {}), ...(typeof dv.fold === 'boolean' ? { fold: dv.fold } : {}) };
+          }
         }
+        members.push({ key: k, ...(await wrap(rec, nowMs, signals, sCall)), ...(placement ? { placement } : {}) });
       }
       // Narrative order when any member is placed by a `seq` decoration; the rest
       // (and ties) fall back to salience so nothing is lost.
