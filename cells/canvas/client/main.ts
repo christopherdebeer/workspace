@@ -1303,11 +1303,11 @@ function updateCanvasController(controller: CanvasController) {
     activeCanvasController = window.CC = controller
 }
 
-(async function main() {
-    // SSR first paint: the server pre-rendered the board for an instant, real
-    // first frame. Clear those nodes before the interactive controller renders
-    // so it doesn't duplicate them — the swap to the live board is seamless
-    // (identical content). (Static embeds keep the SSR DOM; they load no app.)
+/** Clear the server-rendered board so the interactive controller (which appends
+ *  without clearing — see renderElementsImmediately) doesn't paint a duplicate.
+ *  Done only once the live state is in hand, so the SSR paint persists right up
+ *  to the swap (no blank flash) and a failed load leaves the SSR board visible. */
+function clearSsrPaint() {
     const ssrC = document.getElementById('canvas-container');
     if (ssrC && ssrC.dataset.ssr) {
         ssrC.innerHTML = '';
@@ -1315,15 +1315,42 @@ function updateCanvasController(controller: CanvasController) {
         if (ssrS) ssrS.innerHTML = '';
         delete ssrC.dataset.ssr;
     }
+}
+
+(async function main() {
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
     const token = params.get("token");
-    let rootCanvasState = {
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // Boot narration (visible under ?debug=1). The previous boot logged nothing,
+    // so a board that loaded then vanished gave no clue where it went.
+    console.info('[canvas] boot', { canvasId, ssr: !!document.getElementById('canvas-container')?.dataset.ssr });
+    let rootCanvasState: { canvasId: string; elements: any[]; edges: any[]; versionHistory: any[] } = {
         canvasId: canvasId,
         elements: [],
         edges: [],
         versionHistory: []
     };
-    rootCanvasState = await loadInitialCanvas(rootCanvasState, token);
-    updateCanvasController(new CanvasController(rootCanvasState));
+    try {
+        // Load FIRST (the SSR board stays painted meanwhile), THEN swap to the
+        // live board in a single tick. Reversing the old order — which cleared
+        // the SSR DOM *before* a multi-second load — removes the blank window and
+        // means a load failure no longer wipes the canvas to nothing.
+        rootCanvasState = await loadInitialCanvas(rootCanvasState, token);
+        const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+        console.info('[canvas] loaded', { canvasId, elements: rootCanvasState.elements.length, edges: rootCanvasState.edges.length, ms });
+        clearSsrPaint();
+        updateCanvasController(new CanvasController(rootCanvasState));
+        if (!rootCanvasState.elements.length) {
+            // A genuinely empty board and a load that fell back to empty look
+            // identical on screen — say which, so the next debugger knows.
+            console.warn(`[canvas] board "${canvasId}" rendered with 0 elements (empty board, or a load fallback — check for a prior [canvas] load-failed line)`);
+        }
+    } catch (err) {
+        // A boot failure must be VISIBLE, not a silent blank. Keep the SSR paint
+        // (don't clear) and surface the reason on the err-banner.
+        console.error('[canvas] boot failed', err);
+        const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
+        if (typeof report === 'function') report('canvas failed to boot: ' + ((err as Error)?.message ?? err));
+    }
 })();

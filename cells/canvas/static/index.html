@@ -37,6 +37,9 @@
         b.textContent = String(msg).slice(0, 500);
         b.style.display = 'block';
       }
+      // Exposed so the app can surface *caught* failures too — a swallowed load
+      // error (e.g. a blank board after the SSR paint) is otherwise invisible.
+      window.__canvasReport = show;
       window.addEventListener('error', function (e) { show('⚠ ' + e.message + ' @ ' + (e.filename || '').split('/').pop() + ':' + e.lineno); });
       window.addEventListener('unhandledrejection', function (e) { show('⚠ (async) ' + (e.reason && e.reason.message || e.reason)); });
       document.addEventListener('DOMContentLoaded', function () {

@@ -333,6 +333,16 @@ function applyViewport(
   setTimeout(tick, 150);
 }
 
+/** Surface a load-stage failure on the shell's err-banner. A caught error here
+ *  is otherwise invisible — the board just blanks with the reason hidden in a
+ *  `console.error` no one has open. Pairs with `?debug=1` (eruda) for the stack. */
+function reportLoadFailure(stage: string, cid: string, err: unknown): void {
+  const msg = `canvas "${cid}" load failed at [${stage}]: ${(err as Error)?.message ?? err}`;
+  console.error('[canvas] load-failed', msg, err);
+  const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
+  if (typeof report === 'function') report(msg);
+}
+
 export async function loadInitialCanvas(defaultState: any, _paramToken?: string | null): Promise<any> {
   const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
   const viewId = params.get('view');
@@ -385,15 +395,22 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
   const localKey = 'myCanvasData_' + cid;
   const localCopy = localStorage.getItem(localKey);
+  // Breadcrumb of the load phase, so a thrown error names *where* it died
+  // (read vs assembly vs layout) instead of blanking the board anonymously.
+  let stage = 'membership-query';
   try {
     const els = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', membership);
+    stage = 'placement-query';
     const deco = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', { prefix: `_canvas/${cid}/` });
+    console.info('[canvas] read', { canvasId: cid, members: els.count ?? els.entries?.length ?? 0, placements: deco.count ?? deco.entries?.length ?? 0 });
+    stage = 'links';
     let links: LinkEdge[] = [];
     try {
       links = (await read<{ edges: LinkEdge[] }>('workspace.links', {})).edges ?? [];
     } catch (err) {
       console.warn('[substrate] links unavailable; decoration edges only', err);
     }
+    stage = 'assemble';
 
     if ((els.count ?? 0) === 0 && (deco.count ?? 0) === 0 && localCopy && !viewId) {
       const seeded = JSON.parse(localCopy);
@@ -510,6 +527,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       el._synthesized = true;
       synthOrigin.set(el.id, { x: el.x, y: el.y });
     };
+    stage = 'layout';
     const placedById = new Map(placed.map((p) => [p.id, p]));
     const linkedIds = new Set<string>();
     for (const e of lastEdges.values()) {
@@ -594,11 +612,17 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const d = (ev as CustomEvent).detail as { key: string; id: string };
       if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
     });
+    console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length });
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
-    console.error('[substrate] load failed — falling back to local copy', err);
+    // Make the swallowed failure visible (it was a silent console.error before),
+    // naming the stage. The fallback to a local copy / empty state stays, but a
+    // resulting blank board now has an on-screen reason instead of none.
+    reportLoadFailure(stage, cid, err);
     startSalience(cid);
-    return localCopy ? JSON.parse(localCopy) : defaultState;
+    const fallback = localCopy ? JSON.parse(localCopy) : defaultState;
+    console.warn(`[canvas] falling back to ${localCopy ? 'local cached copy' : 'EMPTY state'} after [${stage}] failure`);
+    return fallback;
   }
 }
 
