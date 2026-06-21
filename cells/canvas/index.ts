@@ -61,6 +61,46 @@ interface FactItem {
   superseded?: boolean;
 }
 
+/** Does a `_public/<pattern>` cover this key? (`*` = whole slice, trailing `*` =
+ *  prefix, else exact.) Mirrors the lit cell's coverage check. */
+export function covers(pattern: string, key: string): boolean {
+  if (pattern === '*') return true;
+  if (pattern.endsWith('*')) return key.startsWith(pattern.slice(0, -1));
+  return pattern === key;
+}
+export const covers0 = (patterns: string[], key: string): boolean => patterns.some((p) => covers(p, key));
+
+/** The SSR authority decision for a board: the owner always; anyone else only
+ *  when a `_public/` pattern covers `canvas:<board>`. (Exported for tests.) */
+export const mayRenderBoard = (board: string, isOwner: boolean, patterns: string[]): boolean =>
+  isOwner || covers0(patterns, `canvas:${board}`);
+
+/** The public patterns the owner has shared — `_public/<pattern>` facts. A
+ *  token-less (non-owner) SSR may only render a board these cover. */
+async function publicPatterns(): Promise<string[]> {
+  if (!TABLE) return [];
+  const out: string[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  const client = ddb();
+  do {
+    const r = await client.send(
+      new Query({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': 'KEY#_public/' },
+        ExclusiveStartKey,
+      }),
+    );
+    for (const it of (r.Items ?? []) as FactItem[]) {
+      if (it.superseded) continue;
+      const pat = (it.value as { pattern?: string } | undefined)?.pattern ?? it.key.slice('_public/'.length);
+      out.push(pat);
+    }
+    ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (ExclusiveStartKey);
+  return out;
+}
+
 /**
  * Read a board's elements from the owner's substrate slice, server-side. The
  * cell's IAM role grants `STATE#<owner>` reads only (LeadingKeys), so the
@@ -174,6 +214,10 @@ interface ShellOpts {
   embed?: boolean;
   w?: number;
   h?: number;
+  /** The dispatch-validated viewer is the slice owner — full SSR. */
+  isOwner?: boolean;
+  /** `_public/` patterns; a non-owner may only SSR a board these cover. */
+  patterns?: string[];
 }
 
 /**
@@ -199,6 +243,13 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
       viewport = v.viewport;
     }
     if (!board) return shell;
+    // Authority boundary for SSR: the owner (dispatch-validated `x-cell-caller`)
+    // gets a server-painted board; everyone else only when the owner has shared
+    // it publicly (`_public/canvas:<board>`). Otherwise serve the interactive
+    // shell — the client hydrates with the viewer's own session and the API
+    // enforces grants per-fact. (Mirrors the lit cell; closes the SSR path that
+    // would otherwise render a private board to an anonymous viewer.)
+    if (!mayRenderBoard(board, !!opts.isOwner, opts.patterns ?? [])) return shell;
     const els = await readBoard(board);
     if (!els.length) return shell;
     const cam = cameraFor(viewport, els, opts.w, opts.h);
@@ -244,9 +295,16 @@ export const handler = async (event: any) => {
       const embed = qs.get('embed') === '1';
       const w = Number(qs.get('w')) || undefined;
       const h = Number(qs.get('h')) || undefined;
+      // `x-cell-caller` is the dispatch-validated identity (from the session
+      // cookie on a top-level navigation, or a bearer); the cell is reachable
+      // only via cells.call, so it can't be forged. The owner gets full SSR;
+      // anyone else only sees boards the owner shared (`_public/`).
+      const caller = event.headers?.['x-cell-caller'] as string | undefined;
+      const isOwner = !!caller && caller === OWNER;
       // SSR a board (?canvas=) or a view (?view=, with its declared camera);
       // the bare app (no target) keeps the static shell.
-      const html = board || view ? await renderShell({ board, view, embed, w, h }) : read('static/index.html');
+      const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
+      const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns }) : read('static/index.html');
       // Static embeds are safe to cache briefly at the edge — many thumbnails
       // on one page then cost one render, and refresh within a minute.
       const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
