@@ -776,3 +776,28 @@ legibility went 2 → 5 self-model surfaces. The agent/human interface is **no h
 simpler underneath, and markedly more legible** than the pre-breathe system — the +N reads each
 turn an implicit thing into data you can ask for. The exhale is complete; the ADR stream
 (0001–0014) closes here, and further work is feature work on a settled substrate.
+
+## Wave 19 — Re-audit (the residue the fig itself left)
+
+After 0014 closed, a second pass re-walked 0001–0013 against the *current* code (four parallel
+audits: Resolution/Type/Reference · Selector/Collections/Reactivity · Present/Declaration/Salience
+· Grant/Cell/Fact). The premise: a strangler fig *extracts* new shared resolvers, and the act of
+extracting can leave a near-duplicate just out of the seam's reach. Two were found and folded —
+both behaviour-preserving, both a primitive consuming itself one layer late:
+
+- **`extractTypeRules`** — `state.ts:rulesFromDecl` and `workspace:typeRulesFor` extracted the
+  Reference rules (refs · manager · key-edges) from a resolved `Type` with *identical* code (the
+  `state.ts` comment admitted it: "Mirrors the handler's `typeRulesFor`"). Now one exported
+  extractor; each site keeps only its resolve + empty-gate. The Reference primitive (0003/0009)
+  gains a single rule-extraction point alongside its single edge-derivation point.
+- **`FACT_ICONS`** — canvas hardcoded a type→glyph map that `$types` already serves as
+  `present.icon` (0012). Deleted; canvas reads `present.icon ?? icon ?? '•'`. This completes
+  0014 row 3 for canvas's *icon* path (its label/href already came from kernel) — a new type now
+  ships its glyph as data, no cell recompile.
+
+Everything else audited **clean**: one `layer`, one `mergeTypeDecl`/`resolveType`, one
+`matchesSelector` (3 CEL sites each in their correct pipeline position), one `resolvePresent`,
+one `workspace.members`, one grant grammar (`auth.ts`), one cell registry, one `{value,_meta}`
+envelope. The fig leaves no further residue worth a deletion. **Closing observation:** the
+re-audit is itself the maintenance ritual the invariant buys — "is there a second resolver?" is
+now a grep, not an archaeology dig.
