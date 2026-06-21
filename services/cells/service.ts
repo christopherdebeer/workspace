@@ -1411,7 +1411,7 @@ export function redactLogLine(s: string): string {
 }
 
 interface PlatformLogsInput {
-  /** A tier-1 platform service: home/auth/workspace/gateway/dispatch/cells. */
+  /** A tier-1 platform service: auth/workspace/gateway/dispatch/cells. */
   service?: string;
   since?: string;
   limit?: number;
@@ -1422,7 +1422,7 @@ interface PlatformLogsInput {
  *  `/aws/lambda/<stack>-<ConstructId>Function…` (resolved by prefix at runtime, so
  *  no per-function CDK reference is needed — avoids a gateway↔cells dependency cycle). */
 const PLATFORM_SERVICE_LABELS: Record<string, string> = {
-  home: 'HomeService',
+  // (tier-1 `home` retired — the platform face is the tier-2 @c15r/home cell, use cells.logs)
   auth: 'AuthService',
   workspace: 'WorkspaceService',
   gateway: 'GatewayService',

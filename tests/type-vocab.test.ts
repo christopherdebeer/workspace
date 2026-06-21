@@ -3,11 +3,22 @@
  * layer that replaces home's hardcoded `factHref` conventions. These cases
  * mirror the old behaviour exactly, plus the substrate-override ladder.
  */
-import { resolve, declFor, deriveId, typeSignals } from '../platform/ui/vocab';
-import { DEFAULT_TYPE_DECLS } from '../services/home/client/type-decls';
+import { resolve, declFor, deriveId, typeSignals, type TypeDecl } from '../platform/ui/vocab';
+
+// parc's routing conventions as data — the explicit fixture the resolver is tested
+// against (decoupled from any cell's DEFAULT_TYPE_DECLS, which is now a thin
+// "last-resort fallback"; the canonical handlers live in each managing cell's
+// types.json → $types).
+const CONVENTIONS: Record<string, TypeDecl> = {
+  doc: { icon: '📄', manager: '@c15r/lit', handlers: { open: [{ surface: '/@c15r/lit?doc=${match}' }] } },
+  capture: { icon: '📥', manager: '@c15r/input', handlers: { open: [{ surface: '/@c15r/lit?doc=log:${value.captured}' }, { surface: '/@c15r/input' }] } },
+  inbox: { icon: '📥', manager: '@c15r/input', handlers: { open: [{ surface: '/@c15r/lit?doc=log:${value.captured}' }, { surface: '/@c15r/input' }] } },
+  cell: { icon: '🧩', manager: 'platform', handlers: { open: [{ surface: '${value.address}' }] } },
+  canvas: { icon: '🌲', manager: '@c15r/canvas', handlers: { open: [{ surface: '/@c15r/canvas?canvas=${match}' }] } },
+};
 
 const open = (fact: Parameters<typeof resolve>[0]): string | null =>
-  resolve(fact, 'open', DEFAULT_TYPE_DECLS)?.surface ?? null;
+  resolve(fact, 'open', CONVENTIONS)?.surface ?? null;
 
 describe('typeSignals + deriveId', () => {
   it('derives an id from a prefixed key', () => {
@@ -62,7 +73,7 @@ describe('resolve(open) mirrors the old factHref conventions', () => {
 });
 
 describe('substrate _types override the defaults', () => {
-  const decls = { ...DEFAULT_TYPE_DECLS, doc: { icon: '📘', handlers: { open: [{ surface: '/reader/${id}' }] } } };
+  const decls = { ...CONVENTIONS, doc: { icon: '📘', handlers: { open: [{ surface: '/reader/${id}' }] } } };
   it('a user/cell declaration wins over the convention', () => {
     expect(resolve({ key: 'doc:intro', value: {} }, 'open', decls)?.surface).toBe('/reader/intro');
   });

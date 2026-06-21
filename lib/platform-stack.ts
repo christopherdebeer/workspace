@@ -160,16 +160,9 @@ export class PlatformStack extends cdk.Stack {
       ],
     });
 
-    // Self-documenting front-end: a mobile-first React SPA served at `/` (the
-    // router default). Its browser bundle is built from client/main.tsx by
-    // esbuild at deploy time and shipped in the Lambda asset.
-    const home = new HttpServiceCell(this, 'HomeService', {
-      name: 'home',
-      entry: serviceEntry('home'),
-      clientEntry: path.join(__dirname, '..', '..', 'services', 'home', 'client', 'main.tsx'),
-      routes: [],
-      eventBus,
-    });
+    // (Retired 2026-06-21: the tier-1 `home` SPA service. The platform face is now the
+    // tier-2 `@c15r/home` cell, served at the apex via dispatch's DISPATCH_DEFAULT_CELL —
+    // the "home demotion". See services/dispatch + docs/serverless-platform.md.)
 
     // The MCP gateway: owns `/mcp` (the protected resource the auth cell
     // advertises) and exposes the stable read/act surface, forwarding to the
@@ -233,7 +226,7 @@ export class PlatformStack extends cdk.Stack {
     // reaches its handler, which forwards to this default cell — the platform face is a
     // tier-2 cell. (The first attempt 404'd because dispatch's in-Lambda router only
     // matched `/@*`; fixed in services/dispatch with apex catch-alls + dispatch tests.)
-    // Staged: the tier-1 HomeService stays deployed (unused) until the live apex is verified.
+    // Stage 2 (done, apex verified): the tier-1 HomeService + services/home are removed.
     dispatch.fn.addEnvironment('DISPATCH_DEFAULT_CELL', 'c15r/home');
 
     // Any cell that protects routes asks the auth service to validate the
@@ -321,7 +314,7 @@ export class PlatformStack extends cdk.Stack {
 
     const router = new ServiceRouter(this, 'Router', {
       // forge is a routeless backend, so it is not fronted by CloudFront.
-      cells: [home, auth, workspace, gateway, dispatch],
+      cells: [auth, workspace, gateway, dispatch],
       // Apex `/*` → dispatch → DISPATCH_DEFAULT_CELL (c15r/home). Rollback = `home`.
       defaultCell: dispatch,
       domainNames: props?.domainNames,
@@ -349,7 +342,6 @@ export class PlatformStack extends cdk.Stack {
       // The resource cell derives its metadata/challenge URLs from req.url, which
       // honours PUBLIC_BASE_URL across the OAC hop (where the viewer Host is lost).
       gateway.fn.addEnvironment('PUBLIC_BASE_URL', props.publicBaseUrl);
-      home.fn.addEnvironment('PUBLIC_BASE_URL', props.publicBaseUrl);
     }
   }
 }
