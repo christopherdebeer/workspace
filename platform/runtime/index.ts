@@ -47,7 +47,7 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
-export { createObservedState, createMemoryStateStore, computeScore, extractTypeRules, StatePreconditionError, isTimerLive } from './state';
+export { createObservedState, createMemoryStateStore, computeScore, extractTypeRules, recordContains, StatePreconditionError, isTimerLive } from './state';
 export { layer } from './resolution';
 export { matchesSelector } from './selector';
 export type { Selector, Selectable } from './selector';

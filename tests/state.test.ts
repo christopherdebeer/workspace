@@ -13,6 +13,7 @@ import {
   computeScore,
   parseSalienceConfig,
   deriveBackboneEdges,
+  recordContains,
   SALIENCE_CONFIG_KEY,
 } from '../platform/runtime/state';
 import type { StateRecord } from '../platform/runtime/state';
@@ -20,6 +21,34 @@ import type { Identity } from '../platform/runtime';
 
 const alice: Identity = { user: 'alice', scopes: [] };
 const bob: Identity = { user: 'bob', scopes: [] };
+
+describe('query content search (contains)', () => {
+  it('recordContains scans key + value (incl. nested) case-insensitively', () => {
+    expect(recordContains({ key: 'el:1', value: { type: 'html', content: 'a <script>drawMiniMap()</script>' } }, 'minimap')).toBe(true);
+    expect(recordContains({ key: 'el:2', value: { type: 'text', content: 'hello' } }, 'minimap')).toBe(false);
+    expect(recordContains({ key: 'doc:MiniMap-notes', value: 1 }, 'minimap')).toBe(true); // key match
+    expect(recordContains({ key: 'k', value: 'Plain STRING here' }, 'string')).toBe(true);
+    expect(recordContains({ key: 'k', value: null }, 'x')).toBe(false);
+  });
+
+  it('query(contains) finds a fact by its inner content without paging', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'c', key: 'el:a', value: { type: 'text', content: 'just a tree 🌲' } }, alice);
+    await state.put({ scope: 'c', key: 'el:b', value: { type: 'html', content: '<canvas></canvas><script>requestAnimationFrame(drawMiniMap)</script>' } }, alice);
+    await state.put({ scope: 'c', key: 'el:c', value: { type: 'markdown', content: 'about minimaps in general' } }, alice);
+
+    const res = await state.query('c', { contains: 'drawMiniMap' });
+    expect(res.entries.map((e) => e.key)).toEqual(['el:b']);
+
+    // case-insensitive, matches multiple
+    const res2 = await state.query('c', { contains: 'MINIMAP' });
+    expect(res2.entries.map((e) => e.key).sort()).toEqual(['el:b', 'el:c']);
+
+    // composes with the structural selector (prefix/tag/type)
+    const res3 = await state.query('c', { contains: 'minimap', prefix: 'el:c' });
+    expect(res3.entries.map((e) => e.key)).toEqual(['el:c']);
+  });
+});
 
 describe('observed state: provenance', () => {
   it('wraps a value with server-stamped provenance, not client-supplied', async () => {

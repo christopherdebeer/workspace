@@ -897,9 +897,26 @@ export interface QueryOptions {
    */
   cursor?: string;
   includeSuperseded?: boolean;
+  /** Full-text-ish filter: keep only facts whose key or value (stringified)
+   *  contains this substring, case-insensitively. Lets a caller find a fact by
+   *  what's *inside* it (e.g. a board element whose `value.content` holds a
+   *  script) without paging the whole partition. Applied after type/tag/prefix. */
+  contains?: string;
   /** Resolved per-type Reference rules (managedBy + embedded `ref` + key-encoded).
    *  Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
+}
+
+/** Does a record's key or value contain `needle` (case-insensitive)? Backs the
+ *  `contains` query filter — a substring scan over the value JSON, so nested
+ *  fields (markdown content, an element's inline script) are all searchable. */
+export function recordContains(rec: { key: string; value: unknown }, needle: string): boolean {
+  const n = needle.toLowerCase();
+  if (rec.key.toLowerCase().includes(n)) return true;
+  const v = rec.value;
+  if (typeof v === 'string') return v.toLowerCase().includes(n);
+  if (v == null) return false;
+  try { return JSON.stringify(v).toLowerCase().includes(n); } catch { return false; }
 }
 
 export interface QueryResult {
@@ -1311,6 +1328,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (!isTimerLive(rec, nowMs)) return false;
         // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
         if (!matchesSelector(rec, { tag: opts?.tag, prefix: opts?.prefix })) return false;
+        // Content search: find a fact by what's inside it (substring over value JSON).
+        if (opts?.contains && !recordContains(rec, opts.contains)) return false;
         return true;
       });
       const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain)) })));

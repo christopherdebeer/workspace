@@ -217,6 +217,9 @@ export interface QueryInput {
   /** Resume token from a previous page's `nextCursor`. */
   cursor?: string;
   includeSuperseded?: boolean;
+  /** Find a fact by what's inside it: keep only facts whose key or value
+   *  (stringified) contains this substring, case-insensitively. */
+  contains?: string;
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
   explain?: boolean;
 }
@@ -654,6 +657,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         type: { type: 'string', description: 'Only facts of this type' },
         tag: { type: 'string', description: 'Only facts carrying this tag' },
         prefix: { type: 'string', description: 'Only keys with this prefix' },
+        contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },
         rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
@@ -1523,6 +1527,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
+          contains: input?.contains,
           typeRules: await typeRulesFor(ctx),
         },
         ctx.identity,
