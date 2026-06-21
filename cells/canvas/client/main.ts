@@ -1334,6 +1334,9 @@ function clearSsrPaint() {
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
     const token = params.get("token");
+    // ?cull=1 — opt into off-screen culling (content-visibility) to test whether
+    // compositing pressure is the iOS crash. Zero effect when absent.
+    if (params.get('cull') === '1') document.body.classList.add('cull');
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     // Boot narration (visible under ?debug=1). The previous boot logged nothing,
     // so a board that loaded then vanished gave no clue where it went.

@@ -15,6 +15,13 @@
        zoom/pan belong to the app, not the browser. */
     html, body { touch-action: none; -webkit-user-select: none; user-select: none; overflow: hidden; overscroll-behavior: none; }
     #canvas { touch-action: none; }
+    /* ?cull=1 — let the browser skip rendering/compositing OFF-SCREEN elements.
+       On a big board (many elements, indefinite SVG animations) continuous
+       panning re-composites the whole transformed layer every frame, which on
+       iOS can exhaust GPU memory and silently kill the tab. content-visibility
+       collapses off-screen subtrees to their intrinsic box until they scroll in.
+       Opt-in for now so we can A/B it against the crash with zero default risk. */
+    body.cull .canvas-element { content-visibility: auto; contain-intrinsic-size: 240px 120px; }
     #err-banner { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999; background: crimson; color: #fff; font: 12px monospace; max-height: 45vh; overflow: auto; }
     #err-banner-text { padding: 6px 10px; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
     #err-banner-bar { display: flex; gap: 8px; justify-content: flex-end; padding: 4px 8px; background: rgba(0,0,0,0.25); position: sticky; top: 0; }

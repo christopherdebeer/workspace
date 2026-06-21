@@ -1026,9 +1026,15 @@ function startFlightRecorder(): void {
         els: cc?.canvasState?.elements?.length ?? 0,
         edges: cc?.canvasState?.edges?.length ?? 0,
         dom: document.querySelectorAll('.canvas-element').length,
+        // `dom` only counts .canvas-element; allNodes catches detached/foreign
+        // growth (e.g. an element script that clones the board into itself).
+        allNodes: document.getElementsByTagName('*').length,
         svg: document.querySelectorAll('#edges-layer *').length,
+        // SMIL/CSS animations + media that keep the compositor busy on iOS.
+        anim: document.querySelectorAll('animate,animateTransform,animateMotion,[style*="animation"]').length,
         warm: warmRaf !== 0,
-        lw: lastWritten.size,
+        // Every module-level map — any monotonic climber here is a real leak.
+        maps: { lw: lastWritten.size, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size, pend: pending.size },
         heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : undefined,
         clean,
       }));
