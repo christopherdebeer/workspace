@@ -795,9 +795,24 @@ ${script.getAttribute('src')}`);
                 scriptElement.textContent.trim()) {
 
                 try {
-                    const fn = new Function('element', 'controller', 'node',
+                    // Scope the element's schedulers to its lifetime. A legacy
+                    // widget (e.g. the custom minimap) runs an UNGUARDED
+                    // `requestAnimationFrame(draw)` loop with no isConnected check,
+                    // so every re-mount leaks another immortal 60fps board-redraw
+                    // on a detached node. Shadow rAF/timers with guarded versions
+                    // that stop the moment the element is removed or re-rendered.
+                    const alive = (): boolean => (node as HTMLElement).isConnected;
+                    const gRaf = (cb: FrameRequestCallback): number =>
+                        requestAnimationFrame((t) => { if (alive()) cb(t); });
+                    const gTimeout = (cb: () => void, ms?: number): number =>
+                        window.setTimeout(() => { if (alive()) cb(); }, ms);
+                    const gInterval = (cb: () => void, ms?: number): number => {
+                        const id = window.setInterval(() => { if (alive()) cb(); else clearInterval(id); }, ms);
+                        return id as unknown as number;
+                    };
+                    const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval',
                         scriptElement.textContent || '');
-                    fn(el, this, node);
+                    fn(el, this, node, gRaf, gTimeout, gInterval);
                 } catch (err: any) {
                     // Non-fatal: badge the element + log WHICH element, no global banner.
                     console.warn('[canvas] element script error', { element: elKey, error: err.message });
@@ -1334,9 +1349,10 @@ function clearSsrPaint() {
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
     const token = params.get("token");
-    // ?cull=1 — opt into off-screen culling (content-visibility) to test whether
-    // compositing pressure is the iOS crash. Zero effect when absent.
-    if (params.get('cull') === '1') document.body.classList.add('cull');
+    // Off-screen culling (content-visibility) is now ON by default — it
+    // measurably cut the iOS compositing crash on big boards. Escape with
+    // ?cull=0 / ?nocull=1 if a board ever mis-renders under it.
+    if (params.get('cull') !== '0' && params.get('nocull') !== '1') document.body.classList.add('cull');
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     // Boot narration (visible under ?debug=1). The previous boot logged nothing,
     // so a board that loaded then vanished gave no clue where it went.
