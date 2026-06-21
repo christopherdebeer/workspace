@@ -6,6 +6,7 @@ import {
   handleToken,
   handleRevoke,
   handleDeviceInit,
+  handleDeviceInfo,
   handleDeviceApprove,
   validateBearer,
   grantableScopes,
@@ -422,5 +423,33 @@ describe('OAuth device authorization grant', () => {
     expect(tok.scope).toBe('workspace:write');
     // principal is the human username, not the account id
     expect(await validateBearer(tok.access_token, store)).toMatchObject({ userId: 'alice', scope: 'workspace:write' });
+  });
+
+  it('discloses the requested scopes before approval (informed consent)', async () => {
+    const store = createMemoryStore();
+    await store.createUser('u1', 'alice');
+    const init = await handleDeviceInit(makeReq({ path: '/auth/device', body: { scope: 'workspace:write read:workspace' } }), store);
+    const { user_code } = init.body as { user_code: string };
+
+    // Session required — a bare user_code can't probe scopes.
+    const unauth = await handleDeviceInfo(makeReq({ path: '/auth/device/info', body: { sessionId: 'nope', user_code } }), store);
+    expect((unauth.body as { error?: string }).error).toBeTruthy();
+
+    const sessionId = await store.createSession('u1');
+    const info = await handleDeviceInfo(makeReq({ path: '/auth/device/info', body: { sessionId, user_code } }), store);
+    const body = info.body as { scopes: string[]; catalog: Record<string, { verb: string; title: string }> };
+    // The exact scopes the device asked for are surfaced, with capability metadata
+    // (verb grouping) so the approver sees that this grant can WRITE.
+    expect(body.scopes).toEqual(['workspace:write', 'read:workspace']);
+    expect(body.catalog['workspace:write'].verb).toBe('write');
+    expect(body.catalog['read:workspace'].verb).toBe('read');
+  });
+
+  it('rejects device info for an unknown user code', async () => {
+    const store = createMemoryStore();
+    await store.createUser('u1', 'alice');
+    const sessionId = await store.createSession('u1');
+    const info = await handleDeviceInfo(makeReq({ path: '/auth/device/info', body: { sessionId, user_code: 'ZZZZ-ZZZZ' } }), store);
+    expect((info.body as { error?: string }).error).toBeTruthy();
   });
 });

@@ -34,6 +34,7 @@ import {
   handleToken,
   handleRevoke,
   handleDeviceInit,
+  handleDeviceInfo,
   handleDeviceApprove,
   validateBearer,
 } from './oauth';
@@ -442,6 +443,7 @@ export const handler = defineService({
     { method: 'POST', path: '/webauthn/authenticate/verify', handler: (req) => handleAuthVerify(req, store, WEBAUTHN_CONFIG) },
 
     { method: 'POST', path: '/auth/device', handler: (req) => handleDeviceInit(req, store) },
+    { method: 'POST', path: '/auth/device/info', handler: (req) => handleDeviceInfo(req, store) },
     { method: 'POST', path: '/auth/device/approve', handler: (req) => handleDeviceApprove(req, store) },
   ],
 });

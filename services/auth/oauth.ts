@@ -430,6 +430,25 @@ export async function handleDeviceInit(req: ServiceHttpRequest, store: AuthStore
   });
 }
 
+/**
+ * Disclose what a device code is asking for, so the approver sees the scopes
+ * BEFORE approving (informed consent — kb/device-flow-consent-disclosure). The
+ * device grant is all-or-nothing (RFC 8628 has no scope picker on approval), so
+ * this is read-only disclosure; the catalog labels/groups each scope the same
+ * way the OAuth consent screen does. Session-gated so a bare `user_code` can't
+ * probe scopes.
+ */
+export async function handleDeviceInfo(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
+  const b = req.json<{ sessionId: string; user_code: string }>();
+  const session = await store.validateSession(b.sessionId);
+  if (!session) return ok({ error: 'Invalid or expired session' }, 401);
+  const dc = await store.getDeviceCodeByUserCode(b.user_code);
+  if (!dc) return ok({ error: 'Unknown or expired user code' }, 400);
+  const scopes = (dc.scope ?? '').split(/\s+/).filter(Boolean);
+  const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
+  return ok({ scopes, catalog });
+}
+
 export async function handleDeviceApprove(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
   const b = req.json<{ sessionId: string; user_code: string }>();
   const session = await store.validateSession(b.sessionId);
