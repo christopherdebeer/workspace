@@ -734,3 +734,45 @@ A strangler-fig in flight carries transient double-representation:
 Invariant met at ~80%. The exercise's claim — *expressive surface = three nouns, two
 mechanisms, one signal, two axes* — holds in the running system; the residue is naming the
 two mechanisms (Resolution, Reactivity) and the present stage.
+
+## Wave 18 — The exhale completes (the migration closes)
+
+The last 20% of Wave 17 is gone. Resolution (`layer()`, ADR-0010), Reactivity (the shared
+`matchesSelector`, ADR-0011), and Present (`resolvePresent`/`resolveLabel`, ADR-0012) landed;
+Fact (0013) closed the naming set; and ADR-0014 (the **Eliminate** phase) strangled out the
+transitional double-representation. What that took, concretely:
+
+- **lit** stopped re-implementing the membership resolver — its client `loadDoc` now routes
+  through `workspace.members` (the `_doc/` scan + per-key fetch deleted); the `members` API
+  was extended to surface each member's placing decoration `{seq, fold}` so one read returns
+  membership + order + content. **Verified live** (deployed `app.js` makes one `members` call,
+  no `queryPrefix`).
+- **presentation** converged on the gateway-served `present` facet: `home` and `kernel` read
+  `$types`' resolved `{icon,label}` instead of re-normalising legacy `{icon,titlePath}`;
+  `canvas` inherits it for free (it imports kernel's `titleOf`/`hrefOf` by URL). The only
+  client residue is the irreducible per-fact `pathInto` — Present resolves where the value is.
+- **honest keeps** (the other half of *eliminate*): the per-kind Declaration verbs, CEL on
+  `subscription.match` only, and **canvas membership** (it *composes* `query`+`links`+a generic
+  decoration scan — there was never a second resolver to delete; boards carry spatial placement,
+  not linear `seq`). Recorded as decisions, not debt.
+
+### The grep audit, clean
+
+> *every primitive has one representation and one resolver; every component uses primitives but
+> re-implements none.*
+
+| Primitive | The one resolver | Second one? |
+|---|---|---|
+| Resolution | `resolution.ts` `layer()` | none — `effectiveRules`/`mergeTypeDecl`/`$types` all call it |
+| Selector (Reactivity floor) | `selector.ts` `matchesSelector` | none — view-match · query · `subscription.matches` share it |
+| Present | `present.ts` `resolvePresent`/`resolveLabel` | none — home/kernel are consumers (client `pathInto` only) |
+| Membership | `state.ts` `workspace.members` | none — lit routed in; canvas composes `query`+`links` |
+
+### Is the surface simpler than where Wave 1 started?
+
+Yes, and now provably: the conceptual model is the enumerated set (3 nouns · 2 mechanisms ·
+1 signal · 2 axes), each with exactly one resolver; the verbs are still `whoami`/`read`/`act`;
+legibility went 2 → 5 self-model surfaces. The agent/human interface is **no harder to enter,
+simpler underneath, and markedly more legible** than the pre-breathe system — the +N reads each
+turn an implicit thing into data you can ask for. The exhale is complete; the ADR stream
+(0001–0014) closes here, and further work is feature work on a settled substrate.
