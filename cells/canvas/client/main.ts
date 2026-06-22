@@ -9,6 +9,7 @@ import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/networ
 import { showModal } from './lib/modal.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
 import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
+import { installFrameNav } from './lib/network/frameNav.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -1368,6 +1369,7 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
             cc.updateCanvasTransform();
         }
         updateCanvasController(cc);
+        installFrameNav();
         const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
         console.info('[canvas] hydrated from SSR', { elements: h.elements.length, ms });
 
@@ -1427,6 +1429,7 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         console.info('[canvas] loaded', { canvasId, elements: rootCanvasState.elements.length, edges: rootCanvasState.edges.length, ms });
         clearSsrPaint();
         updateCanvasController(new CanvasController(rootCanvasState));
+        installFrameNav();
         if (!rootCanvasState.elements.length) {
             // A genuinely empty board and a load that fell back to empty look
             // identical on screen — say which, so the next debugger knows.
