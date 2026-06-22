@@ -118,6 +118,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     <div class="cmd-header">
       <div class="recent-commands-label">Recent Commands</div>
     </div>
+    <div class="cmd-context" style="display:none"></div>
     <ul class="suggestions"></ul>
     <div class="cmd-wrapper">
       <span class="cmd-icon">

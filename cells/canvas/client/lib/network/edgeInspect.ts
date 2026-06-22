@@ -14,6 +14,7 @@
  * ------------------------------------------------------------------------- */
 import { act } from './substrate.ts';
 import { saveCanvas } from './storage.ts';
+import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
 
 const cc = (): any => (window as { CC?: any }).CC;
 const elId = (k: string): string => (k.startsWith('el:') ? k.slice(3) : k);
@@ -34,7 +35,7 @@ function selectEdge(id: string): void {
 function clearSelection(): void {
   const c = cc();
   if (c?.selectedEdgeIds?.size) { c.selectedEdgeIds.clear(); c.requestRender?.(); }
-  document.getElementById('edge-inspector')?.remove();
+  clearInspector();
 }
 
 /** Re-key a bare `lnk:` edge to a decoration id so its style/label persist. */
@@ -74,53 +75,45 @@ function deleteEdge(edge: any): void {
 }
 
 function field(label: string, input: string): string {
-  return `<label style="display:grid;gap:3px"><span style="color:#8a8a82;font-size:11px">${label}</span>${input}</label>`;
+  return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${input}</label>`;
 }
 
 function openInspector(edge: any): void {
-  let sheet = document.getElementById('edge-inspector');
-  if (!sheet) {
-    sheet = document.createElement('div');
-    sheet.id = 'edge-inspector';
-    sheet.setAttribute('style', 'position:fixed;bottom:0;left:0;right:0;z-index:9500;background:#fbfbf8;border-top:1px solid #e4e4dc;box-shadow:0 -3px 16px rgba(0,0,0,.12);padding:12px 14px calc(12px + env(safe-area-inset-bottom));font:13px/1.3 -apple-system,system-ui,sans-serif;color:#1c1c1a;display:grid;gap:9px;max-width:560px;margin:0 auto;border-radius:14px 14px 0 0');
-    document.body.appendChild(sheet);
-  }
-  const inp = 'style="font:inherit;padding:6px 8px;border:1px solid #e4e4dc;border-radius:7px;background:#fff;color:#1c1c1a"';
-  sheet.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <strong style="font-family:Georgia,serif">Edge</strong>
-      <button data-act="close" style="border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px">Done</button>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-      ${field('Relation (type)', `<input data-f="rel" value="${(relOf(edge)).replace(/"/g, '&quot;')}" ${inp}/>`)}
-      ${field('Label (display)', `<input data-f="label" placeholder="(optional)" value="${(edge.label ?? '').replace(/"/g, '&quot;')}" ${inp}/>`)}
-      ${field('Colour', `<input data-f="color" type="color" value="${edge.style?.color || '#cccccc'}" style="height:32px;padding:2px;border:1px solid #e4e4dc;border-radius:7px;background:#fff"/>`)}
-      ${field('Width', `<input data-f="thickness" type="number" min="1" max="12" value="${parseFloat(edge.style?.thickness) || 2}" ${inp}/>`)}
-      ${field('Dash', `<select data-f="dash" ${inp}><option value="">solid</option><option value="6,4" ${edge.style?.dash === '6,4' ? 'selected' : ''}>dashed</option><option value="2,4" ${edge.style?.dash === '2,4' ? 'selected' : ''}>dotted</option></select>`)}
-      <div style="display:flex;align-items:flex-end"><button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button></div>
-    </div>`;
+  const body = document.createElement('div');
+  body.style.cssText = 'display:grid;gap:9px';
+  body.appendChild(inspectorHeader('Edge', clearSelection));
+  const grid = document.createElement('div');
+  grid.className = 'ctx-row';
+  grid.innerHTML = `
+    ${field('Relation (type)', `<input data-f="rel" value="${(relOf(edge)).replace(/"/g, '&quot;')}"/>`)}
+    ${field('Label (display)', `<input data-f="label" placeholder="(optional)" value="${(edge.label ?? '').replace(/"/g, '&quot;')}"/>`)}
+    ${field('Colour', `<input data-f="color" type="color" value="${edge.style?.color || '#cccccc'}"/>`)}
+    ${field('Width', `<input data-f="thickness" type="number" min="1" max="12" value="${parseFloat(edge.style?.thickness) || 2}"/>`)}
+    ${field('Dash', `<select data-f="dash"><option value="">solid</option><option value="6,4" ${edge.style?.dash === '6,4' ? 'selected' : ''}>dashed</option><option value="2,4" ${edge.style?.dash === '2,4' ? 'selected' : ''}>dotted</option></select>`)}
+    <div style="display:flex;align-items:flex-end"><button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button></div>`;
+  body.appendChild(grid);
 
-  const get = (f: string): string => (sheet!.querySelector(`[data-f="${f}"]`) as HTMLInputElement | null)?.value ?? '';
+  const get = (f: string): string => (grid.querySelector(`[data-f="${f}"]`) as HTMLInputElement | null)?.value ?? '';
   const commit = (): void => applyEdit(edge, {
     rel: get('rel'), label: get('label'),
     style: { color: get('color'), thickness: get('thickness'), dash: get('dash') },
   });
-  sheet.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('change', commit));
-  sheet.querySelector('[data-act="delete"]')?.addEventListener('click', () => deleteEdge(edge));
-  sheet.querySelector('[data-act="close"]')?.addEventListener('click', () => clearSelection());
+  grid.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('change', commit));
+  grid.querySelector('[data-act="delete"]')?.addEventListener('click', () => deleteEdge(edge));
+  showInspector(body);
 }
 
 /** Install edge selection + the inspector. Selection is canvas-native: the
  *  gesture FSM detects a tap on an edge's hit line and emits `parc:edge-tap`
- *  ({ id } to select, { id: null } to clear). A document `click` listener cannot
- *  be used — the pointer adapter calls preventDefault() on pointerdown, which
- *  suppresses synthetic clicks on the canvas. */
+ *  ({ id }); a tap on empty space / an element emits `parc:canvas-deselect`. A
+ *  document `click` listener cannot be used — the pointer adapter calls
+ *  preventDefault() on pointerdown, which suppresses synthetic canvas clicks. */
 export function installEdgeInspector(): void {
   window.addEventListener('parc:edge-tap', (ev) => {
-    const id = (ev as CustomEvent<{ id: string | null }>).detail?.id ?? null;
+    const id = (ev as CustomEvent<{ id: string }>).detail?.id;
     const edge = id ? findEdge(id) : null;
     if (edge) { selectEdge(id as string); openInspector(edge); }
-    else clearSelection();
   });
+  window.addEventListener('parc:canvas-deselect', () => clearSelection());
   console.info('[canvas] edge inspector installed');
 }

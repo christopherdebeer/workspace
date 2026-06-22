@@ -7,10 +7,14 @@ import { createMachine, assign } from 'xstate';
 import { buildContextMenu } from '../context-menu';
 import type { CanvasController } from '../../types.ts';
 
-/** Notify the edge inspector of a canvas-native edge tap (ADR-0016); null = clear.
- *  An event, not an import, so the FSM stays decoupled from the inspector UI. */
-function emitEdgeTap(id: string | null): void {
-  try { window.dispatchEvent(new CustomEvent('parc:edge-tap', { detail: { id } })); } catch { /* non-DOM env */ }
+/** Canvas-native selection of an edge / frame, or a deselect, surfaced as DOM
+ *  events so the FSM stays decoupled from the inspector UI (ADR-0016). The
+ *  consolidated inspector panel listens for these. */
+function emitSelect(name: 'parc:edge-tap' | 'parc:frame-tap', id: string): void {
+  try { window.dispatchEvent(new CustomEvent(name, { detail: { id } })); } catch { /* non-DOM env */ }
+}
+function emitDeselect(): void {
+  try { window.dispatchEvent(new CustomEvent('parc:canvas-deselect')); } catch { /* non-DOM env */ }
 }
 
 // Event and context types for XState
@@ -22,6 +26,7 @@ interface GestureEvent {
   hitElement?: boolean;
   edgeLabel?: boolean;
   edgeLine?: boolean;
+  frameId?: string;
   handle?: string;
   active?: Record<string, { x: number; y: number }>;
   selected?: Set<string>;
@@ -113,8 +118,8 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
 
               // /* ④ ONE-POINTER ON ENTITY  */
               { cond: 'onePointerSelectedDirect', target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
-              // An edge tap is on an entity, not blank — must precede the blank lasso.
-              { cond: (_c, e) => !!e.edgeId && !e.hitElement, target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
+              // An edge / frame tap is on an entity, not blank — precede the lasso.
+              { cond: (_c, e) => !!(e.edgeId || e.frameId) && !e.hitElement, target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
 
               // /* ⑤ ONE-POINTER BLANK  */
               { cond: 'onePointerBlankDirect', target: 'lassoSelect', actions: ['hideContextMenu', 'capLasso'] },
@@ -150,6 +155,7 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               // small moves do nothing
             ],
             POINTER_UP: [
+              { cond: (_c, e) => !!e.frameId && !e.hitElement, target: 'idle', actions: 'selectFrame' },
               { cond: (_c, e) => !!e.edgeId && !e.hitElement, target: 'idle', actions: 'selectEdge' },
               { cond: (_c, e) => !e.hitElement, target: 'idle', actions: 'clearSelection' },
               { cond: (_c, e) => e.hitElement, target: 'idle', actions: 'selectElement' }
@@ -168,6 +174,7 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               // small moves do nothing
             ],
             POINTER_UP: [
+              { cond: (_c, e) => !!e.frameId && !e.hitElement, target: 'idle', actions: 'selectFrame' },
               { cond: (_c, e) => !!e.edgeId && !e.hitElement, target: 'idle', actions: 'selectEdge' },
               { cond: (_c, e) => !e.hitElement, target: 'idle', actions: 'clearSelection' },
               { cond: (_c, e) => e.hitElement, target: 'idle', actions: 'selectElement' }
@@ -602,16 +609,19 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
       // (decoupled — the FSM doesn't import the inspector). null id = deselect.
       clearSelection: (ctx) => {
         ctx.controller.clearSelection();
-        emitEdgeTap(null);
+        emitDeselect();
       },
       selectElement: (ctx, e) => {
         if (e.elementId) {
           ctx.controller.selectElement(e.elementId);
-          emitEdgeTap(null); // selecting an element drops any edge selection
+          emitDeselect(); // selecting an element drops any edge/frame inspector
         }
       },
       selectEdge: (_ctx, e) => {
-        if (e.edgeId) emitEdgeTap(e.edgeId);
+        if (e.edgeId) emitSelect('parc:edge-tap', e.edgeId);
+      },
+      selectFrame: (_ctx, e) => {
+        if (e.frameId) emitSelect('parc:frame-tap', e.frameId);
       },
 
       // Lasso selection actions

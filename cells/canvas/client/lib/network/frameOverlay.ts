@@ -20,6 +20,7 @@
 import { read, act } from './substrate.ts';
 import { placedOf } from './storage.ts';
 import { goToFrame } from './frameNav.ts';
+import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
 import { regionBBox, type Region } from '../../../shared/frame.ts';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -86,7 +87,10 @@ export function drawFrameOverlay(): void {
     // A header chip pinned to the top-left corner — the tap target (everything
     // else stays click-through so enclosed elements keep working).
     const text = (f.value?.default ? '◉ ' : '') + label;
-    const chip = svg('g', { style: 'pointer-events:all;cursor:pointer' });
+    // Selection is canvas-native: the gesture FSM reads .frame-chip / data-frame
+    // on tap and emits parc:frame-tap (a click handler can't — the pointer
+    // adapter preventDefaults pointerdown, killing synthetic clicks).
+    const chip = svg('g', { class: 'frame-chip', 'data-frame': frameId, style: 'pointer-events:all;cursor:pointer' });
     const padX = 8, fs = 15, chW = text.length * fs * 0.6 + padX * 2, chH = fs + 10;
     chip.appendChild(svg('rect', {
       x: String(bb.minX), y: String(bb.minY - chH), width: String(chW), height: String(chH),
@@ -99,11 +103,6 @@ export function drawFrameOverlay(): void {
     });
     t.textContent = text;
     chip.appendChild(t);
-    chip.addEventListener('click', (ev) => {
-      ev.preventDefault(); ev.stopPropagation();
-      void goToFrame(frameId);
-      openFrameEditor(f);
-    });
     g.appendChild(chip);
     layer.appendChild(g);
   }
@@ -127,7 +126,7 @@ function scheduleDraw(): void {
 /* ── editor ──────────────────────────────────────────────────────────────── */
 
 function field(label: string, inner: string): string {
-  return `<label style="display:grid;gap:3px"><span style="color:#8a8a82;font-size:11px">${label}</span>${inner}</label>`;
+  return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${inner}</label>`;
 }
 
 async function saveFrame(f: FrameFact, patch: Partial<FrameValue>): Promise<void> {
@@ -143,21 +142,14 @@ async function saveFrame(f: FrameFact, patch: Partial<FrameValue>): Promise<void
 
 export function openFrameEditor(f: FrameFact): void {
   const frameId = f.key.slice('frame:'.length);
-  let sheet = document.getElementById('frame-editor');
-  if (!sheet) {
-    sheet = document.createElement('div');
-    sheet.id = 'frame-editor';
-    sheet.setAttribute('style', 'position:fixed;bottom:0;left:0;right:0;z-index:9500;background:#fbfbf8;border-top:1px solid #e4e4dc;box-shadow:0 -3px 16px rgba(0,0,0,.12);padding:12px 14px calc(12px + env(safe-area-inset-bottom));font:13px/1.3 -apple-system,system-ui,sans-serif;color:#1c1c1a;display:grid;gap:9px;max-width:560px;margin:0 auto;border-radius:14px 14px 0 0');
-    document.body.appendChild(sheet);
-  }
-  const inp = 'style="font:inherit;padding:6px 8px;border:1px solid #e4e4dc;border-radius:7px;background:#fff;color:#1c1c1a"';
   const memberCount = f.value?.region?.kind === 'members' ? (f.value.region.members?.length ?? 0) : 0;
-  sheet.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <strong style="font-family:Georgia,serif">Frame</strong>
-      <button data-act="close" style="border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px">Done</button>
-    </div>
-    ${field('Label', `<input data-f="label" value="${(f.value?.label ?? frameId).replace(/"/g, '&quot;')}" ${inp}/>`)}
+  const body = document.createElement('div');
+  body.style.cssText = 'display:grid;gap:9px';
+  body.appendChild(inspectorHeader('Frame', clearInspector));
+  const rest = document.createElement('div');
+  rest.style.cssText = 'display:grid;gap:9px';
+  rest.innerHTML = `
+    ${field('Label', `<input data-f="label" value="${(f.value?.label ?? frameId).replace(/"/g, '&quot;')}"/>`)}
     <label style="display:flex;gap:8px;align-items:center;color:#1c1c1a">
       <input data-f="default" type="checkbox" ${f.value?.default ? 'checked' : ''}/>
       <span>Default view (focused when this board opens)</span>
@@ -167,23 +159,24 @@ export function openFrameEditor(f: FrameFact): void {
       <button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button>
       <span style="margin-left:auto;align-self:center;color:#8a8a82;font-size:11px">${memberCount} member${memberCount === 1 ? '' : 's'}</span>
     </div>`;
+  body.appendChild(rest);
 
-  const labelInput = sheet.querySelector('[data-f="label"]') as HTMLInputElement | null;
-  const defInput = sheet.querySelector('[data-f="default"]') as HTMLInputElement | null;
+  const labelInput = rest.querySelector('[data-f="label"]') as HTMLInputElement | null;
+  const defInput = rest.querySelector('[data-f="default"]') as HTMLInputElement | null;
   labelInput?.addEventListener('change', () => void saveFrame(f, { label: labelInput.value.trim() || frameId }));
   defInput?.addEventListener('change', () => void saveFrame(f, { default: defInput.checked }));
-  sheet.querySelector('[data-act="reframe"]')?.addEventListener('click', () => {
+  rest.querySelector('[data-act="reframe"]')?.addEventListener('click', () => {
     const sel = [...(cc()?.selectedElementIds ?? [])].map((id: string) => `el:${id}`);
     if (!sel.length) { console.warn('[canvas] re-frame: nothing selected'); return; }
     void saveFrame(f, { region: { kind: 'members', members: sel } });
   });
-  sheet.querySelector('[data-act="delete"]')?.addEventListener('click', () => {
+  rest.querySelector('[data-act="delete"]')?.addEventListener('click', () => {
     act('workspace.supersede', { key: f.key }).catch(() => undefined);
     frames = frames.filter((x) => x.key !== f.key);
-    sheet?.remove();
+    clearInspector();
     drawFrameOverlay();
   });
-  sheet.querySelector('[data-act="close"]')?.addEventListener('click', () => sheet?.remove());
+  showInspector(body);
 }
 
 /** Install the frame overlay: fetch + draw, then redraw when member elements move
@@ -202,5 +195,16 @@ export function installFrameOverlay(): void {
   // A new/edited frame fact doesn't touch the DOM, so the observer can't see it —
   // createFrame fires this when the frame set changes.
   window.addEventListener('parc:frames-changed', () => void refreshFrameOverlay());
+  // Canvas-native frame selection: the FSM emits parc:frame-tap on a chip tap —
+  // focus the frame and open its editor in the consolidated panel.
+  window.addEventListener('parc:frame-tap', (ev) => {
+    const id = (ev as CustomEvent<{ id: string }>).detail?.id;
+    const f = id ? frames.find((x) => x.key === `frame:${id}`) : null;
+    if (!f) return;
+    const c = cc();
+    if (c?.selectedEdgeIds?.size) { c.selectedEdgeIds.clear(); c.requestRender?.(); } // drop any edge selection
+    void goToFrame(id as string);
+    openFrameEditor(f);
+  });
   console.info('[canvas] frame overlay installed');
 }

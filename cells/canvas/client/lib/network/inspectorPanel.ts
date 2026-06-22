@@ -1,0 +1,75 @@
+/* ---------------------------------------------------------------------------
+ *  inspectorPanel.ts — the single contextual editing surface (consolidation).
+ *
+ *  Edge + frame editors used to be competing bottom sheets that overlapped the
+ *  command palette. They answer the same question the palette does — "I have
+ *  something selected; what can I do with it?" — so they now render into ONE
+ *  place: a `.cmd-context` slot at the top of #cmd-palette, above its input.
+ *  Search stays usable below; selecting clears the slot's previous occupant.
+ *
+ *  If the palette isn't mounted (it always is in practice), a fixed bottom
+ *  container is used as a fallback so the editors still work.
+ * ------------------------------------------------------------------------- */
+
+const SLOT = 'cmd-context';
+
+/** The palette's context slot, created lazily at the top of #cmd-palette. */
+function paletteSlot(): HTMLElement | null {
+  const palette = document.getElementById('cmd-palette');
+  if (!palette) return null;
+  let slot = palette.querySelector('.' + SLOT) as HTMLElement | null;
+  if (!slot) {
+    slot = document.createElement('div');
+    slot.className = SLOT;
+    slot.style.display = 'none';
+    const header = palette.querySelector('.cmd-header');
+    if (header?.nextSibling) palette.insertBefore(slot, header.nextSibling);
+    else palette.insertBefore(slot, palette.firstChild);
+  }
+  return slot;
+}
+
+function fallback(): HTMLElement {
+  let f = document.getElementById('inspector-fallback');
+  if (!f) {
+    f = document.createElement('div');
+    f.id = 'inspector-fallback';
+    f.setAttribute('style', 'position:fixed;bottom:0;left:0;right:0;z-index:9500;background:#fbfbf8;border-top:1px solid #e4e4dc;box-shadow:0 -3px 16px rgba(0,0,0,.12);padding:12px 14px calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;border-radius:14px 14px 0 0;display:none');
+    document.body.appendChild(f);
+  }
+  return f;
+}
+
+function host(): HTMLElement { return paletteSlot() ?? fallback(); }
+
+/** Render an editor node into the context surface (replacing any prior one). */
+export function showInspector(node: HTMLElement): void {
+  const h = host();
+  h.innerHTML = '';
+  h.appendChild(node);
+  h.style.display = 'block';
+  document.getElementById('cmd-palette')?.classList.add('inspecting');
+}
+
+/** Empty + hide the context surface (both the palette slot and the fallback). */
+export function clearInspector(): void {
+  const slot = document.querySelector('#cmd-palette .' + SLOT) as HTMLElement | null;
+  const fb = document.getElementById('inspector-fallback');
+  for (const h of [slot, fb]) {
+    if (h) { h.innerHTML = ''; h.style.display = 'none'; }
+  }
+  document.getElementById('cmd-palette')?.classList.remove('inspecting');
+}
+
+/** Build the standard inspector header (title + Done) wired to onClose. */
+export function inspectorHeader(title: string, onClose: () => void): HTMLElement {
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px';
+  head.innerHTML = `<strong style="font-family:Georgia,serif">${title}</strong>`;
+  const done = document.createElement('button');
+  done.textContent = 'Done';
+  done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+  done.addEventListener('click', onClose);
+  head.appendChild(done);
+  return head;
+}

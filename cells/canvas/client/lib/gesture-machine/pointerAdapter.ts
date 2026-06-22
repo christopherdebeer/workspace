@@ -45,6 +45,10 @@ export function installPointerAdapter(
     const edgeLineNode = (ev.target as Element)?.closest?.('.edge-hit, .edge-line');
     const edgeId = (edgeLabelNode as HTMLElement | null)?.dataset?.id
       ?? edgeLineNode?.getAttribute?.('data-id') ?? null;
+    // A frame's header chip (ADR-0015) — the canvas-native tap target for frame
+    // selection; data-frame carries the frame id.
+    const frameChipNode = (ev.target as Element)?.closest?.('.frame-chip');
+    const frameId = frameChipNode?.getAttribute?.('data-frame') ?? null;
 
     const payload = {
       type,
@@ -56,6 +60,7 @@ export function installPointerAdapter(
       edgeLabel: !!edgeLabelNode,
       edgeLine: !!edgeLineNode,
       edgeId,
+      frameId,
       selected: selected(),
       view: getViewState(),
       ev, // raw DOM event
