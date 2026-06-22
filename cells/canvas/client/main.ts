@@ -613,6 +613,10 @@ class CanvasController {
                 hit.setAttribute("stroke-width", "16");
                 hit.setAttribute("data-id", edge.id);
                 hit.setAttribute("class", "edge-hit");
+                // #edges-layer is pointer-events:none (only its <text> opts back in),
+                // so the lines must re-enable hit-testing themselves or edges are
+                // untappable. `stroke` = hittable along the (transparent) stroke band.
+                hit.setAttribute("pointer-events", "stroke");
                 (hit as unknown as SVGElement & { style: CSSStyleDeclaration }).style.cursor = "pointer";
                 this.edgeHitNodesMap[edge.id] = hit;
                 this.edgesLayer.appendChild(hit);
@@ -623,6 +627,7 @@ class CanvasController {
                 line.setAttribute("marker-end", "url(#arrowhead)");
                 line.setAttribute("data-id", edge.id);
                 line.setAttribute("class", "edge-line");
+                line.setAttribute("pointer-events", "none"); // the wide hit line below is the target
                 this.edgeNodesMap[edge.id] = line;
                 this.edgesLayer.appendChild(line);
             } else {

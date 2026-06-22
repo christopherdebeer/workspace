@@ -110,21 +110,17 @@ function openInspector(edge: any): void {
   sheet.querySelector('[data-act="close"]')?.addEventListener('click', () => clearSelection());
 }
 
-/** Install edge selection + the inspector. Capture-phase so an edge tap wins
- *  over a background pan-start, but element taps (closest .canvas-element) pass
- *  through untouched. */
+/** Install edge selection + the inspector. Selection is canvas-native: the
+ *  gesture FSM detects a tap on an edge's hit line and emits `parc:edge-tap`
+ *  ({ id } to select, { id: null } to clear). A document `click` listener cannot
+ *  be used — the pointer adapter calls preventDefault() on pointerdown, which
+ *  suppresses synthetic clicks on the canvas. */
 export function installEdgeInspector(): void {
-  document.addEventListener(
-    'click',
-    (ev) => {
-      const t = ev.target as HTMLElement;
-      if (t?.closest?.('#edge-inspector')) return; // clicks inside the sheet
-      const hit = t?.closest?.('.edge-hit, .edge-line') as SVGElement | null;
-      const id = hit?.getAttribute?.('data-id');
-      if (id && findEdge(id)) { ev.preventDefault(); ev.stopPropagation(); selectEdge(id); openInspector(findEdge(id)); }
-      else if (!t?.closest?.('.canvas-element')) clearSelection(); // tap empty → deselect
-    },
-    true,
-  );
+  window.addEventListener('parc:edge-tap', (ev) => {
+    const id = (ev as CustomEvent<{ id: string | null }>).detail?.id ?? null;
+    const edge = id ? findEdge(id) : null;
+    if (edge) { selectEdge(id as string); openInspector(edge); }
+    else clearSelection();
+  });
   console.info('[canvas] edge inspector installed');
 }

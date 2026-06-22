@@ -7,6 +7,12 @@ import { createMachine, assign } from 'xstate';
 import { buildContextMenu } from '../context-menu';
 import type { CanvasController } from '../../types.ts';
 
+/** Notify the edge inspector of a canvas-native edge tap (ADR-0016); null = clear.
+ *  An event, not an import, so the FSM stays decoupled from the inspector UI. */
+function emitEdgeTap(id: string | null): void {
+  try { window.dispatchEvent(new CustomEvent('parc:edge-tap', { detail: { id } })); } catch { /* non-DOM env */ }
+}
+
 // Event and context types for XState
 interface GestureEvent {
   type: string;
@@ -15,6 +21,7 @@ interface GestureEvent {
   edgeId?: string;
   hitElement?: boolean;
   edgeLabel?: boolean;
+  edgeLine?: boolean;
   handle?: string;
   active?: Record<string, { x: number; y: number }>;
   selected?: Set<string>;
@@ -106,6 +113,8 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
 
               // /* ④ ONE-POINTER ON ENTITY  */
               { cond: 'onePointerSelectedDirect', target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
+              // An edge tap is on an entity, not blank — must precede the blank lasso.
+              { cond: (_c, e) => !!e.edgeId && !e.hitElement, target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
 
               // /* ⑤ ONE-POINTER BLANK  */
               { cond: 'onePointerBlankDirect', target: 'lassoSelect', actions: ['hideContextMenu', 'capLasso'] },
@@ -141,6 +150,7 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               // small moves do nothing
             ],
             POINTER_UP: [
+              { cond: (_c, e) => !!e.edgeId && !e.hitElement, target: 'idle', actions: 'selectEdge' },
               { cond: (_c, e) => !e.hitElement, target: 'idle', actions: 'clearSelection' },
               { cond: (_c, e) => e.hitElement, target: 'idle', actions: 'selectElement' }
             ]
@@ -158,6 +168,7 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               // small moves do nothing
             ],
             POINTER_UP: [
+              { cond: (_c, e) => !!e.edgeId && !e.hitElement, target: 'idle', actions: 'selectEdge' },
               { cond: (_c, e) => !e.hitElement, target: 'idle', actions: 'clearSelection' },
               { cond: (_c, e) => e.hitElement, target: 'idle', actions: 'selectElement' }
             ]
@@ -586,14 +597,21 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
       capEdge: assign({ draft: (_c, e) => ({ start: e.xy, sourceId: e.elementId }) }),
       capNode: assign({ draft: (_c, e) => ({ start: e.xy, sourceId: e.elementId }) }),
 
-      // Selection actions
+      // Selection actions. Edge selection (ADR-0016) is canvas-native: a tap on an
+      // edge's hit line routes here. The edge inspector listens for these events
+      // (decoupled — the FSM doesn't import the inspector). null id = deselect.
       clearSelection: (ctx) => {
         ctx.controller.clearSelection();
+        emitEdgeTap(null);
       },
       selectElement: (ctx, e) => {
         if (e.elementId) {
           ctx.controller.selectElement(e.elementId);
+          emitEdgeTap(null); // selecting an element drops any edge selection
         }
+      },
+      selectEdge: (_ctx, e) => {
+        if (e.edgeId) emitEdgeTap(e.edgeId);
       },
 
       // Lasso selection actions
