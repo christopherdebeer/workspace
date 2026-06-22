@@ -9,6 +9,7 @@ import {
 import { autoLayout } from '../layout/auto-layout.ts';
 import { align } from '../layout/align.ts';
 import { generateContent } from '../network/generation.ts';
+import { createFrame } from '../network/frameNav.ts';
 
 function buildTypeItems(controller) {
   /* 1 – native + plug-ins */
@@ -128,6 +129,14 @@ export function buildRootItems(controller) {
           label: 'Un-pin', icon: 'fa-thumbtack', category: 'Edit',
           visible: c => c.selectedElementIds.size > 0,
           action: c => unpinElements(c, [...c.selectedElementIds]),
+        },
+        {
+          // Frame the selection (ADR-0015): a named viewpoint whose region = the
+          // selected facts. It follows them, and is shareable / tour-able.
+          label: 'Frame selection', icon: 'fa-crop-simple', category: 'Navigation',
+          visible: c => c.selectedElementIds.size > 0,
+          needsInput: 'Frame name',
+          action: (c, text) => createFrame(c, text),
         },
         { label: 'Copy', icon: 'fa-clone', category: 'Edit', shortcut: '⌘C', action: c => copySelection(c) },
         {

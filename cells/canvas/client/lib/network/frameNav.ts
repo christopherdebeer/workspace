@@ -10,23 +10,66 @@
  *  a capture-phase click handler. Any failure is swallowed — navigation is a
  *  convenience, never load-bearing.
  * ------------------------------------------------------------------------- */
-import { read } from './substrate.ts';
+import { read, act } from './substrate.ts';
 import { focusFrame } from './storage.ts';
 
 interface Edge { from: string; rel: string; to: string }
 
 const els = (): any[] => ((window as { CC?: any }).CC?.canvasState?.elements ?? []);
+const boardId = (): string => (window as { CC?: any }).CC?.canvasState?.canvasId ?? 'parcland';
 
-/** Move the camera to a frame and reflect it in the URL (shareable, back-able). */
-async function goToFrame(frameId: string): Promise<void> {
+/** Move the camera to a frame; reflect it in the URL (shareable) unless it's the
+ *  implicit default-on-open. */
+async function goToFrame(frameId: string, pushUrl = true): Promise<void> {
   const ok = await focusFrame(frameId, els());
   if (!ok) return;
-  try {
-    const u = new URL(location.href);
-    u.searchParams.set('frame', frameId);
-    history.replaceState(null, '', u.toString());
-  } catch { /* ignore */ }
+  if (pushUrl) {
+    try {
+      const u = new URL(location.href);
+      u.searchParams.set('frame', frameId);
+      history.replaceState(null, '', u.toString());
+    } catch { /* ignore */ }
+  }
   void renderTourBar(frameId);
+}
+
+/** Create a member-derived frame from the current selection (Phase 2 gesture) and
+ *  focus it. The frame IS a collection: its members are the selected facts, so it
+ *  follows them as they move. Returns the new frame id, or null. */
+export async function createFrame(controller: any, label?: string): Promise<string | null> {
+  const sel: string[] = [...(controller?.selectedElementIds ?? [])].map((id: string) => `el:${id}`);
+  if (!sel.length) { console.warn('[canvas] Frame selection: nothing selected'); return null; }
+  const board = controller.canvasState?.canvasId ?? boardId();
+  const name = (label || 'frame').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'frame';
+  const frameId = `${board}/${name}-${Math.random().toString(36).slice(2, 6)}`;
+  try {
+    await act('workspace.remember', {
+      key: `frame:${frameId}`,
+      type: 'frame',
+      tags: ['frame', `tour:${board}`],
+      value: { board, label: label || name, region: { kind: 'members', members: sel } },
+    });
+    console.info('[canvas] created frame', { frameId, members: sel.length });
+    await goToFrame(frameId);
+    return frameId;
+  } catch (e) {
+    console.warn('[canvas] createFrame failed', e);
+    return null;
+  }
+}
+
+/** On a bare open (no ?frame), focus the board's `default` frame if one exists
+ *  (ADR-0015 precedence). Non-blocking; best-effort. */
+async function focusDefaultFrame(): Promise<void> {
+  try {
+    const board = boardId();
+    const r = await read<{ entries?: Array<{ key: string; value?: { board?: string; default?: boolean } }> }>(
+      'workspace.query',
+      { type: 'frame', limit: 100 },
+    );
+    const def = (r.entries ?? []).find((e) => e.value?.board === board && e.value?.default);
+    if (def) await goToFrame(def.key.slice('frame:'.length), false);
+  } catch { /* no default frame */ }
 }
 
 /** The tour controls for a frame: prev = inbound navNext, next = outbound. */
@@ -89,11 +132,13 @@ async function installNavTo(): Promise<void> {
   console.info('[canvas] navTo hotspots installed', { count: map.size });
 }
 
-/** Install frame navigation: the tour bar (if opened on a ?frame) + navTo hotspots. */
+/** Install frame navigation: the tour bar (if opened on a ?frame, else the
+ *  board's default frame) + navTo hotspots. */
 export function installFrameNav(): void {
   try {
     const frameId = new URLSearchParams(location.search).get('frame');
     if (frameId) void renderTourBar(frameId);
+    else void focusDefaultFrame();
     void installNavTo();
   } catch { /* navigation is best-effort */ }
 }
