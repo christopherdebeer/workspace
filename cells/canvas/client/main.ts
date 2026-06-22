@@ -7,6 +7,7 @@ import { installCommandPalette } from './lib/cmd-palette/command-palette.ts';
 import { generateContent, regenerateImage } from './lib/network/generation.ts';
 import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/network/storage.ts';
 import { showModal } from './lib/modal.ts';
+import { enterFull, exitFull } from './lib/network/inspectorPanel.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
 import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
 import { installFrameNav } from './lib/network/frameNav.ts';
@@ -1371,10 +1372,13 @@ ${script.getAttribute('src')}`);
         if (!el && this.selectedElementId) el = this.findElementById(this.selectedElementId);
         if (!el) return;                              // nothing to edit
 
+        // The editor is the full detent of the unified sheet (Phase 2): host it in
+        // cmd-context rather than a centered overlay, then restore on close.
+        const host = enterFull();
         try {
             console.log("[openEditModa] launch", el);
-            // Launch the self-contained modal and wait for the user to finish
             const { status, el: updated } = await showModal(el, {
+                host,
                 /* Callback the modal can use for the “Generate” button */
                 generateContent: (seed) => generateContent(seed, el, this)
             });
@@ -1390,6 +1394,10 @@ ${script.getAttribute('src')}`);
             }
         } catch (err) {
             console.error('[openEditModal] modal error:', err);
+        } finally {
+            exitFull();
+            // Re-render the selection strip behind the closed editor.
+            try { window.dispatchEvent(new CustomEvent('parc:editor-closed')); } catch { /* non-DOM */ }
         }
     }
 }

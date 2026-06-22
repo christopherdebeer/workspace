@@ -155,15 +155,15 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16);
   font-family: system-ui, sans-serif;
 }
-#context-menu.cm2 .cm-head {
+.cm2 .cm-head {
   padding: 0.5rem 0.65rem 0.45rem;
   border-bottom: 1px solid #eee;
   margin-bottom: 0.25rem;
 }
-#context-menu.cm2 .cm-head strong { display: block; font-size: 0.88rem; line-height: 1.3; }
-#context-menu.cm2 .cm-head code { display: block; color: #999; font-size: 0.66rem; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#context-menu.cm2 .cm-open { font-size: 0.75rem; color: #2f6f4f; text-decoration: none; }
-#context-menu.cm2 .cm-row {
+.cm2 .cm-head strong { display: block; font-size: 0.88rem; line-height: 1.3; }
+.cm2 .cm-head code { display: block; color: #999; font-size: 0.66rem; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm2 .cm-open { font-size: 0.75rem; color: #2f6f4f; text-decoration: none; }
+.cm2 .cm-row {
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -177,12 +177,12 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   text-align: left;
   cursor: pointer;
 }
-#context-menu.cm2 .cm-row:hover, #context-menu.cm2 .cm-row:active { background: #f1f1ea; }
-#context-menu.cm2 .cm-row i { width: 1.1rem; text-align: center; color: #8a8a82; }
-#context-menu.cm2 .cm-danger, #context-menu.cm2 .cm-danger i { color: #7a1f1f; }
-#context-menu.cm2 .cm-appearance { border-top: 1px solid #eee; margin-top: 0.25rem; padding: 0.25rem 0; }
-#context-menu.cm2 .cm-appearance summary { padding: 0.45rem 0.65rem; color: #8a8a82; font-size: 0.8rem; cursor: pointer; }
-#context-menu.cm2 .cm-field {
+.cm2 .cm-row:hover, .cm2 .cm-row:active { background: #f1f1ea; }
+.cm2 .cm-row i { width: 1.1rem; text-align: center; color: #8a8a82; }
+.cm2 .cm-danger, .cm2 .cm-danger i { color: #7a1f1f; }
+.cm2 .cm-appearance { border-top: 1px solid #eee; margin-top: 0.25rem; padding: 0.25rem 0; }
+.cm2 .cm-appearance summary { padding: 0.45rem 0.65rem; color: #8a8a82; font-size: 0.8rem; cursor: pointer; }
+.cm2 .cm-field {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -191,7 +191,7 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   font-size: 0.8rem;
   color: #8a8a82;
 }
-#context-menu.cm2 .cm-field select { font-size: 0.85rem; padding: 3px 6px; border-radius: 7px; border: 1px solid #e4e4dc; }
+.cm2 .cm-field select { font-size: 0.85rem; padding: 3px 6px; border-radius: 7px; border: 1px solid #e4e4dc; }
 
 .canvas-element .minimap-tile { background: #fbfbf8; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-sizing: border-box; }
 .minimap-tile canvas { width: 100%; height: 100%; display: block; }

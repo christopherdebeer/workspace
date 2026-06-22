@@ -105,7 +105,7 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               { cond: 'handleScale', target: 'scaleElement', actions: 'capScale' },
               { cond: 'handleRotate', target: 'rotateElement', actions: 'capRotate' },
               { cond: 'handleReorder', target: 'reorderElement', actions: 'capReorder' },
-              { cond: 'handleType', target: 'typeElement', actions: ['buildContextMenu', 'showContextMenu'] },
+              { cond: 'handleType', target: 'typeElement', actions: ['openActions'] },
               { cond: 'edgeHandleDrag', target: 'createEdge', actions: ['capEdge', 'startTempLine'] },
               { cond: 'createNodeHandleDrag', target: 'createNode', actions: ['capNode', 'startTempLine'] },
 
@@ -131,7 +131,7 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               },
             ],
 
-            LONG_PRESS: { target: 'idle', actions: ['buildContextMenu', 'showContextMenu'] },
+            LONG_PRESS: { target: 'idle', actions: ['openActions'] },
 
             WHEEL: { target: 'wheelZoom' },
 
@@ -622,6 +622,13 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
       },
       selectFrame: (_ctx, e) => {
         if (e.frameId) emitSelect('parc:frame-tap', e.frameId);
+      },
+      // Long-press / type-handle open the element's full actions in the sheet
+      // (Phase 1 of the unified sheet — replaces the floating context menu).
+      openActions: (_ctx, e) => {
+        if (e.elementId) {
+          try { window.dispatchEvent(new CustomEvent('parc:element-actions', { detail: { id: e.elementId } })); } catch { /* non-DOM */ }
+        }
       },
 
       // Lasso selection actions

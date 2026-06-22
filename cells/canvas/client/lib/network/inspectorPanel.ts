@@ -59,6 +59,24 @@ export function showInspector(node: HTMLElement, ownerName = 'misc'): void {
   document.getElementById('cmd-palette')?.classList.add('inspecting');
 }
 
+/** Enter the full detent: the editor takes over the sheet. Hides the palette's
+ *  search/suggestions (via .sheet-full), empties the slot and returns it as the
+ *  host for the editor to fill. (Phase 2 of the unified sheet.) */
+export function enterFull(): HTMLElement {
+  owner = 'editor';
+  const h = host();
+  h.innerHTML = '';
+  h.style.display = 'block';
+  document.getElementById('cmd-palette')?.classList.add('inspecting', 'sheet-full');
+  return h;
+}
+
+/** Leave the full detent (restoring the palette) and clear the editor. */
+export function exitFull(): void {
+  document.getElementById('cmd-palette')?.classList.remove('sheet-full');
+  clearInspector('editor');
+}
+
 /** Empty + hide the context surface. With an owner name, only clears when that
  *  owner currently holds the panel; with none, force-clears. */
 export function clearInspector(ownerName?: string): void {

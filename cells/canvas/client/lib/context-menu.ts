@@ -29,12 +29,12 @@ function section(title: string): HTMLElement {
   return d;
 }
 
-function buildContextMenu(el: CanvasElement, controller: CanvasController): void {
-  if (!el) return;
-  const menu = controller.contextMenu;
-  menu.innerHTML = '';
-  menu.classList.add('cm2');
-  const done = (): void => controller.hideContextMenu();
+/** Build the element/group action list as a detached `.cm2` node, so it can be
+ *  hosted either by the floating context menu or — Phase 1 of the unified sheet —
+ *  the cmd-context panel. `done` is invoked after any terminal action. */
+function buildElementActions(el: CanvasElement, controller: CanvasController, done: () => void): HTMLElement {
+  const menu = document.createElement('div');
+  menu.className = 'cm2';
 
   const selected = controller.selectedElementIds ?? new Set<string>();
   const group = selected.size > 1 && selected.has(el.id) ? [...selected] : [el.id];
@@ -184,6 +184,17 @@ function buildContextMenu(el: CanvasElement, controller: CanvasController): void
     }
     menu.appendChild(details);
   }
+  return menu;
 }
 
-export { buildContextMenu };
+/** Legacy floating context menu (retired by the unified sheet, kept as a no-cost
+ *  fallback). Renders the same actions into `controller.contextMenu`. */
+function buildContextMenu(el: CanvasElement, controller: CanvasController): void {
+  if (!el) return;
+  const menu = controller.contextMenu;
+  menu.innerHTML = '';
+  menu.classList.add('cm2');
+  menu.appendChild(buildElementActions(el, controller, () => controller.hideContextMenu()));
+}
+
+export { buildContextMenu, buildElementActions };

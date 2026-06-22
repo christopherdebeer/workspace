@@ -51,6 +51,15 @@
 }
 .cmd-context input[type="color"] { height: 32px; padding: 2px; }
 
+/* Full detent — the editor takes over the sheet: hide the palette's own chrome
+   and let cmd-context grow. (Unified sheet, Phase 2.) */
+#cmd-palette.sheet-full { width: min(900px, 96vw); }
+#cmd-palette.sheet-full .cmd-header,
+#cmd-palette.sheet-full .suggestions,
+#cmd-palette.sheet-full .cmd-wrapper,
+#cmd-palette.sheet-full .cmd-footer { display: none; }
+#cmd-palette.sheet-full .cmd-context { max-height: 85vh; }
+
 .recent-commands-label {
   font-size: 12px;
   color: #666;

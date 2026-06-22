@@ -23,10 +23,12 @@ let currentEl: CanvasElement | null = null;    // element being edited (live ref
 let currentVerIdx = 0;       // 0 … el.versions.length  (top == current)
 let resolver: ((value: { status: string; el: CanvasElement | null }) => void) | null = null;    // Promise resolver returned by showModal
 let generateFn: ((seed: string) => Promise<string> | string) | null = null;    // callback injected by caller (optional)
+let hostEl: HTMLElement | null = null;         // when set, the editor lives inside the sheet (full detent) rather than a centered overlay
 
-export function showModal(el: CanvasElement, opts: { generateContent?: (seed: string) => Promise<string> | string } = {}): Promise<{ status: string; el: CanvasElement | null }> {
+export function showModal(el: CanvasElement, opts: { generateContent?: (seed: string) => Promise<string> | string; host?: HTMLElement } = {}): Promise<{ status: string; el: CanvasElement | null }> {
   if (!el) throw new Error('showModal: element required');
   generateFn = opts.generateContent ?? null;
+  hostEl = opts.host ?? null;
 
   ensureDom();
   hydrateUiFor(el);
@@ -35,12 +37,13 @@ export function showModal(el: CanvasElement, opts: { generateContent?: (seed: st
 }
 
 function ensureDom(): void {
-  if ($root && $root.parentElement) return;
-
-  // Reset CodeMirror instances if DOM was cleared
-  if ($root && !$root.parentElement) {
-    cmContent = null;
-    cmSrc = null;
+  const target = hostEl ?? document.body;
+  // Build once (keeps the CodeMirror instances alive across opens); just
+  // re-attach to the current target — body (centered) or the sheet host.
+  if ($root) {
+    if ($root.parentElement !== target) target.appendChild($root);
+    $root.classList.toggle('in-sheet', !!hostEl);
+    return;
   }
 
   const tpl = /*html*/`
@@ -71,8 +74,11 @@ function ensureDom(): void {
     </div>
   </div>
 </div>`;
-  document.body.insertAdjacentHTML('beforeend', tpl);
-  $root = document.getElementById('edit-modal');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = tpl;
+  $root = wrap.firstElementChild as HTMLElement;
+  target.appendChild($root);
+  $root.classList.toggle('in-sheet', !!hostEl);
   $contentEditorHost = document.getElementById('editor-content');
   $srcEditorHost = document.getElementById('editor-src');
   $btnPrev = document.getElementById('versions-prev');
