@@ -380,6 +380,78 @@ export async function focusFrame(frameId: string, elements: any[]): Promise<bool
   }
 }
 
+/* ── substrate search → add to board (item = fact × renderer × placement) ──── */
+
+export interface FactHit { key: string; title: string; icon: string; type: string | null }
+
+// The board's own machinery + ephemera — never offer these as "add to canvas".
+const RESERVED_FACT = /^(_canvas\/|_views\/|_actions\/|_subscriptions\/|_groups\/|bkpk:|tending\/|machine-run\/|run\/)/;
+
+/** Search the slice for facts NOT already on this board, for the command palette
+ *  (substring `contains` scan, salience-ranked). Excludes reserved/system keys
+ *  and items already present. */
+export async function searchFacts(q: string, controller: any, limit = 8): Promise<FactHit[]> {
+  const query = q.trim();
+  if (query.length < 2) return [];
+  const onBoard = new Set<string>(
+    (controller?.canvasState?.elements ?? []).map((el: any) => el._factKey ?? `el:${el.id}`),
+  );
+  let entries: QueryEntry[] = [];
+  try {
+    const r = await read<{ entries?: QueryEntry[] }>('workspace.query', { contains: query, limit: limit + 16 });
+    entries = r.entries ?? [];
+  } catch (e) { console.warn('[canvas] fact search failed', e); return []; }
+  const hits: FactHit[] = [];
+  for (const e of entries) {
+    const key = e.key;
+    if (!key || onBoard.has(key) || RESERVED_FACT.test(key) || key.startsWith('_canvas/')) continue;
+    const type = e._meta?.type ?? null;
+    const td = factTypeDecls[type ?? ''];
+    let title = key;
+    try { title = titleOf({ key, value: e.value, _meta: e._meta }) || key; } catch { /* fall back to key */ }
+    hits.push({ key, title, type, icon: td?.present?.icon ?? td?.icon ?? '•' });
+    if (hits.length >= limit) break;
+  }
+  return hits;
+}
+
+/** Add an existing substrate fact to THIS board: membership tag (clobber-safe —
+ *  the fact's value + type are preserved, we only add `canvas:<cid>`), a pinned
+ *  placement at the viewport centre, and an in-memory fact card so it appears at
+ *  once (no reload). */
+export async function addFactToCanvas(controller: any, key: string): Promise<void> {
+  const cid = controller?.canvasState?.canvasId;
+  if (!cid || !key) return;
+  const present = controller.canvasState.elements.find((el: any) => (el._factKey ?? `el:${el.id}`) === key);
+  if (present) { controller.recenterOnElement?.(present.id); return; } // already here — just go to it
+
+  let value: Record<string, unknown> = {}, type: string | null = null, tags: string[] = [];
+  try {
+    const entry = await read<{ value?: any; _meta?: { type?: string | null; tags?: string[] } } | null>('workspace.peek', { key });
+    value = (entry?.value ?? {}) as Record<string, unknown>;
+    type = entry?._meta?.type ?? null;
+    tags = entry?._meta?.tags ?? [];
+  } catch (e) { console.warn('[canvas] addFact peek failed', key, e); return; }
+
+  const newTags = Array.from(new Set([...tags, `canvas:${cid}`]));
+  const pt = controller.screenToCanvas(window.innerWidth / 2, window.innerHeight / 2);
+  const el: any = { width: 240, height: 120, rotation: 0, ...value, id: idOfKey(key), x: Math.round(pt.x), y: Math.round(pt.y) };
+  el._factKey = key;
+  // Pre-seed meta so the element-write path never stamps `canvas-element` over
+  // the fact's real type; decorate to the card/renderer it deserves.
+  factMeta.set(key, { type, tags: newTags });
+  decorateFactCard(el, { type, tags: newTags });
+  controller.canvasState.elements.push(el);
+  controller.requestRender();
+
+  // Persist: membership (clean value + preserved type + the canvas tag) and a
+  // pinned placement at the viewport centre. queueFact dedupes on value, so the
+  // value isn't rewritten — only the tag/placement land.
+  queueFact(key, value, { ...(type ? { type } : {}), tags: newTags });
+  queueFact(`_canvas/${cid}/${key}`, { x: el.x, y: el.y, width: el.width, height: el.height });
+  console.info('[canvas] added fact to board', { key, cid, type });
+}
+
 const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /** A read with network timing + payload size, so a slow load shows WHICH call

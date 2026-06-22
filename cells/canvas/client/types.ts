@@ -97,7 +97,19 @@ export interface ElementSuggestion {
   searchText: string;
 }
 
-export type SuggestionItem = CommandItem | ElementSuggestion;
+/** A substrate fact NOT yet on this board — selecting it adds the fact to the
+ *  canvas (membership tag + placement). Distinct from ElementSuggestion, which
+ *  jumps to an item already present. */
+export interface FactSuggestion {
+  kind: 'fact';
+  key: string;
+  label: string;
+  icon: string;
+  type: string;
+  searchText: string;
+}
+
+export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion;
 
 export interface MenuItem {
   label: string | ((controller: CanvasController, config?: any) => string);

@@ -2,8 +2,9 @@
 
 import { buildRootItems } from './menu-items.ts';
 import { editElementWithPrompt } from '../network/generation.ts';
+import { searchFacts, addFactToCanvas } from '../network/storage.ts';
 import { installKeyboardShortcuts } from './keyboard-shortcuts.ts';
-import type { CanvasController, CommandItem, ElementSuggestion, SuggestionItem, MenuItem } from '../../types.ts';
+import type { CanvasController, CommandItem, ElementSuggestion, FactSuggestion, SuggestionItem, MenuItem } from '../../types.ts';
 
 // Import CSS
 import './command-palette.css';
@@ -206,6 +207,18 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
           ${categoryHtml}
           ${shortcutHtml}
         `;
+      } else if (it.kind === 'fact') {
+        // A substrate fact not yet on the board — the icon is a kernel glyph
+        // (emoji / •) or a fontawesome class; the + marks "bring it in".
+        const icon = it.icon.startsWith('fa-') ? `<i class="fa-solid ${it.icon}"></i>` : it.icon;
+        li.innerHTML = `
+          <span class="s-icon">${icon}</span>
+          <div class="cmd-content">
+            <span class="crumb last-crumb">${it.label}</span>
+            <span class="cmd-category">add · ${it.type}</span>
+          </div>
+          <span class="cmd-shortcut"><kbd>+</kbd></span>
+        `;
       } else {
         li.innerHTML = `
           <span class="s-icon"><i class="fa-solid ${it.icon}"></i></span>
@@ -215,7 +228,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
           </div>
         `;
       }
-      
+
       li.onclick = () => run(it);
       $list.appendChild(li);
     });
@@ -295,6 +308,9 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
         return;
       }
       item.action?.(controller);
+    } else if (item.kind === 'fact') {
+      // Bring an existing substrate fact onto this board (membership + placement).
+      void addFactToCanvas(controller, item.key);
     } else {
       controller.selectElement(item.id);
       zoomToElement(controller, item.id);
@@ -342,6 +358,25 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     }
   });
   
+  // Debounced substrate search: facts NOT on this board, appended below the
+  // command/element matches with an "Add to board" affordance. Async, so it
+  // lands a beat after the synchronous matches and only if the query still holds.
+  let factTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleFactSearch = (q: string): void => {
+    clearTimeout(factTimer);
+    if (q.length < 2) return;
+    factTimer = setTimeout(() => {
+      void searchFacts(q, controller, 6).then((hits) => {
+        if ($input.value.trim() !== q) return; // stale — the query moved on
+        const have = new Set(filtered.filter((f) => f.kind === 'fact').map((f) => (f as FactSuggestion).key));
+        const add: FactSuggestion[] = hits
+          .filter((h) => !have.has(h.key))
+          .map((h) => ({ kind: 'fact', key: h.key, label: h.title, icon: h.icon, type: h.type ?? 'fact', searchText: '' }));
+        if (add.length) { filtered = [...filtered, ...add]; render(); }
+      });
+    }, 250);
+  };
+
   $input.addEventListener('input', (e: Event) => {
     const target = e.target as HTMLInputElement;
     const q = target.value.trim();
@@ -349,6 +384,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     filtered = computeFiltered(q);
     sel = -1;
     render();
+    scheduleFactSearch(q);
   });
 
   $input.addEventListener('blur', () => {
