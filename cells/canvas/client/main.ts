@@ -1515,6 +1515,7 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         installFrameOverlay();
         installEdgeInspector();
         installSelectionInspector();
+        markBooted();
         const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
         console.info('[canvas] hydrated from SSR', { elements: h.elements.length, ms });
 
@@ -1538,7 +1539,34 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
     }
 }
 
+/** After a sign-in redirect that dropped our query string (see loadInitialCanvas),
+ *  put the intended board/view back into the URL *before* we read it. */
+function restoreIntendedTarget(): void {
+    try {
+        const here = new URLSearchParams(location.search);
+        if (here.get('canvas') || here.get('view')) { sessionStorage.removeItem('parc.canvas.intended'); return; }
+        const saved = sessionStorage.getItem('parc.canvas.intended');
+        sessionStorage.removeItem('parc.canvas.intended');
+        if (!saved) return;
+        const url = new URL(saved, location.href);
+        if (!url.searchParams.get('canvas') && !url.searchParams.get('view')) return; // nothing worth restoring
+        history.replaceState({}, '', url.pathname + url.search + url.hash);
+        console.info('[canvas] restored intended target after auth', url.search);
+    } catch { /* storage / URL unavailable */ }
+}
+
+/** Reveal the board: fade out the boot splash and remove it. Idempotent — called
+ *  from every terminal boot path (hydrate, full load, and the failure path, so a
+ *  boot error surfaces the banner instead of an eternal spinner). */
+function markBooted(): void {
+    try {
+        document.body.classList.add('booted');
+        setTimeout(() => document.getElementById('boot-splash')?.remove(), 320);
+    } catch { /* pre-DOM */ }
+}
+
 (async function main() {
+    restoreIntendedTarget();
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
     const token = params.get("token");
@@ -1579,6 +1607,7 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         installFrameOverlay();
         installEdgeInspector();
         installSelectionInspector();
+        markBooted();
         if (!rootCanvasState.elements.length) {
             // A genuinely empty board and a load that fell back to empty look
             // identical on screen — say which, so the next debugger knows.
@@ -1590,5 +1619,6 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         console.error('[canvas] boot failed', err);
         const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
         if (typeof report === 'function') report('canvas failed to boot: ' + ((err as Error)?.message ?? err));
+        markBooted(); // drop the spinner so the error banner is visible, not hidden behind it
     }
 })();

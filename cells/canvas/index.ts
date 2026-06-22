@@ -201,6 +201,7 @@ function fitCamera(els: BoardElement[], w = 1200, h = 800): { scale: number; tx:
 
 /** Critical CSS so the SSR board paints correctly before app.js loads. */
 const CRITICAL_CSS = `
+#boot-splash{display:none}
 #canvas{position:relative;width:100%;height:100%;background:#fff;overflow:hidden}
 #canvas-container{position:absolute;transform-origin:0 0;overflow:visible;--zoom:1}
 .canvas-element{--scale:1;--zoom:1;--blend-mode:normal;--width:10px;--height:10px;--padding:calc(.5rem / var(--zoom));padding:var(--padding);font-size:calc(var(--scale) * 1em);position:absolute;box-sizing:content-box;background:transparent;overflow:visible;mix-blend-mode:var(--blend-mode)}

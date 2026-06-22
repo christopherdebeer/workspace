@@ -15,6 +15,22 @@
        zoom/pan belong to the app, not the browser. */
     html, body { touch-action: none; -webkit-user-select: none; user-select: none; overflow: hidden; overscroll-behavior: none; }
     #canvas { touch-action: none; }
+    /* Chrome starts in its resting state at FIRST PAINT — otherwise the drill-up
+       button, the edit/versions modal and the context menu flash unstyled
+       before app.js injects main.css (most visible on the non-SSR first load).
+       Mirrors the main.css defaults so there's no jump when the bundle lands. */
+    #drillUp, #context-menu, .modal { display: none; }
+    #mode { position: fixed; z-index: 2; top: 0; left: 0; border: 0 none; padding: 0.3em; opacity: 0.5; cursor: pointer; }
+    /* Boot splash: a loading state for the NON-SSR first paint (the page is
+       otherwise blank until the client finishes its substrate load — e.g. the
+       first load right after sign-in). The SSR path paints the board and hides
+       this via #ssr-critical; the client hides it (body.booted) once the board
+       has rendered, and embeds never show it. */
+    #boot-splash { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; background: #fafaf7; transition: opacity .25s ease; }
+    #boot-splash .bs-spin { width: 30px; height: 30px; border: 3px solid #d8d8cf; border-top-color: #2f6f4f; border-radius: 50%; animation: bs-rot .8s linear infinite; }
+    @keyframes bs-rot { to { transform: rotate(360deg); } }
+    body.booted #boot-splash { opacity: 0; pointer-events: none; }
+    body.embed #boot-splash { display: none; }
     /* Off-screen culling skips rendering/compositing elements that aren't on
        screen — on a big board (many elements, indefinite SVG animations) panning
        otherwise re-composites the whole transformed layer every frame, which on
@@ -155,6 +171,8 @@
   </script>
 
   <div id="err-banner"><div id="err-banner-bar"><button id="err-copy">copy</button><button id="err-close">dismiss</button></div><div id="err-banner-text"></div></div>
+
+  <div id="boot-splash"><div class="bs-spin"></div></div>
 
   <button id="drillUp">↑ Drill Up</button>
 

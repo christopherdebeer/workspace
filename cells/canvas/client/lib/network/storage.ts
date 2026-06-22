@@ -489,7 +489,18 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     readonlyBoard = true;
     return defaultState;
   }
+  // Preserve the intended board/view across the sign-in redirect. The kernel's
+  // OAuth round-trip returns to the cell root WITHOUT our query string, which
+  // would otherwise drop ?canvas=/?view= and land on the default board. Stash
+  // the full target before the redirect; main()'s restoreIntendedTarget puts it
+  // back on the way in.
+  if (!isAuthed()) {
+    try { sessionStorage.setItem('parc.canvas.intended', location.pathname + location.search + location.hash); } catch { /* storage blocked */ }
+  }
   await ensureAuth();
+  // Reached only when already authed (a redirect navigates away) — drop the
+  // crumb so a later visit to the default board isn't rerouted to a stale target.
+  try { sessionStorage.removeItem('parc.canvas.intended'); } catch { /* ignore */ }
 
   // The renderer ladder: built-in substrate types, then renderer FACTS —
   // both registered before the first element mounts.
