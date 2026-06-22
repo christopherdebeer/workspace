@@ -93,10 +93,27 @@ the same vocabulary that styles nodes now styles edges. User-extensible treatmen
 - Edges become selectable/editable like elements — the substrate's first-class References finally
   have a first-class canvas surface.
 
+## Confirmed decisions (2026-06-22)
+
+- **Edge-as-fact: on gaining content.** A bare relation stays a link-derived line. When an edge
+  gains content/label it is **promoted to a `relation:<id>` fact** whose `from`/`to` are **`ref`
+  fields** — so the fact *projects* its own link through the existing Reference rule (ADR-0003),
+  exactly as a `claim`'s `support` projects `supports`. Minting the fact **replaces** the bare link
+  (no duplicate). The content-rich edge is then a node-on-the-line: selectable, typed, queryable,
+  link-to-able — a first-class fact — while bare references stay cheap.
+- **Unified selection.** One selection holds elements *and* edges; the context menu / inspector
+  adapts. Selecting a node can highlight its incident edges; a mixed selection is a subgraph.
+
 ## Open / to confirm
 
-- **Edge-as-fact threshold:** when does a styled/labeled edge get promoted from a link+decoration to
-  a standalone `relation:<id>` fact? (Lean: on gaining content; bare links stay link-derived.)
 - **rel vocabulary source:** the picker draws from `$graph`'s observed rels + the type vocab, with
-  free-text fallback.
-- **Selection model:** unified (edges + elements in one selection) vs separate. (Lean: unified.)
+  free-text fallback. (Which rels are *editable* vs read-only — see derived edges below.)
+- **Derived edges on the canvas (the reshape surface).** `$graph` carries **derived** backbone
+  edges (`instanceOf`, `inDoc`, `managedBy`, `rendersWith`, `supports`, …) alongside authored ones.
+  If edges are first-class, the canvas can render the **full Reference projection** — authored edges
+  solid/editable, derived edges a distinct faint/dashed treatment, **read-only** (you can't hand-edit
+  a projection). This is where "multiple visual treatments" earns its keep: the treatment encodes
+  *provenance* (authored vs derived) and *type* (rel), not just decoration. Open: show derived edges
+  by default, behind a toggle, or only on selection?
+- **Edit surface (mobile-first):** a bottom-sheet inspector for the selected edge (rel picker /
+  label / style) vs a context menu vs an in-place pill — the canvas tenet is mobile-first.
