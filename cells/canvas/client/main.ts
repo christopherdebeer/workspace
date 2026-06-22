@@ -12,6 +12,7 @@ import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
 import { installFrameNav } from './lib/network/frameNav.ts';
 import { installFrameOverlay } from './lib/network/frameOverlay.ts';
 import { installEdgeInspector } from './lib/network/edgeInspect.ts';
+import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -427,6 +428,15 @@ class CanvasController {
     }
 
     updateGroupBox() {
+        // Surface element/group selection to the consolidated cmd-context strip
+        // (ADR-0016). This is the one chokepoint every selection path funnels
+        // through; the listener dedupes by id-set, so the hot calls (pan/render)
+        // are cheap.
+        try {
+            const ids = [...this.selectedElementIds];
+            window.dispatchEvent(new CustomEvent('parc:selection-changed', { detail: { ids } }));
+        } catch { /* non-DOM env */ }
+
         if (this.selectedElementIds.size < 2) {
             this.groupBox.style.display = 'none';
             this.canvas.classList.remove('group-selected')
@@ -584,20 +594,29 @@ class CanvasController {
             defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
             this.edgesLayer.prepend(defs);
         }
-        if (!defs.querySelector("#arrowhead")) {
-            const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
-            marker.setAttribute("id", "arrowhead");
-            marker.setAttribute("markerWidth", "10");
-            marker.setAttribute("markerHeight", "7");
-            marker.setAttribute("refX", "10");
-            marker.setAttribute("refY", "3.5");
-            marker.setAttribute("orient", "auto");
-            const arrowPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            arrowPath.setAttribute("d", "M0,0 L0,7 L10,3.5 Z");
-            arrowPath.setAttribute("fill", "#ccc");
-            marker.appendChild(arrowPath);
-            defs.appendChild(marker);
-        }
+        // Arrowheads inherit the edge's colour. SVG2 `context-stroke` is unreliable
+        // on older iOS Safari, so mint one marker per distinct colour on demand.
+        const arrowMarker = (color: string): string => {
+            const c = color || "#ccc";
+            const id = "arrowhead-" + c.replace(/[^a-zA-Z0-9]/g, "") || "arrowhead-def";
+            if (!defs!.querySelector("#" + id)) {
+                const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+                marker.setAttribute("id", id);
+                marker.setAttribute("markerWidth", "10");
+                marker.setAttribute("markerHeight", "7");
+                marker.setAttribute("refX", "10");
+                marker.setAttribute("refY", "3.5");
+                marker.setAttribute("orient", "auto");
+                const arrowPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                arrowPath.setAttribute("d", "M0,0 L0,7 L10,3.5 Z");
+                arrowPath.setAttribute("fill", c);
+                marker.appendChild(arrowPath);
+                defs!.appendChild(marker);
+            }
+            return id;
+        };
+        const edgeColor = (edge: Edge): string =>
+            this.selectedEdgeIds?.has(edge.id) ? "#2f6f4f" : (edge.style?.color || "#ccc");
 
         // Iterate over each edge in the canvas state.
         this.edgeHitNodesMap = this.edgeHitNodesMap || {};
@@ -622,18 +641,21 @@ class CanvasController {
                 this.edgesLayer.appendChild(hit);
 
                 line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                line.setAttribute("stroke", edge.style?.color || "#ccc");
+                line.setAttribute("stroke", edgeColor(edge));
                 line.setAttribute("stroke-width", edge.style?.thickness || "2");
-                line.setAttribute("marker-end", "url(#arrowhead)");
+                line.setAttribute("marker-end", `url(#${arrowMarker(edgeColor(edge))})`);
                 line.setAttribute("data-id", edge.id);
                 line.setAttribute("class", "edge-line");
                 line.setAttribute("pointer-events", "none"); // the wide hit line below is the target
                 this.edgeNodesMap[edge.id] = line;
                 this.edgesLayer.appendChild(line);
             } else {
-                // Reflect live style edits (color/width) from the inspector.
-                line.setAttribute("stroke", (this.selectedEdgeIds?.has(edge.id) ? "#2f6f4f" : (edge.style?.color || "#ccc")));
+                // Reflect live style edits (color/width) from the inspector — keep
+                // the arrowhead colour in sync with the stroke.
+                const color = edgeColor(edge);
+                line.setAttribute("stroke", color);
                 line.setAttribute("stroke-width", this.selectedEdgeIds?.has(edge.id) ? "3.5" : (edge.style?.thickness || "2"));
+                line.setAttribute("marker-end", `url(#${arrowMarker(color)})`);
                 if (edge.style?.dash) line.setAttribute("stroke-dasharray", String(edge.style.dash)); else line.removeAttribute("stroke-dasharray");
             }
 
@@ -1416,6 +1438,7 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         installFrameNav();
         installFrameOverlay();
         installEdgeInspector();
+        installSelectionInspector();
         const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
         console.info('[canvas] hydrated from SSR', { elements: h.elements.length, ms });
 
@@ -1478,6 +1501,7 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         installFrameNav();
         installFrameOverlay();
         installEdgeInspector();
+        installSelectionInspector();
         if (!rootCanvasState.elements.length) {
             // A genuinely empty board and a load that fell back to empty look
             // identical on screen — say which, so the next debugger knows.

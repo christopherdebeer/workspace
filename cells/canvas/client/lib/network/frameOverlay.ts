@@ -176,7 +176,7 @@ export function openFrameEditor(f: FrameFact): void {
     clearInspector();
     drawFrameOverlay();
   });
-  showInspector(body);
+  showInspector(body, 'frame');
 }
 
 /** Install the frame overlay: fetch + draw, then redraw when member elements move
@@ -206,5 +206,7 @@ export function installFrameOverlay(): void {
     void goToFrame(id as string);
     openFrameEditor(f);
   });
+  // Tapping empty space / an element closes a frame editor (the FSM emits this).
+  window.addEventListener('parc:canvas-deselect', () => clearInspector('frame'));
   console.info('[canvas] frame overlay installed');
 }

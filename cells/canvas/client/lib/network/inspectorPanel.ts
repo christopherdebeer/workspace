@@ -42,8 +42,16 @@ function fallback(): HTMLElement {
 
 function host(): HTMLElement { return paletteSlot() ?? fallback(); }
 
-/** Render an editor node into the context surface (replacing any prior one). */
-export function showInspector(node: HTMLElement): void {
+/** Who last populated the panel ('selection' | 'edge' | 'frame'). Several modules
+ *  share the one slot; ownership lets each clear only its own content so they
+ *  don't stomp each other (e.g. a pan firing selection-changed mustn't close an
+ *  open edge editor). */
+let owner: string | null = null;
+export function inspectorOwner(): string | null { return owner; }
+
+/** Render an editor node into the context surface, replacing any prior one. */
+export function showInspector(node: HTMLElement, ownerName = 'misc'): void {
+  owner = ownerName;
   const h = host();
   h.innerHTML = '';
   h.appendChild(node);
@@ -51,8 +59,11 @@ export function showInspector(node: HTMLElement): void {
   document.getElementById('cmd-palette')?.classList.add('inspecting');
 }
 
-/** Empty + hide the context surface (both the palette slot and the fallback). */
-export function clearInspector(): void {
+/** Empty + hide the context surface. With an owner name, only clears when that
+ *  owner currently holds the panel; with none, force-clears. */
+export function clearInspector(ownerName?: string): void {
+  if (ownerName && owner !== ownerName) return;
+  owner = null;
   const slot = document.querySelector('#cmd-palette .' + SLOT) as HTMLElement | null;
   const fb = document.getElementById('inspector-fallback');
   for (const h of [slot, fb]) {

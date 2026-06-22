@@ -35,7 +35,7 @@ function selectEdge(id: string): void {
 function clearSelection(): void {
   const c = cc();
   if (c?.selectedEdgeIds?.size) { c.selectedEdgeIds.clear(); c.requestRender?.(); }
-  clearInspector();
+  clearInspector('edge');
 }
 
 /** Re-key a bare `lnk:` edge to a decoration id so its style/label persist. */
@@ -100,7 +100,7 @@ function openInspector(edge: any): void {
   });
   grid.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('change', commit));
   grid.querySelector('[data-act="delete"]')?.addEventListener('click', () => deleteEdge(edge));
-  showInspector(body);
+  showInspector(body, 'edge');
 }
 
 /** Install edge selection + the inspector. Selection is canvas-native: the
