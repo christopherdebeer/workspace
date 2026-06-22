@@ -345,7 +345,10 @@ function applyViewport(
     cc.updateCanvasTransform();
     cc.requestRender();
   };
-  vpTimer = setTimeout(tick, 150);
+  // Apply immediately — the frame fact + elements are already resolved by the
+  // time we get here, so the old 150ms delay just left the wrong viewport on
+  // screen before it snapped. tick() self-reschedules only if CC isn't up yet.
+  tick();
 }
 
 /** Reduce the assembled board elements to the `Placed` shape the frame resolver
