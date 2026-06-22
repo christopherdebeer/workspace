@@ -16,6 +16,7 @@ import { installEdgeInspector } from './lib/network/edgeInspect.ts';
 import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import { canvasPath, boardFromPath } from './lib/url.ts';
+import { fitRegion, type BBox } from '../shared/frame.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
 class CanvasController {
@@ -1499,13 +1500,23 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
     try {
         const node = document.getElementById('canvas-hydrate');
         if (!node?.textContent) return false;
-        const h = JSON.parse(node.textContent) as { canvasId?: string; cam?: { scale: number; translateX: number; translateY: number }; elements?: any[] };
+        const h = JSON.parse(node.textContent) as { canvasId?: string; cam?: { scale: number; translateX: number; translateY: number }; frame?: BBox; elements?: any[] };
         if (h.canvasId !== canvasId || !Array.isArray(h.elements) || !h.elements.length) return false;
 
         registerSubstrateTypes(); // built-in element renderers (text/markdown/html/img/…)
         clearSsrPaint();
         const cc = new CanvasController({ canvasId, elements: h.elements, edges: [], versionHistory: [] } as any);
-        if (h.cam && typeof h.cam.scale === 'number') {
+        // Prefer the framed REGION over the server's pre-baked camera: the SSR cam
+        // was fit to a fixed 1200×800, so re-fitting the bbox to the real device
+        // viewport here (instant, no network) is what makes the first interactive
+        // paint land exactly on the frame instead of jumping after the full load.
+        if (h.frame && typeof h.frame.minX === 'number') {
+            const cam = fitRegion(h.frame, window.innerWidth, window.innerHeight);
+            cc.viewState.scale = cam.scale;
+            cc.viewState.translateX = cam.tx;
+            cc.viewState.translateY = cam.ty;
+            cc.updateCanvasTransform();
+        } else if (h.cam && typeof h.cam.scale === 'number') {
             cc.viewState.scale = h.cam.scale;
             cc.viewState.translateX = h.cam.translateX;
             cc.viewState.translateY = h.cam.translateY;

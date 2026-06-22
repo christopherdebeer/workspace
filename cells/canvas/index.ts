@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderBoard, type BoardElement, type Placement, type Content } from './shared/render';
-import { regionBBox, fitRegion, type Region, type Placed } from './shared/frame';
+import { regionBBox, fitRegion, type Region, type Placed, type BBox } from './shared/frame';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -311,14 +311,19 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
     // else the view's viewport / fit.
     const w = opts.w ?? 1200, h = opts.h ?? 800;
     let cam = cameraFor(viewport, els, opts.w, opts.h);
+    // The framed region's bbox, in canvas coords — carried into the hydrate
+    // payload so the client re-fits it to the REAL device viewport. The SSR
+    // camera is fit to a fixed 1200×800, so it's only an approximation on a
+    // phone; the client correction at hydrate (~50ms) is what makes it exact.
+    let framedBBox: BBox | null = null;
     if (opts.frame) {
       const region = await readFrame(opts.frame);
-      const bbox = region ? regionBBox(region, placedOfBoard(els)) : null;
-      if (bbox) cam = fitRegion(bbox, w, h);
+      framedBBox = region ? regionBBox(region, placedOfBoard(els)) : null;
+      if (framedBBox) cam = fitRegion(framedBBox, w, h);
     } else if (board && !opts.view) {
       const region = await readDefaultFrame(board);
-      const bbox = region ? regionBBox(region, placedOfBoard(els)) : null;
-      if (bbox) cam = fitRegion(bbox, w, h);
+      framedBBox = region ? regionBBox(region, placedOfBoard(els)) : null;
+      if (framedBBox) cam = fitRegion(framedBBox, w, h);
     }
     const { dynamic, static: stat } = renderBoard(els, cam);
     const transform = `transform:translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)});--zoom:${cam.scale.toFixed(4)}`;
@@ -343,6 +348,7 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
       const payload = JSON.stringify({
         canvasId: board,
         cam: { scale: cam.scale, translateX: cam.tx, translateY: cam.ty },
+        ...(framedBBox ? { frame: framedBBox } : {}),
         elements,
       }).replace(/</g, '\\u003c');
       html = html.replace(
@@ -386,15 +392,21 @@ export const handler = async (event: any) => {
     // shell. (Frame/view/embed stay query modifiers.)
     const segs = path.split('/').filter(Boolean);
     const pathBoard = segs.length ? decodeURIComponent(segs[0]) : undefined;
+    // Frame ids are board-prefixed (`<board>/<name>`), so the whole path is the
+    // frame id once there's a segment past the board: `/parcland/forest`.
+    const pathFrame = segs.length >= 2 ? segs.map(decodeURIComponent).join('/') : undefined;
 
-    // Legacy `?canvas=<board>` → canonical path form (301), preserving the rest
-    // of the query so old shared links keep working.
+    // Legacy `?canvas=<board>` (and `?frame=`) → canonical path form (301).
+    // Frame ids are board-prefixed, so a frame folds into the whole path; the
+    // rest of the query is preserved so old shared links keep working.
     const legacyCanvas = qs.get('canvas') ?? undefined;
     if (!pathBoard && legacyCanvas) {
       const rest = new URLSearchParams(qs);
       rest.delete('canvas');
+      rest.delete('frame');
+      const target = (qs.get('frame') || legacyCanvas).split('/').map(encodeURIComponent).join('/');
       const q = rest.toString();
-      const location = `${MOUNT}/${encodeURIComponent(legacyCanvas)}${q ? `?${q}` : ''}`;
+      const location = `${MOUNT}/${target}${q ? `?${q}` : ''}`;
       return { statusCode: 301, headers: { location, 'cache-control': 'no-store' }, body: '' };
     }
 
@@ -416,7 +428,7 @@ export const handler = async (event: any) => {
     // embeds (renderShell gates that). It only adds the JSON when SSR actually
     // paints a board, so a fallback-to-shell load carries no extra weight.
     const hydrate = qs.get('hydrate') !== '0';
-    const frame = qs.get('frame') ?? undefined;
+    const frame = pathFrame ?? qs.get('frame') ?? undefined;
     const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate, frame }) : read('static/index.html');
     // Static embeds are safe to cache briefly at the edge — many thumbnails
     // on one page then cost one render, and refresh within a minute.

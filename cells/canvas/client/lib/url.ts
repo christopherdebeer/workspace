@@ -36,3 +36,21 @@ export function canvasPath(board: string, query = ''): string {
   const q = query && !query.startsWith('?') ? `?${query}` : query;
   return `${canvasBase()}/${encodeURIComponent(board)}${q}`;
 }
+
+/** The frame id encoded in the path, or null. Frame ids are board-prefixed
+ *  (`<board>/<name>`), so the whole path after the mount IS the frame id when
+ *  there's more than the bare board segment: `/parcland/forest` → `parcland/forest`. */
+export function frameFromPath(): string | null {
+  const base = canvasBase();
+  const rest = location.pathname.slice(base.length).replace(/^\/+|\/+$/g, '');
+  const segs = rest.split('/').filter(Boolean);
+  if (segs.length < 2 || segs[0] === 'app.js' || segs[0] === 'style.css') return null;
+  try { return segs.map(decodeURIComponent).join('/'); } catch { return segs.join('/'); }
+}
+
+/** The canonical path URL for a frame. The frame id already carries its board
+ *  (`<board>/<name>`), so the path is just the mount + that id. */
+export function framePath(frameId: string): string {
+  const segs = frameId.split('/').map(encodeURIComponent).join('/');
+  return `${canvasBase()}/${segs}`;
+}

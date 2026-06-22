@@ -12,6 +12,7 @@
  * ------------------------------------------------------------------------- */
 import { read, act } from './substrate.ts';
 import { focusFrame } from './storage.ts';
+import { frameFromPath, framePath } from '../url.ts';
 
 interface Edge { from: string; rel: string; to: string }
 interface FrameEntry { value?: { label?: string } }
@@ -30,11 +31,9 @@ export async function goToFrame(frameId: string, pushUrl = true): Promise<void> 
   const ok = await focusFrame(frameId, els());
   if (!ok) return;
   if (pushUrl) {
-    try {
-      const u = new URL(location.href);
-      u.searchParams.set('frame', frameId);
-      history.replaceState(null, '', u.toString());
-    } catch { /* ignore */ }
+    // Frames are path-addressed now (`/<board>/<name>`), so the URL is shareable
+    // and SSR can paint the frame on a cold load (see the cell server).
+    try { history.replaceState(null, '', framePath(frameId) + location.search); } catch { /* ignore */ }
   }
   void renderTourBar(frameId);
 }
@@ -150,8 +149,12 @@ async function installNavTo(): Promise<void> {
  *  board's default frame) + navTo hotspots. */
 export function installFrameNav(): void {
   try {
-    const frameId = new URLSearchParams(location.search).get('frame');
-    if (frameId) void renderTourBar(frameId);
+    // Frame from the path (`/<board>/<name>`), falling back to the legacy ?frame=.
+    const frameId = frameFromPath() ?? new URLSearchParams(location.search).get('frame');
+    // Focus it (no URL re-push — it's already the address) so the frame is applied
+    // client-side on a non-SSR load, and re-fit to the exact device viewport on an
+    // SSR/hydrate one. No frame in the URL → the board's default viewpoint.
+    if (frameId) void goToFrame(frameId, false);
     else void focusDefaultFrame();
     void installNavTo();
   } catch { /* navigation is best-effort */ }
