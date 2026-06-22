@@ -427,22 +427,41 @@ export function createGestureHelpers(controller: CanvasController) {
     ctx.draft.tempLine.setAttribute('y2', String(pt.y));
   }
 
+  /** The id of the topmost existing element under a drop point, ignoring the
+   *  source and any overlays (edge hit-lines, frame chips, handles). Uses the
+   *  full hit stack — `elementFromPoint` (singular) returns whatever sits on top,
+   *  which since the edge-selectability fix can be an edge line above the node. */
+  function dropTargetId(ev: GestureEvent, excludeId?: string): string | null {
+    const stack = (document.elementsFromPoint?.(ev.xy.x, ev.xy.y) ?? []) as Element[];
+    for (const node of stack) {
+      const el = node.closest?.('.canvas-element') as HTMLElement | null;
+      const id = el?.dataset?.elId;
+      if (id && id !== excludeId) return id;
+    }
+    return null;
+  }
+
+  function linkExisting(ctx: GestureContext, tgtId: string) {
+    controller.createNewEdge!(ctx.draft.sourceId!, tgtId, '');
+    controller.requestRender();
+    saveCanvas(controller.canvasState);
+    controller._pushHistorySnapshot('Add edge');
+  }
+
   function commitEdgeCreation(ctx: GestureContext, ev: GestureEvent) {
     if (!ctx.draft.tempLine) return;
     ctx.draft.tempLine.remove();
-    const target = document.elementFromPoint(ev.xy.x, ev.xy.y)?.closest('.canvas-element') as HTMLElement | null;
-    const tgtId = target?.dataset?.elId;
-    if (tgtId && tgtId !== ctx.draft.sourceId) {
-      controller.createNewEdge(ctx.draft.sourceId, tgtId, '');
-      controller.requestRender();
-      saveCanvas(controller.canvasState);
-      controller._pushHistorySnapshot('Add edge');
-    }
+    const tgtId = dropTargetId(ev, ctx.draft.sourceId);
+    if (tgtId) linkExisting(ctx, tgtId);
   }
 
   async function commitNodeCreation(ctx: GestureContext, ev: GestureEvent) {
     if (!ctx.draft.tempLine) return;
     ctx.draft.tempLine.remove();
+    // Dropped ON an existing node → link the two (the common intent). Only an
+    // empty-canvas drop creates a brand-new connected element.
+    const tgtId = dropTargetId(ev, ctx.draft.sourceId);
+    if (tgtId) { linkExisting(ctx, tgtId); return; }
     const pt = controller.screenToCanvas(ev.xy.x, ev.xy.y);
     const text = prompt('Enter label for the new element', '');
     if (!text) return;
