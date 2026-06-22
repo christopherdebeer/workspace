@@ -701,9 +701,13 @@ class CanvasController {
                 hit.setAttribute("y2", String(targetPoint.y));
             }
 
-            // Handle edge label:
-            // Use a default label if none is present.
-            const labelText = edge.label ? edge.label : "Edge";
+            // Edge caption (ADR-0016): show the display label if set, else fall
+            // back to the semantic relation — but never the generic 'relates' or a
+            // literal "Edge" placeholder, which is just noise on the canvas.
+            const lbl = typeof edge.label === 'string' ? edge.label.trim() : '';
+            const rel = typeof edge.rel === 'string' ? edge.rel.trim() : '';
+            const pick = lbl || rel;
+            const labelText = pick && pick !== 'relates' ? pick : '';
             if (!this.edgeLabelNodesMap) this.edgeLabelNodesMap = {};
             let textEl = this.edgeLabelNodesMap[edge.id];
             if (!textEl) {
