@@ -187,12 +187,24 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
 
 const linkedEdges = new Set<string>();
 
+/** The substrate relation (TYPE) of an edge: explicit `rel`, else the legacy
+ *  `label` (back-compat for edges authored before the split), else 'relates'.
+ *  Editing the display `label` no longer rewrites the rel (ADR-0016). `|` is the
+ *  reserved edge-id separator, so it's swapped out. */
+function edgeRel(edge: { rel?: unknown; label?: unknown }): string {
+  const r =
+    typeof edge.rel === 'string' && edge.rel.trim() ? edge.rel
+    : typeof edge.label === 'string' && edge.label.trim() ? edge.label
+    : 'relates';
+  return r.replace(/\|/g, '/');
+}
+
 export function queueEdgeWrite(canvasId: string, edge: Record<string, unknown>): void {
   if (!edge || typeof edge.id !== 'string' || readonlyBoard) return;
   if ((edge.data as Record<string, unknown> | undefined)?.meta) return; // meta edges are editor ephemera
   const src = edge.source as string | undefined;
   const tgt = edge.target as string | undefined;
-  const rel = (typeof edge.label === 'string' && edge.label.trim() ? edge.label : 'relates').replace(/\|/g, '/');
+  const rel = edgeRel(edge);
   // Link-derived edges need no decoration fact unless they carry style/label edits.
   if (!(edge.id as string).startsWith('lnk:')) {
     queueFact(`_canvas/${canvasId}/edge:${edge.id}`, edge);
@@ -486,9 +498,13 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const sub = e.key.slice(prefix.length);
       if (sub.startsWith('edge:')) {
         const edge = e.value as Record<string, unknown>;
+        // Migration: a decoration authored before the rel/label split has only
+        // `label` (which WAS the rel). Seed `rel` from it once, so it keeps its
+        // relation while a future label edit can diverge without rewriting it.
+        if (edge && edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
         edges.push(edge);
         if (edge && typeof edge.id === 'string' && edge.source && edge.target) {
-          const rel = (typeof edge.label === 'string' && edge.label.trim() ? edge.label : 'relates').replace(/\|/g, '/');
+          const rel = edgeRel(edge);
           lastEdges.set(edge.id, { source: edge.source as string, target: edge.target as string, rel, decorated: true });
           linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
         }
@@ -502,14 +518,16 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
     // Edges are PROJECTED from substrate links among this board's elements;
     // decoration edges (style/label edits, edge-to-edge) merge by signature.
-    const decorated = new Set(edges.map((e) => `${e.source}|${(e.label && String(e.label).trim()) || 'relates'}|${e.target}`));
+    const decorated = new Set(edges.map((e) => `${e.source}|${edgeRel(e)}|${e.target}`));
     for (const l of links) {
       if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
       const source = idOfKey(l.from);
       const target = idOfKey(l.to);
       if (decorated.has(`${source}|${l.rel}|${target}`)) continue;
       const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-      edges.push({ id, source, target, label: l.rel });
+      // A bare reference: `rel` IS the type; `label` defaults to showing it (so
+      // display is unchanged) until a human gives it a distinct annotation.
+      edges.push({ id, source, target, rel: l.rel, label: l.rel });
       lastEdges.set(id, { source, target, rel: l.rel, decorated: false });
       linkedEdges.add(`${source}|${l.rel}|${target}`);
     }
@@ -814,19 +832,20 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
     const edge = e.value;
     lastWritten.set(e.key, JSON.stringify(e.value));
     if (!edge || typeof edge.id !== 'string') continue;
+    if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge); // migrate
     edges.push(edge);
-    const rel = ((edge.label && String(edge.label).trim()) || 'relates').replace(/\|/g, '/');
+    const rel = edgeRel(edge);
     lastEdges.set(edge.id, { source: edge.source, target: edge.target, rel, decorated: true });
     linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
   }
-  const decorated = new Set(edges.map((e: any) => `${e.source}|${(e.label && String(e.label).trim()) || 'relates'}|${e.target}`));
+  const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
   for (const l of links) {
     if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
     const s = idOfKey(l.from);
     const t = idOfKey(l.to);
     if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
     const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-    edges.push({ id, source: s, target: t, label: l.rel });
+    edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
     lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
     linkedEdges.add(`${s}|${l.rel}|${t}`);
   }

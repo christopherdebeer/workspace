@@ -31,6 +31,11 @@ export interface Edge {
   id: string;
   source: string;
   target: string;
+  /** The substrate relation — the edge's semantic TYPE (supports/navNext/relates…).
+   *  Drives the link written to the substrate. Distinct from `label` (ADR-0016). */
+  rel?: string;
+  /** The display annotation — free text shown on the edge. Editing it never
+   *  changes `rel`. Decoration-only; absent on a bare reference. */
   label?: string;
   style?: {
     color?: string;
