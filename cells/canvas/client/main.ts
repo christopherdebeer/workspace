@@ -531,9 +531,11 @@ class CanvasController {
         // matches the visible region.
         const viewBox = `${String(visibleX)} ${String(visibleY)} ${String(visibleWidth)} ${String(visibleHeight)}`;
         this.edgesLayer.setAttribute("viewBox", viewBox);
-        // Keep the frames overlay (ADR-0015) in the same world coordinates so frame
-        // regions pan/zoom with the edges + content. Guarded — it may not exist.
-        document.getElementById('frames-layer')?.setAttribute('viewBox', viewBox);
+        // The frames overlay (ADR-0015) tracks the board by the SAME transform as
+        // the element container (not a viewBox), so it lines up at any viewport —
+        // the model the SSR-painted layer also uses. Guarded — it may not exist.
+        const framesLayer = document.getElementById('frames-layer');
+        if (framesLayer) framesLayer.style.transform = this.container.style.transform;
         // console.log("[DEBUG] SVG viewBox updated to:", visibleX, visibleY, visibleWidth, visibleHeight);
 
         this.updateGroupBox()

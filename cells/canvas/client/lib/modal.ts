@@ -79,21 +79,27 @@ function ensureDom(): void {
   $root = wrap.firstElementChild as HTMLElement;
   target.appendChild($root);
   $root.classList.toggle('in-sheet', !!hostEl);
-  $contentEditorHost = document.getElementById('editor-content');
-  $srcEditorHost = document.getElementById('editor-src');
-  $btnPrev = document.getElementById('versions-prev');
-  $btnNext = document.getElementById('versions-next');
-  $info = document.getElementById('versions-info');
-  $errorBox = document.getElementById('modal-error');
+  // Scope every lookup to THIS root, never document.getElementById: the ids here
+  // (editor-content, modal-save, …) are not globally unique — a stale static
+  // copy of this markup, or a second instance, would otherwise hijack them and
+  // wire CodeMirror + the buttons to the wrong (hidden) nodes, which is exactly
+  // how the in-sheet editor went dead.
+  const q = <T extends HTMLElement = HTMLElement>(id: string): T => $root!.querySelector('#' + id) as T;
+  $contentEditorHost = q('editor-content');
+  $srcEditorHost = q('editor-src');
+  $btnPrev = q('versions-prev');
+  $btnNext = q('versions-next');
+  $info = q('versions-info');
+  $errorBox = q('modal-error');
 
-  $btnClear = document.getElementById('modal-clear');
-  $btnCopy = document.getElementById('modal-copy');
-  $btnCancel = document.getElementById('modal-cancel');
-  $btnSave = document.getElementById('modal-save');
-  $btnGenerate = document.getElementById('modal-generate');
+  $btnClear = q('modal-clear');
+  $btnCopy = q('modal-copy');
+  $btnCancel = q('modal-cancel');
+  $btnSave = q('modal-save');
+  $btnGenerate = q('modal-generate');
 
-  $tabContent = document.getElementById('tab-content');
-  $tabSrc = document.getElementById('tab-src');
+  $tabContent = q('tab-content');
+  $tabSrc = q('tab-src');
 
   /* ------ 2.  install event handlers -------------------------------------- */
   $btnPrev.onclick = () => navVersion(-1);

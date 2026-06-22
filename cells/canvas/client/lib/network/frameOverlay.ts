@@ -21,7 +21,7 @@ import { read, act } from './substrate.ts';
 import { placedOf } from './storage.ts';
 import { goToFrame } from './frameNav.ts';
 import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
-import { regionBBox, type Region } from '../../../shared/frame.ts';
+import { renderFramesSvg, type Region } from '../../../shared/frame.ts';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const cc = (): any => (window as { CC?: any }).CC;
@@ -35,9 +35,10 @@ let frames: FrameFact[] = [];
 let installed = false;
 let rafPending = false;
 
-/** The frames SVG overlay: a sibling *below* #edges-layer, sharing its viewBox so
- *  world coordinates line up. Created lazily; viewBox is synced by the controller's
- *  updateCanvasTransform (guarded there, so this can install at any time). */
+/** The frames SVG overlay: a sibling *below* #edges-layer. It tracks the board
+ *  via a CSS transform identical to the element container (set by the controller's
+ *  updateCanvasTransform), so world coordinates line up at any zoom/viewport — the
+ *  same model the SSR uses, so a server-painted layer and the live one agree. */
 function ensureLayer(): SVGSVGElement | null {
   const edges = document.getElementById('edges-layer');
   if (!edges?.parentElement) return null;
@@ -45,72 +46,25 @@ function ensureLayer(): SVGSVGElement | null {
   if (!layer) {
     layer = document.createElementNS(SVGNS, 'svg') as SVGSVGElement;
     layer.id = 'frames-layer';
-    layer.setAttribute('viewBox', edges.getAttribute('viewBox') ?? '0 0 1000 1000');
     layer.setAttribute(
       'style',
-      'position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4',
+      'position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4;transform-origin:0 0',
     );
+    // Seed the transform from the container so a layer created mid-session lines
+    // up before the next updateCanvasTransform.
+    const container = document.getElementById('canvas-container');
+    if (container) layer.style.transform = container.style.transform;
     edges.parentElement.insertBefore(layer, edges); // below the edges
   }
   return layer;
 }
 
-function svg(tag: string, attrs: Record<string, string>): SVGElement {
-  const n = document.createElementNS(SVGNS, tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  return n;
-}
-
-/** Redraw all frame rectangles + header chips for the current board. Cheap (a
- *  handful of rects); safe to call often. */
+/** Redraw all frame regions + label pills for the current board (shared renderer,
+ *  identical to SSR). Cheap (a handful of rects); safe to call often. */
 export function drawFrameOverlay(): void {
   const layer = ensureLayer();
   if (!layer) return;
-  layer.innerHTML = '';
-  const placed = placedOf(els());
-  for (const f of frames) {
-    const region = f.value?.region;
-    if (!region) continue;
-    const bb = regionBBox(region, placed);
-    if (!bb) continue;
-    const frameId = f.key.slice('frame:'.length);
-    const label = f.value?.label || frameId;
-    // Breathe a little: the region bbox hugs the member geometry exactly, so the
-    // dashed rect would clip the elements' own borders. Pad it out in world units
-    // (non-scaling-stroke keeps the line crisp at any zoom).
-    const PAD = 16;
-    const minX = bb.minX - PAD, minY = bb.minY - PAD;
-    const w = Math.max(1, bb.maxX - bb.minX) + PAD * 2, h = Math.max(1, bb.maxY - bb.minY) + PAD * 2;
-
-    const g = svg('g', {});
-    g.appendChild(svg('rect', {
-      x: String(minX), y: String(minY), width: String(w), height: String(h), rx: '12',
-      fill: f.value?.default ? 'rgba(47,111,79,0.05)' : 'rgba(47,111,79,0.025)',
-      stroke: '#2f6f4f', 'stroke-width': '2', 'stroke-dasharray': '9,7',
-      'vector-effect': 'non-scaling-stroke', style: 'pointer-events:none',
-    }));
-    // A header chip pinned to the top-left corner — the tap target (everything
-    // else stays click-through so enclosed elements keep working).
-    const text = (f.value?.default ? '◉ ' : '') + label;
-    // Selection is canvas-native: the gesture FSM reads .frame-chip / data-frame
-    // on tap and emits parc:frame-tap (a click handler can't — the pointer
-    // adapter preventDefaults pointerdown, killing synthetic clicks).
-    const chip = svg('g', { class: 'frame-chip', 'data-frame': frameId, style: 'pointer-events:all;cursor:pointer' });
-    const padX = 8, fs = 15, chW = text.length * fs * 0.6 + padX * 2, chH = fs + 10;
-    chip.appendChild(svg('rect', {
-      x: String(minX), y: String(minY - chH), width: String(chW), height: String(chH),
-      rx: '7', fill: '#2f6f4f', 'vector-effect': 'non-scaling-stroke',
-    }));
-    const t = svg('text', {
-      x: String(minX + padX), y: String(minY - chH / 2),
-      'dominant-baseline': 'central', fill: '#fbfbf8',
-      style: `font:600 ${fs}px -apple-system,system-ui,sans-serif;pointer-events:none;user-select:none`,
-    });
-    t.textContent = text;
-    chip.appendChild(t);
-    g.appendChild(chip);
-    layer.appendChild(g);
-  }
+  layer.innerHTML = renderFramesSvg(frames, placedOf(els()));
 }
 
 /** Re-fetch this board's frames from the substrate, then redraw. */

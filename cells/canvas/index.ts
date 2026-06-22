@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderBoard, type BoardElement, type Placement, type Content } from './shared/render';
-import { regionBBox, fitRegion, type Region, type Placed, type BBox } from './shared/frame';
+import { regionBBox, fitRegion, renderFramesSvg, type Region, type Placed, type BBox, type FrameLike } from './shared/frame';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -86,6 +86,28 @@ async function readDefaultFrame(board: string): Promise<Region | null> {
     console.warn('[canvas ssr] default-frame lookup failed', (e as Error).message);
   }
   return null;
+}
+
+/** All of a board's frames (`frame:<board>/…`) for the server-painted overlay. */
+async function readFrames(board: string): Promise<FrameLike[]> {
+  if (!TABLE) return [];
+  const out: FrameLike[] = [];
+  try {
+    const r = await ddb().send(
+      new Query({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': `KEY#frame:${board}/` },
+      }),
+    );
+    for (const it of (r.Items ?? []) as FactItem[]) {
+      if (it.superseded) continue;
+      out.push({ key: it.key, value: it.value as FrameLike['value'] });
+    }
+  } catch (e) {
+    console.warn('[canvas ssr] frames lookup failed', (e as Error).message);
+  }
+  return out;
 }
 
 /** Reduce SSR board elements to the `Placed` shape the frame resolver needs.
@@ -326,9 +348,21 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
       if (framedBBox) cam = fitRegion(framedBBox, w, h);
     }
     const { dynamic, static: stat } = renderBoard(els, cam);
-    const transform = `transform:translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)});--zoom:${cam.scale.toFixed(4)}`;
+    const camTransform = `translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)})`;
+    const transform = `transform:${camTransform};--zoom:${cam.scale.toFixed(4)}`;
+    // Frames overlay, server-painted (ADR-0015): the board's frame regions + label
+    // pills, so they appear on the FIRST paint instead of after the client's lazy
+    // frame query. Same shared renderer + transform model as the live overlay, so
+    // the two agree; the client redraws #frames-layer in place on load.
+    let framesSvg = '';
+    if (board && !opts.embed) {
+      const frames = await readFrames(board);
+      if (frames.length) framesSvg = renderFramesSvg(frames, placedOfBoard(els));
+    }
+    const framesLayer = `<svg id="frames-layer" style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4;transform-origin:0 0;transform:${camTransform}">${framesSvg}</svg>`;
     let html = shell
       .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}${opts.embed ? EMBED_CSS : ''}</style></head>`)
+      .replace('<svg id="edges-layer"></svg>', `${framesLayer}<svg id="edges-layer"></svg>`)
       .replace(
         '<div id="canvas-container"></div>',
         `<div id="canvas-container" data-ssr="1" style="${transform}">${dynamic}</div>`,

@@ -51,9 +51,49 @@
 }
 .cmd-context input[type="color"] { height: 32px; padding: 2px; }
 
+/* Frame tour — docked as a strip at the top of the palette (the one bottom
+   surface) instead of a floating pill. Tertiary: low-emphasis, lets the board
+   stay the focus. */
+.cmd-frame-tour {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  font: 12px/1.2 -apple-system, system-ui, sans-serif;
+  color: #8a8a82;
+}
+.cmd-frame-tour .ft-label {
+  flex: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #6a6a64;
+}
+.cmd-frame-tour .ft-nav {
+  border: 1px solid #e0e0d8;
+  background: #fff;
+  color: #3a3a36;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.cmd-frame-tour .ft-nav[disabled] { opacity: 0.35; cursor: default; }
+.cmd-frame-tour .ft-exit {
+  border: 0;
+  background: transparent;
+  color: #a8a89e;
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 6px;
+}
+
 /* Full detent — the editor takes over the sheet: hide the palette's own chrome
    and let cmd-context grow. (Unified sheet, Phase 2.) */
 #cmd-palette.sheet-full { width: min(900px, 96vw); }
+#cmd-palette.sheet-full .cmd-frame-tour,
 #cmd-palette.sheet-full .cmd-header,
 #cmd-palette.sheet-full .suggestions,
 #cmd-palette.sheet-full .cmd-wrapper,

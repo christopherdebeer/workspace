@@ -103,3 +103,62 @@ export function frameCamera(region: Region, els: Placed[], w: number, h: number,
   const bbox = regionBBox(region, els);
   return bbox ? fitRegion(bbox, w, h, padFrac) : null;
 }
+
+/* ── frame overlay (isomorphic) ─────────────────────────────────────────────
+ *  The dashed region + label pill drawn over a board's frames. ONE renderer for
+ *  the SSR (so frames paint on first load, not after a lazy client query) and
+ *  the live client overlay (so they're pixel-identical). Tertiary by design:
+ *  a thin dashed stroke and a small pill spaced off the region — present, never
+ *  competing with the content. The markup is in WORLD coordinates; the layer it
+ *  lives in is transformed exactly like the element container, so it tracks the
+ *  board at any zoom/viewport. */
+
+/** Breathing room (world units) between the members' bbox and the drawn region. */
+export const FRAME_PAD = 16;
+/** Gap (world units) between the label pill and the region's top edge. */
+const FRAME_GAP = 12;
+const FRAME_STROKE = '#c2cabf';      // tertiary: muted green-grey
+const FRAME_FILL_DEFAULT = 'rgba(47,111,79,0.018)';
+const FRAME_CHIP_BG = '#eef0ec';
+const FRAME_CHIP_FG = '#7c8a80';
+
+export interface FrameLike {
+  key: string;
+  value?: { label?: string; default?: boolean; region?: Region };
+}
+
+const svgEsc = (s: string): string =>
+  s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+
+/** The inner SVG markup (a `<g>` per frame: dashed region rect + tappable label
+ *  pill) for `#frames-layer`, in world coordinates. `frame-chip`/`data-frame`
+ *  are read by the gesture FSM (client) for selection; inert under SSR. */
+export function renderFramesSvg(frames: FrameLike[], placed: Placed[]): string {
+  let out = '';
+  for (const f of frames) {
+    const region = f.value?.region;
+    if (!region) continue;
+    const bb = regionBBox(region, placed);
+    if (!bb) continue;
+    const frameId = f.key.replace(/^frame:/, '');
+    const label = f.value?.label || frameId;
+    const x = bb.minX - FRAME_PAD, y = bb.minY - FRAME_PAD;
+    const w = Math.max(1, bb.maxX - bb.minX) + FRAME_PAD * 2;
+    const h = Math.max(1, bb.maxY - bb.minY) + FRAME_PAD * 2;
+    const fs = 14, padX = 8, chH = fs + 8;
+    const text = (f.value?.default ? '◉ ' : '') + label;
+    const chW = text.length * fs * 0.58 + padX * 2;
+    const chipY = y - FRAME_GAP - chH;
+    const fill = f.value?.default ? FRAME_FILL_DEFAULT : 'none';
+    out +=
+      `<g>` +
+      `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="12"` +
+      ` fill="${fill}" stroke="${FRAME_STROKE}" stroke-width="1" stroke-dasharray="3,6" vector-effect="non-scaling-stroke" style="pointer-events:none"/>` +
+      `<g class="frame-chip" data-frame="${svgEsc(frameId)}" style="pointer-events:all;cursor:pointer">` +
+      `<rect x="${x.toFixed(1)}" y="${chipY.toFixed(1)}" width="${chW.toFixed(1)}" height="${chH}" rx="7" fill="${FRAME_CHIP_BG}" stroke="${FRAME_STROKE}" vector-effect="non-scaling-stroke"/>` +
+      `<text x="${(x + padX).toFixed(1)}" y="${(chipY + chH / 2).toFixed(1)}" dominant-baseline="central" fill="${FRAME_CHIP_FG}"` +
+      ` style="font:600 ${fs}px -apple-system,system-ui,sans-serif;pointer-events:none;user-select:none">${svgEsc(text)}</text>` +
+      `</g></g>`;
+  }
+  return out;
+}

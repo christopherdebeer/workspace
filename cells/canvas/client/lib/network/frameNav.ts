@@ -104,14 +104,22 @@ async function renderTourBar(frameId: string): Promise<void> {
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'frame-tour';
-    // Top-centre: clears the command palette (bottom-centre) so the two never
-    // overlap, and reads as a breadcrumb of where you are in the board.
-    bar.setAttribute('style', 'position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:9000;display:flex;gap:8px;align-items:center;background:rgba(28,28,26,.92);color:#fbfbf8;font:13px/1.2 -apple-system,system-ui,sans-serif;padding:7px 10px;border-radius:999px;box-shadow:0 2px 12px rgba(0,0,0,.25)');
-    document.body.appendChild(bar);
+    // Dock the tour into the command palette (the one consolidated bottom
+    // surface) as a strip above its chrome — a breadcrumb of where you are in the
+    // board, sharing the sheet instead of floating as a competing element. Falls
+    // back to a floating top-centre pill if the palette isn't mounted.
+    const palette = document.getElementById('cmd-palette');
+    if (palette) {
+      bar.className = 'cmd-frame-tour';
+      palette.insertBefore(bar, palette.firstChild);
+    } else {
+      bar.setAttribute('style', 'position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:9000;display:flex;gap:8px;align-items:center;background:rgba(28,28,26,.92);color:#fbfbf8;font:13px/1.2 -apple-system,system-ui,sans-serif;padding:7px 10px;border-radius:999px;box-shadow:0 2px 12px rgba(0,0,0,.25)');
+      document.body.appendChild(bar);
+    }
   }
   const btn = (txt: string, target: string | null): string =>
-    `<button data-frame="${target ?? ''}" ${target ? '' : 'disabled'} style="border:0;border-radius:999px;padding:4px 10px;font:inherit;cursor:${target ? 'pointer' : 'default'};background:${target ? '#2f6f4f' : '#3a3a36'};color:#fff;opacity:${target ? 1 : 0.4}">${txt}</button>`;
-  bar.innerHTML = `${btn('‹ Prev', prev)}<span style="padding:0 6px;max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>${btn('Next ›', next)}<button data-exit="1" title="Exit tour" style="border:0;background:transparent;color:#8a8a82;cursor:pointer;font:inherit;padding:4px 6px">✕</button>`;
+    `<button class="ft-nav" data-frame="${target ?? ''}" ${target ? '' : 'disabled'}>${txt}</button>`;
+  bar.innerHTML = `${btn('‹ Prev', prev)}<span class="ft-label">${label}</span>${btn('Next ›', next)}<button class="ft-exit" data-exit="1" title="Exit tour">✕</button>`;
   bar.querySelectorAll('button[data-frame]').forEach((b) => {
     const t = (b as HTMLElement).dataset.frame;
     if (t) b.addEventListener('click', () => void goToFrame(t));

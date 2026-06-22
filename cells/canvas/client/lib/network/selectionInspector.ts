@@ -62,24 +62,27 @@ function headerBar(title: string, onDeselect: () => void, onBack?: () => void): 
 function primaryBtn(label: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
-  b.style.cssText = 'border:1px solid #2f6f4f;background:transparent;color:#2f6f4f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer';
+  b.style.cssText = 'border:1px solid #2f6f4f;background:#2f6f4f;color:#fff;border-radius:7px;padding:7px 14px;font:inherit;cursor:pointer';
   b.addEventListener('click', onClick);
   return b;
 }
 
-/** A muted, low-emphasis row of commands that also live in the palette — present
- *  for reach, downplayed because they're not this surface's reason to exist. */
-function hintRow(entries: Array<[string, () => void]>): HTMLElement {
+/** A ghost (outline) action — tappable but lower-emphasis than the primary. The
+ *  bottom sheet is the TOUCH action surface (palette commands are keyboard-first),
+ *  so these are real buttons, not muted hints pointing back at the palette. */
+function ghostBtn(label: string, onClick: () => void): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'border:1px solid #e0e0d8;background:#fff;color:#3a3a36;border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+/** A wrapping row of action buttons — the sheet's toolbar. */
+function toolbar(buttons: HTMLButtonElement[]): HTMLElement {
   const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:4px;align-items:center;flex-wrap:wrap;color:#a8a89e;font-size:12px';
-  entries.forEach(([label, fn], i) => {
-    if (i) { const sep = document.createElement('span'); sep.textContent = '·'; row.appendChild(sep); }
-    const a = document.createElement('button');
-    a.textContent = label;
-    a.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:2px 3px';
-    a.addEventListener('click', fn);
-    row.appendChild(a);
-  });
+  row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+  buttons.forEach((b) => row.appendChild(b));
   return row;
 }
 
@@ -93,33 +96,27 @@ function renderPeekSingle(c: any, id: string): void {
   if (!el) { clearInspector('selection'); return; }
   const { icon, title } = identity(el);
   const body = document.createElement('div');
-  body.style.cssText = 'display:grid;gap:9px';
+  body.style.cssText = 'display:grid;gap:10px';
   body.appendChild(headerBar(`${icon ? icon + ' ' : ''}${title}`, () => c.clearSelection?.()));
-  const primary = document.createElement('div');
-  primary.style.cssText = 'display:flex;gap:8px';
-  primary.appendChild(primaryBtn('Edit', () => openEdit(c, id)));
-  primary.appendChild(primaryBtn('More ⌄', () => { detent = 'half'; render(); }));
-  body.appendChild(primary);
-  body.appendChild(hintRow([
-    ['Frame', () => void createFrame(c)],
-    ['Duplicate', () => duplicateEl(c, id)],
-    ['Delete', () => deleteSelection(c)],
+  body.appendChild(toolbar([
+    primaryBtn('Edit', () => openEdit(c, id)),
+    ghostBtn('Frame', () => void createFrame(c)),
+    ghostBtn('Duplicate', () => duplicateEl(c, id)),
+    ghostBtn('Delete', () => deleteSelection(c)),
+    ghostBtn('More ⌄', () => { detent = 'half'; render(); }),
   ]));
   showInspector(body, 'selection');
 }
 
 function renderPeekGroup(c: any, count: number): void {
   const body = document.createElement('div');
-  body.style.cssText = 'display:grid;gap:9px';
+  body.style.cssText = 'display:grid;gap:10px';
   body.appendChild(headerBar(`${count} selected`, () => c.clearSelection?.()));
-  const primary = document.createElement('div');
-  primary.style.cssText = 'display:flex;gap:8px';
-  primary.appendChild(primaryBtn('More ⌄', () => { detent = 'half'; render(); }));
-  body.appendChild(primary);
-  body.appendChild(hintRow([
-    ['Group', () => groupSelection(c)],
-    ['Frame', () => void createFrame(c)],
-    ['Delete', () => deleteSelection(c)],
+  body.appendChild(toolbar([
+    primaryBtn('Group', () => groupSelection(c)),
+    ghostBtn('Frame', () => void createFrame(c)),
+    ghostBtn('Delete', () => deleteSelection(c)),
+    ghostBtn('More ⌄', () => { detent = 'half'; render(); }),
   ]));
   showInspector(body, 'selection');
 }
