@@ -412,7 +412,10 @@ export const handler = async (event: any) => {
     // SSR a board (path) or a view (?view=, with its declared camera); the bare
     // app (no target) keeps the static shell.
     const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
-    const hydrate = qs.get('hydrate') === '1';
+    // Hydration payload is emitted by default (escape with ?hydrate=0); never for
+    // embeds (renderShell gates that). It only adds the JSON when SSR actually
+    // paints a board, so a fallback-to-shell load carries no extra weight.
+    const hydrate = qs.get('hydrate') !== '0';
     const frame = qs.get('frame') ?? undefined;
     const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate, frame }) : read('static/index.html');
     // Static embeds are safe to cache briefly at the edge — many thumbnails

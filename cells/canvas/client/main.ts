@@ -1567,12 +1567,14 @@ function markBooted(): void {
     // so a board that loaded then vanished gave no clue where it went.
     console.info('[canvas] boot', { canvasId, ssr: !!document.getElementById('canvas-container')?.dataset.ssr });
 
-    // SSR hydration fast-path (?hydrate=1): the server already read + painted this
-    // board, so consume its embedded JSON to go INTERACTIVE in ~50ms instead of
-    // the multi-second API re-fetch, then refresh from the substrate in the
-    // background (edges, unplaced elements, custom renderers, freshness) and
-    // reconcile. Any failure falls through to the normal load — no regression.
-    if (params.get('hydrate') === '1' && await tryHydrate(canvasId, token, t0)) return;
+    // SSR hydration fast-path (default ON; escape with ?hydrate=0): the server
+    // already read + painted this board, so consume its embedded JSON to go
+    // INTERACTIVE in ~50ms instead of the multi-second API re-fetch, then refresh
+    // from the substrate in the background (edges, unplaced elements, custom
+    // renderers, freshness) and reconcile. tryHydrate no-ops when there's no
+    // payload (a non-SSR load), so this is safe to attempt unconditionally; any
+    // failure falls through to the normal load — no regression.
+    if (params.get('hydrate') !== '0' && await tryHydrate(canvasId, token, t0)) return;
 
     let rootCanvasState: { canvasId: string; elements: any[]; edges: any[]; versionHistory: any[] } = {
         canvasId: canvasId,
