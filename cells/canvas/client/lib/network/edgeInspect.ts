@@ -1,0 +1,130 @@
+/* ---------------------------------------------------------------------------
+ *  edgeInspect.ts — edges are selectable + editable (ADR-0016, phase 1b).
+ *
+ *  Tap an edge (its wide invisible hit line) → select it (highlight) and open a
+ *  bottom-sheet inspector that edits, independently:
+ *    - rel    : the substrate relation (TYPE) — re-links on change
+ *    - label  : the display annotation — never touches rel
+ *    - style  : color / width / dash
+ *  …plus delete. Replaces the flaky "inline edit." Additive + best-effort: a
+ *  capture-phase click handler + a DOM sheet; no gesture-FSM surgery.
+ *
+ *  Editing a BARE reference (a `lnk:` edge) promotes it to a persisted decoration
+ *  (it gains style/label) — the "on gaining content" rule, decoration tier.
+ * ------------------------------------------------------------------------- */
+import { act } from './substrate.ts';
+import { saveCanvas } from './storage.ts';
+
+const cc = (): any => (window as { CC?: any }).CC;
+const elId = (k: string): string => (k.startsWith('el:') ? k.slice(3) : k);
+const relOf = (e: any): string => (e?.rel ?? e?.label ?? 'relates');
+
+function findEdge(id: string): any {
+  return cc()?.canvasState?.edges?.find((e: any) => e.id === id);
+}
+
+function selectEdge(id: string): void {
+  const c = cc();
+  if (!c) return;
+  c.selectedElementIds?.clear?.();
+  c.selectedEdgeIds = new Set([id]);
+  c.requestRender?.();
+}
+
+function clearSelection(): void {
+  const c = cc();
+  if (c?.selectedEdgeIds?.size) { c.selectedEdgeIds.clear(); c.requestRender?.(); }
+  document.getElementById('edge-inspector')?.remove();
+}
+
+/** Re-key a bare `lnk:` edge to a decoration id so its style/label persist. */
+function promoteIfBare(c: any, edge: any): void {
+  if (!String(edge.id).startsWith('lnk:')) return;
+  for (const m of ['edgeNodesMap', 'edgeHitNodesMap', 'edgeLabelNodesMap']) {
+    c[m]?.[edge.id]?.remove?.();
+    if (c[m]) delete c[m][edge.id];
+  }
+  edge.id = `edge-${Date.now().toString(36)}`;
+}
+
+function applyEdit(edge: any, patch: { rel?: string; label?: string; style?: Record<string, string> }): void {
+  const c = cc();
+  if (!c || !edge) return;
+  const oldRel = relOf(edge);
+  promoteIfBare(c, edge);
+  if (patch.rel !== undefined) edge.rel = patch.rel.trim() || 'relates';
+  if (patch.label !== undefined) edge.label = patch.label;
+  if (patch.style) edge.style = { ...(edge.style ?? {}), ...patch.style };
+  // A rel change is a re-link: drop the old relation (the save links the new).
+  const newRel = relOf(edge);
+  if (newRel !== oldRel && typeof edge.source === 'string' && typeof edge.target === 'string') {
+    void act('workspace.unlink', { from: `el:${elId(edge.source)}`, rel: oldRel, to: `el:${elId(edge.target)}` }).catch(() => undefined);
+  }
+  saveCanvas(c.canvasState);
+  c.requestRender?.();
+}
+
+function deleteEdge(edge: any): void {
+  const c = cc();
+  if (!c || !edge) return;
+  c.canvasState.edges = c.canvasState.edges.filter((e: any) => e.id !== edge.id);
+  saveCanvas(c.canvasState); // _saveCanvas unlinks removed edges
+  clearSelection();
+  c.requestRender?.();
+}
+
+function field(label: string, input: string): string {
+  return `<label style="display:grid;gap:3px"><span style="color:#8a8a82;font-size:11px">${label}</span>${input}</label>`;
+}
+
+function openInspector(edge: any): void {
+  let sheet = document.getElementById('edge-inspector');
+  if (!sheet) {
+    sheet = document.createElement('div');
+    sheet.id = 'edge-inspector';
+    sheet.setAttribute('style', 'position:fixed;bottom:0;left:0;right:0;z-index:9500;background:#fbfbf8;border-top:1px solid #e4e4dc;box-shadow:0 -3px 16px rgba(0,0,0,.12);padding:12px 14px calc(12px + env(safe-area-inset-bottom));font:13px/1.3 -apple-system,system-ui,sans-serif;color:#1c1c1a;display:grid;gap:9px;max-width:560px;margin:0 auto;border-radius:14px 14px 0 0');
+    document.body.appendChild(sheet);
+  }
+  const inp = 'style="font:inherit;padding:6px 8px;border:1px solid #e4e4dc;border-radius:7px;background:#fff;color:#1c1c1a"';
+  sheet.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong style="font-family:Georgia,serif">Edge</strong>
+      <button data-act="close" style="border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px">Done</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+      ${field('Relation (type)', `<input data-f="rel" value="${(relOf(edge)).replace(/"/g, '&quot;')}" ${inp}/>`)}
+      ${field('Label (display)', `<input data-f="label" placeholder="(optional)" value="${(edge.label ?? '').replace(/"/g, '&quot;')}" ${inp}/>`)}
+      ${field('Colour', `<input data-f="color" type="color" value="${edge.style?.color || '#cccccc'}" style="height:32px;padding:2px;border:1px solid #e4e4dc;border-radius:7px;background:#fff"/>`)}
+      ${field('Width', `<input data-f="thickness" type="number" min="1" max="12" value="${parseFloat(edge.style?.thickness) || 2}" ${inp}/>`)}
+      ${field('Dash', `<select data-f="dash" ${inp}><option value="">solid</option><option value="6,4" ${edge.style?.dash === '6,4' ? 'selected' : ''}>dashed</option><option value="2,4" ${edge.style?.dash === '2,4' ? 'selected' : ''}>dotted</option></select>`)}
+      <div style="display:flex;align-items:flex-end"><button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button></div>
+    </div>`;
+
+  const get = (f: string): string => (sheet!.querySelector(`[data-f="${f}"]`) as HTMLInputElement | null)?.value ?? '';
+  const commit = (): void => applyEdit(edge, {
+    rel: get('rel'), label: get('label'),
+    style: { color: get('color'), thickness: get('thickness'), dash: get('dash') },
+  });
+  sheet.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('change', commit));
+  sheet.querySelector('[data-act="delete"]')?.addEventListener('click', () => deleteEdge(edge));
+  sheet.querySelector('[data-act="close"]')?.addEventListener('click', () => clearSelection());
+}
+
+/** Install edge selection + the inspector. Capture-phase so an edge tap wins
+ *  over a background pan-start, but element taps (closest .canvas-element) pass
+ *  through untouched. */
+export function installEdgeInspector(): void {
+  document.addEventListener(
+    'click',
+    (ev) => {
+      const t = ev.target as HTMLElement;
+      if (t?.closest?.('#edge-inspector')) return; // clicks inside the sheet
+      const hit = t?.closest?.('.edge-hit, .edge-line') as SVGElement | null;
+      const id = hit?.getAttribute?.('data-id');
+      if (id && findEdge(id)) { ev.preventDefault(); ev.stopPropagation(); selectEdge(id); openInspector(findEdge(id)); }
+      else if (!t?.closest?.('.canvas-element')) clearSelection(); // tap empty → deselect
+    },
+    true,
+  );
+  console.info('[canvas] edge inspector installed');
+}

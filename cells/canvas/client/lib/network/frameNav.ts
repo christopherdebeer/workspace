@@ -14,13 +14,19 @@ import { read, act } from './substrate.ts';
 import { focusFrame } from './storage.ts';
 
 interface Edge { from: string; rel: string; to: string }
+interface FrameEntry { value?: { label?: string } }
+interface Neighbors {
+  outbound?: Edge[];
+  inbound?: Edge[];
+  entries?: Record<string, FrameEntry>;
+}
 
 const els = (): any[] => ((window as { CC?: any }).CC?.canvasState?.elements ?? []);
 const boardId = (): string => (window as { CC?: any }).CC?.canvasState?.canvasId ?? 'parcland';
 
 /** Move the camera to a frame; reflect it in the URL (shareable) unless it's the
  *  implicit default-on-open. */
-async function goToFrame(frameId: string, pushUrl = true): Promise<void> {
+export async function goToFrame(frameId: string, pushUrl = true): Promise<void> {
   const ok = await focusFrame(frameId, els());
   if (!ok) return;
   if (pushUrl) {
@@ -50,6 +56,8 @@ export async function createFrame(controller: any, label?: string): Promise<stri
       value: { board, label: label || name, region: { kind: 'members', members: sel } },
     });
     console.info('[canvas] created frame', { frameId, members: sel.length });
+    // Let the on-canvas overlay pick up the new frame (avoids a circular import).
+    try { window.dispatchEvent(new CustomEvent('parc:frames-changed')); } catch { /* ignore */ }
     await goToFrame(frameId);
     return frameId;
   } catch (e) {
@@ -72,28 +80,34 @@ async function focusDefaultFrame(): Promise<void> {
   } catch { /* no default frame */ }
 }
 
-/** The tour controls for a frame: prev = inbound navNext, next = outbound. */
+/** The tour controls for a frame: prev = inbound navNext, next = outbound.
+ *  `workspace.neighbors` returns { outbound[], inbound[], entries:{key→fact} } —
+ *  the neighbour map carries only the *other* ends, so the current frame's own
+ *  label is read separately (peek). */
 async function renderTourBar(frameId: string): Promise<void> {
+  const selfKey = `frame:${frameId}`;
   let prev: string | null = null, next: string | null = null, label = frameId;
   try {
-    const nb = await read<{ edges?: Edge[]; entries?: Array<{ key: string; value?: { label?: string } }> }>(
-      'workspace.neighbors',
-      { key: `frame:${frameId}`, rel: 'navNext' },
-    );
-    for (const e of nb.edges ?? []) {
-      if (e.rel !== 'navNext') continue;
-      if (e.from === `frame:${frameId}` && e.to.startsWith('frame:')) next = e.to.slice('frame:'.length);
-      if (e.to === `frame:${frameId}` && e.from.startsWith('frame:')) prev = e.from.slice('frame:'.length);
+    const nb = await read<Neighbors>('workspace.neighbors', { key: selfKey, rel: 'navNext' });
+    for (const e of nb.outbound ?? []) {
+      if (e.rel === 'navNext' && e.to.startsWith('frame:')) { next = e.to.slice('frame:'.length); break; }
     }
-    const self = (nb.entries ?? []).find((x) => x.key === `frame:${frameId}`);
-    if (self?.value?.label) label = self.value.label;
+    for (const e of nb.inbound ?? []) {
+      if (e.rel === 'navNext' && e.from.startsWith('frame:')) { prev = e.from.slice('frame:'.length); break; }
+    }
   } catch { /* no tour edges — show just the label */ }
+  try {
+    const self = await read<FrameEntry | null>('workspace.peek', { key: selfKey });
+    if (self?.value?.label) label = self.value.label;
+  } catch { /* fall back to the id */ }
 
   let bar = document.getElementById('frame-tour');
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'frame-tour';
-    bar.setAttribute('style', 'position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:9000;display:flex;gap:8px;align-items:center;background:rgba(28,28,26,.92);color:#fbfbf8;font:13px/1.2 -apple-system,system-ui,sans-serif;padding:7px 10px;border-radius:999px;box-shadow:0 2px 12px rgba(0,0,0,.25)');
+    // Top-centre: clears the command palette (bottom-centre) so the two never
+    // overlap, and reads as a breadcrumb of where you are in the board.
+    bar.setAttribute('style', 'position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:9000;display:flex;gap:8px;align-items:center;background:rgba(28,28,26,.92);color:#fbfbf8;font:13px/1.2 -apple-system,system-ui,sans-serif;padding:7px 10px;border-radius:999px;box-shadow:0 2px 12px rgba(0,0,0,.25)');
     document.body.appendChild(bar);
   }
   const btn = (txt: string, target: string | null): string =>

@@ -345,7 +345,7 @@ function applyViewport(
 
 /** Reduce the assembled board elements to the `Placed` shape the frame resolver
  *  needs (centre x,y + extents + type/tags for query regions). */
-function placedOf(elements: any[]): Placed[] {
+export function placedOf(elements: any[]): Placed[] {
   return elements.map((e) => ({
     key: e._factKey ?? `el:${e.id}`,
     type: factMeta.get(e._factKey ?? `el:${e.id}`)?.type ?? undefined,

@@ -10,6 +10,8 @@ import { showModal } from './lib/modal.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
 import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
 import { installFrameNav } from './lib/network/frameNav.ts';
+import { installFrameOverlay } from './lib/network/frameOverlay.ts';
+import { installEdgeInspector } from './lib/network/edgeInspect.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -25,6 +27,8 @@ class CanvasController {
     elementNodesMap: Record<string, HTMLElement>;
     edgeNodesMap: Record<string, SVGLineElement>;
     edgeLabelNodesMap?: Record<string, SVGTextElement>;
+    edgeHitNodesMap?: Record<string, SVGLineElement>;
+    selectedEdgeIds?: Set<string>;
     canvas: HTMLElement;
     container: HTMLElement;
     staticContainer: HTMLElement;
@@ -87,6 +91,7 @@ class CanvasController {
         }
 
         this.selectedElementIds = new Set();   // multiselect aware
+        this.selectedEdgeIds = new Set();      // unified selection: edges too (ADR-0016)
         Object.defineProperty(this, 'selectedElementId', {  // legacy shim
             get: () => (this.selectedElementIds.size === 1 ? [...this.selectedElementIds][0] : null),
             set: (v) => { this.selectedElementIds.clear(); if (v) this.selectedElementIds.add(v); }
@@ -503,7 +508,11 @@ class CanvasController {
 
         // Set the viewBox attribute on the SVG layer so that its coordinate system
         // matches the visible region.
-        this.edgesLayer.setAttribute("viewBox", `${String(visibleX)} ${String(visibleY)} ${String(visibleWidth)} ${String(visibleHeight)}`);
+        const viewBox = `${String(visibleX)} ${String(visibleY)} ${String(visibleWidth)} ${String(visibleHeight)}`;
+        this.edgesLayer.setAttribute("viewBox", viewBox);
+        // Keep the frames overlay (ADR-0015) in the same world coordinates so frame
+        // regions pan/zoom with the edges + content. Guarded — it may not exist.
+        document.getElementById('frames-layer')?.setAttribute('viewBox', viewBox);
         // console.log("[DEBUG] SVG viewBox updated to:", visibleX, visibleY, visibleWidth, visibleHeight);
 
         this.updateGroupBox()
@@ -591,19 +600,36 @@ class CanvasController {
         }
 
         // Iterate over each edge in the canvas state.
+        this.edgeHitNodesMap = this.edgeHitNodesMap || {};
         this.canvasState.edges.forEach(edge => {
             let line = this.edgeNodesMap[edge.id];
             if (!line) {
-                // console.log("line node does not exists", edge, line)
+                // A wide TRANSPARENT hit line under the visible one, so edges are
+                // tappable (ADR-0016) — a 2px stroke is unhittable on touch. Both
+                // carry data-id; the inspector reads it. The hit line goes first
+                // (below), the visible line on top.
+                const hit = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                hit.setAttribute("stroke", "transparent");
+                hit.setAttribute("stroke-width", "16");
+                hit.setAttribute("data-id", edge.id);
+                hit.setAttribute("class", "edge-hit");
+                (hit as unknown as SVGElement & { style: CSSStyleDeclaration }).style.cursor = "pointer";
+                this.edgeHitNodesMap[edge.id] = hit;
+                this.edgesLayer.appendChild(hit);
+
                 line = document.createElementNS("http://www.w3.org/2000/svg", "line");
                 line.setAttribute("stroke", edge.style?.color || "#ccc");
                 line.setAttribute("stroke-width", edge.style?.thickness || "2");
-                // Set arrow marker at the target end.
                 line.setAttribute("marker-end", "url(#arrowhead)");
+                line.setAttribute("data-id", edge.id);
+                line.setAttribute("class", "edge-line");
                 this.edgeNodesMap[edge.id] = line;
                 this.edgesLayer.appendChild(line);
             } else {
-                // console.log("line node exists", edge, line)
+                // Reflect live style edits (color/width) from the inspector.
+                line.setAttribute("stroke", (this.selectedEdgeIds?.has(edge.id) ? "#2f6f4f" : (edge.style?.color || "#ccc")));
+                line.setAttribute("stroke-width", this.selectedEdgeIds?.has(edge.id) ? "3.5" : (edge.style?.thickness || "2"));
+                if (edge.style?.dash) line.setAttribute("stroke-dasharray", String(edge.style.dash)); else line.removeAttribute("stroke-dasharray");
             }
 
             this.updateEdgePosition(edge, line)
@@ -612,9 +638,10 @@ class CanvasController {
         // Remove any orphaned SVG lines.
         Object.keys(this.edgeNodesMap).forEach(edgeId => {
             if (!this.canvasState.edges.find(e => e.id === edgeId)) {
-                console.log(`[DEBUG] Deleting orphaned edge node`, edgeId, this.edgeNodesMap[edgeId])
                 this.edgeNodesMap[edgeId].remove();
                 delete this.edgeNodesMap[edgeId];
+                this.edgeHitNodesMap?.[edgeId]?.remove();
+                if (this.edgeHitNodesMap) delete this.edgeHitNodesMap[edgeId];
             }
         });
         // Remove orphaned labels.
@@ -660,6 +687,14 @@ class CanvasController {
             line.setAttribute("x2", String(targetPoint.x));
             line.setAttribute("y2", String(targetPoint.y));
             line.setAttribute("stroke-dasharray", edge.data?.meta ? "5,5" : edge.style?.dash || "");
+            // Keep the invisible hit line aligned with the visible one.
+            const hit = this.edgeHitNodesMap?.[edge.id];
+            if (hit) {
+                hit.setAttribute("x1", String(sourcePoint.x));
+                hit.setAttribute("y1", String(sourcePoint.y));
+                hit.setAttribute("x2", String(targetPoint.x));
+                hit.setAttribute("y2", String(targetPoint.y));
+            }
 
             // Handle edge label:
             // Use a default label if none is present.
@@ -1370,6 +1405,8 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         }
         updateCanvasController(cc);
         installFrameNav();
+        installFrameOverlay();
+        installEdgeInspector();
         const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
         console.info('[canvas] hydrated from SSR', { elements: h.elements.length, ms });
 
@@ -1430,6 +1467,8 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         clearSsrPaint();
         updateCanvasController(new CanvasController(rootCanvasState));
         installFrameNav();
+        installFrameOverlay();
+        installEdgeInspector();
         if (!rootCanvasState.elements.length) {
             // A genuinely empty board and a load that fell back to empty look
             // identical on screen — say which, so the next debugger knows.
