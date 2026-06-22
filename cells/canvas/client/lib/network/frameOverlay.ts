@@ -34,6 +34,10 @@ interface FrameFact { key: string; value?: FrameValue }
 let frames: FrameFact[] = [];
 let installed = false;
 let rafPending = false;
+// Until the client has actually fetched this board's frames, the SSR-painted
+// #frames-layer is the source of truth — a redraw with the still-empty `frames`
+// would wipe it (the flash: SSR frames vanish, then reappear after the query).
+let framesFetched = false;
 
 /** The frames SVG overlay: a sibling *below* #edges-layer. It tracks the board
  *  via a CSS transform identical to the element container (set by the controller's
@@ -73,11 +77,13 @@ export async function refreshFrameOverlay(): Promise<void> {
     const r = await read<{ entries?: FrameFact[] }>('workspace.query', { type: 'frame', limit: 100 });
     frames = (r.entries ?? []).filter((f) => f.value?.board === board());
   } catch { frames = []; }
+  framesFetched = true;
   drawFrameOverlay();
 }
 
 function scheduleDraw(): void {
-  if (rafPending) return;
+  // Don't let an element-move redraw wipe the SSR frames before we've loaded ours.
+  if (!framesFetched || rafPending) return;
   rafPending = true;
   requestAnimationFrame(() => { rafPending = false; drawFrameOverlay(); });
 }
