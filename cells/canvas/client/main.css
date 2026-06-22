@@ -387,6 +387,12 @@ body {
     padding: 0;
     background: none;
 }
+/* CodeMirror measures its container; inside the sheet (grid/flex) it collapses
+   to 0 unless given an explicit height. Pin the editor to a usable height. */
+.modal.in-sheet .modal-editor { min-height: 46vh; }
+.modal.in-sheet #editor-content,
+.modal.in-sheet #editor-src,
+.modal.in-sheet .CodeMirror { height: 46vh; }
 
 .modal-tabs {
     display: flex;

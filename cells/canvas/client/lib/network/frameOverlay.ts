@@ -143,6 +143,9 @@ async function saveFrame(f: FrameFact, patch: Partial<FrameValue>): Promise<void
 export function openFrameEditor(f: FrameFact): void {
   const frameId = f.key.slice('frame:'.length);
   const memberCount = f.value?.region?.kind === 'members' ? (f.value.region.members?.length ?? 0) : 0;
+  // Captured at open: re-frame uses whatever was selected when you tapped the
+  // chip (tapping a frame preserves the element selection).
+  const selCount = cc()?.selectedElementIds?.size ?? 0;
   const body = document.createElement('div');
   body.style.cssText = 'display:grid;gap:9px';
   body.appendChild(inspectorHeader('Frame', clearInspector));
@@ -154,10 +157,10 @@ export function openFrameEditor(f: FrameFact): void {
       <input data-f="default" type="checkbox" ${f.value?.default ? 'checked' : ''}/>
       <span>Default view (focused when this board opens)</span>
     </label>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button data-act="reframe" style="border:1px solid #2f6f4f;background:transparent;color:#2f6f4f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Set region to selection</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button data-act="reframe" ${selCount ? '' : 'disabled'} title="${selCount ? '' : 'Select elements first, then re-open this frame'}" style="border:1px solid #2f6f4f;background:transparent;color:#2f6f4f;border-radius:7px;padding:6px 12px;font:inherit;cursor:${selCount ? 'pointer' : 'default'};opacity:${selCount ? 1 : 0.4}">Set region to selection${selCount ? ` (${selCount})` : ''}</button>
       <button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button>
-      <span style="margin-left:auto;align-self:center;color:#8a8a82;font-size:11px">${memberCount} member${memberCount === 1 ? '' : 's'}</span>
+      <span style="margin-left:auto;color:#8a8a82;font-size:11px">${memberCount} member${memberCount === 1 ? '' : 's'}</span>
     </div>`;
   body.appendChild(rest);
 

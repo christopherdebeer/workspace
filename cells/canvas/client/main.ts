@@ -6,7 +6,7 @@ import { buildContextMenu } from './lib/context-menu';
 import { installCommandPalette } from './lib/cmd-palette/command-palette.ts';
 import { generateContent, regenerateImage } from './lib/network/generation.ts';
 import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/network/storage.ts';
-import { showModal } from './lib/modal.ts';
+import { showModal, closeModal } from './lib/modal.ts';
 import { enterFull, exitFull } from './lib/network/inspectorPanel.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
 import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
@@ -1375,6 +1375,17 @@ ${script.getAttribute('src')}`);
         // The editor is the full detent of the unified sheet (Phase 2): host it in
         // cmd-context rather than a centered overlay, then restore on close.
         const host = enterFull();
+        // A guaranteed-working close in the sheet header (independent of the
+        // modal's own buttons, which can be off-screen on small viewports).
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+        hdr.innerHTML = '<strong style="font-family:Georgia,serif;flex:1">Edit</strong>';
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕ Close';
+        closeBtn.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+        closeBtn.addEventListener('click', () => closeModal());
+        hdr.appendChild(closeBtn);
+        host.appendChild(hdr);
         try {
             console.log("[openEditModa] launch", el);
             const { status, el: updated } = await showModal(el, {

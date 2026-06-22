@@ -142,12 +142,11 @@ function hydrateUiFor(el: CanvasElement): void {
   clearError();
 
   $root!.style.display = "block";
-  // CodeMirror measured a hidden container (zero height) — re-measure now
-  // that the modal is visible, else the editor paints empty until tapped.
-  requestAnimationFrame(() => {
-    cmContent?.refresh();
-    cmSrc?.refresh();
-  });
+  // CodeMirror measured a hidden / zero-height container — re-measure now that
+  // the modal is visible and sized, else the editor paints empty. Refresh twice
+  // (rAF + a short timeout) because in-sheet layout settles a frame late.
+  requestAnimationFrame(() => { cmContent?.refresh(); cmSrc?.refresh(); });
+  setTimeout(() => { cmContent?.refresh(); cmSrc?.refresh(); }, 80);
 }
 
 function loadVersion(idx: number): void {
@@ -239,8 +238,12 @@ function clearError(): void { $errorBox!.textContent = ''; }
 function showError(msg: string): void { $errorBox!.textContent = msg; }
 
 function close(status: string, el: CanvasElement | null = null): void {
-  $root!.style.display = "none";
+  if ($root) $root.style.display = "none";
   resolver?.({ status, el });
   resolver = null;
   currentEl = null;
 }
+
+/** Programmatic close (cancel) — the unified sheet's header uses this so closing
+ *  works even if the modal's own buttons are off-screen. */
+export function closeModal(): void { close('cancelled'); }

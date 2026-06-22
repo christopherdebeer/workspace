@@ -71,10 +71,11 @@ export function enterFull(): HTMLElement {
   return h;
 }
 
-/** Leave the full detent (restoring the palette) and clear the editor. */
+/** Leave the full detent (restoring the palette) and clear the editor. Force
+ *  clears (no owner guard) so the editor always closes. */
 export function exitFull(): void {
   document.getElementById('cmd-palette')?.classList.remove('sheet-full');
-  clearInspector('editor');
+  clearInspector();
 }
 
 /** Empty + hide the context surface. With an owner name, only clears when that
@@ -96,7 +97,7 @@ export function inspectorHeader(title: string, onClose: () => void): HTMLElement
   head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px';
   head.innerHTML = `<strong style="font-family:Georgia,serif">${title}</strong>`;
   const done = document.createElement('button');
-  done.textContent = 'Done';
+  done.textContent = 'Deselect';
   done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
   done.addEventListener('click', onClose);
   head.appendChild(done);

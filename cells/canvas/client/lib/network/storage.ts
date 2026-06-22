@@ -315,17 +315,22 @@ let readonlyBoard = false;
 /** Pin the camera once the controller exists (a *named* viewpoint, not device state).
  *  The `'fit'` case routes through the shared `fitRegion` resolver (ADR-0015) so SSR,
  *  the client, and embeds all frame a region identically. */
+let vpTimer: ReturnType<typeof setTimeout> | null = null;
 function applyViewport(
   vp: { x: number; y: number; scale: number } | 'fit',
   bbox: { minX: number; minY: number; maxX: number; maxY: number } | null,
 ): void {
+  // Cancel any pending apply — rapid frame navigation used to queue several
+  // delayed sets that replayed in sequence (wrong viewport "until it snaps").
+  if (vpTimer) { clearTimeout(vpTimer); vpTimer = null; }
   const started = Date.now();
   const tick = (): void => {
     const cc = (window as { CC?: any }).CC;
     if (!cc) {
-      if (Date.now() - started < 10000) setTimeout(tick, 120);
+      vpTimer = Date.now() - started < 10000 ? setTimeout(tick, 120) : null;
       return;
     }
+    vpTimer = null;
     if (vp === 'fit') {
       if (!bbox) return;
       const cam = fitRegion(bbox, window.innerWidth, window.innerHeight);
@@ -340,7 +345,7 @@ function applyViewport(
     cc.updateCanvasTransform();
     cc.requestRender();
   };
-  setTimeout(tick, 150);
+  vpTimer = setTimeout(tick, 150);
 }
 
 /** Reduce the assembled board elements to the `Placed` shape the frame resolver
