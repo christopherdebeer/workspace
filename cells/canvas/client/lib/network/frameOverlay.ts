@@ -75,11 +75,16 @@ export function drawFrameOverlay(): void {
     if (!bb) continue;
     const frameId = f.key.slice('frame:'.length);
     const label = f.value?.label || frameId;
-    const w = Math.max(1, bb.maxX - bb.minX), h = Math.max(1, bb.maxY - bb.minY);
+    // Breathe a little: the region bbox hugs the member geometry exactly, so the
+    // dashed rect would clip the elements' own borders. Pad it out in world units
+    // (non-scaling-stroke keeps the line crisp at any zoom).
+    const PAD = 16;
+    const minX = bb.minX - PAD, minY = bb.minY - PAD;
+    const w = Math.max(1, bb.maxX - bb.minX) + PAD * 2, h = Math.max(1, bb.maxY - bb.minY) + PAD * 2;
 
     const g = svg('g', {});
     g.appendChild(svg('rect', {
-      x: String(bb.minX), y: String(bb.minY), width: String(w), height: String(h), rx: '12',
+      x: String(minX), y: String(minY), width: String(w), height: String(h), rx: '12',
       fill: f.value?.default ? 'rgba(47,111,79,0.05)' : 'rgba(47,111,79,0.025)',
       stroke: '#2f6f4f', 'stroke-width': '2', 'stroke-dasharray': '9,7',
       'vector-effect': 'non-scaling-stroke', style: 'pointer-events:none',
@@ -93,11 +98,11 @@ export function drawFrameOverlay(): void {
     const chip = svg('g', { class: 'frame-chip', 'data-frame': frameId, style: 'pointer-events:all;cursor:pointer' });
     const padX = 8, fs = 15, chW = text.length * fs * 0.6 + padX * 2, chH = fs + 10;
     chip.appendChild(svg('rect', {
-      x: String(bb.minX), y: String(bb.minY - chH), width: String(chW), height: String(chH),
+      x: String(minX), y: String(minY - chH), width: String(chW), height: String(chH),
       rx: '7', fill: '#2f6f4f', 'vector-effect': 'non-scaling-stroke',
     }));
     const t = svg('text', {
-      x: String(bb.minX + padX), y: String(bb.minY - chH / 2),
+      x: String(minX + padX), y: String(minY - chH / 2),
       'dominant-baseline': 'central', fill: '#fbfbf8',
       style: `font:600 ${fs}px -apple-system,system-ui,sans-serif;pointer-events:none;user-select:none`,
     });

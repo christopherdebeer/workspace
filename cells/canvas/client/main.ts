@@ -57,6 +57,10 @@ class CanvasController {
     requestRender: () => void;
     requestEdgeUpdate: () => void;
     contextMenuPointerDownHandler?: (ev: Event) => void;
+    /** Off-screen culling is transform-aware (driven by updateCulling), not the
+     *  browser's content-visibility heuristic — see updateCulling for why. */
+    cullEnabled = false;
+    _cullQueued = false;
 
     constructor(canvasState: CanvasState) {
         updateCanvasController(this)
@@ -190,6 +194,10 @@ class CanvasController {
         }
 
         (this.canvas as any).controller = this;
+
+        // `body.cull` is the feature flag (set from the URL param in main()); the
+        // culling itself is transform-aware JS now (updateCulling), not CSS.
+        this.cullEnabled = typeof document !== 'undefined' && document.body.classList.contains('cull');
 
         this.updateCanvasTransform();
         this._renderQueued = false;
@@ -527,6 +535,54 @@ class CanvasController {
         // console.log("[DEBUG] SVG viewBox updated to:", visibleX, visibleY, visibleWidth, visibleHeight);
 
         this.updateGroupBox()
+        this.scheduleCulling();
+    }
+
+    /** Coalesce culling to one pass per frame — updateCanvasTransform can fire
+     *  many times per pan gesture, but the visible set only needs recomputing once
+     *  the transform settles for the frame. */
+    scheduleCulling() {
+        if (!this.cullEnabled || this._cullQueued) return;
+        this._cullQueued = true;
+        requestAnimationFrame(() => { this._cullQueued = false; this.updateCulling(); });
+    }
+
+    /** Transform-aware off-screen culling. The blanket `content-visibility:auto`
+     *  this replaces had two faults on a CSS-transformed board: (1) its viewport
+     *  relevance heuristic doesn't reliably re-evaluate after a programmatic camera
+     *  jump (goToFrame), so elements panned into view stayed skipped — a blank
+     *  frame; (2) `auto` implies paint containment, which clips the salience badge
+     *  and edit handles that render outside the element box. Here WE decide what's
+     *  on-screen from the canvas-space rect: visible elements get NO containment
+     *  (handles/badges paint freely, always rendered), off-screen ones get
+     *  `content-visibility:hidden` (skipped, keeping the iOS compositing relief —
+     *  and unlike display:none it preserves iframe/editor state). */
+    updateCulling() {
+        if (!this.cullEnabled) return;
+        const s = this.viewState.scale || 1;
+        const W = this.canvas.clientWidth / s;
+        const H = this.canvas.clientHeight / s;
+        const vx = -this.viewState.translateX / s;
+        const vy = -this.viewState.translateY / s;
+        // One screen of slack on every side, so small pans don't thrash elements
+        // on/off at the edge (and it absorbs rotation's bbox growth).
+        const minX = vx - W, minY = vy - H, maxX = vx + 2 * W, maxY = vy + 2 * H;
+        for (const el of this.canvasState.elements) {
+            const node = this.elementNodesMap[el.id];
+            if (!node) continue;
+            if (el.static) { node.style.contentVisibility = 'visible'; continue; } // screen-pinned: always on
+            const sc = el.scale || 1;
+            const hw = ((el.width || 240) * sc) / 2, hh = ((el.height || 120) * sc) / 2;
+            const off = (el.x + hw < minX) || (el.x - hw > maxX) || (el.y + hh < minY) || (el.y - hh > maxY);
+            if (off) {
+                // contain-intrinsic-size lets the skipped box keep its footprint
+                // (left/top still anchor it) instead of collapsing to zero.
+                node.style.containIntrinsicSize = `${Math.round((el.width || 240) * sc)}px ${Math.round((el.height || 120) * sc)}px`;
+                node.style.contentVisibility = 'hidden';
+            } else {
+                node.style.contentVisibility = 'visible';
+            }
+        }
     }
 
     recenterOnElement(elId: string) {
@@ -584,6 +640,7 @@ class CanvasController {
         });
         this.updateGroupBox()
         this.requestEdgeUpdate();
+        this.scheduleCulling(); // new nodes need their on/off-screen state set
     }
 
     renderEdgesImmediately() {
@@ -1485,9 +1542,10 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
     const params = new URLSearchParams(window.location.search);
     const canvasId = params.get("canvas") || "canvas-002";
     const token = params.get("token");
-    // Off-screen culling (content-visibility) is now ON by default — it
-    // measurably cut the iOS compositing crash on big boards. Escape with
-    // ?cull=0 / ?nocull=1 if a board ever mis-renders under it.
+    // Off-screen culling is ON by default — it measurably cut the iOS compositing
+    // crash on big boards. The flag lives on `body.cull`; the culling is now
+    // transform-aware JS (CanvasController.updateCulling), not blanket CSS
+    // content-visibility. Escape with ?cull=0 / ?nocull=1.
     if (params.get('cull') !== '0' && params.get('nocull') !== '1') document.body.classList.add('cull');
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     // Boot narration (visible under ?debug=1). The previous boot logged nothing,
