@@ -20,7 +20,7 @@
 import { read, act } from './substrate.ts';
 import { placedOf } from './storage.ts';
 import { goToFrame } from './frameNav.ts';
-import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
+import { showInspector, clearInspector } from './inspectorPanel.ts';
 import { renderFramesSvg, type Region } from '../../../shared/frame.ts';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -111,39 +111,69 @@ export function openFrameEditor(f: FrameFact): void {
   // Captured at open: re-frame uses whatever was selected when you tapped the
   // chip (tapping a frame preserves the element selection).
   const selCount = cc()?.selectedElementIds?.size ?? 0;
+  const name = f.value?.label || frameId;
+
   const body = document.createElement('div');
-  body.style.cssText = 'display:grid;gap:9px';
-  body.appendChild(inspectorHeader('Frame', clearInspector));
+  body.style.cssText = 'display:grid;gap:10px';
+
+  // Header: frame identity (matches the selection panel) + member count + a close
+  // that actually closes.
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:8px';
+  const title = document.createElement('strong');
+  title.textContent = `${f.value?.default ? '◉ ' : ''}${name}`;
+  title.style.cssText = 'font-family:Georgia,serif;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  const meta = document.createElement('span');
+  meta.textContent = `${memberCount} member${memberCount === 1 ? '' : 's'}`;
+  meta.style.cssText = 'color:#a8a89e;font-size:11px;white-space:nowrap';
+  const done = document.createElement('button');
+  done.textContent = 'Done';
+  done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+  done.addEventListener('click', () => clearInspector());
+  head.append(title, meta, done);
+  body.appendChild(head);
+
+  // Label + default toggle.
   const rest = document.createElement('div');
-  rest.style.cssText = 'display:grid;gap:9px';
+  rest.style.cssText = 'display:grid;gap:10px';
   rest.innerHTML = `
-    ${field('Label', `<input data-f="label" value="${(f.value?.label ?? frameId).replace(/"/g, '&quot;')}"/>`)}
-    <label style="display:flex;gap:8px;align-items:center;color:#1c1c1a">
+    ${field('Label', `<input data-f="label" value="${name.replace(/"/g, '&quot;')}"/>`)}
+    <label style="display:flex;gap:8px;align-items:center;color:#1c1c1a;font-size:13px">
       <input data-f="default" type="checkbox" ${f.value?.default ? 'checked' : ''}/>
-      <span>Default view (focused when this board opens)</span>
-    </label>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button data-act="reframe" ${selCount ? '' : 'disabled'} title="${selCount ? '' : 'Select elements first, then re-open this frame'}" style="border:1px solid #2f6f4f;background:transparent;color:#2f6f4f;border-radius:7px;padding:6px 12px;font:inherit;cursor:${selCount ? 'pointer' : 'default'};opacity:${selCount ? 1 : 0.4}">Set region to selection${selCount ? ` (${selCount})` : ''}</button>
-      <button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button>
-      <span style="margin-left:auto;color:#8a8a82;font-size:11px">${memberCount} member${memberCount === 1 ? '' : 's'}</span>
-    </div>`;
+      <span>Default view — focused when this board opens</span>
+    </label>`;
   body.appendChild(rest);
 
-  const labelInput = rest.querySelector('[data-f="label"]') as HTMLInputElement | null;
-  const defInput = rest.querySelector('[data-f="default"]') as HTMLInputElement | null;
-  labelInput?.addEventListener('change', () => void saveFrame(f, { label: labelInput.value.trim() || frameId }));
-  defInput?.addEventListener('change', () => void saveFrame(f, { default: defInput.checked }));
-  rest.querySelector('[data-act="reframe"]')?.addEventListener('click', () => {
+  // Actions: re-frame (primary when there's a selection) + Delete (ghost danger).
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+  const reframe = document.createElement('button');
+  reframe.textContent = selCount ? `Set region to selection (${selCount})` : 'Set region to selection';
+  reframe.disabled = !selCount;
+  reframe.title = selCount ? '' : 'Select elements first, then re-open this frame';
+  reframe.style.cssText = `border:1px solid #2f6f4f;background:${selCount ? '#2f6f4f' : 'transparent'};color:${selCount ? '#fff' : '#2f6f4f'};border-radius:7px;padding:7px 12px;font:inherit;cursor:${selCount ? 'pointer' : 'default'};opacity:${selCount ? 1 : 0.45}`;
+  reframe.addEventListener('click', () => {
     const sel = [...(cc()?.selectedElementIds ?? [])].map((id: string) => `el:${id}`);
     if (!sel.length) { console.warn('[canvas] re-frame: nothing selected'); return; }
     void saveFrame(f, { region: { kind: 'members', members: sel } });
   });
-  rest.querySelector('[data-act="delete"]')?.addEventListener('click', () => {
+  const del = document.createElement('button');
+  del.textContent = 'Delete';
+  del.style.cssText = 'border:1px solid #e6d6d6;background:#fff;color:#7a1f1f;border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer';
+  del.addEventListener('click', () => {
     act('workspace.supersede', { key: f.key }).catch(() => undefined);
     frames = frames.filter((x) => x.key !== f.key);
     clearInspector();
     drawFrameOverlay();
   });
+  actions.append(reframe, del);
+  body.appendChild(actions);
+
+  const labelInput = rest.querySelector('[data-f="label"]') as HTMLInputElement | null;
+  const defInput = rest.querySelector('[data-f="default"]') as HTMLInputElement | null;
+  labelInput?.addEventListener('change', () => void saveFrame(f, { label: labelInput.value.trim() || frameId }));
+  defInput?.addEventListener('change', () => void saveFrame(f, { default: defInput.checked }));
+
   showInspector(body, 'frame');
 }
 

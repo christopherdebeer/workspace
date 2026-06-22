@@ -99,7 +99,9 @@ export function inspectorHeader(title: string, onClose: () => void): HTMLElement
   const done = document.createElement('button');
   done.textContent = 'Deselect';
   done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
-  done.addEventListener('click', onClose);
+  // Call with NO args — passing the click Event straight to a handler like
+  // clearInspector(ownerName?) made the event the owner-guard, so it never fired.
+  done.addEventListener('click', () => onClose());
   head.appendChild(done);
   return head;
 }
