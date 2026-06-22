@@ -63,6 +63,31 @@ async function readFrame(frameId: string): Promise<Region | null> {
   return region ?? null;
 }
 
+/** The board's DEFAULT viewpoint region, if it declares one — so SSR can paint
+ *  the first frame straight away instead of fit-all, which the client otherwise
+ *  corrects only AFTER a post-load frame query (the visible "jump"). Frame keys
+ *  are `frame:<board>/<name>`, so the board's frames share that prefix. */
+async function readDefaultFrame(board: string): Promise<Region | null> {
+  if (!TABLE) return null;
+  try {
+    const r = await ddb().send(
+      new Query({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': `KEY#frame:${board}/` },
+      }),
+    );
+    for (const it of (r.Items ?? []) as FactItem[]) {
+      if (it.superseded) continue;
+      const v = it.value as { default?: boolean; region?: Region } | undefined;
+      if (v?.default && v.region) return v.region;
+    }
+  } catch (e) {
+    console.warn('[canvas ssr] default-frame lookup failed', (e as Error).message);
+  }
+  return null;
+}
+
 /** Reduce SSR board elements to the `Placed` shape the frame resolver needs.
  *  (SSR carries the value type, not `_meta.type`/tags — so query-by-type regions
  *  are best resolved client-side; member/bbox regions resolve fully here.) */
@@ -281,11 +306,17 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
     if (!mayRenderBoard(board, !!opts.isOwner, opts.patterns ?? [])) return shell;
     const els = await readBoard(board);
     if (!els.length) return shell;
-    // A named viewpoint (?frame=) frames a region; else the view's viewport / fit.
+    // A named viewpoint (?frame=) frames a region; else the board's DEFAULT
+    // viewpoint (so the first paint already sits where the client would jump to);
+    // else the view's viewport / fit.
     const w = opts.w ?? 1200, h = opts.h ?? 800;
     let cam = cameraFor(viewport, els, opts.w, opts.h);
     if (opts.frame) {
       const region = await readFrame(opts.frame);
+      const bbox = region ? regionBBox(region, placedOfBoard(els)) : null;
+      if (bbox) cam = fitRegion(bbox, w, h);
+    } else if (board && !opts.view) {
+      const region = await readDefaultFrame(board);
       const bbox = region ? regionBBox(region, placedOfBoard(els)) : null;
       if (bbox) cam = fitRegion(bbox, w, h);
     }
@@ -338,6 +369,9 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
   }
 }
 
+/** The cell's mount prefix on the apex — board path URLs are built against this. */
+const MOUNT = `/@${OWNER}/canvas`;
+
 export const handler = async (event: any) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
@@ -345,33 +379,48 @@ export const handler = async (event: any) => {
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
     if (path === '/style.css') return respond(200, 'text/css; charset=utf-8', read('static/style.css'));
-    if (path === '/' || path === '') {
-      const qs = new URLSearchParams((event.rawQueryString as string) || '');
-      const board = qs.get('canvas') ?? undefined;
-      const view = qs.get('view') ?? undefined;
-      const embed = qs.get('embed') === '1';
-      const w = Number(qs.get('w')) || undefined;
-      const h = Number(qs.get('h')) || undefined;
-      // `x-cell-caller` is the dispatch-validated identity (from the session
-      // cookie on a top-level navigation, or a bearer); the cell is reachable
-      // only via cells.call, so it can't be forged. The owner gets full SSR;
-      // anyone else only sees boards the owner shared (`_public/`).
-      const caller = event.headers?.['x-cell-caller'] as string | undefined;
-      const isOwner = !!caller && caller === OWNER;
-      // SSR a board (?canvas=) or a view (?view=, with its declared camera);
-      // the bare app (no target) keeps the static shell.
-      const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
-      const hydrate = qs.get('hydrate') === '1';
-      const frame = qs.get('frame') ?? undefined;
-      const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate, frame }) : read('static/index.html');
-      // Static embeds are safe to cache briefly at the edge — many thumbnails
-      // on one page then cost one render, and refresh within a minute.
-      const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
-      if (embed && (board || view)) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
-      return { statusCode: 200, headers, body: html };
+
+    const qs = new URLSearchParams((event.rawQueryString as string) || '');
+    // The board now lives in the PATH (`/@owner/canvas/<board>`); the gateway
+    // strips the mount, so rawPath is `/<board>`. The bare path is the landing
+    // shell. (Frame/view/embed stay query modifiers.)
+    const segs = path.split('/').filter(Boolean);
+    const pathBoard = segs.length ? decodeURIComponent(segs[0]) : undefined;
+
+    // Legacy `?canvas=<board>` → canonical path form (301), preserving the rest
+    // of the query so old shared links keep working.
+    const legacyCanvas = qs.get('canvas') ?? undefined;
+    if (!pathBoard && legacyCanvas) {
+      const rest = new URLSearchParams(qs);
+      rest.delete('canvas');
+      const q = rest.toString();
+      const location = `${MOUNT}/${encodeURIComponent(legacyCanvas)}${q ? `?${q}` : ''}`;
+      return { statusCode: 301, headers: { location, 'cache-control': 'no-store' }, body: '' };
     }
+
+    const board = pathBoard;
+    const view = qs.get('view') ?? undefined;
+    const embed = qs.get('embed') === '1';
+    const w = Number(qs.get('w')) || undefined;
+    const h = Number(qs.get('h')) || undefined;
+    // `x-cell-caller` is the dispatch-validated identity (from the session
+    // cookie on a top-level navigation, or a bearer); the cell is reachable
+    // only via cells.call, so it can't be forged. The owner gets full SSR;
+    // anyone else only sees boards the owner shared (`_public/`).
+    const caller = event.headers?.['x-cell-caller'] as string | undefined;
+    const isOwner = !!caller && caller === OWNER;
+    // SSR a board (path) or a view (?view=, with its declared camera); the bare
+    // app (no target) keeps the static shell.
+    const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
+    const hydrate = qs.get('hydrate') === '1';
+    const frame = qs.get('frame') ?? undefined;
+    const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate, frame }) : read('static/index.html');
+    // Static embeds are safe to cache briefly at the edge — many thumbnails
+    // on one page then cost one render, and refresh within a minute.
+    const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
+    if (embed && (board || view)) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
+    return { statusCode: 200, headers, body: html };
   } catch (err) {
     return respond(404, 'application/json', JSON.stringify({ error: (err as Error).message }));
   }
-  return respond(404, 'application/json', JSON.stringify({ error: `no route for ${path}` }));
 };

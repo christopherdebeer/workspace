@@ -15,6 +15,7 @@ import { installFrameOverlay } from './lib/network/frameOverlay.ts';
 import { installEdgeInspector } from './lib/network/edgeInspect.ts';
 import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
+import { canvasPath, boardFromPath } from './lib/url.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
 class CanvasController {
@@ -1241,7 +1242,7 @@ ${script.getAttribute('src')}`);
         const childController = new CanvasController(canvasState);
         updateCanvasController(childController);
         childController.recenterOnElement(el.id);
-        window.history.pushState({}, "", "?canvas=" + el.refCanvasId);
+        window.history.pushState({}, "", canvasPath(el.refCanvasId));
     }
 
     async handleDrillUp(ev: Event) {
@@ -1260,7 +1261,7 @@ ${script.getAttribute('src')}`);
         if (this.canvasState.parentElement) {
             controller.recenterOnElement(this.canvasState.parentElement)
         }
-        window.history.pushState({}, "", "?canvas=" + canvasId);
+        window.history.pushState({}, "", canvasPath(canvasId));
     };
 
     buildHandles(node: HTMLElement, _el: CanvasElement) {
@@ -1539,22 +1540,6 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
     }
 }
 
-/** After a sign-in redirect that dropped our query string (see loadInitialCanvas),
- *  put the intended board/view back into the URL *before* we read it. */
-function restoreIntendedTarget(): void {
-    try {
-        const here = new URLSearchParams(location.search);
-        if (here.get('canvas') || here.get('view')) { sessionStorage.removeItem('parc.canvas.intended'); return; }
-        const saved = sessionStorage.getItem('parc.canvas.intended');
-        sessionStorage.removeItem('parc.canvas.intended');
-        if (!saved) return;
-        const url = new URL(saved, location.href);
-        if (!url.searchParams.get('canvas') && !url.searchParams.get('view')) return; // nothing worth restoring
-        history.replaceState({}, '', url.pathname + url.search + url.hash);
-        console.info('[canvas] restored intended target after auth', url.search);
-    } catch { /* storage / URL unavailable */ }
-}
-
 /** Reveal the board: fade out the boot splash and remove it. Idempotent — called
  *  from every terminal boot path (hydrate, full load, and the failure path, so a
  *  boot error surfaces the banner instead of an eternal spinner). */
@@ -1566,9 +1551,11 @@ function markBooted(): void {
 }
 
 (async function main() {
-    restoreIntendedTarget();
     const params = new URLSearchParams(window.location.search);
-    const canvasId = params.get("canvas") || "canvas-002";
+    // The board lives in the PATH now (/@c15r/canvas/<board>); ?canvas= is a
+    // legacy fallback the server 301s to the path form. Path-based means it
+    // survives the sign-in redirect (kernel redirect_uri = origin + pathname).
+    const canvasId = boardFromPath() || params.get("canvas") || "canvas-002";
     const token = params.get("token");
     // Off-screen culling is ON by default — it measurably cut the iOS compositing
     // crash on big boards. The flag lives on `body.cull`; the culling is now
