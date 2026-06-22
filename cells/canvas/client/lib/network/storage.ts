@@ -21,6 +21,7 @@ import { elementRegistry } from '../elements/elementRegistry.ts';
 import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
+import { regionBBox, fitRegion, type Region, type Placed, type BBox } from '../../../shared/frame.ts';
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 const DEBOUNCE_SAVE_DELAY = 800;
@@ -299,7 +300,9 @@ interface ViewRenderHint {
 
 let readonlyBoard = false;
 
-/** Pin the camera once the controller exists (a *named* viewpoint, not device state). */
+/** Pin the camera once the controller exists (a *named* viewpoint, not device state).
+ *  The `'fit'` case routes through the shared `fitRegion` resolver (ADR-0015) so SSR,
+ *  the client, and embeds all frame a region identically. */
 function applyViewport(
   vp: { x: number; y: number; scale: number } | 'fit',
   bbox: { minX: number; minY: number; maxX: number; maxY: number } | null,
@@ -311,26 +314,50 @@ function applyViewport(
       if (Date.now() - started < 10000) setTimeout(tick, 120);
       return;
     }
-    let scale: number, cx: number, cy: number;
     if (vp === 'fit') {
       if (!bbox) return;
-      const bw = Math.max(bbox.maxX - bbox.minX, 200);
-      const bh = Math.max(bbox.maxY - bbox.minY, 200);
-      scale = Math.min((window.innerWidth * 0.85) / bw, (window.innerHeight * 0.85) / bh, 2);
-      cx = (bbox.minX + bbox.maxX) / 2;
-      cy = (bbox.minY + bbox.maxY) / 2;
+      const cam = fitRegion(bbox, window.innerWidth, window.innerHeight);
+      cc.viewState.scale = cam.scale;
+      cc.viewState.translateX = cam.tx;
+      cc.viewState.translateY = cam.ty;
     } else {
-      scale = vp.scale ?? 1;
-      cx = vp.x;
-      cy = vp.y;
+      cc.viewState.scale = vp.scale ?? 1;
+      cc.viewState.translateX = window.innerWidth / 2 - (vp.scale ?? 1) * vp.x;
+      cc.viewState.translateY = window.innerHeight / 2 - (vp.scale ?? 1) * vp.y;
     }
-    cc.viewState.scale = scale;
-    cc.viewState.translateX = window.innerWidth / 2 - scale * cx;
-    cc.viewState.translateY = window.innerHeight / 2 - scale * cy;
     cc.updateCanvasTransform();
     cc.requestRender();
   };
   setTimeout(tick, 150);
+}
+
+/** Reduce the assembled board elements to the `Placed` shape the frame resolver
+ *  needs (centre x,y + extents + type/tags for query regions). */
+function placedOf(elements: any[]): Placed[] {
+  return elements.map((e) => ({
+    key: e._factKey ?? `el:${e.id}`,
+    type: factMeta.get(e._factKey ?? `el:${e.id}`)?.type ?? undefined,
+    tags: factMeta.get(e._factKey ?? `el:${e.id}`)?.tags ?? undefined,
+    x: e.x, y: e.y, width: e.width ?? 240, height: e.height ?? 120, scale: e.scale,
+  }));
+}
+
+/** Focus the camera on a frame fact (`frame:<id>`): resolve its region to a bbox
+ *  over the live elements, then fit. Returns true if it focused. (ADR-0015.) */
+export async function focusFrame(frameId: string, elements: any[]): Promise<boolean> {
+  try {
+    const entry = await read<{ value?: { region?: Region } } | null>('workspace.peek', { key: `frame:${frameId}` });
+    const region = entry?.value?.region;
+    if (!region) return false;
+    const bbox: BBox | null = regionBBox(region, placedOf(elements));
+    if (!bbox) { console.warn('[canvas] frame', frameId, 'resolved no region (empty) — fit-all'); return false; }
+    applyViewport('fit', bbox);
+    console.info('[canvas] focused frame', { frameId, region: region.kind });
+    return true;
+  } catch (e) {
+    console.warn('[canvas] focusFrame failed', frameId, e);
+    return false;
+  }
 }
 
 const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -628,23 +655,30 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     const bbox = xs.length
       ? { minX: Math.min(...xs) - 180, minY: Math.min(...ys) - 120, maxX: Math.max(...xs) + 180, maxY: Math.max(...ys) + 120 }
       : null;
-    let cam: ViewRenderHint['viewport'] | null = viewport;
-    if (!cam && !embed && bbox) {
-      let saved: { scale?: number; translateX?: number; translateY?: number } | null = null;
-      try { const s = localStorage.getItem('canvasViewState_' + cid); if (s) saved = JSON.parse(s); } catch { /* storage blocked */ }
-      const W = window.innerWidth, H = window.innerHeight;
-      const framesContent = !!saved && typeof saved.scale === 'number' && saved.scale > 0 && (() => {
-        const s = saved!.scale as number;
-        const vMinX = -(saved!.translateX ?? 0) / s, vMinY = -(saved!.translateY ?? 0) / s;
-        const vMaxX = vMinX + W / s, vMaxY = vMinY + H / s;
-        return vMaxX > bbox.minX && vMinX < bbox.maxX && vMaxY > bbox.minY && vMinY < bbox.maxY;
-      })();
-      if (!framesContent) {
-        cam = 'fit';
-        console.info('[canvas] camera does not frame content — fitting to board', { canvasId: cid, hadSavedView: !!saved });
+    // Precedence (ADR-0015): explicit ?frame ▸ device saved camera (if it frames
+    // content) ▸ fit-all. An explicit frame focus wins over everything.
+    const frameId = params.get('frame');
+    if (frameId) {
+      void focusFrame(frameId, elements);
+    } else {
+      let cam: ViewRenderHint['viewport'] | null = viewport;
+      if (!cam && !embed && bbox) {
+        let saved: { scale?: number; translateX?: number; translateY?: number } | null = null;
+        try { const s = localStorage.getItem('canvasViewState_' + cid); if (s) saved = JSON.parse(s); } catch { /* storage blocked */ }
+        const W = window.innerWidth, H = window.innerHeight;
+        const framesContent = !!saved && typeof saved.scale === 'number' && saved.scale > 0 && (() => {
+          const s = saved!.scale as number;
+          const vMinX = -(saved!.translateX ?? 0) / s, vMinY = -(saved!.translateY ?? 0) / s;
+          const vMaxX = vMinX + W / s, vMaxY = vMinY + H / s;
+          return vMaxX > bbox.minX && vMinX < bbox.maxX && vMaxY > bbox.minY && vMinY < bbox.maxY;
+        })();
+        if (!framesContent) {
+          cam = 'fit';
+          console.info('[canvas] camera does not frame content — fitting to board', { canvasId: cid, hadSavedView: !!saved });
+        }
       }
+      if (cam) applyViewport(cam, bbox);
     }
-    if (cam) applyViewport(cam, bbox);
 
     // An embed is a still picture: render once, start nothing. The background
     // services (salience polling, the change-feed live-sync, the flight

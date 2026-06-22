@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderBoard, type BoardElement, type Placement, type Content } from './shared/render';
+import { regionBBox, fitRegion, type Region, type Placed } from './shared/frame';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -53,6 +54,28 @@ async function readView(viewId: string): Promise<{ board: string; viewport: View
   const def = (r.Item?.value ?? {}) as { render?: { board?: string; viewport?: Viewport } };
   const board = def.render?.board ?? (viewId.startsWith('canvas:') ? viewId.slice('canvas:'.length) : viewId);
   return { board, viewport: def.render?.viewport ?? 'fit' };
+}
+
+/** Read a frame fact (`frame:<id>`) → its region (ADR-0015), server-side. */
+async function readFrame(frameId: string): Promise<Region | null> {
+  const r = await ddb().send(new Get({ TableName: TABLE, Key: { pk: `STATE#${OWNER}`, sk: `KEY#frame:${frameId}` } }));
+  const region = (r.Item?.value as { region?: Region } | undefined)?.region;
+  return region ?? null;
+}
+
+/** Reduce SSR board elements to the `Placed` shape the frame resolver needs.
+ *  (SSR carries the value type, not `_meta.type`/tags — so query-by-type regions
+ *  are best resolved client-side; member/bbox regions resolve fully here.) */
+function placedOfBoard(els: BoardElement[]): Placed[] {
+  return els.map((e) => ({
+    key: `el:${e.id}`,
+    type: (e.content as { type?: string }).type,
+    x: e.placement.x,
+    y: e.placement.y,
+    width: e.placement.width,
+    height: e.placement.height,
+    scale: e.placement.scale,
+  }));
 }
 
 interface FactItem {
@@ -221,6 +244,8 @@ interface ShellOpts {
   /** Embed the board state as JSON so the client hydrates instantly (?hydrate=1)
    *  instead of re-fetching through the API. The server already read it. */
   hydrate?: boolean;
+  /** Focus a named viewpoint (`frame:<id>`) instead of fitting the whole board. */
+  frame?: string;
 }
 
 /**
@@ -255,7 +280,14 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
     if (!mayRenderBoard(board, !!opts.isOwner, opts.patterns ?? [])) return shell;
     const els = await readBoard(board);
     if (!els.length) return shell;
-    const cam = cameraFor(viewport, els, opts.w, opts.h);
+    // A named viewpoint (?frame=) frames a region; else the view's viewport / fit.
+    const w = opts.w ?? 1200, h = opts.h ?? 800;
+    let cam = cameraFor(viewport, els, opts.w, opts.h);
+    if (opts.frame) {
+      const region = await readFrame(opts.frame);
+      const bbox = region ? regionBBox(region, placedOfBoard(els)) : null;
+      if (bbox) cam = fitRegion(bbox, w, h);
+    }
     const { dynamic, static: stat } = renderBoard(els, cam);
     const transform = `transform:translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)});--zoom:${cam.scale.toFixed(4)}`;
     let html = shell
@@ -329,7 +361,8 @@ export const handler = async (event: any) => {
       // the bare app (no target) keeps the static shell.
       const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
       const hydrate = qs.get('hydrate') === '1';
-      const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate }) : read('static/index.html');
+      const frame = qs.get('frame') ?? undefined;
+      const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate, frame }) : read('static/index.html');
       // Static embeds are safe to cache briefly at the edge — many thumbnails
       // on one page then cost one render, and refresh within a minute.
       const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
