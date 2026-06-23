@@ -10,6 +10,8 @@ import {
   projectActions,
   projectSubscriptions,
   spawnChildrenWrites,
+  step,
+  railHolds,
 } from '../cells/machine/engine';
 
 describe('railsFrom', () => {
@@ -183,5 +185,106 @@ describe('spawnChildrenWrites (the multi-write reliability fix)', () => {
   it('clamps vote samples to 2..7', () => {
     expect(spawnChildrenWrites('r', 'd', { kind: 'vote', branch: 'V', samples: 99 }, 'T')).toHaveLength(1 + 7);
     expect(spawnChildrenWrites('r', 'd', { kind: 'vote', branch: 'V', samples: 1 }, 'T')).toHaveLength(1 + 2);
+  });
+});
+
+describe('step (the stateless CEL stepper — ADR-0017)', () => {
+  // Helper: build a machine def the way define_machine stores it.
+  const M = (name: string, nodeNames: string[], rails: Array<Record<string, unknown>>) => ({
+    name,
+    nodes: nodeNames.map((n) => ({ name: n })),
+    rails,
+  });
+
+  it('walks the whole auto prefix in-process and completes at a terminal (no intermediate writes)', () => {
+    const m = M('lin', ['A', 'B', 'C'], [
+      { from: 'A', to: 'B', mode: 'auto' },
+      { from: 'B', to: 'C', mode: 'auto' },
+    ]);
+    const out = step({ machine: 'lin', node: 'A', status: 'running' }, m, 'T');
+    expect(out.yield).toBeNull(); // ran to completion
+    expect(out.run).toMatchObject({ node: 'C', status: 'done', at: 'T' });
+    expect(out.path).toEqual(['A', 'B', 'C']); // the whole deterministic walk, one returned write
+  });
+
+  it('yields at the first non-deterministic (agent) node, surfacing the branch menu', () => {
+    const m = M('dec', ['A', 'D', 'X', 'Y'], [
+      { from: 'A', to: 'D', mode: 'auto' },
+      { from: 'D', to: 'X', mode: 'agent', when: 'needs fix' },
+      { from: 'D', to: 'Y', mode: 'agent', when: 'all good' },
+    ]);
+    const out = step({ machine: 'dec', node: 'A', status: 'running' }, m, 'T');
+    expect(out.run).toMatchObject({ node: 'D', status: 'running' }); // advanced the auto prefix, parked at D
+    expect(out.yield).toMatchObject({ kind: 'agent', node: 'D' });
+    expect(out.yield.choices).toEqual([
+      { to: 'X', mode: 'agent', when: 'needs fix' },
+      { to: 'Y', mode: 'agent', when: 'all good' },
+    ]);
+  });
+
+  it('yields kind=work/section/vote according to the rail mode at the node', () => {
+    const work = step({ machine: 'w', node: 'A', status: 'running' },
+      M('w', ['A', 'B'], [{ from: 'A', to: 'B', mode: 'work', prompt: 'do it' }]), 'T');
+    expect(work.yield).toMatchObject({ kind: 'work', node: 'A' });
+    expect(work.yield.choices[0]).toMatchObject({ to: 'B', mode: 'work', prompt: 'do it' });
+
+    const sec = step({ machine: 's', node: 'P', status: 'running' },
+      M('s', ['P', 'J'], [{ from: 'P', to: 'J', mode: 'section', sections: [{ to: 'A' }, { to: 'B' }] }]), 'T');
+    expect(sec.yield).toMatchObject({ kind: 'section', node: 'P' });
+    expect(sec.yield.choices[0].sections).toEqual([{ to: 'A' }, { to: 'B' }]);
+
+    const vote = step({ machine: 'v', node: 'G', status: 'running' },
+      M('v', ['G', 'K'], [{ from: 'G', to: 'K', mode: 'vote', branch: 'V', samples: 5 }]), 'T');
+    expect(vote.yield).toMatchObject({ kind: 'vote', node: 'G' });
+    expect(vote.yield.choices[0]).toMatchObject({ branch: 'V', samples: 5 });
+  });
+
+  it('honours CEL conditions on auto rails — takes the first whose guard holds', () => {
+    const m = M('guard', ['A', 'Yes', 'No'], [
+      { from: 'A', to: 'Yes', mode: 'auto', condition: 'value.score > 0.5' },
+      { from: 'A', to: 'No', mode: 'auto', condition: 'value.score <= 0.5' },
+    ]);
+    expect(step({ machine: 'guard', node: 'A', score: 0.9 }, m, 'T').run).toMatchObject({ node: 'Yes', status: 'done' });
+    expect(step({ machine: 'guard', node: 'A', score: 0.2 }, m, 'T').run).toMatchObject({ node: 'No', status: 'done' });
+  });
+
+  it('stalls (status=blocked) when no auto rail guard is satisfied', () => {
+    const m = M('stall', ['A', 'B'], [{ from: 'A', to: 'B', mode: 'auto', condition: 'value.ready == true' }]);
+    const out = step({ machine: 'stall', node: 'A', ready: false }, m, 'T');
+    expect(out.run).toMatchObject({ node: 'A', status: 'blocked' });
+    expect(out.yield).toMatchObject({ kind: 'blocked', node: 'A' });
+  });
+
+  it('does not spin on a guardless auto cycle — reports kind=cycle', () => {
+    const m = M('loop', ['A', 'B'], [
+      { from: 'A', to: 'B', mode: 'auto' },
+      { from: 'B', to: 'A', mode: 'auto' },
+    ]);
+    const out = step({ machine: 'loop', node: 'A' }, m, 'T');
+    expect(out.yield.kind).toBe('cycle');
+    expect(out.run.status).toBe('blocked');
+  });
+
+  it('derives rails from arrows when the def carries no precomputed rails', () => {
+    const out = step(
+      { machine: 'arr', node: 'A' },
+      { name: 'arr', nodes: [{ name: 'A' }, { name: 'B' }], arrows: [{ from: 'A', arrow: '->', to: 'B' }] },
+      'T',
+    );
+    expect(out.yield).toBeNull();
+    expect(out.run).toMatchObject({ node: 'B', status: 'done' });
+  });
+});
+
+describe('railHolds', () => {
+  it('is vacuously true with no condition', () => {
+    expect(railHolds({ from: 'A', to: 'B' }, { node: 'A' })).toBe(true);
+  });
+  it('binds the run as `value`', () => {
+    expect(railHolds({ condition: 'value.n >= 3' }, { n: 4 })).toBe(true);
+    expect(railHolds({ condition: 'value.n >= 3' }, { n: 1 })).toBe(false);
+  });
+  it('treats an invalid/throwing condition as false (rail does not fire)', () => {
+    expect(railHolds({ condition: 'value.missing.deep == 1' }, { node: 'A' })).toBe(false);
   });
 });

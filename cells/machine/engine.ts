@@ -11,12 +11,17 @@
  * Why a generator rather than an in-memory interpreter (e.g. XState, like canvas'
  * gesture machine): a run's state lives in substrate FACTS and advances via
  * independent, stateless Lambda reactions — there is no durable host to hold an
- * interpreter between events, and a cell can neither read the substrate nor call
- * other cells. So the core PROJECTS the machine to declared actions + `deliver`
- * subscriptions (model invocation and sibling-aggregating barriers must stay
- * substrate-side) and computes the deterministic writes the cell itself emits.
- * See docs/machine.md (the canonical design doc).
+ * interpreter between events. The core PROJECTS the machine to declared actions +
+ * `deliver` subscriptions and computes the deterministic writes the cell emits.
+ *
+ * NB: a cell CAN read the substrate directly (a scoped DDB read; @c15r/models does
+ * this) — the earlier note here that it "cannot" was wrong (see ADR-0017). The
+ * stateless `step()` below is the consequence: it advances the deterministic `auto`
+ * prefix IN-PROCESS (pure, CEL-guarded, no per-hop fact-write) and yields only at the
+ * non-deterministic rails — see ADR-0018. See docs/machine.md (the canonical design doc).
  */
+
+import { evaluate as celEvaluate } from '@marcbachmann/cel-js';
 
 /** DyGram's relationship arrows → substrate edge relations (faithful to DyGram's
  *  arrow semantics). These are the *relationship* rels — rail *execution* mode is
@@ -346,3 +351,114 @@ export function spawnChildrenWrites(run, machine, spec, at) {
 // Note: progressive disclosure (the old `disclose` tool) was pruned — a driving
 // agent reads `machine/<m>` directly; rails already carry `when` descriptors and
 // the `decide-<from>` action descriptions surface the branch menu. See docs/machine.md.
+
+/** The rails a machine def carries (already computed by define_machine), or
+ *  derived from arrows as a fallback. Pure. */
+export function machineRails(machine) {
+  if (Array.isArray(machine?.rails) && machine.rails.length) return machine.rails;
+  return railsFrom(machine?.arrows || [], undefined);
+}
+
+/** Evaluate a rail's optional CEL `condition` against the run fact value. The
+ *  binding mirrors the substrate convention (`value.<path>`, as in subscription
+ *  `match.cel` and action `if.cel`): an undefined condition is vacuously true; a
+ *  throwing/invalid condition is treated as false (the rail does not fire). */
+export function railHolds(rail, run) {
+  if (!rail || rail.condition == null || rail.condition === '') return true;
+  try {
+    return celEvaluate(rail.condition, { value: run, key: `machine-run/${run?.run ?? ''}`, meta: null }) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** A yield choice surfaced to the driver/decider at a non-deterministic node —
+ *  carries just enough of the rail to make (or deliver) the decision. */
+const choiceOf = (r) => ({
+  to: r.to,
+  mode: r.mode,
+  ...(r.when ? { when: r.when } : {}),
+  ...(r.prompt ? { prompt: r.prompt } : {}),
+  ...(r.branch ? { branch: r.branch } : {}),
+  ...(Array.isArray(r.sections) ? { sections: r.sections } : {}),
+  ...(typeof r.samples === 'number' ? { samples: r.samples } : {}),
+});
+
+/**
+ * The stateless stepper — the heart of ADR-0017. PURE: state IS the run fact
+ * value (`{ machine, node, status, ... }`); given the machine def it advances the
+ * run *in-process* along deterministic `auto` rails (evaluating each rail's CEL
+ * `condition`), emitting NO intermediate fact-writes, until it reaches one of:
+ *
+ *   - a TERMINAL node (no outgoing rails)        → `{ run: <status:done>, yield: null }`
+ *   - a non-deterministic node (any non-auto rail: agent/task/work/section/vote)
+ *                                                 → `{ run, yield: { kind, node, choices } }`
+ *   - a deterministic STALL (every auto rail's condition is false)
+ *                                                 → `{ run, yield: { kind: 'blocked', node, choices } }`
+ *   - a CYCLE (auto rails loop past the node budget)
+ *                                                 → `{ run, yield: { kind: 'cycle', node, choices } }`
+ *
+ * The returned `run` is the advanced fact value the caller persists (one write,
+ * the latest revision of `machine-run/<run>` — not one per hop). `path` is the
+ * node trail walked this step (for trajectory/debug). `yield === null` means the
+ * run completed; otherwise the caller (a DRIVING agent, or a REACTIVE deliver to
+ * a model) makes the decision at `yield.node` and re-steps. Determinism — the
+ * `auto` prefix and the join barrier — never needs a model or a fact cascade.
+ */
+export function step(run, machine, nowIso) {
+  const rails = machineRails(machine);
+  const at = nowIso ?? run?.at ?? null;
+  let cur = { ...run };
+  let node = run?.node;
+  const path = [node];
+  // Cycle budget: every node may be entered at most once along a single
+  // deterministic walk (auto rails should not revisit without a guard).
+  const budget = (Array.isArray(machine?.nodes) ? machine.nodes.length : rails.length) + 1;
+  const seen = new Set([node]);
+
+  for (let i = 0; i < budget; i++) {
+    const out = rails.filter((r) => r.from === node);
+    if (out.length === 0) {
+      // Terminal — the run is done.
+      return { run: { ...cur, node, status: 'done', at }, yield: null, path };
+    }
+    const deterministic = out.every((r) => r.mode === 'auto');
+    if (!deterministic) {
+      // A decision lives here — yield to the driver/model. The run sits at `node`.
+      const kind = (out.find((r) => r.mode !== 'auto') || out[0]).mode;
+      return {
+        run: { ...cur, node, status: 'running', at },
+        yield: { kind, node, choices: out.map(choiceOf) },
+        path,
+      };
+    }
+    // All auto: take the first rail whose condition holds (declaration order).
+    const chosen = out.find((r) => railHolds(r, cur));
+    if (!chosen) {
+      // Deterministic stall — no auto rail's guard is satisfied yet.
+      return {
+        run: { ...cur, node, status: 'blocked', at },
+        yield: { kind: 'blocked', node, choices: out.map(choiceOf) },
+        path,
+      };
+    }
+    node = chosen.to;
+    cur = { ...cur, node, via: `${chosen.from}->${chosen.to}` };
+    path.push(node);
+    if (seen.has(node)) {
+      // Re-entered a node along auto rails — a guardless loop. Stop rather than spin.
+      return {
+        run: { ...cur, node, status: 'blocked', at },
+        yield: { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) },
+        path,
+      };
+    }
+    seen.add(node);
+  }
+  // Budget exhausted (defensive — the seen-set should catch loops first).
+  return {
+    run: { ...cur, node, status: 'blocked', at },
+    yield: { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) },
+    path,
+  };
+}
