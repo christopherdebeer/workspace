@@ -311,8 +311,12 @@ function validateMachine(nodes, rails) {
   const adj = new Map();
   const indeg = new Map();
   for (const n of names) { adj.set(n, []); indeg.set(n, 0); }
+  const link = (from, to) => { if (names.has(from) && names.has(to)) { adj.get(from).push(to); indeg.set(to, indeg.get(to) + 1); } };
   for (const r of rails) {
-    if (names.has(r.from) && names.has(r.to)) { adj.get(r.from).push(r.to); indeg.set(r.to, indeg.get(r.to) + 1); }
+    link(r.from, r.to);
+    // section/vote also SPAWN their branch targets (reachable, though not railed):
+    if (r.mode === 'section') for (const s of r.sections || []) link(r.from, s.to);
+    if (r.mode === 'vote' && r.branch) link(r.from, r.branch);
   }
   const entries = [...names].filter((n) => indeg.get(n) === 0);
   const terminals = [...names].filter((n) => adj.get(n).length === 0);
