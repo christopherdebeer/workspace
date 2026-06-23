@@ -19,6 +19,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App } from './client/app';
 import { installBridge } from './client/bridge';
+import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, disclose } from './engine';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
@@ -32,18 +33,6 @@ function buildBoot(user, ssr) {
   return { session: { user: user ?? null }, machines, runs };
 }
 
-/** DyGram's relationship arrows → substrate edge relations (faithful to DyGram's
- *  arrow semantics; see docs/machine-cell.md). Note these are the *relationship*
- *  rels — rail *execution* mode is a separate, substrate-only concept (railsFrom). */
-const ARROW_RELS = {
-  '->': 'flows-to',
-  '-->': 'depends-on',
-  '=>': 'causes',
-  '<|--': 'inherits',
-  '*-->': 'composes',
-  'o-->': 'aggregates',
-  '<-->': 'relates',
-};
 
 /**
  * The cell-required `_renderers/machine` source (a canvas ElementView): adapts a
@@ -247,214 +236,6 @@ async function emit(detail) {
   );
 }
 
-/** A safe `_actions/` id segment — declared-action ids must not contain "/". */
-const seg = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '_');
-
-/**
- * Rails from arrows (when not declared explicitly). This arrow→mode mapping is a
- * substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum
- * and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its
- * `=>` is causation *styling*). We instead make mode explicit: a plain flow (`->`)
- * is deterministic (auto); `=>` is an agent-decision rail ("escalate when
- * reasoning needed"); `~>`/`~>>` are our own rail arrows for task/work. Other
- * relationship arrows (`-->`, `*-->`, …) are structure, not transitions, so they
- * don't become rails. See docs/machine-dygram-contrast.md.
- */
-function railsFrom(arrows, explicit) {
-  if (Array.isArray(explicit) && explicit.length) {
-    return explicit.map((r) => ({
-      from: r.from,
-      to: r.to,
-      mode: ['agent', 'task', 'work', 'section', 'vote'].includes(r.mode) ? r.mode : 'auto',
-      ...(r.condition ? { condition: r.condition } : {}),
-      // Progressive disclosure (Agent-Skills Level-1): a one-line "when to use
-      // this branch" descriptor surfaced to the decider without the full body.
-      ...(r.when ? { when: r.when } : {}),
-      // A `work` rail SPAWNS an agent (the machine uses an agent) — it carries the
-      // brief the spawned @owner/models.agent runs with: the prompt, scoped grants,
-      // and turn budget. (Distinct from `task`, which parks a claimable hand-off
-      // for a DRIVING agent.)
-      ...(r.prompt ? { prompt: r.prompt } : {}),
-      ...(r.grants ? { grants: r.grants } : {}),
-      ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
-      // The agent's tool allowlist (a subset of the substrate MCP vocabulary the
-      // spawned/driving agent may call) — see docs/machine-agent-scopes.md. The
-      // executor filters its toolbox to this; the full token-scoped model slots
-      // in here later. `grants`/`scope` bound which facts those tools may touch.
-      ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
-      ...(r.scope ? { scope: r.scope } : {}),
-      // Parallel-branching config (docs/machine-workflow-parallels.md):
-      //  - section: `sections` = [{to, when?}] independent branches fanned out,
-      //    then synthesised; `to` is the JOIN node the parent advances to.
-      //  - vote: `branch` sampled `samples`× → consensus; `to` is the JOIN node.
-      ...(Array.isArray(r.sections) ? { sections: r.sections } : {}),
-      ...(r.branch ? { branch: r.branch } : {}),
-      ...(typeof r.samples === 'number' ? { samples: r.samples } : {}),
-    }));
-  }
-  const rails = [];
-  for (const e of arrows) {
-    if (e.arrow === '->') rails.push({ from: e.from, to: e.to, mode: 'auto' });
-    else if (e.arrow === '=>') rails.push({ from: e.from, to: e.to, mode: 'agent' });
-    else if (e.arrow === '~>') rails.push({ from: e.from, to: e.to, mode: 'task' });
-    else if (e.arrow === '~>>') rails.push({ from: e.from, to: e.to, mode: 'work' });
-  }
-  return rails;
-}
-
-/**
- * Static analysis over a machine's rail graph — the structural checks DyGram's
- * `graph-validator` runs that our projection silently skips (a machine with
- * dangling rails, an unreachable node, or a transition cycle is otherwise
- * accepted as-is). Pure / no I/O. Errors are breakages (a run can't start or a
- * rail points nowhere); warnings are smells (unreachable, orphan, cycle, no
- * terminal). Context nodes touched only by relationship arrows — not rails —
- * are correctly flagged as orphan/unreachable here because rails ARE the
- * executable graph. See docs/machine-dygram-contrast.md §3.
- */
-function validateMachine(nodes, rails) {
-  const names = new Set((nodes || []).map((n) => n && n.name).filter(Boolean));
-  const errors = [];
-  const warnings = [];
-
-  // Dangling rails — an endpoint with no node.
-  for (const r of rails) {
-    if (r.from && !names.has(r.from)) errors.push({ code: 'dangling-rail', message: `rail "${r.from}" → "${r.to}": no node named "${r.from}"` });
-    if (r.to && !names.has(r.to)) errors.push({ code: 'dangling-rail', message: `rail "${r.from}" → "${r.to}": no node named "${r.to}"` });
-  }
-
-  // Adjacency + in-degree over the (well-formed) rails — the executable graph.
-  const adj = new Map();
-  const indeg = new Map();
-  for (const n of names) { adj.set(n, []); indeg.set(n, 0); }
-  const link = (from, to) => { if (names.has(from) && names.has(to)) { adj.get(from).push(to); indeg.set(to, indeg.get(to) + 1); } };
-  for (const r of rails) {
-    link(r.from, r.to);
-    // section/vote also SPAWN their branch targets (reachable, though not railed):
-    if (r.mode === 'section') for (const s of r.sections || []) link(r.from, s.to);
-    if (r.mode === 'vote' && r.branch) link(r.from, r.branch);
-  }
-  const entries = [...names].filter((n) => indeg.get(n) === 0);
-  const terminals = [...names].filter((n) => adj.get(n).length === 0);
-
-  // Reachability (DFS from entry nodes).
-  const seen = new Set();
-  const stack = [...entries];
-  while (stack.length) { const n = stack.pop(); if (seen.has(n)) continue; seen.add(n); for (const m of adj.get(n)) stack.push(m); }
-  for (const n of names) if (!seen.has(n)) warnings.push({ code: 'unreachable', message: `node "${n}" is unreachable from any entry` });
-
-  // Orphans — no rail touches them (and the machine has other nodes).
-  const touched = new Set();
-  for (const r of rails) { if (names.has(r.from)) touched.add(r.from); if (names.has(r.to)) touched.add(r.to); }
-  for (const n of names) if (!touched.has(n) && names.size > 1) warnings.push({ code: 'orphan', message: `node "${n}" has no rails (unreachable by execution)` });
-
-  // Cycle detection (white/grey/black DFS over rails).
-  const color = new Map();
-  const cycles = [];
-  const dfs = (n, path) => {
-    color.set(n, 1);
-    for (const m of adj.get(n)) {
-      if (color.get(m) === 1) cycles.push([...path, n, m].join(' → '));
-      else if (!color.get(m)) dfs(m, [...path, n]);
-    }
-    color.set(n, 2);
-  };
-  for (const n of names) if (!color.get(n)) dfs(n, []);
-  for (const c of cycles) warnings.push({ code: 'cycle', message: `transition cycle ${c} — a reactive machine could loop; add a condition/guard` });
-
-  // Entry/terminal presence.
-  if (names.size && entries.length === 0) errors.push({ code: 'no-entry', message: 'no entry node (every node has an incoming rail) — a run cannot start' });
-  if (names.size && terminals.length === 0) warnings.push({ code: 'no-terminal', message: 'no terminal node (every node has an outgoing rail) — a run never reaches done' });
-
-  return { ok: errors.length === 0, errors, warnings, stats: { nodes: names.size, rails: rails.length, entries, terminals, cyclic: cycles.length > 0 } };
-}
-
-/**
- * Project a machine's rails into cell-required declared actions in the owner's
- * slice (now permitted on the organ path). Each rail becomes an invokable,
- * guarded transition over a `machine-run/<run>` fact — execution IS invoking
- * these via the gateway, and the run fact's revision history is the trajectory
- * (effects-as-data). Spend reasoning only at agent rails:
- *   - start              seed a run at the entry node (no incoming rail)
- *   - <from>-to-<to>      auto rail: advance when the run is at `from`, no LLM
- *   - decide-<from>       agent rail: record the chosen branch as a `claim`,
- *                         then advance — the only place a model is invoked
- */
-function projectionActions(name, nodes, rails) {
-  const m = seg(name);
-  const runKey = 'machine-run/${params.run}';
-  const tags = ['machine', `machine:${name}`];
-  const hasOut = (node) => rails.some((r) => r.from === node);
-  const hasIn = (node) => rails.some((r) => r.to === node);
-  const entry = (nodes.find((n) => !hasIn(n.name)) ?? nodes[0])?.name;
-  const actions = [];
-
-  if (entry) {
-    actions.push({
-      id: `machine.${m}.start`,
-      description: `Start a run of "${name}" at ${entry}. Optional \`text\` is the trigger-context body (a Claude-Routine-style payload) stored on the run so the entry node's agent sees it.`,
-      params: {
-        run: { type: 'string', required: true, description: 'Run id → machine-run/<run>' },
-        text: { type: 'string', required: false, description: 'Trigger context body — visible to the entry agent' },
-      },
-      writes: [{ key: runKey, value: { machine: name, node: entry, status: 'running', startedAt: '${now}', text: '${params.text}' }, type: 'machine-run', tags, ifAbsent: true }],
-    });
-  }
-
-  for (const r of rails.filter((x) => x.mode === 'auto')) {
-    const ifConds = [{ key: runKey, path: 'node', op: 'eq', value: r.from }];
-    if (r.condition) ifConds.push({ cel: r.condition, key: runKey });
-    actions.push({
-      id: `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`,
-      description: `Auto rail ${r.from} → ${r.to}${hasOut(r.to) ? '' : ' (terminal)'}.`,
-      params: { run: { type: 'string', required: true } },
-      if: ifConds,
-      writes: [{ key: runKey, value: { machine: name, node: r.to, status: hasOut(r.to) ? 'running' : 'done', at: '${now}', via: `${r.from}->${r.to}` }, type: 'machine-run', tags }],
-    });
-  }
-
-  // Agent (`=>`) and task (`~>`) rails both resolve at `from` by recording a
-  // chosen branch as a claim + advancing — the same completion action, whether
-  // the chooser is a model (agent) or a claimant working an open task (task).
-  const isDecision = (x) => x.mode === 'agent' || x.mode === 'task';
-  for (const from of [...new Set(rails.filter(isDecision).map((x) => x.from))]) {
-    const branchRails = rails.filter((x) => isDecision(x) && x.from === from);
-    const branches = branchRails.map((x) => x.to);
-    // Progressive disclosure (Level-1): show each branch with its one-line `when`
-    // descriptor so the decider chooses from typed options without the full body.
-    const menu = branchRails.map((x) => (x.when ? `${x.to} — ${x.when}` : x.to)).join('; ');
-    // The advance can't know the runtime-chosen branch's terminality, but when
-    // every branch is terminal the result is `done` regardless of choice — the
-    // common "decide/task → a terminal Result" case (mixed nodes resolve `done`
-    // correctly via models.decide, which sees the chosen branch).
-    const decisionStatus = branches.every((b) => !hasOut(b)) ? 'done' : 'running';
-    actions.push({
-      id: `machine.${m}.decide-${seg(from)}`,
-      description: `Decision at ${from}: record the chosen branch as a claim and advance. Branches: ${menu}.`,
-      params: {
-        run: { type: 'string', required: true },
-        to: { type: 'string', required: true, enum: branches, description: 'The chosen branch' },
-        statement: { type: 'string', description: 'Why this branch — becomes the claim' },
-        confidence: { type: 'number', description: 'Calibrated belief 0..1' },
-      },
-      if: [{ key: runKey, path: 'node', op: 'eq', value: from }],
-      writes: [
-        { key: 'claims/${params.run}.' + seg(from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
-        { key: runKey, value: { machine: name, node: '${params.to}', status: decisionStatus, at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
-      ],
-    });
-  }
-
-  // Parallel branching (sectioning + voting) is NOT projected as a declared
-  // action: a single action's multi-write (parent + N children) fired by a
-  // reaction does not reliably emit its secondary writes, so the children's
-  // downstream `work`/`decide` deliveries never fire. Instead the fan is a
-  // `deliver` to this cell's `spawn_children` tool (projectionSubscriptions),
-  // which emits EACH child as its own organ write — the path proven reliable.
-  // See docs/machine-workflow-parallels.md.
-  return actions;
-}
-
 /** Emit one cell-required declared action through the organ path. */
 async function emitAction(def, name) {
   await emit({ key: `_actions/${def.id}`, value: def, type: 'action', tags: ['machine', `machine:${name}`], via: 'machine.project' });
@@ -468,122 +249,6 @@ async function emitSubscription(def, name) {
 /** The owner whose slice this cell serves — used to address sibling cells. */
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
 
-/**
- * Subscriptions that make a machine reactive:
- *  - one per AUTO rail: invoke the transition action in-process; its `if` guard
- *    fires only the rail whose `from` = the run's current node, so the
- *    deterministic prefix advances itself.
- *  - one per AGENT node: when a run reaches it, deliver to `@owner/models.decide`
- *    — the model picks a branch and writes the decision back (re-triggering the
- *    rails), or, with no provider configured, leaves a claimable `task` fact for
- *    any substrate agent to complete. Reasoning is spent only here.
- */
-function projectionSubscriptions(name, rails) {
-  const m = seg(name);
-  const subs = [];
-  for (const r of rails.filter((x) => x.mode === 'auto')) {
-    const id = `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`;
-    subs.push({
-      id,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)}` },
-      invoke: id,
-      params: { run: '${keySuffix}' },
-    });
-  }
-  // Decision nodes deliver to the model. `=>` agent rails let it decide (falling
-  // back to a claimable task if no provider); `~>` task rails always defer to a
-  // claimable task. The `status != awaiting-decision` guard makes the run fire
-  // the decision once on arrival, not again when it parks awaiting a claimant.
-  const agentNodes = new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from));
-  const taskNodes = new Set(rails.filter((x) => x.mode === 'task').map((x) => x.from));
-  for (const from of new Set([...agentNodes, ...taskNodes])) {
-    const defer = taskNodes.has(from) && !agentNodes.has(from);
-    subs.push({
-      id: `machine.${m}.decide-${seg(from)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
-      deliver: `@${OWNER}/models.decide`,
-      params: defer ? { run: '${keySuffix}', defer: 'true' } : { run: '${keySuffix}' },
-    });
-  }
-  // `work` rails SPAWN an agent: when a run reaches the node, deliver it to
-  // @owner/models.agent (the substrate tool-loop) with the rail's brief + scoped
-  // grants. The agent DOES the work and advances the run itself (it writes
-  // machine-run/<run> to the next node) — the run completes instead of parking.
-  // `status == "running"` makes it fire once on arrival.
-  for (const r of rails.filter((x) => x.mode === 'work')) {
-    const advance = `When the work is complete, advance the run by writing fact "machine-run/\${keySuffix}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(r.to)},"status":"done","via":${JSON.stringify(`${r.from}~>>work`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
-    const prompt = (r.prompt ? `${r.prompt}\n\n` : `Do the work for node "${r.from}" of machine "${name}", run \${keySuffix}.\n\n`) + advance;
-    subs.push({
-      id: `machine.${m}.work-${seg(r.from)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(r.from)} && value.status == "running"` },
-      deliver: `@${OWNER}/models.agent`,
-      params: {
-        prompt,
-        // Grants default to the run fact only (so it can advance) + read-all;
-        // a rail widens write within the cell's standing as needed.
-        grants: r.grants ?? { read: true, write: ['machine-run/'] },
-        // Optional tool allowlist — the executor filters its toolbox to this
-        // (docs/machine-agent-scopes.md). Omitted = the executor's full default set.
-        ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
-        ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
-        factKey: `machine-work/${m}.\${keySuffix}`,
-        tags: ['machine', `machine:${name}`, 'work'],
-      },
-    });
-  }
-
-  // Parallel branching (section/vote): the fan DELIVERS to this cell's
-  // `spawn_children` tool when the parent reaches the fan node — the tool emits
-  // each child as its OWN organ write (reliable downstream delivery, unlike a
-  // declared action's secondary writes). The join barrier re-invokes a
-  // synthesis/tally agent on each child completion, which advances the parent
-  // only when ALL children are done (an eventual, idempotent barrier — there is
-  // no aggregate `if`, so the barrier is agentic). docs/machine-workflow-parallels.md.
-  for (const r of rails.filter((x) => x.mode === 'section' || x.mode === 'vote')) {
-    const F = r.from;
-    const J = r.to;
-    const isVote = r.mode === 'vote';
-    const childKind = isVote ? 'vote' : 'section';
-    const sep = isVote ? '#' : '§';
-    const count = isVote ? Math.max(2, Math.min(7, r.samples || 3)) : (r.sections || []).length;
-    const jTerminal = !rails.some((x) => x.from === J);
-    // The spec is static per machine (no event templating) — the cell builds the
-    // child keys from `run` + this spec, emitting one organ write per child.
-    const spec = JSON.stringify(
-      isVote
-        ? { node: F, join: J, kind: 'vote', branch: r.branch, samples: count }
-        : { node: F, join: J, kind: 'section', branches: (r.sections || []).map((s) => s.to) },
-    );
-    subs.push({
-      id: `machine.${m}.fan-${seg(F)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(F)} && value.status == "running"` },
-      deliver: `@${OWNER}/machine.spawn_children`,
-      params: { run: '${keySuffix}', machine: name, spec },
-    });
-    // The barrier matches the CHILD's completion by its KEY separator (`§`/`#`),
-    // not a value field: a child's `work`/`decide` advance overwrites its value
-    // (dropping `kind`/`parent`), but the key is stable. The synthesis agent
-    // derives the parent run id from the child id (everything before the sep).
-    const synthAdvance = `STEP 2 (only once all ${count} are status=="done"): ${isVote ? 'tally the consensus across the sample claims' : 'synthesize the section results'}. Record it as a claim — write "claims/<parent>.${seg(F)}" = {"statement":"<your ${isVote ? 'consensus' : 'synthesis'}>","confidence":<0..1>,"machine":${JSON.stringify(name)},"at":${JSON.stringify(F)},"mode":${JSON.stringify(r.mode)}} (type claim, tags ["claim","machine","dygram"]). Then advance the parent — write "machine-run/<parent>" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
-    const prompt =
-      `You are the ${isVote ? 'VOTE TALLY' : 'SECTION SYNTHESIS'} agent for machine ${JSON.stringify(name)}, fan node "${F}". A ${childKind} child run just completed: "\${keySuffix}". Derive the PARENT run id = everything before the first "${sep}" in that id. There are ${count} ${childKind} children keyed "machine-run/<parent>${sep}…".\n\n` +
-      `STEP 1: Read them — query with prefix "machine-run/<parent>${sep}". If FEWER than ${count} are status=="done", STOP and write nothing (you'll be re-invoked when the next child finishes).\n\n` +
-      synthAdvance;
-    subs.push({
-      id: `machine.${m}.join-${seg(F)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.status == "done" && key.contains(${JSON.stringify(sep)})` },
-      deliver: `@${OWNER}/models.agent`,
-      params: {
-        prompt,
-        grants: { read: true, write: ['machine-run/', 'claims/'] },
-        maxTurns: 8,
-        factKey: `machine-join/${m}.\${keySuffix}`,
-        tags: ['machine', `machine:${name}`, 'join'],
-      },
-    });
-  }
-  return subs;
-}
 
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? 'GET';
@@ -681,53 +346,19 @@ export const handler = async (event) => {
     if (!a.run || !a.machine || !a.spec) return json(400, { error: 'run, machine, and spec are required' });
     let spec;
     try { spec = typeof a.spec === 'string' ? JSON.parse(a.spec) : a.spec; } catch { return json(400, { error: 'spec is not valid JSON' }); }
-    const tags = ['machine', `machine:${a.machine}`];
-    const isVote = spec.kind === 'vote';
-    // Park the parent in its wait-state first (stops the fan re-firing).
-    await emit({
-      key: `machine-run/${a.run}`,
-      value: { machine: a.machine, node: spec.node, status: isVote ? 'voting' : 'sectioning', join: spec.join, via: `${spec.node}~fan`, at: new Date().toISOString() },
-      type: 'machine-run',
-      tags,
-      via: 'machine.spawn_children',
-    });
-    // One SEPARATE organ write per child — each reliably drives its own rail.
-    const children = [];
-    if (isVote) {
-      const k = Math.max(2, Math.min(7, spec.samples || 3));
-      for (let i = 0; i < k; i++) {
-        const key = `machine-run/${a.run}#${i}`;
-        await emit({ key, value: { machine: a.machine, node: spec.branch, parent: a.run, kind: 'vote', status: 'running', at: new Date().toISOString() }, type: 'machine-run', tags: [...tags, 'parallel-child'], via: 'machine.spawn_children' });
-        children.push(key);
-      }
-    } else {
-      for (const t of spec.branches || []) {
-        const key = `machine-run/${a.run}§${seg(t)}`;
-        await emit({ key, value: { machine: a.machine, node: t, parent: a.run, kind: 'section', status: 'running', at: new Date().toISOString() }, type: 'machine-run', tags: [...tags, 'parallel-child'], via: 'machine.spawn_children' });
-        children.push(key);
-      }
-    }
-    return json(200, { spawned: true, run: a.run, kind: spec.kind, children });
+    // The pure core computes the writes (parent wait-state + one child per branch);
+    // the shell emits each as its OWN organ write (reliable downstream delivery).
+    const writes = spawnChildrenWrites(a.run, a.machine, spec, new Date().toISOString());
+    for (const w of writes) await emit({ ...w, via: 'machine.spawn_children' });
+    return json(200, { spawned: true, run: a.run, kind: spec.kind, children: writes.slice(1).map((w) => w.key) });
   }
 
   if (method === 'POST' && path === '/_tools/disclose') {
     const a = event.body ? JSON.parse(event.body) : {};
     const nodes = Array.isArray(a.nodes) ? a.nodes : [];
     const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
-    const out = (n) => rails.filter((r) => r.from === n).map((r) => ({ to: r.to, mode: r.mode, ...(r.when ? { when: r.when } : {}) }));
-    if (a.node) {
-      // Level-2 — one node's full body + its outgoing rails.
-      const n = nodes.find((x) => x.name === a.node);
-      if (!n) return json(404, { error: `no node "${a.node}"` });
-      return json(200, { level: 2, node: n, rails: out(a.node) });
-    }
-    // Level-1 — one-line descriptors + the branch menu leaving each node.
-    const entry = nodes.find((n) => !rails.some((r) => r.to === n.name)) ?? nodes[0];
-    return json(200, {
-      level: 1,
-      entry: entry?.name,
-      nodes: nodes.map((n) => ({ name: n.name, kind: n.kind, summary: n.title ?? '', rails: out(n.name) })),
-    });
+    const out = disclose(nodes, rails, a.node);
+    return json(out.error ? 404 : 200, out);
   }
 
   if (method === 'POST' && path === '/_tools/define_machine') {
@@ -762,13 +393,13 @@ export const handler = async (event) => {
     let projected = [];
     const subscriptions = [];
     if (a.project !== false && rails.length) {
-      projected = projectionActions(a.name, nodes, rails);
+      projected = projectActions(a.name, nodes, rails);
       for (const def of projected) await emitAction(def, a.name);
       // Opt-in reactivity: subscribe each auto rail to this machine's runs, so
       // the deterministic prefix advances itself. Without `reactive`, the same
       // actions remain drivable by hand via workspace.invoke.
       if (a.reactive) {
-        for (const s of projectionSubscriptions(a.name, rails)) {
+        for (const s of projectSubscriptions(a.name, rails, OWNER)) {
           await emitSubscription(s, a.name);
           subscriptions.push(s.id);
         }
