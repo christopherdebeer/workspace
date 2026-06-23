@@ -160,6 +160,22 @@ const TOOLS = [
     scope: null,
   },
   {
+    name: 'spawn_children',
+    description:
+      'Internal (reaction-target) — spawn the child runs of a section/vote fan. The fan rail delivers here when a run reaches the fan node; this emits the parent\'s wait-state AND one child run fact per branch as SEPARATE organ writes (so each reliably re-triggers its work/decide delivery, unlike a single declared action\'s secondary writes — docs/machine-workflow-parallels.md). Not meant to be called by hand.',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run: { type: 'string', description: 'Parent run id' },
+        machine: { type: 'string', description: 'Machine slug' },
+        spec: { type: 'string', description: 'JSON: { node, join, kind:"section"|"vote", branches?[], branch?, samples? }' },
+      },
+      required: ['run', 'machine', 'spec'],
+    },
+    scope: null,
+  },
+  {
     name: 'disclose',
     description:
       'Progressive-disclosure view of a machine (Agent-Skills tiering — see docs/machine-workflow-parallels.md). Pure/no-write over an inline { nodes, rails } (the def a driving agent already read). Level-1 (default): each node as a one-line descriptor + the rails leaving it as { to, mode, when } — the branch menu without bodies. Level-2: pass `node` to get that one node\'s full body + its outgoing rails. Keeps an agent\'s context small as a machine grows.',
@@ -429,46 +445,13 @@ function projectionActions(name, nodes, rails) {
     });
   }
 
-  // Parallel branching (sectioning + voting — docs/machine-workflow-parallels.md).
-  // The fan-out is declarative: one CHILD run fact per branch (keyed off the parent
-  // run id), which the machine's own reactive rails then drive independently. The
-  // JOIN is agentic and eventually-consistent — a synthesis/tally agent (wired in
-  // projectionSubscriptions) re-reads the full child set on each child completion
-  // and advances the parent to `to` only once all are present (idempotent).
-  for (const r of rails.filter((x) => x.mode === 'section' || x.mode === 'vote')) {
-    const F = r.from;
-    const J = r.to;
-    const isVote = r.mode === 'vote';
-    const childTag = isVote ? 'vote' : 'section';
-    let childWrites;
-    if (isVote) {
-      const k = Math.max(2, Math.min(7, r.samples || 3));
-      childWrites = Array.from({ length: k }, (_, i) => ({
-        key: 'machine-run/${params.run}#' + i,
-        value: { machine: name, node: r.branch, status: 'running', parent: '${params.run}', kind: 'vote', at: '${now}' },
-        type: 'machine-run',
-        tags: [...tags, 'parallel-child'],
-      }));
-    } else {
-      childWrites = (r.sections || []).map((s) => ({
-        key: 'machine-run/${params.run}§' + seg(s.to),
-        value: { machine: name, node: s.to, status: 'running', parent: '${params.run}', kind: 'section', at: '${now}' },
-        type: 'machine-run',
-        tags: [...tags, 'parallel-child'],
-      }));
-    }
-    const fanned = isVote ? `${r.samples || 3}× ${r.branch}` : (r.sections || []).map((s) => s.to).join(' ∥ ');
-    actions.push({
-      id: `machine.${m}.fan-${seg(F)}`,
-      description: `${isVote ? 'Vote' : 'Section'} fan at ${F}: spawn ${fanned} as child runs; parent waits to ${isVote ? 'tally a consensus' : 'synthesize'} → ${J}${hasOut(J) ? '' : ' (terminal)'}. Children are tagged ${childTag} and driven by the machine's reactive rails.`,
-      params: { run: { type: 'string', required: true } },
-      if: [{ key: runKey, path: 'node', op: 'eq', value: F }],
-      writes: [
-        { key: runKey, value: { machine: name, node: F, status: isVote ? 'voting' : 'sectioning', at: '${now}', via: `${F}~fan`, join: J }, type: 'machine-run', tags },
-        ...childWrites,
-      ],
-    });
-  }
+  // Parallel branching (sectioning + voting) is NOT projected as a declared
+  // action: a single action's multi-write (parent + N children) fired by a
+  // reaction does not reliably emit its secondary writes, so the children's
+  // downstream `work`/`decide` deliveries never fire. Instead the fan is a
+  // `deliver` to this cell's `spawn_children` tool (projectionSubscriptions),
+  // which emits EACH child as its own organ write — the path proven reliable.
+  // See docs/machine-workflow-parallels.md.
   return actions;
 }
 
@@ -549,11 +532,13 @@ function projectionSubscriptions(name, rails) {
     });
   }
 
-  // Parallel branching (section/vote): the fan trigger spawns children when the
-  // parent reaches the fan node; the join barrier re-invokes a synthesis/tally
-  // agent on each child completion, which advances the parent only when ALL
-  // children are done (an eventual, idempotent barrier — there is no aggregate
-  // `if`, so the barrier is agentic). See docs/machine-workflow-parallels.md.
+  // Parallel branching (section/vote): the fan DELIVERS to this cell's
+  // `spawn_children` tool when the parent reaches the fan node — the tool emits
+  // each child as its OWN organ write (reliable downstream delivery, unlike a
+  // declared action's secondary writes). The join barrier re-invokes a
+  // synthesis/tally agent on each child completion, which advances the parent
+  // only when ALL children are done (an eventual, idempotent barrier — there is
+  // no aggregate `if`, so the barrier is agentic). docs/machine-workflow-parallels.md.
   for (const r of rails.filter((x) => x.mode === 'section' || x.mode === 'vote')) {
     const F = r.from;
     const J = r.to;
@@ -562,11 +547,18 @@ function projectionSubscriptions(name, rails) {
     const sep = isVote ? '#' : '§';
     const count = isVote ? Math.max(2, Math.min(7, r.samples || 3)) : (r.sections || []).length;
     const jTerminal = !rails.some((x) => x.from === J);
+    // The spec is static per machine (no event templating) — the cell builds the
+    // child keys from `run` + this spec, emitting one organ write per child.
+    const spec = JSON.stringify(
+      isVote
+        ? { node: F, join: J, kind: 'vote', branch: r.branch, samples: count }
+        : { node: F, join: J, kind: 'section', branches: (r.sections || []).map((s) => s.to) },
+    );
     subs.push({
       id: `machine.${m}.fan-${seg(F)}`,
       match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(F)} && value.status == "running"` },
-      invoke: `machine.${m}.fan-${seg(F)}`,
-      params: { run: '${keySuffix}' },
+      deliver: `@${OWNER}/machine.spawn_children`,
+      params: { run: '${keySuffix}', machine: name, spec },
     });
     const advance = `Then advance the parent by writing fact "machine-run/\${value.parent}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
     const prompt =
@@ -679,6 +671,40 @@ export const handler = async (event) => {
       via: 'machine.trigger_run',
     });
     return json(200, { triggered: true, machine: a.machine, run, key: `machine-trigger/${a.machine}/${run}` });
+  }
+
+  if (method === 'POST' && path === '/_tools/spawn_children') {
+    const a = event.body ? JSON.parse(event.body) : {};
+    if (!a.run || !a.machine || !a.spec) return json(400, { error: 'run, machine, and spec are required' });
+    let spec;
+    try { spec = typeof a.spec === 'string' ? JSON.parse(a.spec) : a.spec; } catch { return json(400, { error: 'spec is not valid JSON' }); }
+    const tags = ['machine', `machine:${a.machine}`];
+    const isVote = spec.kind === 'vote';
+    // Park the parent in its wait-state first (stops the fan re-firing).
+    await emit({
+      key: `machine-run/${a.run}`,
+      value: { machine: a.machine, node: spec.node, status: isVote ? 'voting' : 'sectioning', join: spec.join, via: `${spec.node}~fan`, at: new Date().toISOString() },
+      type: 'machine-run',
+      tags,
+      via: 'machine.spawn_children',
+    });
+    // One SEPARATE organ write per child — each reliably drives its own rail.
+    const children = [];
+    if (isVote) {
+      const k = Math.max(2, Math.min(7, spec.samples || 3));
+      for (let i = 0; i < k; i++) {
+        const key = `machine-run/${a.run}#${i}`;
+        await emit({ key, value: { machine: a.machine, node: spec.branch, parent: a.run, kind: 'vote', status: 'running', at: new Date().toISOString() }, type: 'machine-run', tags: [...tags, 'parallel-child'], via: 'machine.spawn_children' });
+        children.push(key);
+      }
+    } else {
+      for (const t of spec.branches || []) {
+        const key = `machine-run/${a.run}§${seg(t)}`;
+        await emit({ key, value: { machine: a.machine, node: t, parent: a.run, kind: 'section', status: 'running', at: new Date().toISOString() }, type: 'machine-run', tags: [...tags, 'parallel-child'], via: 'machine.spawn_children' });
+        children.push(key);
+      }
+    }
+    return json(200, { spawned: true, run: a.run, kind: spec.kind, children });
   }
 
   if (method === 'POST' && path === '/_tools/disclose') {

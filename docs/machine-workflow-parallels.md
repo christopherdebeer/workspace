@@ -86,11 +86,22 @@ a token penalty.
 
 Anthropic's two parallelization variants (and the harness post's
 "fan-out-and-synthesize" / "adversarial verification") map onto two new rail
-modes. Because our execution is event-sourced over facts, the **fan-out is
-declarative** (one child-run write per branch) and the **join is agentic and
+modes. The **fan-out** is a `deliver` to this cell's `spawn_children` tool, which
+emits **each child run as its own organ write**, and the **join is agentic and
 eventually-consistent** (a synthesis/tally agent re-reads the full child set on
 each child completion and only advances once all are present — idempotent, no lost
 -update race):
+
+> **Why a cell tool, not a declared action.** The first cut projected the fan as a
+> declared action whose `writes[]` were the parent wait-state + N children. That
+> failed in testing: a *single action's multi-write, when fired by a reaction*,
+> does not reliably emit its secondary writes, so the children sometimes didn't
+> all land and — critically — never re-triggered their `work`/`decide` `deliver`
+> (a directly-written or single-write-reaction fact does; tending's `decide`
+> proves the latter). Routing the spawn through a cell tool that emits **one organ
+> write per child** restores the reliable path (the same path a hand-written run
+> fact takes). The join agent likewise advances the parent with a single direct
+> write.
 
 - **`section`** — a fan node spawns one **child run per target** (independent
   subtasks). A synthesis **work** agent gathers all child results and writes the
