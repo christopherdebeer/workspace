@@ -97,7 +97,7 @@ const TOOLS = [
         },
         rails: {
           type: 'array',
-          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, maxTurns? }]. Default derived from arrows (-> auto, => agent, ~> task, ~>> work). "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself. "task" parks a claimable hand-off for a DRIVING agent instead.',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. Default derived from arrows (-> auto, => agent, ~> task, ~>> work). "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine-agent-scopes.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
@@ -187,6 +187,12 @@ function railsFrom(arrows, explicit) {
       ...(r.prompt ? { prompt: r.prompt } : {}),
       ...(r.grants ? { grants: r.grants } : {}),
       ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
+      // The agent's tool allowlist (a subset of the substrate MCP vocabulary the
+      // spawned/driving agent may call) — see docs/machine-agent-scopes.md. The
+      // executor filters its toolbox to this; the full token-scoped model slots
+      // in here later. `grants`/`scope` bound which facts those tools may touch.
+      ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
+      ...(r.scope ? { scope: r.scope } : {}),
     }));
   }
   const rails = [];
@@ -337,6 +343,9 @@ function projectionSubscriptions(name, rails) {
         // Grants default to the run fact only (so it can advance) + read-all;
         // a rail widens write within the cell's standing as needed.
         grants: r.grants ?? { read: true, write: ['machine-run/'] },
+        // Optional tool allowlist — the executor filters its toolbox to this
+        // (docs/machine-agent-scopes.md). Omitted = the executor's full default set.
+        ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
         ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
         factKey: `machine-work/${m}.\${keySuffix}`,
         tags: ['machine', `machine:${name}`, 'work'],

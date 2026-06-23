@@ -214,6 +214,11 @@ interface AgentInput {
   maxTurns?: number;
   maxTokens?: number;
   grants?: AgentGrants;
+  /** Optional allowlist of tool NAMES the agent may use (a subset of the built
+   *  toolbox). Omitted = the full grant-derived set. The seam for machine-declared
+   *  tool scopes (docs/machine-agent-scopes.md); the token-scoped vocabulary slots
+   *  in here later. */
+  tools?: string[];
   /** Where the result fact lands (default agent/<jobId>). */
   factKey?: string;
   tags?: string[];
@@ -234,8 +239,10 @@ interface AgentToolDef {
   schema: Record<string, unknown>;
 }
 
-/** The tool surface offered to the model — emit only exists when write is granted. */
-function buildAgentTools(grants: AgentGrants): AgentToolDef[] {
+/** The tool surface offered to the model — emit only exists when write is granted.
+ *  An optional `allow` allowlist (tool names) narrows it further — a machine node
+ *  declaring exactly which tools its agent may call (docs/machine-agent-scopes.md). */
+function buildAgentTools(grants: AgentGrants, allow?: string[]): AgentToolDef[] {
   const tools: AgentToolDef[] = [];
   if (grants.read !== false) {
     tools.push(
@@ -278,6 +285,7 @@ function buildAgentTools(grants: AgentGrants): AgentToolDef[] {
       schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
     });
   }
+  if (Array.isArray(allow) && allow.length) return tools.filter((t) => allow.includes(t.name));
   return tools;
 }
 
@@ -479,7 +487,7 @@ const AGENT_PROVIDERS = ['anthropic', 'openai'] as const;
 
 async function runAgent(jobId: string, input: AgentInput): Promise<void> {
   const grants = input.grants ?? {};
-  const tools = buildAgentTools(grants);
+  const tools = buildAgentTools(grants, input.tools);
   const factKey = input.factKey ?? `agent/${jobId}`;
   const system =
     `You are an agent operating over the parc.land substrate — the workspace of facts owned by "${OWNER}". ` +
@@ -709,6 +717,7 @@ const TOOLS = [
           },
           additionalProperties: false,
         },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of tool names the agent may use (subset of substrate_query/substrate_read/substrate_emit/substrate_supersede). Omitted = the full grant-derived set. The seam for machine-declared tool scopes.' },
         factKey: { type: 'string', description: 'Where the result fact lands (default agent/<jobId>)' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Extra tags on the result + transcript facts' },
       },
