@@ -85,6 +85,51 @@ function Card({ children, onClick }: { children: React.ReactNode; onClick?: () =
 }
 const railArrow: Record<string, string> = { auto: '→', agent: '⇒', task: '⤳', work: '⇶' };
 
+/* ── mermaid (the machine drawn as a diagram) ───────────────────────────── */
+
+const sid = (s: string): string => String(s || 'n').replace(/[^A-Za-z0-9_]/g, '_');
+function toMermaid(m: MachineVal): string {
+  const esc = (s: string): string => String(s).replace(/["|]/g, "'").replace(/\n/g, ' ');
+  const lines = ['graph TD'];
+  for (const n of m.nodes ?? []) lines.push(`  ${sid(n.name)}["${esc(n.title || n.name)}"]`);
+  const edges = (m.rails ?? []).length
+    ? (m.rails ?? []).map((r) => ({ from: r.from, to: r.to, label: r.mode }))
+    : (m.arrows ?? []).map((a) => ({ from: a.from, to: a.to, label: (a.arrow ?? '').replace(/[|"]/g, '') }));
+  for (const e of edges) lines.push(`  ${sid(e.from)} -->|${esc(e.label)}| ${sid(e.to)}`);
+  return lines.join('\n');
+}
+
+// The specifier is a VARIABLE so the bundler keeps it a runtime import (mermaid
+// is client-only — never in the server bundle), matching the cell's renderer.
+let mermaidP: Promise<{ render: (id: string, src: string) => Promise<{ svg: string }> }> | null = null;
+function loadMermaid(): Promise<{ render: (id: string, src: string) => Promise<{ svg: string }> }> {
+  if (!mermaidP) {
+    const url = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaidP = import(/* @vite-ignore */ url).then((mod: { default: { initialize: (o: unknown) => void } }) => {
+      mod.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+      return mod.default as unknown as { render: (id: string, src: string) => Promise<{ svg: string }> };
+    });
+  }
+  return mermaidP;
+}
+
+let mmSeq = 0;
+function Mermaid({ source }: { source: string }): React.ReactElement {
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadMermaid()
+      .then((mer) => mer.render('mm' + (++mmSeq), source))
+      .then((r) => { if (alive && ref.current) ref.current.innerHTML = r.svg; })
+      .catch((e) => { if (alive) setErr(String((e && (e as Error).message) || e)); });
+    return () => { alive = false; };
+  }, [source]);
+  if (err) return <pre style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 9, padding: 10, overflow: 'auto', fontSize: 12 }}>{source}</pre>;
+  // SSR + first client render: an empty box (the ref-injected SVG matches it).
+  return <div ref={ref} suppressHydrationWarning style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12, overflow: 'auto', minHeight: 44, textAlign: 'center' }} />;
+}
+
 /* ── views ──────────────────────────────────────────────────────────────── */
 
 function SignInCard(): React.ReactElement {
@@ -187,6 +232,8 @@ function MachineView({ name, machines, seedRuns }: { name: string; machines: Ent
               {busy ? 'Starting…' : '▶ Trigger run'}</button>
           : <button onClick={() => void login()} style={{ border: `1px solid ${C.green}`, background: 'transparent', color: C.green, borderRadius: 8, padding: '7px 14px', font: 'inherit', cursor: 'pointer' }}>Sign in to trigger</button>}
       </div>
+
+      <Field label="Diagram"><Mermaid source={toMermaid(m)} /></Field>
 
       <Field label="Rails (the executable transitions)">
         <div style={{ display: 'grid', gap: 6 }}>

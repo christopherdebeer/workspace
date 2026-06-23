@@ -13,7 +13,8 @@
         "rails": "rail[] — {from, to, mode, condition?} the executable transitions; projected to _actions/machine.<name>.* declared actions"
       },
       "handlers": {
-        "render": [{ "hint": "fields" }]
+        "open": [{ "path": "/#/m/${match}" }],
+        "render": [{ "renderer": "_renderers/machine" }, { "hint": "fields" }]
       }
     },
     {
@@ -42,6 +43,7 @@
         "at": "string? — ISO time of the last transition"
       },
       "handlers": {
+        "open": [{ "path": "/#/r/${match}" }],
         "render": [{ "hint": "fields" }]
       }
     },
