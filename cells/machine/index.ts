@@ -560,21 +560,24 @@ function projectionSubscriptions(name, rails) {
       deliver: `@${OWNER}/machine.spawn_children`,
       params: { run: '${keySuffix}', machine: name, spec },
     });
-    const advance = `Then advance the parent by writing fact "machine-run/\${value.parent}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
+    // The barrier matches the CHILD's completion by its KEY separator (`§`/`#`),
+    // not a value field: a child's `work`/`decide` advance overwrites its value
+    // (dropping `kind`/`parent`), but the key is stable. The synthesis agent
+    // derives the parent run id from the child id (everything before the sep).
+    const synthAdvance = `STEP 2 (only once all ${count} are status=="done"): ${isVote ? 'tally the consensus across the sample claims' : 'synthesize the section results'}. Record it as a claim — write "claims/<parent>.${seg(F)}" = {"statement":"<your ${isVote ? 'consensus' : 'synthesis'}>","confidence":<0..1>,"machine":${JSON.stringify(name)},"at":${JSON.stringify(F)},"mode":${JSON.stringify(r.mode)}} (type claim, tags ["claim","machine","dygram"]). Then advance the parent — write "machine-run/<parent>" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
     const prompt =
-      (isVote
-        ? `You are the VOTE TALLY agent for machine ${JSON.stringify(name)}, parent run "\${value.parent}", fan node "${F}". There are ${count} sample child runs keyed "machine-run/\${value.parent}${sep}0" through "${sep}${count - 1}", each at node "${r.branch}" and producing a claim "claims/<childRunId>.${seg(r.branch)}".`
-        : `You are the SECTION SYNTHESIS agent for machine ${JSON.stringify(name)}, parent run "\${value.parent}", fan node "${F}". There are ${count} section child runs keyed with prefix "machine-run/\${value.parent}${sep}".`) +
-      `\n\nSTEP 1: Read the children (query prefix "machine-run/\${value.parent}${sep}"). If FEWER than ${count} are status=="done", STOP — write nothing; you will be re-invoked when the next child finishes.\n\nSTEP 2 (only once all ${count} are done): ${isVote ? 'tally the consensus across the sample claims' : 'synthesize the section results'}. Record it as a claim by writing "claims/\${value.parent}.${seg(F)}" = {"statement":"<your ${isVote ? 'consensus' : 'synthesis'}>","confidence":<0..1>,"machine":${JSON.stringify(name)},"at":${JSON.stringify(F)},"mode":${JSON.stringify(r.mode)}} (type claim, tags ["claim","machine","dygram"]). ${advance}`;
+      `You are the ${isVote ? 'VOTE TALLY' : 'SECTION SYNTHESIS'} agent for machine ${JSON.stringify(name)}, fan node "${F}". A ${childKind} child run just completed: "\${keySuffix}". Derive the PARENT run id = everything before the first "${sep}" in that id. There are ${count} ${childKind} children keyed "machine-run/<parent>${sep}…".\n\n` +
+      `STEP 1: Read them — query with prefix "machine-run/<parent>${sep}". If FEWER than ${count} are status=="done", STOP and write nothing (you'll be re-invoked when the next child finishes).\n\n` +
+      synthAdvance;
     subs.push({
       id: `machine.${m}.join-${seg(F)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.kind == ${JSON.stringify(childKind)} && value.status == "done"` },
+      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.status == "done" && key.contains(${JSON.stringify(sep)})` },
       deliver: `@${OWNER}/models.agent`,
       params: {
         prompt,
         grants: { read: true, write: ['machine-run/', 'claims/'] },
         maxTurns: 8,
-        factKey: `machine-join/${m}.\${value.parent}`,
+        factKey: `machine-join/${m}.\${keySuffix}`,
         tags: ['machine', `machine:${name}`, 'join'],
       },
     });
