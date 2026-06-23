@@ -27,6 +27,16 @@ export const handler = async (event: any) => {
         'access-control-allow-origin': '*',
       });
     }
+    if (path === '/substrate.js') {
+      // The shared SERVER-side substrate client (ADR-0017). NOT a browser module:
+      // a cell's Lambda imports this URL, the cell bundler fetches + inlines it at
+      // deploy time (its `@aws-sdk`/`node:` imports stay external, runtime-provided).
+      // Served verbatim from static/ — git truth: cells/kernel/static/substrate.js.
+      return respond(200, 'application/javascript; charset=utf-8', read('static/substrate.js'), {
+        'cache-control': 'public, max-age=60',
+        'access-control-allow-origin': '*',
+      });
+    }
     if (path === '/' || path === '') {
       return respond(
         200,

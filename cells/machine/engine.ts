@@ -327,6 +327,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
   const children = [];
   if (isVote) {
     const k = Math.max(2, Math.min(7, spec.samples || 3));
+    parent.value.count = k; // expected sibling count — the barrier waits for it
     for (let i = 0; i < k; i++) {
       children.push({
         key: `machine-run/${run}#${i}`,
@@ -336,6 +337,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
       });
     }
   } else {
+    parent.value.count = (spec.branches || []).length; // expected siblings
     for (const t of spec.branches || []) {
       children.push({
         key: `machine-run/${run}§${seg(t)}`,
@@ -351,6 +353,73 @@ export function spawnChildrenWrites(run, machine, spec, at) {
 // Note: progressive disclosure (the old `disclose` tool) was pruned — a driving
 // agent reads `machine/<m>` directly; rails already carry `when` descriptors and
 // the `decide-<from>` action descriptions surface the branch menu. See docs/machine.md.
+
+/**
+ * The single reactive subscription for the stateless-stepper model (ADR-0018):
+ * every change to one of this machine's runs delivers the run to `machine.step`,
+ * which walks the deterministic prefix in-process and emits at most one advance.
+ * This REPLACES the old per-auto-rail invoke subs + the fan/join subs — `step`
+ * itself spawns section/vote children and runs the deterministic join barrier.
+ * The agent/task/work deliveries (projectSubscriptions) still stand alongside it:
+ * `step` parks a run at those yield nodes and the model-delivery sub acts.
+ */
+export function projectStepSubscription(name, owner) {
+  return {
+    id: `machine.${seg(name)}.step`,
+    match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && (value.status == "running" || value.status == "done")` },
+    deliver: `@${owner}/machine.step`,
+    params: { run: '${keySuffix}' },
+  };
+}
+
+/** Build the spawn spec a section/vote `step` yield implies (fed to spawnChildrenWrites). */
+export function specFromYield(y) {
+  const choice = (y.choices || [])[0] || {};
+  return y.kind === 'vote'
+    ? { node: y.node, join: choice.to, kind: 'vote', branch: choice.branch, samples: choice.samples }
+    : { node: y.node, join: choice.to, kind: 'section', branches: (choice.sections || []).map((s) => s.to) };
+}
+
+/** The parent run id of a section (`§`) or vote (`#`) child key, or null if not a child. */
+export function parentOf(runId) {
+  for (const sep of ['§', '#']) {
+    const i = runId.indexOf(sep);
+    if (i > 0) return { parent: runId.slice(0, i), sep };
+  }
+  return null;
+}
+
+/**
+ * The deterministic join barrier (ADR-0018) — PURE. Given the parent's current
+ * value and the sibling runs read from the substrate, decide whether to advance.
+ * Idempotent: only a parent still waiting (`sectioning`/`voting`) advances, and
+ * only once every expected sibling is `done`. Returns the parent advance write,
+ * or a `{ waiting }` status (the cell emits the write; reading is the shell's job).
+ */
+export function barrierAdvance(parentId, parentValue, siblings, machine, now) {
+  const status = parentValue?.status;
+  if (status !== 'sectioning' && status !== 'voting') return { advance: null, reason: 'parent-not-waiting' };
+  const join = parentValue.join;
+  if (!join) return { advance: null, reason: 'no-join' };
+  const expected = typeof parentValue.count === 'number' ? parentValue.count : siblings.length;
+  const done = siblings.filter((s) => s.value && s.value.status === 'done');
+  if (siblings.length < expected || done.length < expected) {
+    return { advance: null, reason: 'waiting', done: done.length, expected };
+  }
+  const rails = machineRails(machine);
+  const jTerminal = !rails.some((r) => r.from === join);
+  const kind = status === 'voting' ? 'vote' : 'section';
+  return {
+    advance: {
+      key: `machine-run/${parentId}`,
+      value: { machine: parentValue.machine, node: join, status: jTerminal ? 'done' : 'running', via: `${parentValue.node}~${kind}-join`, at: now },
+      type: 'machine-run',
+      tags: ['machine', `machine:${parentValue.machine}`],
+    },
+    done: done.length,
+    expected,
+  };
+}
 
 /** The rails a machine def carries (already computed by define_machine), or
  *  derived from arrows as a fallback. Pure. */

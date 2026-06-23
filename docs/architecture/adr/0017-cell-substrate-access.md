@@ -1,8 +1,10 @@
 # ADR-0017 — Cell substrate access: one shared client, not a re-implementation per cell
 
-- **Status:** Proposed — the read/IAM mechanism already exists (`@c15r/models` uses it);
-  this ADR names it, makes it shared, and sets the packaging path. First increment is the
-  `@c15r/machine` stepper (ADR-0018) consuming it.
+- **Status:** Accepted (first increment shipped) — the shared client lives at
+  `cells/kernel/static/substrate.js`, served at `/@c15r/kernel/substrate.js`, and
+  `@c15r/machine`'s `step` tool consumes it by URL import (ADR-0018). The bridge is the
+  kernel-served URL module; the published-npm-package target (below) is not yet done.
+  `@c15r/models` is not yet migrated onto it.
 - **Date:** 2026-06-23
 - **Context:** [`docs/machine.md`](../../machine.md) §13 (known gaps) and ADR-0011's open item
   (at-least-once delivery under the depth cap). The machine cell was built **write-only**,
@@ -69,23 +71,32 @@ once, here, instead of never.
 ### Where it lives — packaging
 
 The cell bundler (`services/cells/transpile.ts`) resolves relative imports **only within the
-pushed cell directory** and fetches declared bare imports from esm.sh (`?target=node`), then
-bundles them into the Lambda. It cannot reach a sibling `../_shared/` or a repo-local path.
-That constrains the options to:
+pushed cell directory**, fetches declared bare imports from esm.sh (`?target=node`), **and
+bundles direct `https://` URL imports by fetching them at build time** (transpile.ts:266) — a
+URL module's own bare imports (`@aws-sdk/*`, `node:*`) stay `external`, runtime-provided
+(transpile.ts:280). It cannot reach a sibling `../_shared/` or a repo-local path. That gives
+three real options:
 
 1. **Published npm package (target).** Publish the client (e.g. `@c15r/substrate`), declare it
    in each cell's `client/imports.json`, import by bare specifier. The server bundler resolves
-   it via esm.sh exactly as it already does for `react`; client and server stay version-pinned
-   together. This is the platform's existing, tested dependency path and the destination.
-2. **Copy into the cell directory (bridge).** A `cells/<name>/_shared/substrate.ts` imported
-   relatively, bundled with the cell. Works today with zero platform change; cost is
-   duplication. Used as the **strangler-fig bridge** while the package is extracted and
-   published — one canonical source copied in, not re-invented.
+   it via esm.sh exactly as it does for `react`; client and server stay version-pinned. The
+   destination — removes the snapshot/deploy-order coupling of the bridge below.
+2. **Kernel-served URL module (the chosen bridge).** The client lives at
+   `cells/kernel/static/substrate.js`, served verbatim at `https://parc.land/@c15r/kernel/substrate.js`.
+   A cell imports that URL; the bundler fetches and inlines it at the cell's build. This is the
+   **same mechanism cells already use for the browser kernel** (`@c15r/kernel/app.js`), so the
+   kernel cell becomes the home for shared client code — server module beside browser module —
+   which is exactly the "reusable in the kernel" intent. The kernel handler stays a static file
+   server; the served JS is plain ESM (no DOM), so the browser-only objection doesn't apply to a
+   *separate* server entry. Cost: consumers **snapshot** the module at build time, so an update
+   means redeploy-kernel-then-rebuild-consumers, and there is a deploy-order edge (kernel must
+   serve `/substrate.js` before a consumer rebuilds).
+3. **Copy into the cell directory.** A `cells/<name>/_shared/substrate.ts` bundled with the cell —
+   zero platform change, but duplicated per cell. Rejected in favour of (2): one served copy beats
+   N vendored copies, and (2) reuses the proven URL-import path.
 
-We start at (2) for `@c15r/machine` (so ADR-0018 is unblocked immediately), with the file
-authored as the extractable module, and migrate the cells to (1) once published. We do **not**
-extend the kernel cell (`@c15r/kernel`) — it is browser-only (DOM, `localStorage`) and has no
-server half; a Node substrate client does not belong there.
+We ship (2) now (so ADR-0018 is unblocked), authored as the extractable module, and migrate to
+(1) once published.
 
 ### What this is not
 

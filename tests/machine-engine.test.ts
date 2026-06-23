@@ -12,6 +12,10 @@ import {
   spawnChildrenWrites,
   step,
   railHolds,
+  projectStepSubscription,
+  specFromYield,
+  parentOf,
+  barrierAdvance,
 } from '../cells/machine/engine';
 
 describe('railsFrom', () => {
@@ -185,6 +189,85 @@ describe('spawnChildrenWrites (the multi-write reliability fix)', () => {
   it('clamps vote samples to 2..7', () => {
     expect(spawnChildrenWrites('r', 'd', { kind: 'vote', branch: 'V', samples: 99 }, 'T')).toHaveLength(1 + 7);
     expect(spawnChildrenWrites('r', 'd', { kind: 'vote', branch: 'V', samples: 1 }, 'T')).toHaveLength(1 + 2);
+  });
+
+  it('stamps the expected sibling `count` on the parent wait-state (the barrier reads it)', () => {
+    const sec = spawnChildrenWrites('run1', 'demo', { node: 'Plan', join: 'J', kind: 'section', branches: ['A', 'B'] }, 'T');
+    expect(sec[0].value.count).toBe(2);
+    const vote = spawnChildrenWrites('run2', 'demo', { node: 'G', join: 'K', kind: 'vote', branch: 'V', samples: 4 }, 'T');
+    expect(vote[0].value.count).toBe(4);
+  });
+});
+
+describe('projectStepSubscription (ADR-0018 reactive)', () => {
+  it('is ONE subscription delivering run changes to machine.step', () => {
+    const s = projectStepSubscription('demo', 'c15r');
+    expect(s.id).toBe('machine.demo.step');
+    expect(s.deliver).toBe('@c15r/machine.step');
+    expect(s.match.keyPrefix).toBe('machine-run/');
+    expect(s.match.cel).toContain('value.machine == "demo"');
+    expect(s.match.cel).toContain('value.status == "running"');
+    expect(s.params).toEqual({ run: '${keySuffix}' });
+  });
+});
+
+describe('specFromYield', () => {
+  it('builds a section spec from a section yield', () => {
+    const y = { kind: 'section', node: 'P', choices: [{ to: 'J', sections: [{ to: 'A' }, { to: 'B' }] }] };
+    expect(specFromYield(y)).toEqual({ node: 'P', join: 'J', kind: 'section', branches: ['A', 'B'] });
+  });
+  it('builds a vote spec from a vote yield', () => {
+    const y = { kind: 'vote', node: 'G', choices: [{ to: 'K', branch: 'V', samples: 5 }] };
+    expect(specFromYield(y)).toEqual({ node: 'G', join: 'K', kind: 'vote', branch: 'V', samples: 5 });
+  });
+});
+
+describe('parentOf', () => {
+  it('extracts the parent + separator of a section/vote child key', () => {
+    expect(parentOf('run1§A')).toEqual({ parent: 'run1', sep: '§' });
+    expect(parentOf('run2#0')).toEqual({ parent: 'run2', sep: '#' });
+  });
+  it('returns null for a non-child run', () => {
+    expect(parentOf('run1')).toBeNull();
+  });
+});
+
+describe('barrierAdvance (the deterministic join — ADR-0018)', () => {
+  const machine = { name: 'm', nodes: [{ name: 'P' }, { name: 'J' }, { name: 'End' }], rails: [{ from: 'J', to: 'End', mode: 'auto' }] };
+  const parent = (over = {}) => ({ machine: 'm', node: 'P', status: 'sectioning', join: 'J', count: 2, ...over });
+  const sib = (status: string) => ({ key: 'x', value: { status } });
+
+  it('waits while any expected sibling is not done', () => {
+    const d = barrierAdvance('run1', parent(), [sib('done'), sib('running')], machine, 'T');
+    expect(d.advance).toBeNull();
+    expect(d).toMatchObject({ reason: 'waiting', done: 1, expected: 2 });
+  });
+
+  it('waits while fewer than `count` siblings have been spawned (no premature advance)', () => {
+    const d = barrierAdvance('run1', parent(), [sib('done')], machine, 'T');
+    expect(d.advance).toBeNull();
+    expect(d.reason).toBe('waiting');
+  });
+
+  it('advances the parent to the join node once every sibling is done', () => {
+    const d = barrierAdvance('run1', parent(), [sib('done'), sib('done')], machine, 'T');
+    expect(d.advance).toMatchObject({ key: 'machine-run/run1', value: { node: 'J', status: 'running', machine: 'm' } });
+    expect(d.advance.value.via).toBe('P~section-join');
+  });
+
+  it('marks the parent done when the join node is terminal', () => {
+    const term = { name: 'm', nodes: [{ name: 'P' }, { name: 'J' }], rails: [] };
+    const d = barrierAdvance('run1', parent(), [sib('done'), sib('done')], term, 'T');
+    expect(d.advance.value.status).toBe('done');
+  });
+
+  it('is idempotent — a parent no longer waiting does not advance again', () => {
+    expect(barrierAdvance('run1', parent({ status: 'running', node: 'J' }), [sib('done'), sib('done')], machine, 'T').advance).toBeNull();
+  });
+
+  it('tags a vote join as a vote-join', () => {
+    const d = barrierAdvance('run2', parent({ status: 'voting', node: 'G' }), [sib('done'), sib('done')], machine, 'T');
+    expect(d.advance.value.via).toBe('G~vote-join');
   });
 });
 

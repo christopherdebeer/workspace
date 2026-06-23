@@ -1,8 +1,10 @@
 # ADR-0018 — The stateless machine stepper: advance a run in-process, not by fact-cascade
 
-- **Status:** Proposed — the pure core (`step()` in `cells/machine/engine.ts`) and its tests
-  land with this ADR; the cell-side shell wiring (the `step` tool + reactive subscription
-  rework) is the follow-on increment.
+- **Status:** Accepted (shipped, opt-in) — the pure core (`step()`), the deterministic barrier
+  (`barrierAdvance`), the spawn/spec helpers, and the `step` cell tool that wires them through the
+  shared kernel substrate client (ADR-0017) are implemented and unit-tested. The reactive
+  single-step projection ships behind `reactive:"step"`; the legacy per-auto-rail projection
+  stays the default until `reactive:"step"` is exercised live (docs/machine.md §13/§16).
 - **Date:** 2026-06-23
 - **Context:** [`docs/machine.md`](../../machine.md) and ADR-0011's open item. The machine
   cell's deterministic prefix currently advances by writing a fact **per auto-rail hop**, each
@@ -99,10 +101,13 @@ want a model; the *barrier logic* (all-done? advance) is deterministic and in-pr
   zero — folded into one pure function and one "step on change" subscription.
 - **Unblocks the deterministic join**, retiring the agentic barrier and the `models.decide`
   concurrency dependency for completion (synthesis content aside).
-- **Cleanup owed (follow-on increment):** rework `projectActions`/`projectSubscriptions` to stop
-  emitting per-auto-rail vocabulary and emit the single step subscription; add the `step` cell
-  tool (shell) reading the def/run via ADR-0017's client; replace `spawn_children`'s agentic join
-  with the in-process barrier. Tracked in `docs/machine.md` §13.
+- **Shipped this increment:** the `step` cell tool (reads def/run/siblings via ADR-0017's client),
+  the deterministic in-process join barrier (`barrierAdvance`), and `projectStepSubscription` (the
+  single "on run change → step" sub, wired under `reactive:"step"` alongside the agent/work model
+  deliveries).
+- **Cleanup still owed:** make `reactive:"step"` the default and delete the legacy per-auto-rail +
+  agentic-join projection from `projectSubscriptions` once the new path is exercised live; let a
+  work/agent rail at a join node carry synthesis content. Tracked in `docs/machine.md` §13.
 - **Cost / open:** `step` evaluates CEL in the cell (cel-js now declared in the machine cell's
   `imports.json`); a malformed `condition` is treated as a non-firing rail (false), which can
   present as a `stall` rather than a loud error — `validate_machine`-style static checking of

@@ -19,7 +19,11 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App } from './client/app';
 import { installBridge } from './client/bridge';
-import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites } from './engine';
+import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, projectStepSubscription } from './engine';
+// The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
+// over the owner's slice. Imported by URL: the cell bundler fetches + inlines it
+// at deploy time; its @aws-sdk/node imports stay external (runtime-provided).
+import { createSubstrate } from 'https://parc.land/@c15r/kernel/substrate.js';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
@@ -109,7 +113,7 @@ const TOOLS = [
         },
         dryRun: { type: 'boolean', description: 'Validate + preview the projection (action/subscription ids) WITHOUT writing anything. Replaces the old standalone validate tool.' },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
-        reactive: { type: 'boolean', description: 'Also register subscriptions so auto rails advance themselves on run changes (default false — driven only)' },
+        reactive: { description: 'Register subscriptions so runs advance on change (default off — driven only, via the `step` tool). `"step"` (preferred, ADR-0018): ONE step subscription walks the deterministic prefix in-process + runs the join barrier — no per-rail cascade. `true` (legacy): the full per-auto-rail + agentic-join projection.' },
         trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel?, runId? } that STARTS a run. runId templates the run id from the event (default "${keySuffix}"); use e.g. "${value.at}" so a recurring source like tending gets a fresh run each time.' },
         tags: { type: 'array', items: { type: 'string' } },
       },
@@ -149,6 +153,20 @@ const TOOLS = [
     },
     scope: null,
   },
+  {
+    name: 'step',
+    description:
+      'Advance a machine run STATELESSLY (ADR-0018, the stateless stepper). Reads machine-run/<run> + its machine def, follows deterministic `auto` rails IN-PROCESS (CEL-guarded, no per-hop fact-write), and emits at most ONE advanced run fact. Returns the `yield`: the non-deterministic point where a decision is owed — `{kind:"agent"|"task"|"work"|"section"|"vote", node, choices}` — or null when the run completed. On a section/vote yield it spawns the children; when a child completes it runs the DETERMINISTIC join barrier (reads the siblings, advances the parent once all are done — no model). The driven counterpart to the reactive step subscription; either way determinism never needs a model or a fact-cascade. Idempotent: a run already parked at its yield emits nothing.',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run: { type: 'string', description: 'Run id → machine-run/<run>' },
+      },
+      required: ['run'],
+    },
+    scope: null,
+  },
 ];
 
 async function emit(detail) {
@@ -179,6 +197,77 @@ async function emitSubscription(def, name) {
 
 /** The owner whose slice this cell serves — used to address sibling cells. */
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
+
+/**
+ * Drive one run forward (ADR-0018). Reads the run + its machine def via the
+ * shared substrate client, runs the pure `step`, and applies the result:
+ *  - emits the advanced run (only when it actually changed — idempotent, so a
+ *    reactive deliver to this tool on a parked run is a cheap no-op, no loop);
+ *  - on a section/vote yield, spawns the children (reliable per-child writes);
+ *  - on a completed run, runs the deterministic join barrier against its parent.
+ * Pure decisions live in engine.ts; this is the thin I/O shell around them.
+ */
+async function stepRun(runId) {
+  const sub = createSubstrate({ owner: OWNER, via: 'machine.step' });
+  const now = new Date().toISOString();
+  const runFact = await sub.read(`machine-run/${runId}`);
+  if (!runFact) return { error: `no run machine-run/${runId}` };
+  const runValue = runFact.value || {};
+  const machineName = runValue.machine;
+  const def = machineName ? await sub.read(`machine/${machineName}`) : null;
+  if (!def) return { error: `no machine machine/${machineName}` };
+
+  const result = step(runValue, def.value, now);
+
+  // A section/vote yield spawns children; the spawn writes include the parent's
+  // wait-state (which supersedes the plain advance), so don't also emit `result.run`.
+  if (result.yield && (result.yield.kind === 'section' || result.yield.kind === 'vote')) {
+    const spec = specFromYield(result.yield);
+    const writes = spawnChildrenWrites(runId, machineName, spec, now);
+    await sub.emit(writes);
+    return { run: runId, node: result.yield.node, yield: result.yield, spawned: writes.slice(1).map((w) => w.key) };
+  }
+
+  // Emit the advance only if the meaningful state changed (idempotent).
+  const changed = result.run.node !== runValue.node || result.run.status !== runValue.status;
+  if (changed) {
+    await sub.emit([{ key: `machine-run/${runId}`, value: result.run, type: 'machine-run', tags: ['machine', `machine:${machineName}`] }]);
+  }
+
+  // On completion, run the deterministic join barrier against the parent (if any).
+  let barrier;
+  if (result.run.status === 'done') {
+    barrier = await advanceParentBarrier(sub, runId, def.value, now);
+  }
+
+  return {
+    run: runId,
+    node: result.run.node,
+    status: result.run.status,
+    changed,
+    yield: result.yield ?? null,
+    path: result.path,
+    ...(barrier ? { barrier } : {}),
+  };
+}
+
+/**
+ * The deterministic join barrier shell: if `childRunId` is a section/vote child,
+ * read the parent + all siblings and let the pure `barrierAdvance` decide whether
+ * to advance the parent. The parent's machine def may differ in principle, but a
+ * child shares its parent's machine, so reuse `def`.
+ */
+async function advanceParentBarrier(sub, childRunId, def, now) {
+  const rel = parentOf(childRunId);
+  if (!rel) return null;
+  const parent = await sub.read(`machine-run/${rel.parent}`);
+  if (!parent) return null;
+  const siblings = await sub.query({ prefix: `machine-run/${rel.parent}${rel.sep}` });
+  const decision = barrierAdvance(rel.parent, parent.value, siblings, def, now);
+  if (!decision.advance) return { parent: rel.parent, waiting: true, done: decision.done, expected: decision.expected, reason: decision.reason };
+  await sub.emit([decision.advance]);
+  return { parent: rel.parent, advanced: true, node: decision.advance.value.node, done: decision.done, expected: decision.expected };
+}
 
 
 export const handler = async (event) => {
@@ -277,6 +366,17 @@ export const handler = async (event) => {
     return json(200, { spawned: true, run: a.run, kind: spec.kind, children: writes.slice(1).map((w) => w.key) });
   }
 
+  if (method === 'POST' && path === '/_tools/step') {
+    const a = event.body ? JSON.parse(event.body) : {};
+    if (!a.run) return json(400, { error: 'run is required' });
+    try {
+      const out = await stepRun(a.run);
+      return json(out.error ? 404 : 200, out);
+    } catch (err) {
+      return json(500, { error: (err && err.message) || String(err) });
+    }
+  }
+
 
   if (method === 'POST' && path === '/_tools/define_machine') {
     const a = event.body ? JSON.parse(event.body) : {};
@@ -318,10 +418,25 @@ export const handler = async (event) => {
     if (a.project !== false && rails.length) {
       projected = projectActions(a.name, nodes, rails);
       for (const def of projected) await emitAction(def, a.name);
-      // Opt-in reactivity: subscribe each auto rail to this machine's runs, so
-      // the deterministic prefix advances itself. Without `reactive`, the same
-      // actions remain drivable by hand via workspace.invoke.
-      if (a.reactive) {
+      // Opt-in reactivity. Two modes:
+      //  - `reactive: "step"` (ADR-0018, preferred): ONE subscription delivers
+      //    every run change to machine.step, which walks the deterministic prefix
+      //    in-process (no per-auto-rail cascade) and runs the join barrier itself.
+      //    The agent/task/work model deliveries still stand; the auto/fan/join
+      //    subs are gone (step subsumes them).
+      //  - `reactive: true` (legacy): the full per-auto-rail invoke + agentic-join
+      //    projection. Kept so existing machines don't break; migrate to "step".
+      if (a.reactive === 'step') {
+        const stepSub = projectStepSubscription(a.name, OWNER);
+        await emitSubscription(stepSub, a.name);
+        subscriptions.push(stepSub.id);
+        for (const s of projectSubscriptions(a.name, rails, OWNER)) {
+          if (s.deliver && s.deliver.includes('/models.') && !s.id.includes('.join-')) {
+            await emitSubscription(s, a.name);
+            subscriptions.push(s.id);
+          }
+        }
+      } else if (a.reactive) {
         for (const s of projectSubscriptions(a.name, rails, OWNER)) {
           await emitSubscription(s, a.name);
           subscriptions.push(s.id);
