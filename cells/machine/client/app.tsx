@@ -9,7 +9,7 @@
  * client-side via mcpCall (read/act over POST /mcp), exactly as an agent would.
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
-import { authFetch, isAuthed, login } from './bridge';
+import { authFetch, isAuthed, login, completeLoginIfReturning } from './bridge';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -87,9 +87,21 @@ const railArrow: Record<string, string> = { auto: '→', agent: '⇒', task: '�
 
 /* ── views ──────────────────────────────────────────────────────────────── */
 
-function ListView({ boot }: { boot: Boot }): React.ReactElement {
+function SignInCard(): React.ReactElement {
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: '16px', display: 'grid', gap: 10, justifyItems: 'start' }}>
+      <div style={{ color: C.mut }}>Sign in to see your machines, their runs, and to trigger one.</div>
+      <button onClick={() => void login()}
+        style={{ border: `1px solid ${C.green}`, background: C.green, color: '#fff', borderRadius: 8, padding: '9px 18px', font: '600 14px inherit', cursor: 'pointer' }}>
+        Sign in
+      </button>
+    </div>
+  );
+}
+
+function ListView({ machines, runs, authed }: { machines: Entry[]; runs: Entry[]; authed: boolean }): React.ReactElement {
   const runsByMachine = new Map<string, Entry[]>();
-  for (const r of boot.runs) {
+  for (const r of runs) {
     const m = (r.value as RunVal).machine ?? '';
     (runsByMachine.get(m) ?? runsByMachine.set(m, []).get(m)!).push(r);
   }
@@ -97,8 +109,8 @@ function ListView({ boot }: { boot: Boot }): React.ReactElement {
     <div style={{ display: 'grid', gap: 18 }}>
       <section style={{ display: 'grid', gap: 10 }}>
         <h2 style={{ margin: 0, font: '600 15px/1 Georgia,serif', color: C.mut }}>Machines</h2>
-        {boot.machines.length === 0 && <p style={{ color: C.mut }}>No machines defined yet.</p>}
-        {boot.machines.map((m) => {
+        {machines.length === 0 && (authed ? <p style={{ color: C.mut }}>No machines defined yet.</p> : <SignInCard />)}
+        {machines.map((m) => {
           const v = m.value as MachineVal;
           const runs = runsByMachine.get(mName(m.key)) ?? [];
           const last = runs[0]?.value as RunVal | undefined;
@@ -115,9 +127,9 @@ function ListView({ boot }: { boot: Boot }): React.ReactElement {
           );
         })}
       </section>
-      <section style={{ display: 'grid', gap: 8 }}>
+      {runs.length > 0 && <section style={{ display: 'grid', gap: 8 }}>
         <h2 style={{ margin: 0, font: '600 15px/1 Georgia,serif', color: C.mut }}>Recent runs</h2>
-        {boot.runs.slice(0, 24).map((r) => {
+        {runs.slice(0, 24).map((r) => {
           const v = r.value as RunVal;
           return (
             <div key={r.key} onClick={() => { location.hash = `#/r/${encodeURIComponent(rId(r.key))}`; }}
@@ -129,7 +141,7 @@ function ListView({ boot }: { boot: Boot }): React.ReactElement {
             </div>
           );
         })}
-      </section>
+      </section>}
     </div>
   );
 }
@@ -138,10 +150,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <div style={{ display: 'grid', gap: 2 }}><span style={{ color: C.mut, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span><div>{children}</div></div>;
 }
 
-function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactElement {
-  const seed = boot.machines.find((m) => mName(m.key) === name);
+function MachineView({ name, machines, seedRuns }: { name: string; machines: Entry[]; seedRuns: Entry[] }): React.ReactElement {
+  const seed = machines.find((m) => mName(m.key) === name);
   const [m, setM] = useState<MachineVal | undefined>(seed?.value as MachineVal | undefined);
-  const [runs, setRuns] = useState<Entry[]>(boot.runs.filter((r) => (r.value as RunVal).machine === name));
+  const [runs, setRuns] = useState<Entry[]>(seedRuns.filter((r) => (r.value as RunVal).machine === name));
   const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -317,19 +329,52 @@ function RunView({ run }: { run: string }): React.ReactElement {
 export function App({ initial }: { initial?: Boot }): React.ReactElement {
   const boot: Boot = initial ?? { session: { user: null }, machines: [], runs: [] };
   const hash = useHash();
+  // Initialise from the SSR seed so the first client render matches the server
+  // (no hydration mismatch); the effect below reconciles with the real session.
+  const [authed, setAuthed] = useState<boolean>(!!boot.session.user);
+  const [user] = useState<string | null>(boot.session.user);
+  const [machines, setMachines] = useState<Entry[]>(boot.machines);
+  const [runs, setRuns] = useState<Entry[]>(boot.runs);
+
+  const loadData = useCallback(async () => {
+    const [mv, rv] = await Promise.all([
+      mcpCall('read', 'workspace.query', { type: 'machine', limit: 100 }),
+      mcpCall('read', 'workspace.query', { type: 'machine-run', rankBy: 'recency', limit: 60 }),
+    ]);
+    if (mv.ok) setMachines(entriesOf(mv.value).filter((e) => !String(e.key).startsWith('_')));
+    if (rv.ok) setRuns(entriesOf(rv.value));
+  }, []);
+
+  useEffect(() => {
+    // The cell subdomain is its own origin — the session cookie lands here only
+    // after a sign-in completes on this host. Finish a returning OAuth redirect,
+    // reflect auth, and (when the SSR seed was the anonymous shell) load the data.
+    void (async () => {
+      let ok = isAuthed();
+      try { ok = await completeLoginIfReturning(); } catch { /* keep isAuthed() */ }
+      setAuthed(ok);
+      if (ok && machines.length === 0) await loadData();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   let body: React.ReactElement;
   const mMatch = /^#\/m\/(.+)$/.exec(hash);
   const rMatch = /^#\/r\/(.+)$/.exec(hash);
-  if (mMatch) body = <MachineView name={decodeURIComponent(mMatch[1])} boot={boot} />;
+  if (mMatch) body = <MachineView name={decodeURIComponent(mMatch[1])} machines={machines} seedRuns={runs} />;
   else if (rMatch) body = <RunView run={decodeURIComponent(rMatch[1])} />;
-  else body = <ListView boot={boot} />;
+  else body = <ListView machines={machines} runs={runs} authed={authed} />;
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.ink }}>
-      <header style={{ padding: '14px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'baseline' }}>
+      <header style={{ padding: '14px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center' }}>
         <a href="#/" style={{ textDecoration: 'none', color: C.ink }}><strong style={{ font: '700 18px Georgia,serif' }}>🔄 machines</strong></a>
         <span style={{ color: C.mut, fontSize: 12 }}>@c15r/machine</span>
-        <span style={{ marginLeft: 'auto', color: C.mut, fontSize: 12 }}>{boot.session.user ? boot.session.user : 'anonymous'}</span>
+        {authed
+          ? <span style={{ marginLeft: 'auto', color: C.mut, fontSize: 12 }}>{user ?? 'signed in'}</span>
+          : <button onClick={() => void login()}
+              style={{ marginLeft: 'auto', border: `1px solid ${C.green}`, background: C.green, color: '#fff', borderRadius: 8, padding: '6px 14px', font: '600 13px inherit', cursor: 'pointer' }}>
+              Sign in</button>}
       </header>
       <main style={{ maxWidth: 760, margin: '0 auto', padding: '16px 14px 48px' }}>{body}</main>
     </div>
