@@ -343,18 +343,6 @@ export function spawnChildrenWrites(run, machine, spec, at) {
   return [parent, ...children];
 }
 
-/** Progressive-disclosure view of a machine (Agent-Skills tiering). Pure. */
-export function disclose(nodes, rails, node) {
-  const out = (n) => rails.filter((r) => r.from === n).map((r) => ({ to: r.to, mode: r.mode, ...(r.when ? { when: r.when } : {}) }));
-  if (node) {
-    const n = nodes.find((x) => x.name === node);
-    if (!n) return { error: `no node "${node}"` };
-    return { level: 2, node: n, rails: out(node) };
-  }
-  const entry = nodes.find((n) => !rails.some((r) => r.to === n.name)) ?? nodes[0];
-  return {
-    level: 1,
-    entry: entry?.name,
-    nodes: nodes.map((n) => ({ name: n.name, kind: n.kind, summary: n.title ?? '', rails: out(n.name) })),
-  };
-}
+// Note: progressive disclosure (the old `disclose` tool) was pruned — a driving
+// agent reads `machine/<m>` directly; rails already carry `when` descriptors and
+// the `decide-<from>` action descriptions surface the branch menu. See docs/machine.md.

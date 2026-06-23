@@ -126,7 +126,7 @@ It is the single, unit-tested source of truth (`tests/machine-engine.test.ts`).
 the SSR routes), organ-path writes (`emit` → `substrate.write.requested`), and SSR.
 
 Engine exports: `ARROW_RELS`, `seg`, `railsFrom`, `voteCount`, `validateMachine`,
-`projectActions`, `projectSubscriptions`, `spawnChildrenWrites`, `disclose`.
+`projectActions`, `projectSubscriptions`, `spawnChildrenWrites`.
 
 **Why a pure projector/reducer and not an in-memory interpreter** (e.g. XState, like
 canvas' gesture machine): a run's state lives in substrate **facts** and advances
@@ -248,12 +248,14 @@ spawn**, never lazily — our `tools` allowlist already does this.
 Skills load in three tiers; we mirror this for rails so an agent's context stays
 small as a machine grows:
 
-- **Level 1 (always):** an agent rail sees only branch *descriptors* — `{to, mode, when}`. Rails carry a one-line `when`, surfaced in the `decide` branch menu and the `disclose` tool.
+- **Level 1 (always):** an agent rail sees only branch *descriptors* — `{to, mode, when}`. Rails carry a one-line `when`, surfaced in the `decide-<from>` action's branch menu.
 - **Level 2 (on entry):** a node's full body/prompt loads only when entered (the work/decide delivery carries it).
 - **Level 3 (on demand):** `auto` rails / tools execute and return only their *output*.
 
-`disclose({ nodes, rails, node? })` is a pure read: Level-1 returns the node/branch
-menu; Level-2 (with `node`) returns that node's full body + outgoing rails.
+The Level-1 menu **is the machine fact**: a driving agent reads `machine/<m>` and
+sees rails carrying `when`, and the projected `decide-<from>` action descriptions
+list the branch menu. (The standalone `disclose` tool was pruned as redundant with
+reading the fact — see §16.)
 
 ## 9. Agent tool-scopes
 
@@ -308,7 +310,8 @@ spend reasoning where there's no choice.)
 
 ## 11. Validation
 
-`validate_machine({ nodes, arrows?, rails? })` is pure static analysis (the DyGram
+`define_machine({ …, dryRun: true })` returns pure static analysis + a projection
+preview without writing (the DyGram
 graph validators we otherwise skip), run automatically inside `define_machine`:
 
 - **errors:** `dangling-rail` (a rail endpoint with no node), `no-entry` (every node has an incoming rail → a run can't start).
@@ -352,7 +355,7 @@ on the diagram.
 | **Arrows → substrate edges.** A machine's `value.arrows` are stored with their `rel` but not projected to authored edges, so `neighbors`/`links` don't walk a machine. | open | **ADR-0003 migration step 4** — recommends `define_machine` projects arrows → authored `link` edges at write time ("the machine graph *should* be authored"). Follow the ADR. |
 | **Delivery reliability under reactions.** The `spawn_children` multi-write fix and the `models.decide` concurrent-vote-child finding are instances of at-least-once/ordering behavior under the depth cap. | mitigated (cell-tool spawn; agentic barrier) | **ADR-0011 open item** — "document at-least-once vs exactly-once delivery under the depth cap." Our findings *are* that documentation. |
 | **`models.decide` concurrency.** Concurrent vote-child decisions don't auto-complete (decide action + barrier are correct). | open (models-cell) | this doc §6.3; a `@c15r/models` concern, not a join bug. |
-| **No loop/step/timeout guard.** A cyclic reactive machine can thrash; a stuck branch parks a run forever. | partial (`validate_machine` `cycle` warning; the reactor's revision depth cap) | **ADR-0011** boundedness (depth cap by triggering-fact revision). A per-run step/timeout guard is unbuilt. |
+| **No loop/step/timeout guard.** A cyclic reactive machine can thrash; a stuck branch parks a run forever. | partial (the `dryRun` `cycle` warning; the reactor's revision depth cap) | **ADR-0011** boundedness (depth cap by triggering-fact revision). A per-run step/timeout guard is unbuilt. |
 | **Agent token narrowing.** `tools`/`scope` declared (Increment 1) but not yet enforced via a minted scoped token on the spawn path. | partial | **ADR-0007** (Grant axis) + its scope-granularity gap; machine §9 Increment 3 (grants-to-principals). |
 | **`kind` is cosmetic.** Unlike DyGram, node `kind` drives nothing; the rail `mode` carries behavior. | by design | §2.1 — adopt DyGram's kind-inference if we want it meaningful. |
 | **No DSL / type system.** Only the structural validators were ported. | by design | §2.2 — a `dygram` parser/LSP is out of scope. |
@@ -364,21 +367,28 @@ Two categorically different kinds of fact, kept apart:
 - **Cell-required facts** — the cell's own infrastructure: its **types** (`types.json` → `$types`), **renderers** (`_renderers/machine`), **views** (`_views/machine-runs`, `_views/open-tasks`), and generic vocabulary (`task.claim`). Seeded by the cell itself (the `bootstrap` tool), idempotent, versioned with the cell, tagged `cell-required` — never `seed`/`world-model`. They are *part of the program*.
 - **Organic knowledge** — concepts, claims, captures, runs — the graph that accretes through *use*, where salience/confidence/tending do their work. This is *content*; a redeploy must never overwrite it.
 
-`record_idea` (concept | claim) and `register_meta_tool` (a constructed tool → a
-`meta-tool` fact, optionally projecting a declared `action`) grow the organic side.
+Organic knowledge grows through the **generic** `workspace.remember` (a concept or
+claim is just a typed fact) — the cell does not need its own recorder.
 
 ## 15. Tools (the cell's `/_tools` surface)
 
+The surface is deliberately small: the cell is a **compiler** (`define_machine`)
++ a type vocabulary + a UI; *execution* is the substrate's own `workspace.invoke`
+of the projected actions. Four tools:
+
 | tool | kind | purpose |
 |---|---|---|
-| `bootstrap` | act | seed cell-required facts (`_renderers/machine`, views, `task.claim`). Idempotent. |
-| `define_machine` | act | record a machine + project rails → actions/subscriptions; returns `validation`. |
-| `validate_machine` | read | static graph analysis (§11). |
-| `trigger_run` | act | fire a run by name (§7). |
-| `spawn_children` | act | internal reaction-target: emit a fan's child runs as separate organ writes (§6). |
-| `disclose` | read | progressive-disclosure view (§8). |
-| `record_idea` | act | record a concept/claim fact. |
-| `register_meta_tool` | act | persist a constructed tool as a `meta-tool` fact (+ optional declared action). |
+| `define_machine` | act | **the compiler** — record a machine + project rails → actions/subscriptions; returns `validation`. `dryRun:true` validates + previews without writing (§11). |
+| `trigger_run` | act | fire a run by writing one `machine-trigger/…` fact — the write-only external/scheduled-routine entry (§7). (An agent that can `invoke` may call `machine.<m>.start` directly instead.) |
+| `bootstrap` | act | one-time/idempotent infra seeding (renderers, views, `task.claim`). |
+| `spawn_children` | act | **internal** reaction-target only — emit a fan's child runs as separate organ writes (§6); not for hand use. Would collapse into a declared action if ADR-0011's multi-write reliability lands (§13). |
+
+> **Pruned (v5.1).** `record_idea` (≡ `workspace.remember`), `register_meta_tool`
+> (speculative, unused), `validate_machine` (now `define_machine`'s `dryRun`), and
+> `disclose` (the machine fact + `decide` descriptions already disclose) were
+> removed: 8 tools → 4 (2 user-facing core). See the simplification analysis that
+> motivated it. The *core model* is unchanged — a machine compiles to substrate
+> declared-actions and runs via the existing `invoke`.
 
 ## 16. Version history
 
@@ -386,7 +396,8 @@ Two categorically different kinds of fact, kept apart:
 - **v2** — machine → declared-action projection (rails → `start`/`<from>-to-<to>`/`decide-*`).
 - **v3** — execution as substrate (advancing the run fact via the projected actions; claims as reasoning).
 - **v4** — meta-tools as registered substrate tools (`register_meta_tool`).
-- **v5 (current)** — the functional-core refactor (`engine.ts` + unit tests); parallel branching (`section`/`vote` via `spawn_children` + agentic barrier); external trigger (`trigger_run` + internal-trigger subscription); progressive disclosure (`when` + `disclose`); `validate_machine`; the run-position diagram overlay + unified-run UI; type handlers (`open`/`render`).
+- **v5** — the functional-core refactor (`engine.ts` + unit tests); parallel branching (`section`/`vote` via `spawn_children` + agentic barrier); external trigger (`trigger_run` + internal-trigger subscription); progressive disclosure (`when`); the run-position diagram overlay + unified-run UI; type handlers (`open`/`render`).
+- **v5.1 (current)** — **surface prune**: 8 tools → 4. Removed `record_idea`/`register_meta_tool`/`disclose`; folded validation into `define_machine`'s `dryRun`. The cell is a compiler + types + UI; execution is the substrate's `invoke`.
 
 ## Appendix — ADR map & sources
 

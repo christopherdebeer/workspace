@@ -10,7 +10,6 @@ import {
   projectActions,
   projectSubscriptions,
   spawnChildrenWrites,
-  disclose,
 } from '../cells/machine/engine';
 
 describe('railsFrom', () => {
@@ -184,24 +183,5 @@ describe('spawnChildrenWrites (the multi-write reliability fix)', () => {
   it('clamps vote samples to 2..7', () => {
     expect(spawnChildrenWrites('r', 'd', { kind: 'vote', branch: 'V', samples: 99 }, 'T')).toHaveLength(1 + 7);
     expect(spawnChildrenWrites('r', 'd', { kind: 'vote', branch: 'V', samples: 1 }, 'T')).toHaveLength(1 + 2);
-  });
-});
-
-describe('disclose (progressive disclosure)', () => {
-  const nodes = [{ name: 'A', kind: 'Task', title: 'do a' }, { name: 'B', kind: 'Result', title: 'done' }];
-  const rails = [{ from: 'A', to: 'B', mode: 'agent', when: 'finished a' }];
-
-  it('Level-1 returns the branch menu with when descriptors', () => {
-    const d = disclose(nodes, rails, undefined);
-    expect(d.level).toBe(1);
-    expect(d.entry).toBe('A');
-    expect(d.nodes[0].rails).toEqual([{ to: 'B', mode: 'agent', when: 'finished a' }]);
-  });
-
-  it('Level-2 returns a single node body + its outgoing rails', () => {
-    const d = disclose(nodes, rails, 'A');
-    expect(d.level).toBe(2);
-    expect(d.node.name).toBe('A');
-    expect(d.rails).toEqual([{ to: 'B', mode: 'agent', when: 'finished a' }]);
   });
 });

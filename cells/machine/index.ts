@@ -19,7 +19,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App } from './client/app';
 import { installBridge } from './client/bridge';
-import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, disclose } from './engine';
+import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites } from './engine';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
@@ -107,28 +107,13 @@ const TOOLS = [
           description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
+        dryRun: { type: 'boolean', description: 'Validate + preview the projection (action/subscription ids) WITHOUT writing anything. Replaces the old standalone validate tool.' },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
         reactive: { type: 'boolean', description: 'Also register subscriptions so auto rails advance themselves on run changes (default false — driven only)' },
         trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel?, runId? } that STARTS a run. runId templates the run id from the event (default "${keySuffix}"); use e.g. "${value.at}" so a recurring source like tending gets a fresh run each time.' },
         tags: { type: 'array', items: { type: 'string' } },
       },
       required: ['name'],
-    },
-    scope: null,
-  },
-  {
-    name: 'validate_machine',
-    description:
-      'Static graph analysis over a machine (the DyGram validators we dropped when we stopped porting the language — see docs/machine.md). Pure, no write: reports dangling rails + missing entry (errors) and unreachable nodes, orphans, transition cycles, missing terminal (warnings). Pass { nodes, arrows?, rails? } — same shape as define_machine; rails default-derived from arrows. define_machine runs this itself and returns the result.',
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        nodes: { type: 'array', items: { type: 'object' }, description: 'Nodes: [{ name, kind?, title? }]' },
-        arrows: { type: 'array', items: { type: 'object' }, description: 'Arrows (rails derived from these if `rails` omitted)' },
-        rails: { type: 'array', items: { type: 'object' }, description: 'Explicit rails: [{ from, to, mode }]' },
-      },
-      required: ['nodes'],
     },
     scope: null,
   },
@@ -161,60 +146,6 @@ const TOOLS = [
         spec: { type: 'string', description: 'JSON: { node, join, kind:"section"|"vote", branches?[], branch?, samples? }' },
       },
       required: ['run', 'machine', 'spec'],
-    },
-    scope: null,
-  },
-  {
-    name: 'disclose',
-    description:
-      'Progressive-disclosure view of a machine (Agent-Skills tiering — see docs/machine.md). Pure/no-write over an inline { nodes, rails } (the def a driving agent already read). Level-1 (default): each node as a one-line descriptor + the rails leaving it as { to, mode, when } — the branch menu without bodies. Level-2: pass `node` to get that one node\'s full body + its outgoing rails. Keeps an agent\'s context small as a machine grows.',
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        nodes: { type: 'array', items: { type: 'object' } },
-        arrows: { type: 'array', items: { type: 'object' } },
-        rails: { type: 'array', items: { type: 'object' } },
-        node: { type: 'string', description: 'If set, return Level-2 (this node\'s full body + outgoing rails)' },
-      },
-      required: ['nodes'],
-    },
-    scope: null,
-  },
-  {
-    name: 'record_idea',
-    description:
-      'Record a DyGram idea as a first-class fact: a concept (an explanatory note) or a claim ({statement, confidence 0..1, support[]}). Makes the *ideas*, not just machines, addressable, salience-ranked, and linkable.',
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Idea slug' },
-        kind: { type: 'string', enum: ['concept', 'claim'], description: 'concept = note; claim = a confidence-bearing assertion' },
-        statement: { type: 'string', description: 'The concept text or the claim statement' },
-        confidence: { type: 'number', description: 'For a claim: calibrated belief in [0,1]' },
-        support: { type: 'array', items: { type: 'string' }, description: 'For a claim: fact keys of the evidence' },
-        tags: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['id', 'kind', 'statement'],
-    },
-    scope: null,
-  },
-  {
-    name: 'register_meta_tool',
-    description:
-      'v4 — persist a tool constructed mid-run as a meta-tool fact (strategy: agent_backed | code_generation | composition), so the vocabulary grows during use, audited by provenance. If it carries a declared `action` ({id, writes[], if?, params?}), that action is also projected as cell-required vocabulary — instantly invocable.',
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Tool name (becomes key meta-tool/<name>)' },
-        strategy: { type: 'string', enum: ['agent_backed', 'code_generation', 'composition'] },
-        implementation: { type: 'string', description: 'How the tool is realised (prose, code, or a composition spec)' },
-        action: { type: 'object', description: 'Optional declared action to project: { id, writes[], if?, enabled?, params? }' },
-        tags: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['name', 'strategy'],
     },
     scope: null,
   },
@@ -320,13 +251,6 @@ export const handler = async (event) => {
     return json(200, { bootstrapped: true, renderer: '_renderers/machine', views: ['_views/machine-runs', '_views/open-tasks'], actions: ['task.claim'] });
   }
 
-  if (method === 'POST' && path === '/_tools/validate_machine') {
-    const a = event.body ? JSON.parse(event.body) : {};
-    const nodes = Array.isArray(a.nodes) ? a.nodes : [];
-    const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
-    return json(200, validateMachine(nodes, rails));
-  }
-
   if (method === 'POST' && path === '/_tools/trigger_run') {
     const a = event.body ? JSON.parse(event.body) : {};
     if (!a.machine) return json(400, { error: 'machine is required' });
@@ -353,13 +277,6 @@ export const handler = async (event) => {
     return json(200, { spawned: true, run: a.run, kind: spec.kind, children: writes.slice(1).map((w) => w.key) });
   }
 
-  if (method === 'POST' && path === '/_tools/disclose') {
-    const a = event.body ? JSON.parse(event.body) : {};
-    const nodes = Array.isArray(a.nodes) ? a.nodes : [];
-    const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
-    const out = disclose(nodes, rails, a.node);
-    return json(out.error ? 404 : 200, out);
-  }
 
   if (method === 'POST' && path === '/_tools/define_machine') {
     const a = event.body ? JSON.parse(event.body) : {};
@@ -368,6 +285,12 @@ export const handler = async (event) => {
     const arrows = Array.isArray(a.arrows) ? a.arrows : [];
     const rails = railsFrom(arrows, a.rails);
     const validation = validateMachine(nodes, rails);
+    // dryRun: validate + preview the projection without writing anything
+    // (the old standalone validate_machine tool, folded into define).
+    if (a.dryRun) {
+      const preview = a.project !== false && rails.length ? projectActions(a.name, nodes, rails) : [];
+      return json(200, { dryRun: true, validation, rails: rails.length, actions: preview.map((d) => d.id) });
+    }
     const value = {
       title: a.title ?? a.name,
       ...(a.source ? { source: a.source } : {}),
@@ -439,46 +362,6 @@ export const handler = async (event) => {
       subscriptions,
       validation,
     });
-  }
-
-  if (method === 'POST' && path === '/_tools/record_idea') {
-    const a = event.body ? JSON.parse(event.body) : {};
-    if (!a.id || !a.kind || !a.statement) return json(400, { error: 'id, kind, and statement are required' });
-    const key = a.kind === 'claim' ? `claims/${a.id}` : `concept/${a.id}`;
-    const value =
-      a.kind === 'claim'
-        ? { statement: a.statement, ...(a.confidence != null ? { confidence: a.confidence } : {}), ...(Array.isArray(a.support) ? { support: a.support } : {}) }
-        : { content: a.statement };
-    await emit({
-      key,
-      value,
-      type: a.kind,
-      tags: [...new Set([a.kind, 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])])],
-      via: 'machine.record_idea',
-    });
-    return json(200, { recorded: true, key });
-  }
-
-  if (method === 'POST' && path === '/_tools/register_meta_tool') {
-    // v4 — meta-tools as registered substrate tools: a tool constructed during
-    // a run persists as a `meta-tool` fact, and (when it carries a declared
-    // `action`) is projected as a cell-required declared action, so the
-    // vocabulary grows during use, audited by provenance.
-    const a = event.body ? JSON.parse(event.body) : {};
-    if (!a.name || !a.strategy) return json(400, { error: 'name and strategy are required' });
-    await emit({
-      key: `meta-tool/${seg(a.name)}`,
-      value: { name: a.name, strategy: a.strategy, ...(a.implementation ? { implementation: a.implementation } : {}) },
-      type: 'meta-tool',
-      tags: [...new Set(['meta-tool', 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])])],
-      via: 'machine.register_meta_tool',
-    });
-    let action;
-    if (a.action && a.action.id && Array.isArray(a.action.writes)) {
-      action = a.action.id;
-      await emitAction(a.action, a.name);
-    }
-    return json(200, { registered: true, key: `meta-tool/${seg(a.name)}`, ...(action ? { action } : {}) });
   }
 
   return json(404, { error: `no route for ${method} ${path}` });
