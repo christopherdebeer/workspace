@@ -13,8 +13,24 @@
  * and reads are the gateway's job (workspace.link / workspace.query type:machine).
  */
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { App } from './client/app';
+import { installBridge } from './client/bridge';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
+
+/** The SPA's first-paint seed from the dispatch-proxied ssr.json reads (run AS
+ *  the caller; present only on an authed top-level navigation to `/`). */
+function buildBoot(user, ssr) {
+  const s = ssr ?? {};
+  const machines = ((s.machines && s.machines.entries) || []).filter((e) => !String(e.key).startsWith('_'));
+  const runs = (s.runs && s.runs.entries) || [];
+  return { session: { user: user ?? null }, machines, runs };
+}
 
 /** DyGram's seven arrows → substrate edge relations (see docs/machine-cell.md). */
 const ARROW_RELS = {
@@ -358,6 +374,30 @@ function projectionSubscriptions(name, rails) {
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+
+  // ── the SSR React SPA (the user frontend) ──────────────────────────────
+  if (method === 'GET' && path === '/app.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*' }, body: readFile('app.js') };
+  }
+  if ((method === 'GET' || method === 'HEAD') && (path === '/' || path === '')) {
+    try {
+      const caller = event.headers && event.headers['x-cell-caller'];
+      const authed = !!caller && caller !== 'anonymous';
+      const boot = buildBoot(authed ? caller : null, event.ssrData);
+      // SSR'd cross-cell links must match the client's; a host-aware stub keeps
+      // hydration clean (only cellUrl is used during render).
+      installBridge({ cellUrl: (o, n, rest = '') => `/@${o}/${n}${rest}` });
+      const inner = renderToString(createElement(App, { initial: boot }));
+      const state = JSON.stringify(boot).replace(/</g, '\\u003c');
+      const shell = readFile('static/index.html')
+        .replace('<div id="root"></div>', `<div id="root" data-ssr="1">${inner}</div>`)
+        .replace('<script type="module"', `<script id="machine-state" type="application/json">${state}</script>\n  <script type="module"`);
+      return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: shell };
+    } catch (err) {
+      // SSR is best-effort — fall back to the cold-mount shell, never a 500.
+      try { return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: readFile('static/index.html') }; } catch { /* fall through */ }
+    }
+  }
 
   if (method === 'GET' && path === '/_tools') {
     return json(200, { tools: TOOLS });

@@ -1,0 +1,6 @@
+{
+  "reads": [
+    { "as": "machines", "target": "workspace.query", "input": { "type": "machine", "limit": 100 } },
+    { "as": "runs", "target": "workspace.query", "input": { "type": "machine-run", "rankBy": "recency", "limit": 60 } }
+  ]
+}

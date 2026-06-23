@@ -575,7 +575,11 @@ interface DeleteInput {
   cellId: string;
 }
 interface ConfigureCellInput extends CellRef {
-  timeoutSeconds: number;
+  timeoutSeconds?: number;
+  /** Web-facing: anonymous GETs/HEADs are allowed through dispatch so the SPA
+   *  shell loads for a signed-out visitor (the client then handles sign-in for
+   *  the owner's data). Registry-only — no stack rebuild. */
+  public?: boolean;
 }
 async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
@@ -585,6 +589,13 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
   const record = await registry.get(cellId);
   if (!record) throw new Error(`Unknown cell "${cellId}"`);
   if (record.owner !== user) throw new ServiceAuthError('Only the owner can reconfigure a cell');
+  const newPublic = input.public === undefined ? record.public : !!input.public;
+  // Flip `public` without touching the stack (it lives in the registry record).
+  if (input.timeoutSeconds === undefined) {
+    await registry.put({ ...record, public: newPublic, updatedAt: new Date().toISOString() });
+    ctx.logger.info('cell reconfigured (registry)', { cellId, public: newPublic });
+    return { ok: true, cellId, public: newPublic, timeoutSeconds: record.timeoutSeconds ?? null };
+  }
   const timeoutSeconds = clampTimeout(input.timeoutSeconds);
   if (!timeoutSeconds) throw new Error('timeoutSeconds (10–300) is required');
   const codeKey = `cells/${cellId}/${randomUUID()}.zip`;
@@ -617,8 +628,8 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
     timeoutSeconds,
   });
   await updateStack(record.stackName, template);
-  await registry.put({ ...record, timeoutSeconds, updatedAt: new Date().toISOString() });
-  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds });
+  await registry.put({ ...record, public: newPublic, timeoutSeconds, updatedAt: new Date().toISOString() });
+  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds, public: newPublic });
   return {
     ok: true,
     cellId,
@@ -1775,7 +1786,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: deploy as RegisteredCommand,
   },
   configureCell: {
-    description: 'Reconfigure a cell you own: Lambda timeoutSeconds (10–300). Re-renders the stack and preserves live code; run cells.deploy afterwards to restore client/static assets.',
+    description: "Reconfigure a cell you own: `timeoutSeconds` (10–300; re-renders the stack — run cells.deploy afterwards to restore client/static assets) and/or `public` (registry-only, no rebuild — web-facing so a signed-out visitor gets the SPA shell). Pass either or both.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1785,8 +1796,8 @@ const TOOLS: Record<string, ToolSpec> = {
         owner: { type: 'string' },
         name: { type: 'string' },
         timeoutSeconds: { type: 'number' },
+        public: { type: 'boolean', description: 'Allow anonymous GETs through dispatch (the SPA shell loads signed-out; the client handles sign-in for data)' },
       },
-      required: ['timeoutSeconds'],
       additionalProperties: false,
     },
     handler: configureCell as RegisteredCommand,
