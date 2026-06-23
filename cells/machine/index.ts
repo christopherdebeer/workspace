@@ -32,7 +32,9 @@ function buildBoot(user, ssr) {
   return { session: { user: user ?? null }, machines, runs };
 }
 
-/** DyGram's seven arrows → substrate edge relations (see docs/machine-cell.md). */
+/** DyGram's relationship arrows → substrate edge relations (faithful to DyGram's
+ *  arrow semantics; see docs/machine-cell.md). Note these are the *relationship*
+ *  rels — rail *execution* mode is a separate, substrate-only concept (railsFrom). */
 const ARROW_RELS = {
   '->': 'flows-to',
   '-->': 'depends-on',
@@ -108,12 +110,12 @@ const TOOLS = [
         },
         arrows: {
           type: 'array',
-          description: 'Arrows: [{ from, arrow, to, label? }] where arrow is one of -> --> => <|-- *--> o--> <-->',
+          description: 'Arrows: [{ from, arrow, to, label? }]. DyGram\'s relationship/rendering arrows are -> --> => <|-- *--> o--> <--> (stored as edge `rel`s; see ARROW_RELS). `~>`/`~>>` are NOT DyGram arrows — they are substrate-only rail syntax we add for task/work rails (see docs/machine-dygram-contrast.md).',
           items: { type: 'object' },
         },
         rails: {
           type: 'array',
-          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. Default derived from arrows (-> auto, => agent, ~> task, ~>> work). "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine-agent-scopes.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine-agent-scopes.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
@@ -122,6 +124,22 @@ const TOOLS = [
         tags: { type: 'array', items: { type: 'string' } },
       },
       required: ['name'],
+    },
+    scope: null,
+  },
+  {
+    name: 'validate_machine',
+    description:
+      'Static graph analysis over a machine (the DyGram validators we dropped when we stopped porting the language — see docs/machine-dygram-contrast.md). Pure, no write: reports dangling rails + missing entry (errors) and unreachable nodes, orphans, transition cycles, missing terminal (warnings). Pass { nodes, arrows?, rails? } — same shape as define_machine; rails default-derived from arrows. define_machine runs this itself and returns the result.',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodes: { type: 'array', items: { type: 'object' }, description: 'Nodes: [{ name, kind?, title? }]' },
+        arrows: { type: 'array', items: { type: 'object' }, description: 'Arrows (rails derived from these if `rails` omitted)' },
+        rails: { type: 'array', items: { type: 'object' }, description: 'Explicit rails: [{ from, to, mode }]' },
+      },
+      required: ['nodes'],
     },
     scope: null,
   },
@@ -184,10 +202,14 @@ async function emit(detail) {
 const seg = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '_');
 
 /**
- * Rails from arrows (when not declared explicitly): a plain flow (`->`) is a
- * deterministic (auto) transition; a causation arrow (`=>`) is an agent-decision
- * rail — the doc's "escalate when reasoning needed". Other arrows (`-->`, `*-->`,
- * …) are structure, not transitions, so they don't become rails.
+ * Rails from arrows (when not declared explicitly). This arrow→mode mapping is a
+ * substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum
+ * and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its
+ * `=>` is causation *styling*). We instead make mode explicit: a plain flow (`->`)
+ * is deterministic (auto); `=>` is an agent-decision rail ("escalate when
+ * reasoning needed"); `~>`/`~>>` are our own rail arrows for task/work. Other
+ * relationship arrows (`-->`, `*-->`, …) are structure, not transitions, so they
+ * don't become rails. See docs/machine-dygram-contrast.md.
  */
 function railsFrom(arrows, explicit) {
   if (Array.isArray(explicit) && explicit.length) {
@@ -219,6 +241,69 @@ function railsFrom(arrows, explicit) {
     else if (e.arrow === '~>>') rails.push({ from: e.from, to: e.to, mode: 'work' });
   }
   return rails;
+}
+
+/**
+ * Static analysis over a machine's rail graph — the structural checks DyGram's
+ * `graph-validator` runs that our projection silently skips (a machine with
+ * dangling rails, an unreachable node, or a transition cycle is otherwise
+ * accepted as-is). Pure / no I/O. Errors are breakages (a run can't start or a
+ * rail points nowhere); warnings are smells (unreachable, orphan, cycle, no
+ * terminal). Context nodes touched only by relationship arrows — not rails —
+ * are correctly flagged as orphan/unreachable here because rails ARE the
+ * executable graph. See docs/machine-dygram-contrast.md §3.
+ */
+function validateMachine(nodes, rails) {
+  const names = new Set((nodes || []).map((n) => n && n.name).filter(Boolean));
+  const errors = [];
+  const warnings = [];
+
+  // Dangling rails — an endpoint with no node.
+  for (const r of rails) {
+    if (r.from && !names.has(r.from)) errors.push({ code: 'dangling-rail', message: `rail "${r.from}" → "${r.to}": no node named "${r.from}"` });
+    if (r.to && !names.has(r.to)) errors.push({ code: 'dangling-rail', message: `rail "${r.from}" → "${r.to}": no node named "${r.to}"` });
+  }
+
+  // Adjacency + in-degree over the (well-formed) rails — the executable graph.
+  const adj = new Map();
+  const indeg = new Map();
+  for (const n of names) { adj.set(n, []); indeg.set(n, 0); }
+  for (const r of rails) {
+    if (names.has(r.from) && names.has(r.to)) { adj.get(r.from).push(r.to); indeg.set(r.to, indeg.get(r.to) + 1); }
+  }
+  const entries = [...names].filter((n) => indeg.get(n) === 0);
+  const terminals = [...names].filter((n) => adj.get(n).length === 0);
+
+  // Reachability (DFS from entry nodes).
+  const seen = new Set();
+  const stack = [...entries];
+  while (stack.length) { const n = stack.pop(); if (seen.has(n)) continue; seen.add(n); for (const m of adj.get(n)) stack.push(m); }
+  for (const n of names) if (!seen.has(n)) warnings.push({ code: 'unreachable', message: `node "${n}" is unreachable from any entry` });
+
+  // Orphans — no rail touches them (and the machine has other nodes).
+  const touched = new Set();
+  for (const r of rails) { if (names.has(r.from)) touched.add(r.from); if (names.has(r.to)) touched.add(r.to); }
+  for (const n of names) if (!touched.has(n) && names.size > 1) warnings.push({ code: 'orphan', message: `node "${n}" has no rails (unreachable by execution)` });
+
+  // Cycle detection (white/grey/black DFS over rails).
+  const color = new Map();
+  const cycles = [];
+  const dfs = (n, path) => {
+    color.set(n, 1);
+    for (const m of adj.get(n)) {
+      if (color.get(m) === 1) cycles.push([...path, n, m].join(' → '));
+      else if (!color.get(m)) dfs(m, [...path, n]);
+    }
+    color.set(n, 2);
+  };
+  for (const n of names) if (!color.get(n)) dfs(n, []);
+  for (const c of cycles) warnings.push({ code: 'cycle', message: `transition cycle ${c} — a reactive machine could loop; add a condition/guard` });
+
+  // Entry/terminal presence.
+  if (names.size && entries.length === 0) errors.push({ code: 'no-entry', message: 'no entry node (every node has an incoming rail) — a run cannot start' });
+  if (names.size && terminals.length === 0) warnings.push({ code: 'no-terminal', message: 'no terminal node (every node has an outgoing rail) — a run never reaches done' });
+
+  return { ok: errors.length === 0, errors, warnings, stats: { nodes: names.size, rails: rails.length, entries, terminals, cyclic: cycles.length > 0 } };
 }
 
 /**
@@ -441,12 +526,20 @@ export const handler = async (event) => {
     return json(200, { bootstrapped: true, renderer: '_renderers/machine', views: ['_views/machine-runs', '_views/open-tasks'], actions: ['task.claim'] });
   }
 
+  if (method === 'POST' && path === '/_tools/validate_machine') {
+    const a = event.body ? JSON.parse(event.body) : {};
+    const nodes = Array.isArray(a.nodes) ? a.nodes : [];
+    const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
+    return json(200, validateMachine(nodes, rails));
+  }
+
   if (method === 'POST' && path === '/_tools/define_machine') {
     const a = event.body ? JSON.parse(event.body) : {};
     if (!a.name) return json(400, { error: 'name is required' });
     const nodes = Array.isArray(a.nodes) ? a.nodes : [];
     const arrows = Array.isArray(a.arrows) ? a.arrows : [];
     const rails = railsFrom(arrows, a.rails);
+    const validation = validateMachine(nodes, rails);
     const value = {
       title: a.title ?? a.name,
       ...(a.source ? { source: a.source } : {}),
@@ -503,6 +596,7 @@ export const handler = async (event) => {
       actions: projected.map((d) => d.id),
       reactive: !!a.reactive,
       subscriptions,
+      validation,
     });
   }
 

@@ -88,7 +88,11 @@ const railArrow: Record<string, string> = { auto: '→', agent: '⇒', task: '�
 /* ── mermaid (the machine drawn as a diagram) ───────────────────────────── */
 
 const sid = (s: string): string => String(s || 'n').replace(/[^A-Za-z0-9_]/g, '_');
-function toMermaid(m: MachineVal): string {
+/** Optional run overlay — DyGram colours its live graph by execution state; we
+ *  have the same data (machine-run/<run>.node + claim history) and bake it into
+ *  the mermaid source as classDefs (see docs/machine-dygram-contrast.md §7). */
+interface Highlight { active?: string; visited?: string[]; done?: boolean }
+function toMermaid(m: MachineVal, hl?: Highlight): string {
   const esc = (s: string): string => String(s).replace(/["|]/g, "'").replace(/\n/g, ' ');
   const lines = ['graph TD'];
   for (const n of m.nodes ?? []) lines.push(`  ${sid(n.name)}["${esc(n.title || n.name)}"]`);
@@ -96,6 +100,14 @@ function toMermaid(m: MachineVal): string {
     ? (m.rails ?? []).map((r) => ({ from: r.from, to: r.to, label: r.mode }))
     : (m.arrows ?? []).map((a) => ({ from: a.from, to: a.to, label: (a.arrow ?? '').replace(/[|"]/g, '') }));
   for (const e of edges) lines.push(`  ${sid(e.from)} -->|${esc(e.label)}| ${sid(e.to)}`);
+  if (hl) {
+    lines.push(`  classDef active fill:${C.blue},stroke:${C.ink},color:#fff,stroke-width:2px;`);
+    lines.push(`  classDef done fill:${C.green},stroke:${C.ink},color:#fff,stroke-width:2px;`);
+    lines.push('  classDef visited fill:#e3ece3,stroke:#9bbf9b,color:#1c1c1a;');
+    const active = hl.active ? sid(hl.active) : null;
+    for (const v of hl.visited ?? []) if (sid(v) !== active) lines.push(`  class ${sid(v)} visited;`);
+    if (active) lines.push(`  class ${active} ${hl.done ? 'done' : 'active'};`);
+  }
   return lines.join('\n');
 }
 
@@ -221,6 +233,8 @@ function MachineView({ name, machines, seedRuns }: { name: string; machines: Ent
   };
 
   if (!m) return <p style={{ color: C.mut }}>Machine “{name}” not found. <a href="#/">Back</a></p>;
+  // runs come back rankBy recency → runs[0] is the latest; overlay its position.
+  const latest = runs[0]?.value as RunVal | undefined;
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
@@ -233,7 +247,10 @@ function MachineView({ name, machines, seedRuns }: { name: string; machines: Ent
           : <button onClick={() => void login()} style={{ border: `1px solid ${C.green}`, background: 'transparent', color: C.green, borderRadius: 8, padding: '7px 14px', font: 'inherit', cursor: 'pointer' }}>Sign in to trigger</button>}
       </div>
 
-      <Field label="Diagram"><Mermaid source={toMermaid(m)} /></Field>
+      <Field label="Diagram">
+        <Mermaid source={toMermaid(m, latest ? { active: latest.node, done: latest.status === 'done' } : undefined)} />
+        {latest && <div style={{ color: C.mut, fontSize: 11, marginTop: 4 }}>highlight: latest run at <strong>{latest.node}</strong> ({latest.status})</div>}
+      </Field>
 
       <Field label="Rails (the executable transitions)">
         <div style={{ display: 'grid', gap: 6 }}>
@@ -284,6 +301,7 @@ function MachineView({ name, machines, seedRuns }: { name: string; machines: Ent
 
 function RunView({ run }: { run: string }): React.ReactElement {
   const [fact, setFact] = useState<RunVal | null>(null);
+  const [machine, setMachine] = useState<MachineVal | null>(null);
   const [claims, setClaims] = useState<Entry[]>([]);
   const [transcript, setTranscript] = useState<Array<Record<string, unknown>> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -296,13 +314,20 @@ function RunView({ run }: { run: string }): React.ReactElement {
     const cl = await mcpCall('read', 'workspace.query', { prefix: `claims/${run}.`, limit: 20 });
     setClaims(cl.ok ? entriesOf(cl.value) : []);
     if (val?.machine) {
-      const t = await mcpCall('read', 'workspace.peek', { key: `machine-work/${val.machine}.${run}/transcript` });
+      const [mf, t] = await Promise.all([
+        mcpCall('read', 'workspace.peek', { key: `machine/${val.machine}` }),
+        mcpCall('read', 'workspace.peek', { key: `machine-work/${val.machine}.${run}/transcript` }),
+      ]);
+      setMachine(mf.ok ? ((mf.value as { value?: MachineVal } | null)?.value ?? (mf.value as MachineVal) ?? null) : null);
       const tv = t.ok ? ((t.value as { value?: { turns?: Array<Record<string, unknown>> } } | null)?.value?.turns ?? null) : null;
       setTranscript(tv);
     }
     setLoading(false);
   }, [run]);
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // The nodes the run has decided at are "visited" (each claim records its `at`).
+  const visited = claims.map((c) => (c.value as { at?: string }).at).filter((x): x is string => !!x);
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -319,6 +344,12 @@ function RunView({ run }: { run: string }): React.ReactElement {
           <Field label="status"><Badge text={fact.status ?? '—'} color={statusColor(fact.status)} /></Field>
           {fact.via && <Field label="via"><code style={{ fontFamily: C.mono, fontSize: 12 }}>{fact.via}</code></Field>}
         </div>
+      )}
+
+      {machine && (machine.nodes ?? []).length > 0 && (
+        <Field label="Diagram (run position)">
+          <Mermaid source={toMermaid(machine, { active: fact?.node, visited, done: fact?.status === 'done' })} />
+        </Field>
       )}
 
       <Field label="Trajectory (claims — the certificate of reasoning)">

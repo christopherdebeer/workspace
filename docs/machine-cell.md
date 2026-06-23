@@ -12,6 +12,16 @@
 > `implements → kb/722a81781fc94d` (concept_skills_system). This cell turns that
 > single descriptive fact into a managed vocabulary.
 
+> **Correction (see `docs/machine-dygram-contrast.md`).** A later code-grounded
+> read of DyGram corrected three claims that drifted in this doc: (1) DyGram has
+> **no `~>`/`~>>` arrows** and **no arrow→rail-mode mapping** — those are our own
+> substrate-only extension; DyGram infers auto-vs-agent from node-type/out-degree/
+> annotations and its `=>` is causation *styling*, not an agent marker. (2) DyGram
+> has **5 canonical node kinds** (`task/state/context/init/tool`), not "15+"; the
+> rest are authoring aliases that normalize to `context`. (3) In DyGram node *kind
+> drives execution*; in ours `kind` is currently cosmetic (the rail `mode` carries
+> behavior). The arrow→`rel` table below (relationship semantics) remains faithful.
+
 ## Why DyGram belongs in the substrate
 
 DyGram is, in its author's own framing, *"the substrate thesis applied to
@@ -37,7 +47,7 @@ home; nothing requires a new engine.
 | DyGram | Substrate-native form |
 | --- | --- |
 | **machine** (a named graph) | a fact of type `machine` — a named subgraph: its node-facts + the edges between them |
-| **node** (Task/State/Input/Output/Context/Resource/Process/Concept/Implementation/Result, 15+) | a fact of type `machine-node`, `kind` in the value; nesting via qualified key (`machine/<m>/<node>`) |
+| **node** (5 canonical kinds — task/state/context/init/tool; authoring aliases like Input/Output/Resource/Result normalize to context) | a fact of type `machine-node`, `kind` in the value; nesting via qualified key (`machine/<m>/<node>`) |
 | **7 arrow types** | substrate **edges** (typed, directed) — see the rel table below; the graph *is* the program |
 | **rails: deterministic transition** (`-@auto->`, instant, no LLM) | a **declared action** — a bounded, conditional, audited write (`if`/`enabled` + `writes[]`); fires with no model call |
 | **rails: agent decision** (branch needs reasoning) | invoke a model cell (`@c15r/models.agent`) at exactly that node — the *only* place tokens are spent |
