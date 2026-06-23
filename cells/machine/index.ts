@@ -3,7 +3,7 @@
  *
  * A tier-2 cell that makes the concepts of DyGram (christopherdebeer/machine)
  * first-class in the substrate: a machine is a named subgraph of typed nodes
- * and typed arrows an agent rides as rails. See docs/machine-cell.md for the
+ * and typed arrows an agent rides as rails. See docs/machine.md for the
  * full design and the DyGram→substrate mapping.
  *
  * Minimal cell contract (mirrors cells/reef-writer): GET /_tools advertises the
@@ -99,12 +99,12 @@ const TOOLS = [
         },
         arrows: {
           type: 'array',
-          description: 'Arrows: [{ from, arrow, to, label? }]. DyGram\'s relationship/rendering arrows are -> --> => <|-- *--> o--> <--> (stored as edge `rel`s; see ARROW_RELS). `~>`/`~>>` are NOT DyGram arrows — they are substrate-only rail syntax we add for task/work rails (see docs/machine-dygram-contrast.md).',
+          description: 'Arrows: [{ from, arrow, to, label? }]. DyGram\'s relationship/rendering arrows are -> --> => <|-- *--> o--> <--> (stored as edge `rel`s; see ARROW_RELS). `~>`/`~>>` are NOT DyGram arrows — they are substrate-only rail syntax we add for task/work rails (see docs/machine.md).',
           items: { type: 'object' },
         },
         rails: {
           type: 'array',
-          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine-agent-scopes.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
@@ -119,7 +119,7 @@ const TOOLS = [
   {
     name: 'validate_machine',
     description:
-      'Static graph analysis over a machine (the DyGram validators we dropped when we stopped porting the language — see docs/machine-dygram-contrast.md). Pure, no write: reports dangling rails + missing entry (errors) and unreachable nodes, orphans, transition cycles, missing terminal (warnings). Pass { nodes, arrows?, rails? } — same shape as define_machine; rails default-derived from arrows. define_machine runs this itself and returns the result.',
+      'Static graph analysis over a machine (the DyGram validators we dropped when we stopped porting the language — see docs/machine.md). Pure, no write: reports dangling rails + missing entry (errors) and unreachable nodes, orphans, transition cycles, missing terminal (warnings). Pass { nodes, arrows?, rails? } — same shape as define_machine; rails default-derived from arrows. define_machine runs this itself and returns the result.',
     kind: 'read',
     inputSchema: {
       type: 'object',
@@ -135,7 +135,7 @@ const TOOLS = [
   {
     name: 'trigger_run',
     description:
-      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger; see docs/machine-workflow-parallels.md). Writes machine-trigger/<machine>/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context the entry agent sees. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on.',
+      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger; see docs/machine.md). Writes machine-trigger/<machine>/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context the entry agent sees. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -151,7 +151,7 @@ const TOOLS = [
   {
     name: 'spawn_children',
     description:
-      'Internal (reaction-target) — spawn the child runs of a section/vote fan. The fan rail delivers here when a run reaches the fan node; this emits the parent\'s wait-state AND one child run fact per branch as SEPARATE organ writes (so each reliably re-triggers its work/decide delivery, unlike a single declared action\'s secondary writes — docs/machine-workflow-parallels.md). Not meant to be called by hand.',
+      'Internal (reaction-target) — spawn the child runs of a section/vote fan. The fan rail delivers here when a run reaches the fan node; this emits the parent\'s wait-state AND one child run fact per branch as SEPARATE organ writes (so each reliably re-triggers its work/decide delivery, unlike a single declared action\'s secondary writes — docs/machine.md). Not meant to be called by hand.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -167,7 +167,7 @@ const TOOLS = [
   {
     name: 'disclose',
     description:
-      'Progressive-disclosure view of a machine (Agent-Skills tiering — see docs/machine-workflow-parallels.md). Pure/no-write over an inline { nodes, rails } (the def a driving agent already read). Level-1 (default): each node as a one-line descriptor + the rails leaving it as { to, mode, when } — the branch menu without bodies. Level-2: pass `node` to get that one node\'s full body + its outgoing rails. Keeps an agent\'s context small as a machine grows.',
+      'Progressive-disclosure view of a machine (Agent-Skills tiering — see docs/machine.md). Pure/no-write over an inline { nodes, rails } (the def a driving agent already read). Level-1 (default): each node as a one-line descriptor + the rails leaving it as { to, mode, when } — the branch menu without bodies. Level-2: pass `node` to get that one node\'s full body + its outgoing rails. Keeps an agent\'s context small as a machine grows.',
     kind: 'read',
     inputSchema: {
       type: 'object',

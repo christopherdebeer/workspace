@@ -216,7 +216,7 @@ interface AgentInput {
   grants?: AgentGrants;
   /** Optional allowlist of tool NAMES the agent may use (a subset of the built
    *  toolbox). Omitted = the full grant-derived set. The seam for machine-declared
-   *  tool scopes (docs/machine-agent-scopes.md); the token-scoped vocabulary slots
+   *  tool scopes (docs/machine.md); the token-scoped vocabulary slots
    *  in here later. */
   tools?: string[];
   /** Where the result fact lands (default agent/<jobId>). */
@@ -241,7 +241,7 @@ interface AgentToolDef {
 
 /** The tool surface offered to the model — emit only exists when write is granted.
  *  An optional `allow` allowlist (tool names) narrows it further — a machine node
- *  declaring exactly which tools its agent may call (docs/machine-agent-scopes.md). */
+ *  declaring exactly which tools its agent may call (docs/machine.md). */
 function buildAgentTools(grants: AgentGrants, allow?: string[]): AgentToolDef[] {
   const tools: AgentToolDef[] = [];
   if (grants.read !== false) {

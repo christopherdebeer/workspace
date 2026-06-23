@@ -15,7 +15,7 @@
  * other cells. So the core PROJECTS the machine to declared actions + `deliver`
  * subscriptions (model invocation and sibling-aggregating barriers must stay
  * substrate-side) and computes the deterministic writes the cell itself emits.
- * See docs/machine-workflow-parallels.md and docs/machine-cell.md.
+ * See docs/machine.md (the canonical design doc).
  */
 
 /** DyGram's relationship arrows → substrate edge relations (faithful to DyGram's
@@ -39,7 +39,7 @@ export const seg = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '_');
  * substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum
  * and infers auto-vs-agent from node-type/out-degree/annotations (its `=>` is
  * causation *styling*). We make mode explicit: `->` auto, `=>` agent, `~>` task,
- * `~>>` work (the last two our own rail arrows). See docs/machine-dygram-contrast.md.
+ * `~>>` work (the last two our own rail arrows). See docs/machine.md.
  */
 export function railsFrom(arrows, explicit) {
   if (Array.isArray(explicit) && explicit.length) {
@@ -56,7 +56,7 @@ export function railsFrom(arrows, explicit) {
       ...(r.prompt ? { prompt: r.prompt } : {}),
       ...(r.grants ? { grants: r.grants } : {}),
       ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
-      // The agent's tool allowlist (docs/machine-agent-scopes.md).
+      // The agent's tool allowlist (docs/machine.md).
       ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
       ...(r.scope ? { scope: r.scope } : {}),
       // Parallel-branching config: section → `sections` [{to, when?}] then synthesise

@@ -153,7 +153,7 @@ function RunGroupRow({ group, showMachine }: { group: RunGroup; showMachine?: bo
 const sid = (s: string): string => String(s || 'n').replace(/[^A-Za-z0-9_]/g, '_');
 /** Optional run overlay — DyGram colours its live graph by execution state; we
  *  have the same data (machine-run/<run>.node + claim history) and bake it into
- *  the mermaid source as classDefs (see docs/machine-dygram-contrast.md §7). */
+ *  the mermaid source as classDefs (see docs/machine.md §12). */
 interface Highlight { active?: string; visited?: string[]; done?: boolean }
 function toMermaid(m: MachineVal, hl?: Highlight): string {
   const esc = (s: string): string => String(s).replace(/["|]/g, "'").replace(/\n/g, ' ');
