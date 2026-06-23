@@ -94,10 +94,18 @@ allowlisted tools as an interim (see "Increment 1").
   accepts a `tools` allowlist and *filters* its exposed toolbox to it — so a node
   can already say "this agent gets read-only" or "no supersede". Bespoke tools
   remain the floor; the declaration is the seam the token model slots into.
-- **Increment 2 (driving path):** a small machine-execution surface a driving
-  agent reads — `{ run, node, allowedTools, scope, advance }` — plus a helper
-  that mints the narrowed token. Realises "agent nodes returned as next steps for
-  the driving agent" with real `/mcp` tools. No new platform primitive needed.
+- **Increment 2 (driving path) — DONE as `protocol/machine-drive`.** A driving
+  agent already iterates a machine with existing primitives only: `peek
+  machine-run/<run>` (where am I) + `peek machine/<m>` (the rails, each carrying
+  the node's `tools`/`scope`/`prompt` from Increment 1) + `invoke` of the
+  projected `start` / `<from>-to-<to>` / `decide-<from>` actions (whose `if`
+  guards make them safe + idempotent). The protocol fact is what a scheduled
+  routine is *pointed at*; the machine name arrives in the dispatch text. Token
+  narrowing (gateway-enforced scope) is the only remaining upgrade — today the
+  allowlist discipline is the driver's to keep. A `drive`/`step` convenience tool
+  (one call resolves the deterministic prefix + returns the next agent node) is a
+  nicety that would need the machine cell to gain substrate-read provisioning;
+  the protocol works without it.
 - **Increment 3 (spawn path, full):** grants-to-principals so a cell can mint a
   scoped token for the agent it spawns; the bespoke `substrate_*` tools retire in
   favour of the real `workspace.*` vocabulary behind that token.
