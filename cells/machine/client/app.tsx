@@ -23,7 +23,7 @@ export interface Boot {
   runs: Entry[];
 }
 
-interface Rail { from: string; to: string; mode: string; condition?: string; prompt?: string; tools?: string[]; scope?: unknown; grants?: unknown; maxTurns?: number }
+interface Rail { from: string; to: string; mode: string; when?: string; condition?: string; prompt?: string; tools?: string[]; scope?: unknown; grants?: unknown; maxTurns?: number; sections?: Array<{ to: string; when?: string }>; branch?: string; samples?: number }
 interface Node { name: string; kind?: string; title?: string }
 interface MachineVal { title?: string; nodes?: Node[]; arrows?: Array<{ from: string; arrow: string; to: string }>; rails?: Rail[]; context?: string[] }
 interface RunVal { machine?: string; node?: string; status?: string; via?: string; at?: string; startedAt?: string; reason?: string }
@@ -36,7 +36,7 @@ const C = {
   mono: 'ui-monospace,SFMono-Regular,Menlo,monospace',
 };
 const statusColor = (s?: string): string =>
-  s === 'done' ? C.green : s === 'running' ? C.blue : s === 'awaiting-decision' ? C.amber : C.mut;
+  s === 'done' ? C.green : s === 'running' || s === 'sectioning' || s === 'voting' ? C.blue : s === 'awaiting-decision' ? C.amber : C.mut;
 
 /* ── gateway calls (read/act over /mcp, the way the agent does) ───────────── */
 
@@ -83,7 +83,7 @@ function Card({ children, onClick }: { children: React.ReactNode; onClick?: () =
     </div>
   );
 }
-const railArrow: Record<string, string> = { auto: '→', agent: '⇒', task: '⤳', work: '⇶' };
+const railArrow: Record<string, string> = { auto: '→', agent: '⇒', task: '⤳', work: '⇶', section: '⛓', vote: '🗳' };
 
 /* ── mermaid (the machine drawn as a diagram) ───────────────────────────── */
 
@@ -260,9 +260,12 @@ function MachineView({ name, machines, seedRuns }: { name: string; machines: Ent
                 <strong>{r.from}</strong>
                 <span title={r.mode} style={{ color: C.mut }}>{railArrow[r.mode] ?? '→'}</span>
                 <strong>{r.to}</strong>
-                <Badge text={r.mode} color={r.mode === 'agent' || r.mode === 'work' ? C.green : r.mode === 'task' ? C.amber : C.mut} />
+                <Badge text={r.mode} color={r.mode === 'agent' || r.mode === 'work' ? C.green : r.mode === 'task' ? C.amber : r.mode === 'section' || r.mode === 'vote' ? C.blue : C.mut} />
+                {r.mode === 'section' && Array.isArray(r.sections) && <span style={{ color: C.mut, fontSize: 11 }}>∥ {r.sections.map((s) => s.to).join(', ')}</span>}
+                {r.mode === 'vote' && <span style={{ color: C.mut, fontSize: 11 }}>{r.samples ?? 3}× {r.branch}</span>}
                 {Array.isArray(r.tools) && r.tools.length > 0 && <span style={{ color: C.mut, fontSize: 11 }}>tools: {r.tools.join(', ')}</span>}
               </div>
+              {r.when && <div style={{ color: C.mut, fontSize: 12, fontStyle: 'italic' }}>when: {r.when}</div>}
               {r.prompt && <div style={{ color: C.mut, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 72, overflow: 'auto' }}>{r.prompt}</div>}
             </div>
           ))}

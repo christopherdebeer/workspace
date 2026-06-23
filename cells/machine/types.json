@@ -55,7 +55,8 @@
       "schema": {
         "from": "string",
         "to": "string",
-        "mode": "'auto' (deterministic, no LLM) | 'agent' (reasoning required)",
+        "mode": "'auto' (deterministic, no LLM) | 'agent' (model picks a branch) | 'task' (claimable hand-off) | 'work' (spawns an agent) | 'section' (fan-out independent branches → synthesise) | 'vote' (sample one branch N× → consensus)",
+        "when": "string? — Level-1 'when to use this branch' descriptor (progressive disclosure)",
         "condition": "string?"
       },
       "handlers": {
