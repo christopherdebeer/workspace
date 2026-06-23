@@ -2034,6 +2034,26 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
     const identity: Identity = { user: writerAddress, scopes: [] };
     const { state } = build(ctx);
 
+    // The supersede verb on the organ path: a cell-attested agent retires an
+    // ORGANIC fact in the owner's slice (history is kept — reversible, not a
+    // delete). Vocabulary (`_`-prefixed) stays managed via the registries, so
+    // organ supersede is refused there, the mirror of the put-path rule.
+    if (detail.op === 'supersede') {
+      if (key.startsWith('_')) {
+        ctx.logger.warn('organ supersede of vocabulary refused', { cell: writerAddress, key });
+        return;
+      }
+      try {
+        await state.supersede(scope, key, null, identity, {});
+      } catch (err) {
+        ctx.logger.warn('organ supersede refused', { cell: writerAddress, key, error: (err as Error).message });
+        return;
+      }
+      await ctx.events.emit('workspace.fact.written', { scope, key, revision: 0 });
+      ctx.logger.info('substrate supersede applied for organ', { cell: writerAddress, scope, key });
+      return;
+    }
+
     // A cell may seed its own **cell-required** vocabulary — declared actions
     // and views, the same category as the `_renderers/*` it already seeds and
     // exactly the "two kinds of seeding" discipline (cell-required vs. organic).

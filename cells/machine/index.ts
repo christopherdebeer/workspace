@@ -97,7 +97,7 @@ const TOOLS = [
         },
         rails: {
           type: 'array',
-          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent", condition?(CEL) }]. Default: derived from arrows (-> auto, => agent).',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, maxTurns? }]. Default derived from arrows (-> auto, => agent, ~> task, ~>> work). "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself. "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
         project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
@@ -178,8 +178,15 @@ function railsFrom(arrows, explicit) {
     return explicit.map((r) => ({
       from: r.from,
       to: r.to,
-      mode: r.mode === 'agent' ? 'agent' : r.mode === 'task' ? 'task' : 'auto',
+      mode: r.mode === 'agent' ? 'agent' : r.mode === 'task' ? 'task' : r.mode === 'work' ? 'work' : 'auto',
       ...(r.condition ? { condition: r.condition } : {}),
+      // A `work` rail SPAWNS an agent (the machine uses an agent) — it carries the
+      // brief the spawned @owner/models.agent runs with: the prompt, scoped grants,
+      // and turn budget. (Distinct from `task`, which parks a claimable hand-off
+      // for a DRIVING agent.)
+      ...(r.prompt ? { prompt: r.prompt } : {}),
+      ...(r.grants ? { grants: r.grants } : {}),
+      ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
     }));
   }
   const rails = [];
@@ -187,6 +194,7 @@ function railsFrom(arrows, explicit) {
     if (e.arrow === '->') rails.push({ from: e.from, to: e.to, mode: 'auto' });
     else if (e.arrow === '=>') rails.push({ from: e.from, to: e.to, mode: 'agent' });
     else if (e.arrow === '~>') rails.push({ from: e.from, to: e.to, mode: 'task' });
+    else if (e.arrow === '~>>') rails.push({ from: e.from, to: e.to, mode: 'work' });
   }
   return rails;
 }
@@ -310,6 +318,29 @@ function projectionSubscriptions(name, rails) {
       match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
       deliver: `@${OWNER}/models.decide`,
       params: defer ? { run: '${keySuffix}', defer: 'true' } : { run: '${keySuffix}' },
+    });
+  }
+  // `work` rails SPAWN an agent: when a run reaches the node, deliver it to
+  // @owner/models.agent (the substrate tool-loop) with the rail's brief + scoped
+  // grants. The agent DOES the work and advances the run itself (it writes
+  // machine-run/<run> to the next node) — the run completes instead of parking.
+  // `status == "running"` makes it fire once on arrival.
+  for (const r of rails.filter((x) => x.mode === 'work')) {
+    const advance = `When the work is complete, advance the run by writing fact "machine-run/\${keySuffix}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(r.to)},"status":"done","via":${JSON.stringify(`${r.from}~>>work`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
+    const prompt = (r.prompt ? `${r.prompt}\n\n` : `Do the work for node "${r.from}" of machine "${name}", run \${keySuffix}.\n\n`) + advance;
+    subs.push({
+      id: `machine.${m}.work-${seg(r.from)}`,
+      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(r.from)} && value.status == "running"` },
+      deliver: `@${OWNER}/models.agent`,
+      params: {
+        prompt,
+        // Grants default to the run fact only (so it can advance) + read-all;
+        // a rail widens write within the cell's standing as needed.
+        grants: r.grants ?? { read: true, write: ['machine-run/'] },
+        ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
+        factKey: `machine-work/${m}.\${keySuffix}`,
+        tags: ['machine', `machine:${name}`, 'work'],
+      },
     });
   }
   return subs;

@@ -272,6 +272,11 @@ function buildAgentTools(grants: AgentGrants): AgentToolDef[] {
         required: ['key', 'value'],
       },
     });
+    tools.push({
+      name: 'substrate_supersede',
+      description: 'Retire (supersede) a fact by exact key — the substrate keeps its history, so this is reversible, not a delete. Use for clearly-dead facts (e.g. tending cleanup) within your write grant. Never for `_` system namespaces. (Requires the organ-path supersede verb — deploy services/workspace first.)',
+      schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
+    });
   }
   return tools;
 }
@@ -285,6 +290,19 @@ async function emitFact(key: string, value: unknown, type?: string, tags?: strin
       Source: SELF_SOURCE,
       DetailType: 'substrate.write.requested',
       Detail: JSON.stringify({ key, value, via: 'agent', type, tags }),
+    }],
+  }));
+}
+
+/** Retire a fact through the organ path (the supersede verb — reversible). */
+async function emitSupersede(key: string): Promise<void> {
+  if (!BUS) throw new Error('event bus unavailable');
+  await events.send(new PutEventsCommand({
+    Entries: [{
+      EventBusName: BUS,
+      Source: SELF_SOURCE,
+      DetailType: 'substrate.write.requested',
+      Detail: JSON.stringify({ key, op: 'supersede', via: 'agent' }),
     }],
   }));
 }
@@ -320,6 +338,14 @@ async function agentToolExec(name: string, args: Record<string, unknown>, grants
     if (!grantAllows(grants.write, key, false)) return { error: `write not granted for "${key}"` };
     await emitFact(key, args.value, typeof args.type === 'string' ? args.type : undefined, Array.isArray(args.tags) ? (args.tags as string[]) : undefined);
     return { ok: true, key, note: 'write requested via the organ path (applies asynchronously)' };
+  }
+  if (name === 'substrate_supersede') {
+    const key = String(args.key ?? '');
+    if (!key) return { error: 'key is required' };
+    if (key.startsWith('_')) return { error: 'agents may not supersede `_` system namespaces' };
+    if (!grantAllows(grants.write, key, false)) return { error: `write not granted for "${key}"` };
+    await emitSupersede(key);
+    return { ok: true, key, note: 'supersede requested via the organ path (applies asynchronously; reversible)' };
   }
   return { error: `unknown tool "${name}"` };
 }
