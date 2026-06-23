@@ -155,6 +155,12 @@ describe('projectSubscriptions', () => {
     expect(work.params.prompt).toContain('do A');
     expect(work.params.prompt).toContain('"node":"ADone"');
   });
+
+  it('threads a section rail `synthesis` instruction into the join prompt', () => {
+    const r2 = railsFrom([], [{ from: 'F', to: 'J', mode: 'section', sections: [{ to: 'A' }], synthesis: 'combine survey/<parent>§* findings' }]);
+    const join = projectSubscriptions('m2', r2, 'c15r').find((s: { id: string }) => s.id === 'machine.m2.join-F');
+    expect(join.params.prompt).toContain('combine survey/<parent>§* findings');
+  });
 });
 
 describe('spawnChildrenWrites (the multi-write reliability fix)', () => {

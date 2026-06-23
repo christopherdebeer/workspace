@@ -64,6 +64,9 @@ export function railsFrom(arrows, explicit) {
       ...(Array.isArray(r.sections) ? { sections: r.sections } : {}),
       ...(r.branch ? { branch: r.branch } : {}),
       ...(typeof r.samples === 'number' ? { samples: r.samples } : {}),
+      // Optional extra instruction for the join agent's synthesis/tally step —
+      // e.g. where the branch findings live and how to combine them.
+      ...(r.synthesis ? { synthesis: r.synthesis } : {}),
     }));
   }
   const rails = [];
@@ -279,7 +282,8 @@ export function projectSubscriptions(name, rails, owner) {
       deliver: `@${owner}/machine.spawn_children`,
       params: { run: '${keySuffix}', machine: name, spec },
     });
-    const synthAdvance = `STEP 2 (only once all ${count} are status=="done"): ${isVote ? 'tally the consensus across the sample claims' : 'synthesize the section results'}. Record it as a claim — write "claims/<parent>.${seg(F)}" = {"statement":"<your ${isVote ? 'consensus' : 'synthesis'}>","confidence":<0..1>,"machine":${JSON.stringify(name)},"at":${JSON.stringify(F)},"mode":${JSON.stringify(r.mode)}} (type claim, tags ["claim","machine","dygram"]). Then advance the parent — write "machine-run/<parent>" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
+    const how = r.synthesis ? ` ${r.synthesis}` : '';
+    const synthAdvance = `STEP 2 (only once all ${count} are status=="done"): ${isVote ? 'tally the consensus across the sample claims' : 'synthesize the section results'}.${how} Record it as a claim — write "claims/<parent>.${seg(F)}" = {"statement":"<your ${isVote ? 'consensus' : 'synthesis'}>","confidence":<0..1>,"machine":${JSON.stringify(name)},"at":${JSON.stringify(F)},"mode":${JSON.stringify(r.mode)}} (type claim, tags ["claim","machine","dygram"]). Then advance the parent — write "machine-run/<parent>" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
     const prompt =
       `You are the ${isVote ? 'VOTE TALLY' : 'SECTION SYNTHESIS'} agent for machine ${JSON.stringify(name)}, fan node "${F}". A ${childKind} child run just completed: "\${keySuffix}". Derive the PARENT run id = everything before the first "${sep}" in that id. There are ${count} ${childKind} children keyed "machine-run/<parent>${sep}…".\n\n` +
       `STEP 1: Read them — query with prefix "machine-run/<parent>${sep}". If FEWER than ${count} are status=="done", STOP and write nothing (you'll be re-invoked when the next child finishes).\n\n` +

@@ -60,6 +60,35 @@ const entriesOf = (v: unknown): Entry[] => ((v as { entries?: Entry[] } | undefi
 
 const mName = (key: string): string => key.replace(/^machine\//, '');
 const rId = (key: string): string => key.replace(/^machine-run\//, '');
+// A parallel child's run id is `<parent><sep><branch>` (sep `§` section / `#` vote).
+// Group by KEY, not the value `parent` field — a child's advance overwrites its
+// value (dropping `parent`), but the key suffix is stable.
+const SEP = /[§#]/;
+const parentId = (runId: string): string => runId.split(SEP)[0];
+const childSuffix = (runId: string): string | null => { const i = runId.search(SEP); return i < 0 ? null : runId.slice(i + 1); };
+const isChildRun = (runId: string): boolean => SEP.test(runId);
+
+interface RunGroup { id: string; parent?: Entry; children: Entry[] }
+/** Unify a flat list of run facts into parent+children groups (recency-ordered). */
+function groupRuns(entries: Entry[]): RunGroup[] {
+  const order: string[] = [];
+  const map = new Map<string, RunGroup>();
+  for (const e of entries) {
+    const id = parentId(rId(e.key));
+    let g = map.get(id);
+    if (!g) { g = { id, children: [] }; map.set(id, g); order.push(id); }
+    if (isChildRun(rId(e.key))) g.children.push(e); else g.parent = e;
+  }
+  for (const g of map.values()) g.children.sort((a, b) => (childSuffix(rId(a.key)) ?? '').localeCompare(childSuffix(rId(b.key)) ?? ''));
+  return order.map((id) => map.get(id)!);
+}
+/** A group's status: the parent's, else `done` only when every child is done. */
+function groupStatus(g: RunGroup): string {
+  const p = g.parent?.value as RunVal | undefined;
+  if (p?.status) return p.status;
+  if (g.children.length && g.children.every((c) => (c.value as RunVal).status === 'done')) return 'done';
+  return g.children.length ? 'running' : '—';
+}
 const useHash = (): string => {
   const [h, setH] = useState<string>(typeof location !== 'undefined' ? location.hash : '');
   useEffect(() => {
@@ -84,6 +113,40 @@ function Card({ children, onClick }: { children: React.ReactNode; onClick?: () =
   );
 }
 const railArrow: Record<string, string> = { auto: '→', agent: '⇒', task: '⤳', work: '⇶', section: '⛓', vote: '🗳' };
+
+/** A unified run: one row showing the parent's progress, with each parallel
+ *  branch (its disjoint progression) as a chip — node + a status dot. */
+function RunGroupRow({ group, showMachine }: { group: RunGroup; showMachine?: boolean }): React.ReactElement {
+  const p = group.parent?.value as RunVal | undefined;
+  const status = groupStatus(group);
+  return (
+    <div onClick={() => { location.hash = `#/r/${encodeURIComponent(group.id)}`; }}
+      style={{ display: 'grid', gap: 6, padding: '8px 12px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, cursor: 'pointer' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Badge text={status} color={statusColor(status)} />
+        {showMachine && p?.machine && <span style={{ fontWeight: 600 }}>{p.machine}</span>}
+        {p && <span style={{ color: C.mut }}>· {p.node}</span>}
+        {group.children.length > 0 && <span style={{ color: C.mut, fontSize: 11 }}>· {group.children.length} branch{group.children.length === 1 ? '' : 'es'}</span>}
+        <code style={{ marginLeft: 'auto', color: C.mut, fontSize: 11, fontFamily: C.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '42%' }}>{group.id}</code>
+      </div>
+      {group.children.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 2 }}>
+          {group.children.map((c) => {
+            const cv = c.value as RunVal;
+            const sfx = childSuffix(rId(c.key)) ?? '';
+            return (
+              <span key={c.key} title={`${sfx} @ ${cv.node} (${cv.status})`}
+                style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 11, color: C.mut, border: `1px solid ${C.line}`, borderRadius: 7, padding: '2px 7px' }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor(cv.status), flex: 'none' }} />
+                <strong style={{ color: C.ink }}>{sfx}</strong> {cv.node}
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ── mermaid (the machine drawn as a diagram) ───────────────────────────── */
 
@@ -169,16 +232,16 @@ function ListView({ machines, runs, authed }: { machines: Entry[]; runs: Entry[]
         {machines.length === 0 && (authed ? <p style={{ color: C.mut }}>No machines defined yet.</p> : <SignInCard />)}
         {machines.map((m) => {
           const v = m.value as MachineVal;
-          const runs = runsByMachine.get(mName(m.key)) ?? [];
-          const last = runs[0]?.value as RunVal | undefined;
+          const groups = groupRuns(runsByMachine.get(mName(m.key)) ?? []);
+          const last = groups[0];
           return (
             <Card key={m.key} onClick={() => { location.hash = `#/m/${mName(m.key)}`; }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                 <strong style={{ font: '600 16px Georgia,serif', flex: 1 }}>{v.title ?? mName(m.key)}</strong>
-                {last && <Badge text={last.status ?? '—'} color={statusColor(last.status)} />}
+                {last && <Badge text={groupStatus(last)} color={statusColor(groupStatus(last))} />}
               </div>
               <div style={{ color: C.mut, fontSize: 12 }}>
-                <code style={{ fontFamily: C.mono }}>{m.key}</code> · {(v.nodes ?? []).length} nodes · {(v.rails ?? []).length} rails · {runs.length} run{runs.length === 1 ? '' : 's'}
+                <code style={{ fontFamily: C.mono }}>{m.key}</code> · {(v.nodes ?? []).length} nodes · {(v.rails ?? []).length} rails · {groups.length} run{groups.length === 1 ? '' : 's'}
               </div>
             </Card>
           );
@@ -186,18 +249,7 @@ function ListView({ machines, runs, authed }: { machines: Entry[]; runs: Entry[]
       </section>
       {runs.length > 0 && <section style={{ display: 'grid', gap: 8 }}>
         <h2 style={{ margin: 0, font: '600 15px/1 Georgia,serif', color: C.mut }}>Recent runs</h2>
-        {runs.slice(0, 24).map((r) => {
-          const v = r.value as RunVal;
-          return (
-            <div key={r.key} onClick={() => { location.hash = `#/r/${encodeURIComponent(rId(r.key))}`; }}
-              style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 12px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, cursor: 'pointer' }}>
-              <Badge text={v.status ?? '—'} color={statusColor(v.status)} />
-              <span style={{ fontWeight: 600 }}>{v.machine}</span>
-              <span style={{ color: C.mut }}>· {v.node}</span>
-              <code style={{ marginLeft: 'auto', color: C.mut, fontSize: 11, fontFamily: C.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40%' }}>{rId(r.key)}</code>
-            </div>
-          );
-        })}
+        {groupRuns(runs).slice(0, 24).map((g) => <RunGroupRow key={g.id} group={g} showMachine />)}
       </section>}
     </div>
   );
@@ -282,22 +334,14 @@ function MachineView({ name, machines, seedRuns }: { name: string; machines: Ent
         </div>
       </Field>
 
-      <Field label={`Runs (${runs.length})`}>
+      {(() => { const groups = groupRuns(runs); return (
+      <Field label={`Runs (${groups.length})`}>
         <div style={{ display: 'grid', gap: 6 }}>
-          {runs.length === 0 && <span style={{ color: C.mut }}>No runs yet.</span>}
-          {runs.map((r) => {
-            const v = r.value as RunVal;
-            return (
-              <div key={r.key} onClick={() => { location.hash = `#/r/${encodeURIComponent(rId(r.key))}`; }}
-                style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '7px 10px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 9, cursor: 'pointer' }}>
-                <Badge text={v.status ?? '—'} color={statusColor(v.status)} />
-                <span>{v.node}</span>
-                <code style={{ marginLeft: 'auto', color: C.mut, fontSize: 11, fontFamily: C.mono }}>{rId(r.key)}</code>
-              </div>
-            );
-          })}
+          {groups.length === 0 && <span style={{ color: C.mut }}>No runs yet.</span>}
+          {groups.map((g) => <RunGroupRow key={g.id} group={g} />)}
         </div>
       </Field>
+      ); })()}
     </div>
   );
 }
@@ -306,6 +350,7 @@ function RunView({ run }: { run: string }): React.ReactElement {
   const [fact, setFact] = useState<RunVal | null>(null);
   const [machine, setMachine] = useState<MachineVal | null>(null);
   const [claims, setClaims] = useState<Entry[]>([]);
+  const [children, setChildren] = useState<Entry[]>([]);
   const [transcript, setTranscript] = useState<Array<Record<string, unknown>> | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -314,8 +359,14 @@ function RunView({ run }: { run: string }): React.ReactElement {
     const rf = await mcpCall('read', 'workspace.peek', { key: `machine-run/${run}` });
     const val = rf.ok ? ((rf.value as { value?: RunVal } | null)?.value ?? null) : null;
     setFact(val);
-    const cl = await mcpCall('read', 'workspace.query', { prefix: `claims/${run}.`, limit: 20 });
+    const [cl, kids] = await Promise.all([
+      mcpCall('read', 'workspace.query', { prefix: `claims/${run}.`, limit: 40 }),
+      // Parent + children share the `machine-run/<run>` prefix; keep only this
+      // run's parallel children (parentId guards against `<run>0…` siblings).
+      mcpCall('read', 'workspace.query', { prefix: `machine-run/${run}`, limit: 40 }),
+    ]);
     setClaims(cl.ok ? entriesOf(cl.value) : []);
+    setChildren(kids.ok ? entriesOf(kids.value).filter((e) => isChildRun(rId(e.key)) && parentId(rId(e.key)) === run) : []);
     if (val?.machine) {
       const [mf, t] = await Promise.all([
         mcpCall('read', 'workspace.peek', { key: `machine/${val.machine}` }),
@@ -329,8 +380,12 @@ function RunView({ run }: { run: string }): React.ReactElement {
   }, [run]);
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // The nodes the run has decided at are "visited" (each claim records its `at`).
-  const visited = claims.map((c) => (c.value as { at?: string }).at).filter((x): x is string => !!x);
+  // Diagram highlight: claim `at` nodes + each parallel branch's current node are
+  // "visited"; the parent's own node is "active".
+  const visited = [
+    ...claims.map((c) => (c.value as { at?: string }).at),
+    ...children.map((c) => (c.value as RunVal).node),
+  ].filter((x): x is string => !!x);
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -339,6 +394,11 @@ function RunView({ run }: { run: string }): React.ReactElement {
         <strong style={{ font: '600 17px Georgia,serif', flex: 1 }}>Run <code style={{ fontFamily: C.mono, fontSize: 14 }}>{run}</code></strong>
         <button onClick={() => void refresh()} style={{ border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>↻</button>
       </div>
+      {isChildRun(run) && (
+        <div style={{ color: C.mut, fontSize: 12 }}>
+          a <strong>{childSuffix(run)}</strong> branch of run <a href={`#/r/${encodeURIComponent(parentId(run))}`} style={{ color: C.blue }}><code style={{ fontFamily: C.mono }}>{parentId(run)}</code></a>
+        </div>
+      )}
       {loading && !fact && <p style={{ color: C.mut }}>Loading…</p>}
       {fact && (
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
@@ -352,6 +412,26 @@ function RunView({ run }: { run: string }): React.ReactElement {
       {machine && (machine.nodes ?? []).length > 0 && (
         <Field label="Diagram (run position)">
           <Mermaid source={toMermaid(machine, { active: fact?.node, visited, done: fact?.status === 'done' })} />
+        </Field>
+      )}
+
+      {children.length > 0 && (
+        <Field label={`Parallel branches (${children.length})`}>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {children.map((c) => {
+              const cv = c.value as RunVal;
+              const sfx = childSuffix(rId(c.key)) ?? '';
+              return (
+                <div key={c.key} onClick={() => { location.hash = `#/r/${encodeURIComponent(rId(c.key))}`; }}
+                  style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '7px 10px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 9, cursor: 'pointer' }}>
+                  <Badge text={cv.status ?? '—'} color={statusColor(cv.status)} />
+                  <strong>{sfx}</strong>
+                  <span style={{ color: C.mut }}>· {cv.node}</span>
+                  {cv.via && <code style={{ marginLeft: 'auto', color: C.mut, fontSize: 11, fontFamily: C.mono }}>{cv.via}</code>}
+                </div>
+              );
+            })}
+          </div>
         </Field>
       )}
 
