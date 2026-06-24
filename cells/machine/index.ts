@@ -19,7 +19,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App } from './client/app';
 import { installBridge } from './client/bridge';
-import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, projectStepSubscription } from './engine';
+import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites } from './engine';
 // The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
 // over the owner's slice. VENDORED here (not a URL import): the forge bundler
 // only bundles relative imports within the cell dir + esm.sh-declared deps; a
@@ -91,7 +91,7 @@ const TOOLS = [
   {
     name: 'define_machine',
     description:
-      'Record a DyGram machine as a fact at machine/<name> (typed nodes + arrows) AND project its rails into invokable, guarded declared actions: a `start`, an auto-rail advance per `->` flow, and a `decide-*` per `=>` agent node. Execution is then invoking those via workspace.invoke; the run fact (machine-run/<run>) advances, its revision history the trajectory. Pass explicit `rails` to override the arrow-derived ones, `project:false` to skip projection, `source` to keep the .dy text.',
+      'Define a DyGram machine in DECOMPOSED form — like a canvas board or doc, the machine is an identity fact `machine/<name>` plus one `machine-node/*` fact per node and one `machine-rail/*` fact per rail (all nested under `machine/<name>/`). The rail facts carry mode/condition/prompt and their keys derive node→node graph edges (so neighbors/$graph/canvas render the machine for free). Also projects the run vocabulary: a `start` action + a `decide-*` per agent/task node, the single `step` subscription (the stateless stepper walks deterministic rails + runs the join barrier), and model deliveries for agent/work rails. Pass explicit `rails` to override arrow-derived ones, `project:false` to skip the run vocabulary, `reactive:false` for driven-only (drive with the `step` tool), `dryRun` to preview.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -114,9 +114,10 @@ const TOOLS = [
           description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns? }]. NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
-        dryRun: { type: 'boolean', description: 'Validate + preview the projection (action/subscription ids) WITHOUT writing anything. Replaces the old standalone validate tool.' },
-        project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
-        reactive: { description: 'Register subscriptions so runs advance on change (default off — driven only, via the `step` tool). `"step"` (preferred, ADR-0018): ONE step subscription walks the deterministic prefix in-process + runs the join barrier — no per-rail cascade. `true` (legacy): the full per-auto-rail + agentic-join projection.' },
+        dryRun: { type: 'boolean', description: 'Validate + preview the decomposition facts + projected action/subscription ids WITHOUT writing anything.' },
+        project: { type: 'boolean', description: 'Project the run vocabulary (start + decide actions, step + model-delivery subscriptions, triggers). Default true.' },
+        reactive: { type: 'boolean', description: 'Register the step subscription so runs self-drive on change (default true). Pass false for a driven-only machine you advance by hand with the `step` tool.' },
+        context: { type: 'array', items: { type: 'string' }, description: 'Substrate keys a decision should read for context (e.g. tending/latest); stored on the identity fact.' },
         trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel?, runId? } that STARTS a run. runId templates the run id from the event (default "${keySuffix}"); use e.g. "${value.at}" so a recurring source like tending gets a fresh run each time.' },
         tags: { type: 'array', items: { type: 'string' } },
       },
@@ -127,7 +128,7 @@ const TOOLS = [
   {
     name: 'trigger_run',
     description:
-      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger; see docs/machine.md). Writes machine-trigger/<machine>/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context the entry agent sees. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on.',
+      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger). Writes machine/<machine>/trigger/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -141,32 +142,17 @@ const TOOLS = [
     scope: null,
   },
   {
-    name: 'spawn_children',
-    description:
-      'Internal (reaction-target) — spawn the child runs of a section/vote fan. The fan rail delivers here when a run reaches the fan node; this emits the parent\'s wait-state AND one child run fact per branch as SEPARATE organ writes (so each reliably re-triggers its work/decide delivery, unlike a single declared action\'s secondary writes — docs/machine.md). Not meant to be called by hand.',
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        run: { type: 'string', description: 'Parent run id' },
-        machine: { type: 'string', description: 'Machine slug' },
-        spec: { type: 'string', description: 'JSON: { node, join, kind:"section"|"vote", branches?[], branch?, samples? }' },
-      },
-      required: ['run', 'machine', 'spec'],
-    },
-    scope: null,
-  },
-  {
     name: 'step',
     description:
-      'Advance a machine run STATELESSLY (ADR-0018, the stateless stepper). Reads machine-run/<run> + its machine def, follows deterministic `auto` rails IN-PROCESS (CEL-guarded, no per-hop fact-write), and emits at most ONE advanced run fact. Returns the `yield`: the non-deterministic point where a decision is owed — `{kind:"agent"|"task"|"work"|"section"|"vote", node, choices}` — or null when the run completed. On a section/vote yield it spawns the children; when a child completes it runs the DETERMINISTIC join barrier (reads the siblings, advances the parent once all are done — no model). The driven counterpart to the reactive step subscription; either way determinism never needs a model or a fact-cascade. Idempotent: a run already parked at its yield emits nothing.',
+      'Advance a machine run STATELESSLY (ADR-0018, the stateless stepper). Assembles the machine from its decomposed facts, reads machine/<machine>/run/<run>, follows deterministic `auto` rails IN-PROCESS (CEL-guarded, no per-hop fact-write), and emits at most ONE advanced run fact (carrying the execution `trace`). Returns the `yield`: the non-deterministic point where a decision is owed — `{kind:"agent"|"task"|"work"|"section"|"vote", node, choices}` — or null when the run completed. On a section/vote yield it spawns the children; when a child completes it runs the DETERMINISTIC join barrier (reads the siblings, advances the parent once all are done — no model). The driven counterpart to the reactive step subscription. Idempotent: a run already parked at its yield emits nothing.',
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        run: { type: 'string', description: 'Run id → machine-run/<run>' },
+        machine: { type: 'string', description: 'Machine slug (the <name> in machine/<name>)' },
+        run: { type: 'string', description: 'Run id → machine/<machine>/run/<run>' },
       },
-      required: ['run'],
+      required: ['machine', 'run'],
     },
     scope: null,
   },
@@ -210,74 +196,78 @@ const OWNER = process.env.CELL_OWNER ?? 'c15r';
  *  - on a completed run, runs the deterministic join barrier against its parent.
  * Pure decisions live in engine.ts; this is the thin I/O shell around them.
  */
-async function stepRun(runId) {
+/** Assemble a machine's in-memory def from its DECOMPOSED facts (identity + node +
+ *  rail facts, all under the `machine/<name>/` namespace). Returns null if absent. */
+async function loadMachine(sub, machineName) {
+  const idFact = await sub.read(mkey.machine(machineName));
+  if (!idFact) return null;
+  const base = mkey.machine(machineName);
+  const [nodeFacts, railFacts] = await Promise.all([
+    sub.query({ prefix: `${base}/node/` }),
+    sub.query({ prefix: `${base}/rail/` }),
+  ]);
+  return assembleMachine(idFact, nodeFacts, railFacts);
+}
+
+async function stepRun(machineName, runId) {
   const sub = createSubstrate({ owner: OWNER, via: 'machine.step' });
   const now = new Date().toISOString();
-  const runFact = await sub.read(`machine-run/${runId}`);
-  if (!runFact) return { error: `no run machine-run/${runId}` };
+  const runKey = mkey.run(machineName, runId);
+  const runFact = await sub.read(runKey);
+  if (!runFact) return { error: `no run ${runKey}` };
   const runValue = runFact.value || {};
-  const machineName = runValue.machine;
-  const def = machineName ? await sub.read(`machine/${machineName}`) : null;
-  if (!def) return { error: `no machine machine/${machineName}` };
+  const mName = runValue.machine || machineName;
+  const machine = await loadMachine(sub, mName);
+  if (!machine) return { error: `no machine ${mkey.machine(mName)}` };
 
-  const result = step(runValue, def.value, now);
+  const result = step(runValue, machine, now);
 
   // A section/vote yield spawns children; the spawn writes include the parent's
   // wait-state (which supersedes the plain advance), so don't also emit `result.run`.
   if (result.yield && (result.yield.kind === 'section' || result.yield.kind === 'vote')) {
     const spec = specFromYield(result.yield);
-    const writes = spawnChildrenWrites(runId, machineName, spec, now);
+    const writes = spawnChildrenWrites(runId, mName, spec, now);
     await sub.emit(writes);
-    return { run: runId, node: result.yield.node, yield: result.yield, spawned: writes.slice(1).map((w) => w.key) };
+    return { run: runId, machine: mName, node: result.yield.node, yield: result.yield, spawned: writes.slice(1).map((w) => w.key) };
   }
 
-  // Emit the advance only if the meaningful state changed (idempotent).
-  const changed = result.run.node !== runValue.node || result.run.status !== runValue.status;
+  // Emit the advance only if the meaningful state changed (idempotent — so a
+  // reactive deliver to a parked run is a cheap no-op, no loop). trace always rides.
+  const changed = result.run.node !== runValue.node || result.run.status !== runValue.status || JSON.stringify(result.run.trace) !== JSON.stringify(runValue.trace);
   if (changed) {
-    await sub.emit([{ key: `machine-run/${runId}`, value: result.run, type: 'machine-run', tags: ['machine', `machine:${machineName}`] }]);
+    await sub.emit([{ key: runKey, value: result.run, type: 'machine-run', tags: ['machine', `machine:${mName}`] }]);
   }
 
-  // On completion, run the deterministic join barrier against the parent (if any).
   let barrier;
   if (result.run.status === 'done') {
-    barrier = await advanceParentBarrier(sub, runId, result.run, def.value, now);
+    barrier = await advanceParentBarrier(sub, mName, runId, result.run, machine, now);
   }
 
-  return {
-    run: runId,
-    node: result.run.node,
-    status: result.run.status,
-    changed,
-    yield: result.yield ?? null,
-    path: result.path,
-    ...(barrier ? { barrier } : {}),
-  };
+  return { run: runId, machine: mName, node: result.run.node, status: result.run.status, changed, yield: result.yield ?? null, path: result.path, ...(barrier ? { barrier } : {}) };
 }
 
 /**
  * The deterministic join barrier shell: if `childRunId` is a section/vote child,
- * read the parent + all siblings and let the pure `barrierAdvance` decide whether
- * to advance the parent. The parent's machine def may differ in principle, but a
- * child shares its parent's machine, so reuse `def`.
+ * read the parent + all siblings (under the machine's run namespace) and let the
+ * pure `barrierAdvance` decide whether to advance the parent.
  */
-async function advanceParentBarrier(sub, childRunId, childRun, def, now) {
+async function advanceParentBarrier(sub, machineName, childRunId, childRun, machine, now) {
   const rel = parentOf(childRunId);
   if (!rel) return null;
-  const parent = await sub.read(`machine-run/${rel.parent}`);
+  const parent = await sub.read(mkey.run(machineName, rel.parent));
   if (!parent) return null;
-  const siblings = await sub.query({ prefix: `machine-run/${rel.parent}${rel.sep}` });
+  const siblings = await sub.query({ prefix: `${mkey.run(machineName, rel.parent)}${rel.sep}` });
   // Organ writes are async: the child-done write that triggered this step may not
   // have applied yet, so the just-completed child can read back stale. Overlay its
-  // fresh value (and ensure it's present) so the barrier counts it — the read-lag
-  // is the one place the deterministic count would otherwise miss its trigger.
-  const childKey = `machine-run/${childRunId}`;
+  // fresh value (and ensure it's present) so the barrier counts it.
+  const childKey = mkey.run(machineName, childRunId);
   let sawChild = false;
   const merged = siblings.map((s) => {
-    if (s.key === childKey || s.key === childRunId) { sawChild = true; return { ...s, value: childRun }; }
+    if (s.key === childKey) { sawChild = true; return { ...s, value: childRun }; }
     return s;
   });
   if (!sawChild) merged.push({ key: childKey, value: childRun });
-  const decision = barrierAdvance(rel.parent, parent.value, merged, def, now);
+  const decision = barrierAdvance(rel.parent, parent.value, merged, machine, now);
   if (!decision.advance) return { parent: rel.parent, waiting: true, done: decision.done, expected: decision.expected, reason: decision.reason };
   await sub.emit([decision.advance]);
   return { parent: rel.parent, advanced: true, node: decision.advance.value.node, done: decision.done, expected: decision.expected };
@@ -357,122 +347,67 @@ export const handler = async (event) => {
   if (method === 'POST' && path === '/_tools/trigger_run') {
     const a = event.body ? JSON.parse(event.body) : {};
     if (!a.machine) return json(400, { error: 'machine is required' });
-    const run = a.run || `${a.machine}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    const run = a.run || `${new Date().toISOString().replace(/[:.]/g, '-')}`;
     await emit({
-      key: `machine-trigger/${a.machine}/${run}`,
+      key: mkey.trigger(a.machine, run),
       value: { at: new Date().toISOString(), ...(a.text ? { text: a.text } : {}) },
       type: 'machine-trigger',
       tags: ['machine', `machine:${a.machine}`, 'trigger'],
       via: 'machine.trigger_run',
     });
-    return json(200, { triggered: true, machine: a.machine, run, key: `machine-trigger/${a.machine}/${run}` });
-  }
-
-  if (method === 'POST' && path === '/_tools/spawn_children') {
-    const a = event.body ? JSON.parse(event.body) : {};
-    if (!a.run || !a.machine || !a.spec) return json(400, { error: 'run, machine, and spec are required' });
-    let spec;
-    try { spec = typeof a.spec === 'string' ? JSON.parse(a.spec) : a.spec; } catch { return json(400, { error: 'spec is not valid JSON' }); }
-    // The pure core computes the writes (parent wait-state + one child per branch);
-    // the shell emits each as its OWN organ write (reliable downstream delivery).
-    const writes = spawnChildrenWrites(a.run, a.machine, spec, new Date().toISOString());
-    for (const w of writes) await emit({ ...w, via: 'machine.spawn_children' });
-    return json(200, { spawned: true, run: a.run, kind: spec.kind, children: writes.slice(1).map((w) => w.key) });
+    return json(200, { triggered: true, machine: a.machine, run, key: mkey.trigger(a.machine, run) });
   }
 
   if (method === 'POST' && path === '/_tools/step') {
     const a = event.body ? JSON.parse(event.body) : {};
-    if (!a.run) return json(400, { error: 'run is required' });
+    if (!a.run || !a.machine) return json(400, { error: 'run and machine are required' });
     try {
-      const out = await stepRun(a.run);
+      const out = await stepRun(a.machine, a.run);
       return json(out.error ? 404 : 200, out);
     } catch (err) {
       return json(500, { error: (err && err.message) || String(err) });
     }
   }
 
-
   if (method === 'POST' && path === '/_tools/define_machine') {
     const a = event.body ? JSON.parse(event.body) : {};
     if (!a.name) return json(400, { error: 'name is required' });
     const nodes = Array.isArray(a.nodes) ? a.nodes : [];
-    const arrows = Array.isArray(a.arrows) ? a.arrows : [];
-    const rails = railsFrom(arrows, a.rails);
+    const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
     const validation = validateMachine(nodes, rails);
-    // dryRun: validate + preview the projection without writing anything
-    // (the old standalone validate_machine tool, folded into define).
+    const project = a.project !== false;
+    const reactive = a.reactive !== false; // stepper-on by default; pass reactive:false for driven-only
+
+    // The DECOMPOSED definition fan: identity + one fact per node + per rail.
+    const writes = decomposeWrites(a.name, nodes, rails, { title: a.title, source: a.source, ...(a.kind ? { kind: a.kind } : {}) });
+    if (Array.isArray(a.context)) writes[0].value.context = a.context; // decide reads these
+    if (Array.isArray(a.tags)) writes[0].tags = [...new Set([...writes[0].tags, ...a.tags])];
+
+    const actions = project ? projectActions(a.name, nodes, rails) : [];
+    const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER) : [];
+
     if (a.dryRun) {
-      const preview = a.project !== false && rails.length ? projectActions(a.name, nodes, rails) : [];
-      return json(200, { dryRun: true, validation, rails: rails.length, actions: preview.map((d) => d.id) });
+      return json(200, { dryRun: true, validation, facts: writes.map((w) => w.key), actions: actions.map((d) => d.id), subscriptions: subs.map((s) => s.id) });
     }
-    const value = {
-      title: a.title ?? a.name,
-      ...(a.source ? { source: a.source } : {}),
-      nodes,
-      arrows: arrows.map((e) => ({ ...e, rel: ARROW_RELS[e.arrow] ?? 'flows-to' })),
-      rails,
-      // Substrate keys a decision at an agent rail should read for context
-      // (e.g. a tending machine points at `tending/latest`). models.decide
-      // includes their current values in the prompt.
-      ...(Array.isArray(a.context) ? { context: a.context } : {}),
-      nodeCount: nodes.length,
-      arrowCount: arrows.length,
-    };
-    await emit({
-      key: `machine/${a.name}`,
-      value,
-      type: 'machine',
-      tags: [...new Set(['machine', 'dygram', ...(Array.isArray(a.tags) ? a.tags : [])])],
-      via: 'machine.define_machine',
-    });
-    // Project the rails into invokable, guarded declared actions (v2 → v3).
-    // The run advances by invoking these; agent rails surface as `decide-*`.
-    let projected = [];
+
+    // 1. Emit the decomposition fan reliably (FailedEntryCount-checked).
+    const sub = createSubstrate({ owner: OWNER, via: 'machine.define_machine' });
+    await sub.emit(writes);
+    // 2. Project declared actions (start + decide) + the stepper subscriptions.
     const subscriptions = [];
-    if (a.project !== false && rails.length) {
-      projected = projectActions(a.name, nodes, rails);
-      for (const def of projected) await emitAction(def, a.name);
-      // Opt-in reactivity. Two modes:
-      //  - `reactive: "step"` (ADR-0018, preferred): ONE subscription delivers
-      //    every run change to machine.step, which walks the deterministic prefix
-      //    in-process (no per-auto-rail cascade) and runs the join barrier itself.
-      //    The agent/task/work model deliveries still stand; the auto/fan/join
-      //    subs are gone (step subsumes them).
-      //  - `reactive: true` (legacy): the full per-auto-rail invoke + agentic-join
-      //    projection. Kept so existing machines don't break; migrate to "step".
-      if (a.reactive === 'step') {
-        const stepSub = projectStepSubscription(a.name, OWNER);
-        await emitSubscription(stepSub, a.name);
-        subscriptions.push(stepSub.id);
-        for (const s of projectSubscriptions(a.name, rails, OWNER)) {
-          if (s.deliver && s.deliver.includes('/models.') && !s.id.includes('.join-')) {
-            await emitSubscription(s, a.name);
-            subscriptions.push(s.id);
-          }
-        }
-      } else if (a.reactive) {
-        for (const s of projectSubscriptions(a.name, rails, OWNER)) {
-          await emitSubscription(s, a.name);
-          subscriptions.push(s.id);
-        }
-      }
-      // Internal trigger (always, when projecting): writing one fact
-      // `machine-trigger/<name>/<run>` starts a run — the substrate-native API
-      // trigger the `trigger_run` tool (and any scheduled Claude Routine) targets.
-      // `text` carries the trigger-context body onto the run. Registered even on
-      // non-reactive machines so they are always externally fireable.
+    for (const def of actions) await emitAction(def, a.name);
+    for (const s of subs) { await emitSubscription(s, a.name); subscriptions.push(s.id); }
+    // 3. Triggers: the internal `machine/<name>/trigger/<run>` start, plus any
+    //    optional fact-pattern trigger (e.g. a tending audit) — always, when projecting.
+    if (project) {
       const itrig = {
         id: `machine.${seg(a.name)}.itrigger`,
-        match: { keyPrefix: `machine-trigger/${a.name}/` },
+        match: { keyPrefix: `${mkey.machine(a.name)}/trigger/` },
         invoke: `machine.${seg(a.name)}.start`,
         params: { run: '${keySuffix}', text: '${value.text}' },
       };
       await emitSubscription(itrig, a.name);
       subscriptions.push(itrig.id);
-      // Optional trigger: a fact pattern that STARTS a run (e.g. a new capture,
-      // or a tending audit). `runId` templates the run id from the event so each
-      // occurrence gets its own run (default `${keySuffix}`); point it at a
-      // unique field (e.g. `${value.at}`) for a recurring source like tending.
       if (a.trigger && typeof a.trigger === 'object') {
         const { runId, ...match } = a.trigger;
         const trig = { id: `machine.${seg(a.name)}.trigger`, match, invoke: `machine.${seg(a.name)}.start`, params: { run: typeof runId === 'string' ? runId : '${keySuffix}' } };
@@ -482,12 +417,12 @@ export const handler = async (event) => {
     }
     return json(200, {
       defined: true,
-      key: `machine/${a.name}`,
+      key: mkey.machine(a.name),
+      facts: writes.map((w) => w.key),
       nodes: nodes.length,
-      arrows: arrows.length,
       rails: rails.length,
-      actions: projected.map((d) => d.id),
-      reactive: !!a.reactive,
+      actions: actions.map((d) => d.id),
+      reactive,
       subscriptions,
       validation,
     });

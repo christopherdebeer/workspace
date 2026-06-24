@@ -88,6 +88,74 @@ export function railsFrom(arrows, explicit) {
 export const voteCount = (r) => Math.max(2, Math.min(7, r.samples || 3));
 
 /**
+ * Keys nest under the machine's namespace so a whole machine — identity, nodes,
+ * rails, runs, claims — lists/deletes by one `machine/<name>/` prefix. The rail
+ * key encodes from→to with `~` (a separator `seg` strips, so it's unambiguous);
+ * the `machine-rail` type's keyEdges rule projects it into a node→node graph edge
+ * (ADR-0003/0016) — see types.json. The identity is the bare `machine/<name>`.
+ */
+export const mkey = {
+  machine: (m) => `machine/${seg(m)}`,
+  node: (m, n) => `machine/${seg(m)}/node/${seg(n)}`,
+  rail: (m, from, to) => `machine/${seg(m)}/rail/${seg(from)}~${seg(to)}`,
+  run: (m, run) => `machine/${seg(m)}/run/${run}`,
+  claim: (m, run, at) => `machine/${seg(m)}/run/${run}/claim/${seg(at)}`,
+  trigger: (m, run) => `machine/${seg(m)}/trigger/${run}`,
+};
+
+/** The entry node: the first with no incoming rail (or the first node). */
+export const entryOf = (nodes, rails) => {
+  const hasIn = (node) => rails.some((r) => r.to === node);
+  return (nodes.find((n) => !hasIn(n.name)) ?? nodes[0])?.name;
+};
+
+/**
+ * Assemble the in-memory `{ name, title, entry, nodes, rails }` the pure engine
+ * consumes from the DECOMPOSED facts the substrate stores: the `machine/<name>`
+ * identity + its `machine-node/*` + `machine-rail/*` facts (each `{key,value}` or
+ * a bare value). The decomposition is the storage shape; this is the assembly the
+ * stepper/projection run on — so the rest of the core is unchanged. Pure.
+ */
+export function assembleMachine(identity, nodeFacts, railFacts) {
+  const idv = (identity && identity.value) || identity || {};
+  const nodes = (nodeFacts || []).map((f) => {
+    const v = (f && f.value) || f || {};
+    return { name: v.name, ...(v.title ? { title: v.title } : {}), ...(v.kind ? { kind: v.kind } : {}) };
+  });
+  const rails = railsFrom([], (railFacts || []).map((f) => (f && f.value) || f));
+  return { name: idv.name ?? idv.title, title: idv.title ?? idv.name, entry: idv.entry ?? entryOf(nodes, rails), nodes, rails };
+}
+
+/**
+ * The fan of organ writes that DEFINES a machine in decomposed form: the identity
+ * fact + one `machine-node` fact per node + one `machine-rail` fact per rail. The
+ * shell emits each through the organ path (precedent: spawnChildrenWrites). Pure.
+ */
+export function decomposeWrites(name, nodes, rails, extra) {
+  const tags = ['machine', `machine:${name}`];
+  const writes = [
+    {
+      key: mkey.machine(name),
+      value: { title: (extra && extra.title) || name, entry: entryOf(nodes, rails), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
+      type: 'machine',
+      tags: [...tags, 'dygram'],
+    },
+  ];
+  for (const n of nodes) {
+    writes.push({
+      key: mkey.node(name, n.name),
+      value: { machine: name, name: n.name, ...(n.title ? { title: n.title } : {}), ...(n.kind ? { kind: n.kind } : {}) },
+      type: 'machine-node',
+      tags,
+    });
+  }
+  for (const r of rails) {
+    writes.push({ key: mkey.rail(name, r.from, r.to), value: { machine: name, ...r }, type: 'machine-rail', tags });
+  }
+  return writes;
+}
+
+/**
  * Static analysis over a machine's rail graph — the DyGram-style structural
  * checks our projection otherwise skips. Pure / no I/O. Errors are breakages (a
  * run can't start, a rail points nowhere); warnings are smells (unreachable,
@@ -150,20 +218,19 @@ export function validateMachine(nodes, rails) {
 }
 
 /**
- * Project a machine's rails into cell-required declared actions over a
- * `machine-run/<run>` fact: `start` (seed a run at the entry, with optional
- * trigger `text`), one auto-rail `<from>-to-<to>` advance per flow, and a
- * `decide-<from>` per agent/task node (records the chosen branch as a claim).
- * Reasoning is spent only at agent rails. Parallel (section/vote) is NOT a
- * declared action — it is a `deliver` to spawn_children (see projectSubscriptions).
+ * The declared actions a machine needs in the STEPPER model (ADR-0018): just two
+ * kinds — `start` (seed a run at the entry; the itrigger/trigger subscriptions and
+ * the trigger_run tool invoke it) and `decide-<from>` per agent/task node (the
+ * model records its chosen branch as a claim and advances; the run change then
+ * re-triggers `step`). The per-auto-rail advance actions are GONE — `step` walks
+ * the deterministic prefix in-process. Run/claim keys nest under `machine/<name>/`.
  */
 export function projectActions(name, nodes, rails) {
   const m = seg(name);
-  const runKey = 'machine-run/${params.run}';
+  const runKey = mkey.run(name, '${params.run}');
   const tags = ['machine', `machine:${name}`];
   const hasOut = (node) => rails.some((r) => r.from === node);
-  const hasIn = (node) => rails.some((r) => r.to === node);
-  const entry = (nodes.find((n) => !hasIn(n.name)) ?? nodes[0])?.name;
+  const entry = entryOf(nodes, rails);
   const actions = [];
 
   if (entry) {
@@ -171,22 +238,10 @@ export function projectActions(name, nodes, rails) {
       id: `machine.${m}.start`,
       description: `Start a run of "${name}" at ${entry}. Optional \`text\` is the trigger-context body (a Claude-Routine-style payload) stored on the run so the entry node's agent sees it.`,
       params: {
-        run: { type: 'string', required: true, description: 'Run id → machine-run/<run>' },
+        run: { type: 'string', required: true, description: `Run id → ${mkey.run(name, '<run>')}` },
         text: { type: 'string', required: false, description: 'Trigger context body — visible to the entry agent' },
       },
       writes: [{ key: runKey, value: { machine: name, node: entry, status: 'running', startedAt: '${now}', text: '${params.text}' }, type: 'machine-run', tags, ifAbsent: true }],
-    });
-  }
-
-  for (const r of rails.filter((x) => x.mode === 'auto')) {
-    const ifConds = [{ key: runKey, path: 'node', op: 'eq', value: r.from }];
-    if (r.condition) ifConds.push({ cel: r.condition, key: runKey });
-    actions.push({
-      id: `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`,
-      description: `Auto rail ${r.from} → ${r.to}${hasOut(r.to) ? '' : ' (terminal)'}.`,
-      params: { run: { type: 'string', required: true } },
-      if: ifConds,
-      writes: [{ key: runKey, value: { machine: name, node: r.to, status: hasOut(r.to) ? 'running' : 'done', at: '${now}', via: `${r.from}->${r.to}` }, type: 'machine-run', tags }],
     });
   }
 
@@ -207,7 +262,7 @@ export function projectActions(name, nodes, rails) {
       },
       if: [{ key: runKey, path: 'node', op: 'eq', value: from }],
       writes: [
-        { key: 'claims/${params.run}.' + seg(from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
+        { key: mkey.claim(name, '${params.run}', from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
         { key: runKey, value: { machine: name, node: '${params.to}', status: decisionStatus, at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
       ],
     });
@@ -216,93 +271,47 @@ export function projectActions(name, nodes, rails) {
 }
 
 /**
- * Subscriptions that make a machine reactive:
- *  - one per AUTO rail: invoke the transition action (its `if` fires only the
- *    rail whose `from` = the run's node), so the deterministic prefix advances.
- *  - one per AGENT/TASK node: deliver the run to @owner/models.decide (or park a
- *    claimable task) — reasoning is spent only here.
- *  - one per WORK node: deliver to @owner/models.agent (the spawned tool-loop).
- *  - section/vote: a fan `deliver` to @owner/machine.spawn_children (emits each
- *    child as its own organ write — reliable, unlike a single action's multi-
- *    write) + an agentic, eventually-consistent join barrier matched by the
- *    child's KEY separator (the child's advance overwrites its value, dropping
- *    kind/parent — only the key is stable).
+ * The subscriptions a machine needs in the STEPPER model (ADR-0018) — far fewer
+ * than the old per-rail projection:
+ *  - ONE `step` subscription: every run change delivers to @owner/machine.step,
+ *    which walks the deterministic prefix in-process, spawns section/vote children,
+ *    and runs the join barrier. Replaces all the auto-rail invokes + fan + join.
+ *  - one `decide` deliver per AGENT/TASK node → @owner/models.decide (reasoning).
+ *  - one `work` deliver per WORK node → @owner/models.agent (the spawned tool-loop,
+ *    whose prompt advances the run itself).
+ * Run keys nest under `machine/<name>/run/`, so each machine's subs are key-scoped.
  */
 export function projectSubscriptions(name, rails, owner) {
   const m = seg(name);
-  const subs = [];
-  for (const r of rails.filter((x) => x.mode === 'auto')) {
-    const id = `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`;
-    subs.push({
-      id,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)}` },
-      invoke: id,
-      params: { run: '${keySuffix}' },
-    });
-  }
+  const runPrefix = `machine/${m}/run/`;
+  const subs = [projectStepSubscription(name, owner)];
+
   const agentNodes = new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from));
   const taskNodes = new Set(rails.filter((x) => x.mode === 'task').map((x) => x.from));
   for (const from of new Set([...agentNodes, ...taskNodes])) {
     const defer = taskNodes.has(from) && !agentNodes.has(from);
     subs.push({
       id: `machine.${m}.decide-${seg(from)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
+      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
       deliver: `@${owner}/models.decide`,
-      params: defer ? { run: '${keySuffix}', defer: 'true' } : { run: '${keySuffix}' },
+      params: defer ? { run: '${keySuffix}', machine: name, defer: 'true' } : { run: '${keySuffix}', machine: name },
     });
   }
   for (const r of rails.filter((x) => x.mode === 'work')) {
-    const advance = `When the work is complete, advance the run by writing fact "machine-run/\${keySuffix}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(r.to)},"status":"done","via":${JSON.stringify(`${r.from}~>>work`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
+    const runKeyTpl = `machine/${m}/run/\${keySuffix}`;
+    const advance = `When the work is complete, advance the run by writing fact "${runKeyTpl}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(r.to)},"status":"done","via":${JSON.stringify(`${r.from}~>>work`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
     const prompt = (r.prompt ? `${r.prompt}\n\n` : `Do the work for node "${r.from}" of machine "${name}", run \${keySuffix}.\n\n`) + advance;
     subs.push({
       id: `machine.${m}.work-${seg(r.from)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(r.from)} && value.status == "running"` },
+      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(r.from)} && value.status == "running"` },
       deliver: `@${owner}/models.agent`,
       params: {
         prompt,
-        grants: r.grants ?? { read: true, write: ['machine-run/'] },
+        grants: r.grants ?? { read: true, write: [runPrefix] },
         ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
         ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
-        factKey: `machine-work/${m}.\${keySuffix}`,
+        factKey: `machine/${m}/work/\${keySuffix}`,
         tags: ['machine', `machine:${name}`, 'work'],
-      },
-    });
-  }
-  for (const r of rails.filter((x) => x.mode === 'section' || x.mode === 'vote')) {
-    const F = r.from;
-    const J = r.to;
-    const isVote = r.mode === 'vote';
-    const childKind = isVote ? 'vote' : 'section';
-    const sep = isVote ? '#' : '§';
-    const count = isVote ? voteCount(r) : (r.sections || []).length;
-    const jTerminal = !rails.some((x) => x.from === J);
-    const spec = JSON.stringify(
-      isVote
-        ? { node: F, join: J, kind: 'vote', branch: r.branch, samples: count }
-        : { node: F, join: J, kind: 'section', branches: (r.sections || []).map((s) => s.to) },
-    );
-    subs.push({
-      id: `machine.${m}.fan-${seg(F)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(F)} && value.status == "running"` },
-      deliver: `@${owner}/machine.spawn_children`,
-      params: { run: '${keySuffix}', machine: name, spec },
-    });
-    const how = r.synthesis ? ` ${r.synthesis}` : '';
-    const synthAdvance = `STEP 2 (only once all ${count} are status=="done"): ${isVote ? 'tally the consensus across the sample claims' : 'synthesize the section results'}.${how} Record it as a claim — write "claims/<parent>.${seg(F)}" = {"statement":"<your ${isVote ? 'consensus' : 'synthesis'}>","confidence":<0..1>,"machine":${JSON.stringify(name)},"at":${JSON.stringify(F)},"mode":${JSON.stringify(r.mode)}} (type claim, tags ["claim","machine","dygram"]). Then advance the parent — write "machine-run/<parent>" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(J)},"status":${JSON.stringify(jTerminal ? 'done' : 'running')},"via":${JSON.stringify(`${F}~${childKind}-join`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
-    const prompt =
-      `You are the ${isVote ? 'VOTE TALLY' : 'SECTION SYNTHESIS'} agent for machine ${JSON.stringify(name)}, fan node "${F}". A ${childKind} child run just completed: "\${keySuffix}". Derive the PARENT run id = everything before the first "${sep}" in that id. There are ${count} ${childKind} children keyed "machine-run/<parent>${sep}…".\n\n` +
-      `STEP 1: Read them — query with prefix "machine-run/<parent>${sep}". If FEWER than ${count} are status=="done", STOP and write nothing (you'll be re-invoked when the next child finishes).\n\n` +
-      synthAdvance;
-    subs.push({
-      id: `machine.${m}.join-${seg(F)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.status == "done" && key.contains(${JSON.stringify(sep)})` },
-      deliver: `@${owner}/models.agent`,
-      params: {
-        prompt,
-        grants: { read: true, write: ['machine-run/', 'claims/'] },
-        maxTurns: 8,
-        factKey: `machine-join/${m}.\${keySuffix}`,
-        tags: ['machine', `machine:${name}`, 'join'],
       },
     });
   }
@@ -318,8 +327,9 @@ export function projectSubscriptions(name, rails, owner) {
 export function spawnChildrenWrites(run, machine, spec, at) {
   const tags = ['machine', `machine:${machine}`];
   const isVote = spec.kind === 'vote';
+  const base = mkey.run(machine, run);
   const parent = {
-    key: `machine-run/${run}`,
+    key: base,
     value: { machine, node: spec.node, status: isVote ? 'voting' : 'sectioning', join: spec.join, via: `${spec.node}~fan`, at },
     type: 'machine-run',
     tags,
@@ -330,7 +340,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
     parent.value.count = k; // expected sibling count — the barrier waits for it
     for (let i = 0; i < k; i++) {
       children.push({
-        key: `machine-run/${run}#${i}`,
+        key: `${base}#${i}`,
         value: { machine, node: spec.branch, parent: run, kind: 'vote', status: 'running', at },
         type: 'machine-run',
         tags: [...tags, 'parallel-child'],
@@ -340,7 +350,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
     parent.value.count = (spec.branches || []).length; // expected siblings
     for (const t of spec.branches || []) {
       children.push({
-        key: `machine-run/${run}§${seg(t)}`,
+        key: `${base}§${seg(t)}`,
         value: { machine, node: t, parent: run, kind: 'section', status: 'running', at },
         type: 'machine-run',
         tags: [...tags, 'parallel-child'],
@@ -366,9 +376,9 @@ export function spawnChildrenWrites(run, machine, spec, at) {
 export function projectStepSubscription(name, owner) {
   return {
     id: `machine.${seg(name)}.step`,
-    match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && (value.status == "running" || value.status == "done")` },
+    match: { keyPrefix: `machine/${seg(name)}/run/`, cel: `value.status == "running" || value.status == "done"` },
     deliver: `@${owner}/machine.step`,
-    params: { run: '${keySuffix}' },
+    params: { run: '${keySuffix}', machine: name },
   };
 }
 
@@ -411,7 +421,7 @@ export function barrierAdvance(parentId, parentValue, siblings, machine, now) {
   const kind = status === 'voting' ? 'vote' : 'section';
   return {
     advance: {
-      key: `machine-run/${parentId}`,
+      key: mkey.run(parentValue.machine, parentId),
       value: { machine: parentValue.machine, node: join, status: jTerminal ? 'done' : 'running', via: `${parentValue.node}~${kind}-join`, at: now },
       type: 'machine-run',
       tags: ['machine', `machine:${parentValue.machine}`],
@@ -480,54 +490,39 @@ export function step(run, machine, nowIso) {
   let cur = { ...run };
   let node = run?.node;
   const path = [node];
+  // The execution trace lives on the run (so the UI can show HOW it ran). step is
+  // the single keeper: it fires on every run change, so a model-written advance the
+  // prior step didn't see is captured here as the new tail. Idempotent (no dup tail).
+  const trace = Array.isArray(run?.trace) ? run.trace.slice() : [];
+  const mark = (n, via) => { if (!trace.length || trace[trace.length - 1].node !== n) trace.push({ node: n, ...(via ? { via } : {}), at }); };
+  mark(node, run?.via);
+  const out = (status, y) => ({ run: { ...cur, node, status, at, trace }, yield: y, path });
   // Cycle budget: every node may be entered at most once along a single
   // deterministic walk (auto rails should not revisit without a guard).
   const budget = (Array.isArray(machine?.nodes) ? machine.nodes.length : rails.length) + 1;
   const seen = new Set([node]);
 
   for (let i = 0; i < budget; i++) {
-    const out = rails.filter((r) => r.from === node);
-    if (out.length === 0) {
-      // Terminal — the run is done.
-      return { run: { ...cur, node, status: 'done', at }, yield: null, path };
-    }
-    const deterministic = out.every((r) => r.mode === 'auto');
+    const outgoing = rails.filter((r) => r.from === node);
+    if (outgoing.length === 0) return out('done', null); // terminal — the run is done
+    const deterministic = outgoing.every((r) => r.mode === 'auto');
     if (!deterministic) {
       // A decision lives here — yield to the driver/model. The run sits at `node`.
-      const kind = (out.find((r) => r.mode !== 'auto') || out[0]).mode;
-      return {
-        run: { ...cur, node, status: 'running', at },
-        yield: { kind, node, choices: out.map(choiceOf) },
-        path,
-      };
+      const kind = (outgoing.find((r) => r.mode !== 'auto') || outgoing[0]).mode;
+      return out('running', { kind, node, choices: outgoing.map(choiceOf) });
     }
     // All auto: take the first rail whose condition holds (declaration order).
-    const chosen = out.find((r) => railHolds(r, cur));
-    if (!chosen) {
-      // Deterministic stall — no auto rail's guard is satisfied yet.
-      return {
-        run: { ...cur, node, status: 'blocked', at },
-        yield: { kind: 'blocked', node, choices: out.map(choiceOf) },
-        path,
-      };
-    }
+    const chosen = outgoing.find((r) => railHolds(r, cur));
+    if (!chosen) return out('blocked', { kind: 'blocked', node, choices: outgoing.map(choiceOf) });
     node = chosen.to;
     cur = { ...cur, node, via: `${chosen.from}->${chosen.to}` };
     path.push(node);
+    mark(node, cur.via);
     if (seen.has(node)) {
       // Re-entered a node along auto rails — a guardless loop. Stop rather than spin.
-      return {
-        run: { ...cur, node, status: 'blocked', at },
-        yield: { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) },
-        path,
-      };
+      return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
     }
     seen.add(node);
   }
-  // Budget exhausted (defensive — the seen-set should catch loops first).
-  return {
-    run: { ...cur, node, status: 'blocked', at },
-    yield: { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) },
-    path,
-  };
+  return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
 }
