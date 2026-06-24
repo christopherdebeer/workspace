@@ -178,7 +178,7 @@ describe('projectSubscriptions (stepper set: step + decide + work)', () => {
   it('a decide is just an agent with a fixed choice set — delivered to models.agent, no models.decide', () => {
     const decide = subs.find((s: { id: string }) => s.id === 'machine.demo.decide-D');
     expect(decide.deliver).toBe('@c15r/models.agent'); // ONE model primitive
-    expect(decide.params.prompt).toContain('Choose exactly ONE branch');
+    expect(decide.params.prompt).toContain('choose exactly ONE branch');
     expect(decide.params.prompt).toContain('- X — when fix');
     expect(decide.params.prompt).toContain('machine/demo/run/${keySuffix}/claim/D'); // records the claim
     expect(decide.params.grants.write).toEqual(['machine/demo/run/']);
