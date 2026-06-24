@@ -73,7 +73,7 @@
       "schema": {
         "machine": "string — the machine being run",
         "node": "string — the run's current node",
-        "status": "'running' | 'done' | 'blocked' | 'sectioning' | 'voting' | 'awaiting-decision'",
+        "status": "'running' | 'done' | 'blocked' | 'failed' | 'waiting' | 'sectioning' | 'voting'",
         "via": "string? — the transition that produced this state",
         "trace": "{node,via?,at?}[]? — the ordered execution path",
         "at": "string? — ISO time of the last transition"
