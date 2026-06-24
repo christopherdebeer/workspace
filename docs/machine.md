@@ -103,10 +103,25 @@ drives). `@c15r/machine` is a **declarative projection into the substrate**.
 | `work` | `~>>` | **spawns** `@owner/models.agent` (the machine-*uses*-agent path): it does the work with scoped grants + a tool allowlist and advances the run itself. |
 | `section` | — | **fan-out** N independent branches → synthesize (parallelization "sectioning"). |
 | `vote` | — | sample one branch N× → consensus tally (parallelization "voting"). |
+| `catch` | — | **error handling**: fires only when this node's `work`/`agent` step FAILED (run `status:'failed'`) — routes to a recovery node, resets to `running`, and increments `value.failures`. Inert on the happy path. With no catch rail a failure yields `kind:'failed'`. |
+| `wait` | — | **parks** the run for `for` ("30s"/"5m"/"1h"/"2d") — the stepper stamps `waitUntil` and yields `kind:'wait'` (status `waiting`); a 1-minute platform tick (`machine.tick.requested`) resumes the run once the deadline passes, or call `step` to drive it. |
 
 Rails carry optional facets: `when` (a Level-1 disclosure descriptor), `condition`
-(CEL), `prompt`/`grants`/`tools`/`scope`/`maxTurns` (work-agent brief), and for
-parallel: `sections` (`[{to, when?}]`), `branch`, `samples`, `synthesis`.
+(CEL over `{ value:<run>, now, nowMs }` — time-aware, so an edge can gate on a
+deadline/elapsed window), `prompt`/`grants`/`tools`/`scope`/`maxTurns`/`maxMs`
+(work-agent brief; `maxMs` is a soft per-step wall-clock budget), `for` (a `wait`
+duration), and for parallel: `sections` (`[{to, when?}]`), `branch`, `samples`,
+`synthesis`. A failed `work`/`agent` delivery writes the run `status:'failed'`
+via the models cell's `onError` hook, which is what a `catch` rail reacts to.
+
+**Conditional control flow (CEL + time + errors).** These compose into the
+familiar resilience primitives, all as plain graph structure:
+- **conditional edges** — `auto` rails with a `condition` over the run state.
+- **wait / backoff** — a `wait` rail (or `condition: 'now >= value.waitUntil'`).
+- **catch** — a `catch` rail from a node whose work can fail.
+- **circuit breaker** — `work → catch` (counts `failures`) → a threshold edge
+  (`value.failures >= 3 → Open`) → a `wait` cooldown → a half-open probe. A
+  breaker's start node has incoming retry rails, so declare `entry` explicitly.
 
 > **NB (ownership of the mapping):** making rail mode explicit *data* — and the
 > arrow→mode default — is our substrate-only design choice (§2.1), not a DyGram port.
@@ -355,7 +370,8 @@ on the diagram.
 | **Arrows → substrate edges.** A machine's `value.arrows` are stored with their `rel` but not projected to authored edges, so `neighbors`/`links` don't walk a machine. | open | **ADR-0003 migration step 4** — recommends `define_machine` projects arrows → authored `link` edges at write time ("the machine graph *should* be authored"). Follow the ADR. |
 | **Delivery reliability under reactions.** The `spawn_children` multi-write fix and the `models.decide` concurrent-vote-child finding are instances of at-least-once/ordering behavior under the depth cap. | resolved for determinism (`reactive:"step"`); legacy path unchanged | **ADR-0018** — `step` advances the `auto` prefix in-process with **no per-hop fact-write** and the kernel client's `emit` checks `FailedEntryCount` (no silent drop). Reliability worry remains only at genuine (model-paced) yields; ADR-0011 open item stands for those. |
 | **`models.decide` concurrency.** Concurrent vote-child decisions don't auto-complete (decide action + barrier are correct). | resolved (`reactive:"step"`) | **ADR-0018** — `barrierAdvance` is the **deterministic** join: the cell reads the children and advances the parent itself, retiring the `models.decide` completion dependency. Synthesis *content* may still use a model (a work/agent rail at the join node). |
-| **No loop/step/timeout guard.** A cyclic reactive machine can thrash; a stuck branch parks a run forever. | partial (`dryRun` `cycle` warning; `step()` reports `kind:'cycle'`/`'blocked'` rather than spinning + emits idempotently so a parked run doesn't re-trigger; the reactor's revision depth cap) | **ADR-0018** (`step` halts on a guardless auto-loop and on a deterministic stall). A per-run wall-clock/step-count timeout is still unbuilt. |
+| **No loop/step/timeout guard.** A cyclic reactive machine can thrash; a stuck branch parks a run forever. | partial (`dryRun` `cycle` warning; `step()` reports `kind:'cycle'`/`'blocked'` rather than spinning + emits idempotently so a parked run doesn't re-trigger; the reactor's revision depth cap) | **ADR-0018** (`step` halts on a guardless auto-loop and on a deterministic stall). The cycle guard now distinguishes a real auto-loop from a legitimate retry loop through a yield node. |
+| **Conditional control flow: waits / catches / circuit breakers.** Edges could gate on machine state but not time, failures parked runs silently, and there was no cooldown/retry primitive. | **built** | Rail `condition` CEL gains `now`/`nowMs` (deadlines/elapsed); a `wait` rail parks-and-resumes via a 1-min platform tick (`createMachineTickHandler`); a `catch` rail recovers a failed step (the models cell's `onError` hook writes the failure onto the run) and counts `value.failures`; a circuit breaker is their composition. A per-run wall-clock budget rides on work agents as `maxMs`. (Precision upgrade: per-run EventBridge Scheduler instead of the cron tick.) |
 | **Cell-side substrate reads.** The machine cell was built write-only; the agentic join barrier existed only because it could not read its own children. | **resolved** | **ADR-0017** — the shared kernel substrate client (`/@c15r/kernel/substrate.js`); `@c15r/models` already read this way. The machine `step` tool now reads its def + run + siblings directly. |
 | **Shared client is vendored, not a published package.** Each consuming cell keeps a hand-synced copy of the canonical `cells/kernel/static/substrate.js` (a server-side `https://` import hangs the forge bundler, so URL-sharing is out). | bridge | **ADR-0017** packaging — publish `@c15r/substrate` to npm and import by bare specifier (esm.sh, version-pinned) to make it one source again. |
 | **`reactive:"step"` not yet exercised live; the legacy per-auto-rail projection remains the default.** The new single-step subscription + idempotent emit are unit-tested but unproven end-to-end under burst. | new, opt-in | this doc §16 (v5.3). Flip a machine to `reactive:"step"` and exercise; then make it the default and remove the legacy projection. |
