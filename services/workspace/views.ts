@@ -17,6 +17,7 @@
 import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
 import type { Identity } from '../../platform/runtime';
 import type { ObservedState, Entry, QueryOptions } from '../../platform/runtime';
+import { createDeclarationRegistry, type DeclarationKind } from '../../platform/runtime';
 
 /** Reserved key prefix where a slice's registered views live. */
 export const VIEWS_PREFIX = '_views/';
@@ -104,33 +105,29 @@ export interface RegisteredViews {
   evaluate(scope: string, id: string, identity?: Identity): Promise<ViewResult>;
 }
 
+/** The view *kind* (ADR-0001): storage + validation only. `query`/`reduce`/CEL —
+ *  the evaluate side — stays in `evaluate` below. */
+const viewKind: DeclarationKind<ViewDefinition> = {
+  ns: VIEWS_PREFIX,
+  factType: 'view',
+  defaultVia: 'registerView',
+  idOf: (d) => d.id,
+  validate: validateView,
+  isStored: (v): v is ViewDefinition => !!(v as { id?: unknown })?.id,
+};
+
 export function createRegisteredViews(state: ObservedState): RegisteredViews {
+  const reg = createDeclarationRegistry(state, viewKind);
   async function load(scope: string, id: string): Promise<ViewDefinition> {
-    const entry = await state.get(scope, `${VIEWS_PREFIX}${id}`);
-    if (!entry || entry._meta.superseded) throw new Error(`not_found: view "${id}" not found`);
-    return entry.value as ViewDefinition;
+    const def = await reg.get(scope, id);
+    if (!def) throw new Error(`not_found: view "${id}" not found`);
+    return def;
   }
 
   return {
-    async register(scope, def, identity, opts): Promise<ViewDefinition> {
-      validateView(def);
-      await state.put(
-        { scope, key: `${VIEWS_PREFIX}${def.id}`, value: def, via: opts?.via ?? 'registerView', type: 'view', tags: opts?.tags },
-        identity,
-      );
-      return def;
-    },
-
-    async list(scope): Promise<ViewDefinition[]> {
-      const res = await state.query(scope, { prefix: VIEWS_PREFIX, rankBy: 'recency' });
-      return res.entries.map((e) => e.value as ViewDefinition).filter((d): d is ViewDefinition => !!d?.id);
-    },
-
-    async remove(scope, id, identity): Promise<{ ok: true }> {
-      await load(scope, id); // throws not_found
-      await state.supersede(scope, `${VIEWS_PREFIX}${id}`, null, identity);
-      return { ok: true };
-    },
+    register: (scope, def, identity, opts) => reg.register(scope, def, identity, opts),
+    list: (scope) => reg.list(scope),
+    remove: (scope, id, identity) => reg.remove(scope, id, identity),
 
     async evaluate(scope, id, _identity): Promise<ViewResult> {
       const def = await load(scope, id);

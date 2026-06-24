@@ -24,12 +24,14 @@
 import {
   ServiceContext,
   requireUser,
+  grantScopesOf,
   createObservedState,
   type ObservedState,
   type Entry,
   type ReadResult,
   type QueryResult,
   type NeighborsResult,
+  type MembersResult,
   type ChangesResult,
   type AttentionResult,
   type EdgeRecord,
@@ -40,6 +42,11 @@ import {
   type Identity,
   type SalienceLens,
   type SalienceOptions,
+  schemaHints,
+  mergeTypeDecl,
+  resolveType,
+  extractTypeRules,
+  type TypeRules,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -110,6 +117,41 @@ export const dynamoDeps: DepsBuilder = (ctx) => {
   return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table) };
 };
 
+/**
+ * The canonical type vocabulary (`cells.describeTypes`): `{ <type>: decl }` with
+ * `manager`, render hints, and any declared `schema`/`fields`. Global (not
+ * per-user) and changes only on cell deploy, so a short process-wide cache keeps
+ * it off the hot path; a fetch failure degrades to `{}` (the backbone still links
+ * facts to their types, schema hints simply go quiet).
+ */
+const TYPE_DECLS_TTL_MS = 60_000;
+let typeDeclsCache: { at: number; decls: Record<string, Record<string, unknown>> } | null = null;
+async function typeDeclsFor(ctx: ServiceContext): Promise<Record<string, Record<string, unknown>>> {
+  if (typeDeclsCache && Date.now() - typeDeclsCache.at < TYPE_DECLS_TTL_MS) return typeDeclsCache.decls;
+  let decls: Record<string, Record<string, unknown>> = {};
+  try {
+    const res = await ctx.serviceClient('cells').command<{ types?: Record<string, Record<string, unknown>> }>('describeTypes', {});
+    decls = res?.types ?? {};
+    typeDeclsCache = { at: Date.now(), decls };
+  } catch (err) {
+    ctx.logger.warn('type vocabulary unavailable — backbone cell links + schema hints skipped', { error: (err as Error).message });
+  }
+  return decls;
+}
+
+/** Per-type Reference rules (ADR-0003), resolved from the cached vocabulary: the
+ *  manager (`managedBy`), the `ref` fields (embedded edges), and key-encoded edges.
+ *  One `resolveType` per declared type. */
+async function typeRulesFor(ctx: ServiceContext): Promise<Record<string, TypeRules>> {
+  const decls = await typeDeclsFor(ctx);
+  const rules: Record<string, TypeRules> = {};
+  for (const [type, decl] of Object.entries(decls)) {
+    const r = extractTypeRules(resolveType(decl, type));
+    if (r.manager || r.refs || r.keyPattern) rules[type] = r;
+  }
+  return rules;
+}
+
 export interface RememberInput {
   key: string;
   value: unknown;
@@ -154,6 +196,8 @@ export interface RecallInput {
   lens?: SalienceLens;
   /** Precise per-call salience override (merges over the lens + defaults). */
   salience?: Partial<SalienceOptions>;
+  /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
+  explain?: boolean;
 }
 export interface PeekInput {
   key: string;
@@ -173,6 +217,11 @@ export interface QueryInput {
   /** Resume token from a previous page's `nextCursor`. */
   cursor?: string;
   includeSuperseded?: boolean;
+  /** Find a fact by what's inside it: keep only facts whose key or value
+   *  (stringified) contains this substring, case-insensitively. */
+  contains?: string;
+  /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
+  explain?: boolean;
 }
 export interface LinkInput {
   from: string;
@@ -247,6 +296,26 @@ export interface SharedResult {
   /** Grants others have made to you. */
   receiving: Grant[];
 }
+/**
+ * The authority self-model (ADR-0007): *what the caller may see and do*, resolving
+ * the three enforcement layers into one inspectable surface — beside `$catalog`
+ * (capabilities), `$types` (vocabulary), and `$graph` (references). No new
+ * enforcement; this names the axis that gates Fact · Reference · Declaration.
+ */
+export interface GrantsSelfModel {
+  /** The authenticated principal this authority belongs to. */
+  principal: string;
+  /** Layer 1 — token scope. `active` = what is enforced now; `ceiling` = the
+   *  immutable grant set at consent (`active` can be widened up to it). */
+  scope: { active: string[]; ceiling: string[] };
+  /** Layer 3 — partition: the caller's own slice, where they hold full authority. */
+  slice: string;
+  /** Layer 2 — grant: the subsets you expose (`shared`) and receive (`receiving`),
+   *  plus the named audiences you belong to or define (`groups`). */
+  grant: { shared: Grant[]; receiving: Grant[]; groups: GroupResult[] };
+  /** The contract the three layers compose to, as prose. */
+  hint: string;
+}
 export interface GroupValue {
   /** Principals in this audience. */
   members: string[];
@@ -304,7 +373,7 @@ export interface DenyGrantInput {
 // Index signature so it satisfies defineService's `Record<string, RegisteredCommand>`,
 // while keeping precise per-command types for the unit tests.
 export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
-  remember: CommandHandler<RememberInput, Entry>;
+  remember: CommandHandler<RememberInput, Entry & { hints?: string[] }>;
   ingest: CommandHandler<IngestInput, IngestResult>;
   recall: CommandHandler<RecallInput | undefined, ReadResult>;
   peek: CommandHandler<PeekInput, Entry | null>;
@@ -313,6 +382,8 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[] }>;
+  graph: CommandHandler<undefined, { edges: EdgeRecord[] }>;
+  members: CommandHandler<{ key: string }, MembersResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
@@ -331,6 +402,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
   shared: CommandHandler<undefined, SharedResult>;
+  grants: CommandHandler<undefined, GrantsSelfModel>;
   group: CommandHandler<GroupInput, GroupResult>;
   groups: CommandHandler<undefined, GroupsResult>;
   requestGrant: CommandHandler<RequestGrantInput, RequestGrantResult>;
@@ -363,7 +435,7 @@ interface ToolDescriptor {
 const META_SCHEMA = {
   type: 'object',
   description:
-    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided',
+    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided. With a read `explain:true`, also `explain: { signals, weights, contribution, degree }` — the score breakdown for tuning.',
 } as const;
 
 /** Per-call salience lens — an ergonomic bias over the tuned defaults. */
@@ -415,6 +487,7 @@ const EDGE_SCHEMA = {
     strength: { type: ['number', 'null'] },
     createdAt: { type: 'string' },
     writer: { type: ['string', 'null'] },
+    derived: { type: 'boolean', description: 'Present and true for a derived structural-backbone edge (instanceOf/managedBy/rendersWith/inView); absent for authored edges' },
   },
 } as const;
 
@@ -462,7 +535,18 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key', 'value'],
       additionalProperties: false,
     },
-    resultSchema: { ...ENTRY_SCHEMA, description: 'The written fact' },
+    resultSchema: {
+      ...ENTRY_SCHEMA,
+      description: 'The written fact, plus optional advisory `hints` (the write always succeeds)',
+      properties: {
+        ...((ENTRY_SCHEMA as { properties?: Record<string, unknown> }).properties ?? {}),
+        hints: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Advisory notes — missing recommended fields for the type, or that the type could declare a schema. Never blocks the write.',
+        },
+      },
+    },
   },
   {
     name: 'ingest',
@@ -517,7 +601,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'recall',
     description:
-      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`.',
+      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`. Tune your own default shaping by writing a `_config/salience` fact (e.g. `{ focusThreshold: 0.62, elideThreshold: 0.62 }` for a focused <30-item view); precedence is defaults ← that config ← `lens` ← per-call `salience`.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -528,6 +612,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
+        explain: { type: 'boolean', description: 'Attach `_meta.explain` to each entry — the salience breakdown (signals · weights · contributions · degree) so you can see *why* a fact scored, and tune accordingly' },
       },
       additionalProperties: false,
     },
@@ -572,9 +657,11 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         type: { type: 'string', description: 'Only facts of this type' },
         tag: { type: 'string', description: 'Only facts carrying this tag' },
         prefix: { type: 'string', description: 'Only keys with this prefix' },
+        contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },
         rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
+        explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
         limit: { type: 'number', description: 'Max entries to return' },
         cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
@@ -636,7 +723,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'neighbors',
-    description: 'The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop.',
+    description: "The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop. Includes the derived structural backbone (edges flagged `derived:true`): a fact `instanceOf` its `_types/<type>`, a type `managedBy` its cell and `rendersWith` its renderer, and a fact `inView` any view whose query selects it — so even an unlinked fact has a direction to explore.",
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -671,6 +758,37 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       additionalProperties: false,
     },
     resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+  },
+  {
+    name: 'graph',
+    description:
+      "The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary).",
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+  },
+  {
+    name: 'members',
+    description:
+      "A collection's member facts (ADR-0005). **Intensional** when the fact carries a `query` (a view) — its query is evaluated (`order:\"query\"`); **extensional** otherwise — the facts with an inbound membership edge (`inView`/`inDoc`) in the Reference projection (e.g. a doc's blocks). Extensional members come back in **narrative order** when placed by an ordering decoration (a doc-order `seq` → `order:\"seq\"`), else salience-ranked (`order:\"salience\"`). One read for 'a view's facts' and 'a doc's members' alike.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'The collection fact key (a view, a doc, …)' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        membership: { type: 'string', enum: ['intensional', 'extensional'] },
+        order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
+        members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta); extensional members also carry `placement` {seq, fold} from their ordering decoration' },
+      },
+    },
   },
   {
     name: 'changes',
@@ -1018,6 +1136,24 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'grants',
+    description:
+      'The authority self-model (also `read("$grants")`): *what you may see and do*, resolving the three enforcement layers into one surface — `scope` (token: active + ceiling), `slice` (your own partition, full authority), and `grant` (the subsets you `shared`/`receiving` + the `groups` you belong to or define). The authority surface beside `$catalog` (capabilities), `$types` (vocabulary), and `$graph` (references). Inspect-only — it reports authority, it does not change it.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        principal: { type: 'string' },
+        scope: { type: 'object', description: '{ active: enforced now, ceiling: the grant max }' },
+        slice: { type: 'string', description: 'Your own slice — full authority' },
+        grant: { type: 'object', description: '{ shared[], receiving[], groups[] }' },
+        hint: { type: 'string' },
+      },
+    },
+  },
+  {
     name: 'group',
     description:
       'Define or patch a named audience (a group of principals) you can then `share` to with `to: "group:<name>"`. Pass `members` to set the membership wholesale, or `add`/`remove` to patch it. The group is stored as a `_groups/<name>` fact in your slice; recall resolves group shares for members without scanning. You are always implicitly in your own audiences.',
@@ -1252,6 +1388,19 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       );
       await ctx.events.emit('workspace.fact.written', { scope, key: input.key, revision: entry._meta.revision });
       ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision, writer: caller });
+      // Advisory only: the write already happened. Nudge missing recommended
+      // fields (per the type's schema), or that a typed-but-schemaless type could
+      // declare one. Never for system facts (`_…` plumbing) or untyped values.
+      if (input.type && !input.key.startsWith('_')) {
+        // Resolve the type's declaration exactly as `$types` does: the canonical
+        // cell vocabulary, overridden by the writer's own `_types/<type>` fact
+        // (where seeded/slice-local schemas like `claim` live).
+        const canonical = (await typeDeclsFor(ctx))[input.type];
+        const override = (await state.get(scope, `_types/${input.type}`, ctx.identity))?.value;
+        const type = resolveType(mergeTypeDecl(canonical, override), input.type); // one resolve → facets
+        const hints = schemaHints({ type: input.type, value: input.value, fields: type.shape.fields, declared: type.declared });
+        if (hints.length) return { ...entry, hints };
+      }
       return entry;
     },
 
@@ -1313,7 +1462,14 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // (elision:'none' keeps values present so granted slices merge cleanly).
       const lens = input?.lens;
       const salience = input?.salience;
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience }, ctx.identity);
+      const explain = input?.explain;
+      // The viewer's stored salience policy (`_config/salience`) governs the whole
+      // assembled view — scoring (read) and tiering (shape) alike — so granted
+      // slices are scored under the viewer's policy, not each owner's. Precedence:
+      // instance defaults ← viewer config ← lens ← per-call `salience` override.
+      const salienceConfig = await state.salienceConfig(viewer);
+      const typeRules = await typeRulesFor(ctx);
+      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -1322,7 +1478,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience }, ctx.identity);
+          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -1334,7 +1490,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       }
 
       // Shape the whole assembled view once (lens echoes into _shaping).
-      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience });
+      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
     },
 
     async peek(input, ctx) {
@@ -1367,9 +1523,12 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
           rankBy: input?.rankBy,
           lens: input?.lens,
           salience: input?.salience,
+          explain: input?.explain,
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
+          contains: input?.contains,
+          typeRules: await typeRulesFor(ctx),
         },
         ctx.identity,
       );
@@ -1395,7 +1554,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel }, ctx.identity);
+      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
     },
 
     async links(input, ctx) {
@@ -1406,6 +1565,19 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       return {
         edges: prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all,
       };
+    },
+
+    async graph(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { state } = build(ctx);
+      return state.graph(scope, { typeRules: await typeRulesFor(ctx) });
+    },
+
+    async members(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.key) throw new Error('key is required');
+      const { state } = build(ctx);
+      return state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
     },
 
     async changes(input, ctx) {
@@ -1574,6 +1746,34 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { grants } = build(ctx);
       const [shared, receiving] = await Promise.all([grants.listByOwner(me), grants.listForGrantee(me)]);
       return { shared, receiving };
+    },
+
+    /**
+     * The authority self-model (ADR-0007): one read that resolves the three
+     * enforcement layers — token scope, the grant subsets, and the caller's own
+     * partition — into "what may I see and do." Pure projection over the existing
+     * machinery (identity scopes + the grant store); changes no enforcement.
+     */
+    async grants(_input, ctx) {
+      const me = requireUser(ctx.identity);
+      const { state, grants } = build(ctx);
+      const [shared, receiving, groupsRes] = await Promise.all([
+        grants.listByOwner(me),
+        grants.listForGrantee(me),
+        state.query(me, { prefix: GROUPS_NS, limit: 200 }, ctx.identity),
+      ]);
+      const groups = groupsRes.entries.map((e) => {
+        const v = e.value as GroupValue;
+        return { name: e.key.slice(GROUPS_NS.length), members: v.members ?? [], ...(v.label ? { label: v.label } : {}), ...(v.note ? { note: v.note } : {}) };
+      });
+      return {
+        principal: me,
+        scope: { active: ctx.identity.scopes ?? [], ceiling: grantScopesOf(ctx.identity) },
+        slice: me,
+        grant: { shared, receiving, groups },
+        hint:
+          'may(you, verb, resource) holds when all three gates pass: (1) scope — your active token covers the capability; (2) grant — the resource is your own slice, or a grant in `receiving` covers it (read) or grants write; (3) partition — IAM isolates each slice. Widen scope with auth.requestScope; ask for access with workspace.requestGrant.',
+      };
     },
 
     /**
@@ -1792,6 +1992,40 @@ export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
 }
 
 /**
+ * The scheduled machine tick: an EventBridge cron delivers `machine.tick.requested`.
+ * It resumes WAITING machine runs whose `wait`-rail deadline has passed — the
+ * autonomous half of the `wait` primitive (the driven half is calling `step`). A
+ * due run is bumped back to `running`, which re-fires the machine's `step`
+ * subscription; the stepper then re-reads the elapsed `waitUntil`, clears it, and
+ * advances past the wait. Coarse (cron-granular) by design; a per-run delayed
+ * trigger (EventBridge Scheduler) is the precision upgrade.
+ */
+export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx) => {
+    const scopes = Array.isArray(detail.scopes) ? (detail.scopes as string[]) : [];
+    if (!scopes.length) {
+      ctx.logger.warn('machine tick requested without scopes');
+      return;
+    }
+    const { state } = build(ctx);
+    const nowMs = Date.now();
+    const identity: Identity = { user: 'platform/machine-tick', scopes: [] };
+    for (const scope of scopes) {
+      const { entries } = await state.query(scope, { type: 'machine-run', limit: 500 });
+      for (const e of entries) {
+        const v = (e.value ?? {}) as { status?: string; waitUntil?: string };
+        if (e._meta.superseded || v.status !== 'waiting' || typeof v.waitUntil !== 'string') continue;
+        const due = Date.parse(v.waitUntil);
+        if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
+        await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
+        await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
+        ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
+      }
+    }
+  };
+}
+
+/**
  * The organ-to-reef write path: a dynamic cell emits a
  * `substrate.write.requested` event, and the workspace applies it as a fact
  * in the cell **owner's** slice with the cell as the attested writer.
@@ -1833,6 +2067,38 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
     const writerAddress = `@${resolved.owner}/${resolved.name ?? cellId}`;
     const identity: Identity = { user: writerAddress, scopes: [] };
     const { state } = build(ctx);
+
+    // The supersede verb on the organ path: a cell-attested agent retires an
+    // ORGANIC fact in the owner's slice (history is kept — reversible, not a
+    // delete). Vocabulary (`_`-prefixed) stays managed via the registries, so
+    // organ supersede is refused there, the mirror of the put-path rule.
+    if (detail.op === 'supersede') {
+      // The no-code vocabulary a cell SEEDS via the put path (actions/views/
+      // subscriptions) it may also RETIRE here, through the same registries — so a
+      // re-definition can clean up the rails/branches it dropped, the symmetric
+      // counterpart to seeding. Other `_`-prefixed vocabulary (_types, _renderers,
+      // sharing) stays managed elsewhere, so organ supersede there is still refused.
+      try {
+        if (key.startsWith(ACTIONS_PREFIX)) {
+          await createDeclarativeActions(state).remove(scope, key.slice(ACTIONS_PREFIX.length), identity);
+        } else if (key.startsWith(SUBSCRIPTIONS_PREFIX)) {
+          await createSubscriptions(state).remove(scope, key.slice(SUBSCRIPTIONS_PREFIX.length), identity);
+        } else if (key.startsWith(VIEWS_PREFIX)) {
+          await createRegisteredViews(state).remove(scope, key.slice(VIEWS_PREFIX.length), identity);
+        } else if (key.startsWith('_')) {
+          ctx.logger.warn('organ supersede of vocabulary refused', { cell: writerAddress, key });
+          return;
+        } else {
+          await state.supersede(scope, key, null, identity, {});
+        }
+      } catch (err) {
+        ctx.logger.warn('organ supersede refused', { cell: writerAddress, key, error: (err as Error).message });
+        return;
+      }
+      await ctx.events.emit('workspace.fact.written', { scope, key, revision: 0 });
+      ctx.logger.info('substrate supersede applied for organ', { cell: writerAddress, scope, key });
+      return;
+    }
 
     // A cell may seed its own **cell-required** vocabulary — declared actions
     // and views, the same category as the `_renderers/*` it already seeds and
@@ -1950,8 +2216,29 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
           ctx.logger.warn('reaction skipped: bad deliver address', { scope, subscription: sub.id, deliver: sub.deliver });
           continue;
         }
+        // Grants-to-principals (machine.md §9 Increment 3): when delivering to a
+        // models agent that carries `grants` (a machine rail's tool scope), mint a
+        // per-run token FOR the owner scoped to those grants and hand it to the
+        // agent, so it can call REAL tools (workspace.link, @owner/cell.tool) — not
+        // just the bespoke substrate_* wrappers. The agent still bounds writes to
+        // the rail's key-patterns cell-side.
+        let deliverParams = params;
+        const grants = (params as Record<string, unknown>).grants as { read?: unknown; write?: unknown } | undefined;
+        if (grants && target.name === 'models') {
+          const scopes: string[] = [];
+          if (grants.read) scopes.push('workspace:read');
+          if (grants.write) scopes.push('workspace:write');
+          if (scopes.length) {
+            try {
+              const minted = await ctx.serviceClient('auth').command<{ token?: string }>('mintTokenFor', { owner: scope, scope: scopes.join(' '), expiresInSec: 900 });
+              if (minted?.token) deliverParams = { ...params, token: minted.token };
+            } catch (err) {
+              ctx.logger.warn('per-run agent token mint failed; agent runs substrate-only', { scope, subscription: sub.id, error: (err as Error).message });
+            }
+          }
+        }
         try {
-          await deliver(target, params, scope, ctx);
+          await deliver(target, deliverParams, scope, ctx);
           ctx.logger.info('reaction delivered', { scope, key, subscription: sub.id, deliver: sub.deliver });
         } catch (err) {
           ctx.logger.warn('reaction deliver failed', { scope, subscription: sub.id, deliver: sub.deliver, error: (err as Error).message });

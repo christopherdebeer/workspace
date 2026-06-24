@@ -6,9 +6,17 @@ import { buildContextMenu } from './lib/context-menu';
 import { installCommandPalette } from './lib/cmd-palette/command-palette.ts';
 import { generateContent, regenerateImage } from './lib/network/generation.ts';
 import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/network/storage.ts';
-import { showModal } from './lib/modal.ts';
+import { showModal, closeModal } from './lib/modal.ts';
+import { enterFull, exitFull } from './lib/network/inspectorPanel.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
+import { registerSubstrateTypes } from './lib/elements/substrateTypes.ts';
+import { installFrameNav } from './lib/network/frameNav.ts';
+import { installFrameOverlay } from './lib/network/frameOverlay.ts';
+import { installEdgeInspector } from './lib/network/edgeInspect.ts';
+import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
+import { canvasPath, boardFromPath } from './lib/url.ts';
+import { fitRegion, type BBox } from '../shared/frame.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
 class CanvasController {
@@ -23,6 +31,8 @@ class CanvasController {
     elementNodesMap: Record<string, HTMLElement>;
     edgeNodesMap: Record<string, SVGLineElement>;
     edgeLabelNodesMap?: Record<string, SVGTextElement>;
+    edgeHitNodesMap?: Record<string, SVGLineElement>;
+    selectedEdgeIds?: Set<string>;
     canvas: HTMLElement;
     container: HTMLElement;
     staticContainer: HTMLElement;
@@ -49,6 +59,10 @@ class CanvasController {
     requestRender: () => void;
     requestEdgeUpdate: () => void;
     contextMenuPointerDownHandler?: (ev: Event) => void;
+    /** Off-screen culling is transform-aware (driven by updateCulling), not the
+     *  browser's content-visibility heuristic — see updateCulling for why. */
+    cullEnabled = false;
+    _cullQueued = false;
 
     constructor(canvasState: CanvasState) {
         updateCanvasController(this)
@@ -85,6 +99,7 @@ class CanvasController {
         }
 
         this.selectedElementIds = new Set();   // multiselect aware
+        this.selectedEdgeIds = new Set();      // unified selection: edges too (ADR-0016)
         Object.defineProperty(this, 'selectedElementId', {  // legacy shim
             get: () => (this.selectedElementIds.size === 1 ? [...this.selectedElementIds][0] : null),
             set: (v) => { this.selectedElementIds.clear(); if (v) this.selectedElementIds.add(v); }
@@ -181,6 +196,10 @@ class CanvasController {
         }
 
         (this.canvas as any).controller = this;
+
+        // `body.cull` is the feature flag (set from the URL param in main()); the
+        // culling itself is transform-aware JS now (updateCulling), not CSS.
+        this.cullEnabled = typeof document !== 'undefined' && document.body.classList.contains('cull');
 
         this.updateCanvasTransform();
         this._renderQueued = false;
@@ -420,6 +439,15 @@ class CanvasController {
     }
 
     updateGroupBox() {
+        // Surface element/group selection to the consolidated cmd-context strip
+        // (ADR-0016). This is the one chokepoint every selection path funnels
+        // through; the listener dedupes by id-set, so the hot calls (pan/render)
+        // are cheap.
+        try {
+            const ids = [...this.selectedElementIds];
+            window.dispatchEvent(new CustomEvent('parc:selection-changed', { detail: { ids } }));
+        } catch { /* non-DOM env */ }
+
         if (this.selectedElementIds.size < 2) {
             this.groupBox.style.display = 'none';
             this.canvas.classList.remove('group-selected')
@@ -501,10 +529,64 @@ class CanvasController {
 
         // Set the viewBox attribute on the SVG layer so that its coordinate system
         // matches the visible region.
-        this.edgesLayer.setAttribute("viewBox", `${String(visibleX)} ${String(visibleY)} ${String(visibleWidth)} ${String(visibleHeight)}`);
+        const viewBox = `${String(visibleX)} ${String(visibleY)} ${String(visibleWidth)} ${String(visibleHeight)}`;
+        this.edgesLayer.setAttribute("viewBox", viewBox);
+        // The frames overlay (ADR-0015) tracks the board by the SAME transform as
+        // the element container (not a viewBox), so it lines up at any viewport —
+        // the model the SSR-painted layer also uses. Guarded — it may not exist.
+        const framesLayer = document.getElementById('frames-layer');
+        if (framesLayer) framesLayer.style.transform = this.container.style.transform;
         // console.log("[DEBUG] SVG viewBox updated to:", visibleX, visibleY, visibleWidth, visibleHeight);
 
         this.updateGroupBox()
+        this.scheduleCulling();
+    }
+
+    /** Coalesce culling to one pass per frame — updateCanvasTransform can fire
+     *  many times per pan gesture, but the visible set only needs recomputing once
+     *  the transform settles for the frame. */
+    scheduleCulling() {
+        if (!this.cullEnabled || this._cullQueued) return;
+        this._cullQueued = true;
+        requestAnimationFrame(() => { this._cullQueued = false; this.updateCulling(); });
+    }
+
+    /** Transform-aware off-screen culling. The blanket `content-visibility:auto`
+     *  this replaces had two faults on a CSS-transformed board: (1) its viewport
+     *  relevance heuristic doesn't reliably re-evaluate after a programmatic camera
+     *  jump (goToFrame), so elements panned into view stayed skipped — a blank
+     *  frame; (2) `auto` implies paint containment, which clips the salience badge
+     *  and edit handles that render outside the element box. Here WE decide what's
+     *  on-screen from the canvas-space rect: visible elements get NO containment
+     *  (handles/badges paint freely, always rendered), off-screen ones get
+     *  `content-visibility:hidden` (skipped, keeping the iOS compositing relief —
+     *  and unlike display:none it preserves iframe/editor state). */
+    updateCulling() {
+        if (!this.cullEnabled) return;
+        const s = this.viewState.scale || 1;
+        const W = this.canvas.clientWidth / s;
+        const H = this.canvas.clientHeight / s;
+        const vx = -this.viewState.translateX / s;
+        const vy = -this.viewState.translateY / s;
+        // One screen of slack on every side, so small pans don't thrash elements
+        // on/off at the edge (and it absorbs rotation's bbox growth).
+        const minX = vx - W, minY = vy - H, maxX = vx + 2 * W, maxY = vy + 2 * H;
+        for (const el of this.canvasState.elements) {
+            const node = this.elementNodesMap[el.id];
+            if (!node) continue;
+            if (el.static) { node.style.contentVisibility = 'visible'; continue; } // screen-pinned: always on
+            const sc = el.scale || 1;
+            const hw = ((el.width || 240) * sc) / 2, hh = ((el.height || 120) * sc) / 2;
+            const off = (el.x + hw < minX) || (el.x - hw > maxX) || (el.y + hh < minY) || (el.y - hh > maxY);
+            if (off) {
+                // contain-intrinsic-size lets the skipped box keep its footprint
+                // (left/top still anchor it) instead of collapsing to zero.
+                node.style.containIntrinsicSize = `${Math.round((el.width || 240) * sc)}px ${Math.round((el.height || 120) * sc)}px`;
+                node.style.contentVisibility = 'hidden';
+            } else {
+                node.style.contentVisibility = 'visible';
+            }
+        }
     }
 
     recenterOnElement(elId: string) {
@@ -562,6 +644,7 @@ class CanvasController {
         });
         this.updateGroupBox()
         this.requestEdgeUpdate();
+        this.scheduleCulling(); // new nodes need their on/off-screen state set
     }
 
     renderEdgesImmediately() {
@@ -573,35 +656,69 @@ class CanvasController {
             defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
             this.edgesLayer.prepend(defs);
         }
-        if (!defs.querySelector("#arrowhead")) {
-            const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
-            marker.setAttribute("id", "arrowhead");
-            marker.setAttribute("markerWidth", "10");
-            marker.setAttribute("markerHeight", "7");
-            marker.setAttribute("refX", "10");
-            marker.setAttribute("refY", "3.5");
-            marker.setAttribute("orient", "auto");
-            const arrowPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            arrowPath.setAttribute("d", "M0,0 L0,7 L10,3.5 Z");
-            arrowPath.setAttribute("fill", "#ccc");
-            marker.appendChild(arrowPath);
-            defs.appendChild(marker);
-        }
+        // Arrowheads inherit the edge's colour. SVG2 `context-stroke` is unreliable
+        // on older iOS Safari, so mint one marker per distinct colour on demand.
+        const arrowMarker = (color: string): string => {
+            const c = color || "#ccc";
+            const id = "arrowhead-" + c.replace(/[^a-zA-Z0-9]/g, "") || "arrowhead-def";
+            if (!defs!.querySelector("#" + id)) {
+                const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+                marker.setAttribute("id", id);
+                marker.setAttribute("markerWidth", "10");
+                marker.setAttribute("markerHeight", "7");
+                marker.setAttribute("refX", "10");
+                marker.setAttribute("refY", "3.5");
+                marker.setAttribute("orient", "auto");
+                const arrowPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                arrowPath.setAttribute("d", "M0,0 L0,7 L10,3.5 Z");
+                arrowPath.setAttribute("fill", c);
+                marker.appendChild(arrowPath);
+                defs!.appendChild(marker);
+            }
+            return id;
+        };
+        const edgeColor = (edge: Edge): string =>
+            this.selectedEdgeIds?.has(edge.id) ? "#2f6f4f" : (edge.style?.color || "#ccc");
 
         // Iterate over each edge in the canvas state.
+        this.edgeHitNodesMap = this.edgeHitNodesMap || {};
         this.canvasState.edges.forEach(edge => {
             let line = this.edgeNodesMap[edge.id];
             if (!line) {
-                // console.log("line node does not exists", edge, line)
+                // A wide TRANSPARENT hit line under the visible one, so edges are
+                // tappable (ADR-0016) — a 2px stroke is unhittable on touch. Both
+                // carry data-id; the inspector reads it. The hit line goes first
+                // (below), the visible line on top.
+                const hit = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                hit.setAttribute("stroke", "transparent");
+                hit.setAttribute("stroke-width", "16");
+                hit.setAttribute("data-id", edge.id);
+                hit.setAttribute("class", "edge-hit");
+                // #edges-layer is pointer-events:none (only its <text> opts back in),
+                // so the lines must re-enable hit-testing themselves or edges are
+                // untappable. `stroke` = hittable along the (transparent) stroke band.
+                hit.setAttribute("pointer-events", "stroke");
+                (hit as unknown as SVGElement & { style: CSSStyleDeclaration }).style.cursor = "pointer";
+                this.edgeHitNodesMap[edge.id] = hit;
+                this.edgesLayer.appendChild(hit);
+
                 line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                line.setAttribute("stroke", edge.style?.color || "#ccc");
+                line.setAttribute("stroke", edgeColor(edge));
                 line.setAttribute("stroke-width", edge.style?.thickness || "2");
-                // Set arrow marker at the target end.
-                line.setAttribute("marker-end", "url(#arrowhead)");
+                line.setAttribute("marker-end", `url(#${arrowMarker(edgeColor(edge))})`);
+                line.setAttribute("data-id", edge.id);
+                line.setAttribute("class", "edge-line");
+                line.setAttribute("pointer-events", "none"); // the wide hit line below is the target
                 this.edgeNodesMap[edge.id] = line;
                 this.edgesLayer.appendChild(line);
             } else {
-                // console.log("line node exists", edge, line)
+                // Reflect live style edits (color/width) from the inspector — keep
+                // the arrowhead colour in sync with the stroke.
+                const color = edgeColor(edge);
+                line.setAttribute("stroke", color);
+                line.setAttribute("stroke-width", this.selectedEdgeIds?.has(edge.id) ? "3.5" : (edge.style?.thickness || "2"));
+                line.setAttribute("marker-end", `url(#${arrowMarker(color)})`);
+                if (edge.style?.dash) line.setAttribute("stroke-dasharray", String(edge.style.dash)); else line.removeAttribute("stroke-dasharray");
             }
 
             this.updateEdgePosition(edge, line)
@@ -610,9 +727,10 @@ class CanvasController {
         // Remove any orphaned SVG lines.
         Object.keys(this.edgeNodesMap).forEach(edgeId => {
             if (!this.canvasState.edges.find(e => e.id === edgeId)) {
-                console.log(`[DEBUG] Deleting orphaned edge node`, edgeId, this.edgeNodesMap[edgeId])
                 this.edgeNodesMap[edgeId].remove();
                 delete this.edgeNodesMap[edgeId];
+                this.edgeHitNodesMap?.[edgeId]?.remove();
+                if (this.edgeHitNodesMap) delete this.edgeHitNodesMap[edgeId];
             }
         });
         // Remove orphaned labels.
@@ -658,10 +776,22 @@ class CanvasController {
             line.setAttribute("x2", String(targetPoint.x));
             line.setAttribute("y2", String(targetPoint.y));
             line.setAttribute("stroke-dasharray", edge.data?.meta ? "5,5" : edge.style?.dash || "");
+            // Keep the invisible hit line aligned with the visible one.
+            const hit = this.edgeHitNodesMap?.[edge.id];
+            if (hit) {
+                hit.setAttribute("x1", String(sourcePoint.x));
+                hit.setAttribute("y1", String(sourcePoint.y));
+                hit.setAttribute("x2", String(targetPoint.x));
+                hit.setAttribute("y2", String(targetPoint.y));
+            }
 
-            // Handle edge label:
-            // Use a default label if none is present.
-            const labelText = edge.label ? edge.label : "Edge";
+            // Edge caption (ADR-0016): show the display label if set, else fall
+            // back to the semantic relation — but never the generic 'relates' or a
+            // literal "Edge" placeholder, which is just noise on the canvas.
+            const lbl = typeof edge.label === 'string' ? edge.label.trim() : '';
+            const rel = typeof edge.rel === 'string' ? edge.rel.trim() : '';
+            const pick = lbl || rel;
+            const labelText = pick && pick !== 'relates' ? pick : '';
             if (!this.edgeLabelNodesMap) this.edgeLabelNodesMap = {};
             let textEl = this.edgeLabelNodesMap[edge.id];
             if (!textEl) {
@@ -767,6 +897,14 @@ class CanvasController {
         // defer execution
         await new Promise(r => requestAnimationFrame(r));
         const scriptElements = Array.from(node.querySelectorAll('script')) as HTMLScriptElement[];
+        if (!scriptElements.length) return;
+        // Which fact's content is running, so a script error names its element
+        // (these are user content — often legacy scripts referencing a global
+        // `controller` that no longer exists; expected + non-fatal). A module/src
+        // script executes globally and its error escapes to window.onerror, where
+        // the shell reads this to attribute it.
+        const elKey = (el && (el._factKey || el.id)) || '(unknown element)';
+        (window as any).__canvasScriptEl = elKey;
 
         const loadScript = (script: HTMLScriptElement) => {
             return new Promise((resolve, reject) => {
@@ -787,16 +925,36 @@ ${script.getAttribute('src')}`);
                 scriptElement.textContent.trim()) {
 
                 try {
-                    const fn = new Function('element', 'controller', 'node',
+                    // Scope the element's schedulers to its lifetime. A legacy
+                    // widget (e.g. the custom minimap) runs an UNGUARDED
+                    // `requestAnimationFrame(draw)` loop with no isConnected check,
+                    // so every re-mount leaks another immortal 60fps board-redraw
+                    // on a detached node. Shadow rAF/timers with guarded versions
+                    // that stop the moment the element is removed or re-rendered.
+                    const alive = (): boolean => (node as HTMLElement).isConnected;
+                    const gRaf = (cb: FrameRequestCallback): number =>
+                        requestAnimationFrame((t) => { if (alive()) cb(t); });
+                    const gTimeout = (cb: () => void, ms?: number): number =>
+                        window.setTimeout(() => { if (alive()) cb(); }, ms);
+                    const gInterval = (cb: () => void, ms?: number): number => {
+                        const id = window.setInterval(() => { if (alive()) cb(); else clearInterval(id); }, ms);
+                        return id as unknown as number;
+                    };
+                    const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval',
                         scriptElement.textContent || '');
-                    fn(el, this, node);
+                    fn(el, this, node, gRaf, gTimeout, gInterval);
                 } catch (err: any) {
-                    console.warn('Inline script error', err);
-                    this._showElementError(node.closest('.canvas-element') as HTMLElement, err.message);
+                    // Non-fatal: badge the element + log WHICH element, no global banner.
+                    console.warn('[canvas] element script error', { element: elKey, error: err.message });
+                    this._showElementError(node.closest('.canvas-element') as HTMLElement, `script: ${err.message}`);
                 }
 
             } else {
-                await loadScript(scriptElement);
+                try {
+                    await loadScript(scriptElement);
+                } catch (err: any) {
+                    console.warn('[canvas] element script load failed', { element: elKey, error: err && err.message });
+                }
             }
         }
     }
@@ -1087,7 +1245,7 @@ ${script.getAttribute('src')}`);
         const childController = new CanvasController(canvasState);
         updateCanvasController(childController);
         childController.recenterOnElement(el.id);
-        window.history.pushState({}, "", "?canvas=" + el.refCanvasId);
+        window.history.pushState({}, "", canvasPath(el.refCanvasId));
     }
 
     async handleDrillUp(ev: Event) {
@@ -1106,7 +1264,7 @@ ${script.getAttribute('src')}`);
         if (this.canvasState.parentElement) {
             controller.recenterOnElement(this.canvasState.parentElement)
         }
-        window.history.pushState({}, "", "?canvas=" + canvasId);
+        window.history.pushState({}, "", canvasPath(canvasId));
     };
 
     buildHandles(node: HTMLElement, _el: CanvasElement) {
@@ -1275,10 +1433,24 @@ ${script.getAttribute('src')}`);
         if (!el && this.selectedElementId) el = this.findElementById(this.selectedElementId);
         if (!el) return;                              // nothing to edit
 
+        // The editor is the full detent of the unified sheet (Phase 2): host it in
+        // cmd-context rather than a centered overlay, then restore on close.
+        const host = enterFull();
+        // A guaranteed-working close in the sheet header (independent of the
+        // modal's own buttons, which can be off-screen on small viewports).
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+        hdr.innerHTML = '<strong style="font-family:Georgia,serif;flex:1">Edit</strong>';
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕ Close';
+        closeBtn.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+        closeBtn.addEventListener('click', () => closeModal());
+        hdr.appendChild(closeBtn);
+        host.appendChild(hdr);
         try {
             console.log("[openEditModa] launch", el);
-            // Launch the self-contained modal and wait for the user to finish
             const { status, el: updated } = await showModal(el, {
+                host,
                 /* Callback the modal can use for the “Generate” button */
                 generateContent: (seed) => generateContent(seed, el, this)
             });
@@ -1294,6 +1466,10 @@ ${script.getAttribute('src')}`);
             }
         } catch (err) {
             console.error('[openEditModal] modal error:', err);
+        } finally {
+            exitFull();
+            // Re-render the selection strip behind the closed editor.
+            try { window.dispatchEvent(new CustomEvent('parc:editor-closed')); } catch { /* non-DOM */ }
         }
     }
 }
@@ -1303,11 +1479,11 @@ function updateCanvasController(controller: CanvasController) {
     activeCanvasController = window.CC = controller
 }
 
-(async function main() {
-    // SSR first paint: the server pre-rendered the board for an instant, real
-    // first frame. Clear those nodes before the interactive controller renders
-    // so it doesn't duplicate them — the swap to the live board is seamless
-    // (identical content). (Static embeds keep the SSR DOM; they load no app.)
+/** Clear the server-rendered board so the interactive controller (which appends
+ *  without clearing — see renderElementsImmediately) doesn't paint a duplicate.
+ *  Done only once the live state is in hand, so the SSR paint persists right up
+ *  to the swap (no blank flash) and a failed load leaves the SSR board visible. */
+function clearSsrPaint() {
     const ssrC = document.getElementById('canvas-container');
     if (ssrC && ssrC.dataset.ssr) {
         ssrC.innerHTML = '';
@@ -1315,15 +1491,136 @@ function updateCanvasController(controller: CanvasController) {
         if (ssrS) ssrS.innerHTML = '';
         delete ssrC.dataset.ssr;
     }
+}
+
+/** Construct the live board from the SSR-embedded state (`#canvas-hydrate`) so it's
+ *  interactive immediately, then run the full load in the background and reconcile.
+ *  Returns true if it hydrated (caller should stop), false to fall back to the
+ *  normal load path. Built-in element types render at once; custom renderers,
+ *  edges, unplaced elements and any changes since SSR arrive with the refresh. */
+async function tryHydrate(canvasId: string, token: string | null, t0: number): Promise<boolean> {
+    try {
+        const node = document.getElementById('canvas-hydrate');
+        if (!node?.textContent) return false;
+        const h = JSON.parse(node.textContent) as { canvasId?: string; cam?: { scale: number; translateX: number; translateY: number }; frame?: BBox; elements?: any[] };
+        if (h.canvasId !== canvasId || !Array.isArray(h.elements) || !h.elements.length) return false;
+
+        registerSubstrateTypes(); // built-in element renderers (text/markdown/html/img/…)
+        clearSsrPaint();
+        const cc = new CanvasController({ canvasId, elements: h.elements, edges: [], versionHistory: [] } as any);
+        // Prefer the framed REGION over the server's pre-baked camera: the SSR cam
+        // was fit to a fixed 1200×800, so re-fitting the bbox to the real device
+        // viewport here (instant, no network) is what makes the first interactive
+        // paint land exactly on the frame instead of jumping after the full load.
+        if (h.frame && typeof h.frame.minX === 'number') {
+            const cam = fitRegion(h.frame, window.innerWidth, window.innerHeight);
+            cc.viewState.scale = cam.scale;
+            cc.viewState.translateX = cam.tx;
+            cc.viewState.translateY = cam.ty;
+            cc.updateCanvasTransform();
+        } else if (h.cam && typeof h.cam.scale === 'number') {
+            cc.viewState.scale = h.cam.scale;
+            cc.viewState.translateX = h.cam.translateX;
+            cc.viewState.translateY = h.cam.translateY;
+            cc.updateCanvasTransform();
+        }
+        updateCanvasController(cc);
+        installFrameNav();
+        installFrameOverlay();
+        installEdgeInspector();
+        installSelectionInspector();
+        markBooted();
+        const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+        console.info('[canvas] hydrated from SSR', { elements: h.elements.length, ms });
+
+        // Background refresh: the authoritative full load (auth, renderer facts,
+        // links/edges, unplaced elements, salience, live-sync), then reconcile the
+        // controller's state in place. The render reconciler (elementNodesMap)
+        // adds/updates/removes diffs without a flash.
+        void loadInitialCanvas({ canvasId, elements: [], edges: [], versionHistory: [] }, token)
+            .then((full) => {
+                cc.canvasState.elements = full.elements ?? cc.canvasState.elements;
+                cc.canvasState.edges = full.edges ?? [];
+                cc.requestRender();
+                cc.requestEdgeUpdate();
+                console.info('[canvas] background refresh reconciled', { elements: cc.canvasState.elements.length, edges: cc.canvasState.edges.length });
+            })
+            .catch((e) => console.warn('[canvas] background refresh failed (hydrated board stays live)', e));
+        return true;
+    } catch (e) {
+        console.warn('[canvas] hydration failed — falling back to normal load', e);
+        return false;
+    }
+}
+
+/** Reveal the board: fade out the boot splash and remove it. Idempotent — called
+ *  from every terminal boot path (hydrate, full load, and the failure path, so a
+ *  boot error surfaces the banner instead of an eternal spinner). */
+function markBooted(): void {
+    try {
+        document.body.classList.add('booted');
+        setTimeout(() => document.getElementById('boot-splash')?.remove(), 320);
+    } catch { /* pre-DOM */ }
+}
+
+(async function main() {
     const params = new URLSearchParams(window.location.search);
-    const canvasId = params.get("canvas") || "canvas-002";
+    // The board lives in the PATH now (/@c15r/canvas/<board>); ?canvas= is a
+    // legacy fallback the server 301s to the path form. Path-based means it
+    // survives the sign-in redirect (kernel redirect_uri = origin + pathname).
+    const canvasId = boardFromPath() || params.get("canvas") || "canvas-002";
     const token = params.get("token");
-    let rootCanvasState = {
+    // Off-screen culling is ON by default — it measurably cut the iOS compositing
+    // crash on big boards. The flag lives on `body.cull`; the culling is now
+    // transform-aware JS (CanvasController.updateCulling), not blanket CSS
+    // content-visibility. Escape with ?cull=0 / ?nocull=1.
+    if (params.get('cull') !== '0' && params.get('nocull') !== '1') document.body.classList.add('cull');
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // Boot narration (visible under ?debug=1). The previous boot logged nothing,
+    // so a board that loaded then vanished gave no clue where it went.
+    console.info('[canvas] boot', { canvasId, ssr: !!document.getElementById('canvas-container')?.dataset.ssr });
+
+    // SSR hydration fast-path (default ON; escape with ?hydrate=0): the server
+    // already read + painted this board, so consume its embedded JSON to go
+    // INTERACTIVE in ~50ms instead of the multi-second API re-fetch, then refresh
+    // from the substrate in the background (edges, unplaced elements, custom
+    // renderers, freshness) and reconcile. tryHydrate no-ops when there's no
+    // payload (a non-SSR load), so this is safe to attempt unconditionally; any
+    // failure falls through to the normal load — no regression.
+    if (params.get('hydrate') !== '0' && await tryHydrate(canvasId, token, t0)) return;
+
+    let rootCanvasState: { canvasId: string; elements: any[]; edges: any[]; versionHistory: any[] } = {
         canvasId: canvasId,
         elements: [],
         edges: [],
         versionHistory: []
     };
-    rootCanvasState = await loadInitialCanvas(rootCanvasState, token);
-    updateCanvasController(new CanvasController(rootCanvasState));
+    try {
+        // Load FIRST (the SSR board stays painted meanwhile), THEN swap to the
+        // live board in a single tick. Reversing the old order — which cleared
+        // the SSR DOM *before* a multi-second load — removes the blank window and
+        // means a load failure no longer wipes the canvas to nothing.
+        rootCanvasState = await loadInitialCanvas(rootCanvasState, token);
+        const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+        console.info('[canvas] loaded', { canvasId, elements: rootCanvasState.elements.length, edges: rootCanvasState.edges.length, ms });
+        clearSsrPaint();
+        updateCanvasController(new CanvasController(rootCanvasState));
+        installFrameNav();
+        installFrameOverlay();
+        installEdgeInspector();
+        installSelectionInspector();
+        markBooted();
+        if (!rootCanvasState.elements.length) {
+            // A genuinely empty board and a load that fell back to empty look
+            // identical on screen — say which, so the next debugger knows.
+            console.warn(`[canvas] board "${canvasId}" rendered with 0 elements (empty board, or a load fallback — check for a prior [canvas] load-failed line)`);
+        }
+    } catch (err) {
+        // A boot failure must be VISIBLE, not a silent blank. Keep the SSR paint
+        // (don't clear) and surface the reason on the err-banner.
+        console.error('[canvas] boot failed', err);
+        const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
+        if (typeof report === 'function') report('canvas failed to boot: ' + ((err as Error)?.message ?? err));
+        markBooted(); // drop the spinner so the error banner is visible, not hidden behind it
+    }
 })();

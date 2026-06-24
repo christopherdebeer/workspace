@@ -21,6 +21,7 @@ import { elementRegistry } from '../elements/elementRegistry.ts';
 import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
+import { regionBBox, fitRegion, type Region, type Placed, type BBox } from '../../../shared/frame.ts';
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 const DEBOUNCE_SAVE_DELAY = 800;
@@ -41,12 +42,11 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 /** Read-time salience per fact key, for the presentation channel. */
 export const salienceByKey = new Map<string, number>();
 
-const FACT_ICONS: Record<string, string> = {
-  cell: '🔋', doc: '📄', capture: '📥', audit: '🔎', 'type-decl': '🏷️', view: '📊', action: '⚡', log: '🗓️',
-};
-
-/** `_types/<type>` declarations, loaded once per board (kernel-cached). */
-let factTypeDecls: Record<string, { icon?: string }> = {};
+/** The type vocabulary (`$types`), loaded once per board (kernel-cached). Carries
+ *  the gateway-resolved Present facet (ADR-0012) — `present.icon` is the canonical
+ *  type glyph, served from the type declaration, so a new type ships its icon as
+ *  data (no canvas recompile). The legacy flat `icon` is the fallback. */
+let factTypeDecls: Record<string, { icon?: string; present?: { icon?: string } }> = {};
 
 /** A fact with no renderable type becomes a 'fact' CARD — presentation only
  *  (_fact* transients + a type the persister strips), value untouched.
@@ -66,7 +66,8 @@ function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[]
   const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
   el._factTitle = titleOf(entry);
   el._factHref = hrefOf(entry);
-  el._factIcon = factTypeDecls[metaType ?? '']?.icon ?? FACT_ICONS[metaType ?? ''] ?? '•';
+  const td = factTypeDecls[metaType ?? ''];
+  el._factIcon = td?.present?.icon ?? td?.icon ?? '•';
   el._factMeta = [metaType ?? 'fact', entry.key].join(' · ');
   if (typeof el.items === 'number') el._factMeta += ` · ${el.items} item${el.items === 1 ? '' : 's'}`;
   if (el.width === 240 && el.height === 120) { el.width = 270; el.height = 92; }
@@ -186,12 +187,24 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
 
 const linkedEdges = new Set<string>();
 
+/** The substrate relation (TYPE) of an edge: explicit `rel`, else the legacy
+ *  `label` (back-compat for edges authored before the split), else 'relates'.
+ *  Editing the display `label` no longer rewrites the rel (ADR-0016). `|` is the
+ *  reserved edge-id separator, so it's swapped out. */
+function edgeRel(edge: { rel?: unknown; label?: unknown }): string {
+  const r =
+    typeof edge.rel === 'string' && edge.rel.trim() ? edge.rel
+    : typeof edge.label === 'string' && edge.label.trim() ? edge.label
+    : 'relates';
+  return r.replace(/\|/g, '/');
+}
+
 export function queueEdgeWrite(canvasId: string, edge: Record<string, unknown>): void {
   if (!edge || typeof edge.id !== 'string' || readonlyBoard) return;
   if ((edge.data as Record<string, unknown> | undefined)?.meta) return; // meta edges are editor ephemera
   const src = edge.source as string | undefined;
   const tgt = edge.target as string | undefined;
-  const rel = (typeof edge.label === 'string' && edge.label.trim() ? edge.label : 'relates').replace(/\|/g, '/');
+  const rel = edgeRel(edge);
   // Link-derived edges need no decoration fact unless they carry style/label edits.
   if (!(edge.id as string).startsWith('lnk:')) {
     queueFact(`_canvas/${canvasId}/edge:${edge.id}`, edge);
@@ -299,38 +312,169 @@ interface ViewRenderHint {
 
 let readonlyBoard = false;
 
-/** Pin the camera once the controller exists (a *named* viewpoint, not device state). */
+/** Pin the camera once the controller exists (a *named* viewpoint, not device state).
+ *  The `'fit'` case routes through the shared `fitRegion` resolver (ADR-0015) so SSR,
+ *  the client, and embeds all frame a region identically. */
+let vpTimer: ReturnType<typeof setTimeout> | null = null;
 function applyViewport(
   vp: { x: number; y: number; scale: number } | 'fit',
   bbox: { minX: number; minY: number; maxX: number; maxY: number } | null,
 ): void {
+  // Cancel any pending apply — rapid frame navigation used to queue several
+  // delayed sets that replayed in sequence (wrong viewport "until it snaps").
+  if (vpTimer) { clearTimeout(vpTimer); vpTimer = null; }
   const started = Date.now();
   const tick = (): void => {
     const cc = (window as { CC?: any }).CC;
     if (!cc) {
-      if (Date.now() - started < 10000) setTimeout(tick, 120);
+      vpTimer = Date.now() - started < 10000 ? setTimeout(tick, 120) : null;
       return;
     }
-    let scale: number, cx: number, cy: number;
+    vpTimer = null;
     if (vp === 'fit') {
       if (!bbox) return;
-      const bw = Math.max(bbox.maxX - bbox.minX, 200);
-      const bh = Math.max(bbox.maxY - bbox.minY, 200);
-      scale = Math.min((window.innerWidth * 0.85) / bw, (window.innerHeight * 0.85) / bh, 2);
-      cx = (bbox.minX + bbox.maxX) / 2;
-      cy = (bbox.minY + bbox.maxY) / 2;
+      const cam = fitRegion(bbox, window.innerWidth, window.innerHeight);
+      cc.viewState.scale = cam.scale;
+      cc.viewState.translateX = cam.tx;
+      cc.viewState.translateY = cam.ty;
     } else {
-      scale = vp.scale ?? 1;
-      cx = vp.x;
-      cy = vp.y;
+      cc.viewState.scale = vp.scale ?? 1;
+      cc.viewState.translateX = window.innerWidth / 2 - (vp.scale ?? 1) * vp.x;
+      cc.viewState.translateY = window.innerHeight / 2 - (vp.scale ?? 1) * vp.y;
     }
-    cc.viewState.scale = scale;
-    cc.viewState.translateX = window.innerWidth / 2 - scale * cx;
-    cc.viewState.translateY = window.innerHeight / 2 - scale * cy;
     cc.updateCanvasTransform();
     cc.requestRender();
   };
-  setTimeout(tick, 150);
+  // Apply immediately — the frame fact + elements are already resolved by the
+  // time we get here, so the old 150ms delay just left the wrong viewport on
+  // screen before it snapped. tick() self-reschedules only if CC isn't up yet.
+  tick();
+}
+
+/** Reduce the assembled board elements to the `Placed` shape the frame resolver
+ *  needs (centre x,y + extents + type/tags for query regions). */
+export function placedOf(elements: any[]): Placed[] {
+  return elements.map((e) => ({
+    key: e._factKey ?? `el:${e.id}`,
+    type: factMeta.get(e._factKey ?? `el:${e.id}`)?.type ?? undefined,
+    tags: factMeta.get(e._factKey ?? `el:${e.id}`)?.tags ?? undefined,
+    x: e.x, y: e.y, width: e.width ?? 240, height: e.height ?? 120, scale: e.scale,
+  }));
+}
+
+/** Focus the camera on a frame fact (`frame:<id>`): resolve its region to a bbox
+ *  over the live elements, then fit. Returns true if it focused. (ADR-0015.) */
+export async function focusFrame(frameId: string, elements: any[]): Promise<boolean> {
+  try {
+    const entry = await read<{ value?: { region?: Region } } | null>('workspace.peek', { key: `frame:${frameId}` });
+    const region = entry?.value?.region;
+    if (!region) return false;
+    const bbox: BBox | null = regionBBox(region, placedOf(elements));
+    if (!bbox) { console.warn('[canvas] frame', frameId, 'resolved no region (empty) — fit-all'); return false; }
+    applyViewport('fit', bbox);
+    console.info('[canvas] focused frame', { frameId, region: region.kind });
+    return true;
+  } catch (e) {
+    console.warn('[canvas] focusFrame failed', frameId, e);
+    return false;
+  }
+}
+
+/* ── substrate search → add to board (item = fact × renderer × placement) ──── */
+
+export interface FactHit { key: string; title: string; icon: string; type: string | null }
+
+// The board's own machinery + ephemera — never offer these as "add to canvas".
+const RESERVED_FACT = /^(_canvas\/|_views\/|_actions\/|_subscriptions\/|_groups\/|bkpk:|tending\/|machine-run\/|run\/)/;
+
+/** Search the slice for facts NOT already on this board, for the command palette
+ *  (substring `contains` scan, salience-ranked). Excludes reserved/system keys
+ *  and items already present. */
+export async function searchFacts(q: string, controller: any, limit = 8): Promise<FactHit[]> {
+  const query = q.trim();
+  if (query.length < 2) return [];
+  const onBoard = new Set<string>(
+    (controller?.canvasState?.elements ?? []).map((el: any) => el._factKey ?? `el:${el.id}`),
+  );
+  let entries: QueryEntry[] = [];
+  try {
+    const r = await read<{ entries?: QueryEntry[] }>('workspace.query', { contains: query, limit: limit + 16 });
+    entries = r.entries ?? [];
+  } catch (e) { console.warn('[canvas] fact search failed', e); return []; }
+  const hits: FactHit[] = [];
+  for (const e of entries) {
+    const key = e.key;
+    if (!key || onBoard.has(key) || RESERVED_FACT.test(key) || key.startsWith('_canvas/')) continue;
+    const type = e._meta?.type ?? null;
+    const td = factTypeDecls[type ?? ''];
+    let title = key;
+    try { title = titleOf({ key, value: e.value, _meta: e._meta }) || key; } catch { /* fall back to key */ }
+    hits.push({ key, title, type, icon: td?.present?.icon ?? td?.icon ?? '•' });
+    if (hits.length >= limit) break;
+  }
+  return hits;
+}
+
+/** Add an existing substrate fact to THIS board: membership tag (clobber-safe —
+ *  the fact's value + type are preserved, we only add `canvas:<cid>`), a pinned
+ *  placement at the viewport centre, and an in-memory fact card so it appears at
+ *  once (no reload). */
+export async function addFactToCanvas(controller: any, key: string): Promise<void> {
+  const cid = controller?.canvasState?.canvasId;
+  if (!cid || !key) return;
+  const present = controller.canvasState.elements.find((el: any) => (el._factKey ?? `el:${el.id}`) === key);
+  if (present) { controller.recenterOnElement?.(present.id); return; } // already here — just go to it
+
+  let value: Record<string, unknown> = {}, type: string | null = null, tags: string[] = [];
+  try {
+    const entry = await read<{ value?: any; _meta?: { type?: string | null; tags?: string[] } } | null>('workspace.peek', { key });
+    value = (entry?.value ?? {}) as Record<string, unknown>;
+    type = entry?._meta?.type ?? null;
+    tags = entry?._meta?.tags ?? [];
+  } catch (e) { console.warn('[canvas] addFact peek failed', key, e); return; }
+
+  const newTags = Array.from(new Set([...tags, `canvas:${cid}`]));
+  const pt = controller.screenToCanvas(window.innerWidth / 2, window.innerHeight / 2);
+  const el: any = { width: 240, height: 120, rotation: 0, ...value, id: idOfKey(key), x: Math.round(pt.x), y: Math.round(pt.y) };
+  el._factKey = key;
+  // Pre-seed meta so the element-write path never stamps `canvas-element` over
+  // the fact's real type; decorate to the card/renderer it deserves.
+  factMeta.set(key, { type, tags: newTags });
+  decorateFactCard(el, { type, tags: newTags });
+  controller.canvasState.elements.push(el);
+  controller.requestRender();
+
+  // Persist: membership (clean value + preserved type + the canvas tag) and a
+  // pinned placement at the viewport centre. queueFact dedupes on value, so the
+  // value isn't rewritten — only the tag/placement land.
+  queueFact(key, value, { ...(type ? { type } : {}), tags: newTags });
+  queueFact(`_canvas/${cid}/${key}`, { x: el.x, y: el.y, width: el.width, height: el.height });
+  console.info('[canvas] added fact to board', { key, cid, type });
+}
+
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** A read with network timing + payload size, so a slow load shows WHICH call
+ *  cost what (the substrate round-trips, not the local assembly). Logged under
+ *  `[canvas] net` — visible with ?debug=1. */
+async function timedRead<T>(label: string, target: string, input: unknown): Promise<{ value: T; ms: number; bytes: number }> {
+  const t = nowMs();
+  const value = await read<T>(target, input);
+  const ms = Math.round(nowMs() - t);
+  let bytes = -1;
+  try { bytes = JSON.stringify(value).length; } catch { /* circular */ }
+  console.info(`[canvas] net ${label}`, { ms, kb: bytes >= 0 ? Math.round(bytes / 1024) : '?', target });
+  return { value, ms, bytes };
+}
+
+/** Surface a load-stage failure on the shell's err-banner. A caught error here
+ *  is otherwise invisible — the board just blanks with the reason hidden in a
+ *  `console.error` no one has open. Pairs with `?debug=1` (eruda) for the stack. */
+function reportLoadFailure(stage: string, cid: string, err: unknown): void {
+  const msg = `canvas "${cid}" load failed at [${stage}]: ${(err as Error)?.message ?? err}`;
+  console.error('[canvas] load-failed', msg, err);
+  const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
+  if (typeof report === 'function') report(msg);
 }
 
 export async function loadInitialCanvas(defaultState: any, _paramToken?: string | null): Promise<any> {
@@ -345,6 +489,9 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     readonlyBoard = true;
     return defaultState;
   }
+  // The board lives in the URL PATH (see lib/url.ts), and the kernel's OAuth
+  // redirect_uri is `origin + pathname`, so the board survives the sign-in
+  // round-trip natively — no crumb/restore dance needed.
   await ensureAuth();
 
   // The renderer ladder: built-in substrate types, then renderer FACTS —
@@ -355,7 +502,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   (window as any).__parcAct = act;
   (window as any).__parcRead = read;
   await loadRendererFacts();
-  factTypeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { icon?: string }>;
+  factTypeDecls = (await loadTypes().catch(() => ({}))) as Record<string, { icon?: string; present?: { icon?: string } }>;
   installImagePaste();
 
   // View-backed board: membership from the view's query; placements from its
@@ -385,15 +532,38 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
   const localKey = 'myCanvasData_' + cid;
   const localCopy = localStorage.getItem(localKey);
+  // Breadcrumb of the load phase, so a thrown error names *where* it died
+  // (read vs assembly vs layout) instead of blanking the board anonymously.
+  // `tRead`/`tAsm` time the network vs local-compute split — the substrate
+  // round-trips are the part we want to elide once SSR can hydrate the client.
+  const tStart = nowMs();
+  let stage = 'reads';
   try {
-    const els = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', membership);
-    const deco = await read<{ entries: QueryEntry[]; count: number }>('workspace.query', { prefix: `_canvas/${cid}/` });
-    let links: LinkEdge[] = [];
-    try {
-      links = (await read<{ edges: LinkEdge[] }>('workspace.links', {})).edges ?? [];
-    } catch (err) {
-      console.warn('[substrate] links unavailable; decoration edges only', err);
-    }
+    // The three reads are independent — fire them concurrently so the slow
+    // gateway queries (membership + placements were ~4s EACH, serial) overlap
+    // instead of summing. Links is optional: a failure degrades to decoration
+    // edges, it must not fail the whole load.
+    const [elsR, decoR, linksR] = await Promise.all([
+      timedRead<{ entries: QueryEntry[]; count: number }>('membership', 'workspace.query', membership),
+      timedRead<{ entries: QueryEntry[]; count: number }>('placements', 'workspace.query', { prefix: `_canvas/${cid}/` }),
+      timedRead<{ edges: LinkEdge[] }>('links', 'workspace.links', {}).catch((err) => {
+        console.warn('[substrate] links unavailable; decoration edges only', err);
+        return { value: { edges: [] as LinkEdge[] }, ms: 0, bytes: 0 };
+      }),
+    ]);
+    const els = elsR.value, deco = decoR.value;
+    const msMembers = elsR.ms, msPlace = decoR.ms, msLinks = linksR.ms;
+    const links: LinkEdge[] = linksR.value.edges ?? [];
+    stage = 'assemble';
+    const tAsm = nowMs();
+    console.info('[canvas] net total', {
+      canvasId: cid,
+      members: els.count ?? els.entries?.length ?? 0,
+      placements: deco.count ?? deco.entries?.length ?? 0,
+      links: links.length,
+      readMs: Math.round(tAsm - tStart),
+      breakdown: { membership: msMembers, placements: msPlace, links: msLinks },
+    });
 
     if ((els.count ?? 0) === 0 && (deco.count ?? 0) === 0 && localCopy && !viewId) {
       const seeded = JSON.parse(localCopy);
@@ -411,9 +581,13 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const sub = e.key.slice(prefix.length);
       if (sub.startsWith('edge:')) {
         const edge = e.value as Record<string, unknown>;
+        // Migration: a decoration authored before the rel/label split has only
+        // `label` (which WAS the rel). Seed `rel` from it once, so it keeps its
+        // relation while a future label edit can diverge without rewriting it.
+        if (edge && edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
         edges.push(edge);
         if (edge && typeof edge.id === 'string' && edge.source && edge.target) {
-          const rel = (typeof edge.label === 'string' && edge.label.trim() ? edge.label : 'relates').replace(/\|/g, '/');
+          const rel = edgeRel(edge);
           lastEdges.set(edge.id, { source: edge.source as string, target: edge.target as string, rel, decorated: true });
           linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
         }
@@ -427,14 +601,16 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
     // Edges are PROJECTED from substrate links among this board's elements;
     // decoration edges (style/label edits, edge-to-edge) merge by signature.
-    const decorated = new Set(edges.map((e) => `${e.source}|${(e.label && String(e.label).trim()) || 'relates'}|${e.target}`));
+    const decorated = new Set(edges.map((e) => `${e.source}|${edgeRel(e)}|${e.target}`));
     for (const l of links) {
       if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
       const source = idOfKey(l.from);
       const target = idOfKey(l.to);
       if (decorated.has(`${source}|${l.rel}|${target}`)) continue;
       const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-      edges.push({ id, source, target, label: l.rel });
+      // A bare reference: `rel` IS the type; `label` defaults to showing it (so
+      // display is unchanged) until a human gives it a distinct annotation.
+      edges.push({ id, source, target, rel: l.rel, label: l.rel });
       lastEdges.set(id, { source, target, rel: l.rel, decorated: false });
       linkedEdges.add(`${source}|${l.rel}|${target}`);
     }
@@ -510,6 +686,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       el._synthesized = true;
       synthOrigin.set(el.id, { x: el.x, y: el.y });
     };
+    stage = 'layout';
     const placedById = new Map(placed.map((p) => [p.id, p]));
     const linkedIds = new Set<string>();
     for (const e of lastEdges.values()) {
@@ -568,14 +745,40 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       trayIdx++;
     }
 
-    // Camera: pinned by the view declaration (or fit) — device free-roam wins otherwise.
-    if (viewport) {
-      const xs = elements.map((e: any) => e.x).filter((n: unknown) => typeof n === 'number');
-      const ys = elements.map((e: any) => e.y).filter((n: unknown) => typeof n === 'number');
-      const bbox = xs.length
-        ? { minX: Math.min(...xs) - 180, minY: Math.min(...ys) - 120, maxX: Math.max(...xs) + 180, maxY: Math.max(...ys) + 120 }
-        : null;
-      applyViewport(viewport, bbox);
+    // Camera: a view declaration pins it; an embed fits. For a bare board we fit
+    // to content whenever the device camera (saved pan/zoom, or the origin
+    // default) doesn't actually frame ANY element — otherwise the client reset to
+    // the origin and the elements (at their real coordinates) fell off-screen, so
+    // the SSR board "flashed" then went blank. A saved camera that DOES show
+    // content is respected (free-roam persists).
+    const xs = elements.map((e: any) => e.x).filter((n: unknown) => typeof n === 'number') as number[];
+    const ys = elements.map((e: any) => e.y).filter((n: unknown) => typeof n === 'number') as number[];
+    const bbox = xs.length
+      ? { minX: Math.min(...xs) - 180, minY: Math.min(...ys) - 120, maxX: Math.max(...xs) + 180, maxY: Math.max(...ys) + 120 }
+      : null;
+    // Precedence (ADR-0015): explicit ?frame ▸ device saved camera (if it frames
+    // content) ▸ fit-all. An explicit frame focus wins over everything.
+    const frameId = params.get('frame');
+    if (frameId) {
+      void focusFrame(frameId, elements);
+    } else {
+      let cam: ViewRenderHint['viewport'] | null = viewport;
+      if (!cam && !embed && bbox) {
+        let saved: { scale?: number; translateX?: number; translateY?: number } | null = null;
+        try { const s = localStorage.getItem('canvasViewState_' + cid); if (s) saved = JSON.parse(s); } catch { /* storage blocked */ }
+        const W = window.innerWidth, H = window.innerHeight;
+        const framesContent = !!saved && typeof saved.scale === 'number' && saved.scale > 0 && (() => {
+          const s = saved!.scale as number;
+          const vMinX = -(saved!.translateX ?? 0) / s, vMinY = -(saved!.translateY ?? 0) / s;
+          const vMaxX = vMinX + W / s, vMaxY = vMinY + H / s;
+          return vMaxX > bbox.minX && vMinX < bbox.maxX && vMaxY > bbox.minY && vMinY < bbox.maxY;
+        })();
+        if (!framesContent) {
+          cam = 'fit';
+          console.info('[canvas] camera does not frame content — fitting to board', { canvasId: cid, hadSavedView: !!saved });
+        }
+      }
+      if (cam) applyViewport(cam, bbox);
     }
 
     // An embed is a still picture: render once, start nothing. The background
@@ -594,11 +797,17 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const d = (ev as CustomEvent).detail as { key: string; id: string };
       if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
     });
+    console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length, assembleMs: Math.round(nowMs() - tAsm) });
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
-    console.error('[substrate] load failed — falling back to local copy', err);
+    // Make the swallowed failure visible (it was a silent console.error before),
+    // naming the stage. The fallback to a local copy / empty state stays, but a
+    // resulting blank board now has an on-screen reason instead of none.
+    reportLoadFailure(stage, cid, err);
     startSalience(cid);
-    return localCopy ? JSON.parse(localCopy) : defaultState;
+    const fallback = localCopy ? JSON.parse(localCopy) : defaultState;
+    console.warn(`[canvas] falling back to ${localCopy ? 'local cached copy' : 'EMPTY state'} after [${stage}] failure`);
+    return fallback;
   }
 }
 
@@ -706,19 +915,20 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
     const edge = e.value;
     lastWritten.set(e.key, JSON.stringify(e.value));
     if (!edge || typeof edge.id !== 'string') continue;
+    if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge); // migrate
     edges.push(edge);
-    const rel = ((edge.label && String(edge.label).trim()) || 'relates').replace(/\|/g, '/');
+    const rel = edgeRel(edge);
     lastEdges.set(edge.id, { source: edge.source, target: edge.target, rel, decorated: true });
     linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
   }
-  const decorated = new Set(edges.map((e: any) => `${e.source}|${(e.label && String(e.label).trim()) || 'relates'}|${e.target}`));
+  const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
   for (const l of links) {
     if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
     const s = idOfKey(l.from);
     const t = idOfKey(l.to);
     if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
     const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-    edges.push({ id, source: s, target: t, label: l.rel });
+    edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
     lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
     linkedEdges.add(`${s}|${l.rel}|${t}`);
   }
@@ -933,12 +1143,12 @@ function startFlightRecorder(): void {
     if (prev) {
       const p = JSON.parse(prev);
       if (!p.clean) {
-        const banner = document.getElementById('err-banner');
-        if (banner) {
-          banner.style.display = 'block';
-          banner.textContent = `previous session died uncleanly — last vitals: ${JSON.stringify(p)} (dismiss: tap)`;
-          banner.onclick = () => { banner.style.display = 'none'; };
-        }
+        // Route through the new copyable/persisted banner (window.__canvasReport)
+        // — the old code poked banner.textContent/onclick, which the restructured
+        // banner broke, so these crash vitals were no longer reaching anyone.
+        const report = (window as unknown as { __canvasReport?: (m: string) => void }).__canvasReport;
+        const msg = `💥 previous session died uncleanly — last vitals before the crash:\n${JSON.stringify(p, null, 2)}`;
+        if (typeof report === 'function') report(msg);
         console.warn('[flight] unclean exit, last vitals', p);
       }
     }
@@ -952,13 +1162,24 @@ function startFlightRecorder(): void {
         els: cc?.canvasState?.elements?.length ?? 0,
         edges: cc?.canvasState?.edges?.length ?? 0,
         dom: document.querySelectorAll('.canvas-element').length,
+        // `dom` only counts .canvas-element; allNodes catches detached/foreign
+        // growth (e.g. an element script that clones the board into itself).
+        allNodes: document.getElementsByTagName('*').length,
         svg: document.querySelectorAll('#edges-layer *').length,
+        // SMIL/CSS animations + media that keep the compositor busy on iOS.
+        anim: document.querySelectorAll('animate,animateTransform,animateMotion,[style*="animation"]').length,
         warm: warmRaf !== 0,
-        lw: lastWritten.size,
+        // Every module-level map — any monotonic climber here is a real leak.
+        maps: { lw: lastWritten.size, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size, pend: pending.size },
         heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : undefined,
         clean,
       }));
     } catch { /* storage unavailable */ }
+  };
+  // Live vitals on demand — watch what grows WHILE panning (heapMB/dom/svg/lw)
+  // instead of waiting for the crash: call window.__canvasVitals() in the console.
+  (window as unknown as { __canvasVitals?: () => unknown }).__canvasVitals = () => {
+    try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; }
   };
   setInterval(() => record(false), 1000);
   window.addEventListener('pagehide', () => record(true));
@@ -966,6 +1187,14 @@ function startFlightRecorder(): void {
 
 export function startLiveSync(cid: string): void {
   if (liveSyncStarted || typeof window === 'undefined') return;
+  // Diagnostic kill-switch: ?nosync=1 disables the change-feed poller so a crash
+  // can be bisected (is the live merge implicated, or purely local render?).
+  try {
+    if (new URLSearchParams(location.search).get('nosync') === '1') {
+      console.warn('[canvas] live-sync OFF (?nosync=1) — change-feed poller disabled');
+      return;
+    }
+  } catch { /* no URL */ }
   liveSyncStarted = true;
   const tick = async (): Promise<void> => {
     const cc = (window as { CC?: any }).CC;

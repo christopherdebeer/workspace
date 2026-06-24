@@ -125,14 +125,19 @@ function App(): React.JSX.Element {
   const afterAuth = useCallback(
     async (sessionId: string) => {
       if (deviceMode) {
-        setStep('busy');
-        const r = await postJson<{ approved?: boolean; error?: string }>('/auth/device/approve', {
-          sessionId,
-          user_code: p.user_code,
-        });
-        if (r.error) return fail(r.error);
-        setOkMsg('Device approved. Return to your terminal.');
-        setStep('done');
+        // Disclose the requested scopes BEFORE approving (informed consent —
+        // kb/device-flow-consent-disclosure). The device grant is all-or-nothing,
+        // so this is a read-only disclosure + an explicit Approve; denial is the
+        // safe default (the user must act to approve).
+        const info = await postJson<{ scopes?: string[]; catalog?: Record<string, ScopeMeta>; error?: string }>(
+          '/auth/device/info',
+          { sessionId, user_code: p.user_code },
+        );
+        if (info.error || !info.scopes) return fail(info.error ?? 'Could not load the device request');
+        setCatalog(info.catalog ?? {});
+        setGrantable(info.scopes);
+        (window as unknown as { __sessionId: string }).__sessionId = sessionId;
+        setStep('consent');
         return;
       }
       if (!oauthMode || !p.redirect_uri) return fail('Missing OAuth parameters');
@@ -209,6 +214,18 @@ function App(): React.JSX.Element {
     setStep('busy');
     try {
       const sessionId = (window as unknown as { __sessionId: string }).__sessionId;
+      // Device grant: approve the disclosed scopes (all-or-nothing). The scopes
+      // were shown on the consent step; clicking Approve is the explicit consent.
+      if (deviceMode) {
+        const r = await postJson<{ approved?: boolean; error?: string }>('/auth/device/approve', {
+          sessionId,
+          user_code: p.user_code,
+        });
+        if (r.error) throw new Error(r.error);
+        setOkMsg('Device approved. Return to your terminal.');
+        setStep('done');
+        return;
+      }
       const r = await postJson<{ redirect?: string; error?: string }>('/oauth/consent', {
         sessionId,
         clientId: p.client_id,
@@ -229,7 +246,7 @@ function App(): React.JSX.Element {
     } catch (e) {
       fail((e as Error).message);
     }
-  }, [p, selected, grantSecs, fail]);
+  }, [p, selected, grantSecs, deviceMode, fail]);
 
   const toggle = (scope: string, on: boolean) => {
     setSelected((prev) => {
@@ -276,8 +293,18 @@ function App(): React.JSX.Element {
         {step === 'consent' ? (
           <div style={{ display: 'grid', gap: '0.75rem', marginTop: '0.5rem' }}>
             <p style={{ color: theme.dim, fontSize: '0.85rem', margin: 0 }}>
-              Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
-              <strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:
+              {deviceMode ? (
+                <>
+                  Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
+                  This device is requesting the access below.{' '}
+                  <strong style={{ color: theme.text }}>Only approve if you started this sign-in.</strong>
+                </>
+              ) : (
+                <>
+                  Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
+                  <strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:
+                </>
+              )}
             </p>
             <div style={{ display: 'grid', gap: '0.9rem' }}>
               {VERB_GROUPS.map((g) => {
@@ -289,19 +316,33 @@ function App(): React.JSX.Element {
                       <strong style={{ fontFamily: theme.serif, fontSize: '0.95rem' }}>{g.heading}</strong>
                       <span style={{ color: theme.dim, fontSize: '0.75rem' }}>{g.note}</span>
                     </div>
-                    {inGroup.map((s) => (
-                      <Checkbox
-                        key={s}
-                        checked={selected.has(s)}
-                        onChange={(on) => toggle(s, on)}
-                        label={catalog[s]?.title ?? s}
-                        hint={catalog[s]?.description || s}
-                      />
-                    ))}
+                    {inGroup.map((s) =>
+                      deviceMode ? (
+                        // Device grant is all-or-nothing: disclose, don't pick.
+                        <div key={s} style={{ display: 'grid', gap: '0.1rem' }}>
+                          <span style={{ fontSize: '0.9rem', color: theme.text }}>• {catalog[s]?.title ?? s}</span>
+                          {catalog[s]?.description ? (
+                            <span style={{ color: theme.dim, fontSize: '0.75rem', paddingLeft: '0.9rem' }}>
+                              {catalog[s]?.description}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <Checkbox
+                          key={s}
+                          checked={selected.has(s)}
+                          onChange={(on) => toggle(s, on)}
+                          label={catalog[s]?.title ?? s}
+                          hint={catalog[s]?.description || s}
+                        />
+                      ),
+                    )}
                   </div>
                 );
               })}
-              {grantable.length === 0 ? <Badge tone="dim">No grantable scopes</Badge> : null}
+              {grantable.length === 0 ? (
+                <Badge tone="dim">{deviceMode ? 'This device requested no scopes' : 'No grantable scopes'}</Badge>
+              ) : null}
             </div>
             {maxGrantSecs > 0 ? (
               <label style={{ display: 'grid', gap: '0.3rem' }}>
@@ -328,8 +369,8 @@ function App(): React.JSX.Element {
                 </select>
               </label>
             ) : null}
-            <Button onClick={submitConsent} disabled={selected.size === 0}>
-              Authorize{selected.size ? ` (${selected.size})` : ''}
+            <Button onClick={submitConsent} disabled={!deviceMode && selected.size === 0}>
+              {deviceMode ? 'Approve device access' : `Authorize${selected.size ? ` (${selected.size})` : ''}`}
             </Button>
           </div>
         ) : null}

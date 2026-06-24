@@ -16,7 +16,8 @@
  * a bounded fixpoint. tier-1 stays generic; the machine concept stays tier-2.
  */
 import { evaluate as celEvaluate, parse as celParse } from '@marcbachmann/cel-js';
-import type { Identity, ObservedState, Entry } from '../../platform/runtime';
+import type { Identity, ObservedState } from '../../platform/runtime';
+import { createDeclarationRegistry, matchesSelector, type DeclarationKind } from '../../platform/runtime';
 
 /** Reserved key prefix where a slice's reaction subscriptions live. */
 export const SUBSCRIPTIONS_PREFIX = '_subscriptions/';
@@ -83,6 +84,30 @@ function resolveOne(token: string, key: string, keySuffix: string, scope: string
   return cur;
 }
 
+const EXACT_PLACEHOLDER = /^\$\{(key|keySuffix|scope|value(?:\.[A-Za-z0-9_]+)*)\}$/;
+
+/** Substitute `${…}` templates in any param value — recursing into objects and
+ *  arrays so NESTED string leaves template too (e.g. an `onError.key`). A string
+ *  that is exactly one placeholder keeps the resolved JSON type; non-strings
+ *  (number/boolean/null) pass through unchanged. */
+function substituteValue(tpl: unknown, key: string, keySuffix: string, scope: string, value: unknown): unknown {
+  if (typeof tpl === 'string') {
+    const exact = EXACT_PLACEHOLDER.exec(tpl);
+    if (exact) return resolveOne(exact[1], key, keySuffix, scope, value) ?? null;
+    return tpl.replace(PLACEHOLDER, (_m, token: string) => {
+      const v = resolveOne(token, key, keySuffix, scope, value);
+      return v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+    });
+  }
+  if (Array.isArray(tpl)) return tpl.map((x) => substituteValue(x, key, keySuffix, scope, value));
+  if (tpl && typeof tpl === 'object') {
+    const o: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(tpl as Record<string, unknown>)) o[k] = substituteValue(v, key, keySuffix, scope, value);
+    return o;
+  }
+  return tpl;
+}
+
 /** Build an action's params from a subscription's templates + the changed fact. */
 export function resolveParams(
   sub: SubscriptionDefinition,
@@ -93,19 +118,7 @@ export function resolveParams(
   const keySuffix = sub.match.keyPrefix && key.startsWith(sub.match.keyPrefix) ? key.slice(sub.match.keyPrefix.length) : key;
   const out: Record<string, unknown> = {};
   for (const [name, tpl] of Object.entries(sub.params ?? {})) {
-    if (typeof tpl !== 'string') {
-      out[name] = tpl;
-      continue;
-    }
-    const exact = /^\$\{(key|keySuffix|scope|value(?:\.[A-Za-z0-9_]+)*)\}$/.exec(tpl);
-    if (exact) {
-      out[name] = resolveOne(exact[1], key, keySuffix, scope, value) ?? null;
-      continue;
-    }
-    out[name] = tpl.replace(PLACEHOLDER, (_m, token: string) => {
-      const v = resolveOne(token, key, keySuffix, scope, value);
-      return v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
-    });
+    out[name] = substituteValue(tpl, key, keySuffix, scope, value);
   }
   return out;
 }
@@ -149,11 +162,12 @@ function validateSubscription(def: SubscriptionDefinition): void {
   }
 }
 
-/** Does a subscription's match hold for a changed fact? Total (eval errors → false). */
+/** Does a subscription's match hold for a changed fact? Total (eval errors → false).
+ *  The structural part (type / keyPrefix) is the shared Selector predicate (ADR-0011) —
+ *  the same one View membership and `query` use; CEL is the subscription-side clause on top. */
 export function matches(def: SubscriptionDefinition, fact: { key: string; value: unknown; type?: string; meta?: unknown }): boolean {
   const m = def.match;
-  if (m.type !== undefined && fact.type !== m.type) return false;
-  if (m.keyPrefix !== undefined && !fact.key.startsWith(m.keyPrefix)) return false;
+  if (!matchesSelector({ key: fact.key, type: fact.type }, { type: m.type, prefix: m.keyPrefix })) return false;
   if (m.cel !== undefined) {
     try {
       return celEvaluate(m.cel, { key: fact.key, value: fact.value, meta: fact.meta ?? null }) === true;
@@ -172,27 +186,27 @@ export interface Subscriptions {
   remove(scope: string, id: string, identity?: Identity): Promise<{ ok: true }>;
 }
 
+/**
+ * The subscription *kind* (ADR-0001): storage + validation only. `match`/`invoke`
+ * (the evaluate side) stay the exported `matches`/`resolveParams` helpers above.
+ */
+const subscriptionKind: DeclarationKind<SubscriptionDefinition> = {
+  ns: SUBSCRIPTIONS_PREFIX,
+  factType: 'subscription',
+  defaultVia: 'registerSubscription',
+  idOf: (d) => d.id,
+  validate: validateSubscription,
+  isStored: (v): v is SubscriptionDefinition => !!(v as { id?: unknown })?.id,
+  listLimit: 200,
+};
+
 export function createSubscriptions(state: ObservedState): Subscriptions {
+  // Thin wrapper over the shared Declaration registry — the storage lifecycle is
+  // identical for every declaration kind; only `subscriptionKind` is bespoke.
+  const reg = createDeclarationRegistry(state, subscriptionKind);
   return {
-    async register(scope, def, identity, opts): Promise<SubscriptionDefinition> {
-      validateSubscription(def);
-      await state.put(
-        { scope, key: `${SUBSCRIPTIONS_PREFIX}${def.id}`, value: def, via: opts?.via ?? 'registerSubscription', type: 'subscription', tags: opts?.tags },
-        identity,
-      );
-      return def;
-    },
-
-    async list(scope): Promise<SubscriptionDefinition[]> {
-      const res = await state.query(scope, { prefix: SUBSCRIPTIONS_PREFIX, rankBy: 'recency', limit: 200 });
-      return res.entries.map((e: Entry) => e.value as SubscriptionDefinition).filter((d): d is SubscriptionDefinition => !!d?.id);
-    },
-
-    async remove(scope, id, identity): Promise<{ ok: true }> {
-      const entry = await state.get(scope, `${SUBSCRIPTIONS_PREFIX}${id}`);
-      if (!entry || entry._meta.superseded) throw new Error(`not_found: subscription "${id}" not found`);
-      await state.supersede(scope, `${SUBSCRIPTIONS_PREFIX}${id}`, null, identity);
-      return { ok: true };
-    },
+    register: (scope, def, identity, opts) => reg.register(scope, def, identity, opts),
+    list: (scope) => reg.list(scope),
+    remove: (scope, id, identity) => reg.remove(scope, id, identity),
   };
 }

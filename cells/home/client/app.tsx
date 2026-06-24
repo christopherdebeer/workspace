@@ -11,7 +11,7 @@
  */
 import * as React from 'react';
 import { marked } from 'marked';
-import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, theme } from '../shared/ui';
+import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme } from '../shared/ui';
 import { resolve, declFor, type TypeDecl } from '../shared/vocab';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './bridge';
@@ -919,10 +919,16 @@ interface ListEntry {
  */
 let typeDecls: Record<string, TypeDecl> = { ...DEFAULT_TYPE_DECLS };
 
-interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; manager?: string; label?: string; handlers?: TypeDecl['handlers'] }
+interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; manager?: string; label?: string; handlers?: TypeDecl['handlers']; present?: { icon?: string; label?: string; render?: unknown } }
 function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
-  if (d.handlers || !d.href) return d as TypeDecl; // already new-shape
-  return { icon: d.icon, manager: d.manager, label: d.label ?? d.titlePath, handlers: { open: [{ surface: d.href }] } };
+  // Prefer the gateway-resolved `present` facet (ADR-0012/0014 row 3): the legacy
+  // {icon,titlePath} → {icon,label} normalisation now happens once, server-side via
+  // resolveType, so home consumes it instead of re-deriving. (The per-fact label is still
+  // applied client-side by `pathInto` — Present runs where the fact's value is.)
+  const icon = d.present?.icon ?? d.icon;
+  const label = d.present?.label ?? d.label ?? d.titlePath;
+  if (d.handlers || !d.href) return { ...(d as TypeDecl), icon, label }; // new-shape (+ served present)
+  return { icon, manager: d.manager, label, handlers: { open: [{ surface: d.href }] } };
 }
 
 /** Build the type vocabulary from a raw `$types`/`describeTypes` map: normalise
@@ -1134,21 +1140,50 @@ function FactEmbed({ src, href, title }: { src: string; href: string | null; tit
   );
 }
 
+/** Hints whose bodies can run long — clamped in a card, shown whole in the modal. */
+const LONGFORM_HINTS = new Set(['md', 'markdown', 'code', 'fields']);
+
+/** Truncate a rendered body to a few lines with a fade — the card preview. The
+ *  modal (full) shows it untruncated, which is what the peek escalates to. */
+function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div style={{ position: 'relative', maxHeight: '4.5em', overflow: 'hidden' }}>
+      {children}
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: '1.6em', background: `linear-gradient(transparent, ${theme.panel})` }} />
+    </div>
+  );
+}
+
 /**
  * A fact's inline body, from the type's declared default viewer: a built-in
  * `render` hint, or (when `embed` is allowed, e.g. a pinned single fact) the
  * cell's `embed` thumbnail — falling back to the heuristic text preview. Pure
  * presentation over `typeDecls`, so it renders identically server + client.
+ *
+ * `full` is the modal read: long-form bodies render whole. Without it (the list
+ * card) a long-form body is clamped to a few lines — the card is a preview now
+ * that the peek modal carries the full content.
  */
-function FactBody({ e, embed = false }: { e: ListEntry; embed?: boolean }): React.JSX.Element | null {
+function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
   const hint = resolve(e, 'render', typeDecls)?.hint;
   if (hint) {
     const el = HintBody({ kind: hint, e });
-    if (el) return el;
+    if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
   }
   if (embed) {
     const src = handlerUrl(resolve(e, 'embed', typeDecls));
     if (src) return <FactEmbed src={src} href={factHref(e)} title={factTitle(e)} />;
+  }
+  // The modal read of a fact with no declared viewer: show the whole body
+  // (markdown), or the raw value, rather than the clamped heuristic preview.
+  if (full) {
+    const body = bodyText(e.value);
+    if (body) {
+      const html = marked.parse(body.replace(/\r\n/g, '\n'), { async: false }) as string;
+      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+    }
+    if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
+    if (e.value != null && typeof e.value === 'object') return <CodeBlock>{JSON.stringify(e.value, null, 2)}</CodeBlock>;
   }
   const preview = factPreview(e);
   return preview ? (
@@ -1160,6 +1195,310 @@ interface Edge {
   from: string;
   rel: string;
   to: string;
+  derived?: boolean;
+}
+
+// ─── progressive fact detail (peek modal → edit / escalate) ─────────
+//
+// Every fact opens a peek modal first (so the long tail — orphaned/undeclared
+// types with no `open` surface — finally has a detail view). A type's declared
+// `open`/`edit` handlers become escalation links inside it; the generic editor
+// is the fallback so any fact is editable, gated by the write succeeding.
+
+const FACT_DETAIL_EVENT = 'home:fact-detail';
+
+/** Open the progressive detail modal for a fact (or a bare {key}; hydrated by peek). */
+function openFact(e: ListEntry): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry>(FACT_DETAIL_EVENT, { detail: e }));
+}
+
+const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
+
+/** A fact's one-hop neighbourhood — authored edges plus the derived backbone
+ *  (instanceOf → its type, managedBy → its cell, inView → views). Derived edges
+ *  render dashed/dim; every chip is itself a peek into that neighbour. */
+function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
+  const [n, setN] = useState<{ outbound: Edge[]; inbound: Edge[] } | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let live = true;
+    mcpCall('read', 'workspace.neighbors', { key: keyName })
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) setN(r.value as { outbound: Edge[]; inbound: Edge[] });
+        else setErr(true);
+      })
+      .catch(() => live && setErr(true));
+    return () => {
+      live = false;
+    };
+  }, [keyName]);
+  if (err) return <span style={{ color: theme.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
+  if (!n) return <span style={{ color: theme.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
+  const chip = (ed: Edge, other: string, label: string): React.JSX.Element => (
+    <button
+      key={`${ed.from}-${ed.rel}-${ed.to}`}
+      onClick={() => openFact({ key: other })}
+      title={`${ed.from} ${ed.rel} ${ed.to}`}
+      style={{
+        fontSize: '0.66rem',
+        color: ed.derived ? theme.dim : theme.accent,
+        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${theme.border}`,
+        borderRadius: 999,
+        padding: '0.05rem 0.45rem',
+        fontFamily: theme.mono,
+        cursor: 'pointer',
+        background: 'none',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </button>
+  );
+  const chips = [
+    ...n.outbound.map((ed) => chip(ed, ed.to, `${ed.rel}→${shortKey(ed.to)}`)),
+    ...n.inbound.map((ed) => chip(ed, ed.from, `${shortKey(ed.from)}→${ed.rel}`)),
+  ];
+  return chips.length ? (
+    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>{chips}</div>
+  ) : (
+    <span style={{ color: theme.dim, fontSize: '0.72rem' }}>No edges yet.</span>
+  );
+}
+
+/** Generic editor: a string value edits as text; any other value edits as its
+ *  JSON. Saved with `workspace.remember` (preserving the fact's type). A type's
+ *  own `edit` surface, when declared, takes precedence over this (see FactDetail). */
+/** A type's schema field (from `$types[type].fields`, ADR-0002 `shape.fields`). */
+interface FormField {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
+const editInput: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '0.4rem 0.5rem',
+  fontSize: '0.8rem',
+  border: `1px solid ${theme.border}`,
+  borderRadius: 6,
+  background: theme.panel,
+  color: theme.text,
+};
+
+const isJsonField = (t?: string): boolean => t === 'ref' || t === 'array' || t === 'object';
+
+/**
+ * Generic editor (ADR-0002). When the type declares `fields`, render a **form**
+ * (one input per field, required marked) — schema declared once drives validate +
+ * form + agent `create`. Otherwise fall back to text (string value) / raw JSON.
+ * `workspace.remember`'s advisory `hints` flow back via `onSaved`.
+ */
+function FactEditor({
+  e,
+  fields,
+  onSaved,
+  onCancel,
+}: {
+  e: ListEntry;
+  fields?: FormField[];
+  onSaved: (v: unknown, hints?: string[]) => void;
+  onCancel: () => void;
+}): React.JSX.Element {
+  const isStr = typeof e.value === 'string';
+  const base = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
+  const useForm = !isStr && Array.isArray(fields) && fields.length > 0;
+
+  const [form, setForm] = useState<Record<string, unknown>>(() => {
+    const o: Record<string, unknown> = {};
+    if (useForm) for (const f of fields!) o[f.name] = isJsonField(f.type) && base[f.name] != null && typeof base[f.name] !== 'string' ? JSON.stringify(base[f.name]) : base[f.name];
+    return o;
+  });
+  const [text, setText] = useState(isStr ? (e.value as string) : JSON.stringify(e.value ?? {}, null, 2));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const set = (name: string, v: unknown): void => setForm((f) => ({ ...f, [name]: v }));
+
+  const save = async (): Promise<void> => {
+    let value: unknown;
+    if (useForm) {
+      const out: Record<string, unknown> = { ...base };
+      for (const f of fields!) {
+        let v = form[f.name];
+        if (isJsonField(f.type) && typeof v === 'string') {
+          try {
+            v = v.trim() ? JSON.parse(v) : undefined;
+          } catch {
+            setErr(`Field "${f.name}" must be valid JSON`);
+            return;
+          }
+        }
+        if (v === undefined || v === '') delete out[f.name];
+        else out[f.name] = v;
+      }
+      value = out;
+    } else if (isStr) {
+      value = text;
+    } else {
+      try {
+        value = JSON.parse(text);
+      } catch {
+        setErr('Invalid JSON');
+        return;
+      }
+    }
+    setBusy(true);
+    setErr(null);
+    const r = await mcpCall('act', 'workspace.remember', { key: e.key, value, ...(e._meta?.type ? { type: e._meta.type } : {}) });
+    setBusy(false);
+    if (!r.ok) {
+      setErr(typeof r.value === 'string' ? r.value : 'Save failed');
+      return;
+    }
+    const hints = (r.value as { hints?: string[] })?.hints;
+    onSaved(value, Array.isArray(hints) ? hints : undefined);
+  };
+
+  const fieldInput = (f: FormField): React.JSX.Element => {
+    const v = form[f.name];
+    if (f.type === 'boolean') return <input type="checkbox" checked={!!v} onChange={(ev) => set(f.name, ev.target.checked)} />;
+    if (f.type === 'number')
+      return <input type="number" value={v == null ? '' : String(v)} onChange={(ev) => set(f.name, ev.target.value === '' ? undefined : Number(ev.target.value))} style={editInput} />;
+    if (f.type === 'markdown' || isJsonField(f.type))
+      return <textarea value={typeof v === 'string' ? v : ''} onChange={(ev) => set(f.name, ev.target.value)} rows={f.type === 'markdown' ? 4 : 2} spellCheck={false} style={{ ...editInput, fontFamily: isJsonField(f.type) ? theme.mono : 'inherit' }} />;
+    return <input value={typeof v === 'string' ? v : ''} onChange={(ev) => set(f.name, ev.target.value)} style={editInput} />;
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '0.5rem' }}>
+      {useForm ? (
+        <div style={{ display: 'grid', gap: '0.55rem' }}>
+          {fields!.map((f) => (
+            <label key={f.name} style={{ display: 'grid', gap: '0.2rem' }}>
+              <span style={{ fontSize: '0.72rem', color: theme.dim, fontFamily: theme.mono }}>
+                {f.name}
+                {f.required ? <span style={{ color: theme.accent }}> *</span> : null}
+                {f.type ? <span style={{ opacity: 0.6 }}> · {f.type}</span> : null}
+              </span>
+              {fieldInput(f)}
+              {f.description ? <span style={{ fontSize: '0.68rem', color: theme.dim }}>{f.description}</span> : null}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <>
+          <textarea
+            value={text}
+            onChange={(ev) => setText(ev.target.value)}
+            rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
+            spellCheck={false}
+            style={{ ...editInput, padding: '0.55rem', fontFamily: theme.mono }}
+          />
+          {!isStr ? <span style={{ color: theme.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
+        </>
+      )}
+      {err ? <Badge tone="danger">{err}</Badge> : null}
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <Button onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.dim, padding: '0.3rem 0.8rem', cursor: 'pointer' }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/** The peek body: the fact rendered by its viewer (full, not clamped), its
+ *  provenance line, its neighbourhood, and the actions — escalate to the type's
+ *  page/editor when declared, else edit generically in place. */
+function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
+  const [entry, setEntry] = useState<ListEntry>(e);
+  const [editing, setEditing] = useState(false);
+  const [hints, setHints] = useState<string[] | null>(null);
+  useEffect(() => {
+    setEntry(e);
+    setEditing(false);
+    setHints(null);
+  }, [e]);
+  const open = factHref(entry);
+  const edit = factEdit(entry);
+  const meta = entry._meta;
+  const system = entry.key.startsWith('_');
+  // The type's declared fields (ADR-0002 shape.fields), additively on $types.
+  const fields = (declFor(entry, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
+  return (
+    <div style={{ display: 'grid', gap: '0.7rem' }}>
+      <div style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
+        {[meta?.type, entry.key].filter(Boolean).join(' · ')}
+        {meta?.tags?.length ? '  ·  ' + meta.tags.map((t) => '#' + t).join(' ') : ''}
+      </div>
+      {editing ? (
+        <FactEditor
+          e={entry}
+          fields={fields}
+          onCancel={() => setEditing(false)}
+          onSaved={(v, h) => {
+            setEntry({ ...entry, value: v });
+            setHints(h ?? null);
+            setEditing(false);
+          }}
+        />
+      ) : (
+        <>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
+            <FactBody e={entry} full />
+          </div>
+          {hints?.length ? (
+            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: theme.panel }}>
+              <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
+              {hints.map((h, i) => (
+                <span key={i} style={{ fontSize: '0.76rem', color: theme.text }}>· {h}</span>
+              ))}
+            </div>
+          ) : null}
+          <div style={{ display: 'grid', gap: '0.3rem' }}>
+            <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
+            <Neighbourhood keyName={entry.key} />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            {open ? <Anchor href={open}>Open ↗</Anchor> : null}
+            {edit ? <Anchor href={edit}>Edit in cell ↗</Anchor> : !system ? <Button onClick={() => setEditing(true)}>Edit</Button> : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
+ *  via peek, and renders the modal. Returns null when nothing is open. */
+function FactDetailHost(): React.JSX.Element | null {
+  const [entry, setEntry] = useState<ListEntry | null>(null);
+  useEffect(() => {
+    const onOpen = (ev: Event): void => {
+      const detail = (ev as CustomEvent<ListEntry>).detail;
+      if (!detail?.key) return;
+      setEntry(detail);
+      if (detail.value === undefined) {
+        mcpCall('read', 'workspace.peek', { key: detail.key })
+          .then((r) => {
+            const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
+            if (r.ok && f) setEntry({ key: detail.key, value: f.value, _meta: f._meta });
+          })
+          .catch(() => undefined);
+      }
+    };
+    window.addEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
+    return () => window.removeEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
+  }, []);
+  if (!entry) return null;
+  const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
+  return (
+    <Modal open onClose={() => setEntry(null)} title={title}>
+      <FactDetail e={entry} />
+    </Modal>
+  );
 }
 
 // ─── the workspace window (phase 2c) ───────────────────────────────
@@ -1313,11 +1652,19 @@ function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: WorkspaceSe
             const out = edges.get(e.key) ?? [];
             return (
               <li key={e.key} style={{ lineHeight: 1.4, display: 'grid', gap: '0.25rem' }}>
-                {to ? (
-                  <a href={to} style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600 }}>{title}</a>
-                ) : (
-                  <strong style={{ fontWeight: 600 }}>{title}</strong>
-                )}
+                {/* Peek every fact in the modal first; cmd/ctrl-click still deep-links
+                    to the type's own surface when it has one. */}
+                <a
+                  href={to ?? undefined}
+                  onClick={(ev) => {
+                    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+                    ev.preventDefault();
+                    openFact(e);
+                  }}
+                  style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {title}
+                </a>
                 {/* The type's declared default viewer (hint), else a text preview. */}
                 <FactBody e={e} />
                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2627,6 +2974,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>
         <Wordmark /> · a personal substrate · <Anchor href="https://parc.land/mcp">agents start here</Anchor>
       </p>
+      <FactDetailHost />
     </Page>
   );
 }

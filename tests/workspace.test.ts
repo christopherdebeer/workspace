@@ -7,6 +7,7 @@
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
 import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler } from '../services/workspace/handlers';
+import { resolveParams } from '../services/workspace/subscriptions';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -170,14 +171,28 @@ describe('workspace sharing / view layer', () => {
     expect(bobShared.shared).toEqual([]);
   });
 
+  it('grants() is the authority self-model: scope, slice, and the grant layer in one read', async () => {
+    const me = await cmds.grants(undefined, ctxFor('bob').ctx);
+    expect(me.principal).toBe('bob');
+    expect(me.slice).toBe('bob'); // own partition — full authority
+    // layer 1 — token scope (active + ceiling); ctxFor stamps workspace:read/write
+    expect(me.scope.active).toEqual(expect.arrayContaining(['workspace:read', 'workspace:write']));
+    expect(me.scope.ceiling).toEqual(expect.arrayContaining(['workspace:read', 'workspace:write']));
+    // layer 2 — the grant subsets: bob receives alice's whole-slice share
+    expect(me.grant.receiving.some((g) => g.owner === 'alice' && g.key === '*')).toBe(true);
+    expect(Array.isArray(me.grant.shared)).toBe(true);
+    expect(Array.isArray(me.grant.groups)).toBe(true);
+    expect(typeof me.hint).toBe('string');
+  });
+
   it('describeTools advertises the whole vocabulary for the /mcp gateway', async () => {
     const { tools } = await cmds.describeTools(undefined, ctxFor('alice').ctx);
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
-        'peek', 'recall', 'remember', 'ingest', 'shared', 'share', 'supersede', 'unshare',
+        'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
-        'query', 'link', 'unlink', 'neighbors', 'changes', 'attention',
+        'query', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
@@ -358,8 +373,9 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     await cmds.link({ from: 'd2', rel: 'refines', to: 'd1' }, alice());
 
     const around = await cmds.neighbors({ key: 'd1' }, alice());
-    expect(around.inbound.map((e) => `${e.from}-${e.rel}`).sort()).toEqual(['d2-refines', 't1-grounds']);
-    expect(around.outbound).toEqual([]);
+    // Authored edges only here; the derived backbone (instanceOf → _types/decision) is asserted separately.
+    expect(around.inbound.filter((e) => !e.derived).map((e) => `${e.from}-${e.rel}`).sort()).toEqual(['d2-refines', 't1-grounds']);
+    expect(around.outbound.filter((e) => !e.derived)).toEqual([]);
     expect(Object.keys(around.entries).sort()).toEqual(['d2', 't1']); // neighbor entries included
 
     const onlyGrounds = await cmds.neighbors({ key: 'd1', dir: 'in', rel: 'grounds' }, alice());
@@ -902,6 +918,29 @@ describe('workspace substrate-write handler (the organ-to-reef path)', () => {
     expect(viewFact?._meta.type).toBe('view');
     expect(viewFact?._meta.tags).toContain('cell-required');
   });
+
+  it('lets a cell retire its own seeded vocabulary via organ supersede, but refuses other `_` vocabulary', async () => {
+    const cell = busCtx({ owner: 'alice', name: 'machine' });
+    const meta = { source: 'cell-machine-xyz', detailType: 'substrate.write.requested' };
+    // Seed an action + a subscription the cell manages, then a plain renderer fact.
+    await handler({ key: '_actions/machine.toRetire', value: { description: 'temp', writes: [{ key: 'k/${params.id}', value: {} }], params: { id: { type: 'string', required: true } } } }, cell, meta);
+    await handler({ key: '_subscriptions/machine.toRetire', value: { id: 'machine.toRetire', match: { keyPrefix: 'machine-run/' }, invoke: 'machine.advance', params: { id: '${keySuffix}' } } }, cell, meta);
+    await handler({ key: '_renderers/machine', value: { type: 'machine', source: 'x' } }, cell, meta);
+    expect((await cmds.actions({}, ctxFor('alice').ctx)).actions.some((a) => a.id === 'machine.toRetire')).toBe(true);
+    expect((await cmds.subscriptions({}, ctxFor('alice').ctx)).subscriptions.some((s) => s.id === 'machine.toRetire')).toBe(true);
+
+    // The cell retires the action + subscription through the same registries — the
+    // reconcile path a re-definition uses to clean up rails/branches it dropped.
+    await handler({ key: '_actions/machine.toRetire', op: 'supersede' }, cell, meta);
+    await handler({ key: '_subscriptions/machine.toRetire', op: 'supersede' }, cell, meta);
+    expect((await cmds.actions({}, ctxFor('alice').ctx)).actions.some((a) => a.id === 'machine.toRetire')).toBe(false);
+    expect((await cmds.subscriptions({}, ctxFor('alice').ctx)).subscriptions.some((s) => s.id === 'machine.toRetire')).toBe(false);
+
+    // Non-registry `_` vocabulary supersede stays refused — the renderer is intact.
+    await handler({ key: '_renderers/machine', op: 'supersede' }, cell, meta);
+    const renderer = await cmds.peek({ key: '_renderers/machine' }, ctxFor('alice').ctx);
+    expect(renderer?._meta.superseded).toBe(false);
+  });
 });
 
 describe('cell lifecycle projection (the platform reflected in the substrate)', () => {
@@ -1227,5 +1266,35 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
     expect(sub?._meta.type).toBe('subscription');
     expect(sub?._meta.writer).toBe('@alice/machine');
     expect(sub?._meta.tags).toContain('cell-required');
+  });
+});
+
+describe('resolveParams template substitution', () => {
+  const sub = { id: 's', match: { keyPrefix: 'machine/m/run/' } } as Parameters<typeof resolveParams>[0];
+
+  it('templates top-level string params (exact keeps type, interpolation stringifies)', () => {
+    const def = { ...sub, params: { run: '${keySuffix}', label: 'run-${keySuffix}', count: 3 } };
+    const out = resolveParams(def, 'machine/m/run/r2', 'c15r', { node: 'X' });
+    expect(out.run).toBe('r2');
+    expect(out.label).toBe('run-r2');
+    expect(out.count).toBe(3); // non-strings pass through
+  });
+
+  it('recurses into NESTED objects/arrays so an onError.key templates', () => {
+    const def = {
+      ...sub,
+      params: {
+        onError: { key: 'machine/m/run/${keySuffix}', value: { node: 'Work', status: 'failed' }, tags: ['machine', 'machine:${keySuffix}'] },
+        grants: { write: ['machine/m/run/'] }, // static prefixes — unchanged
+      },
+    };
+    const out = resolveParams(def, 'machine/m/run/r2', 'c15r', { node: 'Work' }) as {
+      onError: { key: string; value: { status: string }; tags: string[] };
+      grants: { write: string[] };
+    };
+    expect(out.onError.key).toBe('machine/m/run/r2'); // the bug fix
+    expect(out.onError.value.status).toBe('failed');
+    expect(out.onError.tags).toEqual(['machine', 'machine:r2']);
+    expect(out.grants.write).toEqual(['machine/m/run/']);
   });
 });

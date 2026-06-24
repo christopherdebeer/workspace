@@ -1,0 +1,36 @@
+/* ---------------------------------------------------------------------------
+ * machine — client entry (the mount).
+ *
+ * The ONE module that pulls the kernel and react-dom/client (so the server
+ * bundle never sees them). Installs the real kernel into the bridge, reads the
+ * server's SSR seed (`#machine-state`), and hydrates the markup the server
+ * painted (`data-ssr`) — or cold-mounts when there's no SSR. `App` renders the
+ * same tree on both sides. Mirrors cells/home/client/main.tsx.
+ * ------------------------------------------------------------------------- */
+import * as React from 'react';
+import { hydrateRoot, createRoot } from 'react-dom/client';
+import { App, type Boot } from './app';
+import { installBridge } from './bridge';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './auth';
+
+installBridge({ login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl });
+
+function ssrSeed(): Boot | undefined {
+  const tag = document.getElementById('machine-state');
+  if (!tag?.textContent) return undefined;
+  try {
+    return JSON.parse(tag.textContent) as Boot;
+  } catch {
+    return undefined;
+  }
+}
+
+const el = document.getElementById('root');
+if (el) {
+  const initial = ssrSeed();
+  if (el.dataset.ssr === '1') hydrateRoot(el, <App initial={initial} />);
+  else {
+    el.textContent = '';
+    createRoot(el).render(<App initial={initial} />);
+  }
+}

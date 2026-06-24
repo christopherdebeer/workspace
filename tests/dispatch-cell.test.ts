@@ -117,4 +117,25 @@ describe('dispatch cell (/@owner/cell)', () => {
     const res = (await dispatch(event('GET', '/@alice', bearer('good')))) as FunctionUrlResponse;
     expect(res.statusCode).toBe(404);
   });
+
+  it('apex / routes to the default cell when DISPATCH_DEFAULT_CELL is set (home demotion)', async () => {
+    process.env.DISPATCH_DEFAULT_CELL = 'c15r/home';
+    try {
+      // anonymous GET of the bare apex — the exact request that 404'd in the incident
+      const res = (await dispatch(event('GET', '/', {}))) as FunctionUrlResponse;
+      expect(res.statusCode).toBe(200);
+      expect(lastCallCell).toMatchObject({ owner: 'c15r', name: 'home', method: 'GET', path: '/' });
+      // an apex asset path forwards too (cell-relative path preserved)
+      await dispatch(event('GET', '/some-asset.css', {}));
+      expect(lastCallCell).toMatchObject({ owner: 'c15r', name: 'home', path: '/some-asset.css' });
+    } finally {
+      delete process.env.DISPATCH_DEFAULT_CELL;
+    }
+  });
+
+  it('apex / still 404s when no default cell is configured (no behaviour change without demotion)', async () => {
+    const res = (await dispatch(event('GET', '/', {}))) as FunctionUrlResponse;
+    expect(res.statusCode).toBe(404);
+    expect(lastCallCell).toBeUndefined();
+  });
 });

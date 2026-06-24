@@ -369,6 +369,31 @@ body {
     flex-direction: column;
 }
 
+/* Editor hosted inside the unified sheet (full detent) rather than a centered
+   overlay: drop the dim backdrop + fixed positioning and fill the slot. */
+.modal.in-sheet {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    background: none;
+    z-index: auto;
+}
+.modal.in-sheet .modal-content {
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    border: 0;
+    padding: 0;
+    background: none;
+}
+/* CodeMirror measures its container; inside the sheet (grid/flex) it collapses
+   to 0 unless given an explicit height. Pin the editor to a usable height. */
+.modal.in-sheet .modal-editor { min-height: 46vh; }
+.modal.in-sheet #editor-content,
+.modal.in-sheet #editor-src,
+.modal.in-sheet .CodeMirror { height: 46vh; }
+
 .modal-tabs {
     display: flex;
     border-bottom: 1px solid #ccc;

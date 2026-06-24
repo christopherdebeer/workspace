@@ -15,17 +15,14 @@
 import * as React from 'react';
 import { marked } from 'marked';
 
-export interface BlockRef { key: string; fold?: boolean }
-/** A document is a *view* over cell-facts: thin metadata; membership + order live
- *  in substrate-native `_doc/<id>/<cellKey>={seq,fold}` decorations. `blocks`/
- *  `cells` are the legacy embedded array, read only for migration. `cellCount`
- *  is a denormalised count for the doc list; `projection` is the default lens. */
+/** A document is a *view* over facts: thin metadata only. Membership + order live
+ *  entirely in substrate-native `_doc/<id>/<factKey>={seq,fold}` decorations — any
+ *  fact key (a doc-block, a canvas `el:`, a `cell:`) can be a member. (The legacy
+ *  inline `blocks`/`cells` array was migrated out and removed.) `projection` is the
+ *  default lens. */
 export interface DocValue {
   title: string;
   summary?: string;
-  blocks?: BlockRef[];
-  cells?: BlockRef[];
-  cellCount?: number;
   projection?: 'narrative' | 'salience';
 }
 /** A block resolved for render: its markdown (or a fold title) + identity. */

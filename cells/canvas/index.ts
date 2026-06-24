@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderBoard, type BoardElement, type Placement, type Content } from './shared/render';
+import { regionBBox, fitRegion, renderFramesSvg, type Region, type Placed, type BBox, type FrameLike } from './shared/frame';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -55,10 +56,119 @@ async function readView(viewId: string): Promise<{ board: string; viewport: View
   return { board, viewport: def.render?.viewport ?? 'fit' };
 }
 
+/** Read a frame fact (`frame:<id>`) → its region (ADR-0015), server-side. */
+async function readFrame(frameId: string): Promise<Region | null> {
+  const r = await ddb().send(new Get({ TableName: TABLE, Key: { pk: `STATE#${OWNER}`, sk: `KEY#frame:${frameId}` } }));
+  const region = (r.Item?.value as { region?: Region } | undefined)?.region;
+  return region ?? null;
+}
+
+/** The board's DEFAULT viewpoint region, if it declares one — so SSR can paint
+ *  the first frame straight away instead of fit-all, which the client otherwise
+ *  corrects only AFTER a post-load frame query (the visible "jump"). Frame keys
+ *  are `frame:<board>/<name>`, so the board's frames share that prefix. */
+async function readDefaultFrame(board: string): Promise<Region | null> {
+  if (!TABLE) return null;
+  try {
+    const r = await ddb().send(
+      new Query({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': `KEY#frame:${board}/` },
+      }),
+    );
+    for (const it of (r.Items ?? []) as FactItem[]) {
+      if (it.superseded) continue;
+      const v = it.value as { default?: boolean; region?: Region } | undefined;
+      if (v?.default && v.region) return v.region;
+    }
+  } catch (e) {
+    console.warn('[canvas ssr] default-frame lookup failed', (e as Error).message);
+  }
+  return null;
+}
+
+/** All of a board's frames (`frame:<board>/…`) for the server-painted overlay. */
+async function readFrames(board: string): Promise<FrameLike[]> {
+  if (!TABLE) return [];
+  const out: FrameLike[] = [];
+  try {
+    const r = await ddb().send(
+      new Query({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': `KEY#frame:${board}/` },
+      }),
+    );
+    for (const it of (r.Items ?? []) as FactItem[]) {
+      if (it.superseded) continue;
+      out.push({ key: it.key, value: it.value as FrameLike['value'] });
+    }
+  } catch (e) {
+    console.warn('[canvas ssr] frames lookup failed', (e as Error).message);
+  }
+  return out;
+}
+
+/** Reduce SSR board elements to the `Placed` shape the frame resolver needs.
+ *  (SSR carries the value type, not `_meta.type`/tags — so query-by-type regions
+ *  are best resolved client-side; member/bbox regions resolve fully here.) */
+function placedOfBoard(els: BoardElement[]): Placed[] {
+  return els.map((e) => ({
+    key: `el:${e.id}`,
+    type: (e.content as { type?: string }).type,
+    x: e.placement.x,
+    y: e.placement.y,
+    width: e.placement.width,
+    height: e.placement.height,
+    scale: e.placement.scale,
+  }));
+}
+
 interface FactItem {
   key: string;
   value: unknown;
   superseded?: boolean;
+}
+
+/** Does a `_public/<pattern>` cover this key? (`*` = whole slice, trailing `*` =
+ *  prefix, else exact.) Mirrors the lit cell's coverage check. */
+export function covers(pattern: string, key: string): boolean {
+  if (pattern === '*') return true;
+  if (pattern.endsWith('*')) return key.startsWith(pattern.slice(0, -1));
+  return pattern === key;
+}
+export const covers0 = (patterns: string[], key: string): boolean => patterns.some((p) => covers(p, key));
+
+/** The SSR authority decision for a board: the owner always; anyone else only
+ *  when a `_public/` pattern covers `canvas:<board>`. (Exported for tests.) */
+export const mayRenderBoard = (board: string, isOwner: boolean, patterns: string[]): boolean =>
+  isOwner || covers0(patterns, `canvas:${board}`);
+
+/** The public patterns the owner has shared — `_public/<pattern>` facts. A
+ *  token-less (non-owner) SSR may only render a board these cover. */
+async function publicPatterns(): Promise<string[]> {
+  if (!TABLE) return [];
+  const out: string[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  const client = ddb();
+  do {
+    const r = await client.send(
+      new Query({
+        TableName: TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': 'KEY#_public/' },
+        ExclusiveStartKey,
+      }),
+    );
+    for (const it of (r.Items ?? []) as FactItem[]) {
+      if (it.superseded) continue;
+      const pat = (it.value as { pattern?: string } | undefined)?.pattern ?? it.key.slice('_public/'.length);
+      out.push(pat);
+    }
+    ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (ExclusiveStartKey);
+  return out;
 }
 
 /**
@@ -138,6 +248,7 @@ function fitCamera(els: BoardElement[], w = 1200, h = 800): { scale: number; tx:
 
 /** Critical CSS so the SSR board paints correctly before app.js loads. */
 const CRITICAL_CSS = `
+#boot-splash{display:none}
 #canvas{position:relative;width:100%;height:100%;background:#fff;overflow:hidden}
 #canvas-container{position:absolute;transform-origin:0 0;overflow:visible;--zoom:1}
 .canvas-element{--scale:1;--zoom:1;--blend-mode:normal;--width:10px;--height:10px;--padding:calc(.5rem / var(--zoom));padding:var(--padding);font-size:calc(var(--scale) * 1em);position:absolute;box-sizing:content-box;background:transparent;overflow:visible;mix-blend-mode:var(--blend-mode)}
@@ -174,6 +285,15 @@ interface ShellOpts {
   embed?: boolean;
   w?: number;
   h?: number;
+  /** The dispatch-validated viewer is the slice owner — full SSR. */
+  isOwner?: boolean;
+  /** `_public/` patterns; a non-owner may only SSR a board these cover. */
+  patterns?: string[];
+  /** Embed the board state as JSON so the client hydrates instantly (?hydrate=1)
+   *  instead of re-fetching through the API. The server already read it. */
+  hydrate?: boolean;
+  /** Focus a named viewpoint (`frame:<id>`) instead of fitting the whole board. */
+  frame?: string;
 }
 
 /**
@@ -199,18 +319,77 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
       viewport = v.viewport;
     }
     if (!board) return shell;
+    // Authority boundary for SSR: the owner (dispatch-validated `x-cell-caller`)
+    // gets a server-painted board; everyone else only when the owner has shared
+    // it publicly (`_public/canvas:<board>`). Otherwise serve the interactive
+    // shell — the client hydrates with the viewer's own session and the API
+    // enforces grants per-fact. (Mirrors the lit cell; closes the SSR path that
+    // would otherwise render a private board to an anonymous viewer.)
+    if (!mayRenderBoard(board, !!opts.isOwner, opts.patterns ?? [])) return shell;
     const els = await readBoard(board);
     if (!els.length) return shell;
-    const cam = cameraFor(viewport, els, opts.w, opts.h);
+    // A named viewpoint (?frame=) frames a region; else the board's DEFAULT
+    // viewpoint (so the first paint already sits where the client would jump to);
+    // else the view's viewport / fit.
+    const w = opts.w ?? 1200, h = opts.h ?? 800;
+    let cam = cameraFor(viewport, els, opts.w, opts.h);
+    // The framed region's bbox, in canvas coords — carried into the hydrate
+    // payload so the client re-fits it to the REAL device viewport. The SSR
+    // camera is fit to a fixed 1200×800, so it's only an approximation on a
+    // phone; the client correction at hydrate (~50ms) is what makes it exact.
+    let framedBBox: BBox | null = null;
+    if (opts.frame) {
+      const region = await readFrame(opts.frame);
+      framedBBox = region ? regionBBox(region, placedOfBoard(els)) : null;
+      if (framedBBox) cam = fitRegion(framedBBox, w, h);
+    } else if (board && !opts.view) {
+      const region = await readDefaultFrame(board);
+      framedBBox = region ? regionBBox(region, placedOfBoard(els)) : null;
+      if (framedBBox) cam = fitRegion(framedBBox, w, h);
+    }
     const { dynamic, static: stat } = renderBoard(els, cam);
-    const transform = `transform:translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)});--zoom:${cam.scale.toFixed(4)}`;
+    const camTransform = `translate(${cam.tx.toFixed(1)}px,${cam.ty.toFixed(1)}px) scale(${cam.scale.toFixed(4)})`;
+    const transform = `transform:${camTransform};--zoom:${cam.scale.toFixed(4)}`;
+    // Frames overlay, server-painted (ADR-0015): the board's frame regions + label
+    // pills, so they appear on the FIRST paint instead of after the client's lazy
+    // frame query. Same shared renderer + transform model as the live overlay, so
+    // the two agree; the client redraws #frames-layer in place on load.
+    let framesSvg = '';
+    if (board && !opts.embed) {
+      const frames = await readFrames(board);
+      if (frames.length) framesSvg = renderFramesSvg(frames, placedOfBoard(els));
+    }
+    const framesLayer = `<svg id="frames-layer" style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4;transform-origin:0 0;transform:${camTransform}">${framesSvg}</svg>`;
     let html = shell
       .replace('</head>', `<style id="ssr-critical">${CRITICAL_CSS}${opts.embed ? EMBED_CSS : ''}</style></head>`)
+      .replace('<svg id="edges-layer"></svg>', `${framesLayer}<svg id="edges-layer"></svg>`)
       .replace(
         '<div id="canvas-container"></div>',
         `<div id="canvas-container" data-ssr="1" style="${transform}">${dynamic}</div>`,
       )
       .replace('<div id="static-container"></div>', `<div id="static-container" data-ssr="1">${stat}</div>`);
+    // Hydration payload (?hydrate=1): the same board the server just read, in the
+    // client's element shape, so the client constructs the live board from this
+    // instead of the multi-second API re-fetch. `<` escaped so the JSON can't
+    // break the <script>. Never for embeds (zero-JS), never the default path.
+    if (opts.hydrate && !opts.embed) {
+      const elements = els.map((e) => ({
+        ...(e.content as Record<string, unknown>),
+        ...(e.placement as Record<string, unknown>),
+        id: e.id,
+        _factKey: `el:${e.id}`,
+      }));
+      const payload = JSON.stringify({
+        canvasId: board,
+        cam: { scale: cam.scale, translateX: cam.tx, translateY: cam.ty },
+        ...(framedBBox ? { frame: framedBBox } : {}),
+        elements,
+      }).replace(/</g, '\\u003c');
+      html = html.replace(
+        '<script type="module" src="/@c15r/canvas/app.js"></script>',
+        `<script id="canvas-hydrate" type="application/json">${payload}</script>\n  <script type="module" src="/@c15r/canvas/app.js"></script>`,
+      );
+    }
     if (opts.embed) {
       // Zero-JS: the board is fully rendered server-side, so strip *every*
       // script — app.js, the editor libraries, AND the inline iOS touch-guard
@@ -230,6 +409,9 @@ async function renderShell(opts: ShellOpts = {}): Promise<string> {
   }
 }
 
+/** The cell's mount prefix on the apex — board path URLs are built against this. */
+const MOUNT = `/@${OWNER}/canvas`;
+
 export const handler = async (event: any) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
@@ -237,24 +419,57 @@ export const handler = async (event: any) => {
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
     if (path === '/style.css') return respond(200, 'text/css; charset=utf-8', read('static/style.css'));
-    if (path === '/' || path === '') {
-      const qs = new URLSearchParams((event.rawQueryString as string) || '');
-      const board = qs.get('canvas') ?? undefined;
-      const view = qs.get('view') ?? undefined;
-      const embed = qs.get('embed') === '1';
-      const w = Number(qs.get('w')) || undefined;
-      const h = Number(qs.get('h')) || undefined;
-      // SSR a board (?canvas=) or a view (?view=, with its declared camera);
-      // the bare app (no target) keeps the static shell.
-      const html = board || view ? await renderShell({ board, view, embed, w, h }) : read('static/index.html');
-      // Static embeds are safe to cache briefly at the edge — many thumbnails
-      // on one page then cost one render, and refresh within a minute.
-      const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
-      if (embed && (board || view)) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
-      return { statusCode: 200, headers, body: html };
+
+    const qs = new URLSearchParams((event.rawQueryString as string) || '');
+    // The board now lives in the PATH (`/@owner/canvas/<board>`); the gateway
+    // strips the mount, so rawPath is `/<board>`. The bare path is the landing
+    // shell. (Frame/view/embed stay query modifiers.)
+    const segs = path.split('/').filter(Boolean);
+    const pathBoard = segs.length ? decodeURIComponent(segs[0]) : undefined;
+    // Frame ids are board-prefixed (`<board>/<name>`), so the whole path is the
+    // frame id once there's a segment past the board: `/parcland/forest`.
+    const pathFrame = segs.length >= 2 ? segs.map(decodeURIComponent).join('/') : undefined;
+
+    // Legacy `?canvas=<board>` (and `?frame=`) → canonical path form (301).
+    // Frame ids are board-prefixed, so a frame folds into the whole path; the
+    // rest of the query is preserved so old shared links keep working.
+    const legacyCanvas = qs.get('canvas') ?? undefined;
+    if (!pathBoard && legacyCanvas) {
+      const rest = new URLSearchParams(qs);
+      rest.delete('canvas');
+      rest.delete('frame');
+      const target = (qs.get('frame') || legacyCanvas).split('/').map(encodeURIComponent).join('/');
+      const q = rest.toString();
+      const location = `${MOUNT}/${target}${q ? `?${q}` : ''}`;
+      return { statusCode: 301, headers: { location, 'cache-control': 'no-store' }, body: '' };
     }
+
+    const board = pathBoard;
+    const view = qs.get('view') ?? undefined;
+    const embed = qs.get('embed') === '1';
+    const w = Number(qs.get('w')) || undefined;
+    const h = Number(qs.get('h')) || undefined;
+    // `x-cell-caller` is the dispatch-validated identity (from the session
+    // cookie on a top-level navigation, or a bearer); the cell is reachable
+    // only via cells.call, so it can't be forged. The owner gets full SSR;
+    // anyone else only sees boards the owner shared (`_public/`).
+    const caller = event.headers?.['x-cell-caller'] as string | undefined;
+    const isOwner = !!caller && caller === OWNER;
+    // SSR a board (path) or a view (?view=, with its declared camera); the bare
+    // app (no target) keeps the static shell.
+    const patterns = (board || view) && !isOwner ? await publicPatterns() : [];
+    // Hydration payload is emitted by default (escape with ?hydrate=0); never for
+    // embeds (renderShell gates that). It only adds the JSON when SSR actually
+    // paints a board, so a fallback-to-shell load carries no extra weight.
+    const hydrate = qs.get('hydrate') !== '0';
+    const frame = pathFrame ?? qs.get('frame') ?? undefined;
+    const html = board || view ? await renderShell({ board, view, embed, w, h, isOwner, patterns, hydrate, frame }) : read('static/index.html');
+    // Static embeds are safe to cache briefly at the edge — many thumbnails
+    // on one page then cost one render, and refresh within a minute.
+    const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
+    if (embed && (board || view)) headers['cache-control'] = 'public, max-age=60, stale-while-revalidate=300';
+    return { statusCode: 200, headers, body: html };
   } catch (err) {
     return respond(404, 'application/json', JSON.stringify({ error: (err as Error).message }));
   }
-  return respond(404, 'application/json', JSON.stringify({ error: `no route for ${path}` }));
 };

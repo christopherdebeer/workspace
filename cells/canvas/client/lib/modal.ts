@@ -23,10 +23,12 @@ let currentEl: CanvasElement | null = null;    // element being edited (live ref
 let currentVerIdx = 0;       // 0 … el.versions.length  (top == current)
 let resolver: ((value: { status: string; el: CanvasElement | null }) => void) | null = null;    // Promise resolver returned by showModal
 let generateFn: ((seed: string) => Promise<string> | string) | null = null;    // callback injected by caller (optional)
+let hostEl: HTMLElement | null = null;         // when set, the editor lives inside the sheet (full detent) rather than a centered overlay
 
-export function showModal(el: CanvasElement, opts: { generateContent?: (seed: string) => Promise<string> | string } = {}): Promise<{ status: string; el: CanvasElement | null }> {
+export function showModal(el: CanvasElement, opts: { generateContent?: (seed: string) => Promise<string> | string; host?: HTMLElement } = {}): Promise<{ status: string; el: CanvasElement | null }> {
   if (!el) throw new Error('showModal: element required');
   generateFn = opts.generateContent ?? null;
+  hostEl = opts.host ?? null;
 
   ensureDom();
   hydrateUiFor(el);
@@ -35,12 +37,13 @@ export function showModal(el: CanvasElement, opts: { generateContent?: (seed: st
 }
 
 function ensureDom(): void {
-  if ($root && $root.parentElement) return;
-
-  // Reset CodeMirror instances if DOM was cleared
-  if ($root && !$root.parentElement) {
-    cmContent = null;
-    cmSrc = null;
+  const target = hostEl ?? document.body;
+  // Build once (keeps the CodeMirror instances alive across opens); just
+  // re-attach to the current target — body (centered) or the sheet host.
+  if ($root) {
+    if ($root.parentElement !== target) target.appendChild($root);
+    $root.classList.toggle('in-sheet', !!hostEl);
+    return;
   }
 
   const tpl = /*html*/`
@@ -71,23 +74,32 @@ function ensureDom(): void {
     </div>
   </div>
 </div>`;
-  document.body.insertAdjacentHTML('beforeend', tpl);
-  $root = document.getElementById('edit-modal');
-  $contentEditorHost = document.getElementById('editor-content');
-  $srcEditorHost = document.getElementById('editor-src');
-  $btnPrev = document.getElementById('versions-prev');
-  $btnNext = document.getElementById('versions-next');
-  $info = document.getElementById('versions-info');
-  $errorBox = document.getElementById('modal-error');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = tpl;
+  $root = wrap.firstElementChild as HTMLElement;
+  target.appendChild($root);
+  $root.classList.toggle('in-sheet', !!hostEl);
+  // Scope every lookup to THIS root, never document.getElementById: the ids here
+  // (editor-content, modal-save, …) are not globally unique — a stale static
+  // copy of this markup, or a second instance, would otherwise hijack them and
+  // wire CodeMirror + the buttons to the wrong (hidden) nodes, which is exactly
+  // how the in-sheet editor went dead.
+  const q = <T extends HTMLElement = HTMLElement>(id: string): T => $root!.querySelector('#' + id) as T;
+  $contentEditorHost = q('editor-content');
+  $srcEditorHost = q('editor-src');
+  $btnPrev = q('versions-prev');
+  $btnNext = q('versions-next');
+  $info = q('versions-info');
+  $errorBox = q('modal-error');
 
-  $btnClear = document.getElementById('modal-clear');
-  $btnCopy = document.getElementById('modal-copy');
-  $btnCancel = document.getElementById('modal-cancel');
-  $btnSave = document.getElementById('modal-save');
-  $btnGenerate = document.getElementById('modal-generate');
+  $btnClear = q('modal-clear');
+  $btnCopy = q('modal-copy');
+  $btnCancel = q('modal-cancel');
+  $btnSave = q('modal-save');
+  $btnGenerate = q('modal-generate');
 
-  $tabContent = document.getElementById('tab-content');
-  $tabSrc = document.getElementById('tab-src');
+  $tabContent = q('tab-content');
+  $tabSrc = q('tab-src');
 
   /* ------ 2.  install event handlers -------------------------------------- */
   $btnPrev.onclick = () => navVersion(-1);
@@ -136,12 +148,11 @@ function hydrateUiFor(el: CanvasElement): void {
   clearError();
 
   $root!.style.display = "block";
-  // CodeMirror measured a hidden container (zero height) — re-measure now
-  // that the modal is visible, else the editor paints empty until tapped.
-  requestAnimationFrame(() => {
-    cmContent?.refresh();
-    cmSrc?.refresh();
-  });
+  // CodeMirror measured a hidden / zero-height container — re-measure now that
+  // the modal is visible and sized, else the editor paints empty. Refresh twice
+  // (rAF + a short timeout) because in-sheet layout settles a frame late.
+  requestAnimationFrame(() => { cmContent?.refresh(); cmSrc?.refresh(); });
+  setTimeout(() => { cmContent?.refresh(); cmSrc?.refresh(); }, 80);
 }
 
 function loadVersion(idx: number): void {
@@ -233,8 +244,12 @@ function clearError(): void { $errorBox!.textContent = ''; }
 function showError(msg: string): void { $errorBox!.textContent = msg; }
 
 function close(status: string, el: CanvasElement | null = null): void {
-  $root!.style.display = "none";
+  if ($root) $root.style.display = "none";
   resolver?.({ status, el });
   resolver = null;
   currentEl = null;
 }
+
+/** Programmatic close (cancel) — the unified sheet's header uses this so closing
+ *  works even if the modal's own buttons are off-screen. */
+export function closeModal(): void { close('cancelled'); }

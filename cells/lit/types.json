@@ -5,17 +5,28 @@
       "icon": "📄",
       "label": "value.title",
       "manager": "@c15r/lit",
-      "note": "A document is a VIEW over cell-facts. Membership + order are NOT in the doc value — they live in `_doc/<docId>/<blockKey>` decorations (type `doc-order`, value {seq, fold}). The doc value holds only {id, title, summary}. The inline `blocks` array is a deprecated fallback the loader honours only when no `_doc/` decorations exist.",
+      "note": "A document is a VIEW over facts — it holds only {title, summary}. Membership + order live entirely in `_doc/<docId>/<factKey>` decorations (type doc-order); a member can be ANY fact (a doc-block, a canvas `el:`, a `cell:`, a claim), so 'blocks ARE facts' (no graduation). There is no inline block array — order is one fractional-seq write per decoration.",
       "schema": {
         "id": "string — the doc key, doc:<slug>",
         "title": "string",
-        "summary": "string — one-line abstract",
-        "blocks": "DEPRECATED — legacy inline array [{key, fold?}]; substrate-native docs order block-facts via _doc/<id>/<key> doc-order decorations instead"
+        "summary": "string — one-line abstract"
       },
       "handlers": {
-        "open": [{ "path": "?doc=${match}" }],
-        "edit": [{ "path": "?doc=${match}&edit=1" }],
-        "render": [{ "hint": "markdown" }]
+        "open": [
+          {
+            "path": "?doc=${match}"
+          }
+        ],
+        "edit": [
+          {
+            "path": "?doc=${match}&edit=1"
+          }
+        ],
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
       }
     },
     {
@@ -23,13 +34,16 @@
       "icon": "🧱",
       "label": "value.id",
       "manager": "@c15r/lit",
-      "note": "A document block: markdown + lit fences (```mermaid/json/csv/run/js/repl, [[wiki-links]]). Any fact can be a block; it is placed into a doc by a `_doc/` doc-order decoration, not by living inside the doc.",
+      "note": "The DEFAULT type for prose authored directly in lit (markdown + lit fences) — a convenience, NOT a requirement for doc membership. A doc is a view over facts, so any fact of any type becomes a block when a `_doc/<docId>/<factKey>` decoration places it (lit renders it via its own type's renderer). Reach for doc-block only when minting fresh prose with no better home.",
       "schema": {
-        "id": "string — the block key",
         "content": "string — markdown with lit fences"
       },
       "handlers": {
-        "render": [{ "hint": "markdown" }]
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
       }
     },
     {
@@ -37,11 +51,19 @@
       "icon": "🔢",
       "label": "value.seq",
       "manager": "@c15r/lit",
-      "note": "Ordering decoration. Key `_doc/<docId>/<blockKey>`; places that block-fact in the doc at `seq` (fractional for insertion between neighbours). This is the substrate-native doc membership — a doc is the set of facts decorated for it.",
+      "note": "Ordering decoration. Key `_doc/<docId>/<blockKey>`; the key-encoded rule (ADR-0003) projects it into a `block inDoc doc:<docId>` Reference edge — doc membership as graph.",
       "schema": {
         "seq": "number — narrative position (fractional, e.g. 2.25, allows insertion)",
         "fold": "boolean? — collapsed by default"
-      }
+      },
+      "keyPattern": "_doc/{doc}/{block}",
+      "keyEdges": [
+        {
+          "from": "{block}",
+          "rel": "inDoc",
+          "to": "doc:{doc}"
+        }
+      ]
     }
   ]
 }

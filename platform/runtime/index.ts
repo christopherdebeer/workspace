@@ -47,7 +47,16 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
-export { createObservedState, createMemoryStateStore, computeScore, StatePreconditionError, isTimerLive } from './state';
+export { createObservedState, createMemoryStateStore, computeScore, extractTypeRules, recordContains, StatePreconditionError, isTimerLive } from './state';
+export { layer } from './resolution';
+export { matchesSelector } from './selector';
+export type { Selector, Selectable } from './selector';
+export { resolvePresent, resolveLabel } from './present';
+export type { Affordance, Presentable } from './present';
+export { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl, resolveType } from './type-schema';
+export type { FieldSpec, FieldType, Type, KeyEdge } from './type-schema';
+export { createDeclarationRegistry } from './declarations';
+export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {
   ObservedState,
   StateStore,
@@ -57,6 +66,7 @@ export type {
   TrajectoryEvent,
   Entry,
   EntryMeta,
+  ScoreExplain,
   Tier,
   ReadResult,
   ElidedStub,
@@ -69,10 +79,16 @@ export type {
   QueryResult,
   NeighborsOptions,
   NeighborsResult,
+  MembersResult,
+  MemberEntry,
   ChangesResult,
   AttentionOptions,
   AttentionResult,
   SupersedeOptions,
   SalienceOptions,
   SalienceLens,
+  TypeRules,
+  RefRule,
+  KeyEdgeRule,
+  AnnotatedEdge,
 } from './state';

@@ -207,9 +207,12 @@ export interface GetCellLogsParams {
   filterPattern?: string;
 }
 
-/** Tail a cell's Lambda logs via CloudWatch (observability as a tool). */
-export async function getCellLogs(p: GetCellLogsParams): Promise<CellLogEvent[]> {
-  const logGroupName = `/aws/lambda/${p.functionName}`;
+/** Tail a CloudWatch log group by exact name. Shared by cell logs (group
+ *  `/aws/lambda/<fn>`) and platform logs (a discovered group). */
+export async function getLogsByGroupName(
+  logGroupName: string,
+  p: { startTimeMs?: number; limit?: number; filterPattern?: string } = {},
+): Promise<CellLogEvent[]> {
   try {
     const res = await cwLogs()
       .filterLogEvents({
@@ -223,10 +226,25 @@ export async function getCellLogs(p: GetCellLogsParams): Promise<CellLogEvent[]>
       .map((e) => ({ timestamp: e.timestamp ?? 0, message: (e.message ?? '').replace(/\s+$/, '') }))
       .filter((e) => e.message.length > 0);
   } catch (err) {
-    // No log group yet (cell never invoked) → no logs, not an error.
+    // No log group yet (never invoked) → no logs, not an error.
     if ((err as { code?: string }).code === 'ResourceNotFoundException') return [];
     throw err;
   }
+}
+
+/** Tail a cell's Lambda logs via CloudWatch (observability as a tool). */
+export async function getCellLogs(p: GetCellLogsParams): Promise<CellLogEvent[]> {
+  return getLogsByGroupName(`/aws/lambda/${p.functionName}`, p);
+}
+
+/** Newest log group matching a prefix — platform Lambdas are CFN-auto-named, so
+ *  `platform.logs` resolves `/aws/lambda/<stack>-<Service>Function…` by prefix. */
+export async function findLogGroup(prefix: string): Promise<string | null> {
+  const res = await cwLogs().describeLogGroups({ logGroupNamePrefix: prefix, limit: 50 }).promise();
+  const groups = (res.logGroups ?? [])
+    .filter((g): g is { logGroupName: string; creationTime?: number } => typeof g.logGroupName === 'string')
+    .sort((a, b) => (b.creationTime ?? 0) - (a.creationTime ?? 0));
+  return groups[0]?.logGroupName ?? null;
 }
 
 // ─── S3 object store (the cell common layer) ─────────────────────────

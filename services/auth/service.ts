@@ -34,6 +34,7 @@ import {
   handleToken,
   handleRevoke,
   handleDeviceInit,
+  handleDeviceInfo,
   handleDeviceApprove,
   validateBearer,
 } from './oauth';
@@ -159,6 +160,34 @@ async function mintToken(input: MintTokenInput, ctx: ServiceContext) {
   });
   await ctx.events.emit('auth.token.minted', { userId, id: result.id, scope });
   // Echo the effective scope so the minter sees what the narrowing produced.
+  return { ...result, scope };
+}
+
+interface MintTokenForInput {
+  owner: string;
+  scope: string;
+  expiresInSec?: number;
+  label?: string;
+}
+/**
+ * Grants-to-principals (machine.md §9 Increment 3): a per-run token minted FOR an
+ * owner by a trusted tier-1 caller — the workspace reactor (via `allow(auth)`) —
+ * when it spawns an agent for a machine rail. The `scope` is the rail's declared
+ * scope, *authored by the owner* (a machine the owner defined), so a cell can hand
+ * its spawned agent a real, expiring, scoped credential without a user being
+ * present. NOT gateway-exposed (absent from `describeTools`) — only direct,
+ * IAM-allowed service invokes reach it, so an external caller cannot mint for
+ * someone else. Single-user note: full per-key token scoping (vs the rail's
+ * key-patterns enforced cell-side by the agent) is a follow-up hardening.
+ */
+async function mintTokenFor(input: MintTokenForInput, ctx: ServiceContext) {
+  if (!input?.owner?.trim() || !input?.scope?.trim()) throw new Error('owner and scope are required');
+  const account = await store.getUserByUsername(input.owner);
+  const userId = account?.id ?? input.owner;
+  const scope = input.scope.split(/[\s,]+/).filter(Boolean).join(' ');
+  const result = await store.mintToken({ userId, scope, label: input.label ?? `machine-agent:${input.owner}`, expiresInSec: input.expiresInSec ?? 900 });
+  await ctx.events.emit('auth.token.minted', { userId, id: result.id, scope });
+  ctx.logger.info('minted per-run agent token', { owner: input.owner, scope, id: result.id });
   return { ...result, scope };
 }
 
@@ -401,6 +430,7 @@ export const handler = defineService({
   commands: {
     validateToken,
     mintToken,
+    mintTokenFor,
     listTokens,
     tokens,
     revokeToken,
@@ -442,6 +472,7 @@ export const handler = defineService({
     { method: 'POST', path: '/webauthn/authenticate/verify', handler: (req) => handleAuthVerify(req, store, WEBAUTHN_CONFIG) },
 
     { method: 'POST', path: '/auth/device', handler: (req) => handleDeviceInit(req, store) },
+    { method: 'POST', path: '/auth/device/info', handler: (req) => handleDeviceInfo(req, store) },
     { method: 'POST', path: '/auth/device/approve', handler: (req) => handleDeviceApprove(req, store) },
   ],
 });

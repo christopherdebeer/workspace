@@ -38,6 +38,8 @@ import {
   ServiceContext,
   ServiceHttpRequest,
   ServiceHttpResponse,
+  mergeTypeDecl,
+  resolveType,
 } from '../../platform/runtime';
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -51,6 +53,12 @@ const PROVIDERS = ['workspace', 'cells', 'auth'] as const;
 const CATALOG = '$catalog';
 /** Sentinel target for the type vocabulary (docs/type-vocabulary.md). */
 const TYPES = '$types';
+const GRAPH = '$graph';
+const GRANTS = '$grants';
+const CELLS = '$cells';
+const PLATFORM_LOGS = 'platform.logs';
+/** Admin scope gating `platform.logs` — `platform:*` (held by operators) implies it. */
+const PLATFORM_ADMIN_SCOPE = 'platform:admin';
 
 /** A tier-1 tool as returned by a provider's `describeTools`. */
 interface ProviderTool {
@@ -309,8 +317,26 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
           .catch(() => ({ entries: [] }))
       : Promise.resolve({ entries: [] }),
   ]);
+  // Per-facet resolve (mergeTypeDecl): a slice `_types/<type>` override wins facet
+  // by facet, so overriding only `icon` no longer drops the canonical handlers/schema.
   const types: Record<string, unknown> = { ...(global?.types ?? {}) };
-  for (const e of slice?.entries ?? []) types[e.key.slice('_types/'.length)] = e.value; // user override wins
+  for (const e of slice?.entries ?? []) {
+    const t = e.key.slice('_types/'.length);
+    types[t] = mergeTypeDecl(types[t], e.value);
+  }
+  // Additively attach the resolved `shape.fields` (ADR-0002) and `present` facet
+  // (ADR-0012: { icon, label, render } — the legacy `{icon,titlePath,href}` normalised
+  // once, server-side) so clients consume one resolved shape instead of re-deriving it.
+  // Flat keys are retained — existing consumers are unaffected (ADR-0014 row 3 enabler).
+  for (const [t, decl] of Object.entries(types)) {
+    const resolved = resolveType(decl, t);
+    const extra: Record<string, unknown> = {};
+    if (resolved.shape.fields) extra.fields = resolved.shape.fields;
+    if (resolved.present.icon !== undefined || resolved.present.label !== undefined || resolved.present.render !== undefined) {
+      extra.present = resolved.present;
+    }
+    if (Object.keys(extra).length) types[t] = { ...(decl as Record<string, unknown>), ...extra };
+  }
   return {
     types,
     hint: 'A fact of type T resolves through types[T].handlers[intent] (open/edit/render/create) — a surface (a cell URL), an act target, or a renderer; templated with ${id}/${match}/${value.path}.',
@@ -326,6 +352,21 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     return { capabilities: caps };
   }
   if (target === TYPES) return buildTypes(ctx);
+  // $graph — the Reference projection (authored + derived), the self-model's third surface.
+  if (target === GRAPH) return ctx.serviceClient('workspace').command('graph', {});
+  // $grants — the authority self-model (ADR-0007), the self-model's fourth surface:
+  // what the caller may see and do (scope · grant · partition).
+  if (target === GRANTS) return ctx.serviceClient('workspace').command('grants', {});
+  // $cells — the Cell axis (ADR-0008): each accessible cell's contract — what it
+  // publishes (types), backs (surfaces), and may touch (ssr/caller). The infra axis.
+  if (target === CELLS) return ctx.serviceClient('cells').command('contracts', {});
+  // platform.logs — admin diagnostics: tail a TIER-1 service's CloudWatch logs
+  // (the analogue of cells.logs for gateway/dispatch/workspace/auth/cells/home).
+  // Gated on platform:admin; the cells service resolves + redacts.
+  if (target === PLATFORM_LOGS) {
+    enforceScope(ctx, target, PLATFORM_ADMIN_SCOPE);
+    return ctx.serviceClient('cells').command('platformLogs', (input?.input as Record<string, unknown>) ?? {});
+  }
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
@@ -389,7 +430,7 @@ const tools: Record<string, McpToolDefinition> = {
   read: {
     title: 'Observe the substrate',
     description:
-      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. Pass target="$types" for the type vocabulary: how to open/edit/render a fact of each type, and which cell manages it.',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (auth/workspace/gateway/dispatch/cells), redacted.',
     inputSchema: READ_SCHEMA,
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],

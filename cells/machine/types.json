@@ -5,15 +5,17 @@
       "icon": "🔄",
       "label": "value.title",
       "manager": "@c15r/machine",
+      "note": "A machine is DECOMPOSED like a canvas board or doc: this identity fact holds only {title, entry, kind?, context?}. Its nodes are `machine-node` facts and its rails are `machine-rail` facts, all nested under `machine/<name>/` (list/delete a whole machine by that prefix). The rail facts' keyEdges project node→node graph edges, so neighbors/$graph/canvas render the machine without it carrying an embedded graph.",
       "schema": {
         "title": "string",
+        "entry": "string — the entry node name",
+        "kind": "string? — optional machine kind",
         "source": "string? — original .dy text",
-        "nodes": "node[]",
-        "arrows": "arrow[] — {from, arrow, to} where arrow → edge rel",
-        "rails": "rail[] — {from, to, mode, condition?} the executable transitions; projected to _actions/machine.<name>.* declared actions"
+        "context": "string[]? — substrate keys a decision should read"
       },
       "handlers": {
-        "render": [{ "hint": "fields" }]
+        "open": [{ "path": "/#/m/${id}" }],
+        "render": [{ "renderer": "_renderers/machine" }, { "hint": "fields" }]
       }
     },
     {
@@ -21,11 +23,43 @@
       "icon": "⬡",
       "label": "value.name",
       "manager": "@c15r/machine",
+      "note": "One node of a machine, keyed `machine/<machine>/node/<name>`. The key-encoded rule projects a `node inMachine machine/<machine>` membership edge.",
       "schema": {
+        "machine": "string — the owning machine slug",
         "name": "string",
-        "kind": "string — Task/State/Input/Output/Context/Resource/Process/Concept/Implementation/Result/tool",
-        "attributes": "object?"
+        "title": "string?",
+        "kind": "string? — Task/State/Input/Output/Context/Resource/Process/Concept/Implementation/Result/tool"
       },
+      "keyPattern": "machine/{machine}/node/{node}",
+      "keyEdges": [
+        { "from": "machine/{machine}/node/{node}", "rel": "inMachine", "to": "machine/{machine}" }
+      ],
+      "handlers": {
+        "render": [{ "hint": "fields" }]
+      }
+    },
+    {
+      "type": "machine-rail",
+      "icon": "🛤️",
+      "label": "value.mode",
+      "manager": "@c15r/machine",
+      "note": "An executable transition (rail) between two nodes, keyed `machine/<machine>/rail/<from>~<to>`. A CONTENT-BEARING edge: it carries the execution semantics (mode/condition/prompt/…) as fact fields, and its key-encoded rule (ADR-0003/0016) projects a node —rail→ node graph edge — the substrate's answer to 'edges with attributes' (first-class edges hold only rel+strength). This is ADR-0003 step 4 realised.",
+      "schema": {
+        "machine": "string — the owning machine slug",
+        "from": "string — source node name",
+        "to": "string — target node name",
+        "mode": "'auto' (deterministic, no LLM) | 'agent' (model picks a branch) | 'task' (claimable hand-off) | 'work' (spawns an agent) | 'section' (fan-out independent branches → synthesise) | 'vote' (sample one branch N× → consensus)",
+        "condition": "string? — CEL guard on an auto rail (over the run value)",
+        "when": "string? — Level-1 'when to use this branch' descriptor",
+        "prompt": "string? — the brief a work rail's spawned agent runs",
+        "sections": "section[]? — [{to, when?}] for a section rail",
+        "branch": "string? — the sampled node for a vote rail",
+        "samples": "number? — vote sample count (2..7)"
+      },
+      "keyPattern": "machine/{machine}/rail/{from}~{to}",
+      "keyEdges": [
+        { "from": "machine/{machine}/node/{from}", "rel": "rail", "to": "machine/{machine}/node/{to}" }
+      ],
       "handlers": {
         "render": [{ "hint": "fields" }]
       }
@@ -35,42 +69,17 @@
       "icon": "▶️",
       "label": "value.node",
       "manager": "@c15r/machine",
+      "note": "A run instance, keyed `machine/<machine>/run/<run>` (children `…§<branch>` / `…#<i>`). Its `trace` records the ordered node path the stepper walked — how the run executed.",
       "schema": {
         "machine": "string — the machine being run",
         "node": "string — the run's current node",
-        "status": "'running' | 'done'",
+        "status": "'running' | 'done' | 'blocked' | 'sectioning' | 'voting' | 'awaiting-decision'",
+        "via": "string? — the transition that produced this state",
+        "trace": "{node,via?,at?}[]? — the ordered execution path",
         "at": "string? — ISO time of the last transition"
       },
       "handlers": {
-        "render": [{ "hint": "fields" }]
-      }
-    },
-    {
-      "type": "rail",
-      "icon": "🛤️",
-      "label": "value.from",
-      "manager": "@c15r/machine",
-      "schema": {
-        "from": "string",
-        "to": "string",
-        "mode": "'auto' (deterministic, no LLM) | 'agent' (reasoning required)",
-        "condition": "string?"
-      },
-      "handlers": {
-        "render": [{ "hint": "fields" }]
-      }
-    },
-    {
-      "type": "meta-tool",
-      "icon": "🔧",
-      "label": "value.name",
-      "manager": "@c15r/machine",
-      "schema": {
-        "name": "string",
-        "strategy": "'agent_backed' | 'code_generation' | 'composition'",
-        "implementation": "string"
-      },
-      "handlers": {
+        "open": [{ "path": "/#/r/${id}" }],
         "render": [{ "hint": "fields" }]
       }
     }

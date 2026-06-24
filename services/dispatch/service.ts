@@ -343,6 +343,13 @@ export const handler = defineService({
     { method: 'POST', path: '/@*', handler: route },
     { method: 'PUT', path: '/@*', handler: route },
     { method: 'DELETE', path: '/@*', handler: route },
+    // Apex / userland-root (the "home demotion"): when dispatch is the router default
+    // (DISPATCH_DEFAULT_CELL set), CloudFront sends every unmatched path here — the apex
+    // `/` and its assets. These catch-alls (AFTER `/@*`, so cell paths still win the match)
+    // let those reach `route`, which forwards them to the default cell. Without
+    // DISPATCH_DEFAULT_CELL, `route` 404s a non-`/@` path exactly as before.
+    { method: 'GET', path: '/*', handler: route },
+    { method: 'HEAD', path: '/*', handler: route },
   ],
 });
 

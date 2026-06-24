@@ -133,12 +133,14 @@ async function buildDocVM(id: string, patterns: string[], isOwner: boolean): Pro
   if (!docFact) return null;
   const dv = docFact.value as DocValue;
   // Membership + order are substrate-native `_doc/<id>/<key>` = {seq, fold}
-  // decorations; fall back to the legacy embedded array for un-migrated docs.
+  // decorations — a doc is a *view over facts*, any fact key (a doc-block, a
+  // canvas `el:`, a `cell:`) placed by a decoration. (The legacy inline `blocks`
+  // array is gone — every doc was migrated to decorations.)
   const prefix = `_doc/${id}/`;
   const deco = await queryPrefix(prefix);
-  let order = deco.map((f) => ({ key: f.key.slice(prefix.length), seq: Number((f.value as { seq?: number })?.seq ?? 0), fold: !!(f.value as { fold?: boolean })?.fold }));
-  if (!order.length) order = ((dv.cells ?? dv.blocks ?? []) as Array<{ key: string; fold?: boolean }>).map((r, i) => ({ key: r.key, seq: i + 1, fold: !!r.fold }));
-  order.sort((a, b) => a.seq - b.seq);
+  const order = deco
+    .map((f) => ({ key: f.key.slice(prefix.length), seq: Number((f.value as { seq?: number })?.seq ?? 0), fold: !!(f.value as { fold?: boolean })?.fold }))
+    .sort((a, b) => a.seq - b.seq);
   const facts = await Promise.all(order.map((o) => getFact(o.key)));
   const blocks: BlockData[] = order.map((o, i) => ({
     key: o.key,
@@ -153,13 +155,22 @@ async function buildDocVM(id: string, patterns: string[], isOwner: boolean): Pro
 async function buildListVM(patterns: string[], isOwner: boolean): Promise<ViewModel> {
   const docs = (await queryPrefix('doc:')).filter((f) => isOwner || covers0(patterns, f.key));
   docs.sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'));
+  // Block count = the doc's membership decorations (one `_doc/` scan for all docs),
+  // not the retired inline array. `_doc/<id>/<key>` → bump the count for `<id>`.
+  const counts = new Map<string, number>();
+  for (const d of await queryPrefix('_doc/')) {
+    const rest = d.key.slice('_doc/'.length);
+    const slash = rest.lastIndexOf('/');
+    if (slash > 0) counts.set(rest.slice(0, slash), (counts.get(rest.slice(0, slash)) ?? 0) + 1);
+  }
   const items: ListItem[] = docs.map((f) => {
     const v = f.value as DocValue;
+    const id = f.key.slice('doc:'.length);
     return {
-      id: f.key.slice('doc:'.length),
-      title: v.title || f.key.slice('doc:'.length),
+      id,
+      title: v.title || id,
       summary: v.summary,
-      blocks: (v.blocks ?? []).length,
+      blocks: counts.get(id) ?? 0,
       updated: f._meta?.updatedAt ?? '',
     };
   });

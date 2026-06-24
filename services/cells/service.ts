@@ -32,6 +32,8 @@ import {
   deleteStack,
   invokeCell,
   getCellLogs,
+  getLogsByGroupName,
+  findLogGroup,
   putObject,
   getObject,
   getObjectRaw,
@@ -573,7 +575,11 @@ interface DeleteInput {
   cellId: string;
 }
 interface ConfigureCellInput extends CellRef {
-  timeoutSeconds: number;
+  timeoutSeconds?: number;
+  /** Web-facing: anonymous GETs/HEADs are allowed through dispatch so the SPA
+   *  shell loads for a signed-out visitor (the client then handles sign-in for
+   *  the owner's data). Registry-only — no stack rebuild. */
+  public?: boolean;
 }
 async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
@@ -583,6 +589,13 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
   const record = await registry.get(cellId);
   if (!record) throw new Error(`Unknown cell "${cellId}"`);
   if (record.owner !== user) throw new ServiceAuthError('Only the owner can reconfigure a cell');
+  const newPublic = input.public === undefined ? record.public : !!input.public;
+  // Flip `public` without touching the stack (it lives in the registry record).
+  if (input.timeoutSeconds === undefined) {
+    await registry.put({ ...record, public: newPublic, updatedAt: new Date().toISOString() });
+    ctx.logger.info('cell reconfigured (registry)', { cellId, public: newPublic });
+    return { ok: true, cellId, public: newPublic, timeoutSeconds: record.timeoutSeconds ?? null };
+  }
   const timeoutSeconds = clampTimeout(input.timeoutSeconds);
   if (!timeoutSeconds) throw new Error('timeoutSeconds (10–300) is required');
   const codeKey = `cells/${cellId}/${randomUUID()}.zip`;
@@ -615,8 +628,8 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
     timeoutSeconds,
   });
   await updateStack(record.stackName, template);
-  await registry.put({ ...record, timeoutSeconds, updatedAt: new Date().toISOString() });
-  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds });
+  await registry.put({ ...record, public: newPublic, timeoutSeconds, updatedAt: new Date().toISOString() });
+  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds, public: newPublic });
   return {
     ok: true,
     cellId,
@@ -1346,6 +1359,122 @@ async function describeTypes(_input: unknown, ctx: ServiceContext): Promise<{ ty
   return { types: out };
 }
 
+/**
+ * The Cell axis as a self-model surface (ADR-0008) — powers `read("$cells")`. For
+ * each cell the caller can reach (owns or was granted), its **contract**: what it
+ * *publishes* (the Type Declarations it supplies — the `describeTypes` seam), what
+ * it *backs* (the affordance surfaces those types name it for), and the *substrate
+ * access* it declares (`ssrReads`/`callerWrites` — bounded, and gated by the Grant
+ * axis). `$catalog` lists a cell's capabilities; this names the cell's whole
+ * contract in one place. Mirrors `$grants`: the two orthogonal axes, made legible.
+ */
+async function cellContracts(_input: unknown, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  const env = loadForgeEnv();
+  const registry = createRegistry(env.registryTable);
+  const cells = await registry.listAccessibleBy(user);
+  return {
+    cells: cells
+      .sort((a, b) => cellAddress(a.owner, a.name).localeCompare(cellAddress(b.owner, b.name)))
+      .map((c) => {
+        const declared = c.types ?? [];
+        const typeNames = declared
+          .map((t) => (typeof t.type === 'string' ? t.type : ''))
+          .filter((t) => t && !t.startsWith('_'));
+        // the affordance surfaces those types back (open/edit/render/create…)
+        const backs = Array.from(
+          new Set(
+            declared.flatMap((t) =>
+              t.handlers && typeof t.handlers === 'object' ? Object.keys(t.handlers as Record<string, unknown>) : [],
+            ),
+          ),
+        ).sort();
+        return {
+          address: cellAddress(c.owner, c.name),
+          name: c.name,
+          owner: c.owner,
+          status: c.status,
+          public: c.public,
+          ...(c.owner !== user ? { shared: true } : {}),
+          ...(c.description ? { description: c.description } : {}),
+          publishes: typeNames, // → $types vocabulary
+          backs, // affordance intents these types resolve through this cell
+          substrate: {
+            ssrReads: (c.ssrReads ?? []).map((r) => r.target),
+            callerWrites: (c.callerWrites ?? []).map((w) => ({ keyPrefix: w.keyPrefix, ...(w.crossSlice ? { crossSlice: true } : {}) })),
+          },
+        };
+      }),
+    hint:
+      'A Cell supplies Declarations (publishes → $types) and backs Affordances (open/edit/render). Its `substrate` access is declared cell-side and gated by the Grant axis ($grants). The infra axis beside the authority axis; $catalog lists capabilities, this names the contract.',
+  };
+}
+
+/** Scrub bearer tokens / JWTs / labelled secrets from a log line — platform logs
+ *  can carry credentials, and `platform.logs` is diagnostic, not an exfil path. */
+export function redactLogLine(s: string): string {
+  return s
+    .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [REDACTED]')
+    .replace(/eyJ[A-Za-z0-9._\-]{20,}/g, '[REDACTED-JWT]')
+    // labelled secrets — require an assignment separator (`:`/`=`), not a bare space,
+    // so prose like "token expired" / "secret sauce" is left intact.
+    .replace(/\b(authorization|access_token|refresh_token|token|password|secret|api[_-]?key)(\s*[:=]\s*)["']?[^\s"',}]+/gi, '$1$2[REDACTED]');
+}
+
+interface PlatformLogsInput {
+  /** A tier-1 platform service: auth/workspace/gateway/dispatch/cells. */
+  service?: string;
+  since?: string;
+  limit?: number;
+  filter?: string;
+}
+
+/** service → its HttpServiceCell construct id; the CFN log group is
+ *  `/aws/lambda/<stack>-<ConstructId>Function…` (resolved by prefix at runtime, so
+ *  no per-function CDK reference is needed — avoids a gateway↔cells dependency cycle). */
+const PLATFORM_SERVICE_LABELS: Record<string, string> = {
+  // (tier-1 `home` retired — the platform face is the tier-2 @c15r/home cell, use cells.logs)
+  auth: 'AuthService',
+  workspace: 'WorkspaceService',
+  gateway: 'GatewayService',
+  dispatch: 'DispatchService',
+  cells: 'CellsService',
+};
+
+/**
+ * Internal: tail a TIER-1 platform service's CloudWatch logs — the analogue of
+ * `cells.logs` for the services that route/gate everything (the home-demotion
+ * incident's blind spot, `kb/platform-observability-gap`). Reached only via the
+ * gateway's `platform.logs` target, which enforces `platform:admin` first. The
+ * service's Lambda is auto-named, so the log group is discovered by prefix; every
+ * line is redacted (platform logs can carry credentials).
+ */
+async function platformLogs(input: PlatformLogsInput, ctx: ServiceContext): Promise<unknown> {
+  requireUser(ctx.identity);
+  const known = Object.keys(PLATFORM_SERVICE_LABELS);
+  const service = (input?.service ?? '').trim();
+  if (!service) return { services: known, hint: 'Pass `service` (one of services[]) + optional since/limit/filter.' };
+  const label = PLATFORM_SERVICE_LABELS[service];
+  if (!label) throw new Error(`Unknown platform service "${service}". Known: ${known.join(', ')}`);
+  const stack = process.env.PLATFORM_STACK_NAME;
+  if (!stack) throw new Error('platform.logs unavailable: PLATFORM_STACK_NAME not configured');
+  const prefix = `/aws/lambda/${stack}-${label}Function`;
+  const logGroupName = await findLogGroup(prefix);
+  if (!logGroupName) return { service, count: 0, events: [], note: `no log group matching "${prefix}"` };
+  const events = await getLogsByGroupName(logGroupName, {
+    startTimeMs: Date.now() - sinceToMs(input.since),
+    limit: input.limit ?? 100,
+    filterPattern: input.filter,
+  });
+  ctx.logger.info('platform logs read', { service, logGroup: logGroupName, count: events.length });
+  return {
+    service,
+    logGroup: logGroupName,
+    count: events.length,
+    events: events.map((e) => ({ time: new Date(e.timestamp).toISOString(), message: redactLogLine(e.message) })),
+  };
+}
+
 interface CallCellToolInput {
   /** Target the cell by id, or by owner + name (the `@owner/name` address form). */
   cellId?: string;
@@ -1657,7 +1786,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: deploy as RegisteredCommand,
   },
   configureCell: {
-    description: 'Reconfigure a cell you own: Lambda timeoutSeconds (10–300). Re-renders the stack and preserves live code; run cells.deploy afterwards to restore client/static assets.',
+    description: "Reconfigure a cell you own: `timeoutSeconds` (10–300; re-renders the stack — run cells.deploy afterwards to restore client/static assets) and/or `public` (registry-only, no rebuild — web-facing so a signed-out visitor gets the SPA shell). Pass either or both.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1667,8 +1796,8 @@ const TOOLS: Record<string, ToolSpec> = {
         owner: { type: 'string' },
         name: { type: 'string' },
         timeoutSeconds: { type: 'number' },
+        public: { type: 'boolean', description: 'Allow anonymous GETs through dispatch (the SPA shell loads signed-out; the client handles sign-in for data)' },
       },
-      required: ['timeoutSeconds'],
       additionalProperties: false,
     },
     handler: configureCell as RegisteredCommand,
@@ -1755,6 +1884,8 @@ const commands: Record<string, RegisteredCommand> = {
   describeCellTools: describeCellTools as RegisteredCommand,
   callCellTool: callCellTool as RegisteredCommand,
   describeTypes: describeTypes as RegisteredCommand,
+  contracts: cellContracts as RegisteredCommand,
+  platformLogs: platformLogs as RegisteredCommand,
 };
 for (const [name, spec] of Object.entries(TOOLS)) {
   commands[name] = spec.handler;

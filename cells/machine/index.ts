@@ -3,7 +3,7 @@
  *
  * A tier-2 cell that makes the concepts of DyGram (christopherdebeer/machine)
  * first-class in the substrate: a machine is a named subgraph of typed nodes
- * and typed arrows an agent rides as rails. See docs/machine-cell.md for the
+ * and typed arrows an agent rides as rails. See docs/machine.md for the
  * full design and the DyGram→substrate mapping.
  *
  * Minimal cell contract (mirrors cells/reef-writer): GET /_tools advertises the
@@ -13,19 +13,34 @@
  * and reads are the gateway's job (workspace.link / workspace.query type:machine).
  */
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { App } from './client/app';
+import { installBridge } from './client/bridge';
+import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites } from './engine';
+// The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
+// over the owner's slice. VENDORED here (not a URL import): the forge bundler
+// only bundles relative imports within the cell dir + esm.sh-declared deps; a
+// server-side `https://` import HANGS the bundler (the browser kernel's URL is
+// browser-fetched, never server-bundled). Canonical source: cells/kernel/static/
+// substrate.js — kept in sync until it's published as an npm package (ADR-0017).
+import { createSubstrate } from './substrate';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
 
-/** DyGram's seven arrows → substrate edge relations (see docs/machine-cell.md). */
-const ARROW_RELS = {
-  '->': 'flows-to',
-  '-->': 'depends-on',
-  '=>': 'causes',
-  '<|--': 'inherits',
-  '*-->': 'composes',
-  'o-->': 'aggregates',
-  '<-->': 'relates',
-};
+/** The SPA's first-paint seed from the dispatch-proxied ssr.json reads (run AS
+ *  the caller; present only on an authed top-level navigation to `/`). */
+function buildBoot(user, ssr) {
+  const s = ssr ?? {};
+  const ent = (k) => (s[k] && s[k].entries) || [];
+  // Identities only (bare `machine/<name>`); node/rail/run facts are separate types.
+  const machines = ent('machines').filter((e) => String(e.key).startsWith('machine/') && String(e.key).slice('machine/'.length).indexOf('/') < 0);
+  return { session: { user: user ?? null }, machines, nodes: ent('nodes'), rails: ent('rails'), runs: ent('runs') };
+}
+
 
 /**
  * The cell-required `_renderers/machine` source (a canvas ElementView): adapts a
@@ -77,13 +92,14 @@ const TOOLS = [
   {
     name: 'define_machine',
     description:
-      'Record a DyGram machine as a fact at machine/<name> (typed nodes + arrows) AND project its rails into invokable, guarded declared actions: a `start`, an auto-rail advance per `->` flow, and a `decide-*` per `=>` agent node. Execution is then invoking those via workspace.invoke; the run fact (machine-run/<run>) advances, its revision history the trajectory. Pass explicit `rails` to override the arrow-derived ones, `project:false` to skip projection, `source` to keep the .dy text.',
+      'Define a DyGram machine in DECOMPOSED form — like a canvas board or doc, the machine is an identity fact `machine/<name>` plus one `machine-node/*` fact per node and one `machine-rail/*` fact per rail (all nested under `machine/<name>/`). The rail facts carry mode/condition/prompt and their keys derive node→node graph edges (so neighbors/$graph/canvas render the machine for free). Also projects the run vocabulary: a `start` action + a `decide-*` per agent/task node, the single `step` subscription (the stateless stepper walks deterministic rails + runs the join barrier), and model deliveries for agent/work rails. Pass explicit `rails` to override arrow-derived ones, `project:false` to skip the run vocabulary, `reactive:false` for driven-only (drive with the `step` tool), `dryRun` to preview.',
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Machine slug (becomes key machine/<name>)' },
         title: { type: 'string', description: 'Human title' },
+        entry: { type: 'string', description: 'Explicit start node — needed for a CYCLIC machine (e.g. a circuit breaker) whose entry has incoming retry rails, so the zero-indegree heuristic cannot find it. Defaults to the first node with no incoming rail.' },
         source: { type: 'string', description: 'Optional original .dy source text' },
         nodes: {
           type: 'array',
@@ -92,16 +108,18 @@ const TOOLS = [
         },
         arrows: {
           type: 'array',
-          description: 'Arrows: [{ from, arrow, to, label? }] where arrow is one of -> --> => <|-- *--> o--> <-->',
+          description: 'Arrows: [{ from, arrow, to, label? }]. DyGram\'s relationship/rendering arrows are -> --> => <|-- *--> o--> <--> (stored as edge `rel`s; see ARROW_RELS). `~>`/`~>>` are NOT DyGram arrows — they are substrate-only rail syntax we add for task/work rails (see docs/machine.md).',
           items: { type: 'object' },
         },
         rails: {
           type: 'array',
-          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent", condition?(CEL) }]. Default: derived from arrows (-> auto, => agent).',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work"|"catch", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns?, maxMs? }]. `condition` (auto rails) is CEL over `{ value:<run>, now, nowMs }` — so an edge can gate on machine state AND time, e.g. `value.deadline < now` or `nowMs - value.startedMs > 300000` (a deadline/wait). `maxMs` is a soft per-step wall-clock budget (ms) the spawned work agent honours — bounds a step below the models cell Lambda ceiling (default ≈285s). A `catch` rail from a node fires only when that node`s work/agent step FAILED (`status:"failed"`), routing the run to a recovery node — the error-handling primitive (machine.md §13). NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
-        project: { type: 'boolean', description: 'Project rails into declared actions (default true)' },
-        reactive: { type: 'boolean', description: 'Also register subscriptions so auto rails advance themselves on run changes (default false — driven only)' },
+        dryRun: { type: 'boolean', description: 'Validate + preview the decomposition facts + projected action/subscription ids WITHOUT writing anything.' },
+        project: { type: 'boolean', description: 'Project the run vocabulary (start + decide actions, step + model-delivery subscriptions, triggers). Default true.' },
+        reactive: { type: 'boolean', description: 'Register the step subscription so runs self-drive on change (default true). Pass false for a driven-only machine you advance by hand with the `step` tool.' },
+        context: { type: 'array', items: { type: 'string' }, description: 'Substrate keys a decision should read for context (e.g. tending/latest); stored on the identity fact.' },
         trigger: { type: 'object', description: 'Optional fact pattern { type?, keyPrefix?, cel?, runId? } that STARTS a run. runId templates the run id from the event (default "${keySuffix}"); use e.g. "${value.at}" so a recurring source like tending gets a fresh run each time.' },
         tags: { type: 'array', items: { type: 'string' } },
       },
@@ -110,39 +128,33 @@ const TOOLS = [
     scope: null,
   },
   {
-    name: 'record_idea',
+    name: 'trigger_run',
     description:
-      'Record a DyGram idea as a first-class fact: a concept (an explanatory note) or a claim ({statement, confidence 0..1, support[]}). Makes the *ideas*, not just machines, addressable, salience-ranked, and linkable.',
+      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger). Writes machine/<machine>/trigger/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on.',
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Idea slug' },
-        kind: { type: 'string', enum: ['concept', 'claim'], description: 'concept = note; claim = a confidence-bearing assertion' },
-        statement: { type: 'string', description: 'The concept text or the claim statement' },
-        confidence: { type: 'number', description: 'For a claim: calibrated belief in [0,1]' },
-        support: { type: 'array', items: { type: 'string' }, description: 'For a claim: fact keys of the evidence' },
-        tags: { type: 'array', items: { type: 'string' } },
+        machine: { type: 'string', description: 'Machine slug (the <name> in machine/<name>)' },
+        run: { type: 'string', description: 'Optional run id (auto-generated if omitted)' },
+        text: { type: 'string', description: 'Trigger-context body (like a Routine `text` payload) — stored on the run for the entry agent' },
       },
-      required: ['id', 'kind', 'statement'],
+      required: ['machine'],
     },
     scope: null,
   },
   {
-    name: 'register_meta_tool',
+    name: 'step',
     description:
-      'v4 — persist a tool constructed mid-run as a meta-tool fact (strategy: agent_backed | code_generation | composition), so the vocabulary grows during use, audited by provenance. If it carries a declared `action` ({id, writes[], if?, params?}), that action is also projected as cell-required vocabulary — instantly invocable.',
+      'Advance a machine run STATELESSLY (ADR-0018, the stateless stepper). Assembles the machine from its decomposed facts, reads machine/<machine>/run/<run>, follows deterministic `auto` rails IN-PROCESS (CEL-guarded, no per-hop fact-write), and emits at most ONE advanced run fact (carrying the execution `trace`). Returns the `yield`: the non-deterministic point where a decision is owed — `{kind:"agent"|"task"|"work"|"section"|"vote", node, choices}` — or null when the run completed. On a section/vote yield it spawns the children; when a child completes it runs the DETERMINISTIC join barrier (reads the siblings, advances the parent once all are done — no model). The driven counterpart to the reactive step subscription. Idempotent: a run already parked at its yield emits nothing.',
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Tool name (becomes key meta-tool/<name>)' },
-        strategy: { type: 'string', enum: ['agent_backed', 'code_generation', 'composition'] },
-        implementation: { type: 'string', description: 'How the tool is realised (prose, code, or a composition spec)' },
-        action: { type: 'object', description: 'Optional declared action to project: { id, writes[], if?, enabled?, params? }' },
-        tags: { type: 'array', items: { type: 'string' } },
+        machine: { type: 'string', description: 'Machine slug (the <name> in machine/<name>)' },
+        run: { type: 'string', description: 'Run id → machine/<machine>/run/<run>' },
       },
-      required: ['name', 'strategy'],
+      required: ['machine', 'run'],
     },
     scope: null,
   },
@@ -164,104 +176,6 @@ async function emit(detail) {
   );
 }
 
-/** A safe `_actions/` id segment — declared-action ids must not contain "/". */
-const seg = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '_');
-
-/**
- * Rails from arrows (when not declared explicitly): a plain flow (`->`) is a
- * deterministic (auto) transition; a causation arrow (`=>`) is an agent-decision
- * rail — the doc's "escalate when reasoning needed". Other arrows (`-->`, `*-->`,
- * …) are structure, not transitions, so they don't become rails.
- */
-function railsFrom(arrows, explicit) {
-  if (Array.isArray(explicit) && explicit.length) {
-    return explicit.map((r) => ({
-      from: r.from,
-      to: r.to,
-      mode: r.mode === 'agent' ? 'agent' : r.mode === 'task' ? 'task' : 'auto',
-      ...(r.condition ? { condition: r.condition } : {}),
-    }));
-  }
-  const rails = [];
-  for (const e of arrows) {
-    if (e.arrow === '->') rails.push({ from: e.from, to: e.to, mode: 'auto' });
-    else if (e.arrow === '=>') rails.push({ from: e.from, to: e.to, mode: 'agent' });
-    else if (e.arrow === '~>') rails.push({ from: e.from, to: e.to, mode: 'task' });
-  }
-  return rails;
-}
-
-/**
- * Project a machine's rails into cell-required declared actions in the owner's
- * slice (now permitted on the organ path). Each rail becomes an invokable,
- * guarded transition over a `machine-run/<run>` fact — execution IS invoking
- * these via the gateway, and the run fact's revision history is the trajectory
- * (effects-as-data). Spend reasoning only at agent rails:
- *   - start              seed a run at the entry node (no incoming rail)
- *   - <from>-to-<to>      auto rail: advance when the run is at `from`, no LLM
- *   - decide-<from>       agent rail: record the chosen branch as a `claim`,
- *                         then advance — the only place a model is invoked
- */
-function projectionActions(name, nodes, rails) {
-  const m = seg(name);
-  const runKey = 'machine-run/${params.run}';
-  const tags = ['machine', `machine:${name}`];
-  const hasOut = (node) => rails.some((r) => r.from === node);
-  const hasIn = (node) => rails.some((r) => r.to === node);
-  const entry = (nodes.find((n) => !hasIn(n.name)) ?? nodes[0])?.name;
-  const actions = [];
-
-  if (entry) {
-    actions.push({
-      id: `machine.${m}.start`,
-      description: `Start a run of "${name}" at ${entry}.`,
-      params: { run: { type: 'string', required: true, description: 'Run id → machine-run/<run>' } },
-      writes: [{ key: runKey, value: { machine: name, node: entry, status: 'running', startedAt: '${now}' }, type: 'machine-run', tags, ifAbsent: true }],
-    });
-  }
-
-  for (const r of rails.filter((x) => x.mode === 'auto')) {
-    const ifConds = [{ key: runKey, path: 'node', op: 'eq', value: r.from }];
-    if (r.condition) ifConds.push({ cel: r.condition, key: runKey });
-    actions.push({
-      id: `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`,
-      description: `Auto rail ${r.from} → ${r.to}${hasOut(r.to) ? '' : ' (terminal)'}.`,
-      params: { run: { type: 'string', required: true } },
-      if: ifConds,
-      writes: [{ key: runKey, value: { machine: name, node: r.to, status: hasOut(r.to) ? 'running' : 'done', at: '${now}', via: `${r.from}->${r.to}` }, type: 'machine-run', tags }],
-    });
-  }
-
-  // Agent (`=>`) and task (`~>`) rails both resolve at `from` by recording a
-  // chosen branch as a claim + advancing — the same completion action, whether
-  // the chooser is a model (agent) or a claimant working an open task (task).
-  const isDecision = (x) => x.mode === 'agent' || x.mode === 'task';
-  for (const from of [...new Set(rails.filter(isDecision).map((x) => x.from))]) {
-    const branches = rails.filter((x) => isDecision(x) && x.from === from).map((x) => x.to);
-    // The advance can't know the runtime-chosen branch's terminality, but when
-    // every branch is terminal the result is `done` regardless of choice — the
-    // common "decide/task → a terminal Result" case (mixed nodes resolve `done`
-    // correctly via models.decide, which sees the chosen branch).
-    const decisionStatus = branches.every((b) => !hasOut(b)) ? 'done' : 'running';
-    actions.push({
-      id: `machine.${m}.decide-${seg(from)}`,
-      description: `Decision at ${from}: record the chosen branch as a claim and advance. Branches: ${branches.join(', ')}.`,
-      params: {
-        run: { type: 'string', required: true },
-        to: { type: 'string', required: true, enum: branches, description: 'The chosen branch' },
-        statement: { type: 'string', description: 'Why this branch — becomes the claim' },
-        confidence: { type: 'number', description: 'Calibrated belief 0..1' },
-      },
-      if: [{ key: runKey, path: 'node', op: 'eq', value: from }],
-      writes: [
-        { key: 'claims/${params.run}.' + seg(from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
-        { key: runKey, value: { machine: name, node: '${params.to}', status: decisionStatus, at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
-      ],
-    });
-  }
-  return actions;
-}
-
 /** Emit one cell-required declared action through the organ path. */
 async function emitAction(def, name) {
   await emit({ key: `_actions/${def.id}`, value: def, type: 'action', tags: ['machine', `machine:${name}`], via: 'machine.project' });
@@ -276,48 +190,119 @@ async function emitSubscription(def, name) {
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
 
 /**
- * Subscriptions that make a machine reactive:
- *  - one per AUTO rail: invoke the transition action in-process; its `if` guard
- *    fires only the rail whose `from` = the run's current node, so the
- *    deterministic prefix advances itself.
- *  - one per AGENT node: when a run reaches it, deliver to `@owner/models.decide`
- *    — the model picks a branch and writes the decision back (re-triggering the
- *    rails), or, with no provider configured, leaves a claimable `task` fact for
- *    any substrate agent to complete. Reasoning is spent only here.
+ * Drive one run forward (ADR-0018). Reads the run + its machine def via the
+ * shared substrate client, runs the pure `step`, and applies the result:
+ *  - emits the advanced run (only when it actually changed — idempotent, so a
+ *    reactive deliver to this tool on a parked run is a cheap no-op, no loop);
+ *  - on a section/vote yield, spawns the children (reliable per-child writes);
+ *  - on a completed run, runs the deterministic join barrier against its parent.
+ * Pure decisions live in engine.ts; this is the thin I/O shell around them.
  */
-function projectionSubscriptions(name, rails) {
-  const m = seg(name);
-  const subs = [];
-  for (const r of rails.filter((x) => x.mode === 'auto')) {
-    const id = `machine.${m}.${seg(r.from)}-to-${seg(r.to)}`;
-    subs.push({
-      id,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)}` },
-      invoke: id,
-      params: { run: '${keySuffix}' },
-    });
-  }
-  // Decision nodes deliver to the model. `=>` agent rails let it decide (falling
-  // back to a claimable task if no provider); `~>` task rails always defer to a
-  // claimable task. The `status != awaiting-decision` guard makes the run fire
-  // the decision once on arrival, not again when it parks awaiting a claimant.
-  const agentNodes = new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from));
-  const taskNodes = new Set(rails.filter((x) => x.mode === 'task').map((x) => x.from));
-  for (const from of new Set([...agentNodes, ...taskNodes])) {
-    const defer = taskNodes.has(from) && !agentNodes.has(from);
-    subs.push({
-      id: `machine.${m}.decide-${seg(from)}`,
-      match: { keyPrefix: 'machine-run/', cel: `value.machine == ${JSON.stringify(name)} && value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
-      deliver: `@${OWNER}/models.decide`,
-      params: defer ? { run: '${keySuffix}', defer: 'true' } : { run: '${keySuffix}' },
-    });
-  }
-  return subs;
+/** Assemble a machine's in-memory def from its DECOMPOSED facts (identity + node +
+ *  rail facts, all under the `machine/<name>/` namespace). Returns null if absent. */
+async function loadMachine(sub, machineName) {
+  const idFact = await sub.read(mkey.machine(machineName));
+  if (!idFact) return null;
+  const base = mkey.machine(machineName);
+  const [nodeFacts, railFacts] = await Promise.all([
+    sub.query({ prefix: `${base}/node/` }),
+    sub.query({ prefix: `${base}/rail/` }),
+  ]);
+  return assembleMachine(idFact, nodeFacts, railFacts);
 }
+
+async function stepRun(machineName, runId) {
+  const sub = createSubstrate({ owner: OWNER, via: 'machine.step' });
+  const now = new Date().toISOString();
+  const runKey = mkey.run(machineName, runId);
+  const runFact = await sub.read(runKey);
+  if (!runFact) return { error: `no run ${runKey}` };
+  const runValue = runFact.value || {};
+  const mName = runValue.machine || machineName;
+  const machine = await loadMachine(sub, mName);
+  if (!machine) return { error: `no machine ${mkey.machine(mName)}` };
+
+  const result = step(runValue, machine, now);
+
+  // A section/vote yield spawns children; the spawn writes include the parent's
+  // wait-state (which supersedes the plain advance), so don't also emit `result.run`.
+  if (result.yield && (result.yield.kind === 'section' || result.yield.kind === 'vote')) {
+    const spec = specFromYield(result.yield);
+    const writes = spawnChildrenWrites(runId, mName, spec, now);
+    await sub.emit(writes);
+    return { run: runId, machine: mName, node: result.yield.node, yield: result.yield, spawned: writes.slice(1).map((w) => w.key) };
+  }
+
+  // Emit the advance only if the meaningful state changed (idempotent — so a
+  // reactive deliver to a parked run is a cheap no-op, no loop). trace always rides.
+  const changed = result.run.node !== runValue.node || result.run.status !== runValue.status || JSON.stringify(result.run.trace) !== JSON.stringify(runValue.trace);
+  if (changed) {
+    await sub.emit([{ key: runKey, value: result.run, type: 'machine-run', tags: ['machine', `machine:${mName}`] }]);
+  }
+
+  let barrier;
+  if (result.run.status === 'done') {
+    barrier = await advanceParentBarrier(sub, mName, runId, result.run, machine, now);
+  }
+
+  return { run: runId, machine: mName, node: result.run.node, status: result.run.status, changed, yield: result.yield ?? null, path: result.path, ...(barrier ? { barrier } : {}) };
+}
+
+/**
+ * The deterministic join barrier shell: if `childRunId` is a section/vote child,
+ * read the parent + all siblings (under the machine's run namespace) and let the
+ * pure `barrierAdvance` decide whether to advance the parent.
+ */
+async function advanceParentBarrier(sub, machineName, childRunId, childRun, machine, now) {
+  const rel = parentOf(childRunId);
+  if (!rel) return null;
+  const parent = await sub.read(mkey.run(machineName, rel.parent));
+  if (!parent) return null;
+  const siblings = await sub.query({ prefix: `${mkey.run(machineName, rel.parent)}${rel.sep}` });
+  // Organ writes are async: the child-done write that triggered this step may not
+  // have applied yet, so the just-completed child can read back stale. Overlay its
+  // fresh value (and ensure it's present) so the barrier counts it.
+  const childKey = mkey.run(machineName, childRunId);
+  let sawChild = false;
+  const merged = siblings.map((s) => {
+    if (s.key === childKey) { sawChild = true; return { ...s, value: childRun }; }
+    return s;
+  });
+  if (!sawChild) merged.push({ key: childKey, value: childRun });
+  const decision = barrierAdvance(rel.parent, parent.value, merged, machine, now);
+  if (!decision.advance) return { parent: rel.parent, waiting: true, done: decision.done, expected: decision.expected, reason: decision.reason };
+  await sub.emit([decision.advance]);
+  return { parent: rel.parent, advanced: true, node: decision.advance.value.node, done: decision.done, expected: decision.expected };
+}
+
 
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+
+  // ── the SSR React SPA (the user frontend) ──────────────────────────────
+  if (method === 'GET' && path === '/app.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*' }, body: readFile('app.js') };
+  }
+  if ((method === 'GET' || method === 'HEAD') && (path === '/' || path === '')) {
+    try {
+      const caller = event.headers && event.headers['x-cell-caller'];
+      const authed = !!caller && caller !== 'anonymous';
+      const boot = buildBoot(authed ? caller : null, event.ssrData);
+      // SSR'd cross-cell links must match the client's; a host-aware stub keeps
+      // hydration clean (only cellUrl is used during render).
+      installBridge({ cellUrl: (o, n, rest = '') => `/@${o}/${n}${rest}` });
+      const inner = renderToString(createElement(App, { initial: boot }));
+      const state = JSON.stringify(boot).replace(/</g, '\\u003c');
+      const shell = readFile('static/index.html')
+        .replace('<div id="root"></div>', `<div id="root" data-ssr="1">${inner}</div>`)
+        .replace('<script type="module"', `<script id="machine-state" type="application/json">${state}</script>\n  <script type="module"`);
+      return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: shell };
+    } catch (err) {
+      // SSR is best-effort — fall back to the cold-mount shell, never a 500.
+      try { return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: readFile('static/index.html') }; } catch { /* fall through */ }
+    }
+  }
 
   if (method === 'GET' && path === '/_tools') {
     return json(200, { tools: TOOLS });
@@ -361,52 +346,97 @@ export const handler = async (event) => {
     return json(200, { bootstrapped: true, renderer: '_renderers/machine', views: ['_views/machine-runs', '_views/open-tasks'], actions: ['task.claim'] });
   }
 
+  if (method === 'POST' && path === '/_tools/trigger_run') {
+    const a = event.body ? JSON.parse(event.body) : {};
+    if (!a.machine) return json(400, { error: 'machine is required' });
+    const run = a.run || `${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    await emit({
+      key: mkey.trigger(a.machine, run),
+      value: { at: new Date().toISOString(), ...(a.text ? { text: a.text } : {}) },
+      type: 'machine-trigger',
+      tags: ['machine', `machine:${a.machine}`, 'trigger'],
+      via: 'machine.trigger_run',
+    });
+    return json(200, { triggered: true, machine: a.machine, run, key: mkey.trigger(a.machine, run) });
+  }
+
+  if (method === 'POST' && path === '/_tools/step') {
+    const a = event.body ? JSON.parse(event.body) : {};
+    if (!a.run || !a.machine) return json(400, { error: 'run and machine are required' });
+    try {
+      const out = await stepRun(a.machine, a.run);
+      return json(out.error ? 404 : 200, out);
+    } catch (err) {
+      return json(500, { error: (err && err.message) || String(err) });
+    }
+  }
+
   if (method === 'POST' && path === '/_tools/define_machine') {
     const a = event.body ? JSON.parse(event.body) : {};
     if (!a.name) return json(400, { error: 'name is required' });
     const nodes = Array.isArray(a.nodes) ? a.nodes : [];
-    const arrows = Array.isArray(a.arrows) ? a.arrows : [];
-    const rails = railsFrom(arrows, a.rails);
-    const value = {
-      title: a.title ?? a.name,
-      ...(a.source ? { source: a.source } : {}),
-      nodes,
-      arrows: arrows.map((e) => ({ ...e, rel: ARROW_RELS[e.arrow] ?? 'flows-to' })),
-      rails,
-      // Substrate keys a decision at an agent rail should read for context
-      // (e.g. a tending machine points at `tending/latest`). models.decide
-      // includes their current values in the prompt.
-      ...(Array.isArray(a.context) ? { context: a.context } : {}),
-      nodeCount: nodes.length,
-      arrowCount: arrows.length,
+    const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
+    const validation = validateMachine(nodes, rails, a.entry);
+    const project = a.project !== false;
+    const reactive = a.reactive !== false; // stepper-on by default; pass reactive:false for driven-only
+
+    // The DECOMPOSED definition fan: identity + one fact per node + per rail.
+    const writes = decomposeWrites(a.name, nodes, rails, { title: a.title, source: a.source, ...(a.entry ? { entry: a.entry } : {}), ...(a.kind ? { kind: a.kind } : {}) });
+    if (Array.isArray(a.context)) writes[0].value.context = a.context; // decide reads these
+    writes[0].value.reactive = reactive; // surfaced to the UI toggle
+    if (Array.isArray(a.tags)) writes[0].tags = [...new Set([...writes[0].tags, ...a.tags])];
+
+    const actions = project ? projectActions(a.name, nodes, rails, a.entry) : [];
+    const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER, a.context) : [];
+    const sub = createSubstrate({ owner: OWNER, via: 'machine.define_machine' });
+
+    // Which prior definition facts / projected vocabulary this re-definition would
+    // retire (full-replace semantics — see the reconcile sweep below). Computed up
+    // front so `dryRun` can preview the cleanup, not just the writes.
+    const keepFacts = new Set(writes.map((w) => w.key));
+    const keepActionKeys = new Set(actions.map((d) => `_actions/${d.id}`));
+    // `subs` ⊂ the final projected sub set; itrigger/trigger are added at emit time
+    // below, so include their ids here too or the preview would over-report them.
+    const projectedSubIds = [
+      ...subs.map((s) => s.id),
+      ...(project ? [`machine.${seg(a.name)}.itrigger`] : []),
+      ...(project && a.trigger && typeof a.trigger === 'object' ? [`machine.${seg(a.name)}.trigger`] : []),
+    ];
+    const keepSubKeys = new Set(projectedSubIds.map((id) => `_subscriptions/${id}`));
+    const findStale = async (prefix, keep) => {
+      let existing = [];
+      try { existing = await sub.query({ prefix, limit: 200 }); } catch { return []; }
+      return existing.map((f) => f.key).filter((k) => !keep.has(k));
     };
-    await emit({
-      key: `machine/${a.name}`,
-      value,
-      type: 'machine',
-      tags: [...new Set(['machine', 'dygram', ...(Array.isArray(a.tags) ? a.tags : [])])],
-      via: 'machine.define_machine',
-    });
-    // Project the rails into invokable, guarded declared actions (v2 → v3).
-    // The run advances by invoking these; agent rails surface as `decide-*`.
-    let projected = [];
+    const stalePrefixes = [
+      [`${mkey.machine(a.name)}/node/`, keepFacts],
+      [`${mkey.machine(a.name)}/rail/`, keepFacts],
+      [`_actions/machine.${seg(a.name)}.`, keepActionKeys],
+      [`_subscriptions/machine.${seg(a.name)}.`, keepSubKeys],
+    ];
+
+    if (a.dryRun) {
+      const stale = (await Promise.all(stalePrefixes.map(([p, k]) => findStale(p, k)))).flat();
+      return json(200, { dryRun: true, validation, facts: writes.map((w) => w.key), actions: actions.map((d) => d.id), subscriptions: subs.map((s) => s.id), wouldSupersede: stale });
+    }
+
+    // 1. Emit the decomposition fan reliably (FailedEntryCount-checked).
+    await sub.emit(writes);
+    // 2. Project declared actions (start + decide) + the stepper subscriptions.
     const subscriptions = [];
-    if (a.project !== false && rails.length) {
-      projected = projectionActions(a.name, nodes, rails);
-      for (const def of projected) await emitAction(def, a.name);
-      // Opt-in reactivity: subscribe each auto rail to this machine's runs, so
-      // the deterministic prefix advances itself. Without `reactive`, the same
-      // actions remain drivable by hand via workspace.invoke.
-      if (a.reactive) {
-        for (const s of projectionSubscriptions(a.name, rails)) {
-          await emitSubscription(s, a.name);
-          subscriptions.push(s.id);
-        }
-      }
-      // Optional trigger: a fact pattern that STARTS a run (e.g. a new capture,
-      // or a tending audit). `runId` templates the run id from the event so each
-      // occurrence gets its own run (default `${keySuffix}`); point it at a
-      // unique field (e.g. `${value.at}`) for a recurring source like tending.
+    for (const def of actions) await emitAction(def, a.name);
+    for (const s of subs) { await emitSubscription(s, a.name); subscriptions.push(s.id); }
+    // 3. Triggers: the internal `machine/<name>/trigger/<run>` start, plus any
+    //    optional fact-pattern trigger (e.g. a tending audit) — always, when projecting.
+    if (project) {
+      const itrig = {
+        id: `machine.${seg(a.name)}.itrigger`,
+        match: { keyPrefix: `${mkey.machine(a.name)}/trigger/` },
+        invoke: `machine.${seg(a.name)}.start`,
+        params: { run: '${keySuffix}', text: '${value.text}' },
+      };
+      await emitSubscription(itrig, a.name);
+      subscriptions.push(itrig.id);
       if (a.trigger && typeof a.trigger === 'object') {
         const { runId, ...match } = a.trigger;
         const trig = { id: `machine.${seg(a.name)}.trigger`, match, invoke: `machine.${seg(a.name)}.start`, params: { run: typeof runId === 'string' ? runId : '${keySuffix}' } };
@@ -414,56 +444,39 @@ export const handler = async (event) => {
         subscriptions.push(trig.id);
       }
     }
+    // 4. Reconcile — a re-definition is a full replace, so supersede the prior
+    //    definition facts and projected vocabulary this one no longer includes
+    //    (a removed node/rail, or a branch whose mode flipped agent⇄work, would
+    //    otherwise leave an orphan node/rail fact or a stale decide-/work- sub
+    //    that double-fires). Scoped to this machine's `/node/` + `/rail/` facts
+    //    and its `_actions`/`_subscriptions` only; run/trigger/decide/work/claim
+    //    execution facts are run history and are never swept. (Same prefixes the
+    //    dryRun preview used; subscriptions[] now holds the emitted itrigger/trigger.)
+    const keepSubsFinal = new Set(subscriptions.map((id) => `_subscriptions/${id}`));
+    const sweepSets = [
+      [`${mkey.machine(a.name)}/node/`, keepFacts],
+      [`${mkey.machine(a.name)}/rail/`, keepFacts],
+      [`_actions/machine.${seg(a.name)}.`, keepActionKeys],
+      [`_subscriptions/machine.${seg(a.name)}.`, keepSubsFinal],
+    ];
+    const superseded = [];
+    for (const [prefix, keep] of sweepSets) {
+      for (const key of await findStale(prefix, keep)) {
+        try { await sub.supersede(key); superseded.push(key); } catch { /* best-effort */ }
+      }
+    }
     return json(200, {
       defined: true,
-      key: `machine/${a.name}`,
+      key: mkey.machine(a.name),
+      facts: writes.map((w) => w.key),
       nodes: nodes.length,
-      arrows: arrows.length,
       rails: rails.length,
-      actions: projected.map((d) => d.id),
-      reactive: !!a.reactive,
+      actions: actions.map((d) => d.id),
+      reactive,
       subscriptions,
+      superseded,
+      validation,
     });
-  }
-
-  if (method === 'POST' && path === '/_tools/record_idea') {
-    const a = event.body ? JSON.parse(event.body) : {};
-    if (!a.id || !a.kind || !a.statement) return json(400, { error: 'id, kind, and statement are required' });
-    const key = a.kind === 'claim' ? `claims/${a.id}` : `concept/${a.id}`;
-    const value =
-      a.kind === 'claim'
-        ? { statement: a.statement, ...(a.confidence != null ? { confidence: a.confidence } : {}), ...(Array.isArray(a.support) ? { support: a.support } : {}) }
-        : { content: a.statement };
-    await emit({
-      key,
-      value,
-      type: a.kind,
-      tags: [...new Set([a.kind, 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])])],
-      via: 'machine.record_idea',
-    });
-    return json(200, { recorded: true, key });
-  }
-
-  if (method === 'POST' && path === '/_tools/register_meta_tool') {
-    // v4 — meta-tools as registered substrate tools: a tool constructed during
-    // a run persists as a `meta-tool` fact, and (when it carries a declared
-    // `action`) is projected as a cell-required declared action, so the
-    // vocabulary grows during use, audited by provenance.
-    const a = event.body ? JSON.parse(event.body) : {};
-    if (!a.name || !a.strategy) return json(400, { error: 'name and strategy are required' });
-    await emit({
-      key: `meta-tool/${seg(a.name)}`,
-      value: { name: a.name, strategy: a.strategy, ...(a.implementation ? { implementation: a.implementation } : {}) },
-      type: 'meta-tool',
-      tags: [...new Set(['meta-tool', 'dygram', 'machine', ...(Array.isArray(a.tags) ? a.tags : [])])],
-      via: 'machine.register_meta_tool',
-    });
-    let action;
-    if (a.action && a.action.id && Array.isArray(a.action.writes)) {
-      action = a.action.id;
-      await emitAction(a.action, a.name);
-    }
-    return json(200, { registered: true, key: `meta-tool/${seg(a.name)}`, ...(action ? { action } : {}) });
   }
 
   return json(404, { error: `no route for ${method} ${path}` });

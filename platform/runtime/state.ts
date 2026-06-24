@@ -40,6 +40,9 @@
  * mirroring how the `auth` cell separates `AuthStore` from its backends).
  */
 import type { Identity } from './auth';
+import { resolveType, type Type } from './type-schema';
+import { layer } from './resolution';
+import { matchesSelector } from './selector';
 
 // ── wrapped entry (the read-facing shape) ──────────────────────────
 
@@ -78,6 +81,21 @@ export interface EntryMeta {
   centrality: number;
   /** True when the value was withheld because the entry fell below the tier. */
   elided: boolean;
+  /** Full salience breakdown, attached only when a read sets `explain` — the
+   *  score stage made inspectable for tuning (which signal, at which weight,
+   *  contributed what). Absent on normal reads. */
+  explain?: ScoreExplain;
+}
+
+/** The score stage made legible: each normalized signal, the weight it was
+ *  blended by (resolved defaults ← config ← lens ← override), and its weighted
+ *  contribution to the final score — so a tuner can see *why* a fact scored. */
+export interface ScoreExplain {
+  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  /** Raw inbound+outbound graph degree feeding centrality (pre-saturation). */
+  degree: number;
 }
 
 export interface Entry<V = unknown> {
@@ -324,6 +342,58 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
 }
 
 /**
+ * Reserved key for a scope's salience policy. A fact written here whose value is
+ * a `Partial<SalienceOptions>` (e.g. `{ focusThreshold: 0.62, elideThreshold: 0.62 }`)
+ * re-tunes that owner's *own* `recall`/`query` shaping without a redeploy — the
+ * substrate-native, per-user config seam. The whole `_config/*` namespace is
+ * system plumbing (excluded from tending), so the fact itself stays out of the way.
+ */
+export const SALIENCE_CONFIG_KEY = '_config/salience';
+
+/** Numeric `SalienceOptions` fields a config fact may set, and which are unit [0,1]. */
+const SALIENCE_NUMERIC_KEYS = [
+  'halfLifeMs',
+  'windowMs',
+  'velocitySaturation',
+  'attentionSaturation',
+  'standingSaturation',
+  'centralitySaturation',
+  'recencyWeight',
+  'velocityWeight',
+  'attentionWeight',
+  'standingWeight',
+  'centralityWeight',
+  'focusThreshold',
+  'elideThreshold',
+] as const satisfies ReadonlyArray<keyof SalienceOptions>;
+const SALIENCE_UNIT_KEYS = new Set<keyof SalienceOptions>(['focusThreshold', 'elideThreshold']);
+
+/**
+ * Extract a sanitized `Partial<SalienceOptions>` from a stored config fact's value
+ * — best-effort and defensive: only known numeric fields survive, non-finite or
+ * negative values are dropped, and thresholds are clamped to [0,1]. Accepts the
+ * options object directly or wrapped under a `salience` key (so a config fact can
+ * be `{ focusThreshold }` or `{ salience: { focusThreshold } }`). Returns `null`
+ * when nothing usable is present, so the caller falls back to instance defaults.
+ */
+export function parseSalienceConfig(value: unknown): Partial<SalienceOptions> | null {
+  const wrapped = value as { salience?: unknown } | null | undefined;
+  const src =
+    wrapped && typeof wrapped === 'object' && wrapped.salience && typeof wrapped.salience === 'object'
+      ? wrapped.salience
+      : value;
+  if (!src || typeof src !== 'object') return null;
+  const rec = src as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const k of SALIENCE_NUMERIC_KEYS) {
+    const v = rec[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
+    out[k] = SALIENCE_UNIT_KEYS.has(k) ? Math.min(v, 1) : v;
+  }
+  return Object.keys(out).length ? (out as Partial<SalienceOptions>) : null;
+}
+
+/**
  * Named salience lenses — ergonomic per-read biases over the tuned defaults, for
  * the common "I want a particular view" cases. Each preset's weights sum to 1 so
  * the score stays in [0,1] and the elision tiers keep their meaning. For precise
@@ -465,9 +535,14 @@ export function buildSignals(
       if (inWindow) v.windowWrites++;
     }
   }
+  // Centrality is *weighted* degree (ADR-0009): each edge contributes its strength,
+  // so authored evidence (default 1.0; a `null` authored strength = 1.0) outweighs a
+  // derived `supports` (0.6), which outweighs plumbing like `instanceOf` (0.2). A flat
+  // count would let type-anchor edges dominate the signal.
   for (const ed of edges) {
-    sig(ed.from).degree++;
-    if (ed.to !== ed.from) sig(ed.to).degree++;
+    const w = ed.strength ?? 1;
+    sig(ed.from).degree += w;
+    if (ed.to !== ed.from) sig(ed.to).degree += w;
   }
   return m;
 }
@@ -476,6 +551,267 @@ function tierFor(score: number, s: ResolvedSalience): Tier {
   if (score >= s.focusThreshold) return 'focus';
   if (score >= s.elideThreshold) return 'peripheral';
   return 'elided';
+}
+
+// ── derived structural backbone ────────────────────────────────────
+//
+// Authored edges are sparse — most facts are written without anyone linking
+// them, so they score `centrality: 0` and sit near the elision floor even when
+// they are perfectly real (the `_types/*` vocabulary, freshly-captured notes).
+// But a fact is never *structurally* alone: it is an instance of its type, that
+// type is managed by a cell and drawn by a renderer, and a view is the set of
+// facts its query selects. Those relationships are already implied by fields the
+// fact (and the vocabulary) carry — so we **derive** them at read time as virtual
+// edges rather than materialising (and having to maintain) real ones. They lift
+// weak-but-typed facts off the floor and make the graph navigable
+// (`neighbors("_types/doc")` → every doc; a type → its cell), while the authored
+// graph — what `links`, `changes`, and `attention.unlinked` report — stays clean.
+
+export const TYPES_PREFIX = '_types/';
+export const RENDERERS_PREFIX = '_renderers/';
+export const VIEWS_PREFIX = '_views/';
+
+/** Backbone edge relations (distinct from authored rels; never persisted). */
+export const BACKBONE_RELS = {
+  instanceOf: 'instanceOf', // fact → its type declaration (`_types/<type>`)
+  managedBy: 'managedBy', // type → the cell that manages it
+  rendersWith: 'rendersWith', // type → its renderer (`_renderers/<type>`)
+  inView: 'inView', // fact → a view whose query selects it
+} as const;
+
+/** Reference relations that express *membership in a collection* (ADR-0005): a fact
+ *  `inView` a view, `inDoc` a doc. A collection's extensional members are the facts
+ *  with one of these edges pointing at it. */
+export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc']);
+
+/**
+ * Per-rule Reference strength (ADR-0009). Derived edges carry graded weight so a
+ * hand-drawn (authored) link still dominates a fact's centrality, and *evidence*
+ * edges (an embedded `supports`/`grounds` ref) outweigh mere *plumbing*
+ * (`instanceOf`/`managedBy`). Authored edges default to 1.0 (a `null` authored
+ * strength = 1.0 in `buildSignals`); these are the derived tiers below it:
+ *   authored 1.0  >  embedded 0.6  >  membership 0.4  >  structural 0.2
+ */
+const STRUCTURAL_STRENGTH = 0.2; // instanceOf / managedBy / rendersWith — type plumbing
+const MEMBERSHIP_STRENGTH = 0.4; // inView / inDoc — collection membership (ADR-0005)
+const EMBEDDED_STRENGTH = 0.6; // a `ref` field (supports / grounds) — embedded evidence
+
+/** A `ref` field on a type → an embedded Reference rule (ADR-0003): the value(s)
+ *  at `name` are fact keys; emit `fact —(rel ?? name)→ key` (each, when `list`). */
+export interface RefRule {
+  name: string;
+  rel?: string;
+  list?: boolean;
+}
+
+/** A key-encoded Reference rule (ADR-0003): a `from/rel/to` edge whose endpoints are
+ *  `{group}` captures from a type's `keyPattern` (or literals). */
+export interface KeyEdgeRule {
+  from: string;
+  rel: string;
+  to: string;
+}
+
+/** The Reference-rule inputs a type contributes (resolved from its declaration by the
+ *  handler): its managing cell, its `ref` fields, and its key-encoded edges. */
+export interface TypeRules {
+  manager?: string;
+  refs?: RefRule[];
+  keyPattern?: string;
+  keyEdges?: KeyEdgeRule[];
+}
+
+/** The Reference rules a *resolved* Type carries (ADR-0003): its `ref` fields
+ *  (embedded edges), `manager`, and key-encoded edges. The single extractor —
+ *  both the read-time backbone synthesis (`rulesFromDecl`) and the per-request
+ *  rule map (`typeRulesFor` in workspace handlers) fold a decl through this, so
+ *  a slice-declared type contributes rules identically to a cell-canonical one.
+ *  Returns the (possibly empty) rules; callers decide whether to keep an empty. */
+export function extractTypeRules(t: Type): TypeRules {
+  const refs = (t.shape.fields ?? []).filter((f) => f.type === 'ref').map((f) => ({ name: f.name, rel: f.rel, list: f.list }));
+  const r: TypeRules = {};
+  if (t.manager) r.manager = t.manager;
+  if (refs.length) r.refs = refs;
+  if (t.shape.keyPattern && t.shape.keyEdges?.length) {
+    r.keyPattern = t.shape.keyPattern;
+    r.keyEdges = t.shape.keyEdges;
+  }
+  return r;
+}
+
+/** Compile a `keyPattern` (`_doc/{doc}/{block}`) into a total matcher; `null` if malformed. */
+function compileKeyPattern(pattern: string): { rx: RegExp; names: string[] } | null {
+  const names: string[] = [];
+  let rx = '^';
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === '{') {
+      const end = pattern.indexOf('}', i);
+      if (end < 0) return null;
+      const name = pattern.slice(i + 1, end);
+      if (!/^[A-Za-z0-9_]+$/.test(name)) return null;
+      names.push(name);
+      rx += '([^/]+)';
+      i = end + 1;
+    } else {
+      rx += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      i++;
+    }
+  }
+  try {
+    return { rx: new RegExp(rx + '$'), names };
+  } catch {
+    return null;
+  }
+}
+
+/** Substitute `{group}` placeholders in an endpoint/rel template. */
+function substGroups(tpl: string, groups: Record<string, string>): string {
+  return tpl.replace(/\{([A-Za-z0-9_]+)\}/g, (_m, n: string) => groups[n] ?? '');
+}
+
+/** Fold a *slice* `_types/<type>` decl into Reference rules, so a slice-declared
+ *  type (e.g. `claim`) contributes rules just like a cell-canonical one. The
+ *  extraction is the shared `extractTypeRules`; this just resolves the decl. */
+function rulesFromDecl(decl: unknown): TypeRules {
+  return extractTypeRules(resolveType(decl));
+}
+
+/** An edge plus whether it was derived (vs authored). Stored edges omit the flag. */
+export type AnnotatedEdge = EdgeRecord & {
+  derived?: boolean;
+  /** For a key-encoded edge (ADR-0003), the decoration fact whose key produced it.
+   *  Lets a consumer recover the decoration's payload (e.g. a doc-order `seq`). */
+  source?: string;
+};
+
+/** Normalise a cell address/manager handle for matching: `/@c15r/lit`, `@c15r/lit`
+ *  and a bare name all collapse so a type's `manager` resolves to its cell fact. */
+function normalizeCellHandle(h: string): string {
+  return h.replace(/^\//, '');
+}
+
+/**
+ * Compute the virtual backbone edges implied by a scope's own facts — pure, and
+ * conditioned on the target fact existing in the scope, so a backbone edge never
+ * dangles. Targets: a fact's `_types/<type>` anchor; that anchor's managing cell
+ * (matched against `cell` facts' address/name) and its `_renderers/<type>`; and
+ * `_views/<id>` for any view whose query selects the fact. Edges are timeless
+ * (`createdAt: ''`, `writer: null`) and flagged derived.
+ *
+ * A type's manager comes from the type-decl's own `manager` field when set, else
+ * from `typeManagers` — the canonical type→manager map a cell stamps on deploy
+ * (`cells.describeTypes`), so a cell-managed type links to its cell without the
+ * per-slice anchor having to carry the manager itself.
+ */
+export function deriveBackboneEdges(
+  records: StateRecord[],
+  typeRules?: Record<string, TypeRules>,
+): AnnotatedEdge[] {
+  const live = records.filter((r) => !r.superseded);
+  const present = new Set(live.map((r) => r.key));
+  const scope = live[0]?.scope ?? '';
+
+  // Index cells by every handle they answer to, the views with a usable query, and
+  // the manager a slice type-decl declares for itself (overrides the canonical map).
+  const cellByHandle = new Map<string, string>();
+  const views: Array<{ key: string; type?: string; tag?: string; prefix?: string }> = [];
+  const sliceRules = new Map<string, TypeRules>();
+  const typeNames = new Set<string>(); // every type that appears, anchored or not
+  for (const r of live) {
+    if (r.type && !r.key.startsWith(TYPES_PREFIX)) typeNames.add(r.type);
+    if (r.type === 'cell') {
+      const v = (r.value ?? {}) as { address?: unknown; name?: unknown };
+      for (const h of [v.address, v.name]) {
+        if (typeof h === 'string' && h) cellByHandle.set(normalizeCellHandle(h), r.key);
+      }
+    }
+    if (r.key.startsWith(TYPES_PREFIX)) {
+      const t = r.key.slice(TYPES_PREFIX.length);
+      typeNames.add(t);
+      sliceRules.set(t, rulesFromDecl(r.value));
+    }
+    if (r.key.startsWith(VIEWS_PREFIX)) {
+      const q = ((r.value ?? {}) as { query?: unknown }).query;
+      if (q && typeof q === 'object') {
+        const { type, tag, prefix } = q as { type?: unknown; tag?: unknown; prefix?: unknown };
+        // An unfiltered view selects everything — too coarse to be a useful edge.
+        if (typeof type === 'string' || typeof tag === 'string' || typeof prefix === 'string') {
+          views.push({
+            key: r.key,
+            type: typeof type === 'string' ? type : undefined,
+            tag: typeof tag === 'string' ? tag : undefined,
+            prefix: typeof prefix === 'string' ? prefix : undefined,
+          });
+        }
+      }
+    }
+  }
+
+  // A type's effective rules: its slice `_types/<type>` decl wins per facet over the
+  // canonical (cell-declared) rules — Resolution (ADR-0010), the same per-facet
+  // last-wins merge as `$types`/`mergeTypeDecl`.
+  const effectiveRules = (t: string): TypeRules => layer<TypeRules>(typeRules?.[t], sliceRules.get(t));
+
+  const edges: AnnotatedEdge[] = [];
+  // The `_types/<type>` anchor is a well-known node, so `instanceOf` is emitted
+  // even when the anchor isn't materialised as a fact (most cell-managed content
+  // types are canonical-only) — that's what gives every typed fact its floor.
+  // Edges to *other* targets (a cell, renderer, view) still require the target to
+  // exist, so they never dangle.
+  const push = (from: string, rel: string, to: string, requireTarget = true, strength = STRUCTURAL_STRENGTH, source?: string): void => {
+    if (from === to || (requireTarget && !present.has(to))) return;
+    edges.push({ scope, from, rel, to, strength, createdAt: '', writer: null, derived: true, source });
+  };
+
+  for (const r of live) {
+    // fact → its type anchor (a type-decl is not an instance of itself)
+    if (r.type && !r.key.startsWith(TYPES_PREFIX)) push(r.key, BACKBONE_RELS.instanceOf, `${TYPES_PREFIX}${r.type}`, false);
+    // fact → each view whose query selects it
+    for (const view of views) {
+      if (view.key === r.key) continue;
+      if (!matchesSelector(r, view)) continue; // the one structural predicate (ADR-0011)
+      push(r.key, BACKBONE_RELS.inView, view.key, true, MEMBERSHIP_STRENGTH);
+    }
+    // ── declared Reference rules (ADR-0003), from the fact's own type ──
+    const rules = r.type ? effectiveRules(r.type) : undefined;
+    if (rules) {
+      // embedded: a `ref` field's value(s) are fact keys → fact —rel→ key
+      const value = (r.value ?? {}) as Record<string, unknown>;
+      for (const ref of rules.refs ?? []) {
+        const raw = value[ref.name];
+        const keys = ref.list ? (Array.isArray(raw) ? raw : []) : raw != null ? [raw] : [];
+        for (const k of keys) if (typeof k === 'string') push(r.key, ref.rel ?? ref.name, k, true, EMBEDDED_STRENGTH);
+      }
+      // key-encoded: parse this fact's key, emit the declared edge(s)
+      if (rules.keyPattern && rules.keyEdges?.length) {
+        const compiled = compileKeyPattern(rules.keyPattern);
+        const groups = compiled?.rx.exec(r.key);
+        if (compiled && groups) {
+          const g: Record<string, string> = {};
+          compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
+          // `source: r.key` = the decoration that ordered/placed the member, so
+          // extensional membership can recover its narrative `seq` (ADR-0005).
+          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, MEMBERSHIP_STRENGTH, r.key);
+        }
+      }
+    }
+  }
+
+  // type anchor → its managing cell + renderer. The anchor itself may be virtual,
+  // so this runs over every type that appears (not just materialised type-decls);
+  // manager is the slice decl's own field when set, else the canonical map.
+  for (const t of typeNames) {
+    const anchor = `${TYPES_PREFIX}${t}`;
+    const manager = effectiveRules(t).manager;
+    if (manager) {
+      const cellKey = cellByHandle.get(normalizeCellHandle(manager));
+      if (cellKey) push(anchor, BACKBONE_RELS.managedBy, cellKey);
+    }
+    push(anchor, BACKBONE_RELS.rendersWith, `${RENDERERS_PREFIX}${t}`);
+  }
+  return edges;
 }
 
 // ── the observed-state API ─────────────────────────────────────────
@@ -522,6 +858,21 @@ export interface ReadOptions {
   lens?: SalienceLens;
   /** Precise per-read salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
+  /** Attach `_meta.explain` (signals · weights · contributions) to every entry —
+   *  the score stage made inspectable for tuning. Off by default. */
+  explain?: boolean;
+  /**
+   * The scope's stored salience policy (a `_config/salience` fact), layered over
+   * the instance defaults as the *base* — so it sits below the lens and the
+   * per-call `salience` override (defaults ← config ← lens ← override). `read`
+   * and `query` load this themselves from their scope; the scopeless `shape`
+   * (used by `recall` to tier a merged view) takes it explicitly so the viewer's
+   * policy governs the assembled result. Pass `null` to force instance defaults.
+   */
+  salienceConfig?: Partial<SalienceOptions> | null;
+  /** Resolved per-type Reference rules (`cells.describeTypes` → resolveType): manager
+   *  (managedBy), `ref` fields (embedded edges), keyPattern/keyEdges. Injected by the handler. */
+  typeRules?: Record<string, TypeRules>;
 }
 
 export interface QueryOptions {
@@ -537,6 +888,8 @@ export interface QueryOptions {
   lens?: SalienceLens;
   /** Precise per-query salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
+  /** Attach `_meta.explain` (signals · weights · contributions) to each entry. */
+  explain?: boolean;
   limit?: number;
   /**
    * Resume token from a previous page's `nextCursor`. Pages are computed over
@@ -544,6 +897,26 @@ export interface QueryOptions {
    */
   cursor?: string;
   includeSuperseded?: boolean;
+  /** Full-text-ish filter: keep only facts whose key or value (stringified)
+   *  contains this substring, case-insensitively. Lets a caller find a fact by
+   *  what's *inside* it (e.g. a board element whose `value.content` holds a
+   *  script) without paging the whole partition. Applied after type/tag/prefix. */
+  contains?: string;
+  /** Resolved per-type Reference rules (managedBy + embedded `ref` + key-encoded).
+   *  Injected by the handler. */
+  typeRules?: Record<string, TypeRules>;
+}
+
+/** Does a record's key or value contain `needle` (case-insensitive)? Backs the
+ *  `contains` query filter — a substring scan over the value JSON, so nested
+ *  fields (markdown content, an element's inline script) are all searchable. */
+export function recordContains(rec: { key: string; value: unknown }, needle: string): boolean {
+  const n = needle.toLowerCase();
+  if (rec.key.toLowerCase().includes(n)) return true;
+  const v = rec.value;
+  if (typeof v === 'string') return v.toLowerCase().includes(n);
+  if (v == null) return false;
+  try { return JSON.stringify(v).toLowerCase().includes(n); } catch { return false; }
 }
 
 export interface QueryResult {
@@ -560,13 +933,36 @@ export interface QueryResult {
 export interface NeighborsOptions {
   dir?: 'in' | 'out' | 'both';
   rel?: string;
+  /** Resolved per-type Reference rules (managedBy + embedded + key-encoded), so a
+   *  type's derived edges show up in traversal. Injected by the handler. */
+  typeRules?: Record<string, TypeRules>;
 }
 
 export interface NeighborsResult {
-  outbound: EdgeRecord[];
-  inbound: EdgeRecord[];
+  /** One-hop edges. Authored edges and the derived structural backbone are both
+   *  included; backbone edges carry `derived: true`. */
+  outbound: AnnotatedEdge[];
+  inbound: AnnotatedEdge[];
   /** Wrapped entries for every distinct neighbor key that exists. */
   entries: Record<string, Entry>;
+}
+
+/** A collection member: the fact (key + value + _meta) plus, for an extensional
+ *  member, the `placement` from its ordering decoration (`_doc/<doc>/<key>` = {seq,
+ *  fold}) — so a consumer (lit) gets membership + order + presentation in one read. */
+export type MemberEntry = { key: string; placement?: { seq?: number; fold?: boolean } } & Entry;
+
+export interface MembersResult {
+  key: string;
+  membership: 'intensional' | 'extensional';
+  /**
+   * How the extensional members are ordered: `seq` when at least one member is
+   * placed by an ordering decoration (a doc-order `seq` — narrative position),
+   * else `salience`. Intensional results inherit the query's own ordering and
+   * report `query`.
+   */
+  order: 'seq' | 'salience' | 'query';
+  members: MemberEntry[];
 }
 
 export interface ChangesResult {
@@ -624,6 +1020,9 @@ export interface ObservedState {
   shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult;
   /** Projection over the slice: filter by type/tag/prefix, rank, limit. */
   query(scope: string, opts?: QueryOptions, identity?: Identity): Promise<QueryResult>;
+  /** The scope's stored salience policy (`_config/salience`), sanitized — or `null`
+   *  when unset/malformed. Recall loads the viewer's once to shape the merged view. */
+  salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null>;
   /** Add a typed, directed edge `from --rel--> to` within the scope. */
   link(scope: string, from: string, rel: string, to: string, strength: number | null, identity?: Identity): Promise<LinkResult>;
   unlink(scope: string, from: string, rel: string, to: string, identity?: Identity): Promise<{ ok: true }>;
@@ -631,6 +1030,14 @@ export interface ObservedState {
   neighbors(scope: string, key: string, opts?: NeighborsOptions, identity?: Identity): Promise<NeighborsResult>;
   /** Every edge in the scope (bounded; boards project their edges from this). */
   edges(scope: string): Promise<EdgeRecord[]>;
+  /** The full Reference projection (ADR-0003/0004): authored edges + the derived rule
+   *  edges (structural backbone + embedded `ref` + key-encoded). The `$graph` surface. */
+  graph(scope: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<{ edges: AnnotatedEdge[] }>;
+  /** A collection's member facts (ADR-0005): **intensional** when the collection fact
+   *  carries a `query` (a view) — evaluated via `query`; else **extensional** — the
+   *  facts with an inbound membership edge (`inView`/`inDoc`) in the projection.
+   *  Salience-ranked; ordered extensional membership (by decoration `seq`) is a follow-on. */
+  members(scope: string, key: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<MembersResult>;
   /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call. */
   changes(scope: string, sinceSeq: number | 'head', limit?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
@@ -653,15 +1060,46 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
    *  pass). Lifetime (cumulative) terms need the full trajectory, so this reads
    *  from seq 0 — the price of `standing`. Callers in bulk paths build it once
    *  and share it across `wrap`s. */
-  async function signalsFor(scope: string, nowMs: number, windowMs: number): Promise<Map<string, KeySignals>> {
-    const [events, edges] = await Promise.all([store.recentTrajectory(scope, 0), store.listEdges(scope)]);
-    return buildSignals(events, edges, nowMs, windowMs);
+  async function signalsFor(
+    scope: string,
+    nowMs: number,
+    windowMs: number,
+    records?: StateRecord[],
+    typeRules?: Record<string, TypeRules>,
+  ): Promise<Map<string, KeySignals>> {
+    const [events, edges, recs] = await Promise.all([
+      store.recentTrajectory(scope, 0),
+      store.listEdges(scope),
+      records ? Promise.resolve(records) : store.list(scope),
+    ]);
+    // Centrality counts the derived backbone alongside authored edges, so a
+    // typed-but-unlinked fact earns a structural floor instead of scoring zero.
+    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs, typeRules)], nowMs, windowMs);
   }
+
+  /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
+   *  malformed fact yields `null` and the read proceeds on instance defaults — a
+   *  config fact must never be able to break a read). */
+  async function loadSalienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
+    let rec: StateRecord | null;
+    try {
+      rec = await store.get(scope, SALIENCE_CONFIG_KEY);
+    } catch {
+      return null;
+    }
+    if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+    return parseSalienceConfig(rec.value);
+  }
+
+  /** The per-call base: a scope's config layered over the instance defaults, sitting
+   *  below the lens + per-call override (defaults ← config ← lens ← override). */
+  const baseSalience = (cfg?: Partial<SalienceOptions> | null): ResolvedSalience =>
+    cfg ? resolveSalience({ ...s, ...cfg }) : s;
 
   /** Wrap a stored record into a read-facing entry with a computed score. Pass a
    *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan, and
    *  `sCall` to score under a per-read lens (defaults to the instance settings). */
-  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s): Promise<Entry> {
+  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s, explain = false): Promise<Entry> {
     const sig = (signals ?? (await signalsFor(rec.scope, nowMs, sCall.windowMs))).get(rec.key) ?? EMPTY_SIGNALS;
     // Import priors fold into the cumulative (standing) counts only — never the
     // recent window — so a ported fact's earned importance shows without faking
@@ -698,7 +1136,39 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         standing: round4(parts.standing),
         centrality: round4(parts.centrality),
         elided: false,
+        ...(explain ? { explain: explainScore(parts, sig, sCall) } : {}),
       },
+    };
+  }
+
+  /** Build the inspectable breakdown for a scored entry: the five signals, the
+   *  weights they were blended by, and each one's weighted contribution. */
+  function explainScore(parts: ScoreParts, sig: KeySignals, sCall: ResolvedSalience): ScoreExplain {
+    const signals = {
+      recency: round4(parts.recency),
+      velocity: round4(parts.velocity),
+      attention: round4(parts.attention),
+      standing: round4(parts.standing),
+      centrality: round4(parts.centrality),
+    };
+    const weights = {
+      recency: sCall.recencyWeight,
+      velocity: sCall.velocityWeight,
+      attention: sCall.attentionWeight,
+      standing: sCall.standingWeight,
+      centrality: sCall.centralityWeight,
+    };
+    return {
+      signals,
+      weights,
+      contribution: {
+        recency: round4(parts.recency * weights.recency),
+        velocity: round4(parts.velocity * weights.velocity),
+        attention: round4(parts.attention * weights.attention),
+        standing: round4(parts.standing * weights.standing),
+        centrality: round4(parts.centrality * weights.centrality),
+      },
+      degree: sig.degree ?? 0,
     };
   }
 
@@ -732,7 +1202,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     };
   }
 
-  return {
+  const api: ObservedState = {
     async put(input: WriteInput, identity?: Identity): Promise<Entry> {
       if (!input?.scope || !input?.key) throw new Error('state.put requires `scope` and `key`');
       const writer = identity?.user ?? null;
@@ -817,22 +1287,26 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
       // Re-tiers an already-scored set, so a lens here only adjusts thresholds
-      // (it can't recompute scores without the scope's signals).
-      return shapeEntries(entries, opts, callSalience(s, opts?.lens, opts?.salience));
+      // (it can't recompute scores without the scope's signals). Being scopeless,
+      // it takes the salience config explicitly (recall passes the viewer's).
+      return shapeEntries(entries, opts, callSalience(baseSalience(opts?.salienceConfig), opts?.lens, opts?.salience));
     },
 
     async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
       const nowMs = Date.now();
-      const sCall = callSalience(s, opts?.lens, opts?.salience);
+      // Honor a handler-supplied config (recall scores granted slices under the
+      // viewer's policy); otherwise load this scope's own `_config/salience`.
+      const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
+      const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
       const records = await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
 
       // Score every live entry (no elision yet); shape in one pass below.
       const scored: Record<string, Entry> = {};
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
         if (!isTimerLive(rec, nowMs)) continue;
-        scored[rec.key] = await wrap(rec, nowMs, signals, sCall);
+        scored[rec.key] = await wrap(rec, nowMs, signals, sCall, opts?.explain);
       }
 
       // Reading the scope is itself attention on every surfaced key.
@@ -844,18 +1318,25 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
-      const sCall = callSalience(s, opts?.lens, opts?.salience);
+      const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience);
+      const queryTypeRules = opts?.typeRules;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs);
+      // Reuse the full-partition read for signals when there's no type filter —
+      // otherwise `signalsFor` issues a SECOND `store.list(scope)` (a duplicate
+      // multi-page DDB scan, ~half the query's latency). With a type filter the
+      // candidates are a subset, so signals still need the whole graph.
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, opts?.type ? undefined : records, queryTypeRules);
       const candidates = records.filter((rec) => {
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
-        if (opts?.tag && !rec.tags.includes(opts.tag)) return false;
-        if (opts?.prefix && !rec.key.startsWith(opts.prefix)) return false;
+        // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
+        if (!matchesSelector(rec, { tag: opts?.tag, prefix: opts?.prefix })) return false;
+        // Content search: find a fact by what's inside it (substring over value JSON).
+        if (opts?.contains && !recordContains(rec, opts.contains)) return false;
         return true;
       });
-      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall)) })));
+      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain)) })));
       const rankBy = opts?.rankBy ?? 'salience';
       wrapped.sort((a, b) =>
         rankBy === 'recency'
@@ -874,6 +1355,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         total: wrapped.length,
         ...(consumed < wrapped.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
       };
+    },
+
+    async salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
+      return loadSalienceConfig(scope);
     },
 
     async link(scope, from, rel, to, strength, identity?: Identity): Promise<LinkResult> {
@@ -916,26 +1401,114 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async neighbors(scope, key, opts?, _identity?: Identity): Promise<NeighborsResult> {
       const dir = opts?.dir ?? 'both';
-      const [outbound, inbound] = await Promise.all([
+      const nowMs = Date.now();
+      // Honor the scope's `_config/salience` so neighbor scores match recall (ADR-0006).
+      const sCall = baseSalience(await loadSalienceConfig(scope));
+      const [authoredOut, authoredIn, records] = await Promise.all([
         dir !== 'in' ? store.edgesFrom(scope, key, opts?.rel) : Promise.resolve([]),
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
+        store.list(scope),
       ]);
-      const nowMs = Date.now();
-      const signals = await signalsFor(scope, nowMs, s.windowMs);
+      // The derived backbone is one hop too: a fact's type/cell/renderer/views.
+      const derived = deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel);
+      const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
+      const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
       neighborKeys.delete(key);
+      const byKey = new Map(records.map((r) => [r.key, r]));
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
-        const rec = await store.get(scope, nk);
-        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals);
+        const rec = byKey.get(nk) ?? (await store.get(scope, nk));
+        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals, sCall);
       }
       return { outbound, inbound, entries };
     },
 
     async edges(scope): Promise<EdgeRecord[]> {
       return store.listEdges(scope);
+    },
+
+    async graph(scope, opts): Promise<{ edges: AnnotatedEdge[] }> {
+      const nowMs = Date.now();
+      const [records, authored] = await Promise.all([store.list(scope), store.listEdges(scope)]);
+      const live = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
+      const derived = deriveBackboneEdges(live, opts?.typeRules);
+      return { edges: [...authored, ...derived] };
+    },
+
+    async members(scope, key, opts): Promise<MembersResult> {
+      const nowMs = Date.now();
+      const fact = await store.get(scope, key);
+      const q = (fact?.value as { query?: unknown } | undefined)?.query;
+      // Intensional: the collection IS a query (a view) — evaluate it.
+      if (q && typeof q === 'object') {
+        const res = await api.query(scope, { ...(q as QueryOptions), typeRules: opts?.typeRules });
+        return { key, membership: 'intensional', order: 'query', members: res.entries };
+      }
+      // Extensional: the facts with an inbound membership edge in the projection.
+      // A key-encoded membership edge carries `source` — the decoration that placed
+      // the member — so we can recover its narrative `seq` and order by it.
+      //
+      // ONE partition read serves it all: the membership edges (from the records +
+      // authored edges), the member records, the decoration records, AND signals.
+      // The previous shape did `api.graph` (list + listEdges) + a duplicate
+      // `signalsFor` list + listEdges + an N+1 `store.get` PER member and PER
+      // decoration — pathological for a doc with many blocks.
+      const [records, authored] = await Promise.all([store.list(scope), store.listEdges(scope)]);
+      const byKey = new Map(records.map((r) => [r.key, r]));
+      const live = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
+      const edges: AnnotatedEdge[] = [...authored, ...deriveBackboneEdges(live, opts?.typeRules)];
+      const memberKeys: string[] = [];
+      const seen = new Set<string>();
+      const decorationOf = new Map<string, string>();
+      for (const e of edges) {
+        if (e.to === key && MEMBERSHIP_RELS.has(e.rel) && !seen.has(e.from)) {
+          seen.add(e.from);
+          memberKeys.push(e.from);
+          if (e.source) decorationOf.set(e.from, e.source);
+        }
+      }
+      // Honor the scope's `_config/salience` (the intensional branch already does, via query).
+      const sCall = baseSalience(await loadSalienceConfig(scope));
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
+      const members: MemberEntry[] = [];
+      const seqOf = new Map<string, number>();
+      for (const k of memberKeys) {
+        const rec = byKey.get(k);
+        if (!rec || rec.superseded || !isTimerLive(rec, nowMs)) continue;
+        // Surface the placing decoration (`_doc/<doc>/<key>` = {seq, fold}) so a consumer
+        // gets membership + order + presentation in one read, not a second decoration scan.
+        let placement: MemberEntry['placement'];
+        const decKey = decorationOf.get(k);
+        if (decKey) {
+          const dv = (byKey.get(decKey)?.value ?? {}) as { seq?: unknown; fold?: unknown };
+          const seq = typeof dv.seq === 'number' && Number.isFinite(dv.seq) ? dv.seq : undefined;
+          if (seq !== undefined) seqOf.set(k, seq);
+          if (seq !== undefined || typeof dv.fold === 'boolean') {
+            placement = { ...(seq !== undefined ? { seq } : {}), ...(typeof dv.fold === 'boolean' ? { fold: dv.fold } : {}) };
+          }
+        }
+        members.push({ key: k, ...(await wrap(rec, nowMs, signals, sCall)), ...(placement ? { placement } : {}) });
+      }
+      // Narrative order when any member is placed by a `seq` decoration; the rest
+      // (and ties) fall back to salience so nothing is lost.
+      const ordered = seqOf.size > 0;
+      if (ordered) {
+        members.sort((a, b) => {
+          const sa = seqOf.get(a.key);
+          const sb = seqOf.get(b.key);
+          if (sa !== undefined && sb !== undefined && sa !== sb) return sa - sb;
+          if (sa !== undefined && sb === undefined) return -1;
+          if (sa === undefined && sb !== undefined) return 1;
+          return b._meta.score - a._meta.score;
+        });
+      } else {
+        members.sort((a, b) => b._meta.score - a._meta.score);
+      }
+      return { key, membership: 'extensional', order: ordered ? 'seq' : 'salience', members };
     },
 
     async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
@@ -1025,6 +1598,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return wrap(updated, now.getTime());
     },
   };
+  return api;
 }
 
 // ── in-memory store (tests / local; no AWS) ────────────────────────

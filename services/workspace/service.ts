@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createFactReactionHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -32,6 +32,9 @@ export const handler = defineService({
     handles: {
       'substrate.write.requested': createSubstrateWriteHandler(dynamoDeps),
       'workspace.tend.requested': createTendHandler(dynamoDeps),
+      // The machine tick: a frequent cron resumes machine runs whose `wait`-rail
+      // deadline has elapsed (the autonomous half of the wait primitive).
+      'machine.tick.requested': createMachineTickHandler(dynamoDeps),
       // The reaction reactor: every fact change is delivered back here so the
       // slice's `_subscriptions/*` can invoke matching declared actions — the
       // generic primitive that makes machines (and anything else) reactive.
