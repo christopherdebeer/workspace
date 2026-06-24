@@ -24,7 +24,7 @@ export interface Boot { session: Session; machines: Entry[]; nodes: Entry[]; rai
 
 interface Rail { from: string; to: string; mode: string; when?: string; condition?: string; prompt?: string; tools?: string[]; sections?: Array<{ to: string; when?: string }>; branch?: string; samples?: number }
 interface Node { name: string; kind?: string; title?: string }
-interface MachineVal { title?: string; entry?: string; nodes?: Node[]; rails?: Rail[]; context?: string[] }
+interface MachineVal { title?: string; entry?: string; nodes?: Node[]; rails?: Rail[]; context?: string[]; reactive?: boolean }
 interface TraceStep { node: string; via?: string; at?: string }
 interface RunVal { machine?: string; node?: string; status?: string; via?: string; at?: string; trace?: TraceStep[]; reason?: string }
 
@@ -77,7 +77,7 @@ function assemble(identity: Entry | undefined, allNodes: Entry[], allRails: Entr
   const v = identity.value as MachineVal;
   const nodes = allNodes.filter((f) => (f.value as { machine?: string }).machine === name).map((f) => f.value as Node);
   const rails = allRails.filter((f) => (f.value as { machine?: string }).machine === name).map((f) => f.value as Rail);
-  return { title: v.title, entry: v.entry, context: v.context, nodes, rails };
+  return { title: v.title, entry: v.entry, context: v.context, reactive: v.reactive, nodes, rails };
 }
 
 interface RunGroup { key: string; id: string; parent?: Entry; children: Entry[] }
@@ -158,6 +158,8 @@ function RunGroupRow({ group, showMachine }: { group: RunGroup; showMachine?: bo
 /* ── mermaid (the machine drawn as a diagram, run overlaid) ──────────────── */
 
 const sid = (s: string): string => String(s || 'n').replace(/[^A-Za-z0-9_]/g, '_');
+/** Matches engine `seg` — for building declared-action ids (decide-<node>). */
+const segId = (s: string): string => String(s || '').replace(/[^A-Za-z0-9_-]/g, '_');
 interface Highlight { active?: string; visited?: string[]; done?: boolean; taken?: Set<string> }
 function toMermaid(m: MachineVal, hl?: Highlight): string {
   const esc = (s: string): string => String(s).replace(/["|]/g, "'").replace(/\n/g, ' ');
@@ -288,6 +290,26 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
     else alert(`Trigger failed: ${typeof r.value === 'string' ? r.value : JSON.stringify(r.value)}`);
   };
 
+  // Toggle reactive (self-driving) vs driven. ON re-defines the machine reactive
+  // (registers the step + model-delivery subs). OFF supersedes those subs — the cell
+  // can't retire `_` vocab via the organ path, but the owner can via workspace.supersede.
+  const [toggling, setToggling] = useState(false);
+  const toggleReactive = async (): Promise<void> => {
+    if (!m) return;
+    setToggling(true);
+    if (!m.reactive) {
+      await mcpCall('act', '@c15r/machine.define_machine', { name, title: m.title, nodes: m.nodes, rails: m.rails, context: m.context, reactive: true });
+    } else {
+      const subs = await mcpCall('read', 'workspace.query', { prefix: `_subscriptions/machine.${name}.`, limit: 60 });
+      for (const s of entriesOf(subs.value)) {
+        if (s.key.endsWith('.step') || /\.(decide|work)-/.test(s.key)) await mcpCall('act', 'workspace.supersede', { key: s.key });
+      }
+      await mcpCall('act', '@c15r/machine.define_machine', { name, title: m.title, nodes: m.nodes, rails: m.rails, context: m.context, reactive: false });
+    }
+    setToggling(false);
+    await refresh();
+  };
+
   if (loading && !m) return <div style={{ display: 'grid', gap: 12 }}><a href="#/" style={{ color: C.mut, textDecoration: 'none' }}>‹ machines</a><Skeleton h={28} w="40%" /><Skeleton h={140} /></div>;
   if (!m) return <p style={{ color: C.mut }}>Machine “{name}” not found. <a href="#/">Back</a></p>;
   const latest = runs[0]?.value as RunVal | undefined;
@@ -297,6 +319,12 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
         <a href="#/" style={{ color: C.mut, textDecoration: 'none' }}>‹ machines</a>
         <strong style={{ font: '600 19px Georgia,serif', flex: 1 }}>{m.title ?? name}</strong>
+        {isAuthed() && (
+          <button onClick={() => void toggleReactive()} disabled={toggling} title={m.reactive ? 'Self-driving: runs advance on their own (models decide). Click to make driven.' : 'Driven: you advance runs by hand (Step / Decide). Click to make self-driving.'}
+            style={{ border: `1px solid ${m.reactive ? C.green : C.line}`, background: m.reactive ? '#e3ece3' : C.panel, color: m.reactive ? C.green : C.mut, borderRadius: 999, padding: '5px 11px', font: '600 12px inherit', cursor: 'pointer' }}>
+            {toggling ? '…' : m.reactive ? '⚡ reactive' : '○ driven'}
+          </button>
+        )}
         {isAuthed()
           ? <button onClick={() => void trigger()} disabled={busy} style={{ border: `1px solid ${C.green}`, background: C.green, color: '#fff', borderRadius: 8, padding: '7px 14px', font: 'inherit', cursor: 'pointer' }}>{busy ? 'Starting…' : '▶ Run'}</button>
           : <button onClick={() => void login()} style={{ border: `1px solid ${C.green}`, background: 'transparent', color: C.green, borderRadius: 8, padding: '7px 14px', font: 'inherit', cursor: 'pointer' }}>Sign in to run</button>}
@@ -344,6 +372,8 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
   const [children, setChildren] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [stepping, setStepping] = useState(false);
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const [transcripts, setTranscripts] = useState<Array<{ kind: string; turns: Array<Record<string, unknown>> }>>([]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -362,8 +392,20 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
     setChildren(kids.ok ? entriesOf(kids.value).filter((e) => childSuffix(runIdOf(e.key)) && parentRunKey(e.key) === runKey) : []);
     const id = idf.ok && idf.value ? ({ key: `machine/${mName}`, value: valueOf<Record<string, unknown>>(idf.value) ?? {} } as Entry) : undefined;
     setMv(assemble(id, nf.ok ? entriesOf(nf.value) : [], rrf.ok ? entriesOf(rrf.value) : []));
+    // Agent transcripts (the model's turn-by-turn reasoning) — models.agent writes
+    // one per kind at machine/<m>/{decide,work}/<run>/transcript.
+    const [dt, wt] = await Promise.all([
+      mcpCall('read', 'workspace.peek', { key: `machine/${mName}/decide/${runId}/transcript` }),
+      mcpCall('read', 'workspace.peek', { key: `machine/${mName}/work/${runId}/transcript` }),
+    ]);
+    const ts: Array<{ kind: string; turns: Array<Record<string, unknown>> }> = [];
+    for (const [kind, r] of [['decide', dt], ['work', wt]] as const) {
+      const turns = (valueOf<{ turns?: Array<Record<string, unknown>> }>(r.value)?.turns) ?? null;
+      if (turns && turns.length) ts.push({ kind, turns });
+    }
+    setTranscripts(ts);
     setLoading(false);
-  }, [runKey, machine]);
+  }, [runKey, machine, runId]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const doStep = async (): Promise<void> => {
@@ -373,18 +415,55 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
     await refresh();
   };
 
+  // A driven decision: at an agent/task node a human (or the reactive model) picks
+  // one branch. Records the claim + advance via the projected `decide-<node>` action,
+  // then steps to settle any deterministic tail. (A reactive machine does this itself.)
+  const decide = async (to: string): Promise<void> => {
+    if (!fact?.node) return;
+    const statement = (typeof window !== 'undefined' && window.prompt(`Why "${to}"? (recorded as the claim)`)) || `chose ${to}`;
+    setDeciding(to);
+    await mcpCall('act', 'workspace.invoke', { action: `machine.${machine}.decide-${segId(fact.node)}`, params: { run: runId, to, statement } });
+    await mcpCall('act', '@c15r/machine.step', { machine, run: runId });
+    setDeciding(null);
+    await refresh();
+  };
+
   const trace = fact?.trace ?? [];
   const taken = new Set<string>();
   for (let i = 1; i < trace.length; i++) taken.add(`${trace[i - 1].node}->${trace[i].node}`);
   const visited = [...trace.map((t) => t.node), ...claims.map((c) => (c.value as { at?: string }).at), ...children.map((c) => (c.value as RunVal).node)].filter((x): x is string => !!x);
   const child = childSuffix(runId);
+  // Branch choices the human can take at the current node (agent/task rails out of it).
+  const decideRails = (mv?.rails ?? []).filter((r) => r.from === fact?.node && (r.mode === 'agent' || r.mode === 'task'));
+  const canDecide = isAuthed() && fact?.status === 'running' && decideRails.length > 0;
+
+  // Play/pause: auto-advance a run. Reactive runs advance themselves (so Play just
+  // polls to watch it live); driven runs are stepped each tick. Stops at a decision
+  // (hand back to the human), at done/blocked, or on pause.
+  const [playing, setPlaying] = useState(false);
+  const stRef = React.useRef({ fact, mv, canDecide });
+  stRef.current = { fact, mv, canDecide };
+  useEffect(() => {
+    if (!playing) return;
+    const h = setInterval(async () => {
+      const { fact: f, mv: m2, canDecide: cd } = stRef.current;
+      if (!f || f.status === 'done' || f.status === 'blocked' || cd) { setPlaying(false); return; }
+      if (!m2?.reactive && f.status === 'running') await mcpCall('act', '@c15r/machine.step', { machine, run: runId });
+      await refresh();
+    }, 1500);
+    return () => clearInterval(h);
+  }, [playing, machine, runId, refresh]);
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
         <a href={machine ? `#/m/${machine}` : '#/'} style={{ color: C.mut, textDecoration: 'none' }}>‹ {machine || 'back'}</a>
         <strong style={{ font: '600 17px Georgia,serif', flex: 1 }}>Run <code style={{ fontFamily: C.mono, fontSize: 14 }}>{runId}</code></strong>
-        {isAuthed() && fact && fact.status !== 'done' && <button onClick={() => void doStep()} disabled={stepping} style={{ border: `1px solid ${C.blue}`, background: C.blue, color: '#fff', borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>{stepping ? 'Stepping…' : '⏭ Step'}</button>}
+        {isAuthed() && fact && fact.status !== 'done' && !canDecide && (
+          <button onClick={() => setPlaying((p) => !p)} title={mv?.reactive ? 'Watch the run advance live (it self-drives)' : 'Auto-step until a decision or completion'}
+            style={{ border: `1px solid ${C.blue}`, background: playing ? C.blue : C.panel, color: playing ? '#fff' : C.blue, borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>{playing ? '⏸ Pause' : '▶ Play'}</button>
+        )}
+        {isAuthed() && fact && fact.status !== 'done' && !canDecide && !mv?.reactive && <button onClick={() => void doStep()} disabled={stepping} style={{ border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>{stepping ? '…' : '⏭ Step'}</button>}
         <button onClick={() => void refresh()} style={{ border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>↻</button>
       </div>
       {child && <div style={{ color: C.mut, fontSize: 12 }}>a <strong>{child}</strong> branch of <a href={`#/r/${encodeURIComponent(parentRunKey(runKey))}`} style={{ color: C.blue }}><code style={{ fontFamily: C.mono }}>{baseRunId(runId)}</code></a></div>}
@@ -397,6 +476,21 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
           <Field label="status"><Badge text={fact.status ?? '—'} color={statusColor(fact.status)} /></Field>
           {fact.via && <Field label="via"><code style={{ fontFamily: C.mono, fontSize: 12 }}>{fact.via}</code></Field>}
         </div>
+      )}
+
+      {canDecide && (
+        <Field label={`Decide at ${fact?.node} — pick a branch`}>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {decideRails.map((r) => (
+              <button key={r.to} onClick={() => void decide(r.to)} disabled={!!deciding}
+                style={{ display: 'flex', gap: 8, alignItems: 'baseline', textAlign: 'left', border: `1px solid ${C.green}`, background: deciding === r.to ? C.green : C.panel, color: deciding === r.to ? '#fff' : C.ink, borderRadius: 9, padding: '9px 12px', font: 'inherit', cursor: 'pointer' }}>
+                <strong style={{ color: deciding === r.to ? '#fff' : C.green }}>→ {r.to}</strong>
+                {r.when && <span style={{ color: deciding === r.to ? '#fff' : C.mut, fontSize: 12 }}>{r.when}</span>}
+                {deciding === r.to && <span style={{ marginLeft: 'auto', fontSize: 12 }}>deciding…</span>}
+              </button>
+            ))}
+          </div>
+        </Field>
       )}
 
       {mv && (mv.nodes ?? []).length > 0 && (
@@ -451,6 +545,27 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
           })}
         </div>
       </Field>
+
+      {transcripts.map((t) => (
+        <Field key={t.kind} label={`Agent transcript — ${t.kind} (the model's reasoning)`}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            {t.turns.map((turn, i) => {
+              const tool = turn.tool as string | undefined;
+              const label = tool ? `tool:${tool}` : String(turn.role ?? (turn.note ? 'system' : 'turn'));
+              const raw = typeof turn.text === 'string' ? turn.text
+                : typeof turn.note === 'string' ? turn.note
+                : turn.result !== undefined ? (typeof turn.result === 'string' ? turn.result : JSON.stringify(turn.result))
+                : Array.isArray(turn.tools) ? `tools: ${(turn.tools as string[]).join(', ')}` : '';
+              return (
+                <div key={i} style={{ borderLeft: `2px solid ${tool ? C.blue : C.line}`, padding: '2px 8px', fontSize: 12 }}>
+                  <span style={{ color: C.mut, fontFamily: C.mono }}>{label}</span>
+                  {raw && <div style={{ whiteSpace: 'pre-wrap', maxHeight: 130, overflow: 'auto' }}>{raw}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </Field>
+      ))}
 
       {fact && (
         <details>

@@ -382,6 +382,7 @@ export const handler = async (event) => {
     // The DECOMPOSED definition fan: identity + one fact per node + per rail.
     const writes = decomposeWrites(a.name, nodes, rails, { title: a.title, source: a.source, ...(a.kind ? { kind: a.kind } : {}) });
     if (Array.isArray(a.context)) writes[0].value.context = a.context; // decide reads these
+    writes[0].value.reactive = reactive; // surfaced to the UI toggle
     if (Array.isArray(a.tags)) writes[0].tags = [...new Set([...writes[0].tags, ...a.tags])];
 
     const actions = project ? projectActions(a.name, nodes, rails) : [];
