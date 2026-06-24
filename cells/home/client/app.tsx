@@ -845,6 +845,20 @@ function IdentityShell({ authed, user, scopes, seed }: { authed: boolean; user: 
                   <span style={{ color: theme.dim, fontSize: '0.75rem' }}>
                     {t.expiresAt ? `expires ${t.expiresAt.slice(0, 10)}` : 'non-expiring'}
                   </span>
+                  {/* Steward this credential as a principal (auth.updateToken): rename,
+                      re-scope (upgrade/downgrade, clamped to your standing), re-horizon. */}
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    <InlineButton onClick={() => {
+                      const label = typeof window !== 'undefined' ? window.prompt('Rename this credential', t.label ?? '') : null;
+                      if (label != null) void act(t.id, 'act', 'auth.updateToken', { tokenId: t.id, label });
+                    }}>Rename</InlineButton>
+                    <InlineButton onClick={() => {
+                      const scope = typeof window !== 'undefined' ? window.prompt('Scope (space-separated; clamped to your own standing)', t.scope ?? '') : null;
+                      if (scope != null && scope.trim()) void act(t.id, 'act', 'auth.updateToken', { tokenId: t.id, scope: scope.trim() });
+                    }}>Edit scope</InlineButton>
+                    <InlineButton onClick={() => void act(t.id, 'act', 'auth.updateToken', { tokenId: t.id, expiresInSec: 30 * 24 * 3600 })}>Extend 30d</InlineButton>
+                    <InlineButton onClick={() => void act(t.id, 'act', 'auth.updateToken', { tokenId: t.id, expiresInSec: 0 })}>Never expires</InlineButton>
+                  </div>
                 </div>
               ))
             )}

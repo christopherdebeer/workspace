@@ -289,10 +289,17 @@ function enforceScope(ctx: ServiceContext, target: string, scope: string): void 
       }]. Widen it (no re-consent): act("auth.requestScope", { scopes: ["${scope}"] }), then retry.`,
     );
   }
+  // In-band scope elevation (docs/token-as-principal-plan.md §C): hand back a ready
+  // elevation URL so a connected agent can present the human a one-click widen
+  // (passkey → approve → a wider token), instead of just naming the endpoint.
+  const base = process.env.PUBLIC_BASE_URL ?? '';
+  const q = new URLSearchParams({ scope });
+  if (ctx.identity.tokenId) q.set('elevate', ctx.identity.tokenId);
+  const elevateUrl = `${base}/oauth/authorize?${q.toString()}`;
   throw new ServiceAuthError(
     `scope_denied: "${target}" requires scope "${scope}" and your grant is [${
       (ctx.identity.grantScopes ?? ctx.identity.scopes).join(' ') || 'none'
-    }]. A token is a ceiling — sign in again requesting the scope at /oauth/authorize (humans), or ask your human to re-consent / mint you a wider token via auth.mintToken (agents).`,
+    }]. A token is a ceiling. Elevate (passkey → approve): ${elevateUrl} — open it (humans), or hand it to your human (agents); then retry. (Agents may instead mint a wider token via auth.mintToken.)`,
   );
 }
 
