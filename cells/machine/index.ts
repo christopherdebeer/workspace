@@ -21,9 +21,12 @@ import { App } from './client/app';
 import { installBridge } from './client/bridge';
 import { seg, ARROW_RELS, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, projectStepSubscription } from './engine';
 // The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
-// over the owner's slice. Imported by URL: the cell bundler fetches + inlines it
-// at deploy time; its @aws-sdk/node imports stay external (runtime-provided).
-import { createSubstrate } from 'https://parc.land/@c15r/kernel/substrate.js';
+// over the owner's slice. VENDORED here (not a URL import): the forge bundler
+// only bundles relative imports within the cell dir + esm.sh-declared deps; a
+// server-side `https://` import HANGS the bundler (the browser kernel's URL is
+// browser-fetched, never server-bundled). Canonical source: cells/kernel/static/
+// substrate.js — kept in sync until it's published as an npm package (ADR-0017).
+import { createSubstrate } from './substrate';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
@@ -237,7 +240,7 @@ async function stepRun(runId) {
   // On completion, run the deterministic join barrier against the parent (if any).
   let barrier;
   if (result.run.status === 'done') {
-    barrier = await advanceParentBarrier(sub, runId, def.value, now);
+    barrier = await advanceParentBarrier(sub, runId, result.run, def.value, now);
   }
 
   return {
@@ -257,13 +260,24 @@ async function stepRun(runId) {
  * to advance the parent. The parent's machine def may differ in principle, but a
  * child shares its parent's machine, so reuse `def`.
  */
-async function advanceParentBarrier(sub, childRunId, def, now) {
+async function advanceParentBarrier(sub, childRunId, childRun, def, now) {
   const rel = parentOf(childRunId);
   if (!rel) return null;
   const parent = await sub.read(`machine-run/${rel.parent}`);
   if (!parent) return null;
   const siblings = await sub.query({ prefix: `machine-run/${rel.parent}${rel.sep}` });
-  const decision = barrierAdvance(rel.parent, parent.value, siblings, def, now);
+  // Organ writes are async: the child-done write that triggered this step may not
+  // have applied yet, so the just-completed child can read back stale. Overlay its
+  // fresh value (and ensure it's present) so the barrier counts it — the read-lag
+  // is the one place the deterministic count would otherwise miss its trigger.
+  const childKey = `machine-run/${childRunId}`;
+  let sawChild = false;
+  const merged = siblings.map((s) => {
+    if (s.key === childKey || s.key === childRunId) { sawChild = true; return { ...s, value: childRun }; }
+    return s;
+  });
+  if (!sawChild) merged.push({ key: childKey, value: childRun });
+  const decision = barrierAdvance(rel.parent, parent.value, merged, def, now);
   if (!decision.advance) return { parent: rel.parent, waiting: true, done: decision.done, expected: decision.expected, reason: decision.reason };
   await sub.emit([decision.advance]);
   return { parent: rel.parent, advanced: true, node: decision.advance.value.node, done: decision.done, expected: decision.expected };

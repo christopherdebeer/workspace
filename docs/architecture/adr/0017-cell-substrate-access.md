@@ -1,10 +1,13 @@
 # ADR-0017 — Cell substrate access: one shared client, not a re-implementation per cell
 
-- **Status:** Accepted (first increment shipped) — the shared client lives at
-  `cells/kernel/static/substrate.js`, served at `/@c15r/kernel/substrate.js`, and
-  `@c15r/machine`'s `step` tool consumes it by URL import (ADR-0018). The bridge is the
-  kernel-served URL module; the published-npm-package target (below) is not yet done.
-  `@c15r/models` is not yet migrated onto it.
+- **Status:** Accepted (first increment shipped, bridge revised). The canonical client lives at
+  `cells/kernel/static/substrate.js` (served at `/@c15r/kernel/substrate.js`). **Empirical
+  correction:** a server-side `https://` import *hangs the forge bundler* — it has no timeout and
+  the build never completes (validated 2026-06-24: the machine deploy stuck in `DEPLOYING`, the
+  cell kept the old tool surface). The browser kernel's URL is fetched *by the browser*, never
+  server-bundled, so this path was untested before. The working bridge is therefore **vendoring**:
+  `@c15r/machine` imports a copy at `cells/machine/substrate.js` relatively. `@c15r/models` is not
+  yet migrated. The published-npm-package target (below) remains the destination.
 - **Date:** 2026-06-23
 - **Context:** [`docs/machine.md`](../../machine.md) §13 (known gaps) and ADR-0011's open item
   (at-least-once delivery under the depth cap). The machine cell was built **write-only**,
@@ -71,32 +74,27 @@ once, here, instead of never.
 ### Where it lives — packaging
 
 The cell bundler (`services/cells/transpile.ts`) resolves relative imports **only within the
-pushed cell directory**, fetches declared bare imports from esm.sh (`?target=node`), **and
-bundles direct `https://` URL imports by fetching them at build time** (transpile.ts:266) — a
+pushed cell directory**, fetches declared bare imports from esm.sh (`?target=node`), and a
 URL module's own bare imports (`@aws-sdk/*`, `node:*`) stay `external`, runtime-provided
-(transpile.ts:280). It cannot reach a sibling `../_shared/` or a repo-local path. That gives
-three real options:
+(transpile.ts:280). It cannot reach a sibling `../_shared/` or a repo-local path. The options:
 
 1. **Published npm package (target).** Publish the client (e.g. `@c15r/substrate`), declare it
    in each cell's `client/imports.json`, import by bare specifier. The server bundler resolves
    it via esm.sh exactly as it does for `react`; client and server stay version-pinned. The
-   destination — removes the snapshot/deploy-order coupling of the bridge below.
-2. **Kernel-served URL module (the chosen bridge).** The client lives at
-   `cells/kernel/static/substrate.js`, served verbatim at `https://parc.land/@c15r/kernel/substrate.js`.
-   A cell imports that URL; the bundler fetches and inlines it at the cell's build. This is the
-   **same mechanism cells already use for the browser kernel** (`@c15r/kernel/app.js`), so the
-   kernel cell becomes the home for shared client code — server module beside browser module —
-   which is exactly the "reusable in the kernel" intent. The kernel handler stays a static file
-   server; the served JS is plain ESM (no DOM), so the browser-only objection doesn't apply to a
-   *separate* server entry. Cost: consumers **snapshot** the module at build time, so an update
-   means redeploy-kernel-then-rebuild-consumers, and there is a deploy-order edge (kernel must
-   serve `/substrate.js` before a consumer rebuilds).
-3. **Copy into the cell directory.** A `cells/<name>/_shared/substrate.ts` bundled with the cell —
-   zero platform change, but duplicated per cell. Rejected in favour of (2): one served copy beats
-   N vendored copies, and (2) reuses the proven URL-import path.
+   destination — one source, no per-cell copy.
+2. **Kernel-served URL module — *tried, does not work server-side*.** The bundler *does* have a
+   branch for `https://` imports (transpile.ts:266, `fetchCached`), and the client was authored to
+   be served at `/@c15r/kernel/substrate.js`. But that fetch has **no timeout**, and in the forge
+   the build *hangs* on it — the deploy never finishes (validated live). The browser kernel's URL
+   import works only because the *browser* fetches it; it is never server-bundled. Rejected.
+3. **Vendor into the cell directory (the working bridge).** A copy at `cells/machine/substrate.js`,
+   imported relatively, bundled with the cell — zero network at build, the proven relative-import
+   path. Cost: a copy per consuming cell, kept in sync with the canonical
+   `cells/kernel/static/substrate.js` by hand until (1).
 
-We ship (2) now (so ADR-0018 is unblocked), authored as the extractable module, and migrate to
-(1) once published.
+We ship (3) now (so ADR-0018 is unblocked) and migrate to (1) once published. The canonical source
+stays in the kernel cell (one file to copy from / extract), even though the *consumption* is a
+vendored copy rather than a URL import.
 
 ### What this is not
 
