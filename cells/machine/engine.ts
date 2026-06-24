@@ -118,8 +118,11 @@ export const mkey = {
   trigger: (m, run) => `machine/${seg(m)}/trigger/${run}`,
 };
 
-/** The entry node: the first with no incoming rail (or the first node). */
-export const entryOf = (nodes, rails) => {
+/** The entry node: an explicit `entry` (if it names a real node — for cyclic
+ *  machines whose start has incoming rails), else the first with no incoming
+ *  rail, else the first node. */
+export const entryOf = (nodes, rails, entry) => {
+  if (entry && (nodes || []).some((n) => n && n.name === entry)) return entry;
   const hasIn = (node) => rails.some((r) => r.to === node);
   return (nodes.find((n) => !hasIn(n.name)) ?? nodes[0])?.name;
 };
@@ -151,7 +154,7 @@ export function decomposeWrites(name, nodes, rails, extra) {
   const writes = [
     {
       key: mkey.machine(name),
-      value: { title: (extra && extra.title) || name, entry: entryOf(nodes, rails), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
+      value: { title: (extra && extra.title) || name, entry: entryOf(nodes, rails, extra && extra.entry), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
       type: 'machine',
       tags: [...tags, 'dygram'],
     },
@@ -177,10 +180,13 @@ export function decomposeWrites(name, nodes, rails, extra) {
  * orphan, cycle, no terminal). section/vote SPAWN their branch targets, so those
  * implied edges are followed for reachability.
  */
-export function validateMachine(nodes, rails) {
+export function validateMachine(nodes, rails, entry) {
   const names = new Set((nodes || []).map((n) => n && n.name).filter(Boolean));
   const errors = [];
   const warnings = [];
+  // An explicit entry (e.g. a cyclic machine like a circuit breaker, whose start
+  // node has incoming retry rails) overrides the zero-indegree heuristic.
+  const declaredEntry = entry && names.has(entry) ? entry : null;
 
   for (const r of rails) {
     if (r.from && !names.has(r.from)) errors.push({ code: 'dangling-rail', message: `rail "${r.from}" → "${r.to}": no node named "${r.from}"` });
@@ -196,7 +202,10 @@ export function validateMachine(nodes, rails) {
     if (r.mode === 'section') for (const s of r.sections || []) link(r.from, s.to);
     if (r.mode === 'vote' && r.branch) link(r.from, r.branch);
   }
-  const entries = [...names].filter((n) => indeg.get(n) === 0);
+  const zeroIndeg = [...names].filter((n) => indeg.get(n) === 0);
+  // Reachability + the entries stat seed from the declared entry when given (so a
+  // cyclic machine's start node counts), else from the zero-indegree nodes.
+  const entries = declaredEntry ? [declaredEntry, ...zeroIndeg.filter((n) => n !== declaredEntry)] : zeroIndeg;
   const terminals = [...names].filter((n) => adj.get(n).length === 0);
 
   const seen = new Set();
@@ -226,7 +235,7 @@ export function validateMachine(nodes, rails) {
   for (const n of names) if (!color.get(n)) dfs(n, []);
   for (const c of cycles) warnings.push({ code: 'cycle', message: `transition cycle ${c} — a reactive machine could loop; add a condition/guard` });
 
-  if (names.size && entries.length === 0) errors.push({ code: 'no-entry', message: 'no entry node (every node has an incoming rail) — a run cannot start' });
+  if (names.size && entries.length === 0) errors.push({ code: 'no-entry', message: 'no entry node (every node has an incoming rail) — a run cannot start. Declare `entry` to pick the start node of a cyclic machine.' });
   if (names.size && terminals.length === 0) warnings.push({ code: 'no-terminal', message: 'no terminal node (every node has an outgoing rail) — a run never reaches done' });
 
   return { ok: errors.length === 0, errors, warnings, stats: { nodes: names.size, rails: rails.length, entries, terminals, cyclic: cycles.length > 0 } };
@@ -240,23 +249,23 @@ export function validateMachine(nodes, rails) {
  * re-triggers `step`). The per-auto-rail advance actions are GONE — `step` walks
  * the deterministic prefix in-process. Run/claim keys nest under `machine/<name>/`.
  */
-export function projectActions(name, nodes, rails) {
+export function projectActions(name, nodes, rails, entry) {
   const m = seg(name);
   const runKey = mkey.run(name, '${params.run}');
   const tags = ['machine', `machine:${name}`];
   const hasOut = (node) => rails.some((r) => r.from === node);
-  const entry = entryOf(nodes, rails);
+  const entryNode = entryOf(nodes, rails, entry);
   const actions = [];
 
-  if (entry) {
+  if (entryNode) {
     actions.push({
       id: `machine.${m}.start`,
-      description: `Start a run of "${name}" at ${entry}. Optional \`text\` is the trigger-context body (a Claude-Routine-style payload) stored on the run so the entry node's agent sees it.`,
+      description: `Start a run of "${name}" at ${entryNode}. Optional \`text\` is the trigger-context body (a Claude-Routine-style payload) stored on the run so the entry node's agent sees it.`,
       params: {
         run: { type: 'string', required: true, description: `Run id → ${mkey.run(name, '<run>')}` },
         text: { type: 'string', required: false, description: 'Trigger context body — visible to the entry agent' },
       },
-      writes: [{ key: runKey, value: { machine: name, node: entry, status: 'running', startedAt: '${now}', text: '${params.text}' }, type: 'machine-run', tags, ifAbsent: true }],
+      writes: [{ key: runKey, value: { machine: name, node: entryNode, status: 'running', startedAt: '${now}', text: '${params.text}' }, type: 'machine-run', tags, ifAbsent: true }],
     });
   }
 

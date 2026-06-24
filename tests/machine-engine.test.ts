@@ -81,6 +81,21 @@ describe('validateMachine', () => {
     const codes = v.warnings.map((w: { code: string }) => w.code);
     expect(codes).not.toContain('unreachable');
   });
+  it('a cyclic machine errors no-entry unless an explicit entry is declared', () => {
+    const rails = [
+      { from: 'Call', to: 'Done', mode: 'work' },
+      { from: 'Call', to: 'Gate', mode: 'catch' },
+      { from: 'Gate', to: 'Call', mode: 'auto', condition: 'value.failures < 3' },
+      { from: 'Gate', to: 'Done', mode: 'auto', condition: 'value.failures >= 3' },
+    ];
+    const noEntry = validateMachine(N('Call', 'Gate', 'Done'), rails);
+    expect(noEntry.errors.map((e: { code: string }) => e.code)).toContain('no-entry');
+    const withEntry = validateMachine(N('Call', 'Gate', 'Done'), rails, 'Call');
+    expect(withEntry.errors.map((e: { code: string }) => e.code)).not.toContain('no-entry');
+    expect(withEntry.stats.entries).toContain('Call');
+    // reachability seeds from the declared entry → no false unreachable warnings.
+    expect(withEntry.warnings.map((w: { code: string }) => w.code)).not.toContain('unreachable');
+  });
 });
 
 describe('mkey + entryOf (nested namespace)', () => {

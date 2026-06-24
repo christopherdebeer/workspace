@@ -99,6 +99,7 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: 'Machine slug (becomes key machine/<name>)' },
         title: { type: 'string', description: 'Human title' },
+        entry: { type: 'string', description: 'Explicit start node — needed for a CYCLIC machine (e.g. a circuit breaker) whose entry has incoming retry rails, so the zero-indegree heuristic cannot find it. Defaults to the first node with no incoming rail.' },
         source: { type: 'string', description: 'Optional original .dy source text' },
         nodes: {
           type: 'array',
@@ -375,17 +376,17 @@ export const handler = async (event) => {
     if (!a.name) return json(400, { error: 'name is required' });
     const nodes = Array.isArray(a.nodes) ? a.nodes : [];
     const rails = railsFrom(Array.isArray(a.arrows) ? a.arrows : [], a.rails);
-    const validation = validateMachine(nodes, rails);
+    const validation = validateMachine(nodes, rails, a.entry);
     const project = a.project !== false;
     const reactive = a.reactive !== false; // stepper-on by default; pass reactive:false for driven-only
 
     // The DECOMPOSED definition fan: identity + one fact per node + per rail.
-    const writes = decomposeWrites(a.name, nodes, rails, { title: a.title, source: a.source, ...(a.kind ? { kind: a.kind } : {}) });
+    const writes = decomposeWrites(a.name, nodes, rails, { title: a.title, source: a.source, ...(a.entry ? { entry: a.entry } : {}), ...(a.kind ? { kind: a.kind } : {}) });
     if (Array.isArray(a.context)) writes[0].value.context = a.context; // decide reads these
     writes[0].value.reactive = reactive; // surfaced to the UI toggle
     if (Array.isArray(a.tags)) writes[0].tags = [...new Set([...writes[0].tags, ...a.tags])];
 
-    const actions = project ? projectActions(a.name, nodes, rails) : [];
+    const actions = project ? projectActions(a.name, nodes, rails, a.entry) : [];
     const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER, a.context) : [];
     const sub = createSubstrate({ owner: OWNER, via: 'machine.define_machine' });
 
