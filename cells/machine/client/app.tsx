@@ -12,7 +12,8 @@
  * server bundle stays kernel-free. Drill-ins load client-side via mcpCall.
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
-import { authFetch, isAuthed, login, completeLoginIfReturning } from './bridge';
+import { authFetch, isAuthed, login, completeLoginIfReturning, cellUrl } from './bridge';
+import { type Route, NAV_EVENT, currentRoute, parseRoute, navigate, restHome, restMachine, restRun } from './lib/url';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -20,7 +21,7 @@ const { useState, useEffect, useCallback } = React;
 
 export interface Session { user: string | null }
 export interface Entry { key: string; value: Record<string, unknown> }
-export interface Boot { session: Session; machines: Entry[]; nodes: Entry[]; rails: Entry[]; runs: Entry[] }
+export interface Boot { session: Session; machines: Entry[]; nodes: Entry[]; rails: Entry[]; runs: Entry[]; path?: string; owner?: string }
 
 interface Rail { from: string; to: string; mode: string; when?: string; condition?: string; prompt?: string; tools?: string[]; sections?: Array<{ to: string; when?: string }>; branch?: string; samples?: number }
 interface Node { name: string; kind?: string; title?: string }
@@ -100,11 +101,39 @@ function groupStatus(g: RunGroup): string {
   if (g.children.length && g.children.every((c) => (c.value as RunVal).status === 'done')) return 'done';
   return g.children.length ? 'running' : '—';
 }
-const useHash = (): string => {
-  const [h, setH] = useState<string>(typeof location !== 'undefined' ? location.hash : '');
-  useEffect(() => { const on = (): void => setH(location.hash); window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on); }, []);
-  return h;
+/** The cell owner — set from the SSR boot at App render so server and client
+ *  build identical absolute cell links (clean hydration). */
+let CELL_OWNER = 'c15r';
+/** Absolute href to a cell-relative rest path, via the kernel/bridge `cellUrl`
+ *  (apex `/@owner/machine<rest>` on the server stub + apex; host-aware on a cell
+ *  host). The ONE localizer for in-app links. */
+const href = (rest: string): string => cellUrl(CELL_OWNER, 'machine', rest);
+
+/** Path-based route, kept in sync with the URL. Seeded from the SSR path so the
+ *  first client render matches the server, then driven by popstate (back/forward)
+ *  and our NAV_EVENT (pushState, which emits no popstate). */
+const useRoute = (seedPath?: string): Route => {
+  const [route, setRoute] = useState<Route>(() => (seedPath != null ? parseRoute(seedPath) : currentRoute()));
+  useEffect(() => {
+    const on = (): void => setRoute(currentRoute());
+    window.addEventListener('popstate', on);
+    window.addEventListener(NAV_EVENT, on);
+    return () => { window.removeEventListener('popstate', on); window.removeEventListener(NAV_EVENT, on); };
+  }, []);
+  return route;
 };
+
+/** An internal SPA link: a real anchor (so middle/cmd-click open a new tab and the
+ *  URL is shareable) that intercepts a plain click to pushState-navigate. */
+function Link({ rest, children, style, title }: { rest: string; children: React.ReactNode; style?: React.CSSProperties; title?: string }): React.ReactElement {
+  return (
+    <a href={href(rest)} title={title} onClick={(e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      navigate(rest);
+    }} style={{ textDecoration: 'none', color: 'inherit', ...style }}>{children}</a>
+  );
+}
 
 /* ── small UI atoms ─────────────────────────────────────────────────────── */
 
@@ -129,7 +158,7 @@ function RunGroupRow({ group, showMachine }: { group: RunGroup; showMachine?: bo
   const p = group.parent?.value as RunVal | undefined;
   const status = groupStatus(group);
   return (
-    <div onClick={() => { location.hash = `#/r/${encodeURIComponent(group.key)}`; }}
+    <div onClick={() => navigate(restRun(group.key))}
       style={{ display: 'grid', gap: 6, padding: '8px 12px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, cursor: 'pointer' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <Badge text={status} color={statusColor(status)} />
@@ -239,7 +268,7 @@ function ListView({ machines, nodes, rails, runs, authed, ready }: { machines: E
           const groups = groupRuns(runsByMachine.get(name) ?? []);
           const last = groups[0];
           return (
-            <Card key={m.key} onClick={() => { location.hash = `#/m/${name}`; }}>
+            <Card key={m.key} onClick={() => navigate(restMachine(name))}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                 <strong style={{ font: '600 16px Georgia,serif', flex: 1 }}>{mv.title ?? name}</strong>
                 {last && <Badge text={groupStatus(last)} color={statusColor(groupStatus(last))} />}
@@ -286,7 +315,7 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
     setBusy(true);
     const r = await mcpCall('act', 'workspace.invoke', { action: `machine.${name}.start`, params: { run } });
     setBusy(false);
-    if (r.ok) location.hash = `#/r/${encodeURIComponent(runKeyOf(name, run))}`;
+    if (r.ok) navigate(restRun(runKeyOf(name, run)));
     else alert(`Trigger failed: ${typeof r.value === 'string' ? r.value : JSON.stringify(r.value)}`);
   };
 
@@ -310,14 +339,14 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
     await refresh();
   };
 
-  if (loading && !m) return <div style={{ display: 'grid', gap: 12 }}><a href="#/" style={{ color: C.mut, textDecoration: 'none' }}>‹ machines</a><Skeleton h={28} w="40%" /><Skeleton h={140} /></div>;
-  if (!m) return <p style={{ color: C.mut }}>Machine “{name}” not found. <a href="#/">Back</a></p>;
+  if (loading && !m) return <div style={{ display: 'grid', gap: 12 }}><Link rest={restHome()} style={{ color: C.mut }}>‹ machines</Link><Skeleton h={28} w="40%" /><Skeleton h={140} /></div>;
+  if (!m) return <p style={{ color: C.mut }}>Machine “{name}” not found. <Link rest={restHome()} style={{ color: C.blue }}>Back</Link></p>;
   const latest = runs[0]?.value as RunVal | undefined;
   const groups = groupRuns(runs);
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-        <a href="#/" style={{ color: C.mut, textDecoration: 'none' }}>‹ machines</a>
+        <Link rest={restHome()} style={{ color: C.mut }}>‹ machines</Link>
         <strong style={{ font: '600 19px Georgia,serif', flex: 1 }}>{m.title ?? name}</strong>
         {isAuthed() && (
           <button onClick={() => void toggleReactive()} disabled={toggling} title={m.reactive ? 'Self-driving: runs advance on their own (models decide). Click to make driven.' : 'Driven: you advance runs by hand (Step / Decide). Click to make self-driving.'}
@@ -363,14 +392,19 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
   );
 }
 
-function RunView({ runKey }: { runKey: string }): React.ReactElement {
+function RunView({ runKey, boot }: { runKey: string; boot: Boot }): React.ReactElement {
   const machine = runMachine(runKey);
   const runId = runIdOf(runKey);
-  const [fact, setFact] = useState<RunVal | null>(null);
-  const [mv, setMv] = useState<MachineVal | null>(null);
+  // Seed from the SSR boot (the `/r/<key>` ssr.json reads) so the run paints
+  // immediately on a deep link; refresh() then fills claims/transcripts.
+  const seedFact = (boot.runs.find((r) => r.key === runKey)?.value as RunVal | undefined) ?? null;
+  const seedMv = assemble(boot.machines.find((m) => idName(m.key) === (seedFact?.machine ?? machine)), boot.nodes, boot.rails);
+  const seedChildren = boot.runs.filter((e) => childSuffix(runIdOf(e.key)) && parentRunKey(e.key) === runKey);
+  const [fact, setFact] = useState<RunVal | null>(seedFact);
+  const [mv, setMv] = useState<MachineVal | null>(seedMv);
   const [claims, setClaims] = useState<Entry[]>([]);
-  const [children, setChildren] = useState<Entry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [children, setChildren] = useState<Entry[]>(seedChildren);
+  const [loading, setLoading] = useState(!seedFact);
   const [stepping, setStepping] = useState(false);
   const [deciding, setDeciding] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<Array<{ kind: string; turns: Array<Record<string, unknown>> }>>([]);
@@ -457,7 +491,7 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-        <a href={machine ? `#/m/${machine}` : '#/'} style={{ color: C.mut, textDecoration: 'none' }}>‹ {machine || 'back'}</a>
+        <Link rest={machine ? restMachine(machine) : restHome()} style={{ color: C.mut }}>‹ {machine || 'back'}</Link>
         <strong style={{ font: '600 17px Georgia,serif', flex: 1 }}>Run <code style={{ fontFamily: C.mono, fontSize: 14 }}>{runId}</code></strong>
         {isAuthed() && fact && fact.status !== 'done' && !canDecide && (
           <button onClick={() => setPlaying((p) => !p)} title={mv?.reactive ? 'Watch the run advance live (it self-drives)' : 'Auto-step until a decision or completion'}
@@ -466,7 +500,7 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
         {isAuthed() && fact && fact.status !== 'done' && !canDecide && !mv?.reactive && <button onClick={() => void doStep()} disabled={stepping} style={{ border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>{stepping ? '…' : '⏭ Step'}</button>}
         <button onClick={() => void refresh()} style={{ border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8, padding: '6px 12px', font: 'inherit', cursor: 'pointer' }}>↻</button>
       </div>
-      {child && <div style={{ color: C.mut, fontSize: 12 }}>a <strong>{child}</strong> branch of <a href={`#/r/${encodeURIComponent(parentRunKey(runKey))}`} style={{ color: C.blue }}><code style={{ fontFamily: C.mono }}>{baseRunId(runId)}</code></a></div>}
+      {child && <div style={{ color: C.mut, fontSize: 12 }}>a <strong>{child}</strong> branch of <Link rest={restRun(parentRunKey(runKey))} style={{ color: C.blue }}><code style={{ fontFamily: C.mono }}>{baseRunId(runId)}</code></Link></div>}
 
       {loading && !fact && <div style={{ display: 'grid', gap: 10 }}><Skeleton h={20} w="60%" /><Skeleton h={140} /></div>}
       {fact && (
@@ -518,7 +552,7 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
             {children.map((c) => {
               const cv = c.value as RunVal; const sfx = childSuffix(runIdOf(c.key)) ?? '';
               return (
-                <div key={c.key} onClick={() => { location.hash = `#/r/${encodeURIComponent(c.key)}`; }} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '7px 10px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 9, cursor: 'pointer' }}>
+                <div key={c.key} onClick={() => navigate(restRun(c.key))} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '7px 10px', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 9, cursor: 'pointer' }}>
                   <Badge text={cv.status ?? '—'} color={statusColor(cv.status)} /><strong>{sfx}</strong><span style={{ color: C.mut }}>· {cv.node}</span>
                   {cv.via && <code style={{ marginLeft: 'auto', color: C.mut, fontSize: 11, fontFamily: C.mono }}>{cv.via}</code>}
                 </div>
@@ -581,7 +615,8 @@ function RunView({ runKey }: { runKey: string }): React.ReactElement {
 
 export function App({ initial }: { initial?: Boot }): React.ReactElement {
   const boot: Boot = initial ?? { session: { user: null }, machines: [], nodes: [], rails: [], runs: [] };
-  const hash = useHash();
+  CELL_OWNER = boot.owner ?? CELL_OWNER;
+  const route = useRoute(boot.path);
   const [authed, setAuthed] = useState<boolean>(!!boot.session.user);
   const [user] = useState<string | null>(boot.session.user);
   const [data, setData] = useState<Boot>(boot);
@@ -615,17 +650,15 @@ export function App({ initial }: { initial?: Boot }): React.ReactElement {
   }, []);
 
   let body: React.ReactElement;
-  const mMatch = /^#\/m\/(.+)$/.exec(hash);
-  const rMatch = /^#\/r\/(.+)$/.exec(hash);
-  if (mMatch) body = <MachineView name={decodeURIComponent(mMatch[1])} boot={data} />;
-  else if (rMatch) body = <RunView runKey={decodeURIComponent(rMatch[1])} />;
+  if (route.view === 'machine' && route.name) body = <MachineView name={route.name} boot={data} />;
+  else if (route.view === 'run' && route.runKey) body = <RunView runKey={route.runKey} boot={data} />;
   else body = <ListView machines={data.machines} nodes={data.nodes} rails={data.rails} runs={data.runs} authed={authed} ready={ready} />;
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.ink }}>
       <style>{SKELETON_CSS}</style>
       <header style={{ padding: '14px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center' }}>
-        <a href="#/" style={{ textDecoration: 'none', color: C.ink }}><strong style={{ font: '700 18px Georgia,serif' }}>🔄 machines</strong></a>
+        <Link rest={restHome()} style={{ color: C.ink }}><strong style={{ font: '700 18px Georgia,serif' }}>🔄 machines</strong></Link>
         <span style={{ color: C.mut, fontSize: 12 }}>@c15r/machine</span>
         {authed
           ? <span style={{ marginLeft: 'auto', color: C.mut, fontSize: 12 }}>{user ?? 'signed in'}</span>

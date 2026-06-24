@@ -40,6 +40,65 @@ interface SsrRead {
   as: string;
   target: string;
   input?: Record<string, unknown>;
+  /** Route patterns this read applies to (default `['/']` — root only, the
+   *  historical behavior). A pattern is a cell-relative path of tokens: a literal
+   *  segment, `:name` (one segment), or `*name` (the rest, captured greedily and
+   *  must be last). Matched params are URL-decoded and substituted into `input`
+   *  via `${name}`, so a deep-link read can scope to the entity named in the URL
+   *  (e.g. `/m/:slug` → `{ prefix: "machine/${slug}/node/" }`). */
+  paths?: string[];
+}
+
+const decodeSeg = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };
+
+/**
+ * Match a route pattern against a cell-relative path. `/` matches only `/`.
+ * Returns the captured (URL-decoded) params, or null if it doesn't match.
+ */
+function matchSsrPath(pattern: string, path: string): Record<string, string> | null {
+  const ps = pattern.split('/').filter(Boolean);
+  const xs = path.split('/').filter(Boolean);
+  const params: Record<string, string> = {};
+  for (let i = 0; i < ps.length; i++) {
+    const tok = ps[i];
+    if (tok.startsWith('*')) {
+      if (i !== ps.length - 1 || xs.length < i + 1) return null;
+      params[tok.slice(1)] = xs.slice(i).map(decodeSeg).join('/');
+      return params;
+    }
+    if (xs[i] === undefined) return null;
+    if (tok.startsWith(':')) params[tok.slice(1)] = decodeSeg(xs[i]);
+    else if (tok !== xs[i]) return null;
+  }
+  return xs.length === ps.length ? params : null;
+}
+
+/** Deep-substitute `${name}` tokens in a read's input strings from path params. */
+function substituteSsrParams(input: Record<string, unknown> | undefined, params: Record<string, string>): Record<string, unknown> | undefined {
+  if (!input) return input;
+  const sub = (v: unknown): unknown =>
+    typeof v === 'string' ? v.replace(/\$\{([^}]+)\}/g, (_m, k: string) => params[k] ?? '')
+      : Array.isArray(v) ? v.map(sub)
+        : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, sub(x)]))
+          : v;
+  return sub(input) as Record<string, unknown>;
+}
+
+/**
+ * Select the SSR reads that apply to `subPath` (default scope `['/']`), with path
+ * params substituted into each read's input. A cell that declares no `paths`
+ * behaves exactly as before (root-only), so this is backward compatible.
+ */
+function selectSsrReads(reads: SsrRead[], subPath: string): SsrRead[] {
+  const out: SsrRead[] = [];
+  for (const r of reads) {
+    const patterns = Array.isArray(r.paths) && r.paths.length ? r.paths : ['/'];
+    let params: Record<string, string> | null = null;
+    for (const p of patterns) { params = matchSsrPath(p, subPath); if (params) break; }
+    if (!params) continue;
+    out.push(Object.keys(params).length ? { ...r, input: substituteSsrParams(r.input, params) } : r);
+  }
+  return out;
 }
 
 /**
@@ -263,13 +322,17 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
   // cell's declared substrate reads as the caller and hand the shaped results to
   // cells.call → the cell server-renders real content (no token reaches it).
   let ssrData: Record<string, unknown> | undefined;
-  if (ctx.identity.user && (req.method === 'GET' || req.method === 'HEAD') && parsed.subPath === '/') {
+  // SSR for any non-asset top-level navigation (a path without a file extension):
+  // root `/` as before, plus deep-link paths a cell's ssr.json scopes via `paths`
+  // (e.g. `/m/<slug>`). Reads still run as the caller, read-only, and degrade.
+  if (ctx.identity.user && (req.method === 'GET' || req.method === 'HEAD') && !parsed.subPath.includes('.')) {
     try {
       const meta = await ctx.serviceClient('cells').command<{ reads?: SsrRead[] }>('ssrReadsFor', {
         owner: parsed.owner,
         name: parsed.name,
       });
-      if (meta?.reads?.length) ssrData = await runSsrReads(meta.reads, ctx);
+      const applicable = meta?.reads?.length ? selectSsrReads(meta.reads, parsed.subPath) : [];
+      if (applicable.length) ssrData = await runSsrReads(applicable, ctx);
     } catch (err) {
       ctx.logger.warn('ssr prefetch failed', { error: (err as Error).message });
     }
