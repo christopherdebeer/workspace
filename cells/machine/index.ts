@@ -387,13 +387,39 @@ export const handler = async (event) => {
 
     const actions = project ? projectActions(a.name, nodes, rails) : [];
     const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER, a.context) : [];
+    const sub = createSubstrate({ owner: OWNER, via: 'machine.define_machine' });
+
+    // Which prior definition facts / projected vocabulary this re-definition would
+    // retire (full-replace semantics — see the reconcile sweep below). Computed up
+    // front so `dryRun` can preview the cleanup, not just the writes.
+    const keepFacts = new Set(writes.map((w) => w.key));
+    const keepActionKeys = new Set(actions.map((d) => `_actions/${d.id}`));
+    // `subs` ⊂ the final projected sub set; itrigger/trigger are added at emit time
+    // below, so include their ids here too or the preview would over-report them.
+    const projectedSubIds = [
+      ...subs.map((s) => s.id),
+      ...(project ? [`machine.${seg(a.name)}.itrigger`] : []),
+      ...(project && a.trigger && typeof a.trigger === 'object' ? [`machine.${seg(a.name)}.trigger`] : []),
+    ];
+    const keepSubKeys = new Set(projectedSubIds.map((id) => `_subscriptions/${id}`));
+    const findStale = async (prefix, keep) => {
+      let existing = [];
+      try { existing = await sub.query({ prefix, limit: 200 }); } catch { return []; }
+      return existing.map((f) => f.key).filter((k) => !keep.has(k));
+    };
+    const stalePrefixes = [
+      [`${mkey.machine(a.name)}/node/`, keepFacts],
+      [`${mkey.machine(a.name)}/rail/`, keepFacts],
+      [`_actions/machine.${seg(a.name)}.`, keepActionKeys],
+      [`_subscriptions/machine.${seg(a.name)}.`, keepSubKeys],
+    ];
 
     if (a.dryRun) {
-      return json(200, { dryRun: true, validation, facts: writes.map((w) => w.key), actions: actions.map((d) => d.id), subscriptions: subs.map((s) => s.id) });
+      const stale = (await Promise.all(stalePrefixes.map(([p, k]) => findStale(p, k)))).flat();
+      return json(200, { dryRun: true, validation, facts: writes.map((w) => w.key), actions: actions.map((d) => d.id), subscriptions: subs.map((s) => s.id), wouldSupersede: stale });
     }
 
     // 1. Emit the decomposition fan reliably (FailedEntryCount-checked).
-    const sub = createSubstrate({ owner: OWNER, via: 'machine.define_machine' });
     await sub.emit(writes);
     // 2. Project declared actions (start + decide) + the stepper subscriptions.
     const subscriptions = [];
@@ -417,6 +443,27 @@ export const handler = async (event) => {
         subscriptions.push(trig.id);
       }
     }
+    // 4. Reconcile — a re-definition is a full replace, so supersede the prior
+    //    definition facts and projected vocabulary this one no longer includes
+    //    (a removed node/rail, or a branch whose mode flipped agent⇄work, would
+    //    otherwise leave an orphan node/rail fact or a stale decide-/work- sub
+    //    that double-fires). Scoped to this machine's `/node/` + `/rail/` facts
+    //    and its `_actions`/`_subscriptions` only; run/trigger/decide/work/claim
+    //    execution facts are run history and are never swept. (Same prefixes the
+    //    dryRun preview used; subscriptions[] now holds the emitted itrigger/trigger.)
+    const keepSubsFinal = new Set(subscriptions.map((id) => `_subscriptions/${id}`));
+    const sweepSets = [
+      [`${mkey.machine(a.name)}/node/`, keepFacts],
+      [`${mkey.machine(a.name)}/rail/`, keepFacts],
+      [`_actions/machine.${seg(a.name)}.`, keepActionKeys],
+      [`_subscriptions/machine.${seg(a.name)}.`, keepSubsFinal],
+    ];
+    const superseded = [];
+    for (const [prefix, keep] of sweepSets) {
+      for (const key of await findStale(prefix, keep)) {
+        try { await sub.supersede(key); superseded.push(key); } catch { /* best-effort */ }
+      }
+    }
     return json(200, {
       defined: true,
       key: mkey.machine(a.name),
@@ -426,6 +473,7 @@ export const handler = async (event) => {
       actions: actions.map((d) => d.id),
       reactive,
       subscriptions,
+      superseded,
       validation,
     });
   }
