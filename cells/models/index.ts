@@ -366,7 +366,16 @@ async function emitFact(key: string, value: unknown, type?: string, tags?: strin
 async function emitOnError(spec: AgentInput['onError'], message: string): Promise<void> {
   if (!spec || typeof spec !== 'object' || !spec.key) return;
   try {
-    await emitFact(spec.key, { ...spec.value, error: { message: clip(String(message), 500), at: new Date().toISOString() } }, spec.type, spec.tags);
+    // Merge onto the CURRENT fact so accumulated state survives — a machine run's
+    // `failures` counter and `trace` must NOT be clobbered (else a circuit breaker
+    // never reaches its threshold). onError only overlays status/node/via + error.
+    let base: Record<string, unknown> = {};
+    try {
+      const res = await ddb.send(new GetCommand({ TableName: SUBSTRATE, Key: { pk: `STATE#${OWNER}`, sk: `KEY#${spec.key}` } }));
+      const item = res.Item as { value?: unknown; superseded?: boolean } | undefined;
+      if (item && !item.superseded && item.value && typeof item.value === 'object') base = item.value as Record<string, unknown>;
+    } catch { /* no readback → fall back to the spec value alone */ }
+    await emitFact(spec.key, { ...base, ...spec.value, error: { message: clip(String(message), 500), at: new Date().toISOString() } }, spec.type, spec.tags);
   } catch { /* the catch hook is best-effort — never mask the original failure */ }
 }
 
