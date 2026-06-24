@@ -51,7 +51,7 @@ export function railsFrom(arrows, explicit) {
     return explicit.map((r) => ({
       from: r.from,
       to: r.to,
-      mode: ['agent', 'task', 'work', 'section', 'vote'].includes(r.mode) ? r.mode : 'auto',
+      mode: ['agent', 'task', 'work', 'section', 'vote', 'catch', 'wait'].includes(r.mode) ? r.mode : 'auto',
       ...(r.condition ? { condition: r.condition } : {}),
       // Progressive disclosure (Agent-Skills Level-1): a one-line "when to use
       // this branch" descriptor surfaced to the decider without the full body.
@@ -64,6 +64,9 @@ export function railsFrom(arrows, explicit) {
       // Soft per-step wall-clock budget (ms) — bounds a work agent below the
       // models cell's Lambda ceiling (see cells/models AGENT_BUDGET_MS).
       ...(typeof r.maxMs === 'number' ? { maxMs: r.maxMs } : {}),
+      // A `wait` rail's duration ("30s"/"5m"/"1h"/"2d" or ms) — the stepper parks
+      // the run for this long (an internal deadline) before taking the rail.
+      ...(r.for !== undefined ? { for: r.for } : {}),
       // The agent's tool allowlist (docs/machine.md).
       ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
       ...(r.scope ? { scope: r.scope } : {}),
@@ -89,6 +92,15 @@ export function railsFrom(arrows, explicit) {
 
 /** Number of samples a vote rail fans out (clamped 2..7). */
 export const voteCount = (r) => Math.max(2, Math.min(7, r.samples || 3));
+
+/** Parse a `wait` rail's `for` into milliseconds: a number is ms; a string is
+ *  `<n><unit>` with unit ms|s|m|h|d (default ms). Unparseable → 0 (no wait). */
+export function durationMs(d) {
+  if (typeof d === 'number') return Number.isFinite(d) && d > 0 ? d : 0;
+  const m = /^\s*(\d+)\s*(ms|s|m|h|d)?\s*$/.exec(String(d ?? ''));
+  if (!m) return 0;
+  return Number(m[1]) * ({ ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2] || 'ms']);
+}
 
 /**
  * Keys nest under the machine's namespace so a whole machine — identity, nodes,
@@ -323,6 +335,9 @@ export function projectSubscriptions(name, rails, owner, context) {
         maxTurns: 5,
         factKey: `machine/${m}/decide/\${keySuffix}`,
         tags: tags('decide'),
+        // Catch: if the decide agent hard-fails (provider down, budget), mark the
+        // run failed at this node so a `catch` rail can route it (else it parks).
+        onError: { key: `machine/${m}/run/\${keySuffix}`, value: { machine: name, node: from, status: 'failed', via: `${from}!!error` }, type: 'machine-run', tags: tags('decide') },
       },
     });
   }
@@ -342,6 +357,9 @@ export function projectSubscriptions(name, rails, owner, context) {
         ...(typeof r.maxMs === 'number' ? { maxMs: r.maxMs } : {}),
         factKey: `machine/${m}/work/\${keySuffix}`,
         tags: ['machine', `machine:${name}`, 'work'],
+        // Catch: a hard-failed or budget-exhausted work agent marks the run failed
+        // at this node so a `catch` rail recovers it (else the run parks here).
+        onError: { key: runKeyTpl, value: { machine: name, node: r.from, status: 'failed', via: `${r.from}!!error` }, type: 'machine-run', tags: ['machine', `machine:${name}`] },
       },
     });
   }
@@ -406,7 +424,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
 export function projectStepSubscription(name, owner) {
   return {
     id: `machine.${seg(name)}.step`,
-    match: { keyPrefix: `machine/${seg(name)}/run/`, cel: `value.status == "running" || value.status == "done"` },
+    match: { keyPrefix: `machine/${seg(name)}/run/`, cel: `value.status == "running" || value.status == "done" || value.status == "failed"` },
     deliver: `@${owner}/machine.step`,
     params: { run: '${keySuffix}', machine: name },
   };
@@ -470,12 +488,17 @@ export function machineRails(machine) {
 
 /** Evaluate a rail's optional CEL `condition` against the run fact value. The
  *  binding mirrors the substrate convention (`value.<path>`, as in subscription
- *  `match.cel` and action `if.cel`): an undefined condition is vacuously true; a
- *  throwing/invalid condition is treated as false (the rail does not fire). */
-export function railHolds(rail, run) {
+ *  `match.cel` and action `if.cel`) and adds time: `now` (ISO-8601 string) and
+ *  `nowMs` (epoch ms) — so a rail can gate on a deadline/elapsed window, e.g.
+ *  `value.deadline < now` (ISO strings compare lexicographically) or
+ *  `nowMs - value.startedMs > 300000`. An undefined condition is vacuously true;
+ *  a throwing/invalid condition is treated as false (the rail does not fire). */
+export function railHolds(rail, run, nowIso) {
   if (!rail || rail.condition == null || rail.condition === '') return true;
+  const now = nowIso ?? run?.at ?? null;
+  const nowMs = now ? Date.parse(now) : null;
   try {
-    return celEvaluate(rail.condition, { value: run, key: `machine-run/${run?.run ?? ''}`, meta: null }) === true;
+    return celEvaluate(rail.condition, { value: run, key: `machine-run/${run?.run ?? ''}`, meta: null, now, nowMs }) === true;
   } catch {
     return false;
   }
@@ -486,6 +509,7 @@ export function railHolds(rail, run) {
 const choiceOf = (r) => ({
   to: r.to,
   mode: r.mode,
+  ...(r.for !== undefined ? { for: r.for } : {}),
   ...(r.when ? { when: r.when } : {}),
   ...(r.prompt ? { prompt: r.prompt } : {}),
   ...(r.branch ? { branch: r.branch } : {}),
@@ -535,15 +559,55 @@ export function step(run, machine, nowIso) {
   for (let i = 0; i < budget; i++) {
     const outgoing = rails.filter((r) => r.from === node);
     if (outgoing.length === 0) return out('done', null); // terminal — the run is done
-    const deterministic = outgoing.every((r) => r.mode === 'auto');
+    // Catch (error handling): a run that FAILED at this node takes its `catch`
+    // rail — resetting to `running` and continuing from the handler — so a failed
+    // work/agent step routes to recovery instead of parking. With no catch rail
+    // the failure is terminal: yield `kind:'failed'`. The error rides on the run.
+    if (cur.status === 'failed') {
+      const caught = outgoing.find((r) => r.mode === 'catch');
+      if (!caught) return out('failed', { kind: 'failed', node, choices: outgoing.map(choiceOf) });
+      node = caught.to;
+      cur = { ...cur, node, status: 'running', via: `${caught.from}!!catch` };
+      path.push(node);
+      mark(node, cur.via);
+      if (seen.has(node)) return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
+      seen.add(node);
+      continue;
+    }
+    // On the happy path a `catch` rail is inert (it only fires on failure above).
+    const normal = outgoing.filter((r) => r.mode !== 'catch');
+    if (normal.length === 0) return out('done', null); // only a catch rail + not failed → nothing forward
+    // A `wait` rail parks the run until an internal deadline the stepper manages:
+    // first entry stamps `waitUntil = now + for` and yields `kind:'wait'` (status
+    // `waiting`, which the step sub does NOT match — no busy-loop); a later step
+    // past the deadline clears it and advances. The cell schedules the re-step.
+    const waitRail = normal.find((r) => r.mode === 'wait');
+    if (waitRail) {
+      const nowMsLocal = at ? Date.parse(at) : Date.now();
+      const untilMs = cur.waitUntil ? Date.parse(cur.waitUntil) : null;
+      if (untilMs != null && nowMsLocal >= untilMs) {
+        node = waitRail.to;
+        cur = { ...cur, node, via: `${waitRail.from}~wait`, waitUntil: undefined };
+        path.push(node);
+        mark(node, cur.via);
+        if (seen.has(node)) return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
+        seen.add(node);
+        continue;
+      }
+      const deadlineMs = untilMs ?? nowMsLocal + durationMs(waitRail.for);
+      cur = { ...cur, waitUntil: new Date(deadlineMs).toISOString() };
+      return out('waiting', { kind: 'wait', node, until: cur.waitUntil, choices: normal.map(choiceOf) });
+    }
+    const deterministic = normal.every((r) => r.mode === 'auto');
     if (!deterministic) {
       // A decision lives here — yield to the driver/model. The run sits at `node`.
-      const kind = (outgoing.find((r) => r.mode !== 'auto') || outgoing[0]).mode;
-      return out('running', { kind, node, choices: outgoing.map(choiceOf) });
+      const kind = (normal.find((r) => r.mode !== 'auto') || normal[0]).mode;
+      return out('running', { kind, node, choices: normal.map(choiceOf) });
     }
     // All auto: take the first rail whose condition holds (declaration order).
-    const chosen = outgoing.find((r) => railHolds(r, cur));
-    if (!chosen) return out('blocked', { kind: 'blocked', node, choices: outgoing.map(choiceOf) });
+    // `at` (the step's now) feeds time-aware guards — deadlines/elapsed windows.
+    const chosen = normal.find((r) => railHolds(r, cur, at));
+    if (!chosen) return out('blocked', { kind: 'blocked', node, choices: normal.map(choiceOf) });
     node = chosen.to;
     cur = { ...cur, node, via: `${chosen.from}->${chosen.to}` };
     path.push(node);

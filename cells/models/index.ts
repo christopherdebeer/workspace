@@ -231,6 +231,13 @@ interface AgentInput {
   /** Where the result fact lands (default agent/<jobId>). */
   factKey?: string;
   tags?: string[];
+  /** Catch hook: if the agent loop hard-fails (provider down, all fallbacks
+   *  exhausted, tool-loop throw) or stops WITHOUT a clean finish (budget/turns
+   *  exhausted), emit this fact — the cell injects `error:{message,at}` into its
+   *  value. A machine sets it to mark its run `status:'failed'` so a `catch` rail
+   *  can recover (machine.md §13). A clean finish (agent returned final text with
+   *  no tool call) never fires it. */
+  onError?: { key: string; value: Record<string, unknown>; type?: string; tags?: string[] };
 }
 
 function grantAllows(grant: boolean | string[] | undefined, key: string, dflt: boolean): boolean {
@@ -352,6 +359,15 @@ async function emitFact(key: string, value: unknown, type?: string, tags?: strin
       Detail: JSON.stringify({ key, value, via: 'agent', type, tags }),
     }],
   }));
+}
+
+/** Emit an agent's `onError` catch fact, injecting the failure detail into its
+ *  value (a machine maps this to its run `status:'failed'`). Best-effort. */
+async function emitOnError(spec: AgentInput['onError'], message: string): Promise<void> {
+  if (!spec || typeof spec !== 'object' || !spec.key) return;
+  try {
+    await emitFact(spec.key, { ...spec.value, error: { message: clip(String(message), 500), at: new Date().toISOString() } }, spec.type, spec.tags);
+  } catch { /* the catch hook is best-effort — never mask the original failure */ }
 }
 
 /** Retire a fact through the organ path (the supersede verb — reversible). */
@@ -603,12 +619,18 @@ async function runAgentLoop(
   let finalText = '';
   let toolCalls = 0;
   let turns = 0;
+  // How the loop ended: 'final' = the agent returned text with no tool call (a
+  // clean self-termination = success). Anything else (turns/timeout) is an
+  // incomplete stop → fires the `onError` catch hook. A thrown error is handled
+  // by the caller (runJob), which fires onError too.
+  let stopReason: 'turns' | 'final' | 'timeout' = 'turns';
 
   for (; turns < maxTurns; turns++) {
     // Soft wall-clock guard: stop cleanly between turns (always allow ≥1) so the
     // transcript + job still land before the Lambda's hard timeout would kill us.
     if (turns > 0 && Date.now() - startMs >= budgetMs) {
       transcript.push({ role: 'system', note: `stopped: soft time budget ${budgetMs}ms reached after ${turns} turn(s)` });
+      stopReason = 'timeout';
       break;
     }
     let turn: AgentTurn;
@@ -625,7 +647,7 @@ async function runAgentLoop(
       ...(turn.text ? { text: clip(turn.text, 4000) } : {}),
       ...(turn.toolUses.length ? { tools: turn.toolUses.map((t) => t.name) } : {}),
     });
-    if (!turn.toolUses.length) break;
+    if (!turn.toolUses.length) { stopReason = 'final'; break; }
 
     const results: Array<{ id: string; content: string }> = [];
     for (const use of turn.toolUses) {
@@ -665,7 +687,10 @@ async function runAgentLoop(
     ['agent', ...(input.tags ?? [])],
   );
   await emitFact(`${factKey}/transcript`, { jobId, at, turns: transcript }, 'transcript', ['agent', ...(input.tags ?? [])]);
-  await putJob(jobId, { status: 'done', kind: 'agent', text: finalText, factKey, provider: adapter.provider, turns: turns + 1, toolCalls });
+  // The agent stopped without a clean finish (ran out of turns or time): fire the
+  // catch hook so a machine run routes to recovery instead of parking incomplete.
+  if (stopReason !== 'final') await emitOnError(input.onError, `agent stopped (${stopReason}) after ${turns} turn(s) without completing`);
+  await putJob(jobId, { status: stopReason === 'final' ? 'done' : 'error', kind: 'agent', text: finalText, factKey, provider: adapter.provider, turns: turns + 1, toolCalls });
 }
 
 /* ── async jobs: submit fast, self-invoke for the long work, poll fetch ──
@@ -691,6 +716,9 @@ async function runJob(jobId: string): Promise<void> {
     try {
       await runAgent(jobId, input as unknown as AgentInput);
     } catch (err) {
+      // Hard failure (provider down, every fallback exhausted, tool-loop throw):
+      // fire the catch hook so a machine run routes to recovery, then record it.
+      await emitOnError((input as unknown as AgentInput).onError, (err as Error).message);
       await putJob(jobId, { status: 'error', kind: 'agent', input, error: (err as Error).message });
     }
     return;
@@ -794,6 +822,7 @@ const TOOLS = [
         tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of tool names the agent may use (subset of substrate_query/substrate_read/substrate_emit/substrate_supersede). Omitted = the full grant-derived set. The seam for machine-declared tool scopes.' },
         factKey: { type: 'string', description: 'Where the result fact lands (default agent/<jobId>)' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Extra tags on the result + transcript facts' },
+        onError: { type: 'object', description: 'Catch hook { key, value, type?, tags? } emitted (with error:{message,at} injected) if the agent hard-fails or stops without a clean finish — a machine maps it to its run status:"failed" for a catch rail.' },
       },
       required: ['prompt'],
       additionalProperties: false,

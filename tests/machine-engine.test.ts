@@ -17,6 +17,7 @@ import {
   spawnChildrenWrites,
   step,
   railHolds,
+  durationMs,
   specFromYield,
   parentOf,
   barrierAdvance,
@@ -293,6 +294,53 @@ describe('step (stateless CEL stepper + trace — ADR-0018)', () => {
     expect(sec.yield.kind).toBe('section');
     expect(specFromYield(sec.yield)).toEqual({ node: 'P', join: 'J', kind: 'section', branches: ['A', 'B'] });
   });
+
+  it('a `catch` rail is inert on the happy path but recovers a failed run', () => {
+    const m = M(['Work', 'Recover', 'Done'], [
+      { from: 'Work', to: 'Done', mode: 'work' },
+      { from: 'Work', to: 'Recover', mode: 'catch' },
+      { from: 'Recover', to: 'Done', mode: 'auto' },
+    ]);
+    // Happy path: the catch rail is invisible — the node still yields its work.
+    expect(step({ node: 'Work', status: 'running' }, m, 'T').yield.kind).toBe('work');
+    // Failed: take the catch rail (reset to running), then walk auto to terminal.
+    const r = step({ node: 'Work', status: 'failed', error: { message: 'boom' } }, m, 'T');
+    expect(r.run).toMatchObject({ node: 'Done', status: 'done' });
+    expect(r.run.trace.some((t: { via?: string }) => t.via === 'Work!!catch')).toBe(true);
+  });
+
+  it('a failed run with no catch rail yields kind=failed (terminal failure)', () => {
+    const r = step({ node: 'Work', status: 'failed' }, M(['Work', 'Done'], [{ from: 'Work', to: 'Done', mode: 'work' }]), 'T');
+    expect(r.run.status).toBe('failed');
+    expect(r.yield.kind).toBe('failed');
+  });
+
+  it('a `wait` rail parks the run until its deadline, then advances', () => {
+    const m = M(['Open', 'HalfOpen'], [{ from: 'Open', to: 'HalfOpen', mode: 'wait', for: '30s' }]);
+    const t0 = '2026-06-24T00:00:00.000Z';
+    const w = step({ node: 'Open', status: 'running' }, m, t0);
+    expect(w.run.status).toBe('waiting');
+    expect(w.yield.kind).toBe('wait');
+    expect(w.run.waitUntil).toBe('2026-06-24T00:00:30.000Z');
+    expect(w.yield.until).toBe('2026-06-24T00:00:30.000Z');
+    // Before the deadline: still waiting, deadline preserved (idempotent re-step).
+    expect(step({ ...w.run }, m, '2026-06-24T00:00:10.000Z').run.status).toBe('waiting');
+    // After the deadline: advance to terminal HalfOpen → done, waitUntil cleared.
+    const late = step({ ...w.run }, m, '2026-06-24T00:01:00.000Z');
+    expect(late.run).toMatchObject({ node: 'HalfOpen', status: 'done' });
+    expect(late.run.waitUntil).toBeUndefined();
+  });
+});
+
+describe('durationMs', () => {
+  it('parses units and raw numbers; unparseable → 0', () => {
+    expect(durationMs('30s')).toBe(30_000);
+    expect(durationMs('5m')).toBe(300_000);
+    expect(durationMs('2h')).toBe(7_200_000);
+    expect(durationMs('1d')).toBe(86_400_000);
+    expect(durationMs(1500)).toBe(1500);
+    expect(durationMs('nope')).toBe(0);
+  });
 });
 
 describe('railHolds', () => {
@@ -302,6 +350,19 @@ describe('railHolds', () => {
     expect(railHolds({ condition: 'value.n >= 3' }, { n: 1 })).toBe(false);
   });
   it('treats a throwing condition as false', () => expect(railHolds({ condition: 'value.missing.deep == 1' }, {})).toBe(false));
+  it('binds `now` (ISO) for deadline guards — string comparison', () => {
+    const rail = { condition: 'value.deadline < now' };
+    expect(railHolds(rail, { deadline: '2026-01-01T00:00:00Z' }, '2026-06-24T00:00:00Z')).toBe(true); // past
+    expect(railHolds(rail, { deadline: '2026-12-01T00:00:00Z' }, '2026-06-24T00:00:00Z')).toBe(false); // future
+  });
+  it('binds `nowMs` (epoch ms) for elapsed-window guards — arithmetic', () => {
+    const rail = { condition: 'nowMs - value.startedMs > 300000' }; // > 5 min elapsed
+    expect(railHolds(rail, { startedMs: 1_000_000 }, new Date(1_000_000 + 400_000).toISOString())).toBe(true);
+    expect(railHolds(rail, { startedMs: 1_000_000 }, new Date(1_000_000 + 100_000).toISOString())).toBe(false);
+  });
+  it('falls back to run.at when no nowIso is passed', () => {
+    expect(railHolds({ condition: 'value.deadline < now' }, { deadline: '2026-01-01T00:00:00Z', at: '2026-06-24T00:00:00Z' })).toBe(true);
+  });
 });
 
 describe('parentOf', () => {
