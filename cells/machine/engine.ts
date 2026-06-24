@@ -555,6 +555,15 @@ export function step(run, machine, nowIso) {
   // deterministic walk (auto rails should not revisit without a guard).
   const budget = (Array.isArray(machine?.nodes) ? machine.nodes.length : rails.length) + 1;
   const seen = new Set([node]);
+  // A revisit is only an infinite cycle if the node would KEEP walking auto. A
+  // re-entered node that YIELDS (work/agent/section/vote/wait) or is terminal just
+  // breaks the in-process walk — each yield is a separate step — so a legitimate
+  // retry loop (…catch → auto → a work node …) is not a cycle.
+  const wouldLoop = (n) => {
+    if (!seen.has(n)) return false;
+    const outs = rails.filter((r) => r.from === n && r.mode !== 'catch');
+    return outs.length > 0 && outs.every((r) => r.mode === 'auto');
+  };
 
   for (let i = 0; i < budget; i++) {
     const outgoing = rails.filter((r) => r.from === node);
@@ -567,10 +576,12 @@ export function step(run, machine, nowIso) {
       const caught = outgoing.find((r) => r.mode === 'catch');
       if (!caught) return out('failed', { kind: 'failed', node, choices: outgoing.map(choiceOf) });
       node = caught.to;
-      cur = { ...cur, node, status: 'running', via: `${caught.from}!!catch` };
+      // Count the failure on the run — the input a circuit breaker thresholds
+      // (`value.failures >= 3`). Clearing the failed status resumes the walk.
+      cur = { ...cur, node, status: 'running', via: `${caught.from}!!catch`, failures: (Number(cur.failures) || 0) + 1 };
       path.push(node);
       mark(node, cur.via);
-      if (seen.has(node)) return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
+      if (wouldLoop(node)) return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
       seen.add(node);
       continue;
     }
@@ -590,7 +601,7 @@ export function step(run, machine, nowIso) {
         cur = { ...cur, node, via: `${waitRail.from}~wait`, waitUntil: undefined };
         path.push(node);
         mark(node, cur.via);
-        if (seen.has(node)) return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
+        if (wouldLoop(node)) return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
         seen.add(node);
         continue;
       }
@@ -612,8 +623,8 @@ export function step(run, machine, nowIso) {
     cur = { ...cur, node, via: `${chosen.from}->${chosen.to}` };
     path.push(node);
     mark(node, cur.via);
-    if (seen.has(node)) {
-      // Re-entered a node along auto rails — a guardless loop. Stop rather than spin.
+    if (wouldLoop(node)) {
+      // Re-entered a node that would keep walking auto — a guardless loop. Stop.
       return out('blocked', { kind: 'cycle', node, choices: rails.filter((r) => r.from === node).map(choiceOf) });
     }
     seen.add(node);

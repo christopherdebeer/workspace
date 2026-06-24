@@ -315,6 +315,25 @@ describe('step (stateless CEL stepper + trace — ADR-0018)', () => {
     expect(r.yield.kind).toBe('failed');
   });
 
+  it('counts failures on catch; a retry loop through a work node is not a cycle (breaker)', () => {
+    const m = M(['Call', 'Retry', 'Open', 'Done'], [
+      { from: 'Call', to: 'Done', mode: 'work' },
+      { from: 'Call', to: 'Retry', mode: 'catch' },
+      { from: 'Retry', to: 'Open', mode: 'auto', condition: 'value.failures >= 3' },
+      { from: 'Retry', to: 'Call', mode: 'auto', condition: 'value.failures < 3' },
+    ]);
+    // 1st failure: catch increments failures→1, Retry→Call (1<3), re-yields work
+    // at Call — the revisit is a retry, not an infinite cycle.
+    const r1 = step({ node: 'Call', status: 'failed' }, m, 'T');
+    expect(r1.run.failures).toBe(1);
+    expect(r1.run.node).toBe('Call');
+    expect(r1.yield.kind).toBe('work');
+    // 3rd failure: failures→3 trips the breaker — Retry→Open (terminal) → done.
+    const r3 = step({ node: 'Call', status: 'failed', failures: 2 }, m, 'T');
+    expect(r3.run.failures).toBe(3);
+    expect(r3.run).toMatchObject({ node: 'Open', status: 'done' });
+  });
+
   it('a `wait` rail parks the run until its deadline, then advances', () => {
     const m = M(['Open', 'HalfOpen'], [{ from: 'Open', to: 'HalfOpen', mode: 'wait', for: '30s' }]);
     const t0 = '2026-06-24T00:00:00.000Z';
