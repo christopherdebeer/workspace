@@ -2170,8 +2170,29 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
           ctx.logger.warn('reaction skipped: bad deliver address', { scope, subscription: sub.id, deliver: sub.deliver });
           continue;
         }
+        // Grants-to-principals (machine.md §9 Increment 3): when delivering to a
+        // models agent that carries `grants` (a machine rail's tool scope), mint a
+        // per-run token FOR the owner scoped to those grants and hand it to the
+        // agent, so it can call REAL tools (workspace.link, @owner/cell.tool) — not
+        // just the bespoke substrate_* wrappers. The agent still bounds writes to
+        // the rail's key-patterns cell-side.
+        let deliverParams = params;
+        const grants = (params as Record<string, unknown>).grants as { read?: unknown; write?: unknown } | undefined;
+        if (grants && target.name === 'models') {
+          const scopes: string[] = [];
+          if (grants.read) scopes.push('workspace:read');
+          if (grants.write) scopes.push('workspace:write');
+          if (scopes.length) {
+            try {
+              const minted = await ctx.serviceClient('auth').command<{ token?: string }>('mintTokenFor', { owner: scope, scope: scopes.join(' '), expiresInSec: 900 });
+              if (minted?.token) deliverParams = { ...params, token: minted.token };
+            } catch (err) {
+              ctx.logger.warn('per-run agent token mint failed; agent runs substrate-only', { scope, subscription: sub.id, error: (err as Error).message });
+            }
+          }
+        }
         try {
-          await deliver(target, params, scope, ctx);
+          await deliver(target, deliverParams, scope, ctx);
           ctx.logger.info('reaction delivered', { scope, key, subscription: sub.id, deliver: sub.deliver });
         } catch (err) {
           ctx.logger.warn('reaction deliver failed', { scope, subscription: sub.id, deliver: sub.deliver, error: (err as Error).message });

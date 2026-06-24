@@ -219,6 +219,10 @@ interface AgentInput {
    *  tool scopes (docs/machine.md); the token-scoped vocabulary slots
    *  in here later. */
   tools?: string[];
+  /** Per-run scoped token (grants-to-principals, machine.md §9 Increment 3): when
+   *  present, the dotted real tools in `tools` are callable — proxied to the gateway
+   *  as the owner, scoped by this token. Minted by the workspace reactor. */
+  token?: string;
   /** Where the result fact lands (default agent/<jobId>). */
   factKey?: string;
   tags?: string[];
@@ -239,11 +243,38 @@ interface AgentToolDef {
   schema: Record<string, unknown>;
 }
 
+/* ── real-tool proxy (grants-to-principals, machine.md §9 Increment 3) ──────
+ * A machine rail's `tools` names REAL substrate capabilities (workspace.link,
+ * @owner/cell.tool). When the reactor minted a per-run token, the agent calls them
+ * by proxying to the gateway /mcp as the owner. Provider tool names can't contain
+ * `.`/`@`/`/`, so each proxy is exposed under a sanitised name mapped back here. */
+const GATEWAY_MCP = process.env.GATEWAY_MCP_URL ?? 'https://parc.land/mcp';
+const READ_VERBS = new Set(['query', 'peek', 'read', 'get', 'list', 'neighbors', 'links', 'recall', 'search', 'describe', 'whoami', 'stats', 'tags', 'history', 'tending', 'salience', 'graph', 'catalog', 'types']);
+const isDottedTool = (n: string): boolean => n.includes('.') || n.startsWith('@');
+const sanitizeToolName = (n: string): string => `x_${n.replace(/[^A-Za-z0-9_]/g, '_')}`;
+const toolVerb = (target: string): 'read' | 'act' => (READ_VERBS.has(target.split('.').pop() ?? target) ? 'read' : 'act');
+
+async function callGatewayTool(token: string, target: string, args: Record<string, unknown>): Promise<unknown> {
+  const verb = toolVerb(target);
+  const hasInput = args && Object.keys(args).length > 0;
+  const res = await fetch(GATEWAY_MCP, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: verb, arguments: hasInput ? { target, input: args } : { target } } }),
+  });
+  if (!res.ok) return { error: `gateway HTTP ${res.status}` };
+  const rpc = (await res.json()) as { result?: { content?: Array<{ text?: string }>; isError?: boolean }; error?: { message?: string } };
+  if (rpc.error) return { error: rpc.error.message ?? 'error' };
+  const text = rpc.result?.content?.[0]?.text ?? '';
+  try { return JSON.parse(text); } catch { return text; }
+}
+
 /** The tool surface offered to the model — emit only exists when write is granted.
  *  An optional `allow` allowlist (tool names) narrows it further — a machine node
  *  declaring exactly which tools its agent may call (docs/machine.md). */
-function buildAgentTools(grants: AgentGrants, allow?: string[]): AgentToolDef[] {
+function buildAgentTools(grants: AgentGrants, allow?: string[], hasToken?: boolean): { defs: AgentToolDef[]; proxyMap: Record<string, string> } {
   const tools: AgentToolDef[] = [];
+  const proxyMap: Record<string, string> = {};
   if (grants.read !== false) {
     tools.push(
       {
@@ -285,8 +316,24 @@ function buildAgentTools(grants: AgentGrants, allow?: string[]): AgentToolDef[] 
       schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
     });
   }
-  if (Array.isArray(allow) && allow.length) return tools.filter((t) => allow.includes(t.name));
-  return tools;
+  // A bespoke `substrate_*` allowlist still narrows (back-compat). Dotted names are
+  // ignored here — they become real-tool proxies below, not a filter.
+  const substrateAllow = Array.isArray(allow) ? allow.filter((n) => !isDottedTool(n)) : null;
+  let defs = substrateAllow && substrateAllow.length ? tools.filter((t) => substrateAllow.includes(t.name)) : tools;
+  // Increment 3: each dotted real tool in the allowlist becomes a gateway proxy —
+  // only when a per-run token was minted (else the agent stays substrate-only).
+  if (hasToken && Array.isArray(allow)) {
+    for (const name of allow) {
+      if (!isDottedTool(name)) continue;
+      const sane = sanitizeToolName(name);
+      proxyMap[sane] = name;
+      defs = [
+        ...defs,
+        { name: sane, description: `Real substrate tool "${name}" — call it with its documented arguments (e.g. workspace.link {from, rel, to}). It runs as you, bounded by your grant.`, schema: { type: 'object', additionalProperties: true } },
+      ];
+    }
+  }
+  return { defs, proxyMap };
 }
 
 /** Emit a fact through the organ path (Source IAM-pinned to this cell). */
@@ -315,7 +362,11 @@ async function emitSupersede(key: string): Promise<void> {
   }));
 }
 
-async function agentToolExec(name: string, args: Record<string, unknown>, grants: AgentGrants): Promise<unknown> {
+async function agentToolExec(name: string, args: Record<string, unknown>, grants: AgentGrants, proxyMap: Record<string, string> = {}, token?: string): Promise<unknown> {
+  // A real-tool proxy (Increment 3): forward to the gateway as the owner, scoped by
+  // the per-run token. The rail's key-patterns are still enforced cell-side below for
+  // the bespoke writes; the token is the capability boundary for proxied calls.
+  if (token && proxyMap[name]) return callGatewayTool(token, proxyMap[name], args);
   if (name === 'substrate_read') {
     const key = String(args.key ?? '');
     if (!grantAllows(grants.read, key, true)) return { error: `read not granted for "${key}"` };
@@ -487,7 +538,7 @@ const AGENT_PROVIDERS = ['anthropic', 'openai'] as const;
 
 async function runAgent(jobId: string, input: AgentInput): Promise<void> {
   const grants = input.grants ?? {};
-  const tools = buildAgentTools(grants, input.tools);
+  const { defs: tools, proxyMap } = buildAgentTools(grants, input.tools, !!input.token);
   const factKey = input.factKey ?? `agent/${jobId}`;
   const system =
     `You are an agent operating over the parc.land substrate — the workspace of facts owned by "${OWNER}". ` +
@@ -507,7 +558,7 @@ async function runAgent(jobId: string, input: AgentInput): Promise<void> {
   for (const { provider, rec } of candidates) {
     const adapter = provider === 'anthropic' ? anthropicAdapter(rec, input, system, tools) : openaiAdapter(rec, input, system, tools);
     try {
-      await runAgentLoop(jobId, input, adapter, grants, factKey, fallbacks);
+      await runAgentLoop(jobId, input, adapter, grants, factKey, fallbacks, proxyMap, input.token);
       return;
     } catch (err) {
       if (err instanceof FirstCallFailure) {
@@ -527,6 +578,8 @@ async function runAgentLoop(
   grants: AgentGrants,
   factKey: string,
   fallbacks: Array<{ provider: string; error: string }>,
+  proxyMap: Record<string, string> = {},
+  token?: string,
 ): Promise<void> {
   const maxTurns = Math.min(Math.max(input.maxTurns ?? 8, 1), 16);
   const transcript: Array<Record<string, unknown>> = [
@@ -559,7 +612,7 @@ async function runAgentLoop(
       toolCalls++;
       let out: unknown;
       try {
-        out = await agentToolExec(use.name, use.args, grants);
+        out = await agentToolExec(use.name, use.args, grants, proxyMap, token);
       } catch (err) {
         out = { error: (err as Error).message };
       }

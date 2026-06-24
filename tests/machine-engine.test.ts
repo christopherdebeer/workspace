@@ -195,6 +195,17 @@ describe('projectSubscriptions (stepper set: step + decide + work)', () => {
     const withCtx = projectSubscriptions('demo', rails, 'c15r', ['tending/latest']);
     expect(withCtx.find((s: { id: string }) => s.id === 'machine.demo.decide-D').params.prompt).toContain('tending/latest');
   });
+
+  it('carries the rail tools + write scope on the decide (grants-to-principals — real-tool proxy)', () => {
+    const toolRails = railsFrom([], [
+      { from: 'A', to: 'Fix', mode: 'agent', tools: ['workspace.link', 'workspace.neighbors'], scope: { read: true, write: ['weave/', 'kb/'] } },
+      { from: 'A', to: 'Clear', mode: 'agent' },
+    ]);
+    const decide = projectSubscriptions('w', toolRails, 'c15r').find((s: { id: string }) => s.id === 'machine.w.decide-A');
+    expect(decide.params.tools).toEqual(['workspace.link', 'workspace.neighbors']); // real catalog tools the agent may use
+    // the run namespace (claim/advance) is unioned with the rail's write scope
+    expect(decide.params.grants.write).toEqual(['machine/w/run/', 'weave/', 'kb/']);
+  });
 });
 
 describe('projectStepSubscription', () => {

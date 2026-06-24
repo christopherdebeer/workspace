@@ -298,6 +298,10 @@ export function projectSubscriptions(name, rails, owner, context) {
   for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
     const branches = rails.filter((x) => x.mode === 'agent' && x.from === from);
     const menu = branches.map((b) => (b.when ? `- ${b.to} — when ${b.when}` : `- ${b.to}`)).join('\n');
+    // The decision's real-tool allowlist (for assessment) + write scope (the branch
+    // rails' scope.write, e.g. a weave repair) UNION the run namespace (claim/advance).
+    const branchTools = [...new Set(branches.flatMap((b) => (Array.isArray(b.tools) ? b.tools : [])))];
+    const branchWrite = [...new Set(branches.flatMap((b) => (b.scope && Array.isArray(b.scope.write) ? b.scope.write : [])))];
     const claimKey = `machine/${m}/run/\${keySuffix}/claim/${seg(from)}`;
     const runKeyTpl = `machine/${m}/run/\${keySuffix}`;
     const prompt =
@@ -309,7 +313,14 @@ export function projectSubscriptions(name, rails, owner, context) {
       id: `machine.${m}.decide-${seg(from)}`,
       match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(from)} && value.status == "running"` },
       deliver: `@${owner}/models.agent`,
-      params: { prompt, grants: { read: true, write: [runPrefix] }, maxTurns: 5, factKey: `machine/${m}/decide/\${keySuffix}`, tags: tags('decide') },
+      params: {
+        prompt,
+        grants: { read: true, write: [runPrefix, ...branchWrite] },
+        ...(branchTools.length ? { tools: branchTools } : {}),
+        maxTurns: 5,
+        factKey: `machine/${m}/decide/\${keySuffix}`,
+        tags: tags('decide'),
+      },
     });
   }
   for (const r of rails.filter((x) => x.mode === 'work')) {
