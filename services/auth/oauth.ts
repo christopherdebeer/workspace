@@ -134,6 +134,21 @@ function sessionCookie(token: string, maxAgeSecs: number): string {
 function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
+/**
+ * The long-lived navigation REFRESH cookie. Carries the opaque refresh token at
+ * the grant horizon (e.g. 30d), so a top-level navigation can silently re-mint a
+ * short access token at the edge (dispatch) without a passkey round-trip — the fix
+ * for "I picked 30 days but get signed out within the hour". Same hardening as the
+ * session cookie (HttpOnly/Secure/SameSite=Lax), and the edge only consumes it on
+ * a safe top-level navigation, so it can never authorize a mutation.
+ */
+const REFRESH_COOKIE = 'parc_refresh';
+function refreshCookie(token: string, maxAgeSecs: number): string {
+  return `${REFRESH_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor(maxAgeSecs))}`;
+}
+function clearRefreshCookie(): string {
+  return `${REFRESH_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+}
 function okWithCookies(body: unknown, cookies: string[], status = 200): ServiceHttpResponse {
   return { statusCode: status, headers: NO_STORE, body, cookies };
 }
@@ -353,10 +368,14 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
     if (accessExpiry !== undefined) response.expires_in = accessExpiry;
     if (withRefresh) response.refresh_token = result.refreshToken;
-    // Also set the httpOnly navigation cookie so SSR/page loads are identified; it
-    // tracks the access token's life (refresh rotates it client-side).
+    // Set the httpOnly navigation cookies: the short-lived access cookie identifies
+    // SSR/page loads, and the long-lived refresh cookie lets the edge silently
+    // re-mint the access token on a later navigation (so the chosen grant horizon
+    // actually keeps the browser signed in — not just the access TTL).
     const cookieMaxAge = accessExpiry ?? 30 * 24 * 3600;
-    return okWithCookies(response, [sessionCookie(result.token, cookieMaxAge)]);
+    const cookies = [sessionCookie(result.token, cookieMaxAge)];
+    if (withRefresh && result.refreshToken) cookies.push(refreshCookie(result.refreshToken, refreshLifetime));
+    return okWithCookies(response, cookies);
   }
 
   if (body.grant_type === 'refresh_token') {
@@ -364,10 +383,13 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     if (neverExpires) return ok({ error: 'unsupported_grant_type', error_description: 'Tokens are non-expiring' }, 400);
     const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry, refreshExpiry);
     if (!result) return ok({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
-    // Refresh keeps the navigation cookie current (the access token rotated).
+    // Refresh keeps BOTH navigation cookies current (access + rotated refresh), so
+    // the edge silent-refresh path can keep re-priming the session up to the grant.
+    const cookies = [sessionCookie(result.token, configuredExpiry)];
+    if (result.refreshToken) cookies.push(refreshCookie(result.refreshToken, refreshExpiry));
     return okWithCookies(
       { access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken },
-      [sessionCookie(result.token, configuredExpiry)],
+      cookies,
     );
   }
 
@@ -409,8 +431,9 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
 export async function handleRevoke(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
   const body = parseTokenBody(req);
   if (body.token) await store.revokeByTokenValue(body.token);
-  // Drop the navigation cookie too, so sign-out clears the SSR session.
-  return okWithCookies({}, [clearSessionCookie()]);
+  // Drop both navigation cookies too, so sign-out clears the SSR session and the
+  // edge can't silently re-mint from a lingering refresh cookie.
+  return okWithCookies({}, [clearSessionCookie(), clearRefreshCookie()]);
 }
 
 // ─── Device authorization grant ──────────────────────────────────
@@ -471,6 +494,40 @@ export interface ValidatedToken {
   /** The token id — the handle a session uses to mutate its own effective scope. */
   tokenId: string;
   clientId: string | null;
+}
+
+/**
+ * Edge silent-refresh (consumed by the dispatch SSR path via the `refreshSession`
+ * command): given the value of the `parc_refresh` cookie, rotate a fresh
+ * access+refresh pair and return the resolved identity + the `Set-Cookie` strings
+ * that re-prime the browser. Returns null when the refresh token is invalid/expired
+ * or the deployment is non-expiring. This is what makes a 30-day grant actually keep
+ * a browser signed in for 30 days: a navigation re-mints a short access token with
+ * no passkey round-trip, while access tokens stay short for API clients.
+ */
+export interface RefreshedSession {
+  userId: string;
+  scope: string;
+  effectiveScope: string | null;
+  tokenId: string | null;
+  setCookies: string[];
+}
+export async function handleRefreshSession(refreshToken: string, store: AuthStore, config: OAuthConfig): Promise<RefreshedSession | null> {
+  if (!refreshToken) return null;
+  const configuredExpiry = config.tokenExpirySecs ?? DEFAULT_EXPIRY;
+  const refreshExpiry = config.refreshExpirySecs ?? DEFAULT_REFRESH_EXPIRY;
+  if (configuredExpiry <= 0) return null; // non-expiring deployments don't refresh
+  const result = await store.refreshUnifiedToken(sha256(refreshToken), configuredExpiry, refreshExpiry);
+  if (!result) return null;
+  const validated = await validateBearer(result.token, store);
+  if (!validated) return null;
+  return {
+    userId: validated.userId,
+    scope: validated.scope,
+    effectiveScope: validated.effectiveScope,
+    tokenId: validated.tokenId,
+    setCookies: [sessionCookie(result.token, configuredExpiry), refreshCookie(result.refreshToken, refreshExpiry)],
+  };
 }
 
 export async function validateBearer(token: string, store: AuthStore): Promise<ValidatedToken | null> {

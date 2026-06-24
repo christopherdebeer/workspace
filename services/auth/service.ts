@@ -36,6 +36,7 @@ import {
   handleDeviceInit,
   handleDeviceInfo,
   handleDeviceApprove,
+  handleRefreshSession,
   validateBearer,
 } from './oauth';
 import {
@@ -110,6 +111,19 @@ interface ValidateTokenInput {
 async function validateToken(input: ValidateTokenInput) {
   if (!input?.token) return null;
   return validateBearer(input.token, store);
+}
+
+/**
+ * Edge silent-refresh: the dispatch tier calls this on a top-level navigation when
+ * the access cookie is missing/expired but a `parc_refresh` cookie is present. It
+ * rotates a fresh access+refresh pair and returns the identity + the Set-Cookie
+ * strings dispatch re-primes the browser with — keeping a long-grant session alive
+ * across navigations/tab-closes without a passkey round-trip. Self-authorizing (the
+ * refresh token is the credential), like validateToken.
+ */
+async function refreshSession(input: { refreshToken?: string }) {
+  if (!input?.refreshToken) return null;
+  return handleRefreshSession(input.refreshToken, store, OAUTH_CONFIG);
 }
 
 /**
@@ -429,6 +443,7 @@ export const handler = defineService({
   name: 'auth',
   commands: {
     validateToken,
+    refreshSession,
     mintToken,
     mintTokenFor,
     listTokens,
