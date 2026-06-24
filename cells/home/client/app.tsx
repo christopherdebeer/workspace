@@ -437,6 +437,9 @@ async function loadDashboard(): Promise<DashboardData> {
     mcpCall('read', 'workspace.links'),
     mcpCall('read', 'workspace.changes', { sinceSeq: Math.max(0, seq - 1000), limit: 1000 }),
   ]);
+  // The dashboard already fetched the view list (for the stat count) — feed the
+  // shared cache so the "All views" card + Add-section picker don't refetch.
+  if (v.ok) primeViews((v.value as { views?: ViewDef[] }).views ?? []);
   const events = ch.ok ? (((ch.value as { events?: ChangeEvent[] }).events ?? []) as ChangeEvent[]) : [];
   const writes = events.filter((e) => e.op !== 'read');
   // Adaptive bucketing: the substrate is young and bursty, so a fixed 14-day
@@ -1717,6 +1720,25 @@ interface ViewEval {
   count: number;
 }
 
+/** One memoized `workspace.views` fetch shared by every surface that needs the
+ *  registered-view list (the "All views" card, the Add-section picker, and the
+ *  stats count) — was fetched 3–4× per load. SSR seeds it via `primeViews`. */
+let viewsCache: ViewDef[] | null = null;
+export function primeViews(seed?: ViewDef[]): void { if (seed && (viewsCache === null || viewsCache.length === 0)) viewsCache = seed; }
+export async function loadViews(force = false): Promise<ViewDef[]> {
+  if (viewsCache && !force) return viewsCache;
+  try {
+    const r = await mcpCall('read', 'workspace.views');
+    if (r.ok) viewsCache = (r.value as { views?: ViewDef[] }).views ?? [];
+  } catch { /* keep prior cache / empty */ }
+  return viewsCache ?? [];
+}
+
+/** A small glyph for a view's render type — so the picker and cards read at a
+ *  glance which kind of surface a view is (not just canvas). */
+const VIEW_ICON: Record<string, string> = { canvas: '🌲', metric: '📊', count: '📊', list: '📋', table: '🗂️', feed: '🗞️', markdown: '📝' };
+const viewIcon = (t?: string): string => (t && VIEW_ICON[t]) || '🔎';
+
 function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
   const [out, setOut] = useState<ViewEval | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1869,18 +1891,16 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
  * comes from the registry, not code).
  */
 function Views({ authed, seed }: { authed: boolean; seed?: ViewDef[] }): React.JSX.Element | null {
-  const [views, setViews] = useState<ViewDef[] | null>(seed ?? null);
+  if (seed) primeViews(seed);
+  const [views, setViews] = useState<ViewDef[] | null>(seed ?? viewsCache ?? null);
 
   useEffect(() => {
     if (!authed || seed) return; // SSR-seeded (typeDecls seeded too) → no refetch
     let live = true;
-    // Load the type vocabulary first so list surfaces show icons + route by it.
-    loadTypeDecls().then(() => {
-      if (!live) return;
-      return mcpCall('read', 'workspace.views').then((r) => {
-        if (!live) return;
-        setViews(r.ok ? ((r.value as { views?: ViewDef[] }).views ?? []) : []);
-      });
+    // Load the type vocabulary first so list surfaces show icons + route by it,
+    // then the shared (memoized) view list — also used by the Add-section picker.
+    loadTypeDecls().then(() => loadViews()).then((vs) => {
+      if (live) setViews(vs);
     }).catch(() => {
       if (live) setViews([]);
     });
@@ -1893,13 +1913,13 @@ function Views({ authed, seed }: { authed: boolean; seed?: ViewDef[] }): React.J
   if (!authed) return null;
   return (
     <Card>
-      <Heading sub="Registered views rendered by their hints — one declaration, a surface for you and an affordance for agents.">
-        Pinned views
+      <Heading sub="Every registered view, rendered by its hint — one declaration, a surface for you and an affordance for agents. Pin any to your home from “Add a section”.">
+        All views
       </Heading>
       {views === null ? (
         <p style={{ color: theme.dim, margin: '0.5rem 0 0', fontSize: '0.85rem' }}>Loading…</p>
       ) : views.length === 0 ? (
-        <p style={{ color: theme.dim, margin: '0.5rem 0 0', fontSize: '0.85rem' }}>No pinned views yet.</p>
+        <p style={{ color: theme.dim, margin: '0.5rem 0 0', fontSize: '0.85rem' }}>No views registered yet.</p>
       ) : (
         <div style={{ display: 'grid', gap: '0.7rem', marginTop: '0.5rem' }}>
           {views.map((v) => (
@@ -2536,11 +2556,11 @@ const DEFAULT_LAYOUT: LayoutSection[] = [
 
 const SECTION_LABELS: Record<string, string> = {
   greeting: 'Greeting', stats: 'Stats', capture: 'Quick capture', workspace: 'Workspace',
-  activity: 'Recent activity', identity: 'Identity & grants', views: 'Pinned views',
+  activity: 'Recent activity', identity: 'Identity & grants', views: 'All views',
   cells: 'Cells', console: 'Field computer',
 };
 function sectionLabel(s: LayoutSection): string {
-  if (s.type === 'view') return `Board · ${s.id}`;
+  if (s.type === 'view') return `View · ${s.id}`;
   if (s.type === 'fact') return `Fact · ${s.key}`;
   if (s.type === 'query') return `Query · ${s.title ?? '…'}`;
   return SECTION_LABELS[s.type] ?? s.type;
@@ -2791,19 +2811,18 @@ function SectionControls({
 /** Add a custom section to the layout — a board, a fact, or an ad-hoc query. */
 function AddSection({ onAdd }: { onAdd: (s: LayoutSection) => void }): React.JSX.Element {
   const [mode, setMode] = useState<'view' | 'fact' | 'query' | null>(null);
-  const [boards, setBoards] = useState<Array<{ id: string; label: string }> | null>(null);
+  const [pins, setPins] = useState<Array<{ id: string; label: string; type?: string }> | null>(null);
   const [factKey, setFactKey] = useState('');
   const [q, setQ] = useState({ type: '', tag: '', prefix: '', title: '' });
 
   useEffect(() => {
-    if (mode !== 'view' || boards) return;
-    mcpCall('read', 'workspace.views')
-      .then((r) => {
-        const views = r.ok ? ((r.value as { views?: Array<{ id: string; render?: { type?: string; label?: string } }> }).views ?? []) : [];
-        setBoards(views.filter((v) => v.render?.type === 'canvas').map((v) => ({ id: v.id, label: v.render?.label ?? v.id })));
-      })
-      .catch(() => setBoards([]));
-  }, [mode, boards]);
+    if (mode !== 'view' || pins) return;
+    // ANY registered view is pinnable now (not just canvas boards) — ViewSurface
+    // renders every render type. Reuses the shared (memoized) view list.
+    loadViews()
+      .then((views) => setPins(views.map((v) => ({ id: v.id, label: v.render?.label ?? v.description ?? v.id, type: v.render?.type }))))
+      .catch(() => setPins([]));
+  }, [mode, pins]);
 
   const field: React.CSSProperties = {
     padding: '0.4rem 0.5rem', background: '#fffef9', border: `1px solid ${theme.border}`,
@@ -2822,20 +2841,20 @@ function AddSection({ onAdd }: { onAdd: (s: LayoutSection) => void }): React.JSX
     <Card style={{ display: 'grid', gap: '0.6rem' }}>
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <strong style={{ fontFamily: theme.serif }}>Add a section</strong>
-        {tab('view', '🌲 Board')}
+        {tab('view', '📌 View')}
         {tab('fact', '📄 Fact')}
         {tab('query', '🔎 Query')}
       </div>
       {mode === 'view' ? (
-        boards === null ? (
-          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>Loading boards…</span>
-        ) : boards.length === 0 ? (
-          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>No boards registered.</span>
+        pins === null ? (
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>Loading views…</span>
+        ) : pins.length === 0 ? (
+          <span style={{ color: theme.dim, fontSize: '0.82rem' }}>No views registered.</span>
         ) : (
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-            {boards.map((b) => (
+            {pins.map((b) => (
               <button key={b.id} onClick={() => { onAdd({ type: 'view', id: b.id }); setMode(null); }} style={{ ...field, cursor: 'pointer', width: 'auto' }}>
-                {b.label} +
+                {viewIcon(b.type)} {b.label} +
               </button>
             ))}
           </div>
