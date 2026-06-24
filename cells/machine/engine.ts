@@ -272,29 +272,44 @@ export function projectActions(name, nodes, rails) {
 
 /**
  * The subscriptions a machine needs in the STEPPER model (ADR-0018) — far fewer
- * than the old per-rail projection:
+ * than the old per-rail projection, and with ONE model primitive (an agent):
  *  - ONE `step` subscription: every run change delivers to @owner/machine.step,
  *    which walks the deterministic prefix in-process, spawns section/vote children,
  *    and runs the join barrier. Replaces all the auto-rail invokes + fan + join.
- *  - one `decide` deliver per AGENT/TASK node → @owner/models.decide (reasoning).
- *  - one `work` deliver per WORK node → @owner/models.agent (the spawned tool-loop,
- *    whose prompt advances the run itself).
- * Run keys nest under `machine/<name>/run/`, so each machine's subs are key-scoped.
+ *  - one DECIDE deliver per AGENT node → @owner/models.agent: a decide is just an
+ *    agent with a FIXED choice set — the cell builds the branch menu + write
+ *    template, the agent records the claim + advances. No bespoke models.decide;
+ *    `models` stays generic (it never reads a machine).
+ *  - one WORK deliver per WORK node → @owner/models.agent (open tool-loop).
+ *  - a `task` node gets NO model delivery — it parks for a human, who drives it
+ *    via the projected `decide-<from>` action (the open-tasks queue).
+ * `context` keys (from the machine identity) are surfaced to the decider. Run +
+ * claim keys nest under `machine/<name>/run/`, so a single write grant covers both.
  */
-export function projectSubscriptions(name, rails, owner) {
+export function projectSubscriptions(name, rails, owner, context) {
   const m = seg(name);
   const runPrefix = `machine/${m}/run/`;
   const subs = [projectStepSubscription(name, owner)];
+  const tags = (kind) => ['machine', `machine:${name}`, kind];
+  const ctx = Array.isArray(context) && context.length
+    ? `First read these context facts for grounding: ${context.join(', ')}.\n\n`
+    : '';
 
-  const agentNodes = new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from));
-  const taskNodes = new Set(rails.filter((x) => x.mode === 'task').map((x) => x.from));
-  for (const from of new Set([...agentNodes, ...taskNodes])) {
-    const defer = taskNodes.has(from) && !agentNodes.has(from);
+  for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
+    const branches = rails.filter((x) => x.mode === 'agent' && x.from === from);
+    const menu = branches.map((b) => (b.when ? `- ${b.to} — when ${b.when}` : `- ${b.to}`)).join('\n');
+    const claimKey = `machine/${m}/run/\${keySuffix}/claim/${seg(from)}`;
+    const runKeyTpl = `machine/${m}/run/\${keySuffix}`;
+    const prompt =
+      `Decide at node "${from}" of machine ${JSON.stringify(name)} (run \${keySuffix}). ${ctx}` +
+      `First substrate_read "${runKeyTpl}" (you'll need its current \`trace\` array). Then choose exactly ONE branch:\n${menu}\n\n` +
+      `1) Record your reasoning as a CLAIM — write "${claimKey}" = {"statement":"<why, one sentence>","confidence":<0..1>,"chose":"<the chosen branch>","at":${JSON.stringify(from)},"machine":${JSON.stringify(name)}} (type claim, tags ["claim","machine","dygram"]).\n` +
+      `2) ADVANCE the run — write "${runKeyTpl}" back UNCHANGED except: "node":"<the chosen branch>", "status":"running", "via":${JSON.stringify(`${from}=>decision`)}, and APPEND {"node":"<the chosen branch>","via":${JSON.stringify(`${from}=>decision`)}} to its existing \`trace\` array (keep all prior trace entries). type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]. The stepper settles terminality from there.`;
     subs.push({
       id: `machine.${m}.decide-${seg(from)}`,
-      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(from)} && value.status != "awaiting-decision"` },
-      deliver: `@${owner}/models.decide`,
-      params: defer ? { run: '${keySuffix}', machine: name, defer: 'true' } : { run: '${keySuffix}', machine: name },
+      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(from)} && value.status == "running"` },
+      deliver: `@${owner}/models.agent`,
+      params: { prompt, grants: { read: true, write: [runPrefix] }, maxTurns: 5, factKey: `machine/${m}/decide/\${keySuffix}`, tags: tags('decide') },
     });
   }
   for (const r of rails.filter((x) => x.mode === 'work')) {

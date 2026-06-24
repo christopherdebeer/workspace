@@ -175,13 +175,25 @@ describe('projectSubscriptions (stepper set: step + decide + work)', () => {
     expect(step1[0].match.keyPrefix).toBe('machine/demo/run/');
     expect(step1[0].params).toEqual({ run: '${keySuffix}', machine: 'demo' });
   });
-  it('emits a decide deliver per agent node and a work deliver per work rail — no fan/join/auto', () => {
-    expect(subs.find((s: { id: string }) => s.id === 'machine.demo.decide-D').deliver).toBe('@c15r/models.decide');
+  it('a decide is just an agent with a fixed choice set — delivered to models.agent, no models.decide', () => {
+    const decide = subs.find((s: { id: string }) => s.id === 'machine.demo.decide-D');
+    expect(decide.deliver).toBe('@c15r/models.agent'); // ONE model primitive
+    expect(decide.params.prompt).toContain('Choose exactly ONE branch');
+    expect(decide.params.prompt).toContain('- X — when fix');
+    expect(decide.params.prompt).toContain('machine/demo/run/${keySuffix}/claim/D'); // records the claim
+    expect(decide.params.grants.write).toEqual(['machine/demo/run/']);
+    expect(subs.some((s: { deliver?: string }) => s.deliver === '@c15r/models.decide')).toBe(false);
+  });
+  it('emits a work deliver per work rail; no fan/join/auto', () => {
     const work = subs.find((s: { id: string }) => s.id === 'machine.demo.work-X');
     expect(work.deliver).toBe('@c15r/models.agent');
     expect(work.params.prompt).toContain('do X');
     expect(work.params.prompt).toContain('"machine/demo/run/${keySuffix}"');
     expect(subs.some((s: { id: string }) => s.id.includes('.fan-') || s.id.includes('.join-') || s.id.includes('-to-'))).toBe(false);
+  });
+  it('surfaces machine context to the decider when provided', () => {
+    const withCtx = projectSubscriptions('demo', rails, 'c15r', ['tending/latest']);
+    expect(withCtx.find((s: { id: string }) => s.id === 'machine.demo.decide-D').params.prompt).toContain('tending/latest');
   });
 });
 

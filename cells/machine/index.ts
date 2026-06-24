@@ -35,9 +35,10 @@ const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
  *  the caller; present only on an authed top-level navigation to `/`). */
 function buildBoot(user, ssr) {
   const s = ssr ?? {};
-  const machines = ((s.machines && s.machines.entries) || []).filter((e) => !String(e.key).startsWith('_'));
-  const runs = (s.runs && s.runs.entries) || [];
-  return { session: { user: user ?? null }, machines, runs };
+  const ent = (k) => (s[k] && s[k].entries) || [];
+  // Identities only (bare `machine/<name>`); node/rail/run facts are separate types.
+  const machines = ent('machines').filter((e) => String(e.key).startsWith('machine/') && String(e.key).slice('machine/'.length).indexOf('/') < 0);
+  return { session: { user: user ?? null }, machines, nodes: ent('nodes'), rails: ent('rails'), runs: ent('runs') };
 }
 
 
@@ -384,7 +385,7 @@ export const handler = async (event) => {
     if (Array.isArray(a.tags)) writes[0].tags = [...new Set([...writes[0].tags, ...a.tags])];
 
     const actions = project ? projectActions(a.name, nodes, rails) : [];
-    const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER) : [];
+    const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER, a.context) : [];
 
     if (a.dryRun) {
       return json(200, { dryRun: true, validation, facts: writes.map((w) => w.key), actions: actions.map((d) => d.id), subscriptions: subs.map((s) => s.id) });
