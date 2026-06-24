@@ -21,7 +21,7 @@
 - `define_machine` **projects** the rails into substrate vocabulary: declared **actions** (`_actions/machine.<m>.*`) and reaction **subscriptions** (`_subscriptions/machine.<m>.*`). There is **no bespoke runtime** — the substrate interprets.
 - A **run** is a fact (`machine-run/<run>`); its revision history is the trajectory. Execution *is* advancing that fact, by reactions firing the projected actions / delivering to model cells.
 - Reasoning is spent only at **agent**/**work** rails; deterministic prefixes self-advance.
-- Six rail modes: `auto` · `agent` · `task` · `work` · `section` · `vote`.
+- Eight rail modes: `auto` · `agent` · `task` · `work` · `section` · `vote` · `catch` · `wait` — the last two add error-handling + timed waits (conditional control flow: §3.1).
 - The cell is split **functional-core / imperative-shell**: `engine.ts` is pure and unit-tested; `index.ts` is the thin I/O shell (HTTP routing + organ-path writes + SSR).
 
 ## 1. Thesis — machine introduces *no new primitive*
@@ -65,7 +65,7 @@ it for free. The mapping:
 | **node** (5 canonical kinds — task/state/context/init/tool; authoring aliases normalize to context) | a fact of type `machine-node`, `kind` in the value |
 | **arrows** (relationship/rendering) | substrate **edge `rel`s** (see ARROW_RELS below) |
 | **deterministic rail** (instant, no LLM) | a **declared action** (`if`/`writes[]`; fires with no model call) |
-| **agent-decision rail** | invoke `@c15r/models.decide` at exactly that node — the only place tokens are spent |
+| **agent-decision rail** | a fixed-choice `@c15r/models.agent` delivery at exactly that node — the only place tokens are spent (`models.decide` retired in v5.4) |
 | **meta-programming** (construct a tool mid-run) | a **`meta-tool` fact** (vocabulary-as-data) |
 | **effects-as-data** (`step → {nextState, effects[]}`) | the run fact's `put`/revision duality + the trajectory |
 | **checkpoints** | `supersede`-not-delete + revisions (ADR-0013) |
@@ -89,7 +89,7 @@ Zod type system, graph validators, a pure `step` runtime an in-browser agent
 drives). `@c15r/machine` is a **declarative projection into the substrate**.
 
 - **We improve:** durable event-sourced runs (fact + revisions) vs ephemeral memory; decisions as auditable `claim` facts with confidence; two multi-actor modes (driving-agent-*uses*-machine via `task`/claim, machine-*spawns*-agent via `work`); meta-tools as vocabulary-as-data (no unsandboxed eval); full substrate composition (salience, links, tending, triggers, cross-machine reuse).
-- **We dropped (candidate backlog):** no DSL/type-system (we ported only the structural validators — see §11); no multi-path concurrency *within* a single token beyond section/vote; no loop/step/timeout guard (§13); no editor/LSP.
+- **We dropped (candidate backlog):** no DSL/type-system (we ported only the structural validators — see §11); no multi-path concurrency *within* a single token beyond section/vote; no editor/LSP. (Loop/step/timeout guards — once a gap — are now built as conditional control flow: §3.1, §13.)
 
 ## 3. Vocabulary
 
@@ -98,7 +98,7 @@ drives). `@c15r/machine` is a **declarative projection into the substrate**.
 | mode | arrow default | semantics |
 |---|---|---|
 | `auto` | `->` | deterministic transition; advances with **no LLM** (a guarded declared action). |
-| `agent` | `=>` | a decision: deliver to `@owner/models.decide`, which picks a branch and records a **claim** + advances. |
+| `agent` | `=>` | a decision: deliver to `@owner/models.agent` as a fixed-choice prompt — it picks a branch and records a **claim** + advances (`models.decide` retired in v5.4). |
 | `task` | `~>` | parks a **claimable hand-off** for a *driving* agent (the agent-*uses*-machine path). |
 | `work` | `~>>` | **spawns** `@owner/models.agent` (the machine-*uses*-agent path): it does the work with scoped grants + a tool allowlist and advances the run itself. |
 | `section` | — | **fan-out** N independent branches → synthesize (parallelization "sectioning"). |
@@ -140,8 +140,13 @@ It is the single, unit-tested source of truth (`tests/machine-engine.test.ts`).
 `index.ts` is the **thin shell**: HTTP routing (`GET /_tools`, `POST /_tools/<name>`,
 the SSR routes), organ-path writes (`emit` → `substrate.write.requested`), and SSR.
 
-Engine exports: `ARROW_RELS`, `seg`, `railsFrom`, `voteCount`, `validateMachine`,
-`projectActions`, `projectSubscriptions`, `spawnChildrenWrites`.
+Engine exports: `ARROW_RELS`, `seg`, `mkey`, `entryOf`, `railsFrom`, `voteCount`,
+`durationMs`, `validateMachine`, `decomposeWrites`, `assembleMachine`,
+`projectActions`, `projectSubscriptions`, `projectStepSubscription`,
+`spawnChildrenWrites`, `railHolds`, `step`, `barrierAdvance`, `specFromYield`,
+`parentOf`. The control-flow primitives live here: `railHolds` (CEL guard with
+`now`/`nowMs`), `step` (catch/wait handling + failure counting + the cycle guard),
+and `durationMs` (a `wait` rail's `for`).
 
 **Why a pure projector/reducer and not an in-memory interpreter** (e.g. XState, like
 canvas' gesture machine): a run's state lives in substrate **facts** and advances
@@ -160,18 +165,26 @@ functional-core/imperative-shell split, fitted to a distributed substrate.
 
 ## 5. Projection & execution
 
-`define_machine({ name, title?, source?, nodes[], arrows[], rails?, project?,
-reactive?, trigger?, context?, tags? })` writes `machine/<name>` and (unless
-`project:false`) projects vocabulary. Rails derive from arrows (`railsFrom`) unless
-given explicitly. The response includes `validation` (§11).
+`define_machine({ name, title?, entry?, source?, nodes[], arrows[], rails?,
+project?, reactive?, trigger?, context?, tags? })` writes `machine/<name>` and
+(unless `project:false`) projects vocabulary. Rails derive from arrows (`railsFrom`)
+unless given explicitly. `entry` names the start node explicitly — needed for a
+**cyclic** machine (e.g. a circuit breaker) whose entry has incoming retry rails, so
+the zero-indegree heuristic can't find it. The response includes `validation` (§11).
+
+A re-definition is a **full replace**: stale `machine-node`/`machine-rail`/`_actions`/
+`_subscriptions` facts the new shape no longer declares are superseded (reported in
+the response's `superseded[]`; `dryRun` previews them as `wouldSupersede`). Run,
+claim, and trigger history is never touched.
 
 ### 5.1 Declared actions (`projectActions`) — Declarations, ADR-0001
 
 Over a `machine-run/${params.run}` fact:
 
-- **`machine.<m>.start`** — seed a run at the entry node (the node with no incoming rail), `ifAbsent`. Carries an optional **`text`** trigger-context body, stored on the run for the entry agent.
-- **`machine.<m>.<from>-to-<to>`** — one per `auto` rail: advance when the run is at `from` (guarded by `if: node == from`), writing `done` if `to` is terminal else `running`.
+- **`machine.<m>.start`** — seed a run at the entry node (an explicit `entry`, else the node with no incoming rail — a cyclic machine like a breaker must declare `entry`), `ifAbsent`. Carries an optional **`text`** trigger-context body, stored on the run for the entry agent.
 - **`machine.<m>.decide-<from>`** — one per `agent`/`task` node: record the chosen branch as a **claim** (`{statement, confidence, chose}`) *and* advance. The branch menu in the description carries each branch's `when` (progressive disclosure, §8).
+
+(In the stepper model — v5.4 — there are **no per-`auto`-rail actions**: `step` walks the deterministic `auto` prefix in-process, evaluating each rail's CEL `condition`, and emits one advance. The earlier `machine.<m>.<from>-to-<to>` action per auto rail is retired.)
 
 Execution **is** invoking these (`workspace.invoke`); each advances the run fact,
 whose revision history is the trajectory (effects-as-data; checkpoints = supersede +
@@ -183,10 +196,11 @@ A Subscription is `{ match, invoke|deliver, params }`. The reactor tests `match`
 (type / keyPrefix / CEL) against each `fact.written`, then either `invoke`s an
 in-slice action or `deliver`s to a cell tool *as the slice owner* (`cells.callCellTool`).
 Reaction-writes re-emit `fact.written`, **bounded by a depth cap** keyed on the
-triggering fact's revision (`maxDepth`, default 50). `reactive:true` registers:
+triggering fact's revision (`maxDepth`, default 50). `reactive:true` registers
+(the stepper model — v5.4):
 
-- **auto rail** → `invoke` its transition action (the `if` guard fires only the rail whose `from` = the run's node, so the deterministic prefix self-advances).
-- **agent/task node** → `deliver` to `@owner/models.decide` (or, deferred, park a claimable `task`). *Reasoning spent only here.*
+- **every run change** → `deliver` to `@owner/machine.step` (ONE `step` subscription, matching `status` `running`/`done`/`failed`). `step` walks the deterministic `auto` prefix in-process (no per-auto-rail action), takes `catch`/`wait` rails, and yields at the next non-`auto` node. A 1-minute platform tick (`machine.tick.requested`) re-steps runs whose `wait` deadline passed.
+- **agent/task node** → `deliver` to `@owner/models.agent` as a fixed-choice decision (the cell builds the branch menu + claim/advance template; `models.decide` was retired in v5.4 — `models.agent` is the only model primitive) — or park a claimable `task`. *Reasoning spent only here.* A decide/work delivery carries an **`onError`** hook so a hard failure marks the run `status:'failed'` for a `catch` rail (§3.1).
 - **work node** → `deliver` to `@owner/models.agent` with the rail's brief + scoped `grants` + `tools` allowlist; the agent does the work and advances the run.
 - **internal trigger** (always, when projecting) → writing `machine-trigger/<name>/<run>` invokes `start` (§7).
 - optional **fact-pattern trigger** → a `{type?, keyPrefix?, cel?}` pattern that starts a run (`runId` templates the run id).
@@ -295,11 +309,11 @@ partition) via `auth.mintToken`, which narrows to `intersect(requested, ceiling)
 | | driving agent *uses* a machine | machine *spawns* an agent |
 |---|---|---|
 | token holder | the driving agent (already has one) | a server-side cell (no user token) |
-| status | **works today** — narrow-only minting is exactly this | blocked on **grants-to-principals** |
+| status | **works today** — narrow-only minting is exactly this | **works (Increment 3)** — the cell mints a per-run scoped token |
 
 - **Increment 1 (done):** `tools`/`scope` on the rail; `models.agent` filters its toolbox to the allowlist.
 - **Increment 2 (done) — `protocol/machine-drive`:** a driving agent iterates a machine with existing primitives (`peek machine-run/<run>` + `peek machine/<m>` + `invoke` the projected actions, whose `if` guards make them safe/idempotent). The protocol fact is what a scheduled routine is pointed at.
-- **Increment 3 (future):** grants-to-principals so a cell can mint a scoped token for the agent it spawns; the bespoke `substrate_*` tools retire in favor of the real `workspace.*` vocabulary. (Ties to ADR-0007's noted scope-granularity gap.)
+- **Increment 3 (done):** grants-to-principals — `models.agent` mints a per-run scoped token (`auth.mintTokenFor`, narrowed to the rail's `grants`) and **proxies the rail's real `workspace.*`/MCP tools to the gateway as the slice owner**; the bespoke `substrate_*` tools remain only as a no-token fallback. Validated live (a `work` rail authored a real `link` edge as `c15r`). (Realizes ADR-0007's scope-granularity path.)
 
 ## 10. Anthropic agentic-workflow parallels
 
@@ -329,7 +343,7 @@ spend reasoning where there's no choice.)
 preview without writing (the DyGram
 graph validators we otherwise skip), run automatically inside `define_machine`:
 
-- **errors:** `dangling-rail` (a rail endpoint with no node), `no-entry` (every node has an incoming rail → a run can't start).
+- **errors:** `dangling-rail` (a rail endpoint with no node), `no-entry` (every node has an incoming rail *and* no explicit `entry` → a run can't start; a cyclic machine declares `entry`, which also seeds the reachability sweep so its nodes aren't falsely `unreachable`).
 - **warnings:** `unreachable`, `orphan`, `cycle` (a reactive machine could loop — §13), `no-terminal`.
 - section/vote **spawn** their branch targets, so those implied edges are followed for reachability (no false `unreachable`).
 
@@ -370,12 +384,12 @@ on the diagram.
 | **Arrows → substrate edges.** A machine's `value.arrows` are stored with their `rel` but not projected to authored edges, so `neighbors`/`links` don't walk a machine. | open | **ADR-0003 migration step 4** — recommends `define_machine` projects arrows → authored `link` edges at write time ("the machine graph *should* be authored"). Follow the ADR. |
 | **Delivery reliability under reactions.** The `spawn_children` multi-write fix and the `models.decide` concurrent-vote-child finding are instances of at-least-once/ordering behavior under the depth cap. | resolved for determinism (`reactive:"step"`); legacy path unchanged | **ADR-0018** — `step` advances the `auto` prefix in-process with **no per-hop fact-write** and the kernel client's `emit` checks `FailedEntryCount` (no silent drop). Reliability worry remains only at genuine (model-paced) yields; ADR-0011 open item stands for those. |
 | **`models.decide` concurrency.** Concurrent vote-child decisions don't auto-complete (decide action + barrier are correct). | resolved (`reactive:"step"`) | **ADR-0018** — `barrierAdvance` is the **deterministic** join: the cell reads the children and advances the parent itself, retiring the `models.decide` completion dependency. Synthesis *content* may still use a model (a work/agent rail at the join node). |
-| **No loop/step/timeout guard.** A cyclic reactive machine can thrash; a stuck branch parks a run forever. | partial (`dryRun` `cycle` warning; `step()` reports `kind:'cycle'`/`'blocked'` rather than spinning + emits idempotently so a parked run doesn't re-trigger; the reactor's revision depth cap) | **ADR-0018** (`step` halts on a guardless auto-loop and on a deterministic stall). The cycle guard now distinguishes a real auto-loop from a legitimate retry loop through a yield node. |
+| **Loop / step / timeout guard.** A cyclic reactive machine could thrash; a stuck branch parked a run forever. | **largely resolved** (see the next row) | `dryRun` `cycle` warning + `step()` reporting `kind:'cycle'`/`'blocked'`/`'failed'` (idempotent, so a parked run doesn't re-trigger) + the reactor's depth cap (ADR-0018). The cycle guard now distinguishes a real auto-loop from a legitimate retry loop through a yield node. A stuck branch no longer parks silently — a failure yields/`catch`es and a `wait` resumes via the tick; a work agent has a soft `maxMs` budget. |
 | **Conditional control flow: waits / catches / circuit breakers.** Edges could gate on machine state but not time, failures parked runs silently, and there was no cooldown/retry primitive. | **built** | Rail `condition` CEL gains `now`/`nowMs` (deadlines/elapsed); a `wait` rail parks-and-resumes via a 1-min platform tick (`createMachineTickHandler`); a `catch` rail recovers a failed step (the models cell's `onError` hook writes the failure onto the run) and counts `value.failures`; a circuit breaker is their composition. A per-run wall-clock budget rides on work agents as `maxMs`. (Precision upgrade: per-run EventBridge Scheduler instead of the cron tick.) |
 | **Cell-side substrate reads.** The machine cell was built write-only; the agentic join barrier existed only because it could not read its own children. | **resolved** | **ADR-0017** — the shared kernel substrate client (`/@c15r/kernel/substrate.js`); `@c15r/models` already read this way. The machine `step` tool now reads its def + run + siblings directly. |
 | **Shared client is vendored, not a published package.** Each consuming cell keeps a hand-synced copy of the canonical `cells/kernel/static/substrate.js` (a server-side `https://` import hangs the forge bundler, so URL-sharing is out). | bridge | **ADR-0017** packaging — publish `@c15r/substrate` to npm and import by bare specifier (esm.sh, version-pinned) to make it one source again. |
-| **`reactive:"step"` not yet exercised live; the legacy per-auto-rail projection remains the default.** The new single-step subscription + idempotent emit are unit-tested but unproven end-to-end under burst. | new, opt-in | this doc §16 (v5.3). Flip a machine to `reactive:"step"` and exercise; then make it the default and remove the legacy projection. |
-| **Agent token narrowing.** `tools`/`scope` declared (Increment 1) but not yet enforced via a minted scoped token on the spawn path. | partial | **ADR-0007** (Grant axis) + its scope-granularity gap; machine §9 Increment 3 (grants-to-principals). |
+| **The stepper exercised live.** Once the new single-step projection was only unit-tested. | **resolved** | The step model is now the default projection for `reactive:true` (one `step` sub + the agent/work model deliveries; the per-auto-rail cascade is gone — v5.4/ADR-0019) and is proven end-to-end on `tending`/`weave`/`catchtest`/`waittest`/`breaker` (driven + reactive, including catch/wait/breaker cascades). |
+| **Agent token narrowing.** `tools`/`scope` declared (Increment 1) but not yet enforced via a minted scoped token on the spawn path. | **resolved** | Increment 3 (§9): `models.agent` mints a per-run scoped token (`auth.mintTokenFor`, narrowed to the rail's `grants`) and proxies the real `workspace.*` tools as the slice owner. Validated live. |
 | **`kind` is cosmetic.** Unlike DyGram, node `kind` drives nothing; the rail `mode` carries behavior. | by design | §2.1 — adopt DyGram's kind-inference if we want it meaningful. |
 | **No DSL / type system.** Only the structural validators were ported. | by design | §2.2 — a `dygram` parser/LSP is out of scope. |
 
@@ -393,7 +407,7 @@ claim is just a typed fact) — the cell does not need its own recorder.
 
 The surface is deliberately small: the cell is a **compiler** (`define_machine`)
 + a type vocabulary + a UI; *execution* is the substrate's own `workspace.invoke`
-of the projected actions. Four tools:
+of the projected actions. Five tools:
 
 | tool | kind | purpose |
 |---|---|---|
@@ -401,7 +415,7 @@ of the projected actions. Four tools:
 | `trigger_run` | act | fire a run by writing one `machine-trigger/…` fact — the write-only external/scheduled-routine entry (§7). (An agent that can `invoke` may call `machine.<m>.start` directly instead.) |
 | `bootstrap` | act | one-time/idempotent infra seeding (renderers, views, `task.claim`). |
 | `spawn_children` | act | **internal** reaction-target only — emit a fan's child runs as separate organ writes (§6); not for hand use. Would collapse into a declared action if ADR-0011's multi-write reliability lands (§13). |
-| `step` | act | **the stateless stepper** (ADR-0018) — read `machine-run/<run>` + the def via the shared kernel substrate client (ADR-0017), walk the deterministic `auto` prefix in-process (CEL-guarded, no per-hop write), emit one advance, return the `yield`. Spawns section/vote children; runs the **deterministic** join barrier on child completion (no model). Idempotent. Driven (call it) or reactive (`reactive:"step"` delivers run changes here). |
+| `step` | act | **the stateless stepper** (ADR-0018) — read `machine-run/<run>` + the def via the shared kernel substrate client (ADR-0017), walk the deterministic `auto` prefix in-process (CEL-guarded with `now`/`nowMs`, no per-hop write), take a `catch` rail on a failed step (counting `value.failures`) and park-then-resume a `wait` rail, emit one advance, return the `yield` (`done`/`blocked`/`cycle`/`failed`/`wait`/section/vote). Spawns section/vote children; runs the **deterministic** join barrier on child completion (no model). Idempotent. Driven (call it) or reactive (`reactive:"step"` delivers run changes here; the 1-min tick re-steps due waits). |
 
 > **Pruned (v5.1).** `record_idea` (≡ `workspace.remember`), `register_meta_tool`
 > (speculative, unused), `validate_machine` (now `define_machine`'s `dryRun`), and
@@ -419,8 +433,9 @@ of the projected actions. Four tools:
 - **v5** — the functional-core refactor (`engine.ts` + unit tests); parallel branching (`section`/`vote` via `spawn_children` + agentic barrier); external trigger (`trigger_run` + internal-trigger subscription); progressive disclosure (`when`); the run-position diagram overlay + unified-run UI; type handlers (`open`/`render`).
 - **v5.1** — **surface prune**: 8 tools → 4. Removed `record_idea`/`register_meta_tool`/`disclose`; folded validation into `define_machine`'s `dryRun`. The cell is a compiler + types + UI; execution is the substrate's `invoke`.
 - **v5.2** — **stateless stepper core** (ADR-0018): pure `step(run, machine, now)` in `engine.ts` advances the deterministic `auto` prefix in-process (CEL-guarded, one returned write, yields at non-`auto` rails / terminal / stall / cycle) + unit tests. Foundation set by **ADR-0017** (one shared cell substrate-access client; cel-js declared in the cell's `imports.json`).
-- **v5.4 (current)** — **decomposed graph + one model primitive** (ADR-0019). A machine is no longer one embedded blob: it's an identity fact + `machine-node`/`machine-rail` facts nested under `machine/<name>/`, the rail keys deriving node→node graph edges (so neighbors/$graph/canvas render it; resolves ADR-0003 step 4 + ADR-0016). `decide` is unified as an **agent with a fixed choice set** — `models.agent` is the only model primitive; `models.decide` is eliminated (models never reads a machine). UI rebuilt graph-first (diagram hero + run-trace overlay + step timeline + loading states). Tools: bootstrap/define_machine/step/trigger_run. The embedded-blob machines were purged; tending + weave re-established decomposed (tending keeps its daily audit trigger). See ADR-0019.
+- **v5.4** — **decomposed graph + one model primitive** (ADR-0019). A machine is no longer one embedded blob: it's an identity fact + `machine-node`/`machine-rail` facts nested under `machine/<name>/`, the rail keys deriving node→node graph edges (so neighbors/$graph/canvas render it; resolves ADR-0003 step 4 + ADR-0016). `decide` is unified as an **agent with a fixed choice set** — `models.agent` is the only model primitive; `models.decide` is eliminated (models never reads a machine). UI rebuilt graph-first (diagram hero + run-trace overlay + step timeline + loading states). Tools: bootstrap/define_machine/step/trigger_run. The embedded-blob machines were purged; tending + weave re-established decomposed (tending keeps its daily audit trigger). See ADR-0019.
 - **v5.3** — **stepper wired + shared substrate client** (ADR-0017/0018), **deployed + validated live**. A shared server-side substrate client (`read`/`query`/`emit`/`supersede`, organ-attested writes with a `FailedEntryCount` check) — canonical at `cells/kernel/static/substrate.js`, **vendored** into the machine cell as `cells/machine/substrate.js` (a server-side `https://` import hangs the forge bundler — ADR-0017). The cell gained a `step` tool: read → pure `step` → one idempotent advance, with section/vote **spawn** and a **deterministic** in-process join barrier (`barrierAdvance` — reads siblings, advances the parent once all are done, no model). Validated end-to-end: auto-prefix walk + CEL stall/resume to terminal, and a section fan whose parent advanced via `Plan~section-join` with no model. New reactive mode `reactive:"step"` projects ONE step subscription (+ the agent/work model deliveries), retiring the per-auto-rail cascade and the agentic join; `reactive:true` stays as the legacy path. 5 tools now.
+- **v5.5 (current)** — **conditional control flow (waits · catches · circuit breakers), built + deployed + validated live.** Four composable primitives: (A) time-aware rail `condition` CEL — `railHolds` binds `now`/`nowMs` alongside `value`, so an edge gates on a deadline/elapsed window; (B) `catch` rails — a failed `work`/`agent` step routes to a recovery node, the models cell's **`onError`** hook writing `status:'failed'` onto the run (read-merged, so it preserves accumulated state) and `step` counting `value.failures`; (C) a `wait` rail with stepper-managed deadlines (`waitUntil`/`durationMs`), resumed by a 1-minute platform tick (`MachineTickSchedule` → `createMachineTickHandler`); (D) circuit breakers as their composition (work → catch/count → threshold edge → `wait` cooldown → half-open probe). Plus: a soft per-step `maxMs` budget on work agents; explicit **`entry`** for cyclic machines; `define_machine` **reconcile** (full-replace of stale node/rail/action/subscription facts; run history untouched); a retry-aware **cycle guard** (a loop through a yield node isn't a spin); a tier-1 fix so subscription params **deep-template** (a nested `onError.key` now resolves `${keySuffix}`); and a cell can **retire its own seeded vocabulary** via organ supersede. Validated live on `waittest`/`catchtest`/`breaker`. Increment 3 (grants-to-principals, §9) also landed: `models.agent` proxies real `workspace.*` tools under a per-run scoped token.
 
 ## Appendix — ADR map & sources
 
