@@ -212,6 +212,11 @@ interface AgentInput {
   provider?: 'anthropic' | 'openai';
   model?: string;
   maxTurns?: number;
+  /** Per-call soft wall-clock budget (ms). The agent loop stops cleanly between
+   *  turns once exceeded (transcript + job still written), so a machine node can
+   *  bound a step BELOW the Lambda ceiling. Default ≈ the Lambda timeout headroom
+   *  (AGENT_BUDGET_MS); clamped to that hard ceiling. */
+  maxMs?: number;
   maxTokens?: number;
   grants?: AgentGrants;
   /** Optional allowlist of tool NAMES the agent may use (a subset of the built
@@ -536,6 +541,13 @@ function openaiAdapter(rec: ProviderRec, input: AgentInput, system: string, tool
 /** Agent-capable providers in fallback order. Google's tool-calling is a third format — deferred. */
 const AGENT_PROVIDERS = ['anthropic', 'openai'] as const;
 
+/** Soft wall-clock ceiling for an agent run, in ms. Kept just under the cell's
+ *  Lambda timeout (configured via cells.configureCell timeoutSeconds) so the loop
+ *  stops cleanly and still writes its transcript + job before a hard kill. A node's
+ *  `maxMs` may narrow BELOW this but never above it. Keep in sync with the deployed
+ *  timeout (currently 300s → 285s headroom). */
+const AGENT_BUDGET_MS = 285_000;
+
 async function runAgent(jobId: string, input: AgentInput): Promise<void> {
   const grants = input.grants ?? {};
   const { defs: tools, proxyMap } = buildAgentTools(grants, input.tools, !!input.token);
@@ -582,6 +594,8 @@ async function runAgentLoop(
   token?: string,
 ): Promise<void> {
   const maxTurns = Math.min(Math.max(input.maxTurns ?? 8, 1), 16);
+  const startMs = Date.now();
+  const budgetMs = Math.min(Math.max(input.maxMs ?? AGENT_BUDGET_MS, 1_000), AGENT_BUDGET_MS);
   const transcript: Array<Record<string, unknown>> = [
     { role: 'user', text: clip(input.prompt, 4000) },
     ...fallbacks.map((f) => ({ role: 'system', note: `provider ${f.provider} failed before any effect (${clip(f.error, 200)}) — fell back` })),
@@ -591,6 +605,12 @@ async function runAgentLoop(
   let turns = 0;
 
   for (; turns < maxTurns; turns++) {
+    // Soft wall-clock guard: stop cleanly between turns (always allow ≥1) so the
+    // transcript + job still land before the Lambda's hard timeout would kill us.
+    if (turns > 0 && Date.now() - startMs >= budgetMs) {
+      transcript.push({ role: 'system', note: `stopped: soft time budget ${budgetMs}ms reached after ${turns} turn(s)` });
+      break;
+    }
     let turn: AgentTurn;
     try {
       turn = await adapter.call();
@@ -760,6 +780,7 @@ const TOOLS = [
         provider: { type: 'string', enum: ['anthropic', 'openai'], description: 'Pin one provider (default: enabled chain with first-call fallback)' },
         model: { type: 'string', description: 'Override the pinned/first provider’s configured text model' },
         maxTurns: { type: 'number', description: 'Model-call budget (default 8, cap 16)' },
+        maxMs: { type: 'number', description: 'Soft wall-clock budget in ms — the loop stops cleanly between turns once exceeded (transcript + job still written). Lets a machine node bound a step below the Lambda ceiling; clamped to that ceiling (≈285s).' },
         maxTokens: { type: 'number', description: 'Per-call output cap (default 4096)' },
         grants: {
           type: 'object',

@@ -61,6 +61,9 @@ export function railsFrom(arrows, explicit) {
       ...(r.prompt ? { prompt: r.prompt } : {}),
       ...(r.grants ? { grants: r.grants } : {}),
       ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
+      // Soft per-step wall-clock budget (ms) — bounds a work agent below the
+      // models cell's Lambda ceiling (see cells/models AGENT_BUDGET_MS).
+      ...(typeof r.maxMs === 'number' ? { maxMs: r.maxMs } : {}),
       // The agent's tool allowlist (docs/machine.md).
       ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
       ...(r.scope ? { scope: r.scope } : {}),
@@ -336,6 +339,7 @@ export function projectSubscriptions(name, rails, owner, context) {
         grants: r.grants ?? { read: true, write: [runPrefix] },
         ...(Array.isArray(r.tools) ? { tools: r.tools } : {}),
         ...(typeof r.maxTurns === 'number' ? { maxTurns: r.maxTurns } : {}),
+        ...(typeof r.maxMs === 'number' ? { maxMs: r.maxMs } : {}),
         factKey: `machine/${m}/work/\${keySuffix}`,
         tags: ['machine', `machine:${name}`, 'work'],
       },
