@@ -124,6 +124,28 @@ describe('auth store (in-memory)', () => {
     expect(await store.setEffectiveScope(minted.id, 'someone-else', '')).toBe(false);
   });
 
+  it('updateToken re-labels, re-scopes (resetting effective), and re-horizons a token you own', async () => {
+    const store = createMemoryStore();
+    await store.createUser('uuid-1', 'alice');
+    const minted = await store.mintToken({ userId: 'uuid-1', scope: 'workspace:read workspace:write', label: 'old' });
+    await store.setEffectiveScope(minted.id, 'uuid-1', 'workspace:read'); // narrowed focus
+
+    const updated = await store.updateToken(minted.id, 'uuid-1', { label: 'new', scope: 'workspace:read' });
+    expect(updated).toMatchObject({ id: minted.id, label: 'new', scope: 'workspace:read' });
+
+    // The grant is now the new scope, and effective was reset to it (not the old narrow).
+    const v = await validateBearer(minted.token, store);
+    expect(v!.scope).toBe('workspace:read');
+    expect(v!.effectiveScope).toBeNull();
+
+    // Re-horizon to non-expiring, then back to a finite lifetime.
+    expect((await store.updateToken(minted.id, 'uuid-1', { expiresInSec: 0 }))!.expiresAt).toBeNull();
+    expect((await store.updateToken(minted.id, 'uuid-1', { expiresInSec: 3600 }))!.expiresAt).not.toBeNull();
+
+    // Another account cannot steward it.
+    expect(await store.updateToken(minted.id, 'someone-else', { label: 'x' })).toBeNull();
+  });
+
   it('enforces single-use auth codes', async () => {
     const store = createMemoryStore();
     await store.saveAuthCode({

@@ -307,6 +307,38 @@ export function createDynamoStore(tableName: string): AuthStore {
         .promise();
       return true;
     },
+    async updateToken(tokenId, userId, patch): Promise<TokenSummary | null> {
+      // The USERTOK index row is what listUserTokens reads; the TOKEN# row is what
+      // validateTokenByHash reads — keep both in sync. Re-put each merged (avoids
+      // brittle partial UpdateExpressions); resetting effectiveScope on the TOKEN#
+      // row so a re-scope makes the new grant fully effective.
+      const idx = await get(`USERTOK#${userId}`, tokenId);
+      if (!idx || idx.revoked) return null;
+      const newScope = typeof patch.scope === 'string' && patch.scope.trim() ? patch.scope.trim() : (idx.scope as string);
+      const newLabel = patch.label !== undefined ? patch.label : (idx.label ?? null);
+      const newExpiresAt =
+        patch.expiresInSec === undefined
+          ? (idx.expiresAt ?? null)
+          : patch.expiresInSec && patch.expiresInSec > 0
+            ? isoIn(patch.expiresInSec * 1000)
+            : null;
+      await put({ ...idx, scope: newScope, label: newLabel, expiresAt: newExpiresAt, ttl: ttlOf(newExpiresAt) });
+      const tok = await get(`TOKEN#${idx.tokenHash}`);
+      if (tok) {
+        const { effectiveScope, ...rest } = tok as Record<string, unknown>;
+        void effectiveScope;
+        await put({ ...rest, scope: newScope, label: newLabel, expiresAt: newExpiresAt, ttl: ttlOf(newExpiresAt) });
+      }
+      return {
+        id: tokenId,
+        scope: newScope,
+        label: newLabel,
+        clientId: (idx.clientId as string) ?? null,
+        revoked: !!idx.revoked,
+        expiresAt: newExpiresAt,
+        createdAt: idx.createdAt as string,
+      };
+    },
     async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600, newRefreshExpiresInSec): Promise<RefreshResult | null> {
       // Validate the REFRESH row on its OWN terms — an expired access token is
       // precisely when a refresh is needed, so we must not gate on it (and the

@@ -33,6 +33,35 @@ function cellCeiling(redirectUri: string | undefined): string[] | null {
   return ['workspace:read', 'workspace:write', `cell:${label.slice(0, i)}/${label.slice(i + 1)}:*`];
 }
 
+/**
+ * The cell a sign-in originates at, derived from the redirect_uri — so consent can
+ * name the *cell* ("Authorize @c15r/machine") rather than only the shared client.
+ * Handles both forms: a host-isolated cell host (`<name>-<owner>.on.parc.land`) and
+ * an apex path (`/@<owner>/<name>/…`). Returns null for a plain platform redirect.
+ */
+function cellFromRedirect(redirectUri: string | undefined): { owner: string; name: string; address: string } | null {
+  if (!redirectUri) return null;
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return null;
+  }
+  const suffix = process.env.CELL_DOMAIN_SUFFIX; // e.g. ".on.parc.land"
+  if (suffix && u.host.endsWith(suffix)) {
+    const label = u.host.slice(0, -suffix.length);
+    const i = label.indexOf('-');
+    if (i > 0) {
+      const owner = label.slice(0, i);
+      const name = label.slice(i + 1);
+      return { owner, name, address: `@${owner}/${name}` };
+    }
+  }
+  const m = u.pathname.match(/^\/@([^/]+)\/([^/]+)/);
+  if (m) return { owner: m[1], name: m[2], address: `@${m[1]}/${m[2]}` };
+  return null;
+}
+
 export interface OAuthConfig {
   serverName: string;
   serverDescription?: string;
@@ -272,7 +301,7 @@ export async function handleGrantableScopes(
   store: AuthStore,
   config: OAuthConfig,
 ): Promise<ServiceHttpResponse> {
-  const { sessionId, clientId } = req.json<{ sessionId: string; clientId?: string }>();
+  const { sessionId, clientId, redirectUri } = req.json<{ sessionId: string; clientId?: string; redirectUri?: string }>();
   const session = await store.validateSession(sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   const user = await store.getUserById(session.userId);
@@ -281,6 +310,9 @@ export async function handleGrantableScopes(
   const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
   // The client's human name (from DCR) so consent shows "parc.land", not a UUID.
   const client = clientId ? await store.getOAuthClient(clientId) : null;
+  // The cell the sign-in originates at (from the redirect_uri), so consent can name
+  // the *cell* as the subject acting in your workspace (docs/auth-consent-plan.md §A).
+  const cell = cellFromRedirect(redirectUri);
   // The grant-lifetime ceiling lets the consent screen offer a "this access lasts…"
   // picker bounded by policy (docs/capability-consent.md).
   return ok({
@@ -288,6 +320,7 @@ export async function handleGrantableScopes(
     scopes,
     catalog,
     clientName: client?.clientName ?? null,
+    ...(cell ? { resource: { kind: 'cell', address: cell.address } } : {}),
     maxGrantSecs: grantCeilingSecs(config),
   });
 }

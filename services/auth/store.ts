@@ -211,6 +211,19 @@ export interface AuthStore {
    * only narrow/widen its own token. Returns false when no such token exists.
    */
   setEffectiveScope(tokenId: string, userId: string, effectiveScope: string | null): Promise<boolean>;
+  /**
+   * Patch a token you own — token-as-principal stewardship (docs/token-as-principal-plan.md).
+   * Relabel, re-scope (the GRANT ceiling; resets `effectiveScope` so the new grant is
+   * fully effective), and/or re-horizon its expiry (`expiresInSec` ≤ 0 / null ⇒ no
+   * expiry). The service clamps `scope` to the caller's own standing (narrow-only).
+   * Returns the updated summary, or null when no live token with that id is owned by
+   * `userId`.
+   */
+  updateToken(
+    tokenId: string,
+    userId: string,
+    patch: { label?: string; scope?: string; expiresInSec?: number | null },
+  ): Promise<TokenSummary | null>;
   refreshUnifiedToken(
     oldRefreshHash: string,
     newExpiresInSec?: number,

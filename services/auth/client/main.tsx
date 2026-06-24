@@ -111,6 +111,7 @@ function App(): React.JSX.Element {
   const [grantable, setGrantable] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<Record<string, ScopeMeta>>({});
   const [clientName, setClientName] = useState<string>('');
+  const [resourceAddr, setResourceAddr] = useState<string>('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Grant lifetime: 0 = the server default (full ceiling); >0 = a user-chosen, shorter horizon.
   const [maxGrantSecs, setMaxGrantSecs] = useState<number>(0);
@@ -143,14 +144,16 @@ function App(): React.JSX.Element {
       if (!oauthMode || !p.redirect_uri) return fail('Missing OAuth parameters');
 
       // Fetch the scopes this user is allowed to grant, then show the picker.
-      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; clientName?: string; maxGrantSecs?: number; error?: string }>('/auth/grantable', {
+      const g = await postJson<{ username?: string; scopes?: string[]; catalog?: Record<string, ScopeMeta>; clientName?: string; resource?: { kind: string; address: string }; maxGrantSecs?: number; error?: string }>('/auth/grantable', {
         sessionId,
         clientId: p.client_id,
+        redirectUri: p.redirect_uri,
       });
       if (g.error || !g.scopes) return fail(g.error ?? 'Could not load scopes');
       setSignedInUser(g.username ?? '');
       setCatalog(g.catalog ?? {});
       setClientName(g.clientName ?? '');
+      setResourceAddr(g.resource?.address ?? '');
       setMaxGrantSecs(g.maxGrantSecs ?? 0);
       // Show only what the client actually REQUESTED (∩ what the user may grant) —
       // don't prompt for permissions the client never asked for. Pre-checked; the
@@ -302,7 +305,14 @@ function App(): React.JSX.Element {
               ) : (
                 <>
                   Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
-                  <strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:
+                  {resourceAddr ? (
+                    <>
+                      <strong style={{ color: theme.text }}>{resourceAddr}</strong> is requesting access to your workspace
+                      {clientName || p.client_id ? <> (via {clientName || p.client_id})</> : null}:
+                    </>
+                  ) : (
+                    <><strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:</>
+                  )}
                 </>
               )}
             </p>

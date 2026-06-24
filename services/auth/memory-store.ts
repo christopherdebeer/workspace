@@ -226,6 +226,24 @@ export function createMemoryStore(): AuthStore {
       }
       return false;
     },
+    async updateToken(tokenId, userId, patch): Promise<TokenSummary | null> {
+      for (const t of tokens.values()) {
+        if (t.id !== tokenId || t.mintedBy !== userId || t.revoked) continue;
+        if (patch.label !== undefined) t.label = patch.label;
+        if (typeof patch.scope === 'string' && patch.scope.trim()) {
+          t.scope = patch.scope.trim();
+          t.effectiveScope = null; // the new grant is fully effective until re-narrowed
+        }
+        if (patch.expiresInSec !== undefined) {
+          t.expiresAt = patch.expiresInSec && patch.expiresInSec > 0 ? isoIn(patch.expiresInSec * 1000) : null;
+        }
+        return {
+          id: t.id, scope: t.scope, label: t.label, clientId: t.clientId,
+          revoked: t.revoked, expiresAt: t.expiresAt, createdAt: t.createdAt,
+        };
+      }
+      return null;
+    },
     async refreshUnifiedToken(oldRefreshHash, newExpiresInSec = 3600, newRefreshExpiresInSec): Promise<RefreshResult | null> {
       // Validate the refresh row on its own (longer) expiry — not the access
       // token's, which is expected to be expired/gone when refreshing.
