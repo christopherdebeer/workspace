@@ -917,6 +917,29 @@ describe('workspace substrate-write handler (the organ-to-reef path)', () => {
     expect(viewFact?._meta.type).toBe('view');
     expect(viewFact?._meta.tags).toContain('cell-required');
   });
+
+  it('lets a cell retire its own seeded vocabulary via organ supersede, but refuses other `_` vocabulary', async () => {
+    const cell = busCtx({ owner: 'alice', name: 'machine' });
+    const meta = { source: 'cell-machine-xyz', detailType: 'substrate.write.requested' };
+    // Seed an action + a subscription the cell manages, then a plain renderer fact.
+    await handler({ key: '_actions/machine.toRetire', value: { description: 'temp', writes: [{ key: 'k/${params.id}', value: {} }], params: { id: { type: 'string', required: true } } } }, cell, meta);
+    await handler({ key: '_subscriptions/machine.toRetire', value: { id: 'machine.toRetire', match: { keyPrefix: 'machine-run/' }, invoke: 'machine.advance', params: { id: '${keySuffix}' } } }, cell, meta);
+    await handler({ key: '_renderers/machine', value: { type: 'machine', source: 'x' } }, cell, meta);
+    expect((await cmds.actions({}, ctxFor('alice').ctx)).actions.some((a) => a.id === 'machine.toRetire')).toBe(true);
+    expect((await cmds.subscriptions({}, ctxFor('alice').ctx)).subscriptions.some((s) => s.id === 'machine.toRetire')).toBe(true);
+
+    // The cell retires the action + subscription through the same registries — the
+    // reconcile path a re-definition uses to clean up rails/branches it dropped.
+    await handler({ key: '_actions/machine.toRetire', op: 'supersede' }, cell, meta);
+    await handler({ key: '_subscriptions/machine.toRetire', op: 'supersede' }, cell, meta);
+    expect((await cmds.actions({}, ctxFor('alice').ctx)).actions.some((a) => a.id === 'machine.toRetire')).toBe(false);
+    expect((await cmds.subscriptions({}, ctxFor('alice').ctx)).subscriptions.some((s) => s.id === 'machine.toRetire')).toBe(false);
+
+    // Non-registry `_` vocabulary supersede stays refused — the renderer is intact.
+    await handler({ key: '_renderers/machine', op: 'supersede' }, cell, meta);
+    const renderer = await cmds.peek({ key: '_renderers/machine' }, ctxFor('alice').ctx);
+    expect(renderer?._meta.superseded).toBe(false);
+  });
 });
 
 describe('cell lifecycle projection (the platform reflected in the substrate)', () => {

@@ -2039,12 +2039,24 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
     // delete). Vocabulary (`_`-prefixed) stays managed via the registries, so
     // organ supersede is refused there, the mirror of the put-path rule.
     if (detail.op === 'supersede') {
-      if (key.startsWith('_')) {
-        ctx.logger.warn('organ supersede of vocabulary refused', { cell: writerAddress, key });
-        return;
-      }
+      // The no-code vocabulary a cell SEEDS via the put path (actions/views/
+      // subscriptions) it may also RETIRE here, through the same registries — so a
+      // re-definition can clean up the rails/branches it dropped, the symmetric
+      // counterpart to seeding. Other `_`-prefixed vocabulary (_types, _renderers,
+      // sharing) stays managed elsewhere, so organ supersede there is still refused.
       try {
-        await state.supersede(scope, key, null, identity, {});
+        if (key.startsWith(ACTIONS_PREFIX)) {
+          await createDeclarativeActions(state).remove(scope, key.slice(ACTIONS_PREFIX.length), identity);
+        } else if (key.startsWith(SUBSCRIPTIONS_PREFIX)) {
+          await createSubscriptions(state).remove(scope, key.slice(SUBSCRIPTIONS_PREFIX.length), identity);
+        } else if (key.startsWith(VIEWS_PREFIX)) {
+          await createRegisteredViews(state).remove(scope, key.slice(VIEWS_PREFIX.length), identity);
+        } else if (key.startsWith('_')) {
+          ctx.logger.warn('organ supersede of vocabulary refused', { cell: writerAddress, key });
+          return;
+        } else {
+          await state.supersede(scope, key, null, identity, {});
+        }
       } catch (err) {
         ctx.logger.warn('organ supersede refused', { cell: writerAddress, key, error: (err as Error).message });
         return;
