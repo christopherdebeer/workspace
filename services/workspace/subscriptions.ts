@@ -84,6 +84,30 @@ function resolveOne(token: string, key: string, keySuffix: string, scope: string
   return cur;
 }
 
+const EXACT_PLACEHOLDER = /^\$\{(key|keySuffix|scope|value(?:\.[A-Za-z0-9_]+)*)\}$/;
+
+/** Substitute `${…}` templates in any param value — recursing into objects and
+ *  arrays so NESTED string leaves template too (e.g. an `onError.key`). A string
+ *  that is exactly one placeholder keeps the resolved JSON type; non-strings
+ *  (number/boolean/null) pass through unchanged. */
+function substituteValue(tpl: unknown, key: string, keySuffix: string, scope: string, value: unknown): unknown {
+  if (typeof tpl === 'string') {
+    const exact = EXACT_PLACEHOLDER.exec(tpl);
+    if (exact) return resolveOne(exact[1], key, keySuffix, scope, value) ?? null;
+    return tpl.replace(PLACEHOLDER, (_m, token: string) => {
+      const v = resolveOne(token, key, keySuffix, scope, value);
+      return v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+    });
+  }
+  if (Array.isArray(tpl)) return tpl.map((x) => substituteValue(x, key, keySuffix, scope, value));
+  if (tpl && typeof tpl === 'object') {
+    const o: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(tpl as Record<string, unknown>)) o[k] = substituteValue(v, key, keySuffix, scope, value);
+    return o;
+  }
+  return tpl;
+}
+
 /** Build an action's params from a subscription's templates + the changed fact. */
 export function resolveParams(
   sub: SubscriptionDefinition,
@@ -94,19 +118,7 @@ export function resolveParams(
   const keySuffix = sub.match.keyPrefix && key.startsWith(sub.match.keyPrefix) ? key.slice(sub.match.keyPrefix.length) : key;
   const out: Record<string, unknown> = {};
   for (const [name, tpl] of Object.entries(sub.params ?? {})) {
-    if (typeof tpl !== 'string') {
-      out[name] = tpl;
-      continue;
-    }
-    const exact = /^\$\{(key|keySuffix|scope|value(?:\.[A-Za-z0-9_]+)*)\}$/.exec(tpl);
-    if (exact) {
-      out[name] = resolveOne(exact[1], key, keySuffix, scope, value) ?? null;
-      continue;
-    }
-    out[name] = tpl.replace(PLACEHOLDER, (_m, token: string) => {
-      const v = resolveOne(token, key, keySuffix, scope, value);
-      return v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
-    });
+    out[name] = substituteValue(tpl, key, keySuffix, scope, value);
   }
   return out;
 }

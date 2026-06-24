@@ -7,6 +7,7 @@
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
 import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler } from '../services/workspace/handlers';
+import { resolveParams } from '../services/workspace/subscriptions';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -1265,5 +1266,35 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
     expect(sub?._meta.type).toBe('subscription');
     expect(sub?._meta.writer).toBe('@alice/machine');
     expect(sub?._meta.tags).toContain('cell-required');
+  });
+});
+
+describe('resolveParams template substitution', () => {
+  const sub = { id: 's', match: { keyPrefix: 'machine/m/run/' } } as Parameters<typeof resolveParams>[0];
+
+  it('templates top-level string params (exact keeps type, interpolation stringifies)', () => {
+    const def = { ...sub, params: { run: '${keySuffix}', label: 'run-${keySuffix}', count: 3 } };
+    const out = resolveParams(def, 'machine/m/run/r2', 'c15r', { node: 'X' });
+    expect(out.run).toBe('r2');
+    expect(out.label).toBe('run-r2');
+    expect(out.count).toBe(3); // non-strings pass through
+  });
+
+  it('recurses into NESTED objects/arrays so an onError.key templates', () => {
+    const def = {
+      ...sub,
+      params: {
+        onError: { key: 'machine/m/run/${keySuffix}', value: { node: 'Work', status: 'failed' }, tags: ['machine', 'machine:${keySuffix}'] },
+        grants: { write: ['machine/m/run/'] }, // static prefixes — unchanged
+      },
+    };
+    const out = resolveParams(def, 'machine/m/run/r2', 'c15r', { node: 'Work' }) as {
+      onError: { key: string; value: { status: string }; tags: string[] };
+      grants: { write: string[] };
+    };
+    expect(out.onError.key).toBe('machine/m/run/r2'); // the bug fix
+    expect(out.onError.value.status).toBe('failed');
+    expect(out.onError.tags).toEqual(['machine', 'machine:r2']);
+    expect(out.grants.write).toEqual(['machine/m/run/']);
   });
 });

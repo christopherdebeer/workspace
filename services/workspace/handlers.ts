@@ -1992,6 +1992,40 @@ export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
 }
 
 /**
+ * The scheduled machine tick: an EventBridge cron delivers `machine.tick.requested`.
+ * It resumes WAITING machine runs whose `wait`-rail deadline has passed — the
+ * autonomous half of the `wait` primitive (the driven half is calling `step`). A
+ * due run is bumped back to `running`, which re-fires the machine's `step`
+ * subscription; the stepper then re-reads the elapsed `waitUntil`, clears it, and
+ * advances past the wait. Coarse (cron-granular) by design; a per-run delayed
+ * trigger (EventBridge Scheduler) is the precision upgrade.
+ */
+export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx) => {
+    const scopes = Array.isArray(detail.scopes) ? (detail.scopes as string[]) : [];
+    if (!scopes.length) {
+      ctx.logger.warn('machine tick requested without scopes');
+      return;
+    }
+    const { state } = build(ctx);
+    const nowMs = Date.now();
+    const identity: Identity = { user: 'platform/machine-tick', scopes: [] };
+    for (const scope of scopes) {
+      const { entries } = await state.query(scope, { type: 'machine-run', limit: 500 });
+      for (const e of entries) {
+        const v = (e.value ?? {}) as { status?: string; waitUntil?: string };
+        if (e._meta.superseded || v.status !== 'waiting' || typeof v.waitUntil !== 'string') continue;
+        const due = Date.parse(v.waitUntil);
+        if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
+        await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
+        await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
+        ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
+      }
+    }
+  };
+}
+
+/**
  * The organ-to-reef write path: a dynamic cell emits a
  * `substrate.write.requested` event, and the workspace applies it as a fact
  * in the cell **owner's** slice with the cell as the attested writer.

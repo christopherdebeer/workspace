@@ -159,6 +159,21 @@ export class PlatformStack extends cdk.Stack {
         }),
       ],
     });
+    // The machine tick: a 1-minute schedule resumes machine runs whose `wait`-rail
+    // deadline has passed (the autonomous half of the wait primitive — ADR §13).
+    // The handler bumps each due waiting run to `running`, re-firing its step sub.
+    new awsevents.Rule(this, 'MachineTickSchedule', {
+      schedule: awsevents.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [
+        new eventTargets.LambdaFunction(workspace.fn, {
+          event: awsevents.RuleTargetInput.fromObject({
+            'detail-type': 'machine.tick.requested',
+            source: 'platform.machine-tick',
+            detail: { scopes: ['c15r'] },
+          }),
+        }),
+      ],
+    });
 
     // (Retired 2026-06-21: the tier-1 `home` SPA service. The platform face is now the
     // tier-2 `@c15r/home` cell, served at the apex via dispatch's DISPATCH_DEFAULT_CELL —
