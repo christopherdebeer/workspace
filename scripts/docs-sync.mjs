@@ -22,8 +22,8 @@ import { createHash } from 'node:crypto';
 const BASE = process.env.PARC_BASE ?? 'https://parc.land';
 const DOCS_ROOT = join(process.cwd(), 'docs');
 const KEY_PREFIX = 'file/docs/';
-const BATCH_MAX = 3; // facts per ingest call (handler cap is 100)
-const BATCH_BYTES = 16 * 1024; // …or until this much inline content, whichever first (keep the gateway body small)
+const BATCH_MAX = 20; // facts per ingest call (handler cap is 100)
+const BATCH_BYTES = 80 * 1024; // …or until this much inline content, whichever first (keep the gateway body small)
 
 const flags = process.argv.slice(2);
 const COMMIT = flags.includes('--commit');
