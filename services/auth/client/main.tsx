@@ -148,6 +148,9 @@ function App(): React.JSX.Element {
         sessionId,
         clientId: p.client_id,
         redirectUri: p.redirect_uri,
+        // Send the requested scope so the server can surface any per-type scopes
+        // (read:type:<T> / write:type:<T>) the owner may self-grant (ADR-0023).
+        scope: p.scope,
       });
       if (g.error || !g.scopes) return fail(g.error ?? 'Could not load scopes');
       setSignedInUser(g.username ?? '');

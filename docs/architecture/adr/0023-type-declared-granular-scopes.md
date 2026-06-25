@@ -50,14 +50,15 @@ deliberately-narrow token is held to its declared types.
 
 ## Open / follow-ups
 
-- **Consent-screen surfacing of type-scopes** — the type→scope coupling exists in the vocabulary but the
-  consent flow only offers the *static* `scopesSupported`; the requested scopes never reach the consent
-  screen, and `handleConsent` filters granted scopes to that same static set. So true per-type consent
-  needs (a) plumbing the requested scope into `handleGrantableScopes`, (b) a grantability policy that
-  admits *self-grantable* granular families (`read:type:*`/`write:type:*`) the workspace owner is
-  inherently entitled to, and (c) `scopeMeta` humanization. The same gap means **granular scope
-  *elevation* (ADR-0022) is currently broken** — an elevation URL for `write:type:todo` won't be
-  offered. Reclassified from "polish" to a MEDIUM, security-adjacent change; deferred pending decision.
+- ~~**Consent-screen surfacing of type-scopes**~~ **Closed** — the consent flow previously offered only
+  the *static* `scopesSupported`, so a requested `write:type:<T>` was neither shown nor grantable, and
+  granular *elevation* (ADR-0022) was silently broken. Now: the client sends the requested `scope` to
+  `handleGrantableScopes`, which merges in any requested **self-grantable** granular family
+  (`read:type:*`/`write:type:*` — the owner is inherently entitled to grant these over their own slice,
+  but **never** admin/platform/cell scopes via this door); `scopeMeta` humanizes them (`Write "note"
+  facts`) so they render as per-type checkboxes; and `handleConsent` admits the same families. This also
+  fixes granular elevation end-to-end. (`services/auth/oauth.ts` `isSelfGrantableGranular` +
+  `handleGrantableScopes`/`handleConsent`; `services/auth/client/main.tsx`.)
 - **Per-key / per-target authority** (beyond per-type) — the grammar supports it; finishing it is the
   remaining work to fully retire ambient `write:workspace`.
 - ~~**Read-side granularity** — only the write family is declared; `read:type:<T>` is symmetric and

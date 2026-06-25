@@ -118,11 +118,34 @@ const SCOPE_CATALOG: Record<string, ScopeMeta> = {
 export function scopeMeta(scope: string): ScopeMeta {
   const known = SCOPE_CATALOG[scope];
   if (known) return known;
+  // Granular per-type scopes (ADR-0023): render legibly so the consent screen
+  // shows "Write \"note\" facts", not the raw `write:type:note`.
+  const typed = /^(read|write):type:([^:]+)$/.exec(scope);
+  if (typed) {
+    const verb = typed[1] as 'read' | 'write';
+    const t = typed[2];
+    return verb === 'read'
+      ? { verb, title: `Read "${t}" facts`, description: `See only facts of type "${t}" in your slice.` }
+      : { verb, title: `Write "${t}" facts`, description: `Create, edit, and retire only facts of type "${t}" in your slice.` };
+  }
   const verb: ScopeMeta['verb'] =
     /(:admin$|^platform:\*$|^auth:)/.test(scope) ? 'admin'
     : /(^write:|:write$|^act:|:create$|^cells:)/.test(scope) ? 'write'
     : 'read';
   return { verb, title: scope, description: '' };
+}
+
+/**
+ * A granular per-type scope the workspace OWNER may always grant over their own
+ * slice — `read:type:<T>` / `write:type:<T>` (ADR-0023). These are *requested* by a
+ * client (open-ended in `<T>`), so they can't live in the static `scopesSupported`;
+ * instead the consent flow admits a requested one into the offer because the
+ * authenticated owner is inherently entitled to grant it (and the workspace handler
+ * still enforces the concrete type per `enforceTypeWrite`/`enforceTypeRead`). Bounded
+ * to read/write families only — never admin/platform/cell scopes.
+ */
+export function isSelfGrantableGranular(scope: string): boolean {
+  return /^(read|write):type:[^:]+$/.test(scope);
 }
 
 const DEFAULT_EXPIRY = 3600;
@@ -273,7 +296,10 @@ export async function handleConsent(
   const user = await store.getUserById(session.userId);
   const allowed = new Set(grantableScopes(config, user?.username ?? ''));
   const requested = (b.scope ?? '').split(/\s+/).filter(Boolean);
-  const granted = requested.filter((s) => allowed.has(s)).join(' ');
+  // Admit the static grantable set, plus any requested per-type scope the owner is
+  // inherently entitled to grant over their own slice (ADR-0023) — these are
+  // open-ended in <T> so they can't sit in scopesSupported.
+  const granted = requested.filter((s) => allowed.has(s) || isSelfGrantableGranular(s)).join(' ');
 
   const code = generateToken('authz');
   await store.saveAuthCode({
@@ -301,11 +327,19 @@ export async function handleGrantableScopes(
   store: AuthStore,
   config: OAuthConfig,
 ): Promise<ServiceHttpResponse> {
-  const { sessionId, clientId, redirectUri } = req.json<{ sessionId: string; clientId?: string; redirectUri?: string }>();
+  const { sessionId, clientId, redirectUri, scope: requestedScope } = req.json<{ sessionId: string; clientId?: string; redirectUri?: string; scope?: string }>();
   const session = await store.validateSession(sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   const user = await store.getUserById(session.userId);
-  const scopes = grantableScopes(config, user?.username ?? '');
+  const base = grantableScopes(config, user?.username ?? '');
+  // The client may also request open-ended per-type scopes (read:type:<T> /
+  // write:type:<T>, ADR-0023); surface the requested ones the owner may self-grant
+  // so they appear as per-type checkboxes (and so a granular elevation URL — ADR-0022
+  // — actually offers the scope it asks for). Bounded to read/write type families.
+  const extra = (requestedScope ?? '')
+    .split(/\s+/)
+    .filter((s) => s && isSelfGrantableGranular(s) && !base.includes(s));
+  const scopes = [...base, ...extra];
   // Capability metadata so the consent screen can group + label scopes.
   const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
   // The client's human name (from DCR) so consent shows "parc.land", not a UUID.

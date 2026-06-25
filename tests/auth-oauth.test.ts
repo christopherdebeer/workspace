@@ -10,6 +10,9 @@ import {
   handleDeviceApprove,
   validateBearer,
   grantableScopes,
+  handleGrantableScopes,
+  scopeMeta,
+  isSelfGrantableGranular,
 } from '../services/auth/oauth';
 import { sha256 } from '../services/auth/store';
 import type { ServiceHttpRequest } from '../platform/runtime';
@@ -473,5 +476,76 @@ describe('OAuth device authorization grant', () => {
     const sessionId = await store.createSession('u1');
     const info = await handleDeviceInfo(makeReq({ path: '/auth/device/info', body: { sessionId, user_code: 'ZZZZ-ZZZZ' } }), store);
     expect((info.body as { error?: string }).error).toBeTruthy();
+  });
+});
+
+describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () => {
+  it('isSelfGrantableGranular admits read/write type families only', () => {
+    expect(isSelfGrantableGranular('write:type:note')).toBe(true);
+    expect(isSelfGrantableGranular('read:type:todo')).toBe(true);
+    expect(isSelfGrantableGranular('workspace:write')).toBe(false);
+    expect(isSelfGrantableGranular('platform:*')).toBe(false);
+    expect(isSelfGrantableGranular('write:type:')).toBe(false); // empty <T>
+  });
+
+  it('scopeMeta humanizes a per-type scope with the right verb', () => {
+    expect(scopeMeta('write:type:note')).toMatchObject({ verb: 'write', title: 'Write "note" facts' });
+    expect(scopeMeta('read:type:todo')).toMatchObject({ verb: 'read', title: 'Read "todo" facts' });
+  });
+
+  it('handleGrantableScopes surfaces a requested per-type scope that is NOT in scopesSupported', async () => {
+    const store = createMemoryStore();
+    await store.createUser('u1', 'alice');
+    const sessionId = await store.createSession('u1');
+    const res = await handleGrantableScopes(
+      makeReq({ path: '/auth/grantable', body: { sessionId, scope: 'write:type:note read:workspace' } }),
+      store,
+      CONFIG,
+    );
+    const body = res.body as { scopes: string[]; catalog: Record<string, { title: string; verb: string }> };
+    expect(body.scopes).toContain('write:type:note'); // merged in beyond scopesSupported
+    expect(body.scopes).toContain('workspace:read'); // static set still present
+    expect(body.catalog['write:type:note']).toMatchObject({ verb: 'write', title: 'Write "note" facts' });
+  });
+
+  it('does NOT surface a requested admin/platform scope through the granular door', async () => {
+    const store = createMemoryStore();
+    await store.createUser('u1', 'alice');
+    const sessionId = await store.createSession('u1');
+    const res = await handleGrantableScopes(
+      makeReq({ path: '/auth/grantable', body: { sessionId, scope: 'platform:* write:type:note' } }),
+      store,
+      CONFIG,
+    );
+    const body = res.body as { scopes: string[] };
+    expect(body.scopes).toContain('write:type:note');
+    expect(body.scopes).not.toContain('platform:*'); // only read/write type families are self-grantable
+  });
+
+  it('handleConsent grants a requested per-type scope even though it is not in scopesSupported', async () => {
+    const store = createMemoryStore();
+    await store.createUser('u1', 'alice');
+    const sessionId = await store.createSession('u1');
+    const verifier = 'verifier-typescope';
+    const consent = await handleConsent(
+      makeReq({
+        path: '/oauth/consent',
+        body: {
+          sessionId, clientId: 'cl', redirectUri: 'https://app/cb',
+          codeChallenge: sha256(verifier), codeChallengeMethod: 'S256',
+          scope: 'write:type:note platform:*', // platform:* must be dropped, type-scope kept
+        },
+      }),
+      store,
+      CONFIG,
+    );
+    const code = new URL((consent.body as { redirect: string }).redirect).searchParams.get('code')!;
+    const tokenRes = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: 'authorization_code', code, redirect_uri: 'https://app/cb', code_verifier: verifier, client_id: 'cl' } }),
+      store,
+      CONFIG,
+    );
+    const scope = (tokenRes.body as { scope: string }).scope.split(' ').sort();
+    expect(scope).toEqual(['write:type:note']); // granted the type-scope, dropped platform:*
   });
 });
