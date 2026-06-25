@@ -33,6 +33,7 @@ import {
   defineMcpService,
   hasScope,
   hasGrantScope,
+  holdsUnder,
   ServiceAuthError,
   McpToolDefinition,
   ServiceContext,
@@ -68,6 +69,10 @@ interface ProviderTool {
   /** The declared result envelope, when the provider documents it. */
   resultSchema?: Record<string, unknown>;
   scope: string | null;
+  /** An any-of family gate: a token holding any scope under this pattern (e.g.
+   *  `write:type:*`) satisfies the gate, which the provider's handler then refines
+   *  per the concrete request (docs/auth-consent-plan.md §B). */
+  scopeFamily?: string | null;
   kind: 'read' | 'act';
 }
 
@@ -93,6 +98,8 @@ interface Capability {
   description: string;
   inputSchema: Record<string, unknown>;
   scope: string | null;
+  /** Any-of family gate (see ProviderTool.scopeFamily). */
+  scopeFamily?: string | null;
   forward: (input: unknown, ctx: ServiceContext) => Promise<unknown>;
 }
 
@@ -178,6 +185,7 @@ async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capab
     description: d.description,
     inputSchema: d.inputSchema,
     scope: d.scope,
+    scopeFamily: d.scopeFamily ?? null,
     forward: (input, c) => c.serviceClient(cell).command(command, input ?? {}),
   };
 }
@@ -280,8 +288,13 @@ interface DispatchInput {
  *       ceiling, so the fix is a wider credential (human re-consent at
  *       /oauth/authorize, or `auth.mintToken`).
  */
-function enforceScope(ctx: ServiceContext, target: string, scope: string): void {
+function enforceScope(ctx: ServiceContext, target: string, scope: string, family?: string | null): void {
   if (hasScope(ctx.identity, scope)) return;
+  // Any-of family gate: a token scoped to specific members of a family (e.g.
+  // `write:type:note`) passes here; the provider's handler then refines against the
+  // concrete request (the exact fact type). Coarse tokens satisfy `scope` above; a
+  // token holding neither falls through to the offer/denied paths.
+  if (family && holdsUnder(ctx.identity, family)) return;
   if (hasGrantScope(ctx.identity, scope)) {
     throw new ServiceAuthError(
       `scope_offer: "${target}" needs "${scope}", which is within your grant but not your session's active scope [${
@@ -377,7 +390,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
-  if (cap.scope) enforceScope(ctx, target, cap.scope);
+  if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
   return cap.forward(input?.input, ctx);
 }
 
@@ -387,7 +400,7 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
-  if (cap.scope) enforceScope(ctx, target, cap.scope);
+  if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
   return cap.forward(input?.input, ctx);
 }
 

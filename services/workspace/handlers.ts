@@ -25,6 +25,9 @@ import {
   ServiceContext,
   requireUser,
   grantScopesOf,
+  hasScope,
+  ServiceAuthError,
+  type Identity,
   createObservedState,
   type ObservedState,
   type Entry,
@@ -425,6 +428,11 @@ interface ToolDescriptor {
   resultSchema?: Record<string, unknown>;
   /** Scope the gateway enforces before forwarding (null = any authenticated user). */
   scope: string | null;
+  /** An any-of family gate (docs/auth-consent-plan.md §B): a token holding any scope
+   *  under this pattern (e.g. `write:type:*`) passes the gateway gate, and this
+   *  handler then enforces the concrete fact type. Lets a type-scoped token write
+   *  only its declared types while coarse `write:workspace` tokens are unaffected. */
+  scopeFamily?: string;
   /** `read` = side-effect-free (observe); `act` = may mutate. Routes read/act dispatch. */
   kind: 'read' | 'act';
 }
@@ -506,6 +514,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
     scope: null,
+    scopeFamily: 'write:type:*',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -553,6 +562,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       'Bulk intake: write up to 100 facts in one call (imports, capture backfills). Each fact takes the same fields as `remember` (no `ifRevision`); failures are reported per-fact, the rest are written. May not write `_actions/` or `_views/`.',
     scope: null,
+    scopeFamily: 'write:type:*',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -1362,6 +1372,29 @@ async function resolveRequest(
   ctx.logger.info('grant request resolved', { owner, requester: req.requester, resource: req.resource, status });
 }
 
+/**
+ * Granular type-scope enforcement (docs/auth-consent-plan.md §B). A token scoped to
+ * specific fact types (`write:type:<T>`) — but NOT the coarse `write:workspace` —
+ * may write ONLY facts of those types. Inert for everything that exists today:
+ *  - internal/trusted callers carry no scopes → allowed (Mode-1 bypasses the PEP);
+ *  - coarse/admin/platform tokens hold `write:workspace` → allowed;
+ * so only a *granular-only* external token is constrained, refined per the exact
+ * fact type. The gateway's `scopeFamily: 'write:type:*'` gate lets such a token
+ * reach this handler; this is where the concrete type is actually checked. A
+ * type-scoped token may not write system vocabulary (`_…`) or untyped facts.
+ */
+function enforceTypeWrite(identity: Identity, type: string | undefined, key: string): void {
+  if (!identity.scopes?.length) return; // internal/trusted Mode-1 caller (no PEP)
+  if (hasScope(identity, 'write:workspace')) return; // coarse / admin / platform:*
+  const t = type && !key.startsWith('_') ? type : null;
+  if (t && hasScope(identity, `write:type:${t}`)) return;
+  throw new ServiceAuthError(
+    t
+      ? `scope_denied: writing type "${t}" requires "write:type:${t}" or "write:workspace"; your token holds neither.`
+      : `scope_denied: a type-scoped token may only write typed, non-system facts (key "${key}"${type ? '' : ', untyped'}); needs "write:workspace".`,
+  );
+}
+
 /** Build the workspace vocabulary over a given way of constructing its deps. */
 export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
   return {
@@ -1371,6 +1404,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { state, grants } = build(ctx);
       const scope = input.owner && input.owner !== caller ? input.owner : caller;
       if (scope !== caller) await requireWriteThrough(grants, caller, scope, input.key);
+      enforceTypeWrite(ctx.identity, input.type, input.key); // granular type-scope (§B); inert for coarse tokens
       const entry = await state.put(
         {
           scope,
@@ -1414,6 +1448,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         if (f.key.startsWith(ACTIONS_PREFIX) || f.key.startsWith(VIEWS_PREFIX)) {
           throw new Error(`ingest may not write the declared vocabulary ("${f.key}")`);
         }
+        enforceTypeWrite(ctx.identity, f.type, f.key); // granular type-scope (§B); inert for coarse tokens
       }
       const { state } = build(ctx);
       const errors: IngestResult['errors'] = [];
@@ -1916,6 +1951,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const tools = TOOL_DESCRIPTORS.map((t) => ({
         ...t,
         scope: t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+        ...(t.scopeFamily ? { scopeFamily: t.scopeFamily } : {}),
       }));
       return { tools };
     },

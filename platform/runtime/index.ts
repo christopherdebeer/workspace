@@ -17,6 +17,7 @@ export {
   requireScope,
   hasScope,
   hasGrantScope,
+  holdsUnder,
   grantScopesOf,
   matchesScope,
   intersectScopePatterns,

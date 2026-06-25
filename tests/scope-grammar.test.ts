@@ -4,7 +4,22 @@
  * `:*` is a prefix wildcard); `intersectScopes` is the `effective = grants ∩
  * token` rule: narrow, never widen.
  */
-import { hasScope, matchesScope, intersectScopePatterns, intersectScopes } from '../platform/runtime';
+import { hasScope, holdsUnder, matchesScope, intersectScopePatterns, intersectScopes } from '../platform/runtime';
+
+describe('holdsUnder (any-of family gate — type-scope enforcement §B)', () => {
+  const id = (...scopes: string[]) => ({ scopes });
+  it('is true when a held scope falls under the family', () => {
+    expect(holdsUnder(id('write:type:note'), 'write:type:*')).toBe(true);
+    expect(holdsUnder(id('read:workspace', 'write:type:todo'), 'write:type:*')).toBe(true);
+  });
+  it('is false for coarse or unrelated scopes (the reverse of hasScope)', () => {
+    // A coarse write does NOT "fall under" the granular family — it COVERS it
+    // (that path is hasScope/impliesScope, the primary gate checked before this).
+    expect(holdsUnder(id('write:workspace'), 'write:type:*')).toBe(false);
+    expect(holdsUnder(id('workspace:read'), 'write:type:*')).toBe(false);
+    expect(holdsUnder(id(), 'write:type:*')).toBe(false);
+  });
+});
 
 describe('matchesScope', () => {
   it('matches exact scopes', () => {
