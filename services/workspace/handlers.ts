@@ -42,7 +42,6 @@ import {
   type FactTimer,
   type CommandHandler,
   type RegisteredCommand,
-  type Identity,
   type SalienceLens,
   type SalienceOptions,
   schemaHints,
