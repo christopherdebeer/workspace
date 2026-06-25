@@ -85,6 +85,24 @@
       "icon": "🚀",
       "manager": "@c15r/home",
       "handlers": { "render": [{ "hint": "markdown" }] }
+    },
+    {
+      "type": "file",
+      "icon": "📄",
+      "label": "value.path",
+      "manager": "@c15r/home",
+      "note": "A file as a fact (ADR-0027): a thin pointer to a source/doc/S3 object — never a copy of the bytes. Keyed `file/<path>`. Small text (docs) stores `content` inline so query `contains` is full-text over it; binary/large objects carry `s3Key`/`url` instead. The public docs corpus (file/docs/*) is upserted by scripts/docs-sync.mjs and shared read-only to all.",
+      "schema": {
+        "path": "string — the file's logical path (e.g. docs/machine.md)",
+        "contentType": "string — MIME type (e.g. text/markdown)",
+        "bytes": "number — size in bytes",
+        "sha": "string — content hash (change detection / integrity)",
+        "content": "string? — inline body, small text only",
+        "s3Key": "string? — S3 access handle for large/binary objects",
+        "url": "string? — public URL when servable",
+        "source": "string — provenance (docs-sync | s3:PutObject | cells:deployed)"
+      },
+      "handlers": { "render": [{ "hint": "markdown" }] }
     }
   ]
 }
