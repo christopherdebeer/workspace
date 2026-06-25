@@ -51,7 +51,7 @@ export function railsFrom(arrows, explicit) {
     return explicit.map((r) => ({
       from: r.from,
       to: r.to,
-      mode: ['agent', 'task', 'work', 'section', 'vote', 'catch', 'wait'].includes(r.mode) ? r.mode : 'auto',
+      mode: ['agent', 'task', 'work', 'work-code', 'section', 'vote', 'catch', 'wait'].includes(r.mode) ? r.mode : 'auto',
       ...(r.condition ? { condition: r.condition } : {}),
       // Progressive disclosure (Agent-Skills Level-1): a one-line "when to use
       // this branch" descriptor surfaced to the decider without the full body.
@@ -369,6 +369,46 @@ export function projectSubscriptions(name, rails, owner, context) {
         // Catch: a hard-failed or budget-exhausted work agent marks the run failed
         // at this node so a `catch` rail recovers it (else the run parks here).
         onError: { key: runKeyTpl, value: { machine: name, node: r.from, status: 'failed', via: `${r.from}!!error` }, type: 'machine-run', tags: ['machine', `machine:${name}`] },
+      },
+    });
+  }
+  // WORK-CODE rails (ADR-0026 Inc A): the work step is deterministic CODE, not an
+  // LLM agent. Deliver to @owner/run.exec instead of models.agent. The rail's
+  // `prompt` IS the code body. The cell appends a FIXED advance snippet that reads
+  // the advance fact from `input.__advance` (templated by resolveParams, so the run
+  // id substitutes safely — no ${} collision inside the code) and writes it via
+  // parc.call (ADR-0028) using the per-run token the reactor mints from `grants`.
+  // run.exec stays unchanged. NOTE: if the code throws, the advance does not run and
+  // the run parks at this node (no `failed` status) — catch-rail integration for
+  // work-code is deferred (see ADR-0026 open questions).
+  for (const r of rails.filter((x) => x.mode === 'work-code')) {
+    const runKeyTpl = `machine/${m}/run/\${keySuffix}`;
+    const advanceSnippet =
+      '\n;\n/* machine work-code advance (ADR-0026) */\n' +
+      'if (typeof input === "object" && input && input.__advance) {\n' +
+      '  await parc.call("workspace.remember", { key: input.__advance.key, value: input.__advance.value, type: "machine-run", tags: input.__advance.tags });\n' +
+      '}\n';
+    subs.push({
+      id: `machine.${m}.code-${seg(r.from)}`,
+      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(r.from)} && value.status == "running"` },
+      deliver: `@${owner}/run.exec`,
+      params: {
+        code: (r.prompt ?? '') + advanceSnippet,
+        async: true,
+        // Reactor mints a per-run token from these grants and hands it to run as
+        // `token`, enabling parc.call (the advance write needs the run prefix).
+        grants: r.grants ?? { read: true, write: [runPrefix] },
+        // Templated by resolveParams (recurses into objects) → the run id lands in
+        // the advance key. Carries the run context for the user code too.
+        input: {
+          __advance: {
+            key: runKeyTpl,
+            value: { machine: name, node: r.to, status: 'done', via: `${r.from}~>>code` },
+            tags: ['machine', `machine:${name}`],
+          },
+          run: '${keySuffix}',
+        },
+        tags: ['machine', `machine:${name}`, 'work-code'],
       },
     });
   }

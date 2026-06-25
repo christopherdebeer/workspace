@@ -1,8 +1,11 @@
 # ADR-0026 — `@c15r/run` as machine's code-executor (run-jobs as facts → `work-code` rail)
 
-- **Status:** Proposed (sketch — not built). A forward design capture for incorporating the `@c15r/run`
-  executor cell into `@c15r/machine`, following a capabilities review of both cells. Decides the
-  direction so the run-job and rail-mode shapes don't drift before the work starts.
+- **Status:** Accepted (shipped). **Inc B** — runs are observable as `run-job` facts (safe dual-write
+  beside the authoritative `JOB#` row; full `JOB#` retirement deferred). **Inc A** — a `work-code` rail
+  delivers to `@owner/run.exec` with a reactor-minted per-run token (ADR-0028) and a templated
+  `input.__advance` the code writes back via `parc.call`. Unit-tested; deployed (run + machine cells,
+  workspace reactor). Deferred: catch-rail integration for a thrown code step (the run parks rather than
+  going `failed`); full `JOB#`→fact migration.
 - **Date:** 2026-06-25
 - **Context:** Two cells sit side by side with no structural link. **`@c15r/machine`** (ADR-0018/0019) is
   a declarative state-machine compiler whose `work` rail can spawn exactly one thing: an LLM agent

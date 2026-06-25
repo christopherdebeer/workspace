@@ -2293,7 +2293,10 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // the rail's key-patterns cell-side.
         let deliverParams = params;
         const grants = (params as Record<string, unknown>).grants as { read?: unknown; write?: unknown } | undefined;
-        if (grants && target.name === 'models') {
+        // Mint a per-run token for a models AGENT (work/decide) or a run CODE step
+        // (ADR-0026 work-code rail) — both call REAL tools as the owner, scoped to
+        // the rail's grants. The token rides in as `token` (models.agent / run.exec).
+        if (grants && (target.name === 'models' || target.name === 'run')) {
           const scopes: string[] = [];
           if (grants.read) scopes.push('workspace:read');
           if (grants.write) scopes.push('workspace:write');
