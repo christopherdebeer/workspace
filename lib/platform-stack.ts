@@ -122,6 +122,13 @@ export class PlatformStack extends cdk.Stack {
       commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
+      // The hot write path: each put recomputes salience, so ingest is CPU-bound.
+      // Telemetry (2026-06-25) showed 256 MB → ~84% mem use and 6–15 s batches that
+      // tripped the 15 s timeout, surfacing as gateway 502s. Lambda CPU scales with
+      // memory; 1 GB (~4× CPU) brings a 4-fact batch to a couple seconds. 60 s
+      // timeout gives margin for the daily tending pass over a large slice.
+      memorySize: 1024,
+      timeoutSeconds: 60,
     });
     substrate.grantReadWrite(workspace);
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
@@ -189,6 +196,12 @@ export class PlatformStack extends cdk.Stack {
       // sub-paths. CloudFront's `/mcp/*` pattern does not match the bare `/mcp`.
       routes: ['/mcp', '/mcp/*'],
       eventBus,
+      // The gateway forwards (synchronously invokes) the workspace cell and waits,
+      // so its timeout must outlast the workspace's; 256 MB also throttled its own
+      // resolveTarget/scope work. Raise to 512 MB / 60 s so a slow downstream batch
+      // no longer surfaces as a CloudFront 502 (telemetry 2026-06-25).
+      memorySize: 512,
+      timeoutSeconds: 60,
     });
 
     // ── Reflexive control plane (dynamic cells, tier 2) ──────────────
