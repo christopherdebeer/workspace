@@ -139,3 +139,43 @@ describe('dispatch cell (/@owner/cell)', () => {
     expect(lastCallCell).toBeUndefined();
   });
 });
+
+import { selectSsrReads } from '../services/dispatch/service';
+
+describe('selectSsrReads — path scoping + semantic param validation (ADR-0020)', () => {
+  const reads = [
+    { as: 'root', target: 'workspace.recall', paths: ['/'] },
+    {
+      as: 'machine',
+      target: 'workspace.query',
+      input: { prefix: 'machine/${slug}/node/' },
+      paths: ['/m/:slug'],
+      where: { slug: '[a-z0-9-]+' },
+    },
+  ];
+
+  it('root-only read applies at apex, not on a deep link', () => {
+    expect(selectSsrReads(reads, '/').map((r) => r.as)).toEqual(['root']);
+    expect(selectSsrReads(reads, '/m/my-machine').map((r) => r.as)).toEqual(['machine']);
+  });
+
+  it('substitutes a valid param into the read input', () => {
+    const [m] = selectSsrReads(reads, '/m/my-machine');
+    expect(m.input).toEqual({ prefix: 'machine/my-machine/node/' });
+  });
+
+  it('rejects a param that fails its `where` constraint — no doomed read is selected', () => {
+    // upper-case + space violates [a-z0-9-]+ → the machine read does not apply
+    expect(selectSsrReads(reads, '/m/Not A Slug')).toEqual([]);
+  });
+
+  it('a read without `where` stays unconstrained (backward compatible)', () => {
+    const loose = [{ as: 'm', target: 'workspace.query', input: { p: '${slug}' }, paths: ['/m/:slug'] }];
+    expect(selectSsrReads(loose, '/m/ANYTHING').map((r) => r.as)).toEqual(['m']);
+  });
+
+  it('a malformed author regex falls back to permissive (never breaks SSR)', () => {
+    const bad = [{ as: 'm', target: 'workspace.query', paths: ['/m/:slug'], where: { slug: '[' } }];
+    expect(selectSsrReads(bad, '/m/whatever').map((r) => r.as)).toEqual(['m']);
+  });
+});

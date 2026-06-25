@@ -61,7 +61,7 @@ export interface CellRecord {
    * cell can server-render real content without holding a credential or touching
    * storage. See `runSsrReads` in service.ts.
    */
-  ssrReads?: Array<{ as: string; target: string; input?: Record<string, unknown>; paths?: string[] }>;
+  ssrReads?: Array<{ as: string; target: string; input?: Record<string, unknown>; paths?: string[]; where?: Record<string, string> }>;
   /**
    * Declared caller-writes (Phase 4, docs/capability-consent.md): write intents a
    * cell may ask dispatch to apply AS THE CALLER — the write twin of `ssrReads`.

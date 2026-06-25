@@ -52,5 +52,9 @@ shadows the prefix read. Documented as a deploy hazard, not just a convention.
 
 - **Canvas/`$graph` deep links** are not yet path-addressable end to end — the renderer half still
   reads embedded element state (cf. ADR-0019 open item). Deferred.
-- **Param validation** is structural (segment count) not semantic; a bad `:run` 404s at read time
-  rather than at route time.
+- ~~**Param validation** is structural (segment count) not semantic; a bad `:run` 404s at read time
+  rather than at route time.~~ **Closed** — an `ssr.json` read may declare `where: { param: regex }`;
+  a captured param that fails its anchored pattern means the read does not apply to that path (the
+  section degrades to a client load) instead of issuing a doomed substrate read. A malformed author
+  regex falls back to permissive, so a typo never breaks SSR. (`services/dispatch/service.ts`
+  `paramsSatisfy`/`selectSsrReads`.)

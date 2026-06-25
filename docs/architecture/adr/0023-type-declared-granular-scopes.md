@@ -51,7 +51,20 @@ deliberately-narrow token is held to its declared types.
 ## Open / follow-ups
 
 - **Consent-screen surfacing of type-scopes** — the type→scope coupling exists in the vocabulary but the
-  consent UI doesn't yet *offer* per-type checkboxes; documented as polish, deferred.
+  consent flow only offers the *static* `scopesSupported`; the requested scopes never reach the consent
+  screen, and `handleConsent` filters granted scopes to that same static set. So true per-type consent
+  needs (a) plumbing the requested scope into `handleGrantableScopes`, (b) a grantability policy that
+  admits *self-grantable* granular families (`read:type:*`/`write:type:*`) the workspace owner is
+  inherently entitled to, and (c) `scopeMeta` humanization. The same gap means **granular scope
+  *elevation* (ADR-0022) is currently broken** — an elevation URL for `write:type:todo` won't be
+  offered. Reclassified from "polish" to a MEDIUM, security-adjacent change; deferred pending decision.
 - **Per-key / per-target authority** (beyond per-type) — the grammar supports it; finishing it is the
   remaining work to fully retire ambient `write:workspace`.
-- **Read-side granularity** — only the write family is declared; `read:type:<T>` is symmetric and unbuilt.
+- ~~**Read-side granularity** — only the write family is declared; `read:type:<T>` is symmetric and
+  unbuilt.~~ **Closed** — `read:type:<T>` now mirrors the write side: `peek`/`query` carry
+  `scopeFamily: 'read:type:*'`, and `enforceTypeRead` lets a granular-only token observe only held
+  types. Unlike a write (one type per call), a read can fan out across types, so the rule **denies**
+  rather than silently elides: a type-scoped reader must `peek` a held-type fact or `query` an explicit
+  held `type`; whole-view reads (`recall`/`neighbors`/…) stay gated on coarse `read:workspace` and are
+  denied at the gateway. Inert for every coarse/internal caller. (`services/workspace/handlers.ts`
+  `enforceTypeRead`.)

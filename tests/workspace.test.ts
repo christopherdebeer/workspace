@@ -1298,3 +1298,58 @@ describe('resolveParams template substitution', () => {
     expect(out.grants.write).toEqual(['machine/m/run/']);
   });
 });
+
+describe('granular type-scopes (write:type:<T> / read:type:<T> — ADR-0023 §B enforcement)', () => {
+  // One Substrate; we set facts with a coarse token, then read/write with
+  // granular-only tokens. The gate is INERT for coarse/internal callers and only
+  // constrains a token that holds the granular family but not the coarse verb.
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  /** A ctx for `user` carrying an explicit scope set (the granular-token case). */
+  const scopedCtx = (user: string, scopes: string[]): ServiceContext =>
+    ({
+      identity: { user, scopes },
+      config: { tableName: 'unused-in-memory' },
+      events: { emit: async () => {} },
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    } as unknown as ServiceContext);
+
+  const coarse = scopedCtx('c15r', ['workspace:read', 'workspace:write']);
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'n1', value: 'a note', type: 'note' }, coarse);
+    await cmds.remember({ key: 't1', value: 'a todo', type: 'todo' }, coarse);
+  });
+
+  it('is inert for a coarse token — read/write any type', async () => {
+    expect((await cmds.peek({ key: 'n1' }, coarse))?.value).toBe('a note');
+    expect((await cmds.peek({ key: 't1' }, coarse))?.value).toBe('a todo');
+    await expect(cmds.query({}, coarse)).resolves.toBeDefined();
+  });
+
+  it('write:type:note may write a note but is denied a todo', async () => {
+    const noteWriter = scopedCtx('c15r', ['write:type:note']);
+    await expect(cmds.remember({ key: 'n2', value: 'second note', type: 'note' }, noteWriter)).resolves.toMatchObject({
+      value: 'second note',
+    });
+    await expect(cmds.remember({ key: 't2', value: 'nope', type: 'todo' }, noteWriter)).rejects.toThrow(
+      /scope_denied.*write:type:todo/,
+    );
+  });
+
+  it('read:type:note may peek a note but is denied a todo (deny, never silently elide)', async () => {
+    const noteReader = scopedCtx('c15r', ['read:type:note']);
+    expect((await cmds.peek({ key: 'n1' }, noteReader))?.value).toBe('a note');
+    await expect(cmds.peek({ key: 't1' }, noteReader)).rejects.toThrow(/scope_denied.*read:type:todo/);
+  });
+
+  it('read:type:note may query its own type, but not another type or a whole-view/untyped read', async () => {
+    const noteReader = scopedCtx('c15r', ['read:type:note']);
+    await expect(cmds.query({ type: 'note' }, noteReader)).resolves.toBeDefined();
+    await expect(cmds.query({ type: 'todo' }, noteReader)).rejects.toThrow(/scope_denied.*read:type:todo/);
+    await expect(cmds.query({}, noteReader)).rejects.toThrow(/scope_denied/);
+  });
+});

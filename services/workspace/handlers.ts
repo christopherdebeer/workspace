@@ -642,6 +642,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'peek',
     description: 'Read one fact by key from your slice (no salience shaping). Returns null when the key is absent — including a lapsed lease — so it doubles as an existence probe. Pass `owner` to read a fact another user granted you.',
     scope: null,
+    scopeFamily: 'read:type:*',
     kind: 'read',
     inputSchema: {
       type: 'object',
@@ -659,6 +660,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Use this instead of recall when you want a targeted subset.',
     scope: null,
+    scopeFamily: 'read:type:*',
     kind: 'read',
     inputSchema: {
       type: 'object',
@@ -1394,6 +1396,33 @@ function enforceTypeWrite(identity: Identity, type: string | undefined, key: str
   );
 }
 
+/**
+ * Granular type-scope enforcement for the READ side (docs/auth-consent-plan.md §B) —
+ * the symmetric sibling of `enforceTypeWrite`. A token scoped to specific fact types
+ * (`read:type:<T>`) but NOT the coarse `read:workspace` may observe ONLY facts of
+ * those types. Inert for everything that exists today: internal callers carry no
+ * scopes; coarse/admin/platform tokens hold `read:workspace`.
+ *
+ * Unlike a write (which always names exactly one type), a read can fan out across
+ * many types at once — `recall`/`neighbors`/`members`/… return whole shaped views.
+ * Rather than silently *elide* facts a granular token may not see (which would make
+ * a partial view look complete), this **denies** any read that is not pinned to a
+ * single held type: a type-scoped reader must `peek` a fact of a held type or
+ * `query` with an explicit held `type`. Pass `type=undefined` to mean "whole-view /
+ * untyped read" — always denied for a granular-only token.
+ */
+function enforceTypeRead(identity: Identity, type: string | undefined, key: string): void {
+  if (!identity.scopes?.length) return; // internal/trusted Mode-1 caller (no PEP)
+  if (hasScope(identity, 'read:workspace')) return; // coarse / admin / platform:*
+  const t = type && !key.startsWith('_') ? type : null;
+  if (t && hasScope(identity, `read:type:${t}`)) return;
+  throw new ServiceAuthError(
+    t
+      ? `scope_denied: reading type "${t}" requires "read:type:${t}" or "read:workspace"; your token holds neither.`
+      : `scope_denied: a type-scoped read token must target a single held fact type — peek a typed fact or query with an explicit \`type\`; a whole-view/untyped read needs "read:workspace".`,
+  );
+}
+
 /** Build the workspace vocabulary over a given way of constructing its deps. */
 export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
   return {
@@ -1540,14 +1569,19 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
               `Request one: act("workspace.requestGrant", { resource: "workspace:${input.owner}:${input.key}:read" })`,
           );
         }
-        return state.get(input.owner, input.key, ctx.identity);
+        const granted = await state.get(input.owner, input.key, ctx.identity);
+        enforceTypeRead(ctx.identity, granted?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
+        return granted;
       }
-      return state.get(caller, input.key, ctx.identity);
+      const own = await state.get(caller, input.key, ctx.identity);
+      enforceTypeRead(ctx.identity, own?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
+      return own;
     },
 
     async query(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
+      enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
       return state.query(
         scope,
         {

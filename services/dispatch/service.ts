@@ -47,6 +47,34 @@ interface SsrRead {
    *  via `${name}`, so a deep-link read can scope to the entity named in the URL
    *  (e.g. `/m/:slug` → `{ prefix: "machine/${slug}/node/" }`). */
   paths?: string[];
+  /** Optional semantic validation for captured params (ADR-0020 follow-up): a map
+   *  of param name → anchored regex source. A read whose captured param fails its
+   *  pattern simply does not apply to that path — so a garbage `:slug` is rejected
+   *  at route-selection time (the section degrades to a client load) instead of
+   *  issuing a doomed substrate read that 404s. A malformed author regex falls back
+   *  to permissive (the historical no-validation behavior), so a typo never breaks
+   *  SSR. Backward compatible: a read with no `where` is unconstrained. */
+  where?: Record<string, string>;
+}
+
+/**
+ * Validate captured route params against a read's optional `where` constraints.
+ * Each constraint is an anchored regex (`^(src)$`); a malformed source is treated
+ * as permissive so an author typo degrades to today's no-validation behavior
+ * rather than silently dropping the read.
+ */
+function paramsSatisfy(where: Record<string, string> | undefined, params: Record<string, string>): boolean {
+  if (!where) return true;
+  for (const [name, src] of Object.entries(where)) {
+    const val = params[name];
+    if (val === undefined) continue; // constraint names a param this pattern didn't capture — ignore
+    try {
+      if (!new RegExp(`^(?:${src})$`).test(val)) return false;
+    } catch {
+      // malformed author regex → permissive (no constraint); never break SSR
+    }
+  }
+  return true;
 }
 
 const decodeSeg = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };
@@ -89,12 +117,15 @@ function substituteSsrParams(input: Record<string, unknown> | undefined, params:
  * params substituted into each read's input. A cell that declares no `paths`
  * behaves exactly as before (root-only), so this is backward compatible.
  */
-function selectSsrReads(reads: SsrRead[], subPath: string): SsrRead[] {
+export function selectSsrReads(reads: SsrRead[], subPath: string): SsrRead[] {
   const out: SsrRead[] = [];
   for (const r of reads) {
     const patterns = Array.isArray(r.paths) && r.paths.length ? r.paths : ['/'];
     let params: Record<string, string> | null = null;
-    for (const p of patterns) { params = matchSsrPath(p, subPath); if (params) break; }
+    for (const p of patterns) {
+      const m = matchSsrPath(p, subPath);
+      if (m && paramsSatisfy(r.where, m)) { params = m; break; }
+    }
     if (!params) continue;
     out.push(Object.keys(params).length ? { ...r, input: substituteSsrParams(r.input, params) } : r);
   }
