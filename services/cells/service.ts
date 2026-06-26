@@ -19,6 +19,8 @@ import {
   ServiceAuthError,
   ServiceContext,
   RegisteredCommand,
+  isTextLikeContentType,
+  BLOB_INLINE_MAX_BYTES,
 } from '../../platform/runtime';
 import { createRegistry, CellRecord, CellRegistry, DeployState } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
@@ -1155,7 +1157,18 @@ async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknow
   const { record, bucket } = await resolveAuthorized(input, user);
   if (body.length > 8 * 1024 * 1024) throw new Error('blob too large (>8MB)');
   const key = cleanPath(input.key);
-  await putObject(bucket, dataKey(record.cellId, user, input.key), body, input.contentType ?? fetchedType ?? 'application/octet-stream');
+  const resolvedType = input.contentType ?? fetchedType ?? 'application/octet-stream';
+  await putObject(bucket, dataKey(record.cellId, user, input.key), body, resolvedType);
+  // ADR-0030 (blob text extraction): for a SMALL TEXT blob, carry a bounded UTF-8
+  // preview on the event so the workspace can inline searchable `content` on the
+  // `file` fact (ADR-0027 §1 — small text inlines; binary/large stay pointers, and a
+  // Textract lane is the follow-up for true binary). The producer already holds the
+  // bytes, so this needs no S3 read-back or new IAM downstream.
+  let content: string | undefined;
+  if (isTextLikeContentType(resolvedType) && body.length <= BLOB_INLINE_MAX_BYTES) {
+    const text = (typeof body === 'string' ? body : body.toString('utf8')).trim();
+    if (text) content = text.slice(0, 8000);
+  }
   // Blobs under public/ in a public cell are web-served (see the `_data`
   // intercept in callCell) — hand back the address so a client can embed it.
   const url =
@@ -1172,7 +1185,8 @@ async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknow
     user,
     key,
     bytes: body.length,
-    contentType: input.contentType ?? fetchedType ?? 'application/octet-stream',
+    contentType: resolvedType,
+    ...(content ? { content } : {}),
     ...(url ? { url } : {}),
   });
   return { ok: true, cellId: record.cellId, user, key, bytes: body.length, url };

@@ -13,6 +13,7 @@ import {
   normalize,
   embeddableText,
   metadataForFact,
+  isTextLikeContentType,
   indexForScope,
   PUBLIC_INDEX,
 } from '../platform/runtime';
@@ -85,6 +86,17 @@ describe('metadataForFact', () => {
       tag: 'storage',
     });
     expect(metadataForFact({ superseded: true })).toEqual({ superseded: true });
+  });
+});
+
+describe('isTextLikeContentType (blob extraction gate, ADR-0030)', () => {
+  it('accepts text/* and known text application types; rejects binary', () => {
+    for (const ct of ['text/plain', 'text/markdown; charset=utf-8', 'application/json', 'application/yaml', 'image/svg+xml', 'application/x-ndjson']) {
+      expect(isTextLikeContentType(ct)).toBe(true);
+    }
+    for (const ct of ['image/png', 'application/pdf', 'application/octet-stream', 'audio/mpeg', undefined]) {
+      expect(isTextLikeContentType(ct)).toBe(false);
+    }
   });
 });
 

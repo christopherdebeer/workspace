@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
 import { stripUndefined } from '../platform/runtime/dynamo-state-store';
 import { createMemoryGrantStore } from '../services/workspace/grants';
@@ -1205,6 +1205,30 @@ describe('cell lifecycle projection (the platform reflected in the substrate)', 
 
     const byType = await cmds.query({ type: 'cell' }, ctxFor('alice').ctx);
     expect(byType.entries.some((e) => e.key === 'cells/notes-abc')).toBe(true);
+  });
+});
+
+describe('data-blob file mirror — text inlining for search (ADR-0030 blob extraction)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const mirror = createDataFileMirrorHandler(() => ({ state, grants }));
+  const busCtx = () => ({ ...(ctxFor(null).ctx as unknown as Record<string, unknown>), identity: { scopes: [] } } as unknown as ServiceContext);
+  const dataChanged = (detail: Record<string, unknown>) => mirror(detail, busCtx(), { source: 'cells', detailType: 'cell.data.changed' });
+
+  it('inlines a text blob’s content (searchable) and leaves a binary blob a thin pointer', async () => {
+    // A text blob: putData carried a `content` preview → the file fact inlines it.
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'memo.md', bytes: 20, contentType: 'text/markdown', content: '# Roadmap\nship search' });
+    const textFact = await cmds.peek({ key: 'file/cells/notes-abc/data/memo.md' }, ctxFor('alice').ctx);
+    expect((textFact?.value as { content?: string }).content).toBe('# Roadmap\nship search');
+    expect(embeddableText('file/cells/notes-abc/data/memo.md', textFact?.value)).toContain('ship search'); // full-text searchable
+
+    // A binary blob: no `content` on the event → the fact stays a pointer (no bytes copied).
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'logo.png', bytes: 9000, contentType: 'image/png' });
+    const binFact = await cmds.peek({ key: 'file/cells/notes-abc/data/logo.png' }, ctxFor('alice').ctx);
+    expect((binFact?.value as { content?: string }).content).toBeUndefined();
+    expect((binFact?.value as { s3Key: string }).s3Key).toBe('cells/notes-abc/data/alice/logo.png');
   });
 });
 

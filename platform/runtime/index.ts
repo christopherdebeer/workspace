@@ -61,6 +61,8 @@ export {
   indexForScope,
   embeddableText,
   metadataForFact,
+  isTextLikeContentType,
+  BLOB_INLINE_MAX_BYTES,
   normalize,
   cosineSimilarity,
   HashingEmbedder,

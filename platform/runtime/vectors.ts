@@ -103,6 +103,32 @@ export function embeddableText(key: string, value: unknown): string | null {
   return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
+/** Content types whose bytes are UTF-8 text we can embed directly (ADR-0030 Inc 4
+ *  follow-on — blob text extraction). Binary types (images, PDF, audio) are NOT
+ *  text-like and need an extraction lane (Textract) to become searchable. */
+export function isTextLikeContentType(contentType?: string): boolean {
+  if (!contentType) return false;
+  const ct = contentType.split(';')[0].trim().toLowerCase();
+  if (ct.startsWith('text/')) return true;
+  return [
+    'application/json',
+    'application/ld+json',
+    'application/xml',
+    'application/yaml',
+    'application/x-yaml',
+    'application/csv',
+    'application/markdown',
+    'application/javascript',
+    'application/typescript',
+    'application/x-ndjson',
+    'image/svg+xml',
+  ].includes(ct);
+}
+
+/** The byte ceiling under which a text blob's content is inlined for search
+ *  (ADR-0027 §1 "small text stores content inline"); larger text stays a pointer. */
+export const BLOB_INLINE_MAX_BYTES = 64 * 1024;
+
 function safeJson(v: unknown): string {
   try {
     return JSON.stringify(v) ?? '';

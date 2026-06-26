@@ -2838,6 +2838,11 @@ export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHand
       bytes: typeof detail.bytes === 'number' ? detail.bytes : undefined,
       url: typeof detail.url === 'string' ? detail.url : undefined,
       cell: typeof detail.name === 'string' && typeof detail.owner === 'string' ? `@${detail.owner}/${detail.name}` : undefined,
+      // ADR-0030 (blob text extraction): a small TEXT blob carries a bounded preview
+      // on the event (putData) — inline it as `content` so the fact is full-text
+      // searchable (embeddableText prefers `content`). Binary/large blobs omit it and
+      // stay thin pointers (ADR-0027 §1).
+      content: typeof detail.content === 'string' ? detail.content : undefined,
       source: 'cells.putData',
     };
     const entry = await state.put(
