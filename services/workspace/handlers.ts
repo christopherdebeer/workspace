@@ -253,6 +253,82 @@ function withAffordance(entry: Entry | null, decls: Record<string, Record<string
  *  curatable; `includeRuntime: true` surfaces them. */
 const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim']);
 
+/** The leading segment of a fact key — the "namespace" for an overview breakdown
+ *  (`kb/concept_x` → `kb`, `cell:abc` → `cell`, `tending/latest` → `tending`). */
+function keyPrefix(key: string): string {
+  const slash = key.indexOf('/');
+  const colon = key.indexOf(':');
+  const cut = [slash, colon].filter((i) => i >= 0).sort((a, b) => a - b)[0];
+  return cut === undefined ? key : key.slice(0, cut);
+}
+
+export interface RecallOverview {
+  /** A broad, succinct orientation over the assembled view (ADR-0033). */
+  overview: {
+    total: number;
+    /** Facts merged in from other slices' grants (counted in `total`). */
+    granted: number;
+    bands: { focus: number; peripheral: number; elided: number };
+    byType: Array<{ type: string | null; count: number }>;
+    byPrefix: Array<{ prefix: string; count: number }>;
+  };
+  /** The top facts by salience, in full — the entry points worth reading now. */
+  focus: Record<string, Entry>;
+  /** How to dig deeper — this is progressive disclosure, not the whole view. */
+  hints: string[];
+  types?: Record<string, TypeAffordance>;
+}
+
+/** Cap on facts returned in full in an overview's `focus` block. */
+const OVERVIEW_FOCUS = 12;
+
+/**
+ * Distil the assembled, scored view into a broad+succinct orientation (ADR-0033) —
+ * the default for a bare `recall()` so a context-less agent gets counts + the top
+ * facts + drill pointers, not a full dump it must parse. `merged` is the scored
+ * entry map; `bands` are the shaping counts (reused so we don't re-tier).
+ */
+function buildOverview(
+  merged: Record<string, Entry>,
+  bands: { focus: number; peripheral: number; elided: number },
+  granted: number,
+  decls: Record<string, Record<string, unknown>>,
+): RecallOverview {
+  const entries = Object.entries(merged);
+  const byType = new Map<string | null, number>();
+  const byPrefix = new Map<string, number>();
+  for (const [key, e] of entries) {
+    byType.set(e._meta.type ?? null, (byType.get(e._meta.type ?? null) ?? 0) + 1);
+    byPrefix.set(keyPrefix(key), (byPrefix.get(keyPrefix(key)) ?? 0) + 1);
+  }
+  const topN = <K,>(m: Map<K, number>, n: number): Array<{ count: number; k: K }> =>
+    [...m.entries()].map(([k, count]) => ({ k, count })).sort((a, b) => b.count - a.count).slice(0, n);
+  const focusEntries = entries
+    .sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))
+    .slice(0, OVERVIEW_FOCUS);
+  const focus: Record<string, Entry> = {};
+  for (const [k, e] of focusEntries) focus[k] = e;
+  const types = affordancesForTypes(typesOf(focus), decls);
+  return {
+    overview: {
+      total: entries.length,
+      granted,
+      bands,
+      byType: topN(byType, 15).map(({ k, count }) => ({ type: k, count })),
+      byPrefix: topN(byPrefix, 12).map(({ k, count }) => ({ prefix: k, count })),
+    },
+    focus,
+    hints: [
+      'This is a succinct overview (the default). For the whole shaped view: recall({ view: "full" }).',
+      'Drill by structure: query({ type | prefix | tag | contains }) — filtered + paged.',
+      'Drill by meaning: search({ text }) — semantic candidates across your slice.',
+      'One fact: peek({ key }); its links: neighbors({ key }); the graph: read("$graph").',
+      'Connection candidates the index proposes: suggestions().',
+    ],
+    ...(Object.keys(types).length ? { types } : {}),
+  };
+}
+
 /** A short human label for a fact, for surfaces that show a key without its full value
  *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
 function labelForRecord(key: string, value: unknown): string {
@@ -303,6 +379,15 @@ export interface IngestResult {
   errors: Array<{ key: string; error: string }>;
 }
 export interface RecallInput {
+  /**
+   * Default (when bare): `'overview'` — a broad, succinct orientation (counts by
+   * type/prefix, salience bands, the top focus facts, drill hints) instead of the
+   * whole shaped view (ADR-0033). `'full'` returns every focus/peripheral fact with
+   * elided stubs. Passing ANY shaping arg (elision/expand/lens/salience/explain)
+   * implies `'full'` — so configured callers are unaffected; only the context-less
+   * bare `recall()` gets the overview.
+   */
+  view?: 'overview' | 'full';
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
@@ -562,7 +647,7 @@ export interface DenyGrantInput {
 export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   remember: CommandHandler<RememberInput, Entry & { hints?: string[] }>;
   ingest: CommandHandler<IngestInput, IngestResult>;
-  recall: CommandHandler<RecallInput | undefined, ReadResult>;
+  recall: CommandHandler<RecallInput | undefined, ReadResult | RecallOverview>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
   search: CommandHandler<SearchInput, SearchResult>;
@@ -818,13 +903,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'recall',
     description:
-      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`. Tune your own default shaping by writing a `_config/salience` fact (e.g. `{ focusThreshold: 0.62, elideThreshold: 0.62 }` for a focused <30-item view); precedence is defaults ← that config ← `lens` ← per-call `salience`.',
+      'Orient in your workspace. BY DEFAULT (bare call) returns a broad, succinct OVERVIEW — total + granted counts, salience bands, top types & key-prefixes, and the top ~12 focus facts in full — plus `hints` on how to drill (query/search/peek/neighbors). This is progressive disclosure: skim here, then narrow. For the WHOLE shaped view pass `view:"full"` (or any shaping arg): focus/peripheral facts in full, low-salience collapsed to `{key,type,score}` stubs under `elided` (re-read with `expand:[keys]` or `peek`). For a targeted subset prefer `query`. Granted facts appear under `<owner>/<key>`. Tune shaping by writing a `_config/salience` fact; precedence is defaults ← that config ← `lens` ← per-call `salience`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        elision: { type: 'string', enum: ['auto', 'none'], description: "'auto' (default) collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
+        view: { type: 'string', enum: ['overview', 'full'], description: "'overview' (default for a bare call) = succinct orientation + drill hints; 'full' = the whole salience-shaped view" },
+        elision: { type: 'string', enum: ['auto', 'none'], description: "(implies view:full) 'auto' collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
         expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
         lens: LENS_SCHEMA,
@@ -835,14 +921,28 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
     resultSchema: {
       type: 'object',
+      description: 'Default (bare): an overview — { overview: { total, granted, bands, byType[], byPrefix[] }, focus: {key→entry}, hints[] }. With view:"full"/any shaping arg: the shaped view below.',
       properties: {
-        entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts', additionalProperties: ENTRY_SCHEMA },
+        overview: {
+          type: 'object',
+          description: 'Default orientation: counts by type & key-prefix, salience bands, totals',
+          properties: {
+            total: { type: 'number' },
+            granted: { type: 'number', description: 'Facts merged in from grants' },
+            bands: { type: 'object', properties: { focus: { type: 'number' }, peripheral: { type: 'number' }, elided: { type: 'number' } } },
+            byType: { type: 'array', items: { type: 'object', properties: { type: { type: ['string', 'null'] }, count: { type: 'number' } } } },
+            byPrefix: { type: 'array', items: { type: 'object', properties: { prefix: { type: 'string' }, count: { type: 'number' } } } },
+          },
+        },
+        focus: { type: 'object', description: 'Top facts by salience, in full (overview mode)', additionalProperties: ENTRY_SCHEMA },
+        hints: { type: 'array', items: { type: 'string' }, description: 'How to drill deeper (overview mode)' },
+        entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts (full mode)', additionalProperties: ENTRY_SCHEMA },
         elided: {
           type: 'array',
-          description: 'Stubs for withheld entries (score-descending)',
+          description: 'Stubs for withheld entries, score-descending (full mode)',
           items: { type: 'object', properties: { key: { type: 'string' }, type: { type: ['string', 'null'] }, score: { type: 'number' } } },
         },
-        _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total }' },
+        _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total } (full mode)' },
         types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
@@ -1910,9 +2010,26 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
 
       // Shape the whole assembled view once (lens echoes into _shaping).
       const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      const decls = await typeDeclsFor(ctx);
+
+      // ADR-0033: progressive disclosure by default. A *bare* recall (the context-less
+      // agent's first read) returns a broad, succinct overview — counts + top focus +
+      // drill hints — not the whole view. Any shaping arg (or view:'full') opts into the
+      // full shaped view, so configured callers are unchanged.
+      const shapedAny = input as Record<string, unknown> | undefined;
+      const askedFull =
+        input?.view === 'full' ||
+        (input?.view !== 'overview' &&
+          !!shapedAny &&
+          ['elision', 'expand', 'lens', 'salience', 'explain', 'includeSuperseded'].some((k) => shapedAny[k] !== undefined));
+      if (!askedFull) {
+        const c = shaped._shaping.counts;
+        const granted = Object.keys(merged).length - Object.keys(own.entries).length;
+        return buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+      }
+
       // R1 (ADR-0029): inline affordances — include elided stubs' types so an
       // agent can act on a withheld fact's type after `expand`.
-      const decls = await typeDeclsFor(ctx);
       const types = affordancesForTypes(typesOf(shaped.entries, ...(shaped.elided ?? []).map((s) => s.type)), decls);
       return Object.keys(types).length ? { ...shaped, types } : shaped;
     },

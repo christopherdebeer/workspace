@@ -44,12 +44,28 @@ describe('workspace cell', () => {
     ]);
   });
 
-  it('recall returns the caller view, salience-shaped with a _shaping summary', async () => {
+  it('recall({view:"full"}) returns the caller view, salience-shaped with a _shaping summary', async () => {
     const { ctx } = ctxFor('alice');
-    const res = await cmds.recall(undefined, ctx);
+    const res = await cmds.recall({ view: 'full' }, ctx);
+    if (!('entries' in res)) throw new Error('expected full view');
     expect(res.entries.phase.value).toBe('planning');
     expect(res._shaping.elision).toBe('auto');
     expect(res._shaping.counts.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a bare recall() returns a succinct overview with counts + top focus + drill hints (ADR-0033)', async () => {
+    const { ctx } = ctxFor('alice');
+    const res = await cmds.recall(undefined, ctx);
+    if (!('overview' in res)) throw new Error('expected overview');
+    expect(res.overview.total).toBeGreaterThanOrEqual(1);
+    expect(res.overview.byType.length).toBeGreaterThanOrEqual(1);
+    expect(res.overview.byPrefix.length).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(res.focus).length).toBeGreaterThanOrEqual(1);
+    expect(res.hints.some((h) => h.includes('query'))).toBe(true);
+    expect(res.hints.some((h) => h.includes('view: "full"'))).toBe(true);
+    // The full view is still one arg away.
+    const full = await cmds.recall({ view: 'full' }, ctx);
+    expect('entries' in full).toBe(true);
   });
 
   it('isolates slices — bob cannot see alice', async () => {
@@ -71,7 +87,8 @@ describe('workspace cell', () => {
     const sup = await cmds.supersede({ key: 'phase' }, ctx);
     expect(sup?._meta.supersededBy).toBeNull(); // retired (no successor)
 
-    const def = await cmds.recall(undefined, ctx);
+    const def = await cmds.recall({ view: 'full' }, ctx);
+    if (!('entries' in def)) throw new Error('expected full view');
     expect(def.entries.phase).toBeUndefined(); // hidden from the default view
     expect((await cmds.peek({ key: 'phase' }, ctx))?.value).toBe('planning'); // still there
   });

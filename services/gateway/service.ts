@@ -264,7 +264,7 @@ function summarizeCatalog(caps: CatalogEntry[]): {
   }
   return {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
-    hint: 'Summary view. read("$catalog") without detail returns full input/result schemas.',
+    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target.',
   };
 }
 
@@ -367,9 +367,12 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
+    // ADR-0033: progressive disclosure by default — a bare `$catalog` returns the
+    // grouped one-line menu (skim), not every input/result schema. `detail:"full"`
+    // (or "schemas") returns the heavy full contract.
     const detail = (input?.input as { detail?: string } | undefined)?.detail;
-    if (detail === 'summary') return summarizeCatalog(caps);
-    return { capabilities: caps };
+    if (detail === 'full' || detail === 'schemas') return { capabilities: caps };
+    return summarizeCatalog(caps);
   }
   if (target === TYPES) return buildTypes(ctx);
   // $graph — the Reference projection (authored + derived), the self-model's third surface.
@@ -427,7 +430,7 @@ const READ_SCHEMA = {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
     input: {
       ...INPUT_PROP,
-      description: `${INPUT_PROP.description} For "${CATALOG}": { detail: "summary" } returns capabilities grouped by cell, one line each, no schemas.`,
+      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema.`,
     },
   },
   additionalProperties: false,
@@ -450,7 +453,7 @@ const tools: Record<string, McpToolDefinition> = {
   read: {
     title: 'Observe the substrate',
     description:
-      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (auth/workspace/gateway/dispatch/cells), redacted.',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; the grouped one-line menu is the default, {detail:"full"} adds every schema. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (auth/workspace/gateway/dispatch/cells), redacted.',
     inputSchema: READ_SCHEMA,
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],
@@ -486,7 +489,7 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
       mcp_endpoint: `${origin}/mcp`,
       name: 'parc.land substrate',
       tools: ['whoami', 'read', 'act'],
-      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer to list what you can do ({detail:"summary"} for the grouped one-line menu).',
+      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer for the grouped one-line menu of what you can do ({detail:"full"} adds schemas).',
     },
   };
 }
@@ -500,9 +503,9 @@ export const handler = defineMcpService({
   // client knowing what "read/act" means here.
   instructions:
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
-    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog", {detail:"summary"}) for the grouped menu, ' +
-    'read("$catalog") for full schemas. Targets look like workspace.query or @owner/cell.tool. ' +
-    'Prefer workspace.query (filtered, paged) over workspace.recall (the whole shaped view) for targeted reads. ' +
+    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog") for the grouped one-line menu ' +
+    '({detail:"full"} adds every schema). Targets look like workspace.query or @owner/cell.tool. ' +
+    'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,
   http: [
