@@ -20,6 +20,7 @@ import {
   similarConfig,
   refreshSimilarEdges,
   dropSimilarEdges,
+  authoredPairs,
   createMemoryStateStore,
   SIMILAR_REL,
   SIMILAR_WRITER,
@@ -125,6 +126,37 @@ describe('refreshSimilarEdges / dropSimilarEdges (ADR-0031 edge-write seam)', ()
     await refreshSimilarEdges(store, 'alice', 'F', [M2('a', 0.6), M2('c', 0.5)], 0.3, await store.listEdges('alice'), now);
     inferred = (await store.listEdges('alice')).filter((e) => e.rel === SIMILAR_REL);
     expect(inferred.map((e) => e.to).sort()).toEqual(['a', 'c']);
+  });
+
+  it('skips a neighbour an authored edge already connects, in either direction (dedup-on-create, ADR-0032)', async () => {
+    const store = createMemoryStateStore();
+    const now = '2026-06-26T00:00:00.000Z';
+    // An authored edge F→a and an authored edge c→F already connect those pairs.
+    await store.putEdge({ scope: 'alice', from: 'F', rel: 'grounds', to: 'a', strength: null, createdAt: 't', writer: 'alice' });
+    await store.putEdge({ scope: 'alice', from: 'c', rel: 'refines', to: 'F', strength: null, createdAt: 't', writer: 'alice' });
+    await refreshSimilarEdges(store, 'alice', 'F', [M2('a', 0.6), M2('b', 0.5), M2('c', 0.55)], 0.3, await store.listEdges('alice'), now);
+    const inferred = (await store.listEdges('alice')).filter((e) => e.rel === SIMILAR_REL);
+    expect(inferred.map((e) => e.to)).toEqual(['b']); // a + c redundant (authored either way) → only b gets a hint
+  });
+
+  it('prunes a now-redundant inferred edge on the next refresh when an authored edge appears', async () => {
+    const store = createMemoryStateStore();
+    const now = '2026-06-26T00:00:00.000Z';
+    await refreshSimilarEdges(store, 'alice', 'F', [M2('a', 0.6)], 0.3, await store.listEdges('alice'), now);
+    expect((await store.listEdges('alice')).filter((e) => e.rel === SIMILAR_REL).map((e) => e.to)).toEqual(['a']);
+    // A human links F→a; re-running reconcile drops the redundant kinship.
+    await store.putEdge({ scope: 'alice', from: 'F', rel: 'grounds', to: 'a', strength: null, createdAt: 't', writer: 'alice' });
+    await refreshSimilarEdges(store, 'alice', 'F', [M2('a', 0.6)], 0.3, await store.listEdges('alice'), now);
+    expect((await store.listEdges('alice')).filter((e) => e.rel === SIMILAR_REL)).toHaveLength(0);
+  });
+
+  it('authoredPairs collects non-inferred edges symmetrically, excluding inferred ones', () => {
+    const pairs = authoredPairs([
+      { scope: 'a', from: 'X', rel: 'grounds', to: 'Y', strength: null, createdAt: 't', writer: 'alice' },
+      { scope: 'a', from: 'M', rel: SIMILAR_REL, to: 'N', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER },
+    ]);
+    expect(pairs.has('X Y')).toBe(true); // normalized (a < b) so lookups must use pairKey
+    expect(pairs.has('M N')).toBe(false); // inferred excluded
   });
 
   it('dropSimilarEdges removes inferred edges touching a key (in + out), leaving authored edges', async () => {

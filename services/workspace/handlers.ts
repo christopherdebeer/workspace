@@ -60,6 +60,10 @@ import {
   selectNeighbors,
   similarConfig,
   refreshSimilarEdges,
+  authoredPairs,
+  pairKey,
+  SIMILAR_REL,
+  SIMILAR_WRITER,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -345,6 +349,10 @@ export interface ReindexInput {
   /** Cap on facts scanned (1–5000, default 2000). */
   max?: number;
 }
+export interface PruneSimilarInput {
+  /** Cap on inferred edges deleted in one pass (default: all redundant). */
+  max?: number;
+}
 export interface LinkInput {
   from: string;
   rel: string;
@@ -502,6 +510,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   query: CommandHandler<QueryInput | undefined, QueryResult>;
   search: CommandHandler<SearchInput, SearchResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
+  pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -1132,6 +1141,29 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         status: { type: 'string', description: "'started' (async dispatched), or 'unconfigured'" },
         poll: { type: 'string', description: 'Status fact key to peek for progress' },
         hint: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'pruneSimilar',
+    description:
+      'Prune redundant inferred `similarTo` edges (ADR-0031/0032): delete every `platform/vectors`-written kinship edge whose endpoints are ALREADY connected by an authored edge (in either direction) — a real link a person/grant asserted makes the machine-inferred hint redundant, both as structure and as a salience signal. Synchronous, vector-free (pure edge scan + deletes). The live indexer/reindex now skip these on create (dedup-on-create); this is the one-time backfill for edges written before that. Admin-only.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        max: { type: 'number', description: 'Cap on edges deleted in one pass (default: all redundant)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: "'pruned' or 'unconfigured'" },
+        scanned: { type: 'number', description: 'Inferred similarTo edges examined' },
+        pruned: { type: 'number', description: 'Redundant edges deleted' },
+        remaining: { type: 'number', description: 'Redundant edges left (when capped by max)' },
       },
     },
   },
@@ -1903,6 +1935,34 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       await ctx.events.emit('workspace.reindex.requested', { scope, type: input?.type, prefix: input?.prefix, max: input?.max, phase: 'embed', indexed: 0, skipped: 0, edges: 0 });
       ctx.logger.info('reindex dispatched (async, chunked)', { scope, type: input?.type, prefix: input?.prefix });
       return { status: 'started', poll: statusKey, hint: `reindex runs async in chunks; poll peek("${statusKey}") for { status, phase, indexed, edges }` };
+    },
+
+    async pruneSimilar(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // Vector-free, synchronous edge hygiene (ADR-0031/0032): delete inferred
+      // `similarTo` edges whose endpoints an authored edge already connects. A real
+      // link a person/grant asserted makes the machine's kinship hint redundant — as
+      // structure (it surfaces twice in neighbors/$graph) and as a salience signal
+      // (centrality would double-count the same relationship). The live indexer +
+      // reindex now skip these on create; this is the one-time backfill.
+      if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
+        throw new ServiceAuthError('pruneSimilar requires workspace:admin');
+      }
+      const { store } = build(ctx);
+      if (!store) return { status: 'unconfigured', scanned: 0, pruned: 0, remaining: 0 };
+      const existing = await store.listEdges(scope);
+      const authored = authoredPairs(existing);
+      const redundant = existing.filter(
+        (e) =>
+          e.rel === SIMILAR_REL &&
+          e.writer === SIMILAR_WRITER &&
+          authored.has(pairKey(e.from, e.to)),
+      );
+      const cap = input?.max && input.max > 0 ? input.max : redundant.length;
+      const toDelete = redundant.slice(0, cap);
+      for (const e of toDelete) await store.deleteEdge(scope, e.from, e.rel, e.to);
+      ctx.logger.info('pruneSimilar complete', { scope, scanned: redundant.length, pruned: toDelete.length });
+      return { status: 'pruned', scanned: redundant.length, pruned: toDelete.length, remaining: redundant.length - toDelete.length };
     },
 
     async link(input, ctx) {

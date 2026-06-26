@@ -21,11 +21,35 @@ import { SIMILAR_REL, SIMILAR_WRITER } from './vectors';
 /** The minimal edge surface this seam needs — a subset of `StateStore`. */
 export type EdgeIO = Pick<StateStore, 'listEdges' | 'putEdge' | 'deleteEdge'>;
 
+/** Unordered pair key — `similarTo` is symmetric in intent, and an authored edge in
+ *  *either* direction already connects the two facts, so kinship would be redundant.
+ *  The ` ` separator can't occur in a fact key, so the join is unambiguous. */
+export function pairKey(a: string, b: string): string {
+  return a < b ? `${a} ${b}` : `${b} ${a}`;
+}
+
 /**
- * Reconcile `key`'s outbound `similarTo` edges to exactly `neighbors` (delete stale,
- * add new) — idempotent, so re-indexing a fact whose neighbours shifted self-heals.
- * `existing` is the scope's full edge list (read once per batch); `nowIso` stamps new
- * edges (callers pass a timestamp — keeps this pure of the clock).
+ * The set of fact-pairs an *authored* (non-inferred) edge already connects, in either
+ * direction. A `similarTo` hint between an already-connected pair adds no structure and
+ * no salience signal a human/grant didn't already assert — so we neither create nor keep
+ * one (ADR-0032: similarTo is a suggestion to connect, redundant once a real edge exists).
+ */
+export function authoredPairs(existing: EdgeRecord[]): Set<string> {
+  const pairs = new Set<string>();
+  for (const e of existing) {
+    if (e.rel === SIMILAR_REL && e.writer === SIMILAR_WRITER) continue;
+    pairs.add(pairKey(e.from, e.to));
+  }
+  return pairs;
+}
+
+/**
+ * Reconcile `key`'s outbound `similarTo` edges to exactly the neighbours *not already
+ * connected by an authored edge* (delete stale, add new) — idempotent, so re-indexing a
+ * fact whose neighbours shifted self-heals, and a neighbour that later gains a real edge
+ * has its redundant kinship pruned on the next pass. `existing` is the scope's full edge
+ * list (read once per batch); `nowIso` stamps new edges (callers pass a timestamp — keeps
+ * this pure of the clock).
  */
 export async function refreshSimilarEdges(
   io: EdgeIO,
@@ -36,12 +60,14 @@ export async function refreshSimilarEdges(
   existing: EdgeRecord[],
   nowIso: string,
 ): Promise<void> {
+  const authored = authoredPairs(existing);
   const mine = existing.filter((e) => e.from === key && e.rel === SIMILAR_REL && e.writer === SIMILAR_WRITER);
-  const want = new Set(neighbors.map((n) => n.key));
+  // Only neighbours not already connected by an authored edge are worth a kinship hint.
+  const want = new Set(neighbors.filter((n) => n.key !== key && !authored.has(pairKey(key, n.key))).map((n) => n.key));
   const have = new Set(mine.map((e) => e.to));
   for (const e of mine) if (!want.has(e.to)) await io.deleteEdge(scope, e.from, e.rel, e.to);
   for (const n of neighbors) {
-    if (n.key === key || have.has(n.key)) continue;
+    if (!want.has(n.key) || have.has(n.key)) continue;
     await io.putEdge({ scope, from: key, rel: SIMILAR_REL, to: n.key, strength, createdAt: nowIso, writer: SIMILAR_WRITER });
   }
 }

@@ -5,7 +5,10 @@
   that feed `centrality` (a salience signal, no scorer change) and surface in `neighbors`/`$graph`. NOT
   a query-time `α·cosine + β·salience` knob. The edge-write seam this needed (`refreshSimilarEdges`/
   `dropSimilarEdges` over raw `StateStore` edge CRUD) is built and reusable. Tunable via env
-  (`VECTOR_SIMILAR`/`_K`/`_MIN_SCORE`/`_STRENGTH`).
+  (`VECTOR_SIMILAR`/`_K`/`_MIN_SCORE`/`_STRENGTH`). **Refined by ADR-0032** — `refreshSimilarEdges` now
+  dedups against authored edges (no kinship where a real link already connects the pair), and the open
+  questions below (redundancy, UX/lens, symmetric-vs-directed) carry forward there, where `similarTo`
+  is reframed as a *ratifiable, typed connection suggestion*.
 - **Date:** 2026-06-26
 - **Depends on:** ADR-0030 (the vector index that makes similarity computable), ADR-0006 (salience —
   `centrality` is a scored signal), ADR-0003/0016 (the Reference projection — derived/first-class edges),

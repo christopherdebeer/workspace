@@ -73,7 +73,7 @@ export {
   MemoryVectorStore,
 } from './vectors';
 export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig } from './vectors';
-export { refreshSimilarEdges, dropSimilarEdges } from './similar-edges';
+export { refreshSimilarEdges, dropSimilarEdges, authoredPairs, pairKey } from './similar-edges';
 export type { EdgeIO } from './similar-edges';
 export { createDeclarationRegistry } from './declarations';
 export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';

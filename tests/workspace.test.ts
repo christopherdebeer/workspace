@@ -194,7 +194,7 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
         'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
-        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex',
+        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'pruneSimilar',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
@@ -205,13 +205,14 @@ describe('workspace sharing / view layer', () => {
     // write:workspace). tend stays the operator-only workspace:admin override.
     expect(
       tools.every((t) =>
-        t.name === 'tend' || t.name === 'reindex'
+        t.name === 'tend' || t.name === 'reindex' || t.name === 'pruneSimilar'
           ? t.scope === 'workspace:admin'
           : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
       ),
     ).toBe(true);
     expect(tools.find((t) => t.name === 'tend')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'reindex')!.scope).toBe('workspace:admin');
+    expect(tools.find((t) => t.name === 'pruneSimilar')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'recall')!.scope).toBe('read:workspace');
     expect(tools.find((t) => t.name === 'remember')!.scope).toBe('write:workspace');
     // Every tool ships a JSON Schema the gateway can surface to clients.
@@ -719,10 +720,28 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       // …and they carry the inferred-writer stamp (distinguishable from authored edges).
       const raw = await store.listEdges('erin');
       expect(raw.find((e) => e.rel === 'similarTo')?.writer).toBe('platform/vectors');
+
+      // pruneSimilar (ADR-0032): an authored edge between two facts makes the inferred
+      // kinship redundant — pruneSimilar deletes it, leaving the authored edge.
+      await cmds.link({ from: 'r1', rel: 'grounds', to: 'r2' }, admin());
+      const before = (await store.listEdges('erin')).filter((e) => e.rel === 'similarTo' && (e.to === 'r2' || e.from === 'r2'));
+      expect(before.length).toBeGreaterThan(0); // a redundant inferred edge exists
+      const pr = await cmds.pruneSimilar(undefined, admin());
+      expect(pr.status).toBe('pruned');
+      expect(pr.pruned).toBeGreaterThan(0);
+      const after = await store.listEdges('erin');
+      // No inferred similarTo edge survives between the r1↔r2 pair the authored edge connects…
+      expect(after.filter((e) => e.rel === 'similarTo' && ((e.from === 'r1' && e.to === 'r2') || (e.from === 'r2' && e.to === 'r1')))).toHaveLength(0);
+      // …but the authored edge does.
+      expect(after.find((e) => e.rel === 'grounds' && e.from === 'r1' && e.to === 'r2')).toBeDefined();
     } finally {
       if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
       else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
     }
+  });
+
+  it('pruneSimilar requires admin', async () => {
+    await expect(cmds.pruneSimilar(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
   });
 });
 
