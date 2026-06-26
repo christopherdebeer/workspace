@@ -1,6 +1,13 @@
 # ADR-0036 — The conversational view: progressive, interactive widgets for cell-owned types & tools
 
-- **Status:** Proposed. Inventories which substrate types/tools warrant a `ui://` renderer (ADR-0034/0035),
+- **Status:** Accepted — **Tier 2 viewers/machine reuse shipped.** The card now imports the **`viewers`
+  cell** renderers (json tree / csv table / mermaid — the same modules canvas + lit use) and dispatches on
+  a type's `present.render.viewer`; `machine-run` facts render their `trace` as a **mermaid flowchart**
+  (current node highlighted). The resource declares the mermaid CDN in `_meta.ui.csp.resourceDomains`
+  (`resources/read` now passes `_meta`). **Sizing** is handled (the spec leaves frame size to the host):
+  the widget reports its size via `window.mcpApp.resize()`, a `ResizeObserver`, and `ui-size-change`
+  messages — whichever the host honours. Tier 1 interactive views remain next.
+- **Status (orig):** Proposed. Inventories which substrate types/tools warrant a `ui://` renderer (ADR-0034/0035),
   and defines what the **conversational view** of each should be: a *glanceable, progressive* projection —
   never the full dataset — that **expands interactively in the widget** (host-proxied `tools/call`/
   `resources/read`) without flooding the model's context. Grounds the build by reusing the existing renderer

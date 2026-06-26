@@ -93,9 +93,18 @@ function cardHtml(): string {
   return SHELL_HEAD + appJs() + SHELL_TAIL;
 }
 
-/** Resolve a `ui://` widget URI to its HTML contents, or null if unknown. */
-export function resolveUiResource(uri: string): { uri: string; mimeType: string; text: string } | null {
-  if (uri === CARD_URI) return { uri, mimeType: UI_MIME, text: cardHtml() };
+/** Resolve a `ui://` widget URI to its HTML contents, or null if unknown. The card
+ *  reuses the `viewers` cell renderers; mermaid lazy-loads from the jsDelivr CDN, so the
+ *  resource declares it in `_meta.ui.csp.resourceDomains` (default CSP is `'none'`). */
+export function resolveUiResource(uri: string): { uri: string; mimeType: string; text: string; _meta?: Record<string, unknown> } | null {
+  if (uri === CARD_URI) {
+    return {
+      uri,
+      mimeType: UI_MIME,
+      text: cardHtml(),
+      _meta: { ui: { csp: { resourceDomains: ['https://cdn.jsdelivr.net'] } } },
+    };
+  }
   return null;
 }
 

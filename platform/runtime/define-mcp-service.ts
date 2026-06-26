@@ -66,6 +66,8 @@ export interface McpResourceContents {
   text?: string;
   /** Base64 payload for binary resources. */
   blob?: string;
+  /** Resource metadata — e.g. `{ ui: { csp: { resourceDomains: [...] } } }` (MCP-Apps). */
+  _meta?: Record<string, unknown>;
 }
 
 /** A resource descriptor for `resources/list`. */
@@ -277,6 +279,7 @@ export function defineMcpService(def: McpServiceDefinition) {
         const entry: Record<string, unknown> = { uri: found.uri, ...(found.mimeType ? { mimeType: found.mimeType } : {}) };
         if (found.text !== undefined) entry.text = found.text;
         if (found.blob !== undefined) entry.blob = found.blob;
+        if (found._meta !== undefined) entry._meta = found._meta;
         return rpcResult(id, { contents: [entry] });
       }
       case 'tools/list': {
