@@ -119,7 +119,7 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
       // The hot write path: each put recomputes salience, so ingest is CPU-bound.
@@ -129,8 +129,34 @@ export class PlatformStack extends cdk.Stack {
       // timeout gives margin for the daily tending pass over a large slice.
       memorySize: 1024,
       timeoutSeconds: 60,
+      // Semantic search backend (ADR-0030). The bucket + per-slice indexes are
+      // created at RUNTIME, create-if-absent (§3a — no CDK for them); only the
+      // bucket name + region are wired here. VECTOR_EMBEDDER defaults to the
+      // deterministic hashing embedder; flip to `bedrock` (Increment 4) once Titan
+      // model access is enabled — a config change, no redeploy of code.
+      environment: {
+        VECTOR_BUCKET: `parc-vectors-${envName}-${this.account}`,
+        VECTOR_REGION: this.region,
+      },
     });
     substrate.grantReadWrite(workspace);
+    // S3 Vectors (runtime data plane) + Bedrock embeddings (Increment 4) for the
+    // workspace Lambda. Resource '*' for s3vectors: the vector-bucket ARN format is
+    // pinned at runtime by create-if-absent and this is a single-owner deployment;
+    // tighten to the bucket ARN once confirmed live. Bedrock granted now so enabling
+    // Titan is a pure config flip (VECTOR_EMBEDDER=bedrock), no IAM redeploy.
+    workspace.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3vectors:*'],
+        resources: ['*'],
+      }),
+    );
+    workspace.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [`arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`],
+      }),
+    );
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
     // cell-<id>) emit substrate.write.requested; the workspace applies the
     // fact in the owner's slice. See docs/substrate-storage.md.

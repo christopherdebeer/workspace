@@ -194,7 +194,7 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
         'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
-        'registerAction', 'actions', 'deleteAction', 'invoke',
+        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
@@ -205,12 +205,13 @@ describe('workspace sharing / view layer', () => {
     // write:workspace). tend stays the operator-only workspace:admin override.
     expect(
       tools.every((t) =>
-        t.name === 'tend'
+        t.name === 'tend' || t.name === 'reindex'
           ? t.scope === 'workspace:admin'
           : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
       ),
     ).toBe(true);
     expect(tools.find((t) => t.name === 'tend')!.scope).toBe('workspace:admin');
+    expect(tools.find((t) => t.name === 'reindex')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'recall')!.scope).toBe('read:workspace');
     expect(tools.find((t) => t.name === 'remember')!.scope).toBe('write:workspace');
     // Every tool ships a JSON Schema the gateway can surface to clients.
@@ -648,6 +649,27 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
 
   it('requires query text', async () => {
     await expect(cmds.search({ text: '   ' }, ctxOf('alice'))).rejects.toThrow(/text is required/);
+  });
+
+  it('reindex (admin) backfills a slice so search finds never-manually-indexed facts', async () => {
+    const adminCtx = (): ServiceContext => {
+      const ctx = ctxOf('dave');
+      (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'dave', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+      return ctx;
+    };
+    await cmds.remember({ key: 'k1', value: { title: 'Kubernetes ingress controller routing' }, type: 'note' }, adminCtx());
+    await cmds.remember({ key: 'k2', value: { title: 'Sourdough starter hydration schedule' }, type: 'note' }, adminCtx());
+    // Not indexed yet → search is empty.
+    expect((await cmds.search({ text: 'kubernetes ingress' }, adminCtx())).entries).toHaveLength(0);
+    const r = await cmds.reindex(undefined, adminCtx());
+    expect(r.indexed).toBeGreaterThanOrEqual(2);
+    expect(r.index).toBe('slice-dave');
+    const res = await cmds.search({ text: 'kubernetes ingress routing' }, adminCtx());
+    expect(res.entries[0]?.key).toBe('k1'); // the k8s note, not the sourdough one
+  });
+
+  it('reindex requires admin', async () => {
+    await expect(cmds.reindex(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
   });
 });
 

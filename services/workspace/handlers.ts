@@ -55,6 +55,7 @@ import {
   type VectorFilter,
   indexForScope,
   embeddableText,
+  metadataForFact,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -81,6 +82,7 @@ import {
 import { createServiceClient } from '../../platform/runtime/service-client';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
+import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
 import {
   createDynamoGrantStore,
   grantCovers,
@@ -122,10 +124,12 @@ function tableName(ctx: ServiceContext): string {
   return table;
 }
 
-/** Production deps: observed state + grants over the shared substrate table. */
+/** Production deps: observed state + grants over the shared substrate table, plus the
+ *  semantic-search backend when `VECTOR_BUCKET` is configured (ADR-0030 — else `search`
+ *  degrades to a hint). `vectorsFromEnv` keeps the v3 SDK lazy (loaded on first use). */
 export const dynamoDeps: DepsBuilder = (ctx) => {
   const table = tableName(ctx);
-  return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table) };
+  return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table), vectors: vectorsFromEnv() };
 };
 
 /**
@@ -325,6 +329,14 @@ export interface SearchResult {
   /** Present when no vector backend is configured (degraded to query/contains). */
   hint?: string;
 }
+export interface ReindexInput {
+  /** Only reindex facts of this type. */
+  type?: string;
+  /** Only reindex keys with this prefix. */
+  prefix?: string;
+  /** Cap on facts scanned (1–5000, default 2000). */
+  max?: number;
+}
 export interface LinkInput {
   from: string;
   rel: string;
@@ -481,6 +493,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
   search: CommandHandler<SearchInput, SearchResult>;
+  reindex: CommandHandler<ReindexInput | undefined, { indexed: number; skipped: number; index?: string; hint?: string }>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -1087,6 +1100,31 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         action: { type: 'string' },
         params: { type: 'object' },
         writes: { type: 'array', description: 'The applied writes, each `{ key, value, _meta }`', items: KEYED_ENTRY_SCHEMA },
+      },
+    },
+  },
+  {
+    name: 'reindex',
+    description:
+      'Backfill semantic search (ADR-0030): scan your slice (optionally by type/prefix), embed each text-bearing fact, and upsert it into your vector index. The batch replay beside the live stream indexer; use after enabling search or changing the embedding model. Admin-only. No-op hint when no vector backend is configured.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Only reindex facts of this type' },
+        prefix: { type: 'string', description: 'Only reindex keys with this prefix' },
+        max: { type: 'number', description: 'Cap on facts scanned (1–5000, default 2000)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        indexed: { type: 'number', description: 'Facts embedded + upserted' },
+        skipped: { type: 'number', description: 'Facts with no embeddable text (plumbing / empty)' },
+        index: { type: 'string', description: 'The slice index written' },
+        hint: { type: 'string', description: 'Present when no vector backend is configured' },
       },
     },
   },
@@ -1785,20 +1823,25 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const topK = limit * 4; // over-fetch; the authoritative re-read + grant post-filter trim
 
       const [queryVector] = await vectors.embedder.embed([text]);
-      const filter: VectorFilter = { superseded: false };
+      // Filter on string metadata only (type/tag) — safest across S3 Vectors filter
+      // value types. `superseded` is NOT filtered here: the authoritative re-read
+      // (Decision 1) drops retired facts, so the filter is pure optimization, and a
+      // boolean-filter edge case must never break the whole query.
+      const filter: VectorFilter = {};
       if (input?.type) filter.type = input.type;
       if (input?.tag) filter.tag = input.tag;
+      const queryOpts = Object.keys(filter).length ? { topK, filter } : { topK };
 
       // Candidate generation (ADR-0030 Decision 1: the index is NOT an authority).
       // The readable index set mirrors recall's fold: own slice + every applicable
       // grant's owner (direct/public/group). Each hit is re-read authoritatively below.
       type Cand = { owner: string; key: string; outKey: string; score: number };
       const cands: Cand[] = [];
-      const ownMatches = await vectors.store.query(indexForScope(viewer), queryVector, { topK, filter }).catch(() => []);
+      const ownMatches = await vectors.store.query(indexForScope(viewer), queryVector, queryOpts).catch(() => []);
       for (const m of ownMatches) cands.push({ owner: viewer, key: m.key, outKey: m.key, score: m.score });
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
-        const matches = await vectors.store.query(indexForScope(g.owner), queryVector, { topK, filter }).catch(() => []);
+        const matches = await vectors.store.query(indexForScope(g.owner), queryVector, queryOpts).catch(() => []);
         for (const m of matches) {
           if (!grantCovers(g.key, m.key)) continue; // whole-slice / prefix / exact — exactly as peek
           cands.push({ owner: g.owner, key: m.key, outKey: `${g.owner}/${m.key}`, score: m.score });
@@ -1827,6 +1870,48 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const types = affordancesForTypes(typesOf(entries), await typeDeclsFor(ctx)); // R1 envelope
       const result = { entries, count: entries.length, total: entries.length };
       return Object.keys(types).length ? { ...result, types } : result;
+    },
+
+    async reindex(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // Admin-only: a backfill scans + embeds the whole (or prefixed) slice. The
+      // Increment-2 stream consumer keeps the index live incrementally; this is the
+      // batch replay (ADR-0030 — "replay the table → embed → PutVectors") and manual re-sync.
+      if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
+        throw new ServiceAuthError('reindex requires workspace:admin');
+      }
+      const { state, vectors } = build(ctx);
+      if (!vectors) return { indexed: 0, skipped: 0, hint: 'semantic search is not configured on this deployment' };
+      const index = indexForScope(scope);
+      await vectors.store.ensureIndex(index, { dimension: vectors.embedder.dimension });
+
+      const max = Math.min(Math.max(1, input?.max ?? 2000), 5000);
+      let cursor: string | undefined;
+      let indexed = 0;
+      let skipped = 0;
+      do {
+        const page = await state.query(scope, { type: input?.type, prefix: input?.prefix, limit: 200, cursor }, ctx.identity);
+        const pending: Array<{ key: string; text: string; type: string | null; tags: string[] }> = [];
+        for (const e of page.entries) {
+          const text = embeddableText(e.key, e.value);
+          if (!text) {
+            skipped++;
+            continue;
+          }
+          pending.push({ key: e.key, text, type: e._meta.type, tags: e._meta.tags });
+        }
+        if (pending.length) {
+          const vecs = await vectors.embedder.embed(pending.map((p) => p.text));
+          await vectors.store.put(
+            index,
+            pending.map((p, i) => ({ key: p.key, vector: vecs[i], metadata: metadataForFact({ type: p.type ?? undefined, tags: p.tags, superseded: false }) })),
+          );
+          indexed += pending.length;
+        }
+        cursor = page.nextCursor;
+      } while (cursor && indexed + skipped < max);
+      ctx.logger.info('workspace slice reindexed for semantic search', { scope, index, indexed, skipped });
+      return { indexed, skipped, index };
     },
 
     async link(input, ctx) {
