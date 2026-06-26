@@ -232,6 +232,50 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(result.instructions).toContain('read("$catalog"');
   });
 
+  it('initialize declares the MCP-Apps ui capability + resources (ADR-0034)', async () => {
+    const init = await mcp('creator', 'initialize', { protocolVersion: '2025-06-18' });
+    const caps = (init.result as { capabilities: Record<string, unknown> }).capabilities;
+    expect(caps.tools).toBeDefined();
+    expect(caps.resources).toBeDefined();
+    expect(caps['io.modelcontextprotocol/ui']).toBeDefined();
+  });
+
+  it('a read result carries structuredContent + an MCP-Apps widget binding (ADR-0034 Inc 0/1)', async () => {
+    const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });
+    const result = res.result as { structuredContent?: { cells?: unknown[] }; _meta?: { ui?: { resourceUri: string } }; content: Array<{ text: string }> };
+    // Inc 0: the object result is mirrored as structuredContent (the data channel)…
+    expect(result.structuredContent?.cells).toBeDefined();
+    // …and the text channel still carries the same payload for the model.
+    expect(result.content[0].text).toContain('cells');
+    // Inc 1: a tier-0 widget is bound for the conversation surface.
+    expect(result._meta?.ui?.resourceUri).toBe('ui://parc/card');
+  });
+
+  it('resources/list + resources/read serve the ui:// widget (ADR-0034 Inc 1)', async () => {
+    const list = await mcp('creator', 'resources/list');
+    const resources = (list.result as { resources: Array<{ uri: string; mimeType: string }> }).resources;
+    expect(resources.some((r) => r.uri === 'ui://parc/card')).toBe(true);
+
+    const read = await mcp('creator', 'resources/read', { uri: 'ui://parc/card' });
+    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
+    expect(contents[0].uri).toBe('ui://parc/card');
+    expect(contents[0].mimeType).toContain('text/html');
+    expect(contents[0].text).toContain('<!doctype html>');
+
+    const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
+    expect(missing.error?.code).toBe(-32602);
+  });
+
+  it('resources/read serves a tier-1 cell-widget shim onto the cell surface (ADR-0034 Inc 2)', async () => {
+    const read = await mcp('creator', 'resources/read', { uri: 'ui://cell/c15r/canvas/b/board1' });
+    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
+    expect(contents[0].mimeType).toContain('text/html');
+    // The shim iframes the cell's existing surface (absolute, from PUBLIC_BASE_URL) with ?embed=1.
+    expect(contents[0].text).toContain('https://parc.land/@c15r/canvas/b/board1?embed=1');
+    expect(contents[0].text).toContain('<iframe');
+    expect(contents[0].text).toContain('sandbox=');
+  });
+
   it('tools/list carries spec annotations and titles for the three verbs', async () => {
     const list = await mcp('creator', 'tools/list');
     const tools = list.result!.tools as Array<{ name: string; title?: string; annotations?: { readOnlyHint?: boolean } }>;

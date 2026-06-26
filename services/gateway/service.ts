@@ -42,6 +42,7 @@ import {
   mergeTypeDecl,
   resolveType,
 } from '../../platform/runtime';
+import { resolveUiResource, listUiResources, CARD_URI } from './widgets';
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -457,6 +458,11 @@ const tools: Record<string, McpToolDefinition> = {
     inputSchema: READ_SCHEMA,
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],
+    // ADR-0034 tier-0: bind an object read result to the generic card widget, so
+    // any observation can render in the conversation. Arrays/scalars (no
+    // structuredContent) get no widget. The model still gets the text channel.
+    ui: (out: unknown) =>
+      out && typeof out === 'object' && !Array.isArray(out) ? { resourceUri: CARD_URI } : undefined,
   },
   act: {
     title: 'Act on the substrate',
@@ -508,6 +514,13 @@ export const handler = defineMcpService({
     'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,
+  // ADR-0034: declare the MCP-Apps UI extension + serve the `ui://` widget
+  // resources a read result binds to via `_meta.ui.resourceUri`.
+  capabilities: { 'io.modelcontextprotocol/ui': {} },
+  resources: {
+    read: (uri: string) => resolveUiResource(uri),
+    list: () => listUiResources(),
+  },
   http: [
     { method: 'GET', path: '/mcp', handler: info },
     { method: 'GET', path: '/mcp/whoami', handler: whoamiHttp },

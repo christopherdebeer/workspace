@@ -1,6 +1,12 @@
 # ADR-0034 — MCP Apps (`io.modelcontextprotocol/ui`): the conversation as a projection surface
 
-- **Status:** Proposed (research complete; not yet built). **Decision spine: tiered.** A generic
+- **Status:** Accepted — **Inc 0–2 shipped (server-side); live iframe rendering pending client confirmation.**
+  `structuredContent` on object results (Inc 0); the `io.modelcontextprotocol/ui` + `resources` capabilities,
+  `resources/read`/`resources/list`, a generic tier-0 `ui://parc/card` widget, and `_meta.ui.resourceUri`
+  bound to read results (Inc 1); a tier-1 `ui://cell/<owner>/<name>/<path>` shim onto a cell surface (Inc 2).
+  All validated at the JSON-RPC protocol level (486 tests). What remains is **confirming the widget renders
+  in the claude.ai MCP-Apps host** (the host→iframe data API is recent and unverifiable server-side) — and,
+  gated on that, authoring bespoke cell widgets + Inc 3 interactivity. **Decision spine: tiered.** A generic
   gateway-served widget is the **floor** — any type with a `present.render` hint (markdown/metric/fields/
   table) gets a basic interactive card for free, rendering the tool result's `structuredContent`. A cell
   can **override** with a bespoke `ui://` surface it serves itself (reusing its existing `embed` handler /
@@ -121,23 +127,27 @@ element. A future `_renderers/<type>`-served widget (between the two) is a natur
 
 ## Increments (proposed)
 
-- **Inc 0 — `structuredContent` + capability + schema validation (enabler, independently useful).** In
-  `define-mcp-service.ts`: declare `capabilities.resources` + the ui capability in `initialize`; extend
-  `toContent` to emit `structuredContent` (and validate against the tool's advertised `resultSchema`,
-  closing the "advertise shapes we violate" gap from `mcp-spec-alignment.md`). No UI yet — but every MCP
-  client immediately gets structured results. Smallest, safest, reversible.
-- **Inc 1 — `resources/read` + the tier-0 floor widget.** Implement `resources/read` + a `ui://` resolver;
-  ship one generic `ui://parc/render/<hint>` widget (markdown/metric/fields) that renders
-  `structuredContent`. Wire **one** read (the `recall` overview, or `query`) to attach `_meta.ui.resourceUri`.
-  Validate it renders in claude.ai (trusted-connector path).
-- **Inc 2 — tier-1 cell override.** Map `ui://<owner>/<cellId>/<path>` → the cell's HTTP route; expose a
-  type's `handlers.embed` as its widget. Author one bespoke widget (the `$graph` force-directed view is the
-  obvious first — the D3 dashboard already exists) and one actionable one.
-- **Inc 3 — widget→server callbacks (interactive).** Adopt the `ui/` JSON-RPC dialect so a widget can call
-  `act()` (e.g. `attention` triage "touch"/"link"; `suggestions` "ratify"; a machine rail pick) — bounded
-  by no-SSE: request/response + poll `workspace.changes` for updates. Scope enforcement and cell-origin
-  isolation must hold across the iframe boundary (a widget callback is an `act` like any other and goes
-  through the same `enforceScope`).
+- **Inc 0 — `structuredContent` (shipped).** `toContent` (`platform/runtime/define-mcp-service.ts`) now
+  mirrors an object result as `structuredContent` alongside the text block — every MCP client gets
+  structured results. Independently useful; the data channel widgets consume.
+- **Inc 1 — capability + `resources/read` + tier-0 floor widget (shipped).** `defineMcpService` gained a
+  `capabilities` merge + a `resources` provider; the handshake declares `resources` + (gateway)
+  `io.modelcontextprotocol/ui`; `resources/read`/`resources/list` are answered. The gateway serves a generic
+  `ui://parc/card` widget (`services/gateway/widgets.ts`) that renders a read's `structuredContent` (tuned
+  for the `recall` overview: bands + type/prefix breakdowns + focus list; JSON fallback). A per-tool `ui`
+  hook (MCP-path only — the raw command stays plain, so internal callers are unaffected) binds every object
+  `read` result to the card via `_meta.ui.resourceUri`. A rich-result envelope (`mcpResult(data,{text,ui})`)
+  splits the text/data/ui channels explicitly.
+- **Inc 2 — tier-1 cell shim (shipped, mechanism).** `ui://cell/<owner>/<name>/<path>` resolves to a thin
+  sandboxed iframe shim onto the cell's existing surface (`?embed=1`, absolute from `PUBLIC_BASE_URL`) —
+  reusing the proven cell-render + origin-isolation, so a type's `handlers.embed` becomes its conversation
+  widget with no new rendering code. The resolver + `cellWidgetUri()` helper are in place; wiring a concrete
+  type→widget binding + authoring a bespoke cell widget is **gated on Inc 1 rendering confirmation** (both
+  ride the same host iframe path — building bespoke widgets before it renders would be speculative).
+- **Inc 3 — widget→server callbacks (deferred, "perhaps").** The `ui/` JSON-RPC dialect so a widget can call
+  `act()` (e.g. `attention` triage "touch"/"link"; `suggestions` "ratify") — bounded by no-SSE: request/
+  response + poll `workspace.changes`. A widget callback is an `act` like any other (same `enforceScope`,
+  same sandbox). Most spec-uncertain; deferred until the rendering path + the host callback API are confirmed.
 
 ## Open questions / risks
 

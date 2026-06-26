@@ -49,6 +49,57 @@ export interface McpToolDefinition<Input = never, Output = unknown> {
   /** Optional scope required to call the tool (enforced via `requireScope`). */
   scope?: string;
   handler: (input: Input, ctx: ServiceContext) => Promise<Output> | Output;
+  /**
+   * MCP-Apps widget binding (ADR-0034): given the tool's output (+ input/identity),
+   * return the `ui://` resource to render it as a conversation widget, or undefined
+   * for none. Applied ONLY on the MCP `tools/call` path — the directly-invocable
+   * command keeps returning the raw value, so internal callers are unaffected.
+   */
+  ui?: (output: Output, input: Input, ctx: ServiceContext) => { resourceUri: string } | undefined;
+}
+
+/** One MCP resource's contents (the `resources/read` reply, ADR-0034). */
+export interface McpResourceContents {
+  uri: string;
+  mimeType?: string;
+  /** Text payload (HTML for an MCP-Apps `ui://` widget). */
+  text?: string;
+  /** Base64 payload for binary resources. */
+  blob?: string;
+}
+
+/** A resource descriptor for `resources/list`. */
+export interface McpResourceDescriptor {
+  uri: string;
+  name?: string;
+  title?: string;
+  mimeType?: string;
+  description?: string;
+}
+
+/**
+ * A rich tool result (ADR-0034): carries the model-facing `text` summary, the
+ * `structured` data channel (widget + structuredContent), and an optional
+ * MCP-Apps `ui` binding. Return one from a tool handler via `mcpResult(...)`; a
+ * plain value still works (text + structuredContent for objects).
+ */
+export interface McpToolResult {
+  readonly __mcp: 'tool-result';
+  /** Structured data — becomes `structuredContent` and (unless `text` is set) the text block. */
+  data: unknown;
+  /** Model-facing text override (ADR-0033 succinct summary); defaults to JSON of `data`. */
+  text?: string;
+  /** MCP-Apps widget binding — surfaced as the result's `_meta.ui.resourceUri`. */
+  ui?: { resourceUri: string };
+}
+
+/** Build a rich tool result with an optional MCP-Apps widget + text summary. */
+export function mcpResult(data: unknown, opts?: { text?: string; ui?: { resourceUri: string } }): McpToolResult {
+  return { __mcp: 'tool-result', data, text: opts?.text, ui: opts?.ui };
+}
+
+function isRichResult(v: unknown): v is McpToolResult {
+  return !!v && typeof v === 'object' && (v as { __mcp?: unknown }).__mcp === 'tool-result';
 }
 
 export interface McpServiceDefinition {
@@ -57,6 +108,21 @@ export interface McpServiceDefinition {
   version?: string;
   /** Path of the JSON-RPC endpoint. Defaults to `/mcp`. */
   mcpPath?: string;
+  /**
+   * Extra handshake `capabilities` keys merged over the defaults (ADR-0034) — e.g.
+   * the MCP-Apps `io.modelcontextprotocol/ui` extension. `resources` is added
+   * automatically when `resources.read` is provided.
+   */
+  capabilities?: Record<string, unknown>;
+  /**
+   * Resource serving (ADR-0034): `read` resolves a URI (e.g. a `ui://` MCP-Apps
+   * widget) to its contents; `list` enumerates them. Providing `read` makes the
+   * server declare the `resources` capability and answer `resources/read`.
+   */
+  resources?: {
+    read: (uri: string, ctx: ServiceContext) => Promise<McpResourceContents | null> | McpResourceContents | null;
+    list?: (ctx: ServiceContext) => Promise<McpResourceDescriptor[]> | McpResourceDescriptor[];
+  };
   /** Advertised in `initialize`. Defaults to `{ name, version }`. `title` is the spec's display name. */
   serverInfo?: { name: string; version: string; title?: string };
   /**
@@ -124,10 +190,35 @@ function unauthorized(req: ServiceHttpRequest, resourcePath: string): ServiceHtt
   };
 }
 
-/** Wrap a tool's return value in MCP `content`. */
-function toContent(value: unknown): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {
+/**
+ * Wrap a tool's return value in MCP `content`. Per spec 2025-06-18 (and ADR-0034),
+ * an object result is ALSO returned as `structuredContent` — the data channel a
+ * client (or an MCP-Apps widget) consumes directly, alongside the `text` block the
+ * model reasons over (the same text-vs-data split ADR-0033 made for `recall`).
+ * structuredContent must be a JSON object, so arrays/scalars stay text-only.
+ */
+function toContent(value: unknown): {
+  content: Array<{ type: 'text'; text: string }>;
+  structuredContent?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
+  isError?: boolean;
+} {
+  // A rich result (ADR-0034) splits the channels explicitly: `text` for the model,
+  // `data` for structuredContent/widget, `ui` → the result's `_meta.ui.resourceUri`.
+  if (isRichResult(value)) {
+    const data = value.data;
+    const text = value.text ?? (typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+    const out: ReturnType<typeof toContent> = { content: [{ type: 'text', text }] };
+    if (data && typeof data === 'object' && !Array.isArray(data)) out.structuredContent = data as Record<string, unknown>;
+    if (value.ui) out._meta = { ui: value.ui };
+    return out;
+  }
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return { content: [{ type: 'text', text }] };
+  const base = { content: [{ type: 'text' as const, text }] };
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return { ...base, structuredContent: value as Record<string, unknown> };
+  }
+  return base;
 }
 
 export function defineMcpService(def: McpServiceDefinition) {
@@ -161,12 +252,34 @@ export function defineMcpService(def: McpServiceDefinition) {
         return rpcResult(id, {
           protocolVersion:
             typeof params.protocolVersion === 'string' ? params.protocolVersion : PROTOCOL_VERSION,
-          capabilities: { tools: {} },
+          capabilities: {
+            tools: {},
+            // `resources` is declared only when we actually answer resources/read,
+            // and never advertises `subscribe` (no SSE under CloudFront — ADR-0034).
+            ...(def.resources ? { resources: { listChanged: false } } : {}),
+            ...(def.capabilities ?? {}),
+          },
           serverInfo,
           ...(def.instructions ? { instructions: def.instructions } : {}),
         });
       case 'ping':
         return rpcResult(id, {});
+      case 'resources/list': {
+        if (!def.resources?.list) return rpcResult(id, { resources: [] });
+        const resources = await def.resources.list(ctx);
+        return rpcResult(id, { resources });
+      }
+      case 'resources/read': {
+        if (!def.resources?.read) return rpcError(id, -32601, `Method not found: ${method}`);
+        const uri = typeof params.uri === 'string' ? params.uri : '';
+        if (!uri) return rpcError(id, -32602, 'resources/read requires a uri');
+        const found = await def.resources.read(uri, ctx);
+        if (!found) return rpcError(id, -32602, `Resource not found: ${uri}`);
+        const entry: Record<string, unknown> = { uri: found.uri, ...(found.mimeType ? { mimeType: found.mimeType } : {}) };
+        if (found.text !== undefined) entry.text = found.text;
+        if (found.blob !== undefined) entry.blob = found.blob;
+        return rpcResult(id, { contents: [entry] });
+      }
       case 'tools/list': {
         const tools = await allTools(ctx);
         return rpcResult(id, {
@@ -191,9 +304,13 @@ export function defineMcpService(def: McpServiceDefinition) {
         if (!tool) return rpcError(id, -32602, `Unknown tool: ${name}`);
         try {
           if (tool.scope) requireScope(ctx.identity, tool.scope);
+          const args = params.arguments ?? {};
           const run = tool.handler as (i: unknown, c: ServiceContext) => Promise<unknown> | unknown;
-          const out = await run(params.arguments ?? {}, ctx);
-          return rpcResult(id, toContent(out));
+          const out = await run(args, ctx);
+          // Attach an MCP-Apps widget (ADR-0034) on the MCP path only — never on the
+          // raw command, so internal callers see the plain value.
+          const ui = tool.ui && !isRichResult(out) ? (tool.ui as (o: unknown, i: unknown, c: ServiceContext) => { resourceUri: string } | undefined)(out, args, ctx) : undefined;
+          return rpcResult(id, toContent(ui ? mcpResult(out, { ui }) : out));
         } catch (err) {
           // Surface tool/authorization failures as an MCP tool error, not a
           // transport error, so the client can show it to the model.
