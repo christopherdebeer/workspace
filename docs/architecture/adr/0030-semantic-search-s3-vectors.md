@@ -139,6 +139,26 @@ reactor stays on the bus (it drives declared actions); indexing is a separate, i
 does not contend with or perturb the reactive substrate. The stream is on and unused today — this is its
 first consumer.
 
+#### 3a. Control plane vs data plane — indexes are created at **runtime**, not in CDK
+
+Indexes are **per-slice** (`slice-<scope>`), so they cannot be CDK-templated: a slice's index can't exist
+at deploy time for a user/scope that doesn't exist yet. This is the same control-plane/data-plane split
+the **cells** subsystem already uses — `services/cells/provisioner.ts` calls itself *"the runtime half of
+'CDK, but deployed at runtime'."* S3 Vectors maps onto it exactly:
+
+- **Control plane (CDK, deploy-time, templated once):** the stream-consumer Lambda + its DynamoDB-stream
+  event-source mapping + IAM (`s3vectors:*` on the fixed vector-bucket ARN, `bedrock:InvokeModel` on the
+  Titan model ARN). All standard constructs — **no `aws-cdk-lib` upgrade needed** (Lambda + event-source
+  mapping are long-stable; the `aws-s3vectors` L1 constructs in 2.260 are therefore *not* required).
+- **Data plane (runtime API calls, per-entity, NOT in CDK):** the indexer **creates the vector bucket
+  (fixed name) and the `slice-<scope>` / `slice-public` index `CreateIndex`-if-absent on first use**, just
+  as `cells.create` provisions a cell on demand. IAM grants against the *known* bucket ARN, so the bucket
+  needn't exist at deploy. The v3 `s3vectors` client is a runtime requirement regardless
+  (`CreateIndex`/`PutVectors`/`QueryVectors`), making it a purely additive dependency.
+
+This is why the only deploy-time change is a Lambda + stream mapping + IAM — the existing 5 stacks are
+otherwise untouched.
+
 ### 4. What gets embedded
 
 Text-bearing fact values + `file` inline `content` (docs). **Skip**: `_`-prefixed plumbing facts
@@ -186,24 +206,38 @@ acts on a semantic hit with zero new ergonomics (R1). Salience fusion is the int
   hot path and the reactor.
 - The index can drift (eventual); harmless by Decision 1. Backfill = replay the table (scan per slice →
   embed → `PutVectors`) or replay the stream; a `vectors-sync.mjs` mirrors `docs-sync.mjs`.
-- Couples to Bedrock (region/model availability) and to S3 Vectors' CDK maturity (likely L1/custom resource
-  at this feature's age — note in the infra increment).
+- Couples to Bedrock (account model-access + region availability) — the one true external prerequisite;
+  handled behind an `Embedder` seam so infra + pipeline deploy/validate before Titan access is confirmed.
+  S3 Vectors itself needs **no** CDK-lib bump: bucket + indexes are runtime `Create…`-if-absent calls (§3a).
 
 ## Increments
 
-1. **Infra + index-per-slice + docs corpus.** S3 Vectors bucket; lazily-created `slice-<scope>` indexes +
-   `slice-public`; embed the existing `file/docs/*` corpus into `slice-public` (`vectors-sync.mjs`).
-   `workspace.search` over `slice-public` only — semantic docs search, no per-user write path yet.
-2. **Stream consumer (live indexing).** Attach the Lambda to the dormant stream; embed text fact
-   create/update, delete on supersede; `sha`-skip unchanged. Per-slice search goes live.
+0. **Seams + reference backend (deploy/validate with no external prereqs).** `Embedder` + `VectorStore`
+   interfaces and an `indexForScope` seam; a `MemoryVectorStore` (unit tests) and a deterministic
+   `HashingEmbedder` fallback so the *whole* pipeline — index create-if-absent, `PutVectors`, fan-out,
+   prefix post-filter, authoritative re-read, `workspace.search` R1 envelope — is exercisable before
+   Bedrock/S3 Vectors are wired. (This is the engineering enabler the rest build on.)
+1. **Infra + S3 Vectors backend + docs corpus.** Control plane: indexer Lambda + stream mapping + IAM
+   (§3a). Data plane: runtime bucket + `slice-public` create-if-absent. `S3VectorsStore` impl; embed the
+   existing `file/docs/*` corpus into `slice-public` (`vectors-sync.mjs`). `workspace.search` over
+   `slice-public` only — semantic docs search, no per-user write path yet.
+2. **Stream consumer (live per-slice indexing).** Attach to the dormant stream; embed text fact
+   create/update, delete on supersede; `sha`-skip unchanged; create `slice-<scope>` on first use. Per-slice
+   search goes live.
 3. **Grant fan-out + granular filters.** Fold granted owners' indexes + `slice-public` into `search`;
    `type`/`tag` metadata filters; prefix-grant post-filter. Honour `read:type:<T>`.
-4. **Salience fusion + blob text.** Re-rank candidates by k-NN × salience; optional text-extraction lane so
-   blob `file` facts (`s3Key` only) become searchable.
+4. **Salience fusion + blob text + Bedrock.** Flip `Embedder` to `BedrockEmbedder` (Titan v2) once model
+   access is confirmed; re-rank candidates by k-NN × salience; optional text-extraction lane so blob `file`
+   facts (`s3Key` only) become searchable.
 
 ## Open questions / risks
 
-- **S3 Vectors CDK support** at this date — L2 vs L1/custom resource for bucket+index creation.
+- ~~S3 Vectors CDK support~~ — **resolved:** indexes are per-slice → created at **runtime** (§3a), not
+  CDK; the bucket is a fixed-name runtime create-if-absent. No `aws-cdk-lib` bump. (`aws-cdk-lib@2.260`
+  *does* ship `CfnVectorBucket`/`CfnIndex` if a deploy-time bucket is ever preferred, but it isn't needed.)
+- **Bedrock model access** — the one true external prerequisite (Titan v2 enablement on the account +
+  region). Gated behind the `Embedder` seam: Increments 0–3 deploy/validate without it; Increment 4 flips
+  to `BedrockEmbedder`.
 - **Per-vector metadata limits** — confirm `tags[]` cardinality fits the filterable-metadata budget; if
   not, index only `type` + `superseded` and post-filter tags.
 - **Index lifecycle for ephemeral slices** — when does a `slice-<scope>` index get created/torn down? Lazy
