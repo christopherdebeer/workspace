@@ -79,6 +79,48 @@ Two candidate isolation models:
 The net: isolation is enforced at **three** layers — index partition (structural), in-index metadata
 filter (granular scope), and the authoritative DDB re-read (final word). No single failure leaks a slice.
 
+#### 2a. Revisited — should we weaken the structural boundary, since we fan out and grant-filter anyway?
+
+A fair challenge: if the authoritative re-read (Decision 1) is the real authorization boundary, and we
+fan out across indexes + post-filter by grant regardless, is the per-slice *structural* boundary earning
+its keep — or should we collapse to **one shared index + a `scope ∈ {…}` metadata filter** (model A) for
+operational simplicity? Verdict: **keep the structural boundary — but recognise it costs ~nothing today,
+so the trade-off is not actually live yet.**
+
+The load-bearing insight: **fan-out is driven by the GRANT model, not the isolation model.** A viewer
+reads from a *set* of owners (own ∪ public ∪ granted) — that set exists whether each owner is a separate
+index or a partition inside one index. So "we fan out anyway" is **not** an argument to collapse: a single
+shared index still has to express "these N owners with these key-patterns," which is fan-out in predicate
+form — and grants (whole-slice / prefix / exact / group / public, *per viewer*) do **not** reduce to a
+static metadata predicate, so you'd post-filter anyway. Collapsing doesn't remove the complexity; it moves
+it from an auditable per-index boundary into a filter expression you must get right on **every** future
+code path. What collapsing *does* give up is real:
+
+- **IAM blast radius** — a single shared index means every query principal can read *all* vectors; the
+  only separation is the app filter. That's a regression from the substrate's existing `LeadingKeys`
+  partition posture (`substrate-table.ts:21`). Per-index lets IAM scope the role per index-prefix.
+- **Candidate-key/metadata leakage pre-re-read** — Decision 1 denies the *value*, but a shared index
+  returns foreign candidate **keys + metadata** (a key like `medical/…` or `_secret/…`, plus its type/tags)
+  into the handler's working set *before* the re-read denies it. Per-index never surfaces them. Defense in
+  depth means the backstop is not the *only* stop.
+- **Audit surface** — "you can't query an index you don't name" is a one-line invariant; "the OR-of-grants
+  filter predicate is correct on all paths" is a standing proof obligation.
+
+And the cost the challenge worries about — N indexes, lifecycle, fan-out latency — **does not exist in the
+current single-owner reality.** "Index-per-slice" degenerates today to exactly **two** indexes: the one
+owner's private index + the shared `slice-public`. Fan-out N ≈ 1. So the structural boundary is essentially
+free *now* and scales correctly into multiplayer later.
+
+**When weakening would become worth it:** if real multiplayer makes fan-out N large (a viewer reading
+hundreds of slices → N `QueryVectors` calls per search becomes a latency/cost problem) **and** cross-slice
+global ranking quality matters (one k-NN over the union ranks by true cosine; fan-out+merge needs score
+comparability — an open question below). At that point, revisit. To keep the decision **reversible**, the
+indexing layer routes vectors through a single `indexFor(scope)` seam (today → `{ private-owner,
+slice-public }`; later → per-user; or → a few trust-tier indexes): collapsing or re-splitting is then one
+function + a re-embed, not a rearchitecture. **Recommendation: keep structural isolation; don't pay for
+per-user indexes prematurely (today it's 2 indexes total); gate any collapse on a *measured* multiplayer
+fan-out problem, not on the symmetry observation alone.**
+
 ### 3. Ingestion: the dormant DDB **Stream** → embed → `PutVectors` (not the EventBridge bus)
 
 A dedicated Stream consumer Lambda on the existing `NEW_AND_OLD_IMAGES` stream:
