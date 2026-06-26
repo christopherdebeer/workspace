@@ -39,6 +39,11 @@ function chips(arr: string[]): string {
 function rowList(pairs: Array<[string, unknown]>): string {
   return '<div class="rows">' + pairs.map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>`).join('') + '</div>';
 }
+/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) and re-renders. */
+function drillRows(pairs: Array<[string, unknown]>, input: (k: string) => unknown): string {
+  return '<div class="rows">' + pairs.map(([k, v]) =>
+    `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify(input(String(k))))}">${esc(k)}</div><div class="v">${esc(v)}</div>`).join('') + '</div>';
+}
 
 function viewerContent(name: string, value: unknown): string {
   if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -87,7 +92,20 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string): strin
     if (!body) body = hint('fields', entry.value) || `<pre>${esc(JSON.stringify(entry.value, null, 2)).slice(0, 800)}</pre>`;
   }
   const sc = entry && entry._meta && typeof entry._meta.score === 'number' ? entry._meta.score.toFixed(2) : '';
-  return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc ? `<span class="sc">${sc}</span>` : ''}</div><div id="${slot}">${body}</div></div>`;
+  // A neighbors-traversal affordance — clicking issues a host-proxied read + re-renders.
+  const nav = key ? `<button class="mini" title="neighbors" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key }))}">↹</button>` : '';
+  return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc ? `<span class="sc">${sc}</span>` : ''}${nav}</div><div id="${slot}">${body}</div></div>`;
+}
+/** The ratification queue (ADR-0032/0036): each suggested pair, ratify-as-<rel> buttons
+ *  that act through the host proxy; the view re-renders after. */
+function renderSuggestions(d: Record<string, unknown>): string {
+  const vocab = (Array.isArray(d.vocab) ? d.vocab : ['relatesTo']) as string[];
+  const items = (d.suggestions as Array<Record<string, unknown>> || []).map((c) => {
+    const chips = vocab.map((rel) => `<button class="chip act" data-call="act" data-target="workspace.ratify" data-input="${esc(JSON.stringify({ from: c.from, to: c.to, rel }))}">${esc(rel)}</button>`).join('');
+    const score = c.score != null ? Number(c.score).toFixed(2) : '';
+    return `<div class="fc"><div class="fc-h"><span class="lb">${esc(c.fromLabel || c.from)} ↔ ${esc(c.toLabel || c.to)}</span><span class="sp"></span><span class="sc">${score}</span></div><div class="chips"><span class="hint">ratify as</span> ${chips}</div></div>`;
+  }).join('');
+  return `<h2>Suggestions (${esc(d.total ?? 0)})</h2>${items || '<div class="hint">none</div>'}`;
 }
 function entriesBlock(map: Record<string, Entry>, types: Types): string {
   return Object.keys(map).map((k, i) => typedCard(k, map[k], types, 'slot-' + i)).join('');
@@ -96,9 +114,9 @@ function overview(o: Record<string, unknown>): string {
   let h = '';
   const bands = o.bands as Record<string, number> | undefined;
   if (bands) h += '<h2>Salience</h2><div class="bands">' + (['focus', 'peripheral', 'elided'] as const).map((b) => `<div class="band"><b>${esc(bands[b])}</b><span>${b}</span></div>`).join('') + '</div>';
-  if (typeof o.total === 'number') h += `<div class="hint">${esc(o.total)} facts${o.granted ? ' · ' + esc(o.granted) + ' granted' : ''}</div>`;
-  if (Array.isArray(o.byType)) h += '<h2>By type</h2>' + rowList((o.byType as Array<{ type: string; count: number }>).map((t) => [t.type || '(untyped)', t.count]));
-  if (Array.isArray(o.byPrefix)) h += '<h2>By prefix</h2>' + rowList((o.byPrefix as Array<{ prefix: string; count: number }>).map((p) => [p.prefix, p.count]));
+  if (typeof o.total === 'number') h += `<div class="hint">${esc(o.total)} facts${o.granted ? ' · ' + esc(o.granted) + ' granted' : ''} · tap a type or prefix to drill</div>`;
+  if (Array.isArray(o.byType)) h += '<h2>By type</h2>' + drillRows((o.byType as Array<{ type: string; count: number }>).map((t) => [t.type || '(untyped)', t.count]), (k) => ({ type: k, limit: 25 }));
+  if (Array.isArray(o.byPrefix)) h += '<h2>By prefix</h2>' + drillRows((o.byPrefix as Array<{ prefix: string; count: number }>).map((p) => [p.prefix, p.count]), (k) => ({ prefix: k, limit: 25 }));
   return h;
 }
 function whoami(d: Record<string, unknown>): string {
@@ -118,6 +136,7 @@ function render(data: unknown): void {
     const types = (d.types as Types) || {};
     if (d.overview) b += overview(d.overview as Record<string, unknown>);
     else if (d.user && Array.isArray(d.scopes)) b += whoami(d);
+    else if (Array.isArray(d.suggestions) && Array.isArray(d.vocab)) { b += renderSuggestions(d); currentRead = { target: 'workspace.suggestions', input: {} }; }
     if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus as Record<string, Entry>, types);
     else if (d.entries) b += entriesBlock(d.entries as Record<string, Entry>, types);
     else if (d.value && d._meta) b += typedCard((d.key as string) || '', d as Entry, types, 'slot-one');
@@ -160,6 +179,35 @@ function request(method: string, params: unknown): Promise<unknown> {
     setTimeout(() => { if (pending[id]) { delete pending[id]; resolve(null); } }, 4000);
   });
 }
+// ── interactivity: widget-initiated reads/acts via the host proxy (ADR-0036) ──
+// The widget is an MCP client to the host; tools/call is proxied to our gateway under
+// the connection's auth (enforceScope). So a drill/ratify re-renders the card IN PLACE
+// — progressive disclosure with no new model turn, no model-context cost.
+let currentRead: { target: string; input: unknown } | null = null;
+async function callTool(kind: 'read' | 'act', target: string, input: unknown): Promise<unknown> {
+  const r = await request('tools/call', { name: kind, arguments: { target, input } });
+  return (r as { structuredContent?: unknown })?.structuredContent ?? null;
+}
+document.addEventListener('click', async (ev) => {
+  const el = (ev.target as HTMLElement)?.closest?.('[data-call]') as HTMLElement | null;
+  if (!el) return;
+  ev.preventDefault();
+  const kind = (el.getAttribute('data-call') === 'act' ? 'act' : 'read') as 'read' | 'act';
+  const target = el.getAttribute('data-target') || '';
+  let input: unknown = {};
+  try { input = JSON.parse(el.getAttribute('data-input') || '{}'); } catch { /* default {} */ }
+  el.classList.add('busy');
+  if (kind === 'read') {
+    const sc = await callTool('read', target, input);
+    currentRead = { target, input };
+    if (sc) render(sc);
+  } else {
+    await callTool('act', target, input);
+    const rr = currentRead || { target: 'workspace.suggestions', input: {} };
+    const sc = await callTool('read', rr.target, rr.input); // refresh the current view
+    if (sc) render(sc);
+  }
+});
 function fetchRenderer(uri: string, slot: string): void {
   request('resources/read', { uri }).then((r) => {
     const c = (r as { contents?: Array<{ text?: string }> })?.contents?.[0];

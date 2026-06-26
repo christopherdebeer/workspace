@@ -37,6 +37,10 @@ const SHELL_HEAD = `<!doctype html>
   .band b { display: block; font-size: 20px; font-weight: 650; } .band span { font-size: 11px; opacity: .65; }
   .rows { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
   .rows .k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .rows .v { opacity: .65; font-variant-numeric: tabular-nums; }
+  .rows .k.drill { cursor: pointer; color: #6d5ef0; } .rows .k.drill:hover { text-decoration: underline; }
+  .chip.act { cursor: pointer; } .chip.act:hover { background: color-mix(in srgb, #6d5ef0 28%, transparent); }
+  .mini { cursor: pointer; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 6px; font-size: 12px; line-height: 1; padding: 2px 6px; }
+  .busy { opacity: .5; pointer-events: none; }
   .fc { border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 10px; padding: 10px; margin: 8px 0; }
   .fc-h { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
   .fc-h .ic { font-size: 15px; } .fc-h .lb { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

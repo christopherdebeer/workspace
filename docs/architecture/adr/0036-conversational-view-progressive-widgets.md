@@ -1,6 +1,12 @@
 # ADR-0036 — The conversational view: progressive, interactive widgets for cell-owned types & tools
 
-- **Status:** Accepted — **Tier 2 viewers/machine reuse shipped.** The card now imports the **`viewers`
+- **Status:** Accepted — **Tier 1 (interactive, high-traffic reads) + Tier 2 (viewers/machine) shipped.**
+  The card is now an interactive, self-navigating substrate browser: overview `byType`/`byPrefix` rows
+  **drill** (host-proxied `workspace.query`), each fact card has a **neighbors** traversal, and the
+  `suggestions` shape renders a **ratify queue** whose `refines/grounds/…` chips `act workspace.ratify`
+  through the host proxy and re-render in place — progressive disclosure with no new model turn, all under
+  `enforceScope`. Tier 2 below.
+- **Status (Tier 2):** **viewers/machine reuse shipped.** The card now imports the **`viewers`
   cell** renderers (json tree / csv table / mermaid — the same modules canvas + lit use) and dispatches on
   a type's `present.render.viewer`; `machine-run` facts render their `trace` as a **mermaid flowchart**
   (current node highlighted). The resource declares the mermaid CDN in `_meta.ui.csp.resourceDomains`
