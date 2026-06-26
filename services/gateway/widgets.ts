@@ -27,6 +27,14 @@ const CARD_HTML = `<!doctype html>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; padding: 12px; }
+  .hdr { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13px; letter-spacing: .02em;
+         padding-bottom: 8px; margin-bottom: 8px; border-bottom: 2px solid #6d5ef0; }
+  .hdr .dot { width: 10px; height: 10px; border-radius: 50%; background: #6d5ef0; box-shadow: 0 0 0 3px color-mix(in srgb, #6d5ef0 25%, transparent); }
+  .hdr .sp { flex: 1; } .hdr .tag { font-weight: 500; font-size: 11px; opacity: .55; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 8px; border-radius: 999px;
+          background: color-mix(in srgb, #6d5ef0 14%, transparent); border: 1px solid color-mix(in srgb, #6d5ef0 35%, transparent); }
+  .who { font-size: 18px; font-weight: 650; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin: 14px 0 6px; }
   .bands { display: flex; gap: 8px; flex-wrap: wrap; }
   .band { flex: 1 1 80px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 10px; padding: 8px 10px; }
@@ -44,9 +52,13 @@ const CARD_HTML = `<!doctype html>
 </style>
 </head>
 <body>
-<div id="root">Loading…</div>
+<!-- The header renders immediately on load — so if you see "parc.land", this IS our
+     MCP-Apps iframe (not the client's default JSON view), even before data arrives. -->
+<div id="root"><div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div><div class="hint">Loading…</div></div>
 <script>
   function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function header(){ return '<div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div>'; }
+  function chips(arr){ return '<div class="chips">' + arr.map(function(s){ return '<span class="chip">'+esc(s)+'</span>'; }).join('') + '</div>'; }
   function rows(pairs){ return '<div class="rows">' + pairs.map(([k,v]) => '<div class="k">'+esc(k)+'</div><div class="v">'+esc(v)+'</div>').join('') + '</div>'; }
   function renderOverview(o){
     var h = '';
@@ -58,19 +70,27 @@ const CARD_HTML = `<!doctype html>
     if (o.byPrefix) h += '<h2>By prefix</h2>' + rows(o.byPrefix.map(function(p){ return [p.prefix, p.count]; }));
     return h;
   }
+  function renderWhoami(d){
+    var h = '<h2>Identity</h2><div class="who">' + esc(d.user || 'anonymous') + '</div>';
+    if (Array.isArray(d.scopes)) h += '<h2>Active scope</h2>' + chips(d.scopes);
+    if (Array.isArray(d.grant) && JSON.stringify(d.grant) !== JSON.stringify(d.scopes)) h += '<h2>Grant ceiling</h2>' + chips(d.grant);
+    return h;
+  }
   function render(data){
-    if (!data || typeof data !== 'object') { document.getElementById('root').textContent = String(data); return; }
-    var h = '';
-    // recall overview shape
-    if (data.overview) h += renderOverview(data.overview);
-    if (data.focus) { h += '<h2>Focus</h2><ul class="focus">' + Object.keys(data.focus).map(function(k){
-      var e = data.focus[k], m = (e && e._meta) || {};
-      return '<li><div class="key">'+esc(k)+'</div><div class="meta">'+esc(m.type||'')+(typeof m.score==='number'? ' · '+m.score.toFixed(2):'')+'</div></li>';
-    }).join('') + '</ul>'; }
-    // generic fallback
-    if (!h) h = '<pre>' + esc(JSON.stringify(data, null, 2)) + '</pre>';
-    if (data.hints) h += '<div class="hint">' + data.hints.map(esc).join('<br>') + '</div>';
-    document.getElementById('root').innerHTML = h;
+    var root = document.getElementById('root');
+    var body = '';
+    if (!data || typeof data !== 'object') body = '<pre>' + esc(String(data)) + '</pre>';
+    else {
+      if (data.overview) body += renderOverview(data.overview);              // recall overview
+      else if (data.user && Array.isArray(data.scopes)) body += renderWhoami(data); // whoami
+      if (data.focus) { body += '<h2>Focus</h2><ul class="focus">' + Object.keys(data.focus).map(function(k){
+        var e = data.focus[k], m = (e && e._meta) || {};
+        return '<li><div class="key">'+esc(k)+'</div><div class="meta">'+esc(m.type||'')+(typeof m.score==='number'? ' · '+m.score.toFixed(2):'')+'</div></li>';
+      }).join('') + '</ul>'; }
+      if (!body) body = '<pre>' + esc(JSON.stringify(data, null, 2)) + '</pre>'; // generic fallback (under the header)
+      if (Array.isArray(data.hints)) body += '<div class="hint">' + data.hints.map(esc).join('<br>') + '</div>';
+    }
+    root.innerHTML = header() + body;
   }
   // MCP-Apps host handshake (io.modelcontextprotocol/ui, spec 2026-01-26): the host
   // sends NOTHING until it receives our initialized notification, so we must: send

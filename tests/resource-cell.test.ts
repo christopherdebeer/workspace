@@ -270,6 +270,10 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(contents[0].uri).toBe('ui://parc/card');
     expect(contents[0].mimeType).toContain('text/html');
     expect(contents[0].text).toContain('<!doctype html>');
+    // Unmistakably-ours marker (renders immediately) + the required init handshake.
+    expect(contents[0].text).toContain('parc.land');
+    expect(contents[0].text).toContain('ui/initialize');
+    expect(contents[0].text).toContain('ui/notifications/initialized');
 
     const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
     expect(missing.error?.code).toBe(-32602);
