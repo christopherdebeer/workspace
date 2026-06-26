@@ -1837,11 +1837,12 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       // grant's owner (direct/public/group). Each hit is re-read authoritatively below.
       type Cand = { owner: string; key: string; outKey: string; score: number };
       const cands: Cand[] = [];
-      const ownMatches = await vectors.store.query(indexForScope(viewer), queryVector, queryOpts).catch(() => []);
+      const dim = vectors.embedder.dimension;
+      const ownMatches = await vectors.store.query(indexForScope(viewer, dim), queryVector, queryOpts).catch(() => []);
       for (const m of ownMatches) cands.push({ owner: viewer, key: m.key, outKey: m.key, score: m.score });
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
-        const matches = await vectors.store.query(indexForScope(g.owner), queryVector, queryOpts).catch(() => []);
+        const matches = await vectors.store.query(indexForScope(g.owner, dim), queryVector, queryOpts).catch(() => []);
         for (const m of matches) {
           if (!grantCovers(g.key, m.key)) continue; // whole-slice / prefix / exact — exactly as peek
           cands.push({ owner: g.owner, key: m.key, outKey: `${g.owner}/${m.key}`, score: m.score });
@@ -1882,7 +1883,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       }
       const { state, vectors } = build(ctx);
       if (!vectors) return { indexed: 0, skipped: 0, hint: 'semantic search is not configured on this deployment' };
-      const index = indexForScope(scope);
+      const index = indexForScope(scope, vectors.embedder.dimension);
       await vectors.store.ensureIndex(index, { dimension: vectors.embedder.dimension });
 
       const max = Math.min(Math.max(1, input?.max ?? 2000), 5000);

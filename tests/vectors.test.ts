@@ -89,8 +89,10 @@ describe('metadataForFact', () => {
 });
 
 describe('indexForScope / PUBLIC_INDEX', () => {
-  it('maps a scope to its slice index and exposes the shared public index', () => {
-    expect(indexForScope('c15r')).toBe('slice-c15r');
+  it('maps a scope to its slice index, namespaced by embedding dimension', () => {
+    expect(indexForScope('c15r')).toBe('slice-c15r'); // no dim → bare (back-compat)
+    expect(indexForScope('c15r', 1024)).toBe('slice-c15r-d1024'); // dim → fresh namespace on model change
+    expect(indexForScope('c15r', 256)).toBe('slice-c15r-d256');
     expect(PUBLIC_INDEX).toBe('slice-public');
   });
 });
@@ -150,8 +152,8 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
         { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', '_config/salience', { value: { focusThreshold: 0.6 } })) } },
       ],
     });
-    expect([...plans.keys()]).toEqual(['slice-alice']);
-    const p = plans.get('slice-alice')!;
+    expect([...plans.keys()]).toEqual(['slice-alice-d256']); // DIM defaults to 256 (no VECTOR_* env in tests)
+    const p = plans.get('slice-alice-d256')!;
     expect(p.puts.map((x) => x.key)).toEqual(['d1']);
     expect(p.puts[0].meta).toMatchObject({ type: 'decision', tag: 'storage' });
   });
@@ -163,7 +165,7 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
         { eventName: 'REMOVE', dynamodb: { OldImage: M(fact('bob', 'g2', { value: 'y' })) } },
       ],
     });
-    const p = plans.get('slice-bob')!;
+    const p = plans.get('slice-bob-d256')!;
     expect([...p.removes].sort()).toEqual(['g1', 'g2']);
     expect(p.puts).toHaveLength(0);
   });

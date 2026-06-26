@@ -64,9 +64,16 @@ export const PUBLIC_INDEX = 'slice-public';
 
 /** The index a scope's facts live in — mirrors the `STATE#<scope>` partition so the
  *  isolation boundary is structural (ADR-0030 Decision 2). The single seam through
- *  which a future collapse/re-split is one function change (§2a). */
-export function indexForScope(scope: string): string {
-  return `slice-${scope}`;
+ *  which a future collapse/re-split is one function change (§2a).
+ *
+ *  `dim` (the active embedder's dimension) is appended so an embedding-model change —
+ *  e.g. hashing 256-dim → Titan 1024-dim — lands in a *fresh* index (S3 Vectors fixes
+ *  dimension at creation) rather than colliding with vectors from another space. The
+ *  old index is simply orphaned (harmless; storage is cheap). This is the resolution
+ *  to the "embedding drift" risk: a model swap is a `reindex` into a new namespace,
+ *  callers stay consistent because they all derive `dim` from the same env-built embedder. */
+export function indexForScope(scope: string, dim?: number): string {
+  return dim ? `slice-${scope}-d${dim}` : `slice-${scope}`;
 }
 
 // ── text extraction ─────────────────────────────────────────────────

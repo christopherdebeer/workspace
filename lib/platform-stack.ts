@@ -124,6 +124,12 @@ export class PlatformStack extends cdk.Stack {
     // by the workspace cell (query/reindex) and the stream indexer (live updates).
     const vectorBucket = `parc-vectors-${envName}-${this.account}`;
     const titanModelArn = `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`;
+    // Embedding backend (ADR-0030 Inc 4): Bedrock Titan Text Embeddings v2 (1024-dim,
+    // cosine). Model access now auto-enables on first invoke (the Bedrock model-access
+    // page is retired), so this needs no manual activation. Switching the embedder
+    // re-namespaces indexes by dimension (slice-<scope>-d1024), so the old 256-dim
+    // hashing index is orphaned and `reindex` repopulates the new one — see indexForScope.
+    const vectorEnv = { VECTOR_BUCKET: vectorBucket, VECTOR_REGION: this.region, VECTOR_EMBEDDER: 'bedrock', VECTOR_DIM: '1024' };
 
     const workspace = new HttpServiceCell(this, 'WorkspaceService', {
       name: 'workspace',
@@ -144,10 +150,7 @@ export class PlatformStack extends cdk.Stack {
       // bucket name + region are wired here. VECTOR_EMBEDDER defaults to the
       // deterministic hashing embedder; flip to `bedrock` (Increment 4) once Titan
       // model access is enabled — a config change, no redeploy of code.
-      environment: {
-        VECTOR_BUCKET: vectorBucket,
-        VECTOR_REGION: this.region,
-      },
+      environment: vectorEnv,
     });
     substrate.grantReadWrite(workspace);
     // S3 Vectors (runtime data plane) + Bedrock embeddings (Increment 4) for the
@@ -179,7 +182,7 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       timeout: cdk.Duration.seconds(60),
       logRetention: logs.RetentionDays.ONE_WEEK,
-      environment: { VECTOR_BUCKET: vectorBucket, VECTOR_REGION: this.region },
+      environment: vectorEnv,
       bundling: { externalModules: [] }, // bundle the SDKs (not in the Node 20 image)
     });
     vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['s3vectors:*'], resources: ['*'] }));

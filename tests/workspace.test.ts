@@ -587,7 +587,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     const text = embeddableText(key, value);
     if (!text) return;
     const [vector] = await embedder.embed([text]);
-    await vstore.put(indexForScope(scope), [{ key, vector, metadata: metadataForFact(meta) }]);
+    await vstore.put(indexForScope(scope, embedder.dimension), [{ key, vector, metadata: metadataForFact(meta) }]);
   }
 
   beforeAll(async () => {
@@ -663,7 +663,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     expect((await cmds.search({ text: 'kubernetes ingress' }, adminCtx())).entries).toHaveLength(0);
     const r = await cmds.reindex(undefined, adminCtx());
     expect(r.indexed).toBeGreaterThanOrEqual(2);
-    expect(r.index).toBe('slice-dave');
+    expect(r.index).toBe('slice-dave-d128'); // namespaced by the test embedder's dimension
     const res = await cmds.search({ text: 'kubernetes ingress routing' }, adminCtx());
     expect(res.entries[0]?.key).toBe('k1'); // the k8s note, not the sourdough one
   });

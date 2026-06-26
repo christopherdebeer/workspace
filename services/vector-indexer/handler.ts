@@ -65,7 +65,7 @@ export function planStreamWork(event: StreamEvent): Map<string, IndexPlan> {
     const scope = item.scope;
     const key = item.key;
     if (typeof scope !== 'string' || typeof key !== 'string') continue;
-    const index = indexForScope(scope);
+    const index = indexForScope(scope, DIM);
 
     // Hard delete (incl. delete-effect timer TTL) or supersession → drop the vector.
     if (r.eventName === 'REMOVE' || img?.superseded) {
