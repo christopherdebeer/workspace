@@ -1,7 +1,10 @@
 # ADR-0035 — `ui://` as the substrate's universal render resource
 
-- **Status:** Accepted — **unify the rich tier + share the hint floor** (home stays inline-rendered; not the
-  maximal "home consumes `ui://` for everything"). A type's renderer becomes **one artifact** authored by its
+- **Status:** Accepted — **Inc A–C shipped** (the conversation card is now the *built, shared* renderer:
+  `platform/ui/render-hints` + `marked`, esbuilt via the gateway's `clientEntry` and inlined into
+  `ui://parc/card`); Inc D consumer shipped, provider (cell-authored renderers) the remaining hop. **Unify the
+  rich tier + share the hint floor** (home stays inline-rendered; not the maximal "home consumes `ui://` for
+  everything"). A type's renderer becomes **one artifact** authored by its
   managing cell and consumed by every surface: inline where the surface is React (home, canvas), and as a
   sandboxed `ui://` MCP-Apps iframe where it's foreign (the conversation, any MCP host). The hand-rolled
   hint vocabulary is extracted into `platform/ui` so there is a single implementation, not a React one (home)
@@ -60,17 +63,25 @@ for foreign surfaces.
 
 ## Increments
 
-- **Inc A — share the hint floor.** Extract `bodyText`/markdown/code/metric/fields/image/label-resolution into
-  a `platform/ui` module (framework-agnostic string core). Home's `HintBody` wraps it; the conversation card
-  uses it. Removes the duplicate vanilla renderer. (Pure refactor + dedupe; testable now.)
-- **Inc B — the renderer as a cell bundle.** A renderer entry (in `home` or a dedicated widget cell) that
-  imports the `platform/ui` renderers and builds (existing cell esbuild) to a self-contained HTML doing the
-  MCP-Apps handshake — the real, shared renderer, not the hand-rolled card.
-- **Inc C — gateway serves the cell-built renderer.** `resources/read` returns the cell's built renderer HTML
-  (server-side fetch), replacing the inline `CARD_HTML`. The card becomes the cell's artifact.
-- **Inc D — per-type cell renderers.** A managing cell serves its type's `ui://` renderer; the card resolves
-  `handlers.render[].renderer` to it (ADR-0034 Inc 2′ consumer is already shipped). Now a cell deploy adds a
-  conversation renderer with no platform deploy.
+- **Inc A — share the hint floor (shipped).** `platform/ui/render-hints.ts` is the single source of truth for
+  the hint vocabulary (`bodyText` field priority, `present.label` path resolution, `selectFields` rules,
+  `hintToHtml` for md/code/metric/fields/image). Dependency-free: markdown is **injected** (`HintDeps.md`) so
+  `platform/ui` keeps its React-only contract. The conversation widget uses it with real `marked`. (Home
+  adopting the same helpers — deduping its own `bodyText`/`FieldsBody` — is a safe follow-up; deferred only to
+  confirm home's bundler resolves the cross-dir import without risk to the primary surface.)
+- **Inc B/C — the renderer as the gateway's own client bundle (shipped; simpler than first sketched).** Rather
+  than a *separate* cell + a server-side fetch, the card's render logic lives in `services/gateway/client/
+  main.ts`, esbuilt to `app.js` via the gateway's `HttpServiceCell` `clientEntry` (the same esbuild every cell
+  uses), and `widgets.ts` **inlines** it into the self-contained `ui://parc/card` HTML at runtime (with a small
+  handshake-only fallback for tests/local). So the platform card is now the *built, shared* renderer — using
+  `platform/ui/render-hints` + `marked` — not the hand-rolled vanilla copy. (The "renderer in a separate cell,
+  gateway fetches it" shape is unnecessary for the platform floor; it is exactly the Inc D path for *cell-
+  authored* renderers.)
+- **Inc D — per-type cell renderers (consumer shipped; provider is the remaining hop).** A type declares
+  `handlers.render[].renderer` as a `ui://…`; the card fetches it over the host `resources/read` proxy and
+  injects it, falling back to the hint render (ADR-0034 Inc 2′ — shipped). The remaining hop is the **provider**:
+  the gateway resolving a *cell-authored* renderer URI by fetching the cell's served HTML (version-cached). Then
+  a cell deploy adds a conversation renderer with no platform deploy. Not built (no cell declares one yet).
 
 ## Open questions
 

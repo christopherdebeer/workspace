@@ -269,6 +269,10 @@ export class PlatformStack extends cdk.Stack {
     const gateway = new HttpServiceCell(this, 'GatewayService', {
       name: 'gateway',
       entry: serviceEntry('gateway'),
+      // The MCP-Apps card widget (ADR-0034/0035): esbuilt to `app.js` beside the
+      // handler, inlined by `widgets.ts` into the `ui://parc/card` resource. Uses the
+      // shared `platform/ui` render vocabulary + marked.
+      clientEntry: path.join(__dirname, '..', '..', 'services', 'gateway', 'client', 'main.ts'),
       // Both the bare resource identifier (`/mcp`, advertised in the PRM) and its
       // sub-paths. CloudFront's `/mcp/*` pattern does not match the bare `/mcp`.
       routes: ['/mcp', '/mcp/*'],
