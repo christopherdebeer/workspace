@@ -24,7 +24,9 @@ const SHELL_HEAD = `<!doctype html>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; padding: 12px; }
+  /* min-height nudges hosts that size the frame to initial content (claude.ai mobile);
+     overflow:auto keeps the body scrollable inside a fixed frame so content is reachable. */
+  html, body { min-height: 540px; } body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; padding: 12px; overflow: auto; }
   .hdr { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13px; letter-spacing: .02em; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 2px solid #6d5ef0; }
   .hdr .dot { width: 10px; height: 10px; border-radius: 50%; background: #6d5ef0; box-shadow: 0 0 0 3px color-mix(in srgb, #6d5ef0 25%, transparent); }
   .hdr .sp { flex: 1; } .hdr .tag { font-weight: 500; font-size: 11px; opacity: .55; }
@@ -106,7 +108,14 @@ export function resolveUiResource(uri: string): { uri: string; mimeType: string;
       uri,
       mimeType: UI_MIME,
       text: cardHtml(),
-      _meta: { ui: { csp: { resourceDomains: ['https://cdn.jsdelivr.net'] } } },
+      // CSP allows mermaid's CDN; the preferred-frame-size hints give the host a
+      // sensible initial height (claude.ai mobile does not honour runtime resize yet,
+      // so a too-small fixed frame clips the body — validation 2026-06-27). Belt and
+      // suspenders: spec-style + the MCP-UI vendor key.
+      _meta: {
+        ui: { csp: { resourceDomains: ['https://cdn.jsdelivr.net'] }, preferredFrameSize: { width: '100%', height: '560px' } },
+        'mcpui.dev/ui-preferred-frame-size': ['100%', '560px'],
+      },
     };
   }
   return null;

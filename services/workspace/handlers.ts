@@ -251,7 +251,7 @@ function withAffordance(entry: Entry | null, decls: Record<string, Record<string
 /** High-volume runtime/machine fact types that cluster by *format* rather than meaning
  *  (ADR-0032) — excluded from `suggestions` by default so the candidate list stays
  *  curatable; `includeRuntime: true` surfaces them. */
-const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim']);
+const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim', 'canvas-element']);
 
 /** The leading segment of a fact key — the "namespace" for an overview breakdown
  *  (`kb/concept_x` → `kb`, `cell:abc` → `cell`, `tending/latest` → `tending`). */
