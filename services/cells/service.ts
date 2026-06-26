@@ -1453,7 +1453,7 @@ async function platformLogs(input: PlatformLogsInput, ctx: ServiceContext): Prom
   requireUser(ctx.identity);
   const known = Object.keys(PLATFORM_SERVICE_LABELS);
   const service = (input?.service ?? '').trim();
-  if (!service) return { services: known, hint: 'Pass `service` (one of services[]) + optional since/limit/filter.' };
+  if (!service) return { services: known, hint: 'Pass `service` (one of services[]) + optional since (e.g. 30m), limit (default 200, returns the most-recent tail), filter (a CloudWatch pattern — server-side grep, e.g. "reaction invoke failed" or a correlationId).' };
   const label = PLATFORM_SERVICE_LABELS[service];
   if (!label) throw new Error(`Unknown platform service "${service}". Known: ${known.join(', ')}`);
   const stack = process.env.PLATFORM_STACK_NAME;
@@ -1463,7 +1463,7 @@ async function platformLogs(input: PlatformLogsInput, ctx: ServiceContext): Prom
   if (!logGroupName) return { service, count: 0, events: [], note: `no log group matching "${prefix}"` };
   const events = await getLogsByGroupName(logGroupName, {
     startTimeMs: Date.now() - sinceToMs(input.since),
-    limit: input.limit ?? 100,
+    limit: input.limit ?? 200,
     filterPattern: input.filter,
   });
   ctx.logger.info('platform logs read', { service, logGroup: logGroupName, count: events.length });

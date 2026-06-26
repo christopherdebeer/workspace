@@ -8,6 +8,7 @@
  */
 import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
+import { stripUndefined } from '../platform/runtime/dynamo-state-store';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -583,6 +584,29 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
   it('validates params against the declared schema', async () => {
     await expect(cmds.invoke({ action: 'set-phase', params: {} }, alice())).rejects.toThrow(/invalid_param/);
     await expect(cmds.invoke({ action: 'set-phase', params: { phase: 'flying' } }, alice())).rejects.toThrow(/invalid_param/);
+  });
+
+  it('treats a null/absent OPTIONAL param as absent, not a wrong-type error (no-`text` trigger regression)', async () => {
+    // Mirrors the machine `start` action: an optional `text`. A reaction resolved
+    // an absent trigger `text` to `null`; the validator then hit `typeof null !==
+    // "string"` and silently aborted the reaction, so the run never started.
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'start-like',
+          description: 'start a run; optional text',
+          params: { run: { type: 'string', required: true }, text: { type: 'string', required: false } },
+          writes: [{ key: 'srun/${params.run}', value: { run: '${params.run}', text: '${params.text}', status: 'running' }, type: 'machine-run' }],
+        },
+      },
+      alice(),
+    );
+    // Optional param absent → succeeds. Optional param explicitly null → succeeds
+    // (used to throw invalid_param). Both must start the run.
+    await expect(cmds.invoke({ action: 'start-like', params: { run: 'a' } }, alice())).resolves.toBeDefined();
+    await expect(cmds.invoke({ action: 'start-like', params: { run: 'b', text: null } }, alice())).resolves.toBeDefined();
+    expect((await cmds.peek({ key: 'srun/b' }, alice()))?.value).toMatchObject({ run: 'b', status: 'running' });
+    await cmds.deleteAction({ id: 'start-like' }, alice()); // shared store — don't leak into the action-list assertions
   });
 
   it('if conditions gate invocation with a precondition_failed error', async () => {
@@ -1269,6 +1293,17 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
   });
 });
 
+describe('stripUndefined (DynamoDB write sanitizer — v2 removeUndefinedValues equivalent)', () => {
+  it('recursively drops undefined keys but keeps null/false/0/empties', () => {
+    expect(stripUndefined({ a: 1, b: undefined, c: null, d: false, e: 0, f: '' })).toEqual({ a: 1, c: null, d: false, e: 0, f: '' });
+    expect(stripUndefined({ outer: { keep: 1, drop: undefined }, list: [{ x: undefined, y: 2 }] })).toEqual({ outer: { keep: 1 }, list: [{ y: 2 }] });
+  });
+  it('passes primitives through untouched', () => {
+    expect(stripUndefined('s')).toBe('s');
+    expect(stripUndefined(null)).toBeNull();
+  });
+});
+
 describe('resolveParams template substitution', () => {
   const sub = { id: 's', match: { keyPrefix: 'machine/m/run/' } } as Parameters<typeof resolveParams>[0];
 
@@ -1296,6 +1331,17 @@ describe('resolveParams template substitution', () => {
     expect(out.onError.value.status).toBe('failed');
     expect(out.onError.tags).toEqual(['machine', 'machine:r2']);
     expect(out.grants.write).toEqual(['machine/m/run/']);
+  });
+
+  it('OMITS an exact placeholder that does not resolve — absent, not null (the no-`text` trigger fix)', () => {
+    // `text: ${value.text}` on a trigger that carried no text used to resolve to
+    // `null`, which then failed the action param type-check (typeof null !== string)
+    // and silently aborted the reaction. It must now be ABSENT so an optional param
+    // is correctly skipped.
+    const def = { ...sub, params: { run: '${keySuffix}', text: '${value.text}' } };
+    const out = resolveParams(def, 'machine/m/run/r2', 'c15r', { node: 'X' }); // value has no `text`
+    expect(out.run).toBe('r2');
+    expect('text' in out).toBe(false); // omitted entirely — not null, not "undefined"
   });
 });
 

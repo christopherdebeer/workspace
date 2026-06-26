@@ -213,18 +213,30 @@ export async function getLogsByGroupName(
   logGroupName: string,
   p: { startTimeMs?: number; limit?: number; filterPattern?: string } = {},
 ): Promise<CellLogEvent[]> {
+  const limit = p.limit ?? 100;
+  const startTime = p.startTimeMs ?? Date.now() - 15 * 60 * 1000;
+  // CloudWatch `filterLogEvents` returns events chronologically from `startTime`,
+  // and a single call capped at `limit` yields the OLDEST N in the window — never
+  // the recent tail (the silent reason a live tail showed minutes-stale lines).
+  // Page to the end (bounded) and return the most-recent `limit`. For extreme
+  // volumes that exceed the page budget, narrow with `since`/`filter`.
+  const MAX_PAGES = 20;
+  const PER_PAGE = 1000;
   try {
-    const res = await cwLogs()
-      .filterLogEvents({
-        logGroupName,
-        startTime: p.startTimeMs ?? Date.now() - 15 * 60 * 1000,
-        limit: p.limit ?? 100,
-        filterPattern: p.filterPattern,
-      })
-      .promise();
-    return (res.events ?? [])
-      .map((e) => ({ timestamp: e.timestamp ?? 0, message: (e.message ?? '').replace(/\s+$/, '') }))
-      .filter((e) => e.message.length > 0);
+    const all: CellLogEvent[] = [];
+    let nextToken: string | undefined;
+    let pages = 0;
+    do {
+      const res = await cwLogs()
+        .filterLogEvents({ logGroupName, startTime, limit: PER_PAGE, filterPattern: p.filterPattern, nextToken })
+        .promise();
+      for (const e of res.events ?? []) {
+        const message = (e.message ?? '').replace(/\s+$/, '');
+        if (message.length) all.push({ timestamp: e.timestamp ?? 0, message });
+      }
+      nextToken = res.nextToken;
+    } while (nextToken && ++pages < MAX_PAGES);
+    return all.slice(-limit); // the most-recent `limit` events (chronological asc)
   } catch (err) {
     // No log group yet (never invoked) → no logs, not an error.
     if ((err as { code?: string }).code === 'ResourceNotFoundException') return [];

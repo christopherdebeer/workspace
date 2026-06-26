@@ -2271,6 +2271,31 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
 
     const actions = createDeclarativeActions(state);
     const identity: Identity = { user: 'platform/reaction', scopes: [] };
+
+    // Dead-letter a swallowed reaction failure as an OBSERVABLE fact, so a silently
+    // broken reaction (e.g. an invoke that throws before writing) surfaces in the
+    // substrate — not just a buried CloudWatch `warn`. Keyed `_reaction-errors/<id>`:
+    // the `_` prefix means the reactor skips it (line above), and we write via
+    // state.put without emitting `workspace.fact.written`, so there is no loop.
+    // Best-effort: the error path must never throw. Latest-error-per-subscription
+    // (overwrite) keeps it bounded.
+    const recordReactionError = async (subId: string, kind: 'invoke' | 'deliver', target: string, err: unknown): Promise<void> => {
+      try {
+        await state.put(
+          {
+            scope,
+            key: `_reaction-errors/${subId}`,
+            value: { subscription: subId, kind, target, key, error: (err as Error)?.message ?? String(err), at: new Date().toISOString() },
+            via: 'platform/reaction',
+            type: 'reaction-error',
+            tags: ['reaction-error'],
+          },
+          identity,
+        );
+      } catch {
+        /* best-effort — a dead-letter write must never break the reactor */
+      }
+    };
     for (const sub of hits) {
       if (revision > (sub.maxDepth ?? 50)) {
         ctx.logger.warn('reaction skipped: depth cap', { scope, key, revision, subscription: sub.id });
@@ -2314,6 +2339,7 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
           ctx.logger.info('reaction delivered', { scope, key, subscription: sub.id, deliver: sub.deliver });
         } catch (err) {
           ctx.logger.warn('reaction deliver failed', { scope, subscription: sub.id, deliver: sub.deliver, error: (err as Error).message });
+          await recordReactionError(sub.id, 'deliver', sub.deliver, err);
         }
         continue;
       }
@@ -2330,6 +2356,7 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // `from` ≠ the current node). Anything else is a real fault.
         if (err instanceof ActionInvokeError && (err.code === 'precondition_failed' || err.code === 'action_disabled')) continue;
         ctx.logger.warn('reaction invoke failed', { scope, subscription: sub.id, invoke: sub.invoke, error: (err as Error).message });
+        await recordReactionError(sub.id, 'invoke', sub.invoke as string, err);
       }
     }
   };

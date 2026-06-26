@@ -93,7 +93,13 @@ const EXACT_PLACEHOLDER = /^\$\{(key|keySuffix|scope|value(?:\.[A-Za-z0-9_]+)*)\
 function substituteValue(tpl: unknown, key: string, keySuffix: string, scope: string, value: unknown): unknown {
   if (typeof tpl === 'string') {
     const exact = EXACT_PLACEHOLDER.exec(tpl);
-    if (exact) return resolveOne(exact[1], key, keySuffix, scope, value) ?? null;
+    // An exact placeholder keeps the resolved JSON type. If it does NOT resolve
+    // (e.g. `${value.text}` on a trigger that carried no text), return `undefined`
+    // — meaning "absent" — NOT `null`. The caller (resolveParams) then omits the
+    // key, so an OPTIONAL action param stays truly absent instead of arriving as a
+    // null that fails the param type-check (`typeof null !== 'string'`) and silently
+    // aborts the reaction. (Root cause of no-`text` machine triggers never starting.)
+    if (exact) return resolveOne(exact[1], key, keySuffix, scope, value);
     return tpl.replace(PLACEHOLDER, (_m, token: string) => {
       const v = resolveOne(token, key, keySuffix, scope, value);
       return v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
@@ -102,7 +108,10 @@ function substituteValue(tpl: unknown, key: string, keySuffix: string, scope: st
   if (Array.isArray(tpl)) return tpl.map((x) => substituteValue(x, key, keySuffix, scope, value));
   if (tpl && typeof tpl === 'object') {
     const o: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(tpl as Record<string, unknown>)) o[k] = substituteValue(v, key, keySuffix, scope, value);
+    for (const [k, v] of Object.entries(tpl as Record<string, unknown>)) {
+      const r = substituteValue(v, key, keySuffix, scope, value);
+      if (r !== undefined) o[k] = r; // omit unresolved keys rather than emit undefined/null
+    }
     return o;
   }
   return tpl;
@@ -118,7 +127,8 @@ export function resolveParams(
   const keySuffix = sub.match.keyPrefix && key.startsWith(sub.match.keyPrefix) ? key.slice(sub.match.keyPrefix.length) : key;
   const out: Record<string, unknown> = {};
   for (const [name, tpl] of Object.entries(sub.params ?? {})) {
-    out[name] = substituteValue(tpl, key, keySuffix, scope, value);
+    const resolved = substituteValue(tpl, key, keySuffix, scope, value);
+    if (resolved !== undefined) out[name] = resolved; // an unresolved template = absent param, not null
   }
   return out;
 }

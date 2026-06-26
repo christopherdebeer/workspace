@@ -31,6 +31,25 @@ import {
 /** How long trajectory events live (s). Comfortably beyond the salience window. */
 const TRAJECTORY_TTL_SEC = 24 * 60 * 60;
 
+/**
+ * Recursively drop `undefined` values before an item reaches the v2 DocumentClient.
+ * `undefined` isn't valid JSON and the v2 marshaller mishandles it, so a single
+ * absent field (e.g. a templated `text` an optional trigger never supplied) would
+ * otherwise FAIL the whole write — the silent root cause of "no-text machine
+ * triggers never start a run". This is the SDK-v2 equivalent of v3's
+ * `marshallOptions.removeUndefinedValues:true`; a stored fact never legitimately
+ * carries `undefined` (absent === undefined on read), so stripping is loss-free.
+ */
+export function stripUndefined<T>(v: T): T {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map((x) => stripUndefined(x)) as unknown as T;
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val !== undefined) out[k] = stripUndefined(val);
+  }
+  return out as T;
+}
+
 export function createDynamoStateStore(tableName: string): StateStore {
   const db = new DynamoDB.DocumentClient();
   const statePk = (scope: string): string => `STATE#${scope}`;
@@ -128,7 +147,7 @@ export function createDynamoStateStore(tableName: string): StateStore {
       if (record.timerEffect === 'delete' && record.timerExpiresAt) {
         item.ttl = Math.floor(Date.parse(record.timerExpiresAt) / 1000) + 24 * 60 * 60;
       }
-      const params: DynamoDB.DocumentClient.PutItemInput = { TableName: tableName, Item: item };
+      const params: DynamoDB.DocumentClient.PutItemInput = { TableName: tableName, Item: stripUndefined(item) };
       if (guard) {
         if (guard.expectRevision === null) {
           params.ConditionExpression = 'attribute_not_exists(pk)';
