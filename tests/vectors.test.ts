@@ -16,8 +16,17 @@ import {
   isTextLikeContentType,
   indexForScope,
   PUBLIC_INDEX,
+  selectNeighbors,
+  similarConfig,
+  refreshSimilarEdges,
+  dropSimilarEdges,
+  createMemoryStateStore,
+  SIMILAR_REL,
+  SIMILAR_WRITER,
 } from '../platform/runtime';
 import { planStreamWork } from '../services/vector-indexer/handler';
+
+const M2 = (k: string, s: number) => ({ key: k, score: s, distance: 1 - s });
 
 describe('HashingEmbedder (deterministic lexical fallback)', () => {
   const e = new HashingEmbedder(128);
@@ -86,6 +95,47 @@ describe('metadataForFact', () => {
       tag: 'storage',
     });
     expect(metadataForFact({ superseded: true })).toEqual({ superseded: true });
+  });
+});
+
+describe('selectNeighbors + similarConfig (ADR-0031)', () => {
+  const matches = [M2('self', 1), M2('a', 0.6), M2('b', 0.4), M2('c', 0.2)];
+  it('drops self, applies the score floor, caps at k (matches are score-desc)', () => {
+    expect(selectNeighbors(matches, 'self', { k: 5, minScore: 0.35 }).map((m) => m.key)).toEqual(['a', 'b']);
+    expect(selectNeighbors(matches, 'self', { k: 1, minScore: 0.1 }).map((m) => m.key)).toEqual(['a']);
+    expect(selectNeighbors(matches, 'self', { k: 5, minScore: 0.95 })).toHaveLength(0);
+  });
+  it('similarConfig: defaults on, env overrides + off switch', () => {
+    expect(similarConfig({})).toEqual({ enabled: true, k: 5, minScore: 0.35, strength: 0.3 });
+    expect(similarConfig({ VECTOR_SIMILAR: 'off' }).enabled).toBe(false);
+    expect(similarConfig({ VECTOR_SIMILAR_K: '8', VECTOR_SIMILAR_MIN_SCORE: '0.5', VECTOR_SIMILAR_STRENGTH: '0.25' })).toMatchObject({ k: 8, minScore: 0.5, strength: 0.25 });
+  });
+});
+
+describe('refreshSimilarEdges / dropSimilarEdges (ADR-0031 edge-write seam)', () => {
+  it('reconciles a fact’s outbound similarTo edges idempotently (add/remove to match)', async () => {
+    const store = createMemoryStateStore();
+    const now = '2026-06-26T00:00:00.000Z';
+    await refreshSimilarEdges(store, 'alice', 'F', [M2('a', 0.6), M2('b', 0.5)], 0.3, await store.listEdges('alice'), now);
+    let inferred = (await store.listEdges('alice')).filter((e) => e.rel === SIMILAR_REL);
+    expect(inferred.map((e) => e.to).sort()).toEqual(['a', 'b']);
+    expect(inferred[0]).toMatchObject({ writer: SIMILAR_WRITER, strength: 0.3, from: 'F' });
+
+    // Neighbours shifted to [a, c]: b dropped, c added, a untouched — idempotent reconcile.
+    await refreshSimilarEdges(store, 'alice', 'F', [M2('a', 0.6), M2('c', 0.5)], 0.3, await store.listEdges('alice'), now);
+    inferred = (await store.listEdges('alice')).filter((e) => e.rel === SIMILAR_REL);
+    expect(inferred.map((e) => e.to).sort()).toEqual(['a', 'c']);
+  });
+
+  it('dropSimilarEdges removes inferred edges touching a key (in + out), leaving authored edges', async () => {
+    const store = createMemoryStateStore();
+    await store.putEdge({ scope: 'alice', from: 'X', rel: SIMILAR_REL, to: 'F', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER }); // inbound inferred
+    await store.putEdge({ scope: 'alice', from: 'F', rel: SIMILAR_REL, to: 'Z', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER }); // outbound inferred
+    await store.putEdge({ scope: 'alice', from: 'Y', rel: 'grounds', to: 'F', strength: null, createdAt: 't', writer: 'alice' }); // authored
+    await dropSimilarEdges(store, 'alice', 'F', await store.listEdges('alice'));
+    const left = await store.listEdges('alice');
+    expect(left).toHaveLength(1);
+    expect(left[0].rel).toBe('grounds'); // authored survives; both inferred gone
   });
 });
 

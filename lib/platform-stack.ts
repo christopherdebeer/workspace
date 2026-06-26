@@ -182,11 +182,16 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       timeout: cdk.Duration.seconds(60),
       logRetention: logs.RetentionDays.ONE_WEEK,
-      environment: vectorEnv,
+      // Plus SUBSTRATE_TABLE so the indexer can write inferred similarTo edges (ADR-0031).
+      environment: { ...vectorEnv, SUBSTRATE_TABLE: substrate.table.tableName },
       bundling: { externalModules: [] }, // bundle the SDKs (not in the Node 20 image)
     });
     vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['s3vectors:*'], resources: ['*'] }));
     vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [titanModelArn] }));
+    // Inferred similarTo edges (ADR-0031): the indexer reconciles edges in each fact's
+    // own scope partition directly. Read+write on the substrate table; the stream
+    // already grants read on the source. (Platform component, like the workspace reactor.)
+    substrate.table.grantReadWriteData(vectorIndexer);
     vectorIndexer.addEventSource(
       new DynamoEventSource(substrate.table, {
         startingPosition: lambda.StartingPosition.LATEST, // index from now forward; `reindex` backfills history

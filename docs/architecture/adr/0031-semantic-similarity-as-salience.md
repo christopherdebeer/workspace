@@ -1,10 +1,11 @@
 # ADR-0031 — Semantic similarity as emergent salience (inferred `similarTo` edges)
 
-- **Status:** Proposed (investigation + recommendation; not built). Answers the question raised against
-  ADR-0030's "salience fusion" follow-on: should semantic relevance influence ranking as an explicit
-  query-time knob, or should it **emerge** through the substrate's existing machinery (inferred edges /
-  the salience score)? Finding: the substrate-native form is the latter — similarity as **derived
-  `similarTo` edges** that feed `centrality`, an existing salience signal.
+- **Status:** Accepted — **Option A shipped.** Semantic relevance now emerges through the substrate's
+  own machinery: the indexer/`reindex` wire inferred **`similarTo`** edges (writer `platform/vectors`)
+  that feed `centrality` (a salience signal, no scorer change) and surface in `neighbors`/`$graph`. NOT
+  a query-time `α·cosine + β·salience` knob. The edge-write seam this needed (`refreshSimilarEdges`/
+  `dropSimilarEdges` over raw `StateStore` edge CRUD) is built and reusable. Tunable via env
+  (`VECTOR_SIMILAR`/`_K`/`_MIN_SCORE`/`_STRENGTH`).
 - **Date:** 2026-06-26
 - **Depends on:** ADR-0030 (the vector index that makes similarity computable), ADR-0006 (salience —
   `centrality` is a scored signal), ADR-0003/0016 (the Reference projection — derived/first-class edges),
@@ -81,6 +82,31 @@ derived structure is a general capability), then the indexer's similarity pass o
 
 **C** is worth shipping *only* if an immediate ranking lever is wanted before A lands; keep it an opt-in
 `rankBy` so the default stays pure-similarity and A can later supersede it without a contract change.
+
+## Implementation (Option A, shipped)
+
+- **The edge-write seam** (`platform/runtime/similar-edges.ts`): `refreshSimilarEdges(io, scope, key,
+  neighbors, strength, existing, nowIso)` reconciles a fact's outbound `similarTo` edges to exactly its
+  current top-k (delete stale, add new — idempotent, self-healing on re-index); `dropSimilarEdges` clears
+  in+out inferred edges on supersede/remove. Both write through the **raw `StateStore` edge CRUD**
+  (`EdgeIO` = `listEdges`/`putEdge`/`deleteEdge`) — no trajectory event, no endpoint-resolve (those belong
+  to authored `workspace.link`). Inferred edges stamp `writer = platform/vectors`, so they're regenerable
+  and distinguishable from authored ones, and a future lens can filter them out of the graph UX.
+- **Selection** (`platform/runtime/vectors.ts`): `selectNeighbors(matches, self, {k, minScore})` drops the
+  fact itself + applies the cosine floor τ + caps at k; `similarConfig(env)` reads the knobs
+  (default k=5, τ=0.35, strength=0.3 — above structural 0.2, below membership 0.4).
+- **Producers:** the live `VectorIndexer` (per stream batch, per scope: query each put fact's top-k →
+  `refreshSimilarEdges`; `dropSimilarEdges` on removes) and the admin `reindex` (after the full vector
+  backfill, one pass over the retained `{key,vector}` items). Both **best-effort** — wrapped so an edge
+  failure never fails the already-committed vector write. The indexer writes via a `createDynamoStateStore`
+  it constructs (now granted `SUBSTRATE_TABLE` + `grantReadWriteData`); `reindex` via the workspace's
+  store (`WorkspaceDeps.store`). Edges are written only in the fact's own scope partition — no cross-slice.
+- **Emergence, confirmed:** `signalsFor` counts `store.listEdges` (authored + inferred) in `degree`
+  (`state.ts:1075`), so the new edges raise `centrality` → salience with zero scorer change, and
+  `reindex` reports an `edges` count.
+- Tests: `selectNeighbors`/`similarConfig`; `refreshSimilarEdges` idempotent reconcile + `dropSimilarEdges`
+  leaves authored edges; a `reindex` integration asserting `similarTo` edges appear in `neighbors` with
+  the `platform/vectors` writer. 473 pass.
 
 ## Open questions
 

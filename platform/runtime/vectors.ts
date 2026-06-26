@@ -129,6 +129,43 @@ export function isTextLikeContentType(contentType?: string): boolean {
  *  (ADR-0027 §1 "small text stores content inline"); larger text stays a pointer. */
 export const BLOB_INLINE_MAX_BYTES = 64 * 1024;
 
+// ── inferred similarity edges (ADR-0031 Option A) ───────────────────
+
+/** The relation for an inferred semantic-similarity edge, and the writer it's
+ *  stamped with — so these are distinguishable from authored edges (`workspace.link`)
+ *  and fully regenerable by the indexer. They are persisted authored-style edges, so
+ *  they feed `centrality` (a salience signal) and surface in `neighbors`/`$graph`. */
+export const SIMILAR_REL = 'similarTo';
+export const SIMILAR_WRITER = 'platform/vectors';
+
+/** From a fact's ranked vector matches, the neighbours to link `similarTo`: drop the
+ *  fact itself, keep matches at/above the score floor, cap at k (matches are
+ *  score-descending, so this is the top-k above τ). */
+export function selectNeighbors(matches: VectorMatch[], selfKey: string, opts: { k: number; minScore: number }): VectorMatch[] {
+  return matches.filter((m) => m.key !== selfKey && m.score >= opts.minScore).slice(0, Math.max(0, opts.k));
+}
+
+export interface SimilarConfig {
+  enabled: boolean;
+  k: number;
+  minScore: number;
+  strength: number;
+}
+
+/** Inferred-edge knobs from the environment (ADR-0031): `VECTOR_SIMILAR=off` disables;
+ *  `VECTOR_SIMILAR_K` neighbours per fact (default 5); `VECTOR_SIMILAR_MIN_SCORE` the
+ *  cosine floor τ (default 0.35 — Titan cosines run compressed); `VECTOR_SIMILAR_STRENGTH`
+ *  the edge weight (default 0.3 — above structural 0.2, below membership 0.4, so inferred
+ *  kinship never outweighs authored structure). Tunable without a code redeploy. */
+export function similarConfig(env: NodeJS.ProcessEnv = process.env): SimilarConfig {
+  return {
+    enabled: (env.VECTOR_SIMILAR ?? 'on').toLowerCase() !== 'off',
+    k: Number(env.VECTOR_SIMILAR_K ?? 5),
+    minScore: Number(env.VECTOR_SIMILAR_MIN_SCORE ?? 0.35),
+    strength: Number(env.VECTOR_SIMILAR_STRENGTH ?? 0.3),
+  };
+}
+
 function safeJson(v: unknown): string {
   try {
     return JSON.stringify(v) ?? '';

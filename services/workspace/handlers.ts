@@ -53,9 +53,13 @@ import {
   type VectorStore,
   type Embedder,
   type VectorFilter,
+  type StateStore,
   indexForScope,
   embeddableText,
   metadataForFact,
+  selectNeighbors,
+  similarConfig,
+  refreshSimilarEdges,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -113,6 +117,9 @@ export interface WorkspaceDeps {
   /** Semantic-search backend (ADR-0030). Optional: absent → `search` reports that
    *  semantic search isn't configured (the substrate degrades to `query`/`contains`). */
   vectors?: { store: VectorStore; embedder: Embedder };
+  /** Raw state store — used by `reindex` to write inferred `similarTo` edges directly
+   *  (ADR-0031, the edge-write seam). Absent in lighter test builders → edge pass skipped. */
+  store?: StateStore;
 }
 export type DepsBuilder = (ctx: ServiceContext) => WorkspaceDeps;
 
@@ -129,7 +136,8 @@ function tableName(ctx: ServiceContext): string {
  *  degrades to a hint). `vectorsFromEnv` keeps the v3 SDK lazy (loaded on first use). */
 export const dynamoDeps: DepsBuilder = (ctx) => {
   const table = tableName(ctx);
-  return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table), vectors: vectorsFromEnv() };
+  const store = createDynamoStateStore(table);
+  return { state: createObservedState(store), grants: createDynamoGrantStore(table), vectors: vectorsFromEnv(), store };
 };
 
 /**
@@ -493,7 +501,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
   search: CommandHandler<SearchInput, SearchResult>;
-  reindex: CommandHandler<ReindexInput | undefined, { indexed: number; skipped: number; index?: string; hint?: string }>;
+  reindex: CommandHandler<ReindexInput | undefined, { indexed: number; skipped: number; index?: string; edges?: number; hint?: string }>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -1124,6 +1132,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         indexed: { type: 'number', description: 'Facts embedded + upserted' },
         skipped: { type: 'number', description: 'Facts with no embeddable text (plumbing / empty)' },
         index: { type: 'string', description: 'The slice index written' },
+        edges: { type: 'number', description: 'Inferred similarTo edges written (ADR-0031) — present when any' },
         hint: { type: 'string', description: 'Present when no vector backend is configured' },
       },
     },
@@ -1881,7 +1890,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
         throw new ServiceAuthError('reindex requires workspace:admin');
       }
-      const { state, vectors } = build(ctx);
+      const { state, vectors, store } = build(ctx);
       if (!vectors) return { indexed: 0, skipped: 0, hint: 'semantic search is not configured on this deployment' };
       const index = indexForScope(scope, vectors.embedder.dimension);
       await vectors.store.ensureIndex(index, { dimension: vectors.embedder.dimension });
@@ -1890,6 +1899,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       let cursor: string | undefined;
       let indexed = 0;
       let skipped = 0;
+      const items: Array<{ key: string; vector: number[] }> = []; // retained for the similarity-edge pass
       do {
         const page = await state.query(scope, { type: input?.type, prefix: input?.prefix, limit: 200, cursor }, ctx.identity);
         const pending: Array<{ key: string; text: string; type: string | null; tags: string[] }> = [];
@@ -1907,12 +1917,34 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
             index,
             pending.map((p, i) => ({ key: p.key, vector: vecs[i], metadata: metadataForFact({ type: p.type ?? undefined, tags: p.tags, superseded: false }) })),
           );
+          pending.forEach((p, i) => items.push({ key: p.key, vector: vecs[i] }));
           indexed += pending.length;
         }
         cursor = page.nextCursor;
       } while (cursor && indexed + skipped < max);
-      ctx.logger.info('workspace slice reindexed for semantic search', { scope, index, indexed, skipped });
-      return { indexed, skipped, index };
+
+      // ADR-0031 Option A: after every vector is in the index, wire inferred `similarTo`
+      // edges — each fact links its top-k nearest neighbours, which feed `centrality`
+      // (so semantically-central facts gain salience) and surface in `neighbors`/`$graph`.
+      // Best-effort: a failure here never fails the (already-committed) vector backfill.
+      const sim = similarConfig();
+      let edges = 0;
+      if (sim.enabled && store && items.length) {
+        try {
+          const now = new Date().toISOString();
+          const existing = await store.listEdges(scope);
+          for (const it of items) {
+            const matches = await vectors.store.query(index, it.vector, { topK: sim.k + 1 });
+            const neighbors = selectNeighbors(matches, it.key, { k: sim.k, minScore: sim.minScore });
+            await refreshSimilarEdges(store, scope, it.key, neighbors, sim.strength, existing, now);
+            edges += neighbors.length;
+          }
+        } catch (err) {
+          ctx.logger.warn('reindex similarTo edge pass failed (vectors still indexed)', { scope, error: (err as Error).message });
+        }
+      }
+      ctx.logger.info('workspace slice reindexed for semantic search', { scope, index, indexed, skipped, edges });
+      return { indexed, skipped, index, ...(edges ? { edges } : {}) };
     },
 
     async link(input, ctx) {

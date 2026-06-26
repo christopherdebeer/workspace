@@ -569,7 +569,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
   const state = createObservedState(store);
   const vstore = new MemoryVectorStore();
   const embedder = new HashingEmbedder(128);
-  const cmds = createWorkspaceCommands(() => ({ state, grants, vectors: { store: vstore, embedder } }));
+  const cmds = createWorkspaceCommands(() => ({ state, grants, vectors: { store: vstore, embedder }, store }));
   // cmds with NO vector backend — to assert graceful degradation.
   const noVecCmds = createWorkspaceCommands(() => ({ state, grants }));
   const VOCAB = { decision: { manager: '@c15r/home', icon: '⚖️' }, note: { manager: '@c15r/home', icon: '📝' } };
@@ -670,6 +670,36 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
 
   it('reindex requires admin', async () => {
     await expect(cmds.reindex(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
+  });
+
+  it('reindex wires inferred similarTo edges that feed neighbors + centrality (ADR-0031)', async () => {
+    const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
+    process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05'; // hashing-embedder cosines run low; ensure edges form
+    try {
+      const admin = (): ServiceContext => {
+        const ctx = ctxOf('erin');
+        (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'erin', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+        return ctx;
+      };
+      // Three facts that share vocabulary → non-trivial pairwise similarity.
+      await cmds.remember({ key: 'r1', value: { title: 'DynamoDB single table substrate design' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'r2', value: { title: 'DynamoDB stream indexer for the substrate' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'r3', value: { title: 'DynamoDB table partition and substrate scopes' }, type: 'note' }, admin());
+      const r = await cmds.reindex(undefined, admin());
+      expect((r.edges ?? 0)).toBeGreaterThan(0);
+
+      // The inferred edges are real graph structure: neighbors surfaces them…
+      const n = await cmds.neighbors({ key: 'r1' }, admin());
+      const similar = n.outbound.filter((e) => e.rel === 'similarTo');
+      expect(similar.length).toBeGreaterThan(0);
+      expect(similar.every((e) => e.to.startsWith('r'))).toBe(true);
+      // …and they carry the inferred-writer stamp (distinguishable from authored edges).
+      const raw = await store.listEdges('erin');
+      expect(raw.find((e) => e.rel === 'similarTo')?.writer).toBe('platform/vectors');
+    } finally {
+      if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
+      else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
+    }
   });
 });
 

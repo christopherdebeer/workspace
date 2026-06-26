@@ -63,12 +63,18 @@ export {
   metadataForFact,
   isTextLikeContentType,
   BLOB_INLINE_MAX_BYTES,
+  SIMILAR_REL,
+  SIMILAR_WRITER,
+  selectNeighbors,
+  similarConfig,
   normalize,
   cosineSimilarity,
   HashingEmbedder,
   MemoryVectorStore,
 } from './vectors';
-export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder } from './vectors';
+export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig } from './vectors';
+export { refreshSimilarEdges, dropSimilarEdges } from './similar-edges';
+export type { EdgeIO } from './similar-edges';
 export { createDeclarationRegistry } from './declarations';
 export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {
