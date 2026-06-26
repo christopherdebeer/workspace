@@ -216,23 +216,36 @@ acts on a semantic hit with zero new ergonomics (R1). Salience fusion is the int
 
 ## Increments
 
-0. **Seams + reference backend (deploy/validate with no external prereqs).** `Embedder` + `VectorStore`
+> **Status (2026-06-26):** 0–2 shipped + **live-validated** on prod (deploys #251–#253). 3 is implemented
+> + unit-tested (live cross-user validation needs a second principal — single-owner today). 4 is the
+> Bedrock config-flip (gated on Titan model access) + optional salience fusion.
+>
+> Live validation evidence: `reindex {prefix:"file/docs/"}` embedded 70 docs into `slice-c15r`; a semantic
+> `search "tokens as principals delegation and attenuation"` returned ADR-0024/0022/plan/0025 ranked; a
+> fresh fact written with **no `reindex`** was the #1 hit within seconds (dormant stream → `VectorIndexer`
+> → `PutVectors` live); superseding it dropped it from results immediately (authoritative re-read).
+
+0. **Seams + reference backend (deploy/validate with no external prereqs). ✅** `Embedder` + `VectorStore`
    interfaces and an `indexForScope` seam; a `MemoryVectorStore` (unit tests) and a deterministic
    `HashingEmbedder` fallback so the *whole* pipeline — index create-if-absent, `PutVectors`, fan-out,
    prefix post-filter, authoritative re-read, `workspace.search` R1 envelope — is exercisable before
    Bedrock/S3 Vectors are wired. (This is the engineering enabler the rest build on.)
-1. **Infra + S3 Vectors backend + docs corpus.** Control plane: indexer Lambda + stream mapping + IAM
-   (§3a). Data plane: runtime bucket + `slice-public` create-if-absent. `S3VectorsStore` impl; embed the
-   existing `file/docs/*` corpus into `slice-public` (`vectors-sync.mjs`). `workspace.search` over
-   `slice-public` only — semantic docs search, no per-user write path yet.
-2. **Stream consumer (live per-slice indexing).** Attach to the dormant stream; embed text fact
-   create/update, delete on supersede; `sha`-skip unchanged; create `slice-<scope>` on first use. Per-slice
-   search goes live.
-3. **Grant fan-out + granular filters.** Fold granted owners' indexes + `slice-public` into `search`;
-   `type`/`tag` metadata filters; prefix-grant post-filter. Honour `read:type:<T>`.
-4. **Salience fusion + blob text + Bedrock.** Flip `Embedder` to `BedrockEmbedder` (Titan v2) once model
-   access is confirmed; re-rank candidates by k-NN × salience; optional text-extraction lane so blob `file`
-   facts (`s3Key` only) become searchable.
+1. **Infra + S3 Vectors backend + corpus. ✅** `S3VectorsStore` (runtime bucket + index create-if-absent);
+   IAM + env on the workspace Lambda. The corpus backfill landed as the admin **`reindex`** command (scan
+   → embed → `PutVectors`) rather than a separate `vectors-sync.mjs` — it runs in-Lambda where the
+   IAM/env/client already live, doubles as manual re-sync, and validated live by indexing the 70-doc
+   corpus. Indexing is **per-slice from the start** (`slice-<scope>`), not `slice-public`-only.
+2. **Stream consumer (live per-slice indexing). ✅** `VectorIndexer` Lambda on the dormant stream;
+   `planStreamWork` embeds create/update, drops on supersede/REMOVE, `sha`-skips unchanged, creates
+   `slice-<scope>` on first use. Validated live (fresh fact searchable with no `reindex`).
+3. **Grant fan-out + granular filters. ✅ implemented + unit-tested** (live cross-user pending a 2nd
+   principal). `search` fans out across own slice + applicable grants' owners (mirrors `recall`), prefix
+   grants post-filtered by key, `type`/`tag` metadata filters, `read:type:<T>` honoured. The shared
+   `slice-public` optimization is deferred (single-owner → own slice already holds the public corpus).
+4. **Bedrock + salience fusion + blob text. ⏳** Flip `Embedder` to `BedrockEmbedder` (Titan v2) once
+   model access is confirmed — `VECTOR_EMBEDDER=bedrock` + `VECTOR_DIM=1024`, a config change, no code
+   redeploy (the class + IAM already ship). Optional: re-rank candidates by k-NN × salience (`_meta.score`
+   is already on each hit); text-extraction lane so blob `file` facts (`s3Key` only) become searchable.
 
 ## Open questions / risks
 
