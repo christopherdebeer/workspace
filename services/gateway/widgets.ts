@@ -1,22 +1,27 @@
 /**
- * MCP-Apps widgets (ADR-0034) — the tier-0 "floor": generic, self-contained HTML
- * resources the gateway serves at `ui://parc/<id>` and binds to tool results via
- * `_meta.ui.resourceUri`. A widget renders the tool result's `structuredContent`;
- * the model still gets the text channel (ADR-0033), so a non-supporting client
- * loses nothing.
+ * MCP-Apps widgets (ADR-0034) — the tier-0 platform card: a single generic, self-
+ * contained HTML resource served at `ui://parc/card` and bound to the gateway's
+ * `read`/`whoami` tools via `_meta.ui.resourceUri`. Because the gateway exposes only
+ * 3 MCP tools (whoami/read/act) and all substrate capability is nested in the `target`
+ * argument, this ONE card is the renderer for every observation — so it resolves
+ * per-type rendering at runtime from the result's inline `types` affordances (ADR-0029:
+ * each type's icon/label/`present.render` hint + managing cell), mirroring the home
+ * cell's hint vocabulary (markdown/code/metric/fields/image). New types render with NO
+ * gateway deploy — pure type-vocabulary extensibility.
  *
- * NOTE (verify before relying on live rendering): the exact host→iframe data API
- * for `io.modelcontextprotocol/ui` is recent and not yet confirmed against the
- * claude.ai client. The `card` widget below defensively reads the tool output from
- * the known candidate channels (a host global and a postMessage init), and renders
- * a readable fallback if none arrive — so it degrades visibly rather than blank.
+ * (2) Bespoke cell renderers: a type may declare `handlers.render[].renderer` as a
+ * `ui://…` resource; the card fetches it over the host `resources/read` proxy and
+ * injects it, falling back to the hint render if it's unavailable. The widget is itself
+ * an MCP client to the HOST (spec 2026-01-26): it never touches parc.land directly; the
+ * host proxies `resources/read`/`tools/call` with the connection's auth.
+ *
+ * The card does the required handshake (ui/initialize → initialized → tool-result);
+ * verified rendering in claude.ai 2026-06-26.
  */
 
 export const UI_MIME = 'text/html;profile=mcp-app';
 export const CARD_URI = 'ui://parc/card';
 
-/** The generic card widget — renders any `structuredContent`, with a tuned layout
- *  for the `recall` overview (bands + type/prefix breakdowns + focus list). */
 const CARD_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -43,11 +48,15 @@ const CARD_HTML = `<!doctype html>
   .rows { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
   .rows .k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rows .v { opacity: .65; font-variant-numeric: tabular-nums; }
-  ul.focus { list-style: none; margin: 0; padding: 0; }
-  ul.focus li { padding: 6px 0; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
-  ul.focus .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-  ul.focus .meta { font-size: 11px; opacity: .6; }
-  pre { background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; overflow: auto; font-size: 12px; }
+  .fc { border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 10px; padding: 10px; margin: 8px 0; }
+  .fc-h { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+  .fc-h .ic { font-size: 15px; } .fc-h .lb { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fc-h .ty { font: 11px ui-monospace, monospace; opacity: .5; } .fc-h .sp { flex: 1; } .fc-h .sc { font-size: 11px; opacity: .5; font-variant-numeric: tabular-nums; }
+  .md { font-size: 13px; overflow-wrap: anywhere; } .md h1,.md h2,.md h3 { font-size: 14px; margin: 6px 0 3px; } .md code { font-family: ui-monospace, monospace; background: color-mix(in srgb, currentColor 8%, transparent); padding: 0 3px; border-radius: 3px; }
+  .metric { font-size: 22px; font-weight: 650; }
+  dl.f { margin: 0; display: grid; gap: 2px; font-size: 12.5px; } dl.f div { display: flex; gap: 8px; } dl.f dt { opacity: .55; font-family: ui-monospace, monospace; font-size: 11px; flex-shrink: 0; } dl.f dd { margin: 0; overflow-wrap: anywhere; }
+  pre { background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; overflow: auto; font-size: 12px; max-height: 280px; }
+  img { max-width: 100%; border-radius: 8px; display: block; }
   .hint { font-size: 11px; opacity: .55; margin-top: 12px; }
 </style>
 </head>
@@ -56,10 +65,60 @@ const CARD_HTML = `<!doctype html>
      MCP-Apps iframe (not the client's default JSON view), even before data arrives. -->
 <div id="root"><div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div><div class="hint">Loading…</div></div>
 <script>
-  function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
   function header(){ return '<div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div>'; }
   function chips(arr){ return '<div class="chips">' + arr.map(function(s){ return '<span class="chip">'+esc(s)+'</span>'; }).join('') + '</div>'; }
-  function rows(pairs){ return '<div class="rows">' + pairs.map(([k,v]) => '<div class="k">'+esc(k)+'</div><div class="v">'+esc(v)+'</div>').join('') + '</div>'; }
+  function rows(pairs){ return '<div class="rows">' + pairs.map(function(p){ return '<div class="k">'+esc(p[0])+'</div><div class="v">'+esc(p[1])+'</div>'; }).join('') + '</div>'; }
+  function path(root, p){ return String(p).split('.').reduce(function(o,k){ return (o==null)?undefined:o[k]; }, root); }
+  function bodyText(v){ if (typeof v === 'string') return v; if (v && typeof v === 'object'){ var fs=['content','body','text','description','note','md','markdown']; for (var i=0;i<fs.length;i++) if (typeof v[fs[i]]==='string') return v[fs[i]]; } return ''; }
+  // Minimal markdown (headings, fenced code, inline code, bold/italic, links, breaks).
+  function md(src){
+    var out = [], lines = String(src).replace(/\\r\\n/g,'\\n').split('\\n'), inCode = false, buf = [];
+    function inline(t){ return esc(t).replace(/\`([^\`]+)\`/g,'<code>$1</code>').replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>').replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g,'<a href="$2">$1</a>'); }
+    for (var i=0;i<lines.length;i++){ var l=lines[i];
+      if (/^\`\`\`/.test(l)){ if(inCode){ out.push('<pre>'+esc(buf.join('\\n'))+'</pre>'); buf=[]; inCode=false; } else inCode=true; continue; }
+      if (inCode){ buf.push(l); continue; }
+      var h=l.match(/^(#{1,3})\\s+(.*)/); if(h){ out.push('<h'+h[1].length+'>'+inline(h[2])+'</h'+h[1].length+'>'); continue; }
+      if (l.trim()==='') continue;
+      out.push('<div>'+inline(l)+'</div>');
+    }
+    if (buf.length) out.push('<pre>'+esc(buf.join('\\n'))+'</pre>');
+    return out.join('');
+  }
+  function fields(v){
+    if (!v || typeof v !== 'object') return '';
+    var skip = {content:1,title:1,name:1,id:1,src:1};
+    var rs = Object.keys(v).filter(function(k){ return v[k]!=null && typeof v[k]!=='object' && !skip[k]; }).slice(0,6);
+    if (!rs.length) return '';
+    return '<dl class="f">' + rs.map(function(k){ return '<div><dt>'+esc(k)+'</dt><dd>'+esc(String(v[k]).slice(0,160))+'</dd></div>'; }).join('') + '</dl>';
+  }
+  function hintBody(hint, v){
+    switch (hint){
+      case 'md': case 'markdown': { var t=bodyText(v); return t? '<div class="md">'+md(t)+'</div>':''; }
+      case 'code': { var c=bodyText(v); return c? '<pre>'+esc(c.slice(0,2000))+'</pre>':''; }
+      case 'metric': { var n=(typeof v==='number')?v:((v&&(v.value!=null?v.value:v.count!=null?v.count:v.total))||bodyText(v)); return (n!=null&&n!=='')? '<div class="metric">'+esc(n)+'</div>':''; }
+      case 'fields': return fields(v);
+      case 'image': { var s=v&&(v.src||v.url||v.href||v.image); return s? '<img src="'+esc(s)+'" loading="lazy">':''; }
+      default: return '';
+    }
+  }
+  // A single fact, rendered by its TYPE affordance (icon + label + present.render hint).
+  function typedCard(key, entry, types, slot){
+    var t = (entry && entry._meta && entry._meta.type) || null;
+    var aff = (t && types && types[t]) || {};
+    var label = (aff.label && path(entry, aff.label)) || (entry.value && (entry.value.title || entry.value.name)) || key;
+    var rh = aff.handlers && aff.handlers.render && aff.handlers.render[0];
+    var body = (rh && rh.hint) ? hintBody(rh.hint, entry.value) : '';
+    if (!body) body = fields(entry.value) || ('<pre>'+esc(JSON.stringify(entry.value,null,2)).slice(0,800)+'</pre>');
+    var sc = entry && entry._meta && typeof entry._meta.score==='number' ? entry._meta.score.toFixed(2) : '';
+    // (2) bespoke cell renderer: if the type declares a ui:// renderer, fetch + inject it.
+    if (rh && typeof rh.renderer === 'string' && rh.renderer.indexOf('ui://')===0){ fetchRenderer(rh.renderer, entry, slot); }
+    return '<div class="fc"><div class="fc-h"><span class="ic">'+esc(aff.icon||'•')+'</span><span class="lb">'+esc(String(label).slice(0,100))+'</span><span class="sp"></span>'+(t?'<span class="ty">'+esc(t)+'</span>':'')+(sc?'<span class="sc">'+sc+'</span>':'')+'</div><div id="'+slot+'">'+body+'</div></div>';
+  }
+  function entriesBlock(map, types){
+    var keys = Object.keys(map);
+    return keys.map(function(k,i){ return typedCard(k, map[k], types, 'slot-'+i); }).join('');
+  }
   function renderOverview(o){
     var h = '';
     if (o.bands) h += '<h2>Salience</h2><div class="bands">' +
@@ -78,35 +137,43 @@ const CARD_HTML = `<!doctype html>
   }
   function render(data){
     var root = document.getElementById('root');
-    var body = '';
-    if (!data || typeof data !== 'object') body = '<pre>' + esc(String(data)) + '</pre>';
+    var b = '';
+    if (!data || typeof data !== 'object') b = '<pre>' + esc(String(data)) + '</pre>';
     else {
-      if (data.overview) body += renderOverview(data.overview);              // recall overview
-      else if (data.user && Array.isArray(data.scopes)) body += renderWhoami(data); // whoami
-      if (data.focus) { body += '<h2>Focus</h2><ul class="focus">' + Object.keys(data.focus).map(function(k){
-        var e = data.focus[k], m = (e && e._meta) || {};
-        return '<li><div class="key">'+esc(k)+'</div><div class="meta">'+esc(m.type||'')+(typeof m.score==='number'? ' · '+m.score.toFixed(2):'')+'</div></li>';
-      }).join('') + '</ul>'; }
-      if (!body) body = '<pre>' + esc(JSON.stringify(data, null, 2)) + '</pre>'; // generic fallback (under the header)
-      if (Array.isArray(data.hints)) body += '<div class="hint">' + data.hints.map(esc).join('<br>') + '</div>';
+      var types = data.types || {};
+      if (data.overview) b += renderOverview(data.overview);                          // recall overview
+      else if (data.user && Array.isArray(data.scopes)) b += renderWhoami(data);       // whoami
+      if (data.focus) b += '<h2>Focus</h2>' + entriesBlock(data.focus, types);         // overview focus facts
+      else if (data.entries) b += entriesBlock(data.entries, types);                   // query / recall full
+      else if (data.value && data._meta) b += typedCard(data.key||'', data, types, 'slot-one'); // single fact (peek)
+      if (!b) b = '<pre>' + esc(JSON.stringify(data, null, 2)) + '</pre>';             // generic fallback (under header)
+      if (Array.isArray(data.hints)) b += '<div class="hint">' + data.hints.map(esc).join('<br>') + '</div>';
     }
-    root.innerHTML = header() + body;
+    root.innerHTML = header() + b;
   }
-  // MCP-Apps host handshake (io.modelcontextprotocol/ui, spec 2026-01-26): the host
-  // sends NOTHING until it receives our initialized notification, so we must: send
-  // ui/initialize, then on its response send ui/notifications/initialized, then
-  // passively receive ui/notifications/tool-result and render its structuredContent.
-  var INIT_ID = 1, inited = false;
+
+  // ── MCP-Apps host channel (spec 2026-01-26) ──────────────────────────────────
+  // The widget is an MCP client to the HOST. We must handshake before the host sends
+  // anything: ui/initialize → (response) ui/notifications/initialized → tool-result.
+  // We also issue host-proxied requests (resources/read) for cell-declared renderers.
+  var INIT_ID = 1, inited = false, rid = 100, pending = {};
   function send(msg){ try { window.parent.postMessage(Object.assign({ jsonrpc: '2.0' }, msg), '*'); } catch (e) {} }
+  function request(method, params){
+    return new Promise(function(resolve){ var id = ++rid; pending[id] = resolve; send({ id: id, method: method, params: params });
+      setTimeout(function(){ if (pending[id]){ delete pending[id]; resolve(null); } }, 4000); });
+  }
+  // (2) Fetch a cell-declared ui:// renderer via the host and inject it into a fact's slot.
+  function fetchRenderer(uri, entry, slot){
+    request('resources/read', { uri: uri }).then(function(r){
+      var c = r && r.contents && r.contents[0]; if (!c || !c.text) return;       // degrade to the hint render already shown
+      var el = document.getElementById(slot); if (el) el.innerHTML = c.text;     // cell renderer markup (no scripts execute via innerHTML)
+    });
+  }
   window.addEventListener('message', function(ev){
-    var m = ev.data;
-    if (!m || m.jsonrpc !== '2.0') return;
-    if (!inited && m.id === INIT_ID && m.result) {
-      inited = true;
-      send({ method: 'ui/notifications/initialized' });
-      return;
-    }
-    if (m.method === 'ui/notifications/tool-result' && m.params) { render(m.params.structuredContent); }
+    var m = ev.data; if (!m || m.jsonrpc !== '2.0') return;
+    if (m.id != null && pending[m.id]){ var cb = pending[m.id]; delete pending[m.id]; cb(m.result || null); return; }
+    if (!inited && m.id === INIT_ID && m.result){ inited = true; send({ method: 'ui/notifications/initialized' }); return; }
+    if (m.method === 'ui/notifications/tool-result' && m.params){ render(m.params.structuredContent); }
   });
   send({ id: INIT_ID, method: 'ui/initialize', params: { capabilities: {}, clientInfo: { name: 'parc.land card', version: '1.0.0' }, protocolVersion: '2026-01-26' } });
 </script>
@@ -117,17 +184,13 @@ const WIDGETS: Record<string, string> = {
   [CARD_URI]: CARD_HTML,
 };
 
-// Tier-1 (cell-authored bespoke widgets) is intentionally NOT a nested iframe onto
-// the live cell surface: the MCP-Apps sandbox runs the View on a separate/opaque
-// origin and FORBIDS framing the server's own domain (frame-src 'none' by default;
-// frameDomains is for third-party embeds), and the sandbox has no parc.land session.
-// The correct tier-1 is self-contained widget HTML served as its own `ui://` resource
-// (the gateway fetches the cell's widget HTML server-side and returns it inline), with
-// live data + interactivity flowing through the host `tools/call`/`resources/read`
-// proxy — exactly like the tier-0 card, just cell-authored. Wired in a later increment,
-// gated on the host rendering the tier-0 card at all (ADR-0034).
+// Bespoke cell renderers (ADR-0034 Inc 2): a type declares `handlers.render[].renderer`
+// as a `ui://…` URI; the card fetches it via the host `resources/read` proxy. Serving a
+// *cell-authored* renderer (gateway fetching the cell's HTML server-side) is the next
+// hop — not yet wired (no cell declares one). The card-side consumer + the built-in
+// resolver below are in place, so a `ui://parc/<id>` renderer would already resolve.
 
-/** Resolve a `ui://` widget URI to its HTML contents, or null if unknown. */
+/** Resolve a `ui://` widget/renderer URI to its HTML contents, or null if unknown. */
 export function resolveUiResource(uri: string): { uri: string; mimeType: string; text: string } | null {
   if (WIDGETS[uri]) return { uri, mimeType: UI_MIME, text: WIDGETS[uri] };
   return null;
@@ -140,7 +203,7 @@ export function listUiResources(): Array<{ uri: string; name: string; mimeType: 
       uri: CARD_URI,
       name: 'parc.land card',
       mimeType: UI_MIME,
-      description: 'Generic substrate result card — renders a read result (salience bands, type/prefix breakdowns, focus list, or JSON).',
+      description: 'Generic substrate result card — renders a read result (salience bands, type/prefix breakdowns, typed fact cards via each type’s render hint, or whoami identity).',
     },
   ];
 }

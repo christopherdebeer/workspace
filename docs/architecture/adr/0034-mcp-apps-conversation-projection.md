@@ -155,13 +155,18 @@ element. A future `_renderers/<type>`-served widget (between the two) is a natur
 - **~~Inc 2 — tier-1 cell shim~~ (RETRACTED — spec-invalid).** The first pass had
   `ui://cell/<owner>/<name>/<path>` iframe the live cell surface; the sandbox forbids framing the server's
   own origin and has no parc.land session, so it could never render. Removed. The correct tier-1 is below.
-- **Inc 2′ — type-vocab-driven card + bespoke cell widgets (next, now unblocked).** Two runtime-extensible
-  pieces: (a) the tier-0 card reads each fact's inline `types` affordances (ADR-0029 — already on results)
-  and renders per-type from the declared `present.render` hint, so new types render richly with **no
-  gateway deploy**; (b) a cell authors a self-contained widget HTML, served as its own `ui://` resource
-  (gateway fetches it server-side), and declares it on its tool/type — propagated through the gateway's
-  dynamic-tool path into `tools/list` `_meta.ui`. After these two **deploy-once** gateway enablers, new
-  widgets are pure tier-2 cell deploys + type-vocabulary declarations.
+- **Inc 2′ — type-vocab-driven card (shipped) + bespoke cell renderers (consumer shipped).** A subtlety
+  the 3-tool design forces: MCP-Apps binds a widget *statically per tool* in `tools/list`, but parc exposes
+  only `whoami`/`read`/`act` and **every cell capability is a `target` inside `read`/`act`, not a distinct
+  MCP tool** — so there is no per-target or per-cell-tool binding. The single platform card bound to `read`
+  is therefore *the* renderer, and it resolves per-type rendering at runtime: (a) it reads each fact's
+  inline `types` affordances (ADR-0029 — already on results) and renders by the declared `present.render`
+  hint (markdown/code/metric/fields/image — mirroring the home cell's `HintBody`), so new types render with
+  **no gateway deploy**; (b) when a type declares `handlers.render[].renderer` as a `ui://…` resource, the
+  card fetches it over the host `resources/read` proxy and injects it (falling back to the hint render).
+  The card-side consumer + convention are shipped; the remaining hop is the gateway serving a *cell-authored*
+  renderer (fetching the cell's HTML server-side) — not yet wired (no cell declares one). NB: the earlier
+  "propagate a cell tool's `_meta.ui`" idea does **not** apply here — parc has no per-cell MCP tools.
 - **Inc 3 — interactive widgets (now spec-native, unblocked).** The widget calls `tools/call`/`resources/read`
   over `postMessage`; the **host proxies to our gateway with the connection's auth**, so a widget button
   (`attention` "touch"/"link", `suggestions` "ratify", a machine rail pick) is an `act` through the same
