@@ -1,10 +1,12 @@
 # ADR-0030 — Semantic search over the substrate with Amazon S3 Vectors
 
-- **Status:** Accepted — **Increments 0–2 shipped + live-validated** (the vector seam + `workspace.search`;
-  `S3VectorsStore` + runtime bucket/index + admin `reindex`, validated by reindexing the 70-doc corpus and
-  a live semantic `search`; the DDB-stream live indexer). Embeddings run on the deterministic
-  `HashingEmbedder` (lexical) pending Bedrock Titan model access — Increment 4 flips to `BedrockEmbedder`
-  (config only). Originally: how to add
+- **Status:** Accepted — **shipped + live (all increments).** The vector seam + `workspace.search`;
+  `S3VectorsStore` + runtime bucket/index + admin `reindex`; the DDB-stream live indexer; grant fan-out +
+  granular filters; and **Bedrock Titan v2 embeddings (1024-dim) — now live**. Validated end-to-end on prod:
+  a query sharing almost no literal words with its targets (*"how do I let an AI assistant act on my behalf
+  without giving it my full powers"*) returned the delegation/authority/token-principal docs ranked top —
+  true semantic match beyond lexical overlap. (Salience-fusion ranking remains an optional follow-on.)
+  Originally: how to add
   *semantic* search to the substrate — over fact values and `file` content (ADR-0027) — using **Amazon S3
   Vectors**, fed by the (currently dormant) DynamoDB Stream, while preserving the substrate's
   **scope / grant / slice isolation** by construction.
@@ -216,9 +218,11 @@ acts on a semantic hit with zero new ergonomics (R1). Salience fusion is the int
 
 ## Increments
 
-> **Status (2026-06-26):** 0–2 shipped + **live-validated** on prod (deploys #251–#253). 3 is implemented
-> + unit-tested (live cross-user validation needs a second principal — single-owner today). 4 is the
-> Bedrock config-flip (gated on Titan model access) + optional salience fusion.
+> **Status (2026-06-26):** ALL increments shipped + **live-validated** on prod (deploys #251–#254). 0–2
+> validated as below; 3 implemented + unit-tested (live cross-user needs a 2nd principal — single-owner
+> today); **4 live** — Titan v2 embeddings (1024-dim) validated with a low-lexical-overlap query that still
+> surfaced the right conceptual cluster. The flip re-namespaced indexes to `slice-<scope>-d1024`; the old
+> 256-dim hashing index is orphaned and harmless. Optional remaining: salience-fusion ranking.
 >
 > Live validation evidence: `reindex {prefix:"file/docs/"}` embedded 70 docs into `slice-c15r`; a semantic
 > `search "tokens as principals delegation and attenuation"` returned ADR-0024/0022/plan/0025 ranked; a
@@ -242,10 +246,11 @@ acts on a semantic hit with zero new ergonomics (R1). Salience fusion is the int
    principal). `search` fans out across own slice + applicable grants' owners (mirrors `recall`), prefix
    grants post-filtered by key, `type`/`tag` metadata filters, `read:type:<T>` honoured. The shared
    `slice-public` optimization is deferred (single-owner → own slice already holds the public corpus).
-4. **Bedrock + salience fusion + blob text. ⏳** Flip `Embedder` to `BedrockEmbedder` (Titan v2) once
-   model access is confirmed — `VECTOR_EMBEDDER=bedrock` + `VECTOR_DIM=1024`, a config change, no code
-   redeploy (the class + IAM already ship). Optional: re-rank candidates by k-NN × salience (`_meta.score`
-   is already on each hit); text-extraction lane so blob `file` facts (`s3Key` only) become searchable.
+4. **Bedrock + salience fusion + blob text.** ✅ **Bedrock live** — `VECTOR_EMBEDDER=bedrock` +
+   `VECTOR_DIM=1024` on both Lambdas (config flip, no code change; model access auto-enabled on first
+   invoke). `reindex` re-embedded the 70-doc corpus into `slice-c15r-d1024` via Titan; semantic ranking
+   validated. ⏳ Optional follow-ons: re-rank candidates by k-NN × salience (`_meta.score` is already on
+   each hit); text-extraction lane so blob `file` facts (`s3Key` only) become searchable.
 
 ## Open questions / risks
 
