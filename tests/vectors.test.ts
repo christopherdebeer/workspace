@@ -5,6 +5,7 @@
  * pure helpers (cosine, text extraction, addressing). The same contract is what
  * S3VectorsStore + BedrockEmbedder implement, so these tests pin the seam.
  */
+import { DynamoDB } from 'aws-sdk';
 import {
   HashingEmbedder,
   MemoryVectorStore,
@@ -15,6 +16,7 @@ import {
   indexForScope,
   PUBLIC_INDEX,
 } from '../platform/runtime';
+import { planStreamWork } from '../services/vector-indexer/handler';
 
 describe('HashingEmbedder (deterministic lexical fallback)', () => {
   const e = new HashingEmbedder(128);
@@ -130,5 +132,49 @@ describe('MemoryVectorStore (brute-force k-NN reference)', () => {
     await store.remove('slice-y', ['k']);
     expect(await store.query('slice-y', v, { topK: 5 })).toEqual([]);
     expect(await store.query('slice-missing', v, { topK: 5 })).toEqual([]);
+  });
+});
+
+describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index work)', () => {
+  // DynamoDB stream images are attribute-value typed; build them with the v2 marshaller.
+  const M = (obj: Record<string, unknown>) => DynamoDB.Converter.marshall(obj);
+  const fact = (scope: string, key: string, extra: Record<string, unknown> = {}) => ({ sk: `KEY#${key}`, scope, key, ...extra });
+
+  it('routes a live fact create to a put on its slice index, skipping non-facts', () => {
+    const plans = planStreamWork({
+      Records: [
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'd1', { value: { title: 'dynamodb decision' }, type: 'decision', tags: ['storage'] })) } },
+        // an edge item (sk EDGE#…) — must be ignored
+        { eventName: 'INSERT', dynamodb: { NewImage: M({ sk: 'EDGE#a|rel|b', scope: 'alice', from: 'a', rel: 'rel', to: 'b' }) } },
+        // a `_`-prefixed plumbing fact — no embeddable text, skipped
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', '_config/salience', { value: { focusThreshold: 0.6 } })) } },
+      ],
+    });
+    expect([...plans.keys()]).toEqual(['slice-alice']);
+    const p = plans.get('slice-alice')!;
+    expect(p.puts.map((x) => x.key)).toEqual(['d1']);
+    expect(p.puts[0].meta).toMatchObject({ type: 'decision', tag: 'storage' });
+  });
+
+  it('drops the vector on supersession and on REMOVE', () => {
+    const plans = planStreamWork({
+      Records: [
+        { eventName: 'MODIFY', dynamodb: { NewImage: M(fact('bob', 'g1', { value: 'x', superseded: true })), OldImage: M(fact('bob', 'g1', { value: 'x' })) } },
+        { eventName: 'REMOVE', dynamodb: { OldImage: M(fact('bob', 'g2', { value: 'y' })) } },
+      ],
+    });
+    const p = plans.get('slice-bob')!;
+    expect([...p.removes].sort()).toEqual(['g1', 'g2']);
+    expect(p.puts).toHaveLength(0);
+  });
+
+  it('sha-skips a metadata-only rewrite (same embeddable text, still live)', () => {
+    const same = { value: { title: 'unchanged title' } };
+    const plans = planStreamWork({
+      Records: [
+        { eventName: 'MODIFY', dynamodb: { NewImage: M(fact('alice', 'k', { ...same, tags: ['new-tag'] })), OldImage: M(fact('alice', 'k', { ...same, tags: ['old-tag'] })) } },
+      ],
+    });
+    expect(plans.size).toBe(0); // text unchanged → no re-embed
   });
 });

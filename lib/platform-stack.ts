@@ -5,6 +5,10 @@ import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as awsevents from 'aws-cdk-lib/aws-events';
 import * as eventTargets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import {
   HttpServiceCell,
   ServiceRouter,
@@ -115,6 +119,12 @@ export class PlatformStack extends cdk.Stack {
     // provenance + salience). The workspace is the substrate's *room provider* —
     // vocabulary, sharing, shaping — over the shared substrate table; it owns no
     // private storage. See docs/substrate.md + docs/substrate-storage.md.
+    // Semantic search (ADR-0030): one vector bucket per env/account, created at
+    // RUNTIME by the workspace + indexer Lambdas (create-if-absent, §3a). Shared
+    // by the workspace cell (query/reindex) and the stream indexer (live updates).
+    const vectorBucket = `parc-vectors-${envName}-${this.account}`;
+    const titanModelArn = `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`;
+
     const workspace = new HttpServiceCell(this, 'WorkspaceService', {
       name: 'workspace',
       entry: serviceEntry('workspace'),
@@ -135,7 +145,7 @@ export class PlatformStack extends cdk.Stack {
       // deterministic hashing embedder; flip to `bedrock` (Increment 4) once Titan
       // model access is enabled — a config change, no redeploy of code.
       environment: {
-        VECTOR_BUCKET: `parc-vectors-${envName}-${this.account}`,
+        VECTOR_BUCKET: vectorBucket,
         VECTOR_REGION: this.region,
       },
     });
@@ -154,7 +164,33 @@ export class PlatformStack extends cdk.Stack {
     workspace.fn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel'],
-        resources: [`arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`],
+        resources: [titanModelArn],
+      }),
+    );
+
+    // Live vector indexer (ADR-0030 Increment 2): the dormant SubstrateTable stream's
+    // first consumer. Each fact create/update is embedded + upserted into its slice
+    // index; supersession/delete removes it. A standalone Lambda off the stream — no
+    // hot-path cost, and a failure here can't perturb the write path or the reactor.
+    const vectorIndexer = new NodejsFunction(this, 'VectorIndexer', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '..', '..', 'services', 'vector-indexer', 'handler.ts'),
+      handler: 'handler',
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(60),
+      logRetention: logs.RetentionDays.ONE_WEEK,
+      environment: { VECTOR_BUCKET: vectorBucket, VECTOR_REGION: this.region },
+      bundling: { externalModules: [] }, // bundle the SDKs (not in the Node 20 image)
+    });
+    vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['s3vectors:*'], resources: ['*'] }));
+    vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [titanModelArn] }));
+    vectorIndexer.addEventSource(
+      new DynamoEventSource(substrate.table, {
+        startingPosition: lambda.StartingPosition.LATEST, // index from now forward; `reindex` backfills history
+        batchSize: 100,
+        maxBatchingWindow: cdk.Duration.seconds(10),
+        retryAttempts: 3,
+        bisectBatchOnError: true,
       }),
     );
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their

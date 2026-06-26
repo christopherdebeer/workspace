@@ -1,6 +1,10 @@
 # ADR-0030 — Semantic search over the substrate with Amazon S3 Vectors
 
-- **Status:** Proposed (design exploration; recommended path + increments, not built). How to add
+- **Status:** Accepted — **Increments 0–2 shipped + live-validated** (the vector seam + `workspace.search`;
+  `S3VectorsStore` + runtime bucket/index + admin `reindex`, validated by reindexing the 70-doc corpus and
+  a live semantic `search`; the DDB-stream live indexer). Embeddings run on the deterministic
+  `HashingEmbedder` (lexical) pending Bedrock Titan model access — Increment 4 flips to `BedrockEmbedder`
+  (config only). Originally: how to add
   *semantic* search to the substrate — over fact values and `file` content (ADR-0027) — using **Amazon S3
   Vectors**, fed by the (currently dormant) DynamoDB Stream, while preserving the substrate's
   **scope / grant / slice isolation** by construction.
