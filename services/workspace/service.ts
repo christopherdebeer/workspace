@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -24,6 +24,8 @@ export const handler = defineService({
       'workspace.ingested',
       'workspace.grant.requested',
       'workspace.grant.resolved',
+      // The async, chunked reindex chains continuation events to itself (ADR-0030/0031).
+      'workspace.reindex.requested',
     ],
     // The organ-to-reef write path: dynamic cells emit substrate.write.requested
     // (source IAM-pinned to cell-<id>); the workspace applies it as a fact in
@@ -47,6 +49,9 @@ export const handler = defineService({
       'cell.delete.requested': createCellLifecycleHandler(dynamoDeps),
       // ADR-0027 Inc 2: a cell data blob mirrors into a `file` fact in the uploader's slice.
       'cell.data.changed': createDataFileMirrorHandler(dynamoDeps),
+      // ADR-0030/0031: the async, chunked semantic-search backfill — one page per
+      // invocation, chaining itself until the slice is embedded + similarTo-linked.
+      'workspace.reindex.requested': createReindexHandler(dynamoDeps),
     },
   },
 });

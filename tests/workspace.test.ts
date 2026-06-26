@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
 import { stripUndefined } from '../platform/runtime/dynamo-state-store';
 import { createMemoryGrantStore } from '../services/workspace/grants';
@@ -590,6 +590,21 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     await vstore.put(indexForScope(scope, embedder.dimension), [{ key, vector, metadata: metadataForFact(meta) }]);
   }
 
+  /** Drive the async, chunked reindex (ADR-0030/0031) to completion: feed the handler
+   *  its continuation events until it stops emitting (the embed → edges chain). */
+  const reindexHandler = createReindexHandler(() => ({ state, grants, vectors: { store: vstore, embedder }, store }));
+  async function drainReindex(scope: string): Promise<void> {
+    let detail: Record<string, unknown> = { scope, phase: 'embed', indexed: 0, skipped: 0, edges: 0 };
+    for (let i = 0; i < 500; i++) {
+      const { ctx, emitted } = ctxFor(null);
+      await reindexHandler(detail, ctx, { source: 'workspace', detailType: 'workspace.reindex.requested' });
+      const cont = emitted.find((e) => e.type === 'workspace.reindex.requested');
+      if (!cont) return; // no continuation → job done
+      detail = cont.payload as Record<string, unknown>;
+    }
+    throw new Error('reindex did not converge');
+  }
+
   beforeAll(async () => {
     __resetTypeDeclsCache();
     // alice's slice — two dynamo decisions + an unrelated auth note.
@@ -661,9 +676,14 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     await cmds.remember({ key: 'k2', value: { title: 'Sourdough starter hydration schedule' }, type: 'note' }, adminCtx());
     // Not indexed yet → search is empty.
     expect((await cmds.search({ text: 'kubernetes ingress' }, adminCtx())).entries).toHaveLength(0);
+    // reindex now DISPATCHES async + chunked; the work happens in the handler chain.
     const r = await cmds.reindex(undefined, adminCtx());
-    expect(r.indexed).toBeGreaterThanOrEqual(2);
-    expect(r.index).toBe('slice-dave-d128'); // namespaced by the test embedder's dimension
+    expect(r.status).toBe('started');
+    expect(r.poll).toBe('_reindex/dave');
+    await drainReindex('dave');
+    const status = await cmds.peek({ key: '_reindex/dave' }, adminCtx());
+    expect((status?.value as { status: string }).status).toBe('done');
+    expect((status?.value as { indexed: number }).indexed).toBeGreaterThanOrEqual(2);
     const res = await cmds.search({ text: 'kubernetes ingress routing' }, adminCtx());
     expect(res.entries[0]?.key).toBe('k1'); // the k8s note, not the sourdough one
   });
@@ -685,8 +705,11 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       await cmds.remember({ key: 'r1', value: { title: 'DynamoDB single table substrate design' }, type: 'note' }, admin());
       await cmds.remember({ key: 'r2', value: { title: 'DynamoDB stream indexer for the substrate' }, type: 'note' }, admin());
       await cmds.remember({ key: 'r3', value: { title: 'DynamoDB table partition and substrate scopes' }, type: 'note' }, admin());
-      const r = await cmds.reindex(undefined, admin());
-      expect((r.edges ?? 0)).toBeGreaterThan(0);
+      expect((await cmds.reindex(undefined, admin())).status).toBe('started');
+      await drainReindex('erin');
+      const status = await cmds.peek({ key: '_reindex/erin' }, admin());
+      expect((status?.value as { status: string }).status).toBe('done');
+      expect((status?.value as { edges: number }).edges).toBeGreaterThan(0);
 
       // The inferred edges are real graph structure: neighbors surfaces them…
       const n = await cmds.neighbors({ key: 'r1' }, admin());

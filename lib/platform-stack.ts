@@ -221,6 +221,10 @@ export class PlatformStack extends cdk.Stack {
     // so only first-party fact events drive reactions. This is the generic
     // primitive reactive machines ride on.
     eventBus.routeTo('FactReactionRoute', workspace.fn, ['workspace.fact.written'], 'workspace');
+    // The async, chunked semantic-search reindex (ADR-0030/0031): the command dispatches
+    // a `workspace.reindex.requested` event and the handler chains continuation events to
+    // itself (source 'workspace'), one bounded page per invocation, off the 30s edge.
+    eventBus.routeTo('ReindexRoute', workspace.fn, ['workspace.reindex.requested'], 'workspace');
     // Autonomous tending (the legacy workspace's signature loop): a daily
     // schedule delivers workspace.tend.requested; the handler distills
     // attention() into a tending/latest audit fact per scope.

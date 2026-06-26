@@ -234,6 +234,15 @@ acts on a semantic hit with zero new ergonomics (R1). Salience fusion is the int
    `HashingEmbedder` fallback so the *whole* pipeline — index create-if-absent, `PutVectors`, fan-out,
    prefix post-filter, authoritative re-read, `workspace.search` R1 envelope — is exercisable before
    Bedrock/S3 Vectors are wired. (This is the engineering enabler the rest build on.)
+> **`reindex` is async + chunked (added 2026-06-26).** A full-slice backfill (the substrate has ~1.3k
+> facts; ~200s of Titan calls) far exceeds the ~30s CloudFront→Function-URL edge cap *and* the 60s Lambda.
+> So `reindex` no longer runs inline: the command records a `_reindex/<scope>` status fact, emits a
+> `workspace.reindex.requested` event, and returns `{status:'started', poll}`. `createReindexHandler`
+> then processes one bounded page per invocation off the bus, chaining continuation events — two phases
+> (`embed` the whole slice, then `edges`, since `similarTo` needs the full index present), each chunk well
+> under 60s, resumable, idempotent on EventBridge retry. Poll the status fact for `{status, phase,
+> indexed, edges}`. (Mirrors the `models`/`run` async-job pattern; the ~30s edge is why they're async too.)
+
 1. **Infra + S3 Vectors backend + corpus. ✅** `S3VectorsStore` (runtime bucket + index create-if-absent);
    IAM + env on the workspace Lambda. The corpus backfill landed as the admin **`reindex`** command (scan
    → embed → `PutVectors`) rather than a separate `vectors-sync.mjs` — it runs in-Lambda where the

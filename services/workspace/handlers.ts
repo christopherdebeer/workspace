@@ -501,7 +501,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
   search: CommandHandler<SearchInput, SearchResult>;
-  reindex: CommandHandler<ReindexInput | undefined, { indexed: number; skipped: number; index?: string; edges?: number; hint?: string }>;
+  reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -1114,7 +1114,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'reindex',
     description:
-      'Backfill semantic search (ADR-0030): scan your slice (optionally by type/prefix), embed each text-bearing fact, and upsert it into your vector index. The batch replay beside the live stream indexer; use after enabling search or changing the embedding model. Admin-only. No-op hint when no vector backend is configured.',
+      'Backfill semantic search (ADR-0030/0031): scan your slice (optionally by type/prefix), embed each text-bearing fact into your vector index, then wire inferred `similarTo` edges. Runs ASYNC + CHUNKED — a full slice far exceeds the sync request budget, so this dispatches and returns immediately; poll the `_reindex/<you>` status fact for { status: running|done, phase: embed|edges, indexed, edges }. The batch replay beside the live stream indexer; use after enabling search or changing the embedding model. Admin-only.',
     scope: 'workspace:admin',
     kind: 'act',
     inputSchema: {
@@ -1122,18 +1122,16 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         type: { type: 'string', description: 'Only reindex facts of this type' },
         prefix: { type: 'string', description: 'Only reindex keys with this prefix' },
-        max: { type: 'number', description: 'Cap on facts scanned (1–5000, default 2000)' },
+        max: { type: 'number', description: 'Optional cap on facts processed in the embed phase' },
       },
       additionalProperties: false,
     },
     resultSchema: {
       type: 'object',
       properties: {
-        indexed: { type: 'number', description: 'Facts embedded + upserted' },
-        skipped: { type: 'number', description: 'Facts with no embeddable text (plumbing / empty)' },
-        index: { type: 'string', description: 'The slice index written' },
-        edges: { type: 'number', description: 'Inferred similarTo edges written (ADR-0031) — present when any' },
-        hint: { type: 'string', description: 'Present when no vector backend is configured' },
+        status: { type: 'string', description: "'started' (async dispatched), or 'unconfigured'" },
+        poll: { type: 'string', description: 'Status fact key to peek for progress' },
+        hint: { type: 'string' },
       },
     },
   },
@@ -1884,67 +1882,27 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
 
     async reindex(input, ctx) {
       const scope = requireUser(ctx.identity);
-      // Admin-only: a backfill scans + embeds the whole (or prefixed) slice. The
-      // Increment-2 stream consumer keeps the index live incrementally; this is the
-      // batch replay (ADR-0030 — "replay the table → embed → PutVectors") and manual re-sync.
+      // Admin-only backfill. ASYNC + CHUNKED (ADR-0030/0031): a full slice is ~hundreds
+      // of Titan calls — far over the ~30s edge cap AND the 60s Lambda — so the command
+      // only *dispatches*: it records a `running` status fact and emits the first
+      // continuation event, returning immediately. `createReindexHandler` then processes
+      // one bounded page per invocation off the stream, chaining continuation events
+      // (embed all → then similarTo edges, which need the full index present). Poll the
+      // status fact. The live stream indexer keeps NEW writes indexed; this is the replay.
       if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
         throw new ServiceAuthError('reindex requires workspace:admin');
       }
-      const { state, vectors, store } = build(ctx);
-      if (!vectors) return { indexed: 0, skipped: 0, hint: 'semantic search is not configured on this deployment' };
-      const index = indexForScope(scope, vectors.embedder.dimension);
-      await vectors.store.ensureIndex(index, { dimension: vectors.embedder.dimension });
-
-      const max = Math.min(Math.max(1, input?.max ?? 2000), 5000);
-      let cursor: string | undefined;
-      let indexed = 0;
-      let skipped = 0;
-      const items: Array<{ key: string; vector: number[] }> = []; // retained for the similarity-edge pass
-      do {
-        const page = await state.query(scope, { type: input?.type, prefix: input?.prefix, limit: 200, cursor }, ctx.identity);
-        const pending: Array<{ key: string; text: string; type: string | null; tags: string[] }> = [];
-        for (const e of page.entries) {
-          const text = embeddableText(e.key, e.value);
-          if (!text) {
-            skipped++;
-            continue;
-          }
-          pending.push({ key: e.key, text, type: e._meta.type, tags: e._meta.tags });
-        }
-        if (pending.length) {
-          const vecs = await vectors.embedder.embed(pending.map((p) => p.text));
-          await vectors.store.put(
-            index,
-            pending.map((p, i) => ({ key: p.key, vector: vecs[i], metadata: metadataForFact({ type: p.type ?? undefined, tags: p.tags, superseded: false }) })),
-          );
-          pending.forEach((p, i) => items.push({ key: p.key, vector: vecs[i] }));
-          indexed += pending.length;
-        }
-        cursor = page.nextCursor;
-      } while (cursor && indexed + skipped < max);
-
-      // ADR-0031 Option A: after every vector is in the index, wire inferred `similarTo`
-      // edges — each fact links its top-k nearest neighbours, which feed `centrality`
-      // (so semantically-central facts gain salience) and surface in `neighbors`/`$graph`.
-      // Best-effort: a failure here never fails the (already-committed) vector backfill.
-      const sim = similarConfig();
-      let edges = 0;
-      if (sim.enabled && store && items.length) {
-        try {
-          const now = new Date().toISOString();
-          const existing = await store.listEdges(scope);
-          for (const it of items) {
-            const matches = await vectors.store.query(index, it.vector, { topK: sim.k + 1 });
-            const neighbors = selectNeighbors(matches, it.key, { k: sim.k, minScore: sim.minScore });
-            await refreshSimilarEdges(store, scope, it.key, neighbors, sim.strength, existing, now);
-            edges += neighbors.length;
-          }
-        } catch (err) {
-          ctx.logger.warn('reindex similarTo edge pass failed (vectors still indexed)', { scope, error: (err as Error).message });
-        }
-      }
-      ctx.logger.info('workspace slice reindexed for semantic search', { scope, index, indexed, skipped, edges });
-      return { indexed, skipped, index, ...(edges ? { edges } : {}) };
+      const { state, vectors } = build(ctx);
+      if (!vectors) return { status: 'unconfigured', hint: 'semantic search is not configured on this deployment' };
+      const statusKey = `_reindex/${scope}`;
+      const value: Record<string, unknown> = { status: 'running', phase: 'embed', indexed: 0, skipped: 0, edges: 0, startedAt: new Date().toISOString() };
+      if (input?.type) value.type = input.type;
+      if (input?.prefix) value.prefix = input.prefix;
+      if (input?.max) value.max = input.max;
+      await state.put({ scope, key: statusKey, value, via: 'reindex', type: 'reindex-status' }, ctx.identity);
+      await ctx.events.emit('workspace.reindex.requested', { scope, type: input?.type, prefix: input?.prefix, max: input?.max, phase: 'embed', indexed: 0, skipped: 0, edges: 0 });
+      ctx.logger.info('reindex dispatched (async, chunked)', { scope, type: input?.type, prefix: input?.prefix });
+      return { status: 'started', poll: statusKey, hint: `reindex runs async in chunks; poll peek("${statusKey}") for { status, phase, indexed, edges }` };
     },
 
     async link(input, ctx) {
@@ -2825,6 +2783,111 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
         writer,
       );
       await ctx.events.emit('workspace.fact.written', { scope: owner, key: manifestKey, revision: m._meta.revision });
+    }
+  };
+}
+
+/** The platform principal that the async reindex writes under (status fact + edges). */
+const REINDEX_IDENTITY: Identity = { user: 'platform/reindex', scopes: [] };
+const REINDEX_CHUNK = Number(process.env.VECTOR_REINDEX_CHUNK ?? 50);
+
+interface ReindexParams {
+  type?: string;
+  prefix?: string;
+  max?: number;
+  phase: 'embed' | 'edges';
+  cursor?: string;
+  indexed: number;
+  skipped: number;
+  edges: number;
+}
+
+/** Process ONE bounded page of a reindex (ADR-0030/0031), returning whether the whole
+ *  job is done and the next continuation params. Two phases: `embed` fills the vector
+ *  index page by page; once exhausted it flips to `edges`, which (re-embedding each
+ *  fact only to get its query vector — the index is already full) wires `similarTo`
+ *  edges against the complete index. Each call stays well under the 60s Lambda. */
+async function reindexChunk(deps: WorkspaceDeps, scope: string, p: ReindexParams): Promise<{ done: boolean; next: ReindexParams }> {
+  const { state, vectors, store } = deps;
+  if (!vectors) return { done: true, next: p };
+  const dim = vectors.embedder.dimension;
+  const index = indexForScope(scope, dim);
+  let { indexed, skipped, edges } = p;
+
+  const page = await state.query(scope, { type: p.type, prefix: p.prefix, limit: REINDEX_CHUNK, cursor: p.cursor }, REINDEX_IDENTITY);
+  const embeddable = page.entries
+    .map((e) => ({ key: e.key, text: embeddableText(e.key, e.value), type: e._meta.type, tags: e._meta.tags }))
+    .filter((e): e is { key: string; text: string; type: string | null; tags: string[] } => !!e.text);
+
+  if (p.phase === 'embed') {
+    await vectors.store.ensureIndex(index, { dimension: dim });
+    skipped += page.entries.length - embeddable.length;
+    if (embeddable.length) {
+      const vecs = await vectors.embedder.embed(embeddable.map((e) => e.text));
+      await vectors.store.put(index, embeddable.map((e, i) => ({ key: e.key, vector: vecs[i], metadata: metadataForFact({ type: e.type ?? undefined, tags: e.tags, superseded: false }) })));
+      indexed += embeddable.length;
+    }
+    const capped = p.max !== undefined && indexed + skipped >= p.max;
+    if (page.nextCursor && !capped) return { done: false, next: { ...p, cursor: page.nextCursor, indexed, skipped, edges } };
+    // Embed complete → start the edge phase from the top (the full index is now present).
+    return { done: false, next: { ...p, phase: 'edges', cursor: undefined, indexed, skipped, edges } };
+  }
+
+  // phase === 'edges'
+  const sim = similarConfig();
+  if (sim.enabled && store && embeddable.length) {
+    const now = new Date().toISOString();
+    const existing = await store.listEdges(scope);
+    const vecs = await vectors.embedder.embed(embeddable.map((e) => e.text)); // re-embed only to get the query vector (index already full)
+    for (let i = 0; i < embeddable.length; i++) {
+      const matches = await vectors.store.query(index, vecs[i], { topK: sim.k + 1 });
+      const neighbors = selectNeighbors(matches, embeddable[i].key, { k: sim.k, minScore: sim.minScore });
+      await refreshSimilarEdges(store, scope, embeddable[i].key, neighbors, sim.strength, existing, now);
+      edges += neighbors.length;
+    }
+  }
+  if (page.nextCursor) return { done: false, next: { ...p, cursor: page.nextCursor, indexed, skipped, edges } };
+  return { done: true, next: { ...p, cursor: undefined, indexed, skipped, edges } };
+}
+
+/** The async reindex worker (`workspace.reindex.requested`): runs one chunk, writes the
+ *  pollable `_reindex/<scope>` status, and either chains the next continuation event or
+ *  marks the job done. A chunk failure throws → EventBridge retries it (idempotent:
+ *  re-embed/re-put + refreshSimilarEdges reconcile). */
+export function createReindexHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'workspace') {
+      ctx.logger.warn('workspace.reindex.requested from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const scope = typeof detail.scope === 'string' ? detail.scope : '';
+    if (!scope) return;
+    const deps = build(ctx);
+    const statusKey = `_reindex/${scope}`;
+    const params: ReindexParams = {
+      type: typeof detail.type === 'string' ? detail.type : undefined,
+      prefix: typeof detail.prefix === 'string' ? detail.prefix : undefined,
+      max: typeof detail.max === 'number' ? detail.max : undefined,
+      phase: detail.phase === 'edges' ? 'edges' : 'embed',
+      cursor: typeof detail.cursor === 'string' ? detail.cursor : undefined,
+      indexed: Number(detail.indexed ?? 0),
+      skipped: Number(detail.skipped ?? 0),
+      edges: Number(detail.edges ?? 0),
+    };
+    const index = deps.vectors ? indexForScope(scope, deps.vectors.embedder.dimension) : '';
+    try {
+      const { done, next } = await reindexChunk(deps, scope, params);
+      const base = { phase: next.phase, indexed: next.indexed, skipped: next.skipped, edges: next.edges, index };
+      if (done) {
+        await deps.state.put({ scope, key: statusKey, value: { status: 'done', ...base, finishedAt: new Date().toISOString() }, via: 'reindex', type: 'reindex-status' }, REINDEX_IDENTITY);
+        ctx.logger.info('reindex complete', { scope, ...base });
+      } else {
+        await deps.state.put({ scope, key: statusKey, value: { status: 'running', ...base, cursor: next.cursor, updatedAt: new Date().toISOString() }, via: 'reindex', type: 'reindex-status' }, REINDEX_IDENTITY);
+        await ctx.events.emit('workspace.reindex.requested', { scope, type: next.type, prefix: next.prefix, max: next.max, phase: next.phase, cursor: next.cursor, indexed: next.indexed, skipped: next.skipped, edges: next.edges });
+      }
+    } catch (err) {
+      ctx.logger.error('reindex chunk failed (EventBridge will retry)', { scope, phase: params.phase, error: (err as Error).message });
+      throw err;
     }
   };
 }
