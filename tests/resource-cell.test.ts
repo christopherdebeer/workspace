@@ -279,16 +279,6 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(missing.error?.code).toBe(-32602);
   });
 
-  it('resources/read serves a tier-1 cell-widget shim onto the cell surface (ADR-0034 Inc 2)', async () => {
-    const read = await mcp('creator', 'resources/read', { uri: 'ui://cell/c15r/canvas/b/board1' });
-    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
-    expect(contents[0].mimeType).toContain('text/html');
-    // The shim iframes the cell's existing surface (absolute, from PUBLIC_BASE_URL) with ?embed=1.
-    expect(contents[0].text).toContain('https://parc.land/@c15r/canvas/b/board1?embed=1');
-    expect(contents[0].text).toContain('<iframe');
-    expect(contents[0].text).toContain('sandbox=');
-  });
-
   it('tools/list carries spec annotations and titles for the three verbs', async () => {
     const list = await mcp('creator', 'tools/list');
     const tools = list.result!.tools as Array<{ name: string; title?: string; annotations?: { readOnlyHint?: boolean } }>;

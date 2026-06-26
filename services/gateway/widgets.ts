@@ -117,41 +117,19 @@ const WIDGETS: Record<string, string> = {
   [CARD_URI]: CARD_HTML,
 };
 
-/** Tier-1 (ADR-0034): a cell serves its own widget. `ui://cell/<owner>/<name>/<path>`
- *  resolves to a thin iframe shim onto the cell's EXISTING surface (`?embed=1`) —
- *  reusing the proven cell-render + origin-isolation, so a type's `embed` handler
- *  becomes its conversation widget with no new rendering code. */
-const CELL_PREFIX = 'ui://cell/';
+// Tier-1 (cell-authored bespoke widgets) is intentionally NOT a nested iframe onto
+// the live cell surface: the MCP-Apps sandbox runs the View on a separate/opaque
+// origin and FORBIDS framing the server's own domain (frame-src 'none' by default;
+// frameDomains is for third-party embeds), and the sandbox has no parc.land session.
+// The correct tier-1 is self-contained widget HTML served as its own `ui://` resource
+// (the gateway fetches the cell's widget HTML server-side and returns it inline), with
+// live data + interactivity flowing through the host `tools/call`/`resources/read`
+// proxy — exactly like the tier-0 card, just cell-authored. Wired in a later increment,
+// gated on the host rendering the tier-0 card at all (ADR-0034).
 
-/** Build a tier-1 cell-widget URI from an owner/name and optional cell-relative path. */
-export function cellWidgetUri(owner: string, name: string, path = ''): string {
-  const tail = path ? `/${path.replace(/^\//, '')}` : '';
-  return `${CELL_PREFIX}${owner}/${name}${tail}`;
-}
-
-function cellShimHtml(surfaceUrl: string): string {
-  const safe = surfaceUrl.replace(/"/g, '%22');
-  return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<style>html,body{margin:0;height:100%}iframe{display:block;width:100%;height:100vh;min-height:420px;border:0}</style></head>
-<body><iframe src="${safe}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" referrerpolicy="no-referrer"></iframe></body></html>`;
-}
-
-/** Resolve a `ui://` widget URI to its HTML contents, or null if unknown.
- *  `ui://parc/<id>` → a built-in tier-0 widget; `ui://cell/<owner>/<name>/<path>`
- *  → a shim onto the cell surface (absolute URL from PUBLIC_BASE_URL). */
+/** Resolve a `ui://` widget URI to its HTML contents, or null if unknown. */
 export function resolveUiResource(uri: string): { uri: string; mimeType: string; text: string } | null {
   if (WIDGETS[uri]) return { uri, mimeType: UI_MIME, text: WIDGETS[uri] };
-  if (uri.startsWith(CELL_PREFIX)) {
-    const rest = uri.slice(CELL_PREFIX.length); // <owner>/<name>/<path...>
-    const parts = rest.split('/');
-    if (parts.length < 2 || !parts[0] || !parts[1]) return null;
-    const [owner, name, ...pathParts] = parts;
-    const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/$/, '');
-    const path = pathParts.join('/');
-    const sep = path.includes('?') ? '&' : '?';
-    const surface = `${base}/@${owner}/${name}${path ? `/${path}` : ''}${sep}embed=1`;
-    return { uri, mimeType: UI_MIME, text: cellShimHtml(surface) };
-  }
   return null;
 }
 

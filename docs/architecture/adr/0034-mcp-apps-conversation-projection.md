@@ -1,18 +1,26 @@
 # ADR-0034 — MCP Apps (`io.modelcontextprotocol/ui`): the conversation as a projection surface
 
-- **Status:** Accepted — **Inc 0–2 shipped (server-side); live iframe rendering pending client confirmation.**
-  `structuredContent` on object results (Inc 0); the `io.modelcontextprotocol/ui` + `resources` capabilities,
-  `resources/read`/`resources/list`, a generic tier-0 `ui://parc/card` widget, and `_meta.ui.resourceUri`
-  bound to read results (Inc 1); a tier-1 `ui://cell/<owner>/<name>/<path>` shim onto a cell surface (Inc 2).
-  All validated at the JSON-RPC protocol level (486 tests). What remains is **confirming the widget renders
-  in the claude.ai MCP-Apps host** (the host→iframe data API is recent and unverifiable server-side) — and,
-  gated on that, authoring bespoke cell widgets + Inc 3 interactivity. **Decision spine: tiered.** A generic
-  gateway-served widget is the **floor** — any type with a `present.render` hint (markdown/metric/fields/
-  table) gets a basic interactive card for free, rendering the tool result's `structuredContent`. A cell
-  can **override** with a bespoke `ui://` surface it serves itself (reusing its existing `embed` handler /
-  cell-iframe). This mirrors the existing renderer ladder (built-in hint → `_renderers/<type>` → cell
-  element) and the "one declaration, many projections" invariant — MCP Apps is simply a **sixth projection
-  surface**: the conversation.
+- **Status:** Accepted — **Inc 0–1 shipped and CONFIRMED RENDERING in claude.ai** (2026-06-26: a bare
+  `whoami` renders the `ui://parc/card` widget — `parc.land` header + identity card, not JSON). Inc 0:
+  `structuredContent` on object results. Inc 1: `capabilities.extensions["io.modelcontextprotocol/ui"]`
+  (with `mimeTypes`), `resources/read`/`resources/list`, the generic tier-0 `ui://parc/card` widget (which
+  does the spec `ui/initialize`→`initialized`→`tool-result` handshake), and the STATIC tool→UI binding on
+  the tool *definition* (`_meta.ui.resourceUri` in `tools/list`). 486 tests. **Decision spine: tiered** —
+  a generic gateway-served card is the **floor** (renders any read's `structuredContent`); a cell can
+  **override** with a bespoke widget. The renderer ladder (built-in hint → `_renderers/<type>` → cell
+  element), now projecting to a **sixth surface: the conversation.**
+- **Security model (verified, spec 2026-01-26) — load-bearing:** the View runs in a **sandboxed iframe on
+  a separate/opaque origin**, NOT `parc.land` and NOT the host ("Host and Sandbox MUST have different
+  origins"). The host fetches our HTML via `resources/read` (server-to-server, the connector's bearer) and
+  renders the *content* in that sandbox. The widget has **no ambient parc.land session** and cannot reach
+  our domain directly (default CSP `connect-src 'none'`; **nested iframes back to the server's own origin
+  are forbidden** — `frame-src 'none'`). Instead the widget is an MCP client to the **host**, calling
+  `tools/call`/`resources/read` over `postMessage`; the **host proxies these to our gateway with the
+  connection's auth**, so our existing `enforceScope`/slice-isolation runs unchanged on every widget
+  action. Tools may be `visibility:["app"]` (callable by the widget, hidden from the agent). **Consequence:
+  the original tier-1 "iframe the live cell surface" was retracted as spec-invalid** — a bespoke cell
+  widget is self-contained HTML served as its own `ui://` resource (interactivity via the host `tools/call`
+  proxy), exactly like the card, just cell-authored.
 - **Date:** 2026-06-26
 - **Depends on:** ADR-0002 (type-as-one-object — `present`/`handlers` facets), ADR-0004 + ADR-0012
   (projection pipeline; the `present`/affordance stage), ADR-0008 (cell axis + origin isolation — the
@@ -144,16 +152,21 @@ element. A future `_renderers/<type>`-served widget (between the two) is a natur
   hook (MCP-path only — the raw command stays plain, so internal callers are unaffected) binds every object
   `read` result to the card via `_meta.ui.resourceUri`. A rich-result envelope (`mcpResult(data,{text,ui})`)
   splits the text/data/ui channels explicitly.
-- **Inc 2 — tier-1 cell shim (shipped, mechanism).** `ui://cell/<owner>/<name>/<path>` resolves to a thin
-  sandboxed iframe shim onto the cell's existing surface (`?embed=1`, absolute from `PUBLIC_BASE_URL`) —
-  reusing the proven cell-render + origin-isolation, so a type's `handlers.embed` becomes its conversation
-  widget with no new rendering code. The resolver + `cellWidgetUri()` helper are in place; wiring a concrete
-  type→widget binding + authoring a bespoke cell widget is **gated on Inc 1 rendering confirmation** (both
-  ride the same host iframe path — building bespoke widgets before it renders would be speculative).
-- **Inc 3 — widget→server callbacks (deferred, "perhaps").** The `ui/` JSON-RPC dialect so a widget can call
-  `act()` (e.g. `attention` triage "touch"/"link"; `suggestions` "ratify") — bounded by no-SSE: request/
-  response + poll `workspace.changes`. A widget callback is an `act` like any other (same `enforceScope`,
-  same sandbox). Most spec-uncertain; deferred until the rendering path + the host callback API are confirmed.
+- **~~Inc 2 — tier-1 cell shim~~ (RETRACTED — spec-invalid).** The first pass had
+  `ui://cell/<owner>/<name>/<path>` iframe the live cell surface; the sandbox forbids framing the server's
+  own origin and has no parc.land session, so it could never render. Removed. The correct tier-1 is below.
+- **Inc 2′ — type-vocab-driven card + bespoke cell widgets (next, now unblocked).** Two runtime-extensible
+  pieces: (a) the tier-0 card reads each fact's inline `types` affordances (ADR-0029 — already on results)
+  and renders per-type from the declared `present.render` hint, so new types render richly with **no
+  gateway deploy**; (b) a cell authors a self-contained widget HTML, served as its own `ui://` resource
+  (gateway fetches it server-side), and declares it on its tool/type — propagated through the gateway's
+  dynamic-tool path into `tools/list` `_meta.ui`. After these two **deploy-once** gateway enablers, new
+  widgets are pure tier-2 cell deploys + type-vocabulary declarations.
+- **Inc 3 — interactive widgets (now spec-native, unblocked).** The widget calls `tools/call`/`resources/read`
+  over `postMessage`; the **host proxies to our gateway with the connection's auth**, so a widget button
+  (`attention` "touch"/"link", `suggestions` "ratify", a machine rail pick) is an `act` through the same
+  `enforceScope`/slice-isolation — no new auth surface. Widget-only actions can use `visibility:["app"]`
+  tools. No-SSE only limits *server push*; widget-initiated calls + polling `workspace.changes` cover updates.
 
 ## Open questions / risks
 
