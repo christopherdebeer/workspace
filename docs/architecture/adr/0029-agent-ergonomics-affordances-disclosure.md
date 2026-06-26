@@ -1,10 +1,12 @@
 # ADR-0029 — Agent ergonomics: inline affordances on reads + progressive-disclosure tiers
 
-- **Status:** Proposed (audit + recommendations; not built). A critical review of the `read`/`act` MCP
-  surface for *agent* ergonomics — progressive disclosure, salience, and the central question: when a
-  read returns facts, does it surface what the agent can DO with them (the type's tool hints / managing
-  cell), or must it round-trip? Grounded in two code investigations **and a self-audit of a live agent
-  session** (this one).
+- **Status:** Accepted — **R1 shipped** (inline `types` affordance map on `query`/`recall`/`peek`/
+  `neighbors`/`members`); **R2 found already-implemented** (elided entries already collapse to
+  `{key,type,score}` stubs — see the F3 correction below); **R3/R4 remain open follow-ups**. A critical
+  review of the `read`/`act` MCP surface for *agent* ergonomics — progressive disclosure, salience, and
+  the central question: when a read returns facts, does it surface what the agent can DO with them (the
+  type's tool hints / managing cell), or must it round-trip? Grounded in two code investigations **and a
+  self-audit of a live agent session** (this one).
 - **Date:** 2026-06-26
 - **Depends on:** ADR-0012 (present stage / `resolvePresent`), ADR-0002 (type-as-one-object), ADR-0006
   (salience stage), ADR-0008 (Cell axis / `$cells`), `docs/type-vocabulary.md`,
@@ -31,11 +33,15 @@ decls; `resolvePresent` is pure).
 per-target filter** (discovering one cell's tools pulls the whole catalog), `$graph` is unbounded (no
 pagination/prefix), and `$types`↔`$catalog` are not cross-linked (handlers vs the tools that invoke them).
 
-### F3 — Salience tiers work, but elided facts still cost tokens
+### F3 — Salience tiers work; elision is already compact *(corrected on implementation)*
 `shape()` tiers entries focus/peripheral/elided by score (`tierFor`); lenses
-(`salience|recent|connected|durable|active`) recompute scores and re-tier. **But** an elided entry sets
-`value:null` while still shipping the full `_meta` envelope — the prior ergonomics review measured ~95% of
-an elided payload as metadata for facts the system itself chose to hide. Elision saves less than it should.
+(`salience|recent|connected|durable|active`) recompute scores and re-tier. The prior ergonomics review
+(2026-06-12) measured ~95% of an elided payload as metadata and concluded elision shipped a full `_meta`
+envelope per hidden fact. **That has since been fixed and the finding is stale:** `shapeEntries`
+(`platform/runtime/state.ts`) now *withholds the entry entirely* below the elide threshold and emits a
+compact `ElidedStub` — `{ key, type, score }` — under a separate `elided` array (`expand:[key]`/`peek`
+pulls the full entry back). So R2 ("trim elided `_meta`") was **already implemented**; verifying that was
+the substance of the R2 work, and the recommendation is closed as a no-op rather than a code change.
 
 ---
 
@@ -61,25 +67,46 @@ F1–F3 — which is the strongest argument for fixing them:
 
 ## Recommendations (ranked; answers "surface tool hints on returned facts?" → **yes**)
 
-- **R1 — Inline affordances on reads (highest leverage, on-question).** Add a **shared** per-response
-  `types: { [T]: Affordance & { manager } }` map to `query`/`recall`/`peek`/`members`/`neighbors` (one
-  `resolvePresent` per *type* present in the result, not per entry — no per-fact bloat; skip for elided
-  stubs). Collapses `query → $types → correlate → act` into `query → act`. Cheap: decls are already cached,
-  `resolvePresent` is pure. This is the direct fix to F1 and the thing my own session most needed.
-- **R2 — Trim elided `_meta`.** An elided entry should ship `{ key, type, score }`, not the full envelope —
-  reclaim the ~95% measured waste (F3).
+- **R1 — Inline affordances on reads (highest leverage, on-question). ✅ SHIPPED.** A **shared** per-response
+  `types: { [T]: { icon?, label?, render?, handlers?, manager? } }` map on `query`/`recall`/`peek`/
+  `neighbors`/`members` (one `resolveType` per *type* present, not per entry — no per-fact bloat; built
+  from the already-cached canonical vocabulary). Collapses `query → $types → correlate → act` into
+  `query → act`. The direct fix to F1 and the thing my own session most needed.
+- **R2 — Trim elided `_meta`. ✅ ALREADY DONE.** Verified `shapeEntries` already withholds the whole entry
+  below the elide threshold and emits a compact `{ key, type, score }` stub (see corrected F3). No code
+  change — closed as a no-op.
 - **R3 — Disclosure tiers/filters.** `$catalog {detail:"basic"}` (names + input schema, no result) and a
-  `{cell}`/`{target}` filter; consider `$graph` pagination (F2).
+  `{cell}`/`{target}` filter; consider `$graph` pagination (F2). *(Open follow-up.)*
 - **R4 — Result-size ergonomics.** Field-projection/pagination on heavy self-model reads so an agent isn't
   forced to spill 100–400 KB and `jq` it. (Applies to the gateway reads and is a general MCP-result hygiene
-  point.)
+  point.) *(Open follow-up.)*
 
-**Net:** R1 + R2 are small, substrate-side, and independently shippable; they're the highest-value agent-
-ergonomics wins and are corroborated by concrete friction in a real session. R3/R4 are follow-ons.
+**Net:** R1 shipped and R2 was already in place — the two highest-value agent-ergonomics wins, corroborated
+by concrete friction in a real session, are done. R3/R4 remain follow-ons.
+
+## Implementation (R1)
+
+- `services/workspace/handlers.ts`: `affordancesForTypes(typeNames, decls)` resolves one `TypeAffordance`
+  (`{ icon?, label?, render?, handlers?, manager? }`) per *distinct declared type present*, skipping
+  `_`-prefixed plumbing types and omitting undeclared types (empty affordance). `typesOf(container, …extra)`
+  collects `_meta.type` across an entry array or key→Entry map plus standalone strings (elided stubs).
+  `withAffordance(entry, decls)` attaches the map to a single `peek` fact. Each read handler appends the map
+  only when non-empty (no field on a typeless result), reusing the already-cached `typeDeclsFor(ctx)`.
+- **Why `resolveType`, not `resolvePresent`:** the map is **type-level**, so per-fact label resolution is
+  the wrong shape. `label` is exposed as the type's label *path* (e.g. `value.title`), matching `$types`'
+  `present.label`. An agent reads `types[fact._meta.type].handlers[intent]` + `.manager` directly.
+- **Scope/disclosure:** the map is built from the *canonical* (cell-declared) vocabulary — identical to
+  `$types`' global half — and adds nothing the caller couldn't already read via `$types`; slice-local
+  `_types/<T>` overrides are NOT folded in (rare; `$types` still gives the fully-merged view). It carries no
+  per-fact data, so it leaks nothing across slices.
+- Descriptors document `types` via a shared `TYPES_AFFORDANCE_SCHEMA` on all five read `resultSchema`s.
+  Tests: `tests/workspace.test.ts` — "inline affordances on reads (ADR-0029 R1)" (handlers+manager present;
+  undeclared omitted; peek sibling; recall map; omitted when no declared type). `__resetTypeDeclsCache()`
+  is a test seam mirroring the runtime's `__setLambda`/`__setEventBridge`.
 
 ## Open questions
-- R1 shape: a shared `types` map (lean) vs a per-entry `_present` (convenient but heavier) — the map wins on
-  token cost; confirm agents find the indirection acceptable.
+- ~~R1 shape: a shared `types` map (lean) vs a per-entry `_present`~~ — **decided: the shared map** (wins on
+  token cost; the indirection is one lookup by `_meta.type`).
 - Should `act` errors (`scope_denied`/unknown target) also carry an affordance hint (e.g. the elevation URL
   already does — extend the pattern)?
 - Does inlining affordances tempt cells to over-declare handlers? Keep the Affordance lean (icon/label/

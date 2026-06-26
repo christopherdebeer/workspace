@@ -6,7 +6,7 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
 import { stripUndefined } from '../platform/runtime/dynamo-state-store';
 import { createMemoryGrantStore } from '../services/workspace/grants';
@@ -490,6 +490,75 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     const all = await cmds.query({ type: 'paged' }, alice());
     expect(all.nextCursor).toBeUndefined();
     expect(all.total).toBe(all.count);
+  });
+});
+
+describe('inline affordances on reads (ADR-0029 R1 — types map: tool hints + managing cell)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  // A `cells.describeTypes` vocabulary, so `typeDeclsFor` resolves (the test ctx
+  // otherwise has no serviceClient → fails closed to {} → no `types` map).
+  const VOCAB = {
+    decision: { manager: '@c15r/home', icon: '⚖️', label: 'value.title', handlers: { open: '@c15r/home/decision/${id}' } },
+    todo: { manager: '@c15r/home', icon: '✅' },
+    // `undeclared` is referenced by a fact below but absent here → must be omitted.
+  };
+  const aliceWithTypes = (): ServiceContext => {
+    const { ctx } = ctxFor('alice');
+    (ctx as unknown as { serviceClient: (n: string) => { command: (c: string, i: unknown) => Promise<unknown> } }).serviceClient = () => ({
+      command: async (cmd: string) => (cmd === 'describeTypes' ? { types: VOCAB } : {}),
+    });
+    return ctx;
+  };
+
+  beforeAll(async () => {
+    __resetTypeDeclsCache(); // hermetic: don't inherit a sibling block's vocab cache
+    const a = aliceWithTypes();
+    await cmds.remember({ key: 'd1', value: { title: 'choose dynamo' }, type: 'decision', tags: ['storage'] }, a);
+    await cmds.remember({ key: 't1', value: 'wire links', type: 'todo' }, a);
+    await cmds.remember({ key: 'x1', value: 'no decl', type: 'undeclared' }, a);
+    await cmds.remember({ key: 'note', value: 'untyped' }, a); // no type → contributes nothing
+  });
+  afterAll(() => __resetTypeDeclsCache());
+
+  it('query inlines a shared types map: handlers + manager per declared type present', async () => {
+    const res = await cmds.query({}, aliceWithTypes());
+    expect(res.types).toBeDefined();
+    // Declared types present in the result carry their affordance…
+    expect(res.types.decision).toEqual({
+      icon: '⚖️',
+      label: 'value.title',
+      handlers: { open: '@c15r/home/decision/${id}' },
+      manager: '@c15r/home',
+    });
+    expect(res.types.todo).toEqual({ icon: '✅', manager: '@c15r/home' });
+    // …an undeclared type (no affordance) is omitted, not an empty stub.
+    expect(res.types.undeclared).toBeUndefined();
+    // Untyped facts contribute no key.
+    expect(Object.keys(res.types).sort()).toEqual(['decision', 'todo']);
+  });
+
+  it('peek attaches the single fact’s type affordance as a sibling (value/_meta intact)', async () => {
+    const e = await cmds.peek({ key: 'd1' }, aliceWithTypes());
+    expect((e as { value: { title: string } }).value.title).toBe('choose dynamo');
+    expect(e?._meta.type).toBe('decision');
+    expect((e as unknown as { types: Record<string, unknown> }).types.decision).toMatchObject({ manager: '@c15r/home' });
+  });
+
+  it('recall inlines the types map across the shaped view', async () => {
+    const res = await cmds.recall({ elision: 'none' }, aliceWithTypes());
+    expect((res as unknown as { types: Record<string, unknown> }).types.decision).toMatchObject({ icon: '⚖️' });
+  });
+
+  it('omits the types map entirely when no declared type is present', async () => {
+    __resetTypeDeclsCache();
+    const { ctx } = ctxFor('alice'); // no serviceClient → vocab unavailable
+    const res = await cmds.query({ type: 'todo' }, ctx);
+    expect((res as { types?: unknown }).types).toBeUndefined();
+    __resetTypeDeclsCache();
   });
 });
 

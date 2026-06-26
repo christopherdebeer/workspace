@@ -128,6 +128,11 @@ export const dynamoDeps: DepsBuilder = (ctx) => {
  */
 const TYPE_DECLS_TTL_MS = 60_000;
 let typeDeclsCache: { at: number; decls: Record<string, Record<string, unknown>> } | null = null;
+/** Test seam: drop the process-wide type-vocabulary cache (consistent with the
+ *  runtime's `__setLambda`/`__setEventBridge` injection seams). */
+export function __resetTypeDeclsCache(): void {
+  typeDeclsCache = null;
+}
 async function typeDeclsFor(ctx: ServiceContext): Promise<Record<string, Record<string, unknown>>> {
   if (typeDeclsCache && Date.now() - typeDeclsCache.at < TYPE_DECLS_TTL_MS) return typeDeclsCache.decls;
   let decls: Record<string, Record<string, unknown>> = {};
@@ -152,6 +157,66 @@ async function typeRulesFor(ctx: ServiceContext): Promise<Record<string, TypeRul
     if (r.manager || r.refs || r.keyPattern) rules[type] = r;
   }
   return rules;
+}
+
+/**
+ * The per-type **affordance** a read inlines for the types present in its result
+ * (ADR-0029 R1). Handed a fact, an agent answers "what can I DO with this, and
+ * where?" from the *same* response — `types[fact._meta.type].handlers[intent]`
+ * (an act target / surface / renderer) and `.manager` (the owning cell) — instead
+ * of a second `read("$types")` + manual correlation. `label` is the type's label
+ * *path* (e.g. `value.title`), matching `$types`' `present.label`.
+ */
+export interface TypeAffordance {
+  icon?: string;
+  label?: string;
+  render?: unknown;
+  handlers?: Record<string, unknown>;
+  manager?: string;
+}
+
+/** Build the inline `types` map for the type names present in a read result
+ *  (ADR-0029 R1). One `resolveType` per *distinct type* (not per entry → no
+ *  per-fact bloat), from the already-cached canonical vocabulary; an undeclared
+ *  type (empty affordance) is omitted, and `_`-prefixed plumbing types are
+ *  skipped. Slice-local `_types/<T>` overrides are NOT folded in here (rare —
+ *  `read("$types")` still returns the fully-merged view). */
+function affordancesForTypes(
+  typeNames: Iterable<string | null | undefined>,
+  decls: Record<string, Record<string, unknown>>,
+): Record<string, TypeAffordance> {
+  const present = new Set<string>();
+  for (const t of typeNames) if (typeof t === 'string' && t && !t.startsWith('_')) present.add(t);
+  const out: Record<string, TypeAffordance> = {};
+  for (const t of present) {
+    const rt = resolveType(decls[t], t);
+    const aff: TypeAffordance = {};
+    if (rt.present.icon !== undefined) aff.icon = rt.present.icon;
+    if (rt.present.label !== undefined) aff.label = rt.present.label;
+    if (rt.present.render !== undefined) aff.render = rt.present.render;
+    if (rt.handlers !== undefined) aff.handlers = rt.handlers;
+    if (rt.manager !== undefined) aff.manager = rt.manager;
+    if (Object.keys(aff).length) out[t] = aff;
+  }
+  return out;
+}
+
+/** The `_meta.type` of every entry in a read container (entry array or key→Entry
+ *  map), plus any standalone type strings (e.g. elided stubs). For `affordancesForTypes`. */
+function typesOf(
+  container: Array<{ _meta?: { type?: string | null } }> | Record<string, { _meta?: { type?: string | null } }> | undefined,
+  ...extra: Array<string | null | undefined>
+): Array<string | null | undefined> {
+  const list = container ? (Array.isArray(container) ? container : Object.values(container)) : [];
+  return [...list.map((e) => e?._meta?.type), ...extra];
+}
+
+/** Attach the inline `types` affordance map to a single returned fact (`peek`),
+ *  leaving a `null` (absent) fact untouched (ADR-0029 R1). */
+function withAffordance(entry: Entry | null, decls: Record<string, Record<string, unknown>>): Entry | (Entry & { types: Record<string, TypeAffordance> }) | null {
+  if (!entry) return entry;
+  const types = affordancesForTypes([entry._meta.type], decls);
+  return Object.keys(types).length ? { ...entry, types } : entry;
 }
 
 export interface RememberInput {
@@ -485,6 +550,24 @@ const KEYED_ENTRY_SCHEMA = {
   properties: { key: { type: 'string' }, value: { description: 'The stored JSON value' }, _meta: META_SCHEMA },
 } as const;
 
+/** The inline affordance map a read carries for the types present in its result
+ *  (ADR-0029 R1) — collapses `query → $types → correlate → act` into `query → act`. */
+const TYPES_AFFORDANCE_SCHEMA = {
+  type: 'object',
+  description:
+    "What you can DO with each type in this result, keyed by type name (present only when ≥1 returned type is declared). For a fact of type T: types[T].handlers[intent] (open/edit/render/create → an act target, cell surface, or renderer) and types[T].manager (the owning cell) — no separate read('$types') needed. `label` is the type's label path (e.g. value.title).",
+  additionalProperties: {
+    type: 'object',
+    properties: {
+      icon: { type: 'string' },
+      label: { type: 'string', description: 'Label path (where a fact of this type gets its display label)' },
+      render: { description: 'Render binding: a { hint } or { viewer } ref' },
+      handlers: { type: 'object', description: 'intent → surface | act target | renderer | hint' },
+      manager: { type: 'string', description: 'The cell that manages this type' },
+    },
+  },
+} as const;
+
 const EDGE_SCHEMA = {
   type: 'object',
   properties: {
@@ -635,6 +718,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           items: { type: 'object', properties: { key: { type: 'string' }, type: { type: ['string', 'null'] }, score: { type: 'number' } } },
         },
         _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total }' },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -653,7 +737,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key'],
       additionalProperties: false,
     },
-    resultSchema: { ...ENTRY_SCHEMA, description: 'The fact, or null when absent' },
+    resultSchema: { ...ENTRY_SCHEMA, properties: { ...ENTRY_SCHEMA.properties, types: TYPES_AFFORDANCE_SCHEMA }, description: 'The fact (with an inline `types` affordance map), or null when absent' },
   },
   {
     name: 'query',
@@ -686,6 +770,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         count: { type: 'number', description: 'Entries in this page' },
         total: { type: 'number', description: 'Entries matching overall' },
         nextCursor: { type: 'string', description: 'Present when more pages remain' },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -753,6 +838,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         outbound: { type: 'array', items: EDGE_SCHEMA },
         inbound: { type: 'array', items: EDGE_SCHEMA },
         entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist', additionalProperties: ENTRY_SCHEMA },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -798,6 +884,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         membership: { type: 'string', enum: ['intensional', 'extensional'] },
         order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
         members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta); extensional members also carry `placement` {seq, fold} from their ordering decoration' },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -1553,7 +1640,12 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       }
 
       // Shape the whole assembled view once (lens echoes into _shaping).
-      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      // R1 (ADR-0029): inline affordances — include elided stubs' types so an
+      // agent can act on a withheld fact's type after `expand`.
+      const decls = await typeDeclsFor(ctx);
+      const types = affordancesForTypes(typesOf(shaped.entries, ...(shaped.elided ?? []).map((s) => s.type)), decls);
+      return Object.keys(types).length ? { ...shaped, types } : shaped;
     },
 
     async peek(input, ctx) {
@@ -1571,18 +1663,18 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         }
         const granted = await state.get(input.owner, input.key, ctx.identity);
         enforceTypeRead(ctx.identity, granted?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
-        return granted;
+        return withAffordance(granted, await typeDeclsFor(ctx));
       }
       const own = await state.get(caller, input.key, ctx.identity);
       enforceTypeRead(ctx.identity, own?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
-      return own;
+      return withAffordance(own, await typeDeclsFor(ctx));
     },
 
     async query(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
       enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
-      return state.query(
+      const result = await state.query(
         scope,
         {
           type: input?.type,
@@ -1600,6 +1692,9 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         },
         ctx.identity,
       );
+      // R1 (ADR-0029): inline what the agent can DO with each returned type.
+      const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
+      return Object.keys(types).length ? { ...result, types } : result;
     },
 
     async link(input, ctx) {
@@ -1622,7 +1717,9 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
+      const result = await state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
+      const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx)); // R1 (ADR-0029)
+      return Object.keys(types).length ? { ...result, types } : result;
     },
 
     async links(input, ctx) {
@@ -1645,7 +1742,9 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
+      const result = await state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
+      const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx)); // R1 (ADR-0029)
+      return Object.keys(types).length ? { ...result, types } : result;
     },
 
     async changes(input, ctx) {
