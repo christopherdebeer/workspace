@@ -1,6 +1,7 @@
 # ADR-0027 — Files as facts + the public system corpus
 
-- **Status:** Accepted (Increment 1 shipped — the docs corpus; Increments 2–3 proposed). A `file` fact
+- **Status:** Accepted (Increments 1–3 shipped — docs corpus, data-blob mirror, cell-source manifest;
+  presigned-upload mirror via S3→EventBridge is the remaining follow-up). A `file` fact
   type makes an S3 object (or a repo source/doc file) a first-class, queryable, linkable, shareable
   substrate citizen, and the repo's own docs are upserted into a **public, read-only, shared-by-all**
   corpus.
@@ -87,12 +88,16 @@ filter + key-prefix + substring search + cursor, all already implemented. The th
 
 - **1 — Docs corpus (shipped):** `file` type + `docs-sync.mjs` + public share. Pure substrate writes; no
   new AWS infra, no cell redeploy required for the facts (render hint lands with the next `home` deploy).
-- **2 — S3 → file fact auto-mirror (proposed):** an S3 EventBridge notification on the `CodeBucket`
-  (`data/` prefix) → the existing `substrate.write.requested` organ path → upsert/retire a `file` fact
-  per object. ~1 rule + a handler branch. Scope it (opt-in per cell / `data/` only) so build artifacts
-  aren't fact-ified.
-- **3 — Cell-source manifests (proposed):** on `cell.deployed`, project a `file`-typed source manifest so
-  `cells/<id>/src/` is queryable, completing "any file is a fact."
+- **2 — Data blobs → file facts (shipped):** `cells.putData` emits `cell.data.changed`; the workspace's
+  `createDataFileMirrorHandler` projects a `file` fact `file/cells/<cellId>/data/<key>` into the uploading
+  user's slice (a thin pointer — `s3Key` + metadata, never the bytes). Chosen the event→projection path
+  (consistent with `cell.files.changed`) over an S3 bucket-notification rule — no new infra/IAM. **Caveat
+  (follow-up):** presigned direct-to-S3 uploads bypass the handler and aren't mirrored; capturing those
+  needs an S3→EventBridge rule. `data/` only — `src/`/`build/` are not fact-ified here (src is Inc 3).
+- **3 — Cell-source manifest (shipped):** on `cell.deployed`, `createCellLifecycleHandler` projects a
+  `file`-typed `cells/<id>/source-manifest` (the src file listing + version) into the owner's slice, so a
+  cell's source is a queryable, linkable fact — "any file is a fact." A listing, not per-file (individual
+  src files stay in S3, read on demand via `cells.readFile`).
 
 ## Open / follow-ups
 

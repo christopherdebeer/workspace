@@ -1162,6 +1162,19 @@ async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknow
     record.public && key.startsWith('public/')
       ? `/@${record.owner}/${record.name}/_data/${user}/${key}`
       : null;
+  // ADR-0027 Inc 2: mirror the blob into a `file` fact (the workspace projects it
+  // into the uploading user's slice). Synchronous-write path only — presigned
+  // direct-to-S3 uploads bypass this (documented follow-up: an S3→EventBridge rule).
+  await ctx.events.emit('cell.data.changed', {
+    cellId: record.cellId,
+    owner: record.owner,
+    name: record.name,
+    user,
+    key,
+    bytes: body.length,
+    contentType: input.contentType ?? fetchedType ?? 'application/octet-stream',
+    ...(url ? { url } : {}),
+  });
   return { ok: true, cellId: record.cellId, user, key, bytes: body.length, url };
 }
 
@@ -1903,6 +1916,7 @@ export const handler = defineService({
       'cell.delete.requested',
       'cell.deployed',
       'cell.files.changed',
+      'cell.data.changed',
     ],
     // forge consumes its own `cell.deploy.requested` (routed back by the
     // CellDeployRoute in platform-stack) to run the bundle asynchronously.

@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createFactReactionHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -45,6 +45,8 @@ export const handler = defineService({
       'cell.deployed': createCellLifecycleHandler(dynamoDeps),
       'cell.files.changed': createCellLifecycleHandler(dynamoDeps),
       'cell.delete.requested': createCellLifecycleHandler(dynamoDeps),
+      // ADR-0027 Inc 2: a cell data blob mirrors into a `file` fact in the uploader's slice.
+      'cell.data.changed': createDataFileMirrorHandler(dynamoDeps),
     },
   },
 });

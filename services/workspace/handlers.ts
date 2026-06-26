@@ -2455,6 +2455,71 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
     );
     await ctx.events.emit('workspace.fact.written', { scope: owner, key, revision: entry._meta.revision });
     ctx.logger.info('cell lifecycle projected', { scope: owner, key, status: value.status, revision: entry._meta.revision });
+
+    // ADR-0027 Inc 3: on deploy, project a `file`-typed SOURCE MANIFEST so a cell's
+    // src/ tree is a queryable fact (`query type=file prefix="cells/"`) and linkable
+    // — "any file is a fact". A listing, not per-file (those stay in S3, read on
+    // demand via cells.readFile). undefined fields are stripped at the write (fix #1).
+    if (meta.detailType === 'cell.deployed') {
+      const manifestKey = `cells/${cellId}/source-manifest`;
+      const manifest = {
+        path: `cells/${cellId}/src/`,
+        contentType: 'application/vnd.parc.cell-source-manifest+json',
+        cell: base.address,
+        files: Array.isArray(detail.files) ? (detail.files as string[]) : value.files ?? [],
+        version: typeof detail.version === 'string' ? detail.version : undefined,
+        clientEntry: (detail.clientEntry as string | null | undefined) ?? null,
+        source: 'cells:deployed',
+      };
+      const m = await state.put(
+        { scope: owner, key: manifestKey, value: manifest, via: 'cells:deployed', type: 'file', tags: ['file', 'cell-source'] },
+        writer,
+      );
+      await ctx.events.emit('workspace.fact.written', { scope: owner, key: manifestKey, revision: m._meta.revision });
+    }
+  };
+}
+
+/**
+ * ADR-0027 Inc 2: mirror a cell DATA blob into a `file` fact when `cells.putData`
+ * writes one (`cell.data.changed`). The fact lands in the UPLOADING user's slice
+ * (their file), keyed `file/cells/<cellId>/data/<key>`, as a thin pointer (s3Key +
+ * metadata, never the bytes). Makes blobs queryable/linkable/shareable. NB: presigned
+ * direct-to-S3 uploads bypass the handler, so they aren't mirrored — capturing those
+ * needs an S3→EventBridge rule (deferred; documented in ADR-0027).
+ */
+export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'cells') {
+      ctx.logger.warn('cell.data.changed from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const cellId = typeof detail.cellId === 'string' ? detail.cellId : '';
+    const user = typeof detail.user === 'string' ? detail.user : '';
+    const key = typeof detail.key === 'string' ? detail.key : '';
+    if (!cellId || !user || !key) {
+      ctx.logger.warn('cell.data.changed missing cellId/user/key refused', {});
+      return;
+    }
+    const { state } = build(ctx);
+    const writer: Identity = { user: 'platform/cells', scopes: [] };
+    const factKey = `file/cells/${cellId}/data/${key}`;
+    const s3Key = `cells/${cellId}/data/${user}/${key}`;
+    const value = {
+      path: s3Key,
+      s3Key,
+      contentType: typeof detail.contentType === 'string' ? detail.contentType : 'application/octet-stream',
+      bytes: typeof detail.bytes === 'number' ? detail.bytes : undefined,
+      url: typeof detail.url === 'string' ? detail.url : undefined,
+      cell: typeof detail.name === 'string' && typeof detail.owner === 'string' ? `@${detail.owner}/${detail.name}` : undefined,
+      source: 'cells.putData',
+    };
+    const entry = await state.put(
+      { scope: user, key: factKey, value, via: 'cells:data', type: 'file', tags: ['file', 'cell-data'] },
+      writer,
+    );
+    await ctx.events.emit('workspace.fact.written', { scope: user, key: factKey, revision: entry._meta.revision });
+    ctx.logger.info('cell data mirrored to file fact', { scope: user, key: factKey });
   };
 }
 
