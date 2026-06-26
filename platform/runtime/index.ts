@@ -56,6 +56,17 @@ export { resolvePresent, resolveLabel } from './present';
 export type { Affordance, Presentable } from './present';
 export { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl, resolveType } from './type-schema';
 export type { FieldSpec, FieldType, Type, KeyEdge } from './type-schema';
+export {
+  PUBLIC_INDEX,
+  indexForScope,
+  embeddableText,
+  metadataForFact,
+  normalize,
+  cosineSimilarity,
+  HashingEmbedder,
+  MemoryVectorStore,
+} from './vectors';
+export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder } from './vectors';
 export { createDeclarationRegistry } from './declarations';
 export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {

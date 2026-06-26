@@ -10,7 +10,7 @@ import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler
 import { resolveParams } from '../services/workspace/subscriptions';
 import { stripUndefined } from '../platform/runtime/dynamo-state-store';
 import { createMemoryGrantStore } from '../services/workspace/grants';
-import { createObservedState, createMemoryStateStore } from '../platform/runtime';
+import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
 
 /** A minimal ServiceContext for a given caller; captures emitted events. */
@@ -193,7 +193,7 @@ describe('workspace sharing / view layer', () => {
       [
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
-        'query', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
+        'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
         'registerAction', 'actions', 'deleteAction', 'invoke',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
@@ -559,6 +559,95 @@ describe('inline affordances on reads (ADR-0029 R1 — types map: tool hints + m
     const res = await cmds.query({ type: 'todo' }, ctx);
     expect((res as { types?: unknown }).types).toBeUndefined();
     __resetTypeDeclsCache();
+  });
+});
+
+describe('semantic search (ADR-0030 — vector seam: candidate generation + authoritative re-read)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const vstore = new MemoryVectorStore();
+  const embedder = new HashingEmbedder(128);
+  const cmds = createWorkspaceCommands(() => ({ state, grants, vectors: { store: vstore, embedder } }));
+  // cmds with NO vector backend — to assert graceful degradation.
+  const noVecCmds = createWorkspaceCommands(() => ({ state, grants }));
+  const VOCAB = { decision: { manager: '@c15r/home', icon: '⚖️' }, note: { manager: '@c15r/home', icon: '📝' } };
+  const ctxOf = (u: string): ServiceContext => {
+    const ctx = ctxFor(u).ctx;
+    (ctx as unknown as { serviceClient: () => { command: (c: string) => Promise<unknown> } }).serviceClient = () => ({
+      command: async (cmd: string) => (cmd === 'describeTypes' ? { types: VOCAB } : {}),
+    });
+    return ctx;
+  };
+
+  /** Mirror what the Increment-2 stream indexer will do: embed a fact's text and
+   *  upsert its vector into the owner's slice index. */
+  async function indexFact(scope: string, key: string, value: unknown, meta: { type?: string; tags?: string[]; superseded?: boolean }): Promise<void> {
+    const text = embeddableText(key, value);
+    if (!text) return;
+    const [vector] = await embedder.embed([text]);
+    await vstore.put(indexForScope(scope), [{ key, vector, metadata: metadataForFact(meta) }]);
+  }
+
+  beforeAll(async () => {
+    __resetTypeDeclsCache();
+    // alice's slice — two dynamo decisions + an unrelated auth note.
+    await cmds.remember({ key: 'd-dynamo', value: { title: 'Choose a single DynamoDB table for the substrate' }, type: 'decision', tags: ['storage'] }, ctxOf('alice'));
+    await cmds.remember({ key: 'd-stream', value: { title: 'Consume the DynamoDB stream to index vectors' }, type: 'decision', tags: ['storage'] }, ctxOf('alice'));
+    await cmds.remember({ key: 'n-auth', value: { title: 'Passkey webauthn refresh cookie horizon' }, type: 'note', tags: ['auth'] }, ctxOf('alice'));
+    await indexFact('alice', 'd-dynamo', { title: 'Choose a single DynamoDB table for the substrate' }, { type: 'decision', tags: ['storage'] });
+    await indexFact('alice', 'd-stream', { title: 'Consume the DynamoDB stream to index vectors' }, { type: 'decision', tags: ['storage'] });
+    await indexFact('alice', 'n-auth', { title: 'Passkey webauthn refresh cookie horizon' }, { type: 'note', tags: ['auth'] });
+    // bob's slice — one unrelated fact.
+    await cmds.remember({ key: 'b1', value: { title: 'Grocery list' }, type: 'note' }, ctxOf('bob'));
+    await indexFact('bob', 'b1', { title: 'Grocery list' }, { type: 'note' });
+  });
+  afterAll(() => __resetTypeDeclsCache());
+
+  it('ranks by meaning and returns the R1 types envelope', async () => {
+    const res = await cmds.search({ text: 'dynamodb storage table design' }, ctxOf('alice'));
+    expect(res.entries.length).toBeGreaterThanOrEqual(2);
+    expect(['d-dynamo', 'd-stream']).toContain(res.entries[0].key); // a dynamo decision ranks first
+    expect(res.entries[0].score).toBeGreaterThan(res.entries[res.entries.length - 1].score);
+    expect(res.types?.decision).toBeDefined(); // R1 envelope (declared types resolved client-free)
+  });
+
+  it('isolates slices — bob’s search never surfaces alice’s facts (structural index boundary)', async () => {
+    const res = await cmds.search({ text: 'dynamodb storage table design' }, ctxOf('bob'));
+    expect(res.entries.every((e) => !e.key.startsWith('alice/') && e.key !== 'd-dynamo')).toBe(true);
+  });
+
+  it('honours a type filter (the granular read:type pin)', async () => {
+    const res = await cmds.search({ text: 'dynamodb', type: 'decision' }, ctxOf('alice'));
+    expect(res.entries.every((e) => e._meta.type === 'decision')).toBe(true);
+    expect(res.entries.some((e) => e.key === 'n-auth')).toBe(false);
+  });
+
+  it('folds a grant: a shared prefix surfaces for the grantee, keyed <owner>/<key>, post-filtered by prefix', async () => {
+    await cmds.share({ to: 'carol', key: 'd-*' }, ctxOf('alice')); // prefix grant: only d-* keys
+    const res = await cmds.search({ text: 'dynamodb stream vectors' }, ctxOf('carol'));
+    expect(res.entries.length).toBeGreaterThanOrEqual(1);
+    expect(res.entries.every((e) => e.key.startsWith('alice/d-'))).toBe(true); // prefix post-filter
+    expect(res.entries.some((e) => e.key === 'alice/n-auth')).toBe(false); // outside the grant prefix
+  });
+
+  it('authoritative re-read drops a superseded fact still present in the (stale) index', async () => {
+    await cmds.remember({ key: 'tmp', value: { title: 'dynamodb temporary scratch decision' }, type: 'decision' }, ctxOf('alice'));
+    await indexFact('alice', 'tmp', { title: 'dynamodb temporary scratch decision' }, { type: 'decision', superseded: false });
+    expect((await cmds.search({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'))).entries.some((e) => e.key === 'tmp')).toBe(true);
+    await cmds.supersede({ key: 'tmp' }, ctxOf('alice')); // index NOT updated → still superseded:false there
+    const after = await cmds.search({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'));
+    expect(after.entries.some((e) => e.key === 'tmp')).toBe(false); // dropped on re-read (Decision 1)
+  });
+
+  it('degrades gracefully with no vector backend (hint, not error)', async () => {
+    const res = await noVecCmds.search({ text: 'anything' }, ctxOf('alice'));
+    expect(res.entries).toEqual([]);
+    expect(res.hint).toMatch(/not configured/i);
+  });
+
+  it('requires query text', async () => {
+    await expect(cmds.search({ text: '   ' }, ctxOf('alice'))).rejects.toThrow(/text is required/);
   });
 });
 

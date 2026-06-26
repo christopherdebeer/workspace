@@ -31,6 +31,7 @@ import {
   createObservedState,
   type ObservedState,
   type Entry,
+  type EntryMeta,
   type ReadResult,
   type QueryResult,
   type NeighborsResult,
@@ -49,6 +50,11 @@ import {
   resolveType,
   extractTypeRules,
   type TypeRules,
+  type VectorStore,
+  type Embedder,
+  type VectorFilter,
+  indexForScope,
+  embeddableText,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -102,6 +108,9 @@ import {
 export interface WorkspaceDeps {
   state: ObservedState;
   grants: GrantStore;
+  /** Semantic-search backend (ADR-0030). Optional: absent → `search` reports that
+   *  semantic search isn't configured (the substrate degrades to `query`/`contains`). */
+  vectors?: { store: VectorStore; embedder: Embedder };
 }
 export type DepsBuilder = (ctx: ServiceContext) => WorkspaceDeps;
 
@@ -290,6 +299,32 @@ export interface QueryInput {
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
   explain?: boolean;
 }
+export interface SearchInput {
+  /** Natural-language query — embedded and matched by meaning (ADR-0030). */
+  text: string;
+  /** Restrict to one fact type (also the granular `read:type:<T>` pin). */
+  type?: string;
+  /** Restrict to facts carrying this (primary) tag. */
+  tag?: string;
+  /** Max results (1–50, default 10). */
+  limit?: number;
+}
+export interface SearchHit {
+  key: string;
+  value: unknown;
+  _meta: EntryMeta;
+  /** Cosine similarity to the query (1 = closest). */
+  score: number;
+}
+export interface SearchResult {
+  entries: SearchHit[];
+  count: number;
+  total: number;
+  /** Inline affordances (ADR-0029 R1) for the types present — present when ≥1 declared. */
+  types?: Record<string, TypeAffordance>;
+  /** Present when no vector backend is configured (degraded to query/contains). */
+  hint?: string;
+}
 export interface LinkInput {
   from: string;
   rel: string;
@@ -445,6 +480,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   recall: CommandHandler<RecallInput | undefined, ReadResult>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
+  search: CommandHandler<SearchInput, SearchResult>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -771,6 +807,39 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         total: { type: 'number', description: 'Entries matching overall' },
         nextCursor: { type: 'string', description: 'Present when more pages remain' },
         types: TYPES_AFFORDANCE_SCHEMA,
+      },
+    },
+  },
+  {
+    name: 'search',
+    description:
+      'Semantic search: find facts by MEANING, not exact words. Embeds your text and ranks facts (and file content) by similarity across your slice + everything shared with you, then re-reads each hit authoritatively (so a result is always live + permitted). Complements `query` (structured type/tag/prefix filter) and `query.contains` (exact substring) — use `search` for "facts about X" when you do not know the exact wording. Restrict with `type`/`tag`. Returns the same `{entries, types}` shape as query. If the deployment has no vector backend, returns empty with a `hint`.',
+    scope: null,
+    scopeFamily: 'read:type:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Natural-language query, matched by meaning' },
+        type: { type: 'string', description: 'Only facts of this type (also the granular read:type pin)' },
+        tag: { type: 'string', description: 'Only facts carrying this (primary) tag' },
+        limit: { type: 'number', description: 'Max results (1–50, default 10)' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        entries: {
+          type: 'array',
+          description: 'Ranked hits — { key, value, _meta, score } where score is cosine similarity (1 = closest)',
+          items: { type: 'object', properties: { key: { type: 'string' }, value: {}, _meta: META_SCHEMA, score: { type: 'number' } } },
+        },
+        count: { type: 'number' },
+        total: { type: 'number' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+        hint: { type: 'string', description: 'Present only when semantic search is not configured (degraded to query/contains)' },
       },
     },
   },
@@ -1694,6 +1763,69 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       );
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
+      return Object.keys(types).length ? { ...result, types } : result;
+    },
+
+    async search(input, ctx) {
+      const viewer = requireUser(ctx.identity);
+      const { state, grants, vectors } = build(ctx);
+      // No backend wired → degrade gracefully (the substrate still has query/contains).
+      if (!vectors) {
+        return {
+          entries: [],
+          count: 0,
+          total: 0,
+          hint: 'semantic search is not configured on this deployment — use workspace.query (type/tag/prefix filter) or query `contains` (substring search)',
+        };
+      }
+      const text = typeof input?.text === 'string' ? input.text.trim() : '';
+      if (!text) throw new Error('text is required');
+      enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`
+      const limit = Math.min(Math.max(1, input?.limit ?? 10), 50);
+      const topK = limit * 4; // over-fetch; the authoritative re-read + grant post-filter trim
+
+      const [queryVector] = await vectors.embedder.embed([text]);
+      const filter: VectorFilter = { superseded: false };
+      if (input?.type) filter.type = input.type;
+      if (input?.tag) filter.tag = input.tag;
+
+      // Candidate generation (ADR-0030 Decision 1: the index is NOT an authority).
+      // The readable index set mirrors recall's fold: own slice + every applicable
+      // grant's owner (direct/public/group). Each hit is re-read authoritatively below.
+      type Cand = { owner: string; key: string; outKey: string; score: number };
+      const cands: Cand[] = [];
+      const ownMatches = await vectors.store.query(indexForScope(viewer), queryVector, { topK, filter }).catch(() => []);
+      for (const m of ownMatches) cands.push({ owner: viewer, key: m.key, outKey: m.key, score: m.score });
+      for (const g of await applicableGrants(grants, viewer)) {
+        if (g.owner === viewer) continue;
+        const matches = await vectors.store.query(indexForScope(g.owner), queryVector, { topK, filter }).catch(() => []);
+        for (const m of matches) {
+          if (!grantCovers(g.key, m.key)) continue; // whole-slice / prefix / exact — exactly as peek
+          cands.push({ owner: g.owner, key: m.key, outKey: `${g.owner}/${m.key}`, score: m.score });
+        }
+      }
+
+      // Collapse a key reachable via >1 path to its best score, then rank.
+      const best = new Map<string, Cand>();
+      for (const c of cands) {
+        const prev = best.get(c.outKey);
+        if (!prev || c.score > prev.score) best.set(c.outKey, c);
+      }
+      const ranked = [...best.values()].sort((a, b) => b.score - a.score);
+
+      // Authoritative re-read (Decision 1): scope/grant/timer/supersession re-enforced
+      // on the LIVE substrate with the viewer's identity. A stale or wrong vector — a
+      // superseded fact still in the index, a lapsed lease — is dropped here, never leaked.
+      const entries: Array<{ key: string; value: unknown; _meta: EntryMeta; score: number }> = [];
+      for (const c of ranked) {
+        if (entries.length >= limit) break;
+        const e = await state.get(c.owner, c.key, ctx.identity);
+        if (!e || e._meta.superseded) continue;
+        entries.push({ key: c.outKey, value: e.value, _meta: e._meta, score: Number(c.score.toFixed(4)) });
+      }
+
+      const types = affordancesForTypes(typesOf(entries), await typeDeclsFor(ctx)); // R1 envelope
+      const result = { entries, count: entries.length, total: entries.length };
       return Object.keys(types).length ? { ...result, types } : result;
     },
 
