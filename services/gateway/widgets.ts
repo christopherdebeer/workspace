@@ -24,12 +24,17 @@ const SHELL_HEAD = `<!doctype html>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  /* min-height nudges hosts that size the frame to initial content (claude.ai mobile);
-     overflow:auto keeps the body scrollable inside a fixed frame so content is reachable. */
-  html, body { min-height: 540px; } body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; padding: 12px; overflow: auto; }
-  .hdr { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13px; letter-spacing: .02em; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 2px solid #6d5ef0; }
-  .hdr .dot { width: 10px; height: 10px; border-radius: 50%; background: #6d5ef0; box-shadow: 0 0 0 3px color-mix(in srgb, #6d5ef0 25%, transparent); }
-  .hdr .sp { flex: 1; } .hdr .tag { font-weight: 500; font-size: 11px; opacity: .55; }
+  /* The host (claude.ai mobile) gives a fixed, often small frame and doesn't honour
+     runtime resize — so #root is the scroll container (fills the frame, scrolls within),
+     and the header is a thin sticky marker to maximise content space. */
+  html, body { height: 100%; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #root { height: 100vh; overflow: auto; padding: 10px 12px; }
+  .hdr { position: sticky; top: 0; z-index: 2; background: Canvas; display: flex; align-items: center; gap: 6px;
+         font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .5;
+         padding: 1px 0 3px; margin: 0 0 6px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); }
+  .hdr .dot { width: 6px; height: 6px; border-radius: 50%; background: #6d5ef0; }
+  .hdr .sp { flex: 1; } .hdr .tag { display: none; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, #6d5ef0 14%, transparent); border: 1px solid color-mix(in srgb, #6d5ef0 35%, transparent); }
   .who { font-size: 18px; font-weight: 650; }
