@@ -21,6 +21,8 @@ import {
   refreshSimilarEdges,
   dropSimilarEdges,
   authoredPairs,
+  suggestionCandidates,
+  dropSimilarPair,
   createMemoryStateStore,
   SIMILAR_REL,
   SIMILAR_WRITER,
@@ -157,6 +159,28 @@ describe('refreshSimilarEdges / dropSimilarEdges (ADR-0031 edge-write seam)', ()
     ]);
     expect(pairs.has('X Y')).toBe(true); // normalized (a < b) so lookups must use pairKey
     expect(pairs.has('M N')).toBe(false); // inferred excluded
+  });
+
+  it('suggestionCandidates dedupes inferred edges to unordered pairs, keeping the strongest, ignoring authored', () => {
+    const edges = [
+      { scope: 'a', from: 'X', rel: SIMILAR_REL, to: 'Y', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER },
+      { scope: 'a', from: 'Y', rel: SIMILAR_REL, to: 'X', strength: 0.5, createdAt: 't', writer: SIMILAR_WRITER }, // reciprocal, stronger
+      { scope: 'a', from: 'P', rel: 'grounds', to: 'Q', strength: null, createdAt: 't', writer: 'alice' }, // authored — not a candidate
+    ];
+    const cands = suggestionCandidates(edges);
+    expect(cands).toHaveLength(1); // X↔Y collapses to one
+    expect(cands[0].strength).toBe(0.5); // keeps the stronger of the reciprocal pair
+  });
+
+  it('dropSimilarPair removes both directed inferred edges between a pair, leaving others', async () => {
+    const store = createMemoryStateStore();
+    await store.putEdge({ scope: 'a', from: 'X', rel: SIMILAR_REL, to: 'Y', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER });
+    await store.putEdge({ scope: 'a', from: 'Y', rel: SIMILAR_REL, to: 'X', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER });
+    await store.putEdge({ scope: 'a', from: 'X', rel: SIMILAR_REL, to: 'Z', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER });
+    const removed = await dropSimilarPair(store, 'a', 'X', 'Y', await store.listEdges('a'));
+    expect(removed).toBe(2); // both directions of X↔Y
+    const left = (await store.listEdges('a')).filter((e) => e.rel === SIMILAR_REL);
+    expect(left.map((e) => e.to)).toEqual(['Z']); // the X→Z kinship survives
   });
 
   it('dropSimilarEdges removes inferred edges touching a key (in + out), leaving authored edges', async () => {

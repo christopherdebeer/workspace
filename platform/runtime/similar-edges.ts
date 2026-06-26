@@ -81,3 +81,59 @@ export async function dropSimilarEdges(io: EdgeIO, scope: string, key: string, e
     }
   }
 }
+
+/**
+ * The vocabulary a suggested kinship can be *ratified* into (ADR-0032 Option C) — a
+ * richer, directional relation than the generic `similarTo` hint. Advisory: `ratify`
+ * accepts any `rel`, but these are the recommended labels surfaced to the user.
+ */
+export const RATIFY_LINK_TYPES = ['refines', 'grounds', 'duplicates', 'contradicts', 'elaborates', 'relatesTo'] as const;
+export type RatifyLinkType = (typeof RATIFY_LINK_TYPES)[number];
+
+/** One ratification candidate — an inferred `similarTo` between two facts, as an
+ *  unordered pair (reciprocal A→B / B→A collapse to one). */
+export interface SuggestionCandidate {
+  from: string;
+  to: string;
+  strength: number | null;
+  createdAt: string;
+}
+
+/**
+ * Collapse a scope's inferred `similarTo` edges to unique unordered pairs — the
+ * ratification candidates (ADR-0032). Authored-connected pairs are already excluded at
+ * write time (dedup-on-create), so what remains is genuinely "a link a person might
+ * want". Keeps the strongest of a reciprocal pair.
+ */
+export function suggestionCandidates(edges: EdgeRecord[]): SuggestionCandidate[] {
+  const best = new Map<string, SuggestionCandidate>();
+  for (const e of edges) {
+    if (e.rel !== SIMILAR_REL || e.writer !== SIMILAR_WRITER) continue;
+    const pk = pairKey(e.from, e.to);
+    const prior = best.get(pk);
+    if (!prior || (e.strength ?? 0) > (prior.strength ?? 0)) {
+      best.set(pk, { from: e.from, to: e.to, strength: e.strength, createdAt: e.createdAt });
+    }
+  }
+  return [...best.values()];
+}
+
+/**
+ * Drop both directed inferred `similarTo` edges between a pair — called on `ratify`,
+ * since the authored typed edge makes the machine's hint redundant. Returns the count
+ * removed (`existing` is the scope's edge list, read once).
+ */
+export async function dropSimilarPair(io: EdgeIO, scope: string, a: string, b: string, existing: EdgeRecord[]): Promise<number> {
+  let removed = 0;
+  for (const e of existing) {
+    if (
+      e.rel === SIMILAR_REL &&
+      e.writer === SIMILAR_WRITER &&
+      ((e.from === a && e.to === b) || (e.from === b && e.to === a))
+    ) {
+      await io.deleteEdge(scope, e.from, e.rel, e.to);
+      removed++;
+    }
+  }
+  return removed;
+}

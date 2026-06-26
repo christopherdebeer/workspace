@@ -194,7 +194,7 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
         'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
-        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'pruneSimilar',
+        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'pruneSimilar', 'suggestions', 'ratify',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
@@ -742,6 +742,48 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
 
   it('pruneSimilar requires admin', async () => {
     await expect(cmds.pruneSimilar(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
+  });
+
+  it('suggestions lists inferred kinship as ratification candidates; ratify graduates one to a typed authored edge (ADR-0032)', async () => {
+    const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
+    process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05';
+    try {
+      const admin = (): ServiceContext => {
+        const ctx = ctxOf('fred');
+        (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'fred', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+        return ctx;
+      };
+      await cmds.remember({ key: 's1', value: { title: 'GraphQL schema stitching across services' }, type: 'note' }, admin());
+      await cmds.remember({ key: 's2', value: { title: 'GraphQL federation and schema composition' }, type: 'note' }, admin());
+      await cmds.reindex(undefined, admin());
+      await drainReindex('fred');
+
+      // suggestions surfaces the inferred pair, enriched with endpoint labels + the vocab.
+      const sug = await cmds.suggestions(undefined, admin());
+      expect(sug.total).toBeGreaterThan(0);
+      expect(sug.vocab).toContain('refines');
+      const cand = sug.suggestions.find((c) => (c.from === 's1' && c.to === 's2') || (c.from === 's2' && c.to === 's1'));
+      expect(cand).toBeDefined();
+      expect(cand!.fromLabel).toMatch(/GraphQL/);
+
+      // ratify promotes it to a typed authored edge and drops the redundant similarTo.
+      const res = await cmds.ratify({ from: 's1', to: 's2', rel: 'refines' }, admin());
+      expect(res.ratified).toBe(true);
+      expect(res.edge.rel).toBe('refines');
+      expect(res.dropped).toBeGreaterThan(0);
+      const edges = await store.listEdges('fred');
+      expect(edges.find((e) => e.rel === 'refines' && e.from === 's1' && e.to === 's2')).toBeDefined();
+      expect(edges.filter((e) => e.rel === 'similarTo' && ((e.from === 's1' && e.to === 's2') || (e.from === 's2' && e.to === 's1')))).toHaveLength(0);
+      // The ratified edge is authored (writer = the user), not the inferred platform/vectors stamp.
+      expect(edges.find((e) => e.rel === 'refines')?.writer).toBe('fred');
+    } finally {
+      if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
+      else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
+    }
+  });
+
+  it('ratify rejects a self-link', async () => {
+    await expect(cmds.ratify({ from: 'x', to: 'x', rel: 'refines' }, ctxOf('alice'))).rejects.toThrow(/self-link/);
   });
 });
 

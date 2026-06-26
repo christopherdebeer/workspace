@@ -1,12 +1,15 @@
 # ADR-0032 — `similarTo` as a ratifiable, typed connection suggestion
 
-- **Status:** Proposed. Captures the design evolution of ADR-0031's inferred edges. **Mechanics
-  shipped now (no model change):** (1) **dedup-on-create** — `refreshSimilarEdges` skips any neighbour
-  an *authored* edge already connects (in either direction), so redundant kinship is never created and
-  is pruned the next time the fact is reindexed; (2) a vector-free admin **`pruneSimilar`** command that
-  backfills the cleanup over edges written before (1). **The reframe below — `similarTo` as a *suggestion
-  to connect* that a person/grant *ratifies* into a typed edge — is NOT yet built; it needs the user's
-  steer before implementation.**
+- **Status:** Accepted — **B2 + C.** Mechanics shipped first (no model change): (1) **dedup-on-create** —
+  `refreshSimilarEdges` skips any neighbour an *authored* edge already connects (in either direction), so
+  redundant kinship is never created and is pruned the next reindex; (2) a vector-free admin
+  **`pruneSimilar`** command that backfilled the cleanup (live: 482 pruned, 0 remaining). The **model**:
+  an inferred `similarTo` edge is a **ratifiable connection suggestion** — it still feeds `centrality` at
+  its low inferred strength (0.3 — **B2**, so the ADR-0031 emergence is preserved), and a person/grant
+  **ratifies** it into a **typed, authored, full-weight** edge (`refines`/`grounds`/`duplicates`/… —
+  **C**), at which point the redundant `similarTo` is dropped. Suggestions surface through `suggestions`
+  (a read) and the tend report; ratification is the `ratify` act. Typing is user-picked, optionally
+  `models`-cell-proposed.
 - **Date:** 2026-06-26
 - **Depends on:** ADR-0031 (inferred `similarTo` edges → centrality — the thing being refined), ADR-0030
   (the vector index), ADR-0009 (graded edge strengths), ADR-0003/0016 (the Reference projection — edge
@@ -90,24 +93,36 @@ stops being a machine artefact and becomes the seed of a **typed knowledge graph
 `duplicates` label also feeds the *node*-dedup problem (the 48 `el:<X>`/`<X>` pairs) — a `duplicates` edge
 is the ratifiable form of "these two nodes are the same".
 
-## Recommendation
+## Decision — B2 + C
 
-Ship the **mechanics** (done): dedup-on-create + `pruneSimilar`. Then pursue **B2 + C** as the model: keep
-similarity feeding salience (don't regress the emergence), but make every inferred edge a **provenance-
+Keep similarity feeding salience (don't regress the emergence), but make every inferred edge a **provenance-
 stamped suggestion** that *graduates* to a **typed, authored** edge on human/grant ratification — surfaced
 through tending, classified at the point of ratification (optionally with `models`-cell help). This turns
 the vector index from "a thing that quietly inflates centrality" into "a thing that proposes structure the
-user curates", while preserving everything ADR-0031 demonstrated.
+user curates", while preserving everything ADR-0031 demonstrated. The resolved sub-choices:
 
-**Decision needed from the user before building B/C:**
-1. **Do unratified suggestions feed salience?** (B1 weightless vs B2 low-weight-then-graduate — this is the
-   one real fork; B2 preserves the ADR-0031 emergence, B1 is cleaner but regresses it.)
-2. **Surface:** a new `rel` (`suggestsLink`) vs `_suggestions/*` facts vs a flag on the existing edge — how
-   tending and `neighbors` should present suggestions.
-3. **Typing:** user-picked at ratification, `models`-cell-proposed, or both; and the initial label vocabulary.
-4. **τ:** the deferred threshold drop (0.35 → 0.25) is now entangled here — a *suggestion* model can afford
-   a lower τ (more candidates, low cost, human filters) than auto-materialized salience structure could. Set
-   τ in whichever model we pick, not before.
+1. **Salience of unratified suggestions — B2.** They feed `centrality` at the inferred strength (`0.3`,
+   below authored). The strength differential *already* encodes "suggestion = weak, asserted = full", so
+   B2 needs no scorer change — ratification simply replaces a `0.3` `similarTo` with a full-weight authored
+   edge. Emergence is preserved; the graph gains *provenance* (suggested vs asserted) and *type*.
+2. **Surface — the edge IS the suggestion.** No `_suggestions/*` facts (that would lose the centrality
+   emergence). The inferred `similarTo` edge (writer `platform/vectors`) is the suggestion; a `suggestions`
+   read lists the ratification candidates (deduped to unordered pairs, so reciprocals collapse) with
+   endpoint context, and the tend report carries a count + sample.
+3. **Typing — user-picked, `models`-optional.** `ratify { from, to, rel }` writes the authored typed edge.
+   Vocabulary: `refines` / `grounds` / `duplicates` / `contradicts` / `elaborates` / `relatesTo`. A later
+   increment lets the `models` cell *propose* `{ rel, direction }` for a pair, user-confirmed.
+4. **τ.** A *suggestion* model can afford a lower floor (more candidates, low cost, human filters) than
+   auto-materialized salience structure could — so the deferred `0.35 → 0.25` drop lands here (Increment 3),
+   not before.
+
+### Increments
+- **Inc 1 (this change):** `ratify` (accept → typed authored edge, drop the redundant `similarTo` pair) +
+  `suggestions` (list candidates with endpoint context + the type vocabulary) + tend-report `suggestions`
+  bucket. Vocabulary + helpers in `platform/runtime/similar-edges.ts`.
+- **Inc 2:** `models`-cell-assisted classification (propose `rel`+direction for a pair) and **decline/suppress**
+  (a declined pair is recorded so the indexer doesn't re-surface it).
+- **Inc 3:** τ `0.35 → 0.25` (env) + reindex to widen the candidate set under the suggestion model.
 
 ## Open questions / deferred
 

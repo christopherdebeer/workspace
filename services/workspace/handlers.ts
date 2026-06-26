@@ -62,6 +62,10 @@ import {
   refreshSimilarEdges,
   authoredPairs,
   pairKey,
+  suggestionCandidates,
+  dropSimilarPair,
+  RATIFY_LINK_TYPES,
+  type SuggestionCandidate,
   SIMILAR_REL,
   SIMILAR_WRITER,
 } from '../../platform/runtime';
@@ -244,6 +248,19 @@ function withAffordance(entry: Entry | null, decls: Record<string, Record<string
   return Object.keys(types).length ? { ...entry, types } : entry;
 }
 
+/** A short human label for a fact, for surfaces that show a key without its full value
+ *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
+function labelForRecord(key: string, value: unknown): string {
+  if (value && typeof value === 'object') {
+    const v = value as Record<string, unknown>;
+    for (const f of ['title', 'name', 'label', 'summary'] as const) {
+      if (typeof v[f] === 'string' && v[f]) return (v[f] as string).slice(0, 120);
+    }
+  }
+  if (typeof value === 'string' && value) return value.slice(0, 120);
+  return key;
+}
+
 export interface RememberInput {
   key: string;
   value: unknown;
@@ -352,6 +369,38 @@ export interface ReindexInput {
 export interface PruneSimilarInput {
   /** Cap on inferred edges deleted in one pass (default: all redundant). */
   max?: number;
+}
+export interface SuggestionsInput {
+  /** Cap on candidates returned (default 25). */
+  limit?: number;
+}
+/** A ratification candidate enriched with each endpoint's type + a short label. */
+export interface SuggestionEntry extends SuggestionCandidate {
+  fromLabel: string;
+  fromType: string | null;
+  toLabel: string;
+  toType: string | null;
+}
+export interface SuggestionsResult {
+  suggestions: SuggestionEntry[];
+  /** The recommended relation vocabulary to ratify a suggestion into. */
+  vocab: readonly string[];
+  /** Total candidates before `limit` (so a caller knows there are more). */
+  total: number;
+}
+export interface RatifyInput {
+  from: string;
+  to: string;
+  /** The relation to assert — recommended one of `RATIFY_LINK_TYPES`, but any string is accepted. */
+  rel: string;
+  /** Edge strength (default null = full authored weight). */
+  strength?: number | null;
+}
+export interface RatifyResult {
+  edge: LinkResult;
+  /** Inferred `similarTo` edges dropped between the pair (the suggestion, now redundant). */
+  dropped: number;
+  ratified: true;
 }
 export interface LinkInput {
   from: string;
@@ -511,6 +560,8 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   search: CommandHandler<SearchInput, SearchResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
   pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
+  suggestions: CommandHandler<SuggestionsInput | undefined, SuggestionsResult>;
+  ratify: CommandHandler<RatifyInput, RatifyResult>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -896,6 +947,69 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         ...EDGE_SCHEMA.properties,
         fromExists: { type: 'boolean', description: 'from resolves to a live fact' },
         toExists: { type: 'boolean', description: 'to resolves to a live fact' },
+      },
+    },
+  },
+  {
+    name: 'suggestions',
+    description:
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, strongest first. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Cap on candidates returned (default 25)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        suggestions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+              fromLabel: { type: 'string' },
+              fromType: { type: 'string' },
+              toLabel: { type: 'string' },
+              toType: { type: 'string' },
+              strength: { type: 'number' },
+              createdAt: { type: 'string' },
+            },
+          },
+        },
+        vocab: { type: 'array', items: { type: 'string' }, description: 'Recommended relations to ratify into' },
+        total: { type: 'number', description: 'Candidates before limit' },
+      },
+    },
+  },
+  {
+    name: 'ratify',
+    description:
+      'Accept a suggested connection (ADR-0032): write a typed, directed, authored edge `from --rel--> to` (full weight — you assert it, not the machine) and drop the redundant inferred `similarTo` between the pair. `rel` should be one of refines/grounds/duplicates/contradicts/elaborates/relatesTo (any string accepted). The substrate-native way to graduate a machine hint into curated structure; pairs come from `suggestions`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Source fact key' },
+        to: { type: 'string', description: 'Target fact key' },
+        rel: { type: 'string', description: 'Relation to assert (refines/grounds/duplicates/contradicts/elaborates/relatesTo)' },
+        strength: { type: 'number', description: 'Optional edge strength (default full authored weight)' },
+      },
+      required: ['from', 'to', 'rel'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        edge: { ...EDGE_SCHEMA },
+        dropped: { type: 'number', description: 'Inferred similarTo edges removed between the pair' },
+        ratified: { type: 'boolean' },
       },
     },
   },
@@ -1974,6 +2088,57 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       return edge;
     },
 
+    async suggestions(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // ADR-0032: the inferred `similarTo` edges ARE the suggestions — list them as
+      // ratification candidates (deduped to unordered pairs), enriched with each
+      // endpoint's type + a short label so a human/grant can judge the connection.
+      const { store } = build(ctx);
+      if (!store) return { suggestions: [], vocab: RATIFY_LINK_TYPES, total: 0 };
+      const limit = input?.limit && input.limit > 0 ? input.limit : 25;
+      const candidates = suggestionCandidates(await store.listEdges(scope)).sort(
+        (a, b) => (b.strength ?? 0) - (a.strength ?? 0),
+      );
+      const top = candidates.slice(0, limit);
+      // Enrich only the returned page (raw reads — no scoring/grant overhead).
+      const keys = new Set<string>();
+      for (const c of top) {
+        keys.add(c.from);
+        keys.add(c.to);
+      }
+      const recs = new Map<string, { type: string | null; label: string }>();
+      await Promise.all(
+        [...keys].map(async (k) => {
+          const r = await store.get(scope, k);
+          recs.set(k, { type: r?.type ?? null, label: labelForRecord(k, r?.value) });
+        }),
+      );
+      const suggestions: SuggestionEntry[] = top.map((c) => ({
+        ...c,
+        fromType: recs.get(c.from)?.type ?? null,
+        fromLabel: recs.get(c.from)?.label ?? c.from,
+        toType: recs.get(c.to)?.type ?? null,
+        toLabel: recs.get(c.to)?.label ?? c.to,
+      }));
+      return { suggestions, vocab: RATIFY_LINK_TYPES, total: candidates.length };
+    },
+
+    async ratify(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.from || !input?.to || !input?.rel) throw new Error('from, to, and rel are required');
+      if (input.from === input.to) throw new Error('cannot ratify a self-link');
+      // ADR-0032 Option C: graduate a machine suggestion into curated structure. The
+      // authored edge is written through the normal `link` path (writer = you, full
+      // weight), then the now-redundant inferred `similarTo` between the pair is dropped
+      // (dedup-on-create would prune it on the next reindex anyway; this is immediate).
+      const { state, store } = build(ctx);
+      const edge = await state.link(scope, input.from, input.rel, input.to, input.strength ?? null, ctx.identity);
+      let dropped = 0;
+      if (store) dropped = await dropSimilarPair(store, scope, input.from, input.to, await store.listEdges(scope));
+      ctx.logger.info('suggestion ratified', { scope, from: input.from, rel: input.rel, to: input.to, dropped });
+      return { edge, dropped, ratified: true };
+    },
+
     async unlink(input, ctx) {
       const scope = requireUser(ctx.identity);
       if (!input?.from || !input?.rel || !input?.to) throw new Error('from, rel, and to are required');
@@ -2071,8 +2236,8 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
 
     async tend(_input, ctx) {
       const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
-      return runTend(state, scope, ctx, 'manual', ctx.identity);
+      const { state, store } = build(ctx);
+      return runTend(state, scope, ctx, 'manual', ctx.identity, store);
     },
 
     async registerView(input, ctx) {
@@ -2365,9 +2530,12 @@ export interface TendReport {
   stale: number;
   unlinked: number;
   dangling: number;
+  /** Ratification candidates: inferred `similarTo` pairs no authored edge connects (ADR-0032). */
+  suggestions: number;
   staleSample: Array<{ key: string; updatedAt: string; type: string | null }>;
   unlinkedSample: string[];
   danglingSample: Array<{ from: string; rel: string; to: string; reason: string }>;
+  suggestionsSample: Array<{ from: string; to: string }>;
 }
 
 /**
@@ -2382,17 +2550,23 @@ async function runTend(
   ctx: ServiceContext,
   via: string,
   writer: { user?: string; scopes: string[] },
+  store?: Pick<StateStore, 'listEdges'>,
 ): Promise<TendReport> {
   const att = await state.attention(scope, {});
+  // ADR-0032: surface ratification candidates as part of standing health — the
+  // inferred `similarTo` pairs a person/grant might want to promote to a typed edge.
+  const candidates = store ? suggestionCandidates(await store.listEdges(scope)) : [];
   const report: TendReport = {
     at: new Date().toISOString(),
     scope,
     stale: att.stale.length,
     unlinked: att.unlinked.length,
     dangling: att.dangling.length,
+    suggestions: candidates.length,
     staleSample: att.stale.slice(0, 5),
     unlinkedSample: att.unlinked.slice(0, 5),
     danglingSample: att.dangling.slice(0, 3),
+    suggestionsSample: candidates.slice(0, 5).map((c) => ({ from: c.from, to: c.to })),
   };
   const entry = await state.put(
     { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },
@@ -2420,9 +2594,9 @@ export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
       ctx.logger.warn('tend requested without scopes');
       return;
     }
-    const { state } = build(ctx);
+    const { state, store } = build(ctx);
     for (const scope of scopes) {
-      await runTend(state, scope, ctx, 'schedule', { user: 'platform/tend', scopes: [] });
+      await runTend(state, scope, ctx, 'schedule', { user: 'platform/tend', scopes: [] }, store);
     }
   };
 }
