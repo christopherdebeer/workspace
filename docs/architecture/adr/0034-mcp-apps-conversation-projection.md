@@ -38,6 +38,12 @@ return interactive UI alongside a tool result. The wiring:
 The exact field names above are from the recent spec and **must be verified against the live
 `io.modelcontextprotocol/ui` schema before implementation** (the design here is robust to naming drift).
 
+**Verified wire contract (ext-apps spec `2026-01-26`), correcting a first pass that didn't render:**
+- **Capability** is nested: `capabilities.extensions["io.modelcontextprotocol/ui"] = { mimeTypes: ["text/html;profile=mcp-app"] }` — NOT a top-level capability key.
+- **Tool→UI binding is STATIC on the tool *definition*** in `tools/list` (`_meta.ui.resourceUri` + `visibility`), so the host can *preload* the widget — NOT on the call result.
+- **The iframe must handshake first:** send `ui/initialize` → on the response send `ui/notifications/initialized` → only then does the host push `ui/notifications/tool-input` and `ui/notifications/tool-result` (carrying `content` + `structuredContent`). *"The Host MUST NOT send any notification to the View before `initialized`."* (A first pass that skipped this handshake got no data and rendered nothing.)
+- `resources/read` returns `{ contents:[{ uri, mimeType:"text/html;profile=mcp-app", text, _meta?:{ ui:{ csp, permissions, … } } }] }`. Iframe→host `postMessage` uses `targetOrigin:"*"`.
+
 ## Why this is thesis-native, not a bolt-on
 
 The substrate's founding claim (`docs/substrate.md:75–82`):

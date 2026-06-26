@@ -42,7 +42,7 @@ import {
   mergeTypeDecl,
   resolveType,
 } from '../../platform/runtime';
-import { resolveUiResource, listUiResources, CARD_URI } from './widgets';
+import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -448,21 +448,27 @@ const tools: Record<string, McpToolDefinition> = {
     title: 'Who am I',
     description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: { type: 'object', properties: { user: { type: 'string' }, scopes: { type: 'array' }, grant: { type: 'array' } } },
     annotations: { readOnlyHint: true },
     handler: whoamiTool,
+    // The simplest MCP-Apps canary (ADR-0034): a tiny deterministic result rendered
+    // by the generic card — the first thing to confirm the host renders ui:// at all.
+    ui: { resourceUri: CARD_URI },
   },
   read: {
     title: 'Observe the substrate',
     description:
       'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; the grouped one-line menu is the default, {detail:"full"} adds every schema. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (auth/workspace/gateway/dispatch/cells), redacted.',
     inputSchema: READ_SCHEMA,
+    // Permissive outputSchema so spec-strict clients surface `structuredContent`
+    // (read returns a different object per target — a generic object shape).
+    outputSchema: { type: 'object', description: 'The observed capability result (shape varies by target).' },
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],
-    // ADR-0034 tier-0: bind an object read result to the generic card widget, so
-    // any observation can render in the conversation. Arrays/scalars (no
-    // structuredContent) get no widget. The model still gets the text channel.
-    ui: (out: unknown) =>
-      out && typeof out === 'object' && !Array.isArray(out) ? { resourceUri: CARD_URI } : undefined,
+    // ADR-0034 tier-0: the generic card widget renders the read's structuredContent
+    // in the conversation. Static tool→UI binding per the MCP-Apps spec (the host
+    // preloads it); the card handles the empty/non-object case gracefully.
+    ui: { resourceUri: CARD_URI },
   },
   act: {
     title: 'Act on the substrate',
@@ -514,9 +520,10 @@ export const handler = defineMcpService({
     'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,
-  // ADR-0034: declare the MCP-Apps UI extension + serve the `ui://` widget
-  // resources a read result binds to via `_meta.ui.resourceUri`.
-  capabilities: { 'io.modelcontextprotocol/ui': {} },
+  // ADR-0034: declare the MCP-Apps UI extension (spec 2026-01-26 nests it under
+  // `capabilities.extensions` with the supported `mimeTypes`) + serve the `ui://`
+  // widget resources the tools bind to via their `_meta.ui.resourceUri`.
+  capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [UI_MIME] } } },
   resources: {
     read: (uri: string) => resolveUiResource(uri),
     list: () => listUiResources(),

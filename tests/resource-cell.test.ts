@@ -232,23 +232,32 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(result.instructions).toContain('read("$catalog"');
   });
 
-  it('initialize declares the MCP-Apps ui capability + resources (ADR-0034)', async () => {
+  it('initialize declares the MCP-Apps ui extension (nested) + resources (ADR-0034)', async () => {
     const init = await mcp('creator', 'initialize', { protocolVersion: '2025-06-18' });
-    const caps = (init.result as { capabilities: Record<string, unknown> }).capabilities;
+    const caps = (init.result as { capabilities: Record<string, { mimeTypes?: string[] } & Record<string, unknown>> }).capabilities;
     expect(caps.tools).toBeDefined();
     expect(caps.resources).toBeDefined();
-    expect(caps['io.modelcontextprotocol/ui']).toBeDefined();
+    // Spec 2026-01-26: nested under capabilities.extensions with mimeTypes.
+    const ext = (caps.extensions as Record<string, { mimeTypes?: string[] }>)['io.modelcontextprotocol/ui'];
+    expect(ext?.mimeTypes).toContain('text/html;profile=mcp-app');
   });
 
-  it('a read result carries structuredContent + an MCP-Apps widget binding (ADR-0034 Inc 0/1)', async () => {
+  it('tools advertise the MCP-Apps widget on the tool definition (_meta.ui), and results carry structuredContent (ADR-0034 Inc 0/1)', async () => {
+    // The tool→UI binding is STATIC on the tool def (host preloads it) — not on the result.
+    const list = await mcp('creator', 'tools/list');
+    const tools = list.result!.tools as Array<{ name: string; _meta?: { ui?: { resourceUri: string; visibility?: string[] } } }>;
+    const whoami = tools.find((t) => t.name === 'whoami')!;
+    expect(whoami._meta?.ui?.resourceUri).toBe('ui://parc/card');
+    expect(whoami._meta?.ui?.visibility).toContain('app');
+    expect(tools.find((t) => t.name === 'read')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+
+    // Inc 0: an object result is mirrored as structuredContent (the widget's data channel)…
     const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });
-    const result = res.result as { structuredContent?: { cells?: unknown[] }; _meta?: { ui?: { resourceUri: string } }; content: Array<{ text: string }> };
-    // Inc 0: the object result is mirrored as structuredContent (the data channel)…
+    const result = res.result as { structuredContent?: { cells?: unknown[] }; _meta?: unknown; content: Array<{ text: string }> };
     expect(result.structuredContent?.cells).toBeDefined();
-    // …and the text channel still carries the same payload for the model.
+    // …the text channel still carries it for the model; the result no longer carries the ui binding.
     expect(result.content[0].text).toContain('cells');
-    // Inc 1: a tier-0 widget is bound for the conversation surface.
-    expect(result._meta?.ui?.resourceUri).toBe('ui://parc/card');
+    expect(result._meta).toBeUndefined();
   });
 
   it('resources/list + resources/read serve the ui:// widget (ADR-0034 Inc 1)', async () => {

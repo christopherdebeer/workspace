@@ -72,19 +72,23 @@ const CARD_HTML = `<!doctype html>
     if (data.hints) h += '<div class="hint">' + data.hints.map(esc).join('<br>') + '</div>';
     document.getElementById('root').innerHTML = h;
   }
-  // Defensive host-data binding (verify against the live MCP-Apps host API):
-  // 1) a host-injected global, 2) a postMessage init carrying the tool output.
-  function pick(m){ return m && (m.structuredContent || (m.result && m.result.structuredContent) || m.toolOutput || m.output || m.data); }
-  try {
-    var g = (window.openai && window.openai.toolOutput) || window.__MCP_TOOL_OUTPUT__ || window.mcpToolOutput;
-    if (g) render(g);
-  } catch (e) {}
+  // MCP-Apps host handshake (io.modelcontextprotocol/ui, spec 2026-01-26): the host
+  // sends NOTHING until it receives our initialized notification, so we must: send
+  // ui/initialize, then on its response send ui/notifications/initialized, then
+  // passively receive ui/notifications/tool-result and render its structuredContent.
+  var INIT_ID = 1, inited = false;
+  function send(msg){ try { window.parent.postMessage(Object.assign({ jsonrpc: '2.0' }, msg), '*'); } catch (e) {} }
   window.addEventListener('message', function(ev){
-    var data = pick(ev.data);
-    if (data) render(data);
+    var m = ev.data;
+    if (!m || m.jsonrpc !== '2.0') return;
+    if (!inited && m.id === INIT_ID && m.result) {
+      inited = true;
+      send({ method: 'ui/notifications/initialized' });
+      return;
+    }
+    if (m.method === 'ui/notifications/tool-result' && m.params) { render(m.params.structuredContent); }
   });
-  // Announce readiness so a host that waits for the iframe can post the output.
-  try { (window.parent || window).postMessage({ type: 'ui-ready', uri: '${CARD_URI}' }, '*'); } catch (e) {}
+  send({ id: INIT_ID, method: 'ui/initialize', params: { capabilities: {}, clientInfo: { name: 'parc.land card', version: '1.0.0' }, protocolVersion: '2026-01-26' } });
 </script>
 </body>
 </html>`;
