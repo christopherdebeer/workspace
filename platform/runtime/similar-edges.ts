@@ -68,7 +68,9 @@ export async function refreshSimilarEdges(
   for (const e of mine) if (!want.has(e.to)) await io.deleteEdge(scope, e.from, e.rel, e.to);
   for (const n of neighbors) {
     if (!want.has(n.key) || have.has(n.key)) continue;
-    await io.putEdge({ scope, from: key, rel: SIMILAR_REL, to: n.key, strength, createdAt: nowIso, writer: SIMILAR_WRITER });
+    // `strength` stays fixed (centrality weighting unchanged); `score` carries the raw
+    // cosine so ratification candidates can be ranked by actual relevance (ADR-0032).
+    await io.putEdge({ scope, from: key, rel: SIMILAR_REL, to: n.key, strength, createdAt: nowIso, writer: SIMILAR_WRITER, score: n.score });
   }
 }
 
@@ -96,14 +98,23 @@ export interface SuggestionCandidate {
   from: string;
   to: string;
   strength: number | null;
+  /** Raw cosine similarity (ADR-0032) — ranks candidates; may be absent on edges
+   *  written before the score was persisted. */
+  score: number | null;
   createdAt: string;
+}
+
+/** Rank key for a candidate — prefer the persisted cosine, fall back to strength. */
+function rankOf(c: { score?: number | null; strength: number | null }): number {
+  return c.score ?? c.strength ?? 0;
 }
 
 /**
  * Collapse a scope's inferred `similarTo` edges to unique unordered pairs — the
- * ratification candidates (ADR-0032). Authored-connected pairs are already excluded at
+ * ratification candidates (ADR-0032), **sorted by cosine score descending** so the most
+ * relevant kinship surfaces first. Authored-connected pairs are already excluded at
  * write time (dedup-on-create), so what remains is genuinely "a link a person might
- * want". Keeps the strongest of a reciprocal pair.
+ * want". Keeps the higher-scoring of a reciprocal pair.
  */
 export function suggestionCandidates(edges: EdgeRecord[]): SuggestionCandidate[] {
   const best = new Map<string, SuggestionCandidate>();
@@ -111,11 +122,10 @@ export function suggestionCandidates(edges: EdgeRecord[]): SuggestionCandidate[]
     if (e.rel !== SIMILAR_REL || e.writer !== SIMILAR_WRITER) continue;
     const pk = pairKey(e.from, e.to);
     const prior = best.get(pk);
-    if (!prior || (e.strength ?? 0) > (prior.strength ?? 0)) {
-      best.set(pk, { from: e.from, to: e.to, strength: e.strength, createdAt: e.createdAt });
-    }
+    const cand: SuggestionCandidate = { from: e.from, to: e.to, strength: e.strength, score: e.score ?? null, createdAt: e.createdAt };
+    if (!prior || rankOf(cand) > rankOf(prior)) best.set(pk, cand);
   }
-  return [...best.values()];
+  return [...best.values()].sort((a, b) => rankOf(b) - rankOf(a));
 }
 
 /**

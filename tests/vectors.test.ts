@@ -161,15 +161,17 @@ describe('refreshSimilarEdges / dropSimilarEdges (ADR-0031 edge-write seam)', ()
     expect(pairs.has('M N')).toBe(false); // inferred excluded
   });
 
-  it('suggestionCandidates dedupes inferred edges to unordered pairs, keeping the strongest, ignoring authored', () => {
+  it('suggestionCandidates dedupes to unordered pairs, ignores authored, and ranks by cosine score', () => {
     const edges = [
-      { scope: 'a', from: 'X', rel: SIMILAR_REL, to: 'Y', strength: 0.3, createdAt: 't', writer: SIMILAR_WRITER },
-      { scope: 'a', from: 'Y', rel: SIMILAR_REL, to: 'X', strength: 0.5, createdAt: 't', writer: SIMILAR_WRITER }, // reciprocal, stronger
+      { scope: 'a', from: 'X', rel: SIMILAR_REL, to: 'Y', strength: 0.3, score: 0.4, createdAt: 't', writer: SIMILAR_WRITER },
+      { scope: 'a', from: 'Y', rel: SIMILAR_REL, to: 'X', strength: 0.3, score: 0.6, createdAt: 't', writer: SIMILAR_WRITER }, // reciprocal, higher cosine
+      { scope: 'a', from: 'M', rel: SIMILAR_REL, to: 'N', strength: 0.3, score: 0.7, createdAt: 't', writer: SIMILAR_WRITER }, // strongest
       { scope: 'a', from: 'P', rel: 'grounds', to: 'Q', strength: null, createdAt: 't', writer: 'alice' }, // authored — not a candidate
     ];
     const cands = suggestionCandidates(edges);
-    expect(cands).toHaveLength(1); // X↔Y collapses to one
-    expect(cands[0].strength).toBe(0.5); // keeps the stronger of the reciprocal pair
+    expect(cands).toHaveLength(2); // X↔Y collapses to one; M↔N; authored excluded
+    expect(cands.map((c) => `${c.from}-${c.to}`)).toEqual(['M-N', 'Y-X']); // score-desc: 0.7 then 0.6 (kept Y→X, the higher-cosine direction)
+    expect(cands[1].score).toBe(0.6); // kept the higher-cosine direction of the reciprocal pair
   });
 
   it('dropSimilarPair removes both directed inferred edges between a pair, leaving others', async () => {

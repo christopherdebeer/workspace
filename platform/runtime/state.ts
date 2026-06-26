@@ -228,6 +228,13 @@ export interface EdgeRecord {
   strength: number | null;
   createdAt: string;
   writer: string | null;
+  /**
+   * For inferred (`similarTo`) edges: the raw cosine similarity that produced the
+   * edge (ADR-0032). Distinct from `strength` — `strength` stays fixed (0.3) so
+   * `centrality` weighting is unchanged, while `score` ranks ratification
+   * candidates by actual relevance. Absent on authored edges.
+   */
+  score?: number | null;
 }
 
 export interface TrajectoryEvent {

@@ -129,7 +129,10 @@ export class PlatformStack extends cdk.Stack {
     // page is retired), so this needs no manual activation. Switching the embedder
     // re-namespaces indexes by dimension (slice-<scope>-d1024), so the old 256-dim
     // hashing index is orphaned and `reindex` repopulates the new one — see indexForScope.
-    const vectorEnv = { VECTOR_BUCKET: vectorBucket, VECTOR_REGION: this.region, VECTOR_EMBEDDER: 'bedrock', VECTOR_DIM: '1024' };
+    // VECTOR_SIMILAR_MIN_SCORE=0.25 (ADR-0032 Inc 3): a *suggestion* model can afford a
+    // lower cosine floor than auto-materialized salience could — more candidates, low
+    // cost, the human filters via `suggestions`/`ratify`. (Default would be 0.35.)
+    const vectorEnv = { VECTOR_BUCKET: vectorBucket, VECTOR_REGION: this.region, VECTOR_EMBEDDER: 'bedrock', VECTOR_DIM: '1024', VECTOR_SIMILAR_MIN_SCORE: '0.25' };
 
     const workspace = new HttpServiceCell(this, 'WorkspaceService', {
       name: 'workspace',

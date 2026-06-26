@@ -89,6 +89,7 @@ export function createDynamoStateStore(tableName: string): StateStore {
       strength: item.strength ?? null,
       createdAt: item.createdAt,
       writer: item.writer ?? null,
+      ...(item.score !== undefined && item.score !== null ? { score: Number(item.score) } : {}),
     };
   }
 

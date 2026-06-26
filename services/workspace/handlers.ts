@@ -248,6 +248,11 @@ function withAffordance(entry: Entry | null, decls: Record<string, Record<string
   return Object.keys(types).length ? { ...entry, types } : entry;
 }
 
+/** High-volume runtime/machine fact types that cluster by *format* rather than meaning
+ *  (ADR-0032) — excluded from `suggestions` by default so the candidate list stays
+ *  curatable; `includeRuntime: true` surfaces them. */
+const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim']);
+
 /** A short human label for a fact, for surfaces that show a key without its full value
  *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
 function labelForRecord(key: string, value: unknown): string {
@@ -373,6 +378,9 @@ export interface PruneSimilarInput {
 export interface SuggestionsInput {
   /** Cap on candidates returned (default 25). */
   limit?: number;
+  /** Include high-volume runtime/machine facts (transcripts, agent-runs, cells, …) that
+   *  are filtered out by default as format-clustered noise. */
+  includeRuntime?: boolean;
 }
 /** A ratification candidate enriched with each endpoint's type + a short label. */
 export interface SuggestionEntry extends SuggestionCandidate {
@@ -953,13 +961,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'suggestions',
     description:
-      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, strongest first. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Cap on candidates returned (default 25)' },
+        includeRuntime: { type: 'boolean', description: 'Include runtime/machine facts (transcripts, agent-runs, cells) filtered out by default' },
       },
       additionalProperties: false,
     },
@@ -2091,34 +2100,27 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     async suggestions(input, ctx) {
       const scope = requireUser(ctx.identity);
       // ADR-0032: the inferred `similarTo` edges ARE the suggestions — list them as
-      // ratification candidates (deduped to unordered pairs), enriched with each
-      // endpoint's type + a short label so a human/grant can judge the connection.
+      // ratification candidates (deduped to unordered pairs, ranked by cosine), enriched
+      // with each endpoint's type + label so a human/grant can judge the connection. The
+      // slice's records are read once to type/label every candidate and to filter out
+      // high-volume runtime/system facts (transcripts, agent-runs, cells, `_` plumbing)
+      // that cluster by format rather than meaning — unless `includeRuntime`.
       const { store } = build(ctx);
       if (!store) return { suggestions: [], vocab: RATIFY_LINK_TYPES, total: 0 };
       const limit = input?.limit && input.limit > 0 ? input.limit : 25;
-      const candidates = suggestionCandidates(await store.listEdges(scope)).sort(
-        (a, b) => (b.strength ?? 0) - (a.strength ?? 0),
-      );
-      const top = candidates.slice(0, limit);
-      // Enrich only the returned page (raw reads — no scoring/grant overhead).
-      const keys = new Set<string>();
-      for (const c of top) {
-        keys.add(c.from);
-        keys.add(c.to);
-      }
-      const recs = new Map<string, { type: string | null; label: string }>();
-      await Promise.all(
-        [...keys].map(async (k) => {
-          const r = await store.get(scope, k);
-          recs.set(k, { type: r?.type ?? null, label: labelForRecord(k, r?.value) });
-        }),
-      );
-      const suggestions: SuggestionEntry[] = top.map((c) => ({
+      const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
+      const typeByKey = new Map(records.map((r) => [r.key, r.type]));
+      const labelByKey = new Map(records.map((r) => [r.key, labelForRecord(r.key, r.value)]));
+      const isNoise = (k: string): boolean =>
+        k.startsWith('_') || SUGGESTION_RUNTIME_TYPES.has(typeByKey.get(k) ?? '');
+      let candidates = suggestionCandidates(edges); // already score-desc
+      if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
+      const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => ({
         ...c,
-        fromType: recs.get(c.from)?.type ?? null,
-        fromLabel: recs.get(c.from)?.label ?? c.from,
-        toType: recs.get(c.to)?.type ?? null,
-        toLabel: recs.get(c.to)?.label ?? c.to,
+        fromType: typeByKey.get(c.from) ?? null,
+        fromLabel: labelByKey.get(c.from) ?? c.from,
+        toType: typeByKey.get(c.to) ?? null,
+        toLabel: labelByKey.get(c.to) ?? c.to,
       }));
       return { suggestions, vocab: RATIFY_LINK_TYPES, total: candidates.length };
     },

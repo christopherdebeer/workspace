@@ -117,12 +117,21 @@ user curates", while preserving everything ADR-0031 demonstrated. The resolved s
    not before.
 
 ### Increments
-- **Inc 1 (this change):** `ratify` (accept → typed authored edge, drop the redundant `similarTo` pair) +
+- **Inc 1 (shipped + live):** `ratify` (accept → typed authored edge, drop the redundant `similarTo` pair) +
   `suggestions` (list candidates with endpoint context + the type vocabulary) + tend-report `suggestions`
-  bucket. Vocabulary + helpers in `platform/runtime/similar-edges.ts`.
-- **Inc 2:** `models`-cell-assisted classification (propose `rel`+direction for a pair) and **decline/suppress**
-  (a declined pair is recorded so the indexer doesn't re-surface it).
-- **Inc 3:** τ `0.35 → 0.25` (env) + reindex to widen the candidate set under the suggestion model.
+  bucket. Vocabulary + helpers in `platform/runtime/similar-edges.ts`. Validated live: `ratify` graduated
+  `agent/…/transcript --elaborates--> agent/…` (writer = user, full weight) and dropped both inferred
+  directions; the typed edge surfaces in `neighbors`; centrality stayed healthy.
+- **Inc 2 — rank + filter + τ (shipped):** the live run showed candidates dominated by high-volume runtime
+  facts and unranked (every inferred edge carried a flat `strength 0.3`). Fixes: (a) **persist the cosine**
+  on each inferred edge — `EdgeRecord.score` (distinct from `strength`, which stays fixed so centrality is
+  unchanged), written by `refreshSimilarEdges`, so `suggestionCandidates` ranks by *actual relevance*;
+  (b) **filter** runtime/machine types (`transcript`/`agent-run`/`cell`/`reindex-status`/`audit`/`claim`)
+  and `_` plumbing from `suggestions` by default (`includeRuntime:true` to override); (c) τ `0.35 → 0.25`
+  (`VECTOR_SIMILAR_MIN_SCORE`) — a suggestion model affords a lower floor. `score` + the wider τ backfill on
+  the next reindex.
+- **Inc 3 (deferred — needs user steer):** `models`-cell-assisted classification (propose `rel`+direction
+  for a pair) and **decline/suppress** (a declined pair recorded so the indexer doesn't re-surface it).
 
 ## Open questions / deferred
 
