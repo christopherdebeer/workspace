@@ -2505,6 +2505,15 @@ export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHand
     const writer: Identity = { user: 'platform/cells', scopes: [] };
     const factKey = `file/cells/${cellId}/data/${key}`;
     const s3Key = `cells/${cellId}/data/${user}/${key}`;
+    // A delete-op retires the mirrored file fact (cells.deleteData).
+    if (detail.op === 'delete') {
+      const existing = await state.get(user, factKey);
+      if (existing && !existing._meta.superseded) {
+        await state.supersede(user, factKey, null, writer, {});
+        ctx.logger.info('cell data file-fact retired', { scope: user, key: factKey });
+      }
+      return;
+    }
     const value = {
       path: s3Key,
       s3Key,

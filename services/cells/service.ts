@@ -1210,6 +1210,19 @@ async function listData(input: DataRefInput, ctx: ServiceContext): Promise<unkno
   return { cellId: record.cellId, user: target, keys: keys.map((k) => k.slice(prefix.length)).filter(Boolean) };
 }
 
+async function deleteData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.key) throw new Error('key is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const target = targetDataUser(input, user, record);
+  const key = cleanPath(input.key);
+  await deleteObject(bucket, dataKey(record.cellId, target, input.key));
+  // Retire the mirrored `file` fact (ADR-0027 Inc 2): the workspace supersedes it
+  // on a delete-op `cell.data.changed`.
+  await ctx.events.emit('cell.data.changed', { cellId: record.cellId, owner: record.owner, name: record.name, user: target, key, op: 'delete' });
+  return { ok: true, cellId: record.cellId, user: target, key, deleted: true };
+}
+
 // ─── registry-driven cell tools ──────────────────────────────────
 //
 // Beyond forge's own control-plane tools, the /mcp gateway also surfaces the
@@ -1870,6 +1883,24 @@ const TOOLS: Record<string, ToolSpec> = {
       additionalProperties: false,
     },
     handler: listData as RegisteredCommand,
+  },
+  deleteData: {
+    description: "Delete a blob from a cell's data space (your own by default; another user's only if you own the cell). Idempotent. Also retires the mirrored `file/cells/<id>/data/<key>` fact.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        key: { type: 'string' },
+        user: { type: 'string', description: 'Whose data (owner-only for others); defaults to you' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    handler: deleteData as RegisteredCommand,
   },
 };
 
