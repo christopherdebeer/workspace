@@ -20,6 +20,19 @@
   results show a **similarity/salience bar**, the degraded-search `hint` is surfaced, and array entries
   (search) are keyed by their real fact key (fixing the array-index mis-key). D3 force layout (vs mermaid)
   remains the one deferred follow-up.
+- **Status (audit fixes, 2026-06-27 r4):** Full mobile audit (`widget-test/2026-06-27`): 7 pass, sizing
+  resolved, **host bridges `ctx ✓ msg ✓ sampling ✗`** (the ADR-0037 reach question — `updateModelContext`
+  *is* honoured on claude.ai mobile). Fixed the reported fails: **(1+2)** `peek` omits a top-level `key`, so
+  the single-fact card had no key → no doc assembly, no backlinks, no `↹`; now falls back to the requested
+  key (`currentRead`), restoring all three on the peek surface. **(3)** dedicated `$catalog` (grouped drillable
+  menu) and `$types` (type list) renderers — `$types` had rendered empty because the generic fallback skipped
+  the `types` key — plus **hint demotion** (verbose model-facing `hint` guidance ≥140 chars is suppressed; it
+  was leaking as chrome on every self-model read). **(5)** the ambient per-drill *"viewing"* `updateModelContext`
+  was clobbering meaningful act notes (last-write-wins) before the next message — removed it; only **acts**
+  (decisions) now bridge to the model, so a ratify reliably reaches the agent. **(H3)** `changes` feed gets
+  per-op icons + relative time + a head-seq empty state; graph cap 50→120. Deferred (warns): inline tend/undo
+  actions, D3/zoomable graph + centrality-ranked selection, `platform.logs` log-feed formatting, redundant
+  header chrome.
 - **Status (orig):** Proposed. A holistic audit of the MCP-Apps card (`services/gateway/client/main.ts`) against the
   *whole* read/act surface — not the happy-path subset the 2026-06-27 validation exercised. Names the systemic
   gap (most reads dump raw JSON), the nuance gaps (search-as-cards vs graph, dead links, thin docs, plain-text

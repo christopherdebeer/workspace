@@ -277,7 +277,7 @@ function graphMermaid(edges: Edge[]): string {
 function renderGraph(d: Record<string, unknown>): string {
   const edges = (Array.isArray(d.edges) ? d.edges : []) as Edge[];
   if (!edges.length) return '<h2>Graph</h2><div class="hint">No edges in this slice.</div>';
-  const cap = 50;
+  const cap = 120;
   const shown = edges.slice(0, cap);
   const slot = 'g' + nextId();
   mounts.push({ slot, view: vwMermaid as ElView, content: graphMermaid(shown) });
@@ -303,10 +303,11 @@ function renderGrantRequests(d: Record<string, unknown>): string {
   h += answers.length ? rowsBlock(answers.map((a) => `<div class="k">${esc(a.resource)} <span class="ty">${esc(a.status)}</span></div><div class="v"><span class="hint">${esc(a.by || '')}</span></div>`)) : '<div class="hint">none</div>';
   return h;
 }
+const OP_ICON: Record<string, string> = { write: '✏️', read: '👁', supersede: '🗑', link: '🔗', unlink: '✂️' };
 function renderChanges(d: Record<string, unknown>): string {
-  const ev = (d.events as Array<{ op: string; key?: string; seq: number }>) || [];
-  let h = `<h2>Changes</h2><div class="hint">head seq ${esc(d.seq ?? '')}</div>`;
-  h += ev.length ? rowsBlock(ev.map((e) => `<div class="k${e.key ? ' drill" data-call="read" data-target="workspace.peek" data-input="' + esc(JSON.stringify({ key: e.key })) : ''}"><span class="ty">${esc(e.op)}</span> ${esc(e.key || '')}</div><div class="v">${esc(e.seq)}</div>`)) : '<div class="hint">no events</div>';
+  const ev = (d.events as Array<{ op: string; key?: string; seq: number; at?: string }>) || [];
+  let h = `<h2>Changes</h2><div class="hint">head seq ${esc(d.seq ?? '')}${ev.length ? '' : ' · you are at the head — no newer events'}</div>`;
+  if (ev.length) h += rowsBlock(ev.map((e) => `<div class="k${e.key ? ' drill" data-call="read" data-target="workspace.peek" data-input="' + esc(JSON.stringify({ key: e.key })) : ''}">${esc(OP_ICON[e.op] || '•')} <span class="ty">${esc(e.op)}</span> ${esc(e.key || '')}</div><div class="v">${esc((e.at || '').slice(11, 16) || e.seq)}</div>`));
   return h;
 }
 function renderGrants(d: Record<string, unknown>): string {
@@ -334,13 +335,39 @@ function renderView(d: Record<string, unknown>, types: Types): string {
   }
   return h;
 }
+/** $catalog summary `{cells:[{cell,count,capabilities:[{target,kind,summary}]}]}` → a grouped,
+ *  skimmable menu; read-kind targets drill (audit: was truncated single-line JSON). */
+function renderCatalog(d: Record<string, unknown>): string {
+  const cells = (d.cells as Array<{ cell: string; count: number; capabilities: Array<{ target: string; kind: string; summary?: string }> }>) || [];
+  let h = `<h2>Capabilities (${cells.reduce((n, c) => n + (c.count || 0), 0)})</h2>`;
+  for (const c of cells) {
+    h += `<h2>${esc(c.cell)} (${esc(c.count)})</h2>` + rowsBlock(c.capabilities.map((cap) => {
+      const drill = cap.kind === 'read' ? ` drill" data-call="read" data-target="${esc(cap.target)}" data-input="{}` : '';
+      return `<div class="k${drill}">${esc(cap.target)}${cap.summary ? ` <span class="hint">${esc(cap.summary)}</span>` : ''}</div><div class="v"><span class="ty">${esc(cap.kind)}</span></div>`;
+    }), 8);
+  }
+  return h;
+}
+/** $types `{types:{<name>:{icon,label,present,…}}}` → the type vocabulary as a list (audit:
+ *  rendered as an empty card because the generic fallback skipped the `types` key). */
+function renderTypes(d: Record<string, unknown>): string {
+  const types = (d.types as Types) || {};
+  const names = Object.keys(types);
+  return `<h2>Types (${names.length})</h2>` + rowsBlock(names.map((n) => {
+    const t = types[n] as { icon?: string; label?: string; render?: { viewer?: string } };
+    const sub = t.render && t.render.viewer ? `viewer: ${t.render.viewer}` : (t.label || '');
+    return `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify({ type: n, limit: 25 }))}">${t.icon ? esc(t.icon) + ' ' : ''}${esc(n)}${sub ? ` <span class="hint">${esc(sub)}</span>` : ''}</div><div class="v"></div>`;
+  }), 12);
+}
 /** A "view as graph" affordance shown under a fact list (ADR-0038 Inc 2). */
 function graphToggle(): string {
   return lastEntryKeys.length ? `<button class="more-btn" data-graph="1">⊹ view as graph</button>` : '';
 }
-/** A single fact (peek) + lit-doc assembly + backlinks, both lazily fetched (Inc 3/4). */
+/** A single fact (peek) + lit-doc assembly + backlinks, both lazily fetched (Inc 3/4).
+ *  `peek` omits a top-level `key`, so fall back to the key we requested (currentRead) —
+ *  without it the ↹/doc-assembly/backlinks affordances can't fire (audit 2026-06-27). */
 function renderSingleFact(d: Record<string, unknown>, types: Types): string {
-  const key = (d.key as string) || '';
+  const key = (d.key as string) || (currentRead && (currentRead.input as { key?: string })?.key) || '';
   let b = typedCard(key, d as Entry, types, 'slot-one');
   const t = d._meta && (d._meta as { type?: string }).type;
   if (key.indexOf('doc:') === 0 || t === 'doc') { const slot = 'doc' + nextId(); b += `<div id="${slot}"></div>`; lazyDoc(key, slot, types); }
@@ -400,6 +427,8 @@ function render(data: unknown): void {
     else if ('events' in d && 'seq' in d) b += renderChanges(d);                            // changes
     else if ('principal' in d && 'scope' in d) b += renderGrants(d);                        // grants ($grants)
     else if ('value' in d && 'id' in d && 'count' in d) b += renderView(d, types);          // view
+    else if (Array.isArray(d.cells)) b += renderCatalog(d);                                 // $catalog summary
+    else if (d.types && Object.keys(d).every((k) => k === 'types' || k === 'hint')) b += renderTypes(d); // $types
     else if (Array.isArray(d.members)) {                                                    // members
       const map: Record<string, Entry> = {};
       for (const m of d.members as Array<Entry & { key?: string }>) map[m.key || nextId()] = m;
@@ -410,7 +439,9 @@ function render(data: unknown): void {
     else if (d.entries && !isNeighbors) b += entriesBlock(d.entries, types) + graphToggle();
     else if (d.value && d._meta) b += renderSingleFact(d, types);
     if (!b) b = genericStructured(d);
-    if (typeof d.hint === 'string' && d.hint) b += `<div class="hint">${esc(d.hint)}</div>`; // degraded-search note etc.
+    // Short hints (e.g. degraded-search note) help the human; the long model-facing
+    // guidance hints ($catalog/$types/$grants) just leak chrome — suppress those (audit).
+    if (typeof d.hint === 'string' && d.hint && d.hint.length < 140) b += `<div class="hint">${esc(d.hint)}</div>`;
     if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
   }
   b += hostBridges();
@@ -530,7 +561,10 @@ async function navigate(target: string, input: unknown): Promise<void> {
   const r = await app.callServerTool({ name: 'read', arguments: { target, input } });
   if ((r as { isError?: boolean }).isError) { handleError(r, { kind: 'read', target, input }); return; }
   const sc = (r as { structuredContent?: unknown }).structuredContent ?? null;
-  if (sc) { viewStack.push(currentData); currentRead = { target, input }; render(sc); notifyModel(`The user is viewing ${target}${input && Object.keys(input as object).length ? ' ' + JSON.stringify(input) : ''} in the parc.land card.`, { event: 'view', target, input }); }
+  // NB: no ambient "viewing" context push here — updateModelContext is last-write-wins, so
+  // a per-drill note would clobber a meaningful act (e.g. ratify) before the next user
+  // message delivers it (audit 2026-06-27). Only acts (decisions) bridge to the model.
+  if (sc) { viewStack.push(currentData); currentRead = { target, input }; render(sc); }
 }
 /** Host-proxied act → notify the agent → refresh the current view; errors → escalation. */
 async function perform(target: string, input: unknown): Promise<void> {
