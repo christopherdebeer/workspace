@@ -57,12 +57,20 @@ const SHELL_HEAD = `<!doctype html>
   pre { background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; overflow: auto; font-size: 12px; max-height: 280px; }
   img { max-width: 100%; border-radius: 8px; display: block; }
   .hint { font-size: 11px; opacity: .55; margin-top: 12px; }
+  /* Loading skeleton — gives the card presence + a sensible initial height before the
+     first tool-result arrives (it then grows-to-content). */
+  .skel { display: flex; flex-direction: column; gap: 9px; padding: 4px 0; }
+  .skel .ln { height: 13px; border-radius: 7px; position: relative; overflow: hidden; background: color-mix(in srgb, currentColor 9%, transparent); }
+  .skel .ln.w1 { width: 45%; } .skel .ln.w2 { width: 88%; } .skel .ln.w3 { width: 70%; } .skel .ln.tall { height: 38px; }
+  .skel .ln::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, color-mix(in srgb, currentColor 11%, transparent), transparent); animation: sh 1.3s infinite; }
+  @keyframes sh { 100% { transform: translateX(100%); } }
+  @media (prefers-reduced-motion: reduce) { .skel .ln::after { animation: none; } }
 </style>
 </head>
 <body>
 <!-- The header renders immediately — so "parc.land" proves this IS our iframe even
      before data arrives. The render logic + handshake come from the inlined app.js. -->
-<div id="root"><div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div><div class="hint">Loading…</div></div>
+<div id="root"><div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div><div class="skel"><div class="ln w1"></div><div class="ln tall"></div><div class="ln w2"></div><div class="ln w3"></div></div></div>
 <script>`;
 
 const SHELL_TAIL = `</script>
