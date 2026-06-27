@@ -1,6 +1,14 @@
 # ADR-0038 — The conversational render surface, holistically: coverage, graph mode, links, docs, escalation
 
-- **Status:** Proposed. A holistic audit of the MCP-Apps card (`services/gateway/client/main.ts`) against the
+- **Status:** Accepted — **Inc 1 (coverage) shipped.** The card now has structured render branches for
+  `graph`/`links` (mermaid node-link diagram, authored solid / derived dashed, capped 50), `attention`
+  (stale/unlinked/dangling triage with drills), `grantRequests` (incoming inbox with approve/deny acts +
+  answers), `changes` (event feed), `grants` (`$grants` authority surface), `members` (assembled entry cards),
+  and `view` (evaluated value by its render hint). A **generic structured fallback** (`genericStructured`)
+  renders any remaining array-bearing shape (`actions`/`views`/`subscriptions`/`groups`/`shared`/`$catalog`/
+  `$types`) as capped list sections + fields instead of a raw-JSON `<pre>` — which now appears only as a true
+  last resort. Inc 2–6 below remain.
+- **Status (orig):** Proposed. A holistic audit of the MCP-Apps card (`services/gateway/client/main.ts`) against the
   *whole* read/act surface — not the happy-path subset the 2026-06-27 validation exercised. Names the systemic
   gap (most reads dump raw JSON), the nuance gaps (search-as-cards vs graph, dead links, thin docs, plain-text
   escalation), and proposes prioritized increments.

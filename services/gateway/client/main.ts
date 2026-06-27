@@ -189,6 +189,120 @@ function whoami(d: Record<string, unknown>): string {
   if (Array.isArray(d.grant) && JSON.stringify(d.grant) !== JSON.stringify(d.scopes)) h += '<h2>Grant ceiling</h2>' + chips(d.grant as string[]);
   return h;
 }
+// ── ADR-0038 Inc 1: coverage — structured renderers so no read dumps raw JSON ──
+/** Best label for an arbitrary list item (registry/grant/group/share shapes). */
+function labelOf(it: unknown): string {
+  if (it == null) return '';
+  if (typeof it !== 'object') return String(it);
+  const o = it as Record<string, unknown>;
+  return String(o.id ?? o.name ?? o.label ?? o.key ?? o.title ?? o.rel ?? o.resource ?? JSON.stringify(o).slice(0, 80));
+}
+/** A muted secondary line for a list item — the decision-relevant scalar fields. */
+function subOf(it: unknown): string {
+  if (!it || typeof it !== 'object') return '';
+  const o = it as Record<string, unknown>;
+  const keys = ['resource', 'mode', 'status', 'description', 'note', 'to', 'keyPrefix', 'membership', 'order', 'op', 'count', 'requester', 'grantee', 'by', 'invoke', 'deliver'];
+  const parts: string[] = [];
+  for (const k of keys) if (o[k] != null && typeof o[k] !== 'object') parts.push(`${k}: ${String(o[k]).slice(0, 60)}`);
+  return parts.slice(0, 3).join(' · ');
+}
+function listRows(arr: unknown[], drill?: (it: unknown) => { target: string; input: unknown } | null): string {
+  return rowsBlock(arr.map((it) => {
+    const sub = subOf(it);
+    const d = drill && drill(it);
+    const cls = d ? ' drill" data-call="read" data-target="' + esc(d.target) + '" data-input="' + esc(JSON.stringify(d.input)) : '';
+    return `<div class="k${cls}">${esc(labelOf(it))}${sub ? ` <span class="hint">${esc(sub)}</span>` : ''}</div><div class="v"></div>`;
+  }));
+}
+/** Generic structured fallback: render each array property as a capped list section and
+ *  scalar/object props as fields — instead of dumping JSON. Covers actions/views/
+ *  subscriptions/groups/shared and any other array-bearing shape. */
+function genericStructured(d: Record<string, unknown>): string {
+  let h = '';
+  const scalars: Array<[string, unknown]> = [];
+  for (const [k, v] of Object.entries(d)) {
+    if (k === 'types' || k === 'hints') continue;
+    if (Array.isArray(v)) h += `<h2>${esc(k)} (${v.length})</h2>` + (v.length ? listRows(v) : '<div class="hint">none</div>');
+    else if (v != null && typeof v === 'object') h += `<h2>${esc(k)}</h2>` + (hint('fields', v) || `<pre>${esc(JSON.stringify(v, null, 2)).slice(0, 600)}</pre>`);
+    else if (v != null) scalars.push([k, v]);
+  }
+  if (scalars.length) h = rowList(scalars) + h;
+  return h || `<pre>${esc(JSON.stringify(d, null, 2))}</pre>`;
+}
+/** A node-link graph (graph/links `{edges}`) as a mermaid diagram — authored edges solid,
+ *  derived dashed. Capped for legibility (ADR-0038 Inc 2 cheap cut; D3 follow-up later). */
+function graphMermaid(edges: Edge[]): string {
+  const ids = new Map<string, string>();
+  const nid = (k: string): string => { if (!ids.has(k)) ids.set(k, 'n' + ids.size); return ids.get(k) as string; };
+  const short = (k: string): string => (k.length > 24 ? k.slice(0, 22) + '…' : k);
+  const lines = ['flowchart LR'];
+  for (const e of edges) {
+    const arrow = e.derived ? '-.->' : '-->';
+    const lbl = e.rel ? `|${mmEsc(e.rel)}|` : '';
+    lines.push(`  ${nid(e.from)}["${mmEsc(short(e.from))}"] ${arrow}${lbl} ${nid(e.to)}["${mmEsc(short(e.to))}"]`);
+  }
+  return lines.join('\n');
+}
+function renderGraph(d: Record<string, unknown>): string {
+  const edges = (Array.isArray(d.edges) ? d.edges : []) as Edge[];
+  if (!edges.length) return '<h2>Graph</h2><div class="hint">No edges in this slice.</div>';
+  const cap = 50;
+  const shown = edges.slice(0, cap);
+  const slot = 'g' + nextId();
+  mounts.push({ slot, view: vwMermaid as ElView, content: graphMermaid(shown) });
+  const note = edges.length > cap ? `<div class="hint">showing ${cap} of ${edges.length} edges</div>` : '';
+  return `<h2>Graph (${edges.length} edges)</h2>${note}<div id="${slot}"></div>`;
+}
+function renderAttention(d: Record<string, unknown>): string {
+  const stale = (d.stale as Array<{ key: string; updatedAt?: string; type?: string }>) || [];
+  const unlinked = (d.unlinked as string[]) || [];
+  const dangling = (d.dangling as Array<{ from: string; rel: string; to: string; reason?: string }>) || [];
+  let h = `<h2>Attention</h2><div class="hint">${stale.length} stale · ${unlinked.length} unlinked · ${dangling.length} dangling</div>`;
+  if (stale.length) h += `<h2>Stale (${stale.length})</h2>` + rowsBlock(stale.map((s) => `<div class="k drill" data-call="read" data-target="workspace.peek" data-input="${esc(JSON.stringify({ key: s.key }))}">${esc(s.key)}${s.type ? ` <span class="ty">${esc(s.type)}</span>` : ''}</div><div class="v">${esc((s.updatedAt || '').slice(0, 10))}</div>`));
+  if (unlinked.length) h += `<h2>Unlinked (${unlinked.length})</h2>` + rowsBlock(unlinked.map((k) => `<div class="k drill" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key: k }))}">${esc(k)}</div><div class="v"></div>`));
+  if (dangling.length) h += `<h2>Dangling (${dangling.length})</h2>` + rowsBlock(dangling.map((g) => `<div class="k"><span class="ty">${esc(g.rel)}</span> ${esc(g.from)} → ${esc(g.to)}</div><div class="v"><span class="hint">${esc(g.reason || '')}</span></div>`));
+  return h;
+}
+function renderGrantRequests(d: Record<string, unknown>): string {
+  const incoming = (d.incoming as Array<{ key: string; requester: string; resource: string; note?: string }>) || [];
+  const answers = (d.answers as Array<{ resource: string; status: string; by?: string }>) || [];
+  let h = `<h2>Incoming (${incoming.length})</h2>`;
+  h += incoming.length ? incoming.map((r) => `<div class="fc"><div class="fc-h"><span class="lb">${esc(r.requester)} → ${esc(r.resource)}</span></div>${r.note ? `<div class="md">${esc(r.note)}</div>` : ''}<div class="chips"><button class="chip act" data-call="act" data-target="workspace.approveGrant" data-input="${esc(JSON.stringify({ key: r.key }))}">approve</button><button class="chip act" data-call="act" data-target="workspace.denyGrant" data-input="${esc(JSON.stringify({ key: r.key }))}">deny</button></div></div>`).join('') : '<div class="hint">none pending</div>';
+  h += `<h2>Answers (${answers.length})</h2>`;
+  h += answers.length ? rowsBlock(answers.map((a) => `<div class="k">${esc(a.resource)} <span class="ty">${esc(a.status)}</span></div><div class="v"><span class="hint">${esc(a.by || '')}</span></div>`)) : '<div class="hint">none</div>';
+  return h;
+}
+function renderChanges(d: Record<string, unknown>): string {
+  const ev = (d.events as Array<{ op: string; key?: string; seq: number }>) || [];
+  let h = `<h2>Changes</h2><div class="hint">head seq ${esc(d.seq ?? '')}</div>`;
+  h += ev.length ? rowsBlock(ev.map((e) => `<div class="k${e.key ? ' drill" data-call="read" data-target="workspace.peek" data-input="' + esc(JSON.stringify({ key: e.key })) : ''}"><span class="ty">${esc(e.op)}</span> ${esc(e.key || '')}</div><div class="v">${esc(e.seq)}</div>`)) : '<div class="hint">no events</div>';
+  return h;
+}
+function renderGrants(d: Record<string, unknown>): string {
+  let h = `<h2>Authority</h2><div class="who">${esc(d.principal || '')}</div>`;
+  const scope = d.scope as { active?: string[]; ceiling?: string[] } | undefined;
+  if (Array.isArray(scope?.active)) h += '<h2>Active scope</h2>' + chips(scope!.active as string[]);
+  if (Array.isArray(scope?.ceiling) && JSON.stringify(scope!.ceiling) !== JSON.stringify(scope!.active)) h += '<h2>Ceiling</h2>' + chips(scope!.ceiling as string[]);
+  const g = d.grant as { shared?: unknown[]; receiving?: unknown[]; groups?: unknown[] } | undefined;
+  if (d.slice) h += `<div class="hint">slice: ${esc(d.slice)}</div>`;
+  if (g) h += `<div class="hint">grants — shared ${g.shared?.length || 0} · receiving ${g.receiving?.length || 0} · groups ${g.groups?.length || 0}</div>`;
+  return h;
+}
+function renderView(d: Record<string, unknown>, types: Types): string {
+  let h = `<h2>${esc(d.id || 'view')}</h2>`;
+  if (d.description) h += `<div class="hint">${esc(d.description)}</div>`;
+  if (typeof d.count === 'number') h += `<div class="hint">${esc(d.count)} items</div>`;
+  const rh = d.render as { viewer?: string; hint?: string } | null;
+  if (rh && rh.viewer && VIEWERS[rh.viewer]) {
+    const slot = 'v' + nextId();
+    mounts.push({ slot, view: VIEWERS[rh.viewer], content: viewerContent(rh.viewer, d.value) });
+    h += `<div id="${slot}"></div>`;
+  } else {
+    const name = (rh && rh.hint) || '';
+    h += (name && hint(name, d.value)) || hint('fields', d.value) || `<pre>${esc(JSON.stringify(d.value, null, 2)).slice(0, 800)}</pre>`;
+  }
+  return h;
+}
 /** Reveal a "show more" only on bodies that actually overflow the clamp; un-clamp the rest.
  *  Runs after innerHTML is live (post-render and after async inline injections). */
 function measureClamps(): void {
@@ -214,10 +328,21 @@ function render(data: unknown): void {
     else if (d.user && Array.isArray(d.scopes)) b += whoami(d);
     else if (Array.isArray(d.suggestions) && Array.isArray(d.vocab)) { b += renderSuggestions(d); currentRead = { target: 'workspace.suggestions', input: {} }; }
     else if (isNeighbors) b += renderNeighbors(d, types);
+    else if (Array.isArray(d.edges)) b += renderGraph(d);                                  // graph / links
+    else if ('stale' in d || 'unlinked' in d || 'dangling' in d) b += renderAttention(d);  // attention
+    else if ('incoming' in d || 'answers' in d) { b += renderGrantRequests(d); currentRead = { target: 'workspace.grantRequests', input: {} }; }
+    else if ('events' in d && 'seq' in d) b += renderChanges(d);                            // changes
+    else if ('principal' in d && 'scope' in d) b += renderGrants(d);                        // grants ($grants)
+    else if ('value' in d && 'id' in d && 'count' in d) b += renderView(d, types);          // view
+    else if (Array.isArray(d.members)) {                                                    // members
+      const map: Record<string, Entry> = {};
+      for (const m of d.members as Array<Entry & { key?: string }>) map[m.key || nextId()] = m;
+      b += `<h2>Members (${(d.members as unknown[]).length})</h2>` + entriesBlock(map, types);
+    }
     if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus as Record<string, Entry>, types);
     else if (d.entries && !isNeighbors) b += entriesBlock(d.entries as Record<string, Entry>, types);
     else if (d.value && d._meta) b += typedCard((d.key as string) || '', d as Entry, types, 'slot-one');
-    if (!b) b = `<pre>${esc(JSON.stringify(d, null, 2))}</pre>`;
+    if (!b) b = genericStructured(d);
     if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
   }
   b += hostBridges();
