@@ -149,6 +149,8 @@ function renderCsv(host: HTMLElement, code: string): void {
 let mermaidMod: Promise<{ render: (id: string, code: string) => Promise<{ svg: string }> }> | null = null;
 function loadMermaid() {
   if (!mermaidMod) {
+    // Runtime CDN ES-module import (esbuild keeps it external; bundlers leave it as-is).
+    // @ts-ignore — a URL module specifier has no local types; this is intentional.
     mermaidMod = import(/* @vite-ignore */ 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then((m) => {
       m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
       return m.default;

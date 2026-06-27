@@ -200,12 +200,30 @@ async function completeLoginIfReturning(): Promise<boolean> {
       client_id: localStorage.getItem(K.client),
     }),
   });
-  const j = (await res.json()) as Tokens & { error?: string; error_description?: string };
+  const j = (await res.json()) as Tokens & { error?: string; error_description?: string; expires_in?: number };
   if (!j.access_token) throw new Error(j.error_description ?? j.error ?? 'token exchange failed');
   setTokens({ access_token: j.access_token, refresh_token: j.refresh_token, scope: j.scope });
+  scheduleRefresh(j.expires_in); // arm proactive refresh for this fresh session
   // Restore the pre-login URL (minus the code) — query params and all.
   history.replaceState({}, '', back && back.startsWith(location.origin) ? back : location.pathname);
   return true;
+}
+
+/**
+ * Proactive refresh: re-mint the access token shortly BEFORE it expires (not just
+ * reactively on a 401), so an open tab never lapses and each refresh also re-primes
+ * the httpOnly navigation cookies server-side — the client half of edge
+ * silent-refresh. Self-perpetuating while the tab is open; complements the
+ * server-side cookie refresh that covers returning after the tab was closed.
+ */
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRefresh(expiresInSec?: number): void {
+  if (typeof window === 'undefined') return;
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+  if (!getTokens()?.refresh_token) return;
+  const horizon = Number.isFinite(expiresInSec) && (expiresInSec as number) > 0 ? (expiresInSec as number) : 3600;
+  const delayMs = Math.max(60, horizon - 300) * 1000; // ~5m before expiry, ≥60s out
+  refreshTimer = setTimeout(() => { void refresh(); }, delayMs);
 }
 
 async function refresh(): Promise<boolean> {
@@ -216,12 +234,13 @@ async function refresh(): Promise<boolean> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
   });
-  const j = (await res.json()) as Tokens;
+  const j = (await res.json()) as Tokens & { expires_in?: number };
   if (!j.access_token) {
     setTokens(null);
     return false;
   }
   setTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, scope: j.scope ?? t.scope });
+  scheduleRefresh(j.expires_in); // re-arm the next proactive refresh
   return true;
 }
 

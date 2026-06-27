@@ -315,7 +315,11 @@ export function createDeclarativeActions(state: ObservedState): DeclarativeActio
       // Validate params against the declared schema.
       for (const [name, spec] of Object.entries(def.params ?? {})) {
         const v = args[name];
-        if (v === undefined) {
+        // `null` is treated as absent (an unresolved template / omitted optional),
+        // not as a present value of the wrong type — otherwise an optional param
+        // that didn't resolve fails the type-check below and silently aborts the
+        // reaction (root cause of no-`text` machine triggers never starting).
+        if (v === undefined || v === null) {
           if (spec.required) throw new ActionInvokeError('invalid_param', `param "${name}" is required`);
           continue;
         }

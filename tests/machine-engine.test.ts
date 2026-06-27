@@ -212,6 +212,20 @@ describe('projectSubscriptions (stepper set: step + decide + work)', () => {
     expect(withCtx.find((s: { id: string }) => s.id === 'machine.demo.decide-D').params.prompt).toContain('tending/latest');
   });
 
+  it('a work-code rail delivers to run.exec (not models.agent) with an advance read from input (ADR-0026 Inc A)', () => {
+    const codeRails = railsFrom([], [{ from: 'Crunch', to: 'Done', mode: 'work-code', prompt: 'const n = (await parc.query({prefix:"data/"})).count; await parc.emit("stats/n", n);' }]);
+    const sub = projectSubscriptions('pipe', codeRails, 'c15r').find((s: { id: string }) => s.id === 'machine.pipe.code-Crunch');
+    expect(sub.deliver).toBe('@c15r/run.exec'); // code step → the executor, not the model
+    expect(sub.params.async).toBe(true);
+    expect(sub.params.code).toContain('parc.query'); // the user's code body is preserved
+    expect(sub.params.code).toContain('input.__advance'); // …plus the appended advance snippet
+    // The advance fact is carried in input (templated by resolveParams — no ${} collision in the code)
+    expect(sub.params.input.__advance.key).toBe('machine/pipe/run/${keySuffix}');
+    expect(sub.params.input.__advance.value).toMatchObject({ machine: 'pipe', node: 'Done', status: 'done' });
+    // grants → the reactor mints a per-run token; default write covers the run prefix
+    expect(sub.params.grants.write).toEqual(['machine/pipe/run/']);
+  });
+
   it('carries the rail tools + write scope on the decide (grants-to-principals — real-tool proxy)', () => {
     const toolRails = railsFrom([], [
       { from: 'A', to: 'Fix', mode: 'agent', tools: ['workspace.link', 'workspace.neighbors'], scope: { read: true, write: ['weave/', 'kb/'] } },

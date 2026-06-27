@@ -1,0 +1,22 @@
+{
+  "types": [
+    {
+      "type": "run-job",
+      "icon": "⚙️",
+      "label": "value.status",
+      "manager": "@c15r/run",
+      "note": "An exec job's lifecycle as a fact (ADR-0026 Inc B): pending → done | error. A lean observability projection of the authoritative job — poll @c15r/run.fetch for the full result. Keyed run-job/<jobId>; makes runs queryable (query type=run-job), linkable, and salient.",
+      "schema": {
+        "jobId": "string — the job id (also the fetch handle)",
+        "status": "string — pending | done | error",
+        "at": "string — ISO timestamp of this transition",
+        "lang": "string? — js | ts",
+        "codeBytes": "number? — size of the submitted code",
+        "emitted": "string[]? — substrate keys the run wrote via parc.emit",
+        "logs": "number? — console line count",
+        "error": "string? — present when status=error"
+      },
+      "handlers": { "render": [{ "hint": "json" }] }
+    }
+  ]
+}

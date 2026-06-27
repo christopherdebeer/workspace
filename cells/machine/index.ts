@@ -32,13 +32,20 @@ const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'ap
 const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');
 
 /** The SPA's first-paint seed from the dispatch-proxied ssr.json reads (run AS
- *  the caller; present only on an authed top-level navigation to `/`). */
-function buildBoot(user, ssr) {
+ *  the caller). Present on any authed top-level navigation the cell's ssr.json
+ *  scopes — `/` (list), `/m/<slug>` (a machine), `/r/<runKey>` (a run). `path` is
+ *  the cell-relative route the client hydrates against; `owner` localizes links. */
+function buildBoot(user, ssr, path) {
   const s = ssr ?? {};
   const ent = (k) => (s[k] && s[k].entries) || [];
   // Identities only (bare `machine/<name>`); node/rail/run facts are separate types.
   const machines = ent('machines').filter((e) => String(e.key).startsWith('machine/') && String(e.key).slice('machine/'.length).indexOf('/') < 0);
-  return { session: { user: user ?? null }, machines, nodes: ent('nodes'), rails: ent('rails'), runs: ent('runs') };
+  // A `/r/<key>` deep link seeds the single run fact via a `run` peek (Entry|null);
+  // fold it into runs so RunView paints from the boot.
+  const runs = ent('runs').slice();
+  const runFact = s.run && typeof s.run === 'object' && s.run.key ? s.run : null;
+  if (runFact && !runs.some((r) => r.key === runFact.key)) runs.push(runFact);
+  return { session: { user: user ?? null }, machines, nodes: ent('nodes'), rails: ent('rails'), runs, path: path ?? '/', owner: OWNER };
 }
 
 
@@ -284,11 +291,12 @@ export const handler = async (event) => {
   if (method === 'GET' && path === '/app.js') {
     return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*' }, body: readFile('app.js') };
   }
-  if ((method === 'GET' || method === 'HEAD') && (path === '/' || path === '')) {
+  const isAppRoute = path === '/' || path === '' || path.startsWith('/m/') || path.startsWith('/r/');
+  if ((method === 'GET' || method === 'HEAD') && isAppRoute) {
     try {
       const caller = event.headers && event.headers['x-cell-caller'];
       const authed = !!caller && caller !== 'anonymous';
-      const boot = buildBoot(authed ? caller : null, event.ssrData);
+      const boot = buildBoot(authed ? caller : null, event.ssrData, path);
       // SSR'd cross-cell links must match the client's; a host-aware stub keeps
       // hydration clean (only cellUrl is used during render).
       installBridge({ cellUrl: (o, n, rest = '') => `/@${o}/${n}${rest}` });

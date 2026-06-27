@@ -136,24 +136,27 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(names).toEqual(['act', 'read', 'whoami']);
   });
 
-  it('read("$catalog") aggregates tier-1 + dynamic capabilities, scope-filtered', async () => {
+  it('read("$catalog", {detail:"full"}) aggregates tier-1 + dynamic capabilities, scope-filtered', async () => {
     cellTools = [
       { name: 'x__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
     ];
-    const cat = await callTool('creator', 'read', { target: '$catalog' });
+    const cat = await callTool('creator', 'read', { target: '$catalog', input: { detail: 'full' } });
     const targets = ((cat.parsed as { capabilities: Array<{ target: string }> }).capabilities).map((c) => c.target).sort();
     expect(targets).toEqual(['@alice/tools-demo.echo', 'cells.create', 'cells.list', 'workspace.recall', 'workspace.remember']);
 
     // bob lacks platform:cells:create, so forge.createCell is filtered out.
-    const bobCat = await callTool('plain', 'read', { target: '$catalog' });
+    const bobCat = await callTool('plain', 'read', { target: '$catalog', input: { detail: 'full' } });
     const bobTargets = ((bobCat.parsed as { capabilities: Array<{ target: string }> }).capabilities).map((c) => c.target);
     expect(bobTargets).not.toContain('cells.create');
     expect(bobTargets).toContain('workspace.recall');
   });
 
-  it('read omitting target also returns the catalog', async () => {
-    const cat = await callTool('creator', 'read', {});
-    expect((cat.parsed as { capabilities: unknown[] }).capabilities.length).toBeGreaterThan(0);
+  it('read("$catalog") defaults to the grouped summary; omitting target does too (ADR-0033)', async () => {
+    const cat = await callTool('creator', 'read', { target: '$catalog' });
+    expect((cat.parsed as { cells: unknown[] }).cells.length).toBeGreaterThan(0);
+    expect((cat.parsed as { capabilities?: unknown }).capabilities).toBeUndefined(); // not the heavy form by default
+    const bare = await callTool('creator', 'read', {});
+    expect((bare.parsed as { cells: unknown[] }).cells.length).toBeGreaterThan(0);
   });
 
   it('read("$types") returns the global cell-registry vocabulary keyed by bare type name', async () => {
@@ -212,7 +215,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
   it('catalog passes a provider resultSchema through when declared', async () => {
     WORKSPACE_TOOLS[0].resultSchema = { type: 'object', properties: { entries: { type: 'object' } } };
     try {
-      const cat = await callTool('creator', 'read', { target: '$catalog' });
+      const cat = await callTool('creator', 'read', { target: '$catalog', input: { detail: 'full' } });
       const caps = (cat.parsed as { capabilities: Array<{ target: string; resultSchema?: unknown }> }).capabilities;
       expect(caps.find((c) => c.target === 'workspace.recall')?.resultSchema).toEqual(WORKSPACE_TOOLS[0].resultSchema);
       expect(caps.find((c) => c.target === 'workspace.remember')?.resultSchema).toBeUndefined();
@@ -227,6 +230,53 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(result.serverInfo.name).toBe('parc-substrate');
     expect(result.serverInfo.title).toBe('parc.land substrate');
     expect(result.instructions).toContain('read("$catalog"');
+  });
+
+  it('initialize declares the MCP-Apps ui extension (nested) + resources (ADR-0034)', async () => {
+    const init = await mcp('creator', 'initialize', { protocolVersion: '2025-06-18' });
+    const caps = (init.result as { capabilities: Record<string, { mimeTypes?: string[] } & Record<string, unknown>> }).capabilities;
+    expect(caps.tools).toBeDefined();
+    expect(caps.resources).toBeDefined();
+    // Spec 2026-01-26: nested under capabilities.extensions with mimeTypes.
+    const ext = (caps.extensions as Record<string, { mimeTypes?: string[] }>)['io.modelcontextprotocol/ui'];
+    expect(ext?.mimeTypes).toContain('text/html;profile=mcp-app');
+  });
+
+  it('tools advertise the MCP-Apps widget on the tool definition (_meta.ui), and results carry structuredContent (ADR-0034 Inc 0/1)', async () => {
+    // The tool→UI binding is STATIC on the tool def (host preloads it) — not on the result.
+    const list = await mcp('creator', 'tools/list');
+    const tools = list.result!.tools as Array<{ name: string; _meta?: { ui?: { resourceUri: string; visibility?: string[] } } }>;
+    const whoami = tools.find((t) => t.name === 'whoami')!;
+    expect(whoami._meta?.ui?.resourceUri).toBe('ui://parc/card');
+    expect(whoami._meta?.ui?.visibility).toContain('app');
+    expect(tools.find((t) => t.name === 'read')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+
+    // Inc 0: an object result is mirrored as structuredContent (the widget's data channel)…
+    const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });
+    const result = res.result as { structuredContent?: { cells?: unknown[] }; _meta?: unknown; content: Array<{ text: string }> };
+    expect(result.structuredContent?.cells).toBeDefined();
+    // …the text channel still carries it for the model; the result no longer carries the ui binding.
+    expect(result.content[0].text).toContain('cells');
+    expect(result._meta).toBeUndefined();
+  });
+
+  it('resources/list + resources/read serve the ui:// widget (ADR-0034 Inc 1)', async () => {
+    const list = await mcp('creator', 'resources/list');
+    const resources = (list.result as { resources: Array<{ uri: string; mimeType: string }> }).resources;
+    expect(resources.some((r) => r.uri === 'ui://parc/card')).toBe(true);
+
+    const read = await mcp('creator', 'resources/read', { uri: 'ui://parc/card' });
+    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
+    expect(contents[0].uri).toBe('ui://parc/card');
+    expect(contents[0].mimeType).toContain('text/html');
+    expect(contents[0].text).toContain('<!doctype html>');
+    // Unmistakably-ours marker (renders immediately) + the required init handshake.
+    expect(contents[0].text).toContain('parc.land');
+    expect(contents[0].text).toContain('ui/initialize');
+    expect(contents[0].text).toContain('ui/notifications/initialized');
+
+    const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
+    expect(missing.error?.code).toBe(-32602);
   });
 
   it('tools/list carries spec annotations and titles for the three verbs', async () => {

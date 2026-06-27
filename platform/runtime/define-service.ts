@@ -63,19 +63,33 @@ interface ValidatedToken {
   clientId: string | null;
 }
 
-/** The session-cookie name the auth cell sets for browser navigations. */
-const SESSION_COOKIE = 'parc_session';
+/** Shape returned by the auth cell's `refreshSession` command (edge silent-refresh). */
+interface RefreshedSession {
+  userId: string;
+  scope: string;
+  effectiveScope: string | null;
+  tokenId: string | null;
+  /** Ready-made Set-Cookie strings (auth owns the format) to re-prime the browser. */
+  setCookies: string[];
+}
 
-/** Extract the `parc_session` value from a Cookie header, if present. */
-function sessionCookie(cookieHeader: string | undefined): string | undefined {
+/** The navigation cookies the auth cell sets: the short-lived access credential and
+ *  the long-lived refresh credential used for edge silent-refresh. */
+const SESSION_COOKIE = 'parc_session';
+const REFRESH_COOKIE = 'parc_refresh';
+
+/** Extract a named cookie's value from a Cookie header, if present. */
+function cookieValue(cookieHeader: string | undefined, name: string): string | undefined {
   if (!cookieHeader) return undefined;
   for (const part of cookieHeader.split(';')) {
     const eq = part.indexOf('=');
     if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === SESSION_COOKIE) return part.slice(eq + 1).trim() || undefined;
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim() || undefined;
   }
   return undefined;
 }
+const sessionCookie = (cookieHeader: string | undefined): string | undefined => cookieValue(cookieHeader, SESSION_COOKIE);
+const refreshCookieValue = (cookieHeader: string | undefined): string | undefined => cookieValue(cookieHeader, REFRESH_COOKIE);
 
 /**
  * Establish the request identity for an HTTP call. Identity is derived from a
@@ -94,11 +108,30 @@ function sessionCookie(cookieHeader: string | undefined): string | undefined {
  * credential reaches only this tier-1 hop; dynamic cells receive `x-cell-caller`,
  * never the token (see callCell).
  */
+/** Identity for the request, plus any Set-Cookie strings the edge silent-refresh
+ *  rotated (re-priming the browser's navigation cookies). */
+interface ResolvedIdentity {
+  identity: Identity;
+  setCookies?: string[];
+}
+
+function identityFromValidated(validated: ValidatedToken): Identity {
+  const grant = validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [];
+  const effective =
+    validated.effectiveScope != null ? validated.effectiveScope.split(/[\s,]+/).filter(Boolean) : grant;
+  return {
+    user: validated.userId,
+    scopes: effective,
+    grantScopes: grant,
+    ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
+  };
+}
+
 async function resolveHttpIdentity(
   headers: Record<string, string | undefined> | undefined,
   serviceName: string,
   method?: string,
-): Promise<Identity> {
+): Promise<ResolvedIdentity> {
   // Prefer the standard Authorization header, but fall back to the
   // `x-forwarded-authorization` header that the edge preserves the viewer's
   // bearer in — CloudFront OAC overwrites Authorization with its SigV4 signature.
@@ -115,43 +148,51 @@ async function resolveHttpIdentity(
   // result either). Absent header (curl, old clients) ⇒ treat as non-navigation.
   const topLevelNav = headerOf(headers, 'sec-fetch-dest') === 'document';
   const cookieAllowed = serviceName === 'dispatch' && (method === 'GET' || method === 'HEAD') && topLevelNav;
-  if (!token && cookieAllowed) token = sessionCookie(headerOf(headers, 'cookie'));
-  if (!token) return ANONYMOUS;
+  const cookieHeader = headerOf(headers, 'cookie');
+  if (!token && cookieAllowed) token = sessionCookie(cookieHeader);
+  // The long-lived refresh credential — only consulted on a safe top-level
+  // navigation (cookieAllowed), and only to silently re-mint a short access token.
+  const refreshTok = cookieAllowed ? refreshCookieValue(cookieHeader) : undefined;
+  if (!token && !refreshTok) return { identity: ANONYMOUS };
 
   const authService = process.env.AUTH_SERVICE_NAME ?? 'auth';
-  if (serviceName === authService) return ANONYMOUS;
+  if (serviceName === authService) return { identity: ANONYMOUS };
 
   const config = loadConfig();
-  if (!config.registry[authService]) return ANONYMOUS;
+  if (!config.registry[authService]) return { identity: ANONYMOUS };
 
   try {
     const client = createServiceClient({ registry: config.registry });
-    const validated = await client(authService).command<ValidatedToken | null>('validateToken', {
-      token,
-    });
-    if (!validated) {
+    if (token) {
+      const validated = await client(authService).command<ValidatedToken | null>('validateToken', { token });
+      if (validated) return { identity: identityFromValidated(validated) };
       console.warn('[auth] bearer present but rejected by validateToken', { service: serviceName });
-      return ANONYMOUS;
     }
-    const grant = validated.scope ? validated.scope.split(/[\s,]+/).filter(Boolean) : [];
-    // Effective scope is what's enforced now; it defaults to the full grant but a
-    // session may have narrowed it (incremental authorization). The grant stays the
-    // ceiling so a denial within it is a self-serve widen, not a re-consent.
-    const effective =
-      validated.effectiveScope != null
-        ? validated.effectiveScope.split(/[\s,]+/).filter(Boolean)
-        : grant;
-    return {
-      user: validated.userId,
-      scopes: effective,
-      grantScopes: grant,
-      ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
-    };
+    // Edge silent-refresh: the access cookie was missing or rejected (expired), but a
+    // top-level navigation carries a valid refresh cookie — rotate a fresh access
+    // token at the edge and re-prime both cookies, so a long-grant session survives
+    // navigations/tab-closes without a passkey round-trip. Safe-method nav only.
+    if (cookieAllowed && refreshTok) {
+      const refreshed = await client(authService).command<RefreshedSession | null>('refreshSession', { refreshToken: refreshTok });
+      if (refreshed) {
+        return {
+          identity: identityFromValidated({
+            userId: refreshed.userId,
+            scope: refreshed.scope,
+            effectiveScope: refreshed.effectiveScope,
+            tokenId: refreshed.tokenId ?? undefined,
+            clientId: null,
+          }),
+          setCookies: refreshed.setCookies,
+        };
+      }
+    }
+    return { identity: ANONYMOUS };
   } catch (err) {
     // A validation failure (revoked/expired/unknown token, or auth unavailable)
     // is treated as anonymous; handlers enforce auth via requireUser/requireScope.
-    console.warn('[auth] validateToken errored', { service: serviceName, error: (err as Error).message });
-    return ANONYMOUS;
+    console.warn('[auth] identity resolution errored', { service: serviceName, error: (err as Error).message });
+    return { identity: ANONYMOUS };
   }
 }
 
@@ -276,7 +317,7 @@ export function defineService(definition: ServiceDefinition) {
     const path = httpEvent.rawPath ?? httpEvent.requestContext?.http?.path ?? '/';
     const correlationId = headerOf(httpEvent.headers, 'x-correlation-id') ?? randomUUID();
     const traceId = headerOf(httpEvent.headers, 'x-amzn-trace-id') ?? correlationId;
-    const identity = await resolveHttpIdentity(httpEvent.headers, definition.name, method);
+    const { identity, setCookies } = await resolveHttpIdentity(httpEvent.headers, definition.name, method);
     const ctx = buildContext({ correlationId, traceId, identity });
 
     const rawBody = httpEvent.body
@@ -291,7 +332,11 @@ export function defineService(definition: ServiceDefinition) {
       try {
         const req = buildHttpRequest(httpEvent, method, path, rawBody);
         const res = (await route.handler(req, ctx)) ?? {};
-        return renderHttp(res, correlationId);
+        // Re-prime the browser with any cookies the edge silent-refresh rotated
+        // (only set on a dispatch top-level navigation). Cell/handler cookies win.
+        const withCookies =
+          setCookies && setCookies.length ? { ...res, cookies: [...setCookies, ...(res.cookies ?? [])] } : res;
+        return renderHttp(withCookies, correlationId);
       } catch (err) {
         if (err instanceof ServiceAuthError) {
           return json(401, { error: err.message }, correlationId);

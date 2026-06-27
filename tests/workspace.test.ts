@@ -6,10 +6,11 @@
  * caller's slice, recall is salience-shaped, supersede retires without deleting,
  * one user cannot see another's slice, and `remember` announces a fact event.
  */
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createFactReactionHandler } from '../services/workspace/handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
+import { stripUndefined } from '../platform/runtime/dynamo-state-store';
 import { createMemoryGrantStore } from '../services/workspace/grants';
-import { createObservedState, createMemoryStateStore } from '../platform/runtime';
+import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
 
 /** A minimal ServiceContext for a given caller; captures emitted events. */
@@ -43,12 +44,28 @@ describe('workspace cell', () => {
     ]);
   });
 
-  it('recall returns the caller view, salience-shaped with a _shaping summary', async () => {
+  it('recall({view:"full"}) returns the caller view, salience-shaped with a _shaping summary', async () => {
     const { ctx } = ctxFor('alice');
-    const res = await cmds.recall(undefined, ctx);
+    const res = await cmds.recall({ view: 'full' }, ctx);
+    if (!('entries' in res)) throw new Error('expected full view');
     expect(res.entries.phase.value).toBe('planning');
     expect(res._shaping.elision).toBe('auto');
     expect(res._shaping.counts.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a bare recall() returns a succinct overview with counts + top focus + drill hints (ADR-0033)', async () => {
+    const { ctx } = ctxFor('alice');
+    const res = await cmds.recall(undefined, ctx);
+    if (!('overview' in res)) throw new Error('expected overview');
+    expect(res.overview.total).toBeGreaterThanOrEqual(1);
+    expect(res.overview.byType.length).toBeGreaterThanOrEqual(1);
+    expect(res.overview.byPrefix.length).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(res.focus).length).toBeGreaterThanOrEqual(1);
+    expect(res.hints.some((h) => h.includes('query'))).toBe(true);
+    expect(res.hints.some((h) => h.includes('view: "full"'))).toBe(true);
+    // The full view is still one arg away.
+    const full = await cmds.recall({ view: 'full' }, ctx);
+    expect('entries' in full).toBe(true);
   });
 
   it('isolates slices — bob cannot see alice', async () => {
@@ -70,7 +87,8 @@ describe('workspace cell', () => {
     const sup = await cmds.supersede({ key: 'phase' }, ctx);
     expect(sup?._meta.supersededBy).toBeNull(); // retired (no successor)
 
-    const def = await cmds.recall(undefined, ctx);
+    const def = await cmds.recall({ view: 'full' }, ctx);
+    if (!('entries' in def)) throw new Error('expected full view');
     expect(def.entries.phase).toBeUndefined(); // hidden from the default view
     expect((await cmds.peek({ key: 'phase' }, ctx))?.value).toBe('planning'); // still there
   });
@@ -192,8 +210,8 @@ describe('workspace sharing / view layer', () => {
       [
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
-        'query', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
-        'registerAction', 'actions', 'deleteAction', 'invoke',
+        'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
+        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'pruneSimilar', 'suggestions', 'ratify',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
@@ -204,12 +222,14 @@ describe('workspace sharing / view layer', () => {
     // write:workspace). tend stays the operator-only workspace:admin override.
     expect(
       tools.every((t) =>
-        t.name === 'tend'
+        t.name === 'tend' || t.name === 'reindex' || t.name === 'pruneSimilar'
           ? t.scope === 'workspace:admin'
           : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
       ),
     ).toBe(true);
     expect(tools.find((t) => t.name === 'tend')!.scope).toBe('workspace:admin');
+    expect(tools.find((t) => t.name === 'reindex')!.scope).toBe('workspace:admin');
+    expect(tools.find((t) => t.name === 'pruneSimilar')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'recall')!.scope).toBe('read:workspace');
     expect(tools.find((t) => t.name === 'remember')!.scope).toBe('write:workspace');
     // Every tool ships a JSON Schema the gateway can surface to clients.
@@ -492,6 +512,298 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
   });
 });
 
+describe('inline affordances on reads (ADR-0029 R1 — types map: tool hints + managing cell)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  // A `cells.describeTypes` vocabulary, so `typeDeclsFor` resolves (the test ctx
+  // otherwise has no serviceClient → fails closed to {} → no `types` map).
+  const VOCAB = {
+    decision: { manager: '@c15r/home', icon: '⚖️', label: 'value.title', handlers: { open: '@c15r/home/decision/${id}' } },
+    todo: { manager: '@c15r/home', icon: '✅' },
+    // `undeclared` is referenced by a fact below but absent here → must be omitted.
+  };
+  const aliceWithTypes = (): ServiceContext => {
+    const { ctx } = ctxFor('alice');
+    (ctx as unknown as { serviceClient: (n: string) => { command: (c: string, i: unknown) => Promise<unknown> } }).serviceClient = () => ({
+      command: async (cmd: string) => (cmd === 'describeTypes' ? { types: VOCAB } : {}),
+    });
+    return ctx;
+  };
+
+  beforeAll(async () => {
+    __resetTypeDeclsCache(); // hermetic: don't inherit a sibling block's vocab cache
+    const a = aliceWithTypes();
+    await cmds.remember({ key: 'd1', value: { title: 'choose dynamo' }, type: 'decision', tags: ['storage'] }, a);
+    await cmds.remember({ key: 't1', value: 'wire links', type: 'todo' }, a);
+    await cmds.remember({ key: 'x1', value: 'no decl', type: 'undeclared' }, a);
+    await cmds.remember({ key: 'note', value: 'untyped' }, a); // no type → contributes nothing
+  });
+  afterAll(() => __resetTypeDeclsCache());
+
+  it('query inlines a shared types map: handlers + manager per declared type present', async () => {
+    const res = await cmds.query({}, aliceWithTypes());
+    expect(res.types).toBeDefined();
+    // Declared types present in the result carry their affordance…
+    expect(res.types.decision).toEqual({
+      icon: '⚖️',
+      label: 'value.title',
+      handlers: { open: '@c15r/home/decision/${id}' },
+      manager: '@c15r/home',
+    });
+    expect(res.types.todo).toEqual({ icon: '✅', manager: '@c15r/home' });
+    // …an undeclared type (no affordance) is omitted, not an empty stub.
+    expect(res.types.undeclared).toBeUndefined();
+    // Untyped facts contribute no key.
+    expect(Object.keys(res.types).sort()).toEqual(['decision', 'todo']);
+  });
+
+  it('peek attaches the single fact’s type affordance as a sibling (value/_meta intact)', async () => {
+    const e = await cmds.peek({ key: 'd1' }, aliceWithTypes());
+    expect((e as { value: { title: string } }).value.title).toBe('choose dynamo');
+    expect(e?._meta.type).toBe('decision');
+    expect((e as unknown as { types: Record<string, unknown> }).types.decision).toMatchObject({ manager: '@c15r/home' });
+  });
+
+  it('recall inlines the types map across the shaped view', async () => {
+    const res = await cmds.recall({ elision: 'none' }, aliceWithTypes());
+    expect((res as unknown as { types: Record<string, unknown> }).types.decision).toMatchObject({ icon: '⚖️' });
+  });
+
+  it('omits the types map entirely when no declared type is present', async () => {
+    __resetTypeDeclsCache();
+    const { ctx } = ctxFor('alice'); // no serviceClient → vocab unavailable
+    const res = await cmds.query({ type: 'todo' }, ctx);
+    expect((res as { types?: unknown }).types).toBeUndefined();
+    __resetTypeDeclsCache();
+  });
+});
+
+describe('semantic search (ADR-0030 — vector seam: candidate generation + authoritative re-read)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const vstore = new MemoryVectorStore();
+  const embedder = new HashingEmbedder(128);
+  const cmds = createWorkspaceCommands(() => ({ state, grants, vectors: { store: vstore, embedder }, store }));
+  // cmds with NO vector backend — to assert graceful degradation.
+  const noVecCmds = createWorkspaceCommands(() => ({ state, grants }));
+  const VOCAB = { decision: { manager: '@c15r/home', icon: '⚖️' }, note: { manager: '@c15r/home', icon: '📝' } };
+  const ctxOf = (u: string): ServiceContext => {
+    const ctx = ctxFor(u).ctx;
+    (ctx as unknown as { serviceClient: () => { command: (c: string) => Promise<unknown> } }).serviceClient = () => ({
+      command: async (cmd: string) => (cmd === 'describeTypes' ? { types: VOCAB } : {}),
+    });
+    return ctx;
+  };
+
+  /** Mirror what the Increment-2 stream indexer will do: embed a fact's text and
+   *  upsert its vector into the owner's slice index. */
+  async function indexFact(scope: string, key: string, value: unknown, meta: { type?: string; tags?: string[]; superseded?: boolean }): Promise<void> {
+    const text = embeddableText(key, value);
+    if (!text) return;
+    const [vector] = await embedder.embed([text]);
+    await vstore.put(indexForScope(scope, embedder.dimension), [{ key, vector, metadata: metadataForFact(meta) }]);
+  }
+
+  /** Drive the async, chunked reindex (ADR-0030/0031) to completion: feed the handler
+   *  its continuation events until it stops emitting (the embed → edges chain). */
+  const reindexHandler = createReindexHandler(() => ({ state, grants, vectors: { store: vstore, embedder }, store }));
+  async function drainReindex(scope: string): Promise<void> {
+    let detail: Record<string, unknown> = { scope, phase: 'embed', indexed: 0, skipped: 0, edges: 0 };
+    for (let i = 0; i < 500; i++) {
+      const { ctx, emitted } = ctxFor(null);
+      await reindexHandler(detail, ctx, { source: 'workspace', detailType: 'workspace.reindex.requested' });
+      const cont = emitted.find((e) => e.type === 'workspace.reindex.requested');
+      if (!cont) return; // no continuation → job done
+      detail = cont.payload as Record<string, unknown>;
+    }
+    throw new Error('reindex did not converge');
+  }
+
+  beforeAll(async () => {
+    __resetTypeDeclsCache();
+    // alice's slice — two dynamo decisions + an unrelated auth note.
+    await cmds.remember({ key: 'd-dynamo', value: { title: 'Choose a single DynamoDB table for the substrate' }, type: 'decision', tags: ['storage'] }, ctxOf('alice'));
+    await cmds.remember({ key: 'd-stream', value: { title: 'Consume the DynamoDB stream to index vectors' }, type: 'decision', tags: ['storage'] }, ctxOf('alice'));
+    await cmds.remember({ key: 'n-auth', value: { title: 'Passkey webauthn refresh cookie horizon' }, type: 'note', tags: ['auth'] }, ctxOf('alice'));
+    await indexFact('alice', 'd-dynamo', { title: 'Choose a single DynamoDB table for the substrate' }, { type: 'decision', tags: ['storage'] });
+    await indexFact('alice', 'd-stream', { title: 'Consume the DynamoDB stream to index vectors' }, { type: 'decision', tags: ['storage'] });
+    await indexFact('alice', 'n-auth', { title: 'Passkey webauthn refresh cookie horizon' }, { type: 'note', tags: ['auth'] });
+    // bob's slice — one unrelated fact.
+    await cmds.remember({ key: 'b1', value: { title: 'Grocery list' }, type: 'note' }, ctxOf('bob'));
+    await indexFact('bob', 'b1', { title: 'Grocery list' }, { type: 'note' });
+  });
+  afterAll(() => __resetTypeDeclsCache());
+
+  it('ranks by meaning and returns the R1 types envelope', async () => {
+    const res = await cmds.search({ text: 'dynamodb storage table design' }, ctxOf('alice'));
+    expect(res.entries.length).toBeGreaterThanOrEqual(2);
+    expect(['d-dynamo', 'd-stream']).toContain(res.entries[0].key); // a dynamo decision ranks first
+    expect(res.entries[0].score).toBeGreaterThan(res.entries[res.entries.length - 1].score);
+    expect(res.types?.decision).toBeDefined(); // R1 envelope (declared types resolved client-free)
+  });
+
+  it('isolates slices — bob’s search never surfaces alice’s facts (structural index boundary)', async () => {
+    const res = await cmds.search({ text: 'dynamodb storage table design' }, ctxOf('bob'));
+    expect(res.entries.every((e) => !e.key.startsWith('alice/') && e.key !== 'd-dynamo')).toBe(true);
+  });
+
+  it('honours a type filter (the granular read:type pin)', async () => {
+    const res = await cmds.search({ text: 'dynamodb', type: 'decision' }, ctxOf('alice'));
+    expect(res.entries.every((e) => e._meta.type === 'decision')).toBe(true);
+    expect(res.entries.some((e) => e.key === 'n-auth')).toBe(false);
+  });
+
+  it('folds a grant: a shared prefix surfaces for the grantee, keyed <owner>/<key>, post-filtered by prefix', async () => {
+    await cmds.share({ to: 'carol', key: 'd-*' }, ctxOf('alice')); // prefix grant: only d-* keys
+    const res = await cmds.search({ text: 'dynamodb stream vectors' }, ctxOf('carol'));
+    expect(res.entries.length).toBeGreaterThanOrEqual(1);
+    expect(res.entries.every((e) => e.key.startsWith('alice/d-'))).toBe(true); // prefix post-filter
+    expect(res.entries.some((e) => e.key === 'alice/n-auth')).toBe(false); // outside the grant prefix
+  });
+
+  it('authoritative re-read drops a superseded fact still present in the (stale) index', async () => {
+    await cmds.remember({ key: 'tmp', value: { title: 'dynamodb temporary scratch decision' }, type: 'decision' }, ctxOf('alice'));
+    await indexFact('alice', 'tmp', { title: 'dynamodb temporary scratch decision' }, { type: 'decision', superseded: false });
+    expect((await cmds.search({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'))).entries.some((e) => e.key === 'tmp')).toBe(true);
+    await cmds.supersede({ key: 'tmp' }, ctxOf('alice')); // index NOT updated → still superseded:false there
+    const after = await cmds.search({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'));
+    expect(after.entries.some((e) => e.key === 'tmp')).toBe(false); // dropped on re-read (Decision 1)
+  });
+
+  it('degrades gracefully with no vector backend (hint, not error)', async () => {
+    const res = await noVecCmds.search({ text: 'anything' }, ctxOf('alice'));
+    expect(res.entries).toEqual([]);
+    expect(res.hint).toMatch(/not configured/i);
+  });
+
+  it('requires query text', async () => {
+    await expect(cmds.search({ text: '   ' }, ctxOf('alice'))).rejects.toThrow(/text is required/);
+  });
+
+  it('reindex (admin) backfills a slice so search finds never-manually-indexed facts', async () => {
+    const adminCtx = (): ServiceContext => {
+      const ctx = ctxOf('dave');
+      (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'dave', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+      return ctx;
+    };
+    await cmds.remember({ key: 'k1', value: { title: 'Kubernetes ingress controller routing' }, type: 'note' }, adminCtx());
+    await cmds.remember({ key: 'k2', value: { title: 'Sourdough starter hydration schedule' }, type: 'note' }, adminCtx());
+    // Not indexed yet → search is empty.
+    expect((await cmds.search({ text: 'kubernetes ingress' }, adminCtx())).entries).toHaveLength(0);
+    // reindex now DISPATCHES async + chunked; the work happens in the handler chain.
+    const r = await cmds.reindex(undefined, adminCtx());
+    expect(r.status).toBe('started');
+    expect(r.poll).toBe('_reindex/dave');
+    await drainReindex('dave');
+    const status = await cmds.peek({ key: '_reindex/dave' }, adminCtx());
+    expect((status?.value as { status: string }).status).toBe('done');
+    expect((status?.value as { indexed: number }).indexed).toBeGreaterThanOrEqual(2);
+    const res = await cmds.search({ text: 'kubernetes ingress routing' }, adminCtx());
+    expect(res.entries[0]?.key).toBe('k1'); // the k8s note, not the sourdough one
+  });
+
+  it('reindex requires admin', async () => {
+    await expect(cmds.reindex(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
+  });
+
+  it('reindex wires inferred similarTo edges that feed neighbors + centrality (ADR-0031)', async () => {
+    const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
+    process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05'; // hashing-embedder cosines run low; ensure edges form
+    try {
+      const admin = (): ServiceContext => {
+        const ctx = ctxOf('erin');
+        (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'erin', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+        return ctx;
+      };
+      // Three facts that share vocabulary → non-trivial pairwise similarity.
+      await cmds.remember({ key: 'r1', value: { title: 'DynamoDB single table substrate design' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'r2', value: { title: 'DynamoDB stream indexer for the substrate' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'r3', value: { title: 'DynamoDB table partition and substrate scopes' }, type: 'note' }, admin());
+      expect((await cmds.reindex(undefined, admin())).status).toBe('started');
+      await drainReindex('erin');
+      const status = await cmds.peek({ key: '_reindex/erin' }, admin());
+      expect((status?.value as { status: string }).status).toBe('done');
+      expect((status?.value as { edges: number }).edges).toBeGreaterThan(0);
+
+      // The inferred edges are real graph structure: neighbors surfaces them…
+      const n = await cmds.neighbors({ key: 'r1' }, admin());
+      const similar = n.outbound.filter((e) => e.rel === 'similarTo');
+      expect(similar.length).toBeGreaterThan(0);
+      expect(similar.every((e) => e.to.startsWith('r'))).toBe(true);
+      // …and they carry the inferred-writer stamp (distinguishable from authored edges).
+      const raw = await store.listEdges('erin');
+      expect(raw.find((e) => e.rel === 'similarTo')?.writer).toBe('platform/vectors');
+
+      // pruneSimilar (ADR-0032): an authored edge between two facts makes the inferred
+      // kinship redundant — pruneSimilar deletes it, leaving the authored edge.
+      await cmds.link({ from: 'r1', rel: 'grounds', to: 'r2' }, admin());
+      const before = (await store.listEdges('erin')).filter((e) => e.rel === 'similarTo' && (e.to === 'r2' || e.from === 'r2'));
+      expect(before.length).toBeGreaterThan(0); // a redundant inferred edge exists
+      const pr = await cmds.pruneSimilar(undefined, admin());
+      expect(pr.status).toBe('pruned');
+      expect(pr.pruned).toBeGreaterThan(0);
+      const after = await store.listEdges('erin');
+      // No inferred similarTo edge survives between the r1↔r2 pair the authored edge connects…
+      expect(after.filter((e) => e.rel === 'similarTo' && ((e.from === 'r1' && e.to === 'r2') || (e.from === 'r2' && e.to === 'r1')))).toHaveLength(0);
+      // …but the authored edge does.
+      expect(after.find((e) => e.rel === 'grounds' && e.from === 'r1' && e.to === 'r2')).toBeDefined();
+    } finally {
+      if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
+      else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
+    }
+  });
+
+  it('pruneSimilar requires admin', async () => {
+    await expect(cmds.pruneSimilar(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
+  });
+
+  it('suggestions lists inferred kinship as ratification candidates; ratify graduates one to a typed authored edge (ADR-0032)', async () => {
+    const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
+    process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05';
+    try {
+      const admin = (): ServiceContext => {
+        const ctx = ctxOf('fred');
+        (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'fred', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+        return ctx;
+      };
+      await cmds.remember({ key: 's1', value: { title: 'GraphQL schema stitching across services' }, type: 'note' }, admin());
+      await cmds.remember({ key: 's2', value: { title: 'GraphQL federation and schema composition' }, type: 'note' }, admin());
+      await cmds.reindex(undefined, admin());
+      await drainReindex('fred');
+
+      // suggestions surfaces the inferred pair, enriched with endpoint labels + the vocab.
+      const sug = await cmds.suggestions(undefined, admin());
+      expect(sug.total).toBeGreaterThan(0);
+      expect(sug.vocab).toContain('refines');
+      const cand = sug.suggestions.find((c) => (c.from === 's1' && c.to === 's2') || (c.from === 's2' && c.to === 's1'));
+      expect(cand).toBeDefined();
+      expect(cand!.fromLabel).toMatch(/GraphQL/);
+
+      // ratify promotes it to a typed authored edge and drops the redundant similarTo.
+      const res = await cmds.ratify({ from: 's1', to: 's2', rel: 'refines' }, admin());
+      expect(res.ratified).toBe(true);
+      expect(res.edge.rel).toBe('refines');
+      expect(res.dropped).toBeGreaterThan(0);
+      const edges = await store.listEdges('fred');
+      expect(edges.find((e) => e.rel === 'refines' && e.from === 's1' && e.to === 's2')).toBeDefined();
+      expect(edges.filter((e) => e.rel === 'similarTo' && ((e.from === 's1' && e.to === 's2') || (e.from === 's2' && e.to === 's1')))).toHaveLength(0);
+      // The ratified edge is authored (writer = the user), not the inferred platform/vectors stamp.
+      expect(edges.find((e) => e.rel === 'refines')?.writer).toBe('fred');
+    } finally {
+      if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
+      else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
+    }
+  });
+
+  it('ratify rejects a self-link', async () => {
+    await expect(cmds.ratify({ from: 'x', to: 'x', rel: 'refines' }, ctxOf('alice'))).rejects.toThrow(/self-link/);
+  });
+});
+
 describe('workspace timers (lease / reveal, evaluated at read)', () => {
   const store = createMemoryStateStore();
   const grants = createMemoryGrantStore();
@@ -583,6 +895,29 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
   it('validates params against the declared schema', async () => {
     await expect(cmds.invoke({ action: 'set-phase', params: {} }, alice())).rejects.toThrow(/invalid_param/);
     await expect(cmds.invoke({ action: 'set-phase', params: { phase: 'flying' } }, alice())).rejects.toThrow(/invalid_param/);
+  });
+
+  it('treats a null/absent OPTIONAL param as absent, not a wrong-type error (no-`text` trigger regression)', async () => {
+    // Mirrors the machine `start` action: an optional `text`. A reaction resolved
+    // an absent trigger `text` to `null`; the validator then hit `typeof null !==
+    // "string"` and silently aborted the reaction, so the run never started.
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'start-like',
+          description: 'start a run; optional text',
+          params: { run: { type: 'string', required: true }, text: { type: 'string', required: false } },
+          writes: [{ key: 'srun/${params.run}', value: { run: '${params.run}', text: '${params.text}', status: 'running' }, type: 'machine-run' }],
+        },
+      },
+      alice(),
+    );
+    // Optional param absent → succeeds. Optional param explicitly null → succeeds
+    // (used to throw invalid_param). Both must start the run.
+    await expect(cmds.invoke({ action: 'start-like', params: { run: 'a' } }, alice())).resolves.toBeDefined();
+    await expect(cmds.invoke({ action: 'start-like', params: { run: 'b', text: null } }, alice())).resolves.toBeDefined();
+    expect((await cmds.peek({ key: 'srun/b' }, alice()))?.value).toMatchObject({ run: 'b', status: 'running' });
+    await cmds.deleteAction({ id: 'start-like' }, alice()); // shared store — don't leak into the action-list assertions
   });
 
   it('if conditions gate invocation with a precondition_failed error', async () => {
@@ -1004,6 +1339,30 @@ describe('cell lifecycle projection (the platform reflected in the substrate)', 
   });
 });
 
+describe('data-blob file mirror — text inlining for search (ADR-0030 blob extraction)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const mirror = createDataFileMirrorHandler(() => ({ state, grants }));
+  const busCtx = () => ({ ...(ctxFor(null).ctx as unknown as Record<string, unknown>), identity: { scopes: [] } } as unknown as ServiceContext);
+  const dataChanged = (detail: Record<string, unknown>) => mirror(detail, busCtx(), { source: 'cells', detailType: 'cell.data.changed' });
+
+  it('inlines a text blob’s content (searchable) and leaves a binary blob a thin pointer', async () => {
+    // A text blob: putData carried a `content` preview → the file fact inlines it.
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'memo.md', bytes: 20, contentType: 'text/markdown', content: '# Roadmap\nship search' });
+    const textFact = await cmds.peek({ key: 'file/cells/notes-abc/data/memo.md' }, ctxFor('alice').ctx);
+    expect((textFact?.value as { content?: string }).content).toBe('# Roadmap\nship search');
+    expect(embeddableText('file/cells/notes-abc/data/memo.md', textFact?.value)).toContain('ship search'); // full-text searchable
+
+    // A binary blob: no `content` on the event → the fact stays a pointer (no bytes copied).
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'logo.png', bytes: 9000, contentType: 'image/png' });
+    const binFact = await cmds.peek({ key: 'file/cells/notes-abc/data/logo.png' }, ctxFor('alice').ctx);
+    expect((binFact?.value as { content?: string }).content).toBeUndefined();
+    expect((binFact?.value as { s3Key: string }).s3Key).toBe('cells/notes-abc/data/alice/logo.png');
+  });
+});
+
 describe('workspace granular grants (write-through / prefix / request loop)', () => {
   // Fresh substrate per suite; the same one-Substrate/many-views layout.
   const store = createMemoryStateStore();
@@ -1269,6 +1628,17 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
   });
 });
 
+describe('stripUndefined (DynamoDB write sanitizer — v2 removeUndefinedValues equivalent)', () => {
+  it('recursively drops undefined keys but keeps null/false/0/empties', () => {
+    expect(stripUndefined({ a: 1, b: undefined, c: null, d: false, e: 0, f: '' })).toEqual({ a: 1, c: null, d: false, e: 0, f: '' });
+    expect(stripUndefined({ outer: { keep: 1, drop: undefined }, list: [{ x: undefined, y: 2 }] })).toEqual({ outer: { keep: 1 }, list: [{ y: 2 }] });
+  });
+  it('passes primitives through untouched', () => {
+    expect(stripUndefined('s')).toBe('s');
+    expect(stripUndefined(null)).toBeNull();
+  });
+});
+
 describe('resolveParams template substitution', () => {
   const sub = { id: 's', match: { keyPrefix: 'machine/m/run/' } } as Parameters<typeof resolveParams>[0];
 
@@ -1296,5 +1666,71 @@ describe('resolveParams template substitution', () => {
     expect(out.onError.value.status).toBe('failed');
     expect(out.onError.tags).toEqual(['machine', 'machine:r2']);
     expect(out.grants.write).toEqual(['machine/m/run/']);
+  });
+
+  it('OMITS an exact placeholder that does not resolve — absent, not null (the no-`text` trigger fix)', () => {
+    // `text: ${value.text}` on a trigger that carried no text used to resolve to
+    // `null`, which then failed the action param type-check (typeof null !== string)
+    // and silently aborted the reaction. It must now be ABSENT so an optional param
+    // is correctly skipped.
+    const def = { ...sub, params: { run: '${keySuffix}', text: '${value.text}' } };
+    const out = resolveParams(def, 'machine/m/run/r2', 'c15r', { node: 'X' }); // value has no `text`
+    expect(out.run).toBe('r2');
+    expect('text' in out).toBe(false); // omitted entirely — not null, not "undefined"
+  });
+});
+
+describe('granular type-scopes (write:type:<T> / read:type:<T> — ADR-0023 §B enforcement)', () => {
+  // One Substrate; we set facts with a coarse token, then read/write with
+  // granular-only tokens. The gate is INERT for coarse/internal callers and only
+  // constrains a token that holds the granular family but not the coarse verb.
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+
+  /** A ctx for `user` carrying an explicit scope set (the granular-token case). */
+  const scopedCtx = (user: string, scopes: string[]): ServiceContext =>
+    ({
+      identity: { user, scopes },
+      config: { tableName: 'unused-in-memory' },
+      events: { emit: async () => {} },
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    } as unknown as ServiceContext);
+
+  const coarse = scopedCtx('c15r', ['workspace:read', 'workspace:write']);
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'n1', value: 'a note', type: 'note' }, coarse);
+    await cmds.remember({ key: 't1', value: 'a todo', type: 'todo' }, coarse);
+  });
+
+  it('is inert for a coarse token — read/write any type', async () => {
+    expect((await cmds.peek({ key: 'n1' }, coarse))?.value).toBe('a note');
+    expect((await cmds.peek({ key: 't1' }, coarse))?.value).toBe('a todo');
+    await expect(cmds.query({}, coarse)).resolves.toBeDefined();
+  });
+
+  it('write:type:note may write a note but is denied a todo', async () => {
+    const noteWriter = scopedCtx('c15r', ['write:type:note']);
+    await expect(cmds.remember({ key: 'n2', value: 'second note', type: 'note' }, noteWriter)).resolves.toMatchObject({
+      value: 'second note',
+    });
+    await expect(cmds.remember({ key: 't2', value: 'nope', type: 'todo' }, noteWriter)).rejects.toThrow(
+      /scope_denied.*write:type:todo/,
+    );
+  });
+
+  it('read:type:note may peek a note but is denied a todo (deny, never silently elide)', async () => {
+    const noteReader = scopedCtx('c15r', ['read:type:note']);
+    expect((await cmds.peek({ key: 'n1' }, noteReader))?.value).toBe('a note');
+    await expect(cmds.peek({ key: 't1' }, noteReader)).rejects.toThrow(/scope_denied.*read:type:todo/);
+  });
+
+  it('read:type:note may query its own type, but not another type or a whole-view/untyped read', async () => {
+    const noteReader = scopedCtx('c15r', ['read:type:note']);
+    await expect(cmds.query({ type: 'note' }, noteReader)).resolves.toBeDefined();
+    await expect(cmds.query({ type: 'todo' }, noteReader)).rejects.toThrow(/scope_denied.*read:type:todo/);
+    await expect(cmds.query({}, noteReader)).rejects.toThrow(/scope_denied/);
   });
 });

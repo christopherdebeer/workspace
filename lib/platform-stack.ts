@@ -5,6 +5,10 @@ import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as awsevents from 'aws-cdk-lib/aws-events';
 import * as eventTargets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import {
   HttpServiceCell,
   ServiceRouter,
@@ -115,15 +119,91 @@ export class PlatformStack extends cdk.Stack {
     // provenance + salience). The workspace is the substrate's *room provider* —
     // vocabulary, sharing, shaping — over the shared substrate table; it owns no
     // private storage. See docs/substrate.md + docs/substrate-storage.md.
+    // Semantic search (ADR-0030): one vector bucket per env/account, created at
+    // RUNTIME by the workspace + indexer Lambdas (create-if-absent, §3a). Shared
+    // by the workspace cell (query/reindex) and the stream indexer (live updates).
+    const vectorBucket = `parc-vectors-${envName}-${this.account}`;
+    const titanModelArn = `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`;
+    // Embedding backend (ADR-0030 Inc 4): Bedrock Titan Text Embeddings v2 (1024-dim,
+    // cosine). Model access now auto-enables on first invoke (the Bedrock model-access
+    // page is retired), so this needs no manual activation. Switching the embedder
+    // re-namespaces indexes by dimension (slice-<scope>-d1024), so the old 256-dim
+    // hashing index is orphaned and `reindex` repopulates the new one — see indexForScope.
+    // VECTOR_SIMILAR_MIN_SCORE=0.25 (ADR-0032 Inc 3): a *suggestion* model can afford a
+    // lower cosine floor than auto-materialized salience could — more candidates, low
+    // cost, the human filters via `suggestions`/`ratify`. (Default would be 0.35.)
+    const vectorEnv = { VECTOR_BUCKET: vectorBucket, VECTOR_REGION: this.region, VECTOR_EMBEDDER: 'bedrock', VECTOR_DIM: '1024', VECTOR_SIMILAR_MIN_SCORE: '0.25' };
+
     const workspace = new HttpServiceCell(this, 'WorkspaceService', {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'pruneSimilar', 'suggestions', 'ratify', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
+      // The hot write path: each put recomputes salience, so ingest is CPU-bound.
+      // Telemetry (2026-06-25) showed 256 MB → ~84% mem use and 6–15 s batches that
+      // tripped the 15 s timeout, surfacing as gateway 502s. Lambda CPU scales with
+      // memory; 1 GB (~4× CPU) brings a 4-fact batch to a couple seconds. 60 s
+      // timeout gives margin for the daily tending pass over a large slice.
+      memorySize: 1024,
+      timeoutSeconds: 60,
+      // Semantic search backend (ADR-0030). The bucket + per-slice indexes are
+      // created at RUNTIME, create-if-absent (§3a — no CDK for them); only the
+      // bucket name + region are wired here. VECTOR_EMBEDDER defaults to the
+      // deterministic hashing embedder; flip to `bedrock` (Increment 4) once Titan
+      // model access is enabled — a config change, no redeploy of code.
+      environment: vectorEnv,
     });
     substrate.grantReadWrite(workspace);
+    // S3 Vectors (runtime data plane) + Bedrock embeddings (Increment 4) for the
+    // workspace Lambda. Resource '*' for s3vectors: the vector-bucket ARN format is
+    // pinned at runtime by create-if-absent and this is a single-owner deployment;
+    // tighten to the bucket ARN once confirmed live. Bedrock granted now so enabling
+    // Titan is a pure config flip (VECTOR_EMBEDDER=bedrock), no IAM redeploy.
+    workspace.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3vectors:*'],
+        resources: ['*'],
+      }),
+    );
+    workspace.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [titanModelArn],
+      }),
+    );
+
+    // Live vector indexer (ADR-0030 Increment 2): the dormant SubstrateTable stream's
+    // first consumer. Each fact create/update is embedded + upserted into its slice
+    // index; supersession/delete removes it. A standalone Lambda off the stream — no
+    // hot-path cost, and a failure here can't perturb the write path or the reactor.
+    const vectorIndexer = new NodejsFunction(this, 'VectorIndexer', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '..', '..', 'services', 'vector-indexer', 'handler.ts'),
+      handler: 'handler',
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(60),
+      logRetention: logs.RetentionDays.ONE_WEEK,
+      // Plus SUBSTRATE_TABLE so the indexer can write inferred similarTo edges (ADR-0031).
+      environment: { ...vectorEnv, SUBSTRATE_TABLE: substrate.table.tableName },
+      bundling: { externalModules: [] }, // bundle the SDKs (not in the Node 20 image)
+    });
+    vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['s3vectors:*'], resources: ['*'] }));
+    vectorIndexer.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'], resources: [titanModelArn] }));
+    // Inferred similarTo edges (ADR-0031): the indexer reconciles edges in each fact's
+    // own scope partition directly. Read+write on the substrate table; the stream
+    // already grants read on the source. (Platform component, like the workspace reactor.)
+    substrate.table.grantReadWriteData(vectorIndexer);
+    vectorIndexer.addEventSource(
+      new DynamoEventSource(substrate.table, {
+        startingPosition: lambda.StartingPosition.LATEST, // index from now forward; `reindex` backfills history
+        batchSize: 100,
+        maxBatchingWindow: cdk.Duration.seconds(10),
+        retryAttempts: 3,
+        bisectBatchOnError: true,
+      }),
+    );
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
     // cell-<id>) emit substrate.write.requested; the workspace applies the
     // fact in the owner's slice. See docs/substrate-storage.md.
@@ -135,7 +215,7 @@ export class PlatformStack extends cdk.Stack {
     eventBus.routeTo(
       'CellLifecycleRoute',
       workspace.fn,
-      ['cell.create.requested', 'cell.deployed', 'cell.files.changed', 'cell.delete.requested'],
+      ['cell.create.requested', 'cell.deployed', 'cell.files.changed', 'cell.delete.requested', 'cell.data.changed'],
       'cells',
     );
     // The reaction reactor: deliver every fact change back to the workspace so
@@ -144,6 +224,10 @@ export class PlatformStack extends cdk.Stack {
     // so only first-party fact events drive reactions. This is the generic
     // primitive reactive machines ride on.
     eventBus.routeTo('FactReactionRoute', workspace.fn, ['workspace.fact.written'], 'workspace');
+    // The async, chunked semantic-search reindex (ADR-0030/0031): the command dispatches
+    // a `workspace.reindex.requested` event and the handler chains continuation events to
+    // itself (source 'workspace'), one bounded page per invocation, off the 30s edge.
+    eventBus.routeTo('ReindexRoute', workspace.fn, ['workspace.reindex.requested'], 'workspace');
     // Autonomous tending (the legacy workspace's signature loop): a daily
     // schedule delivers workspace.tend.requested; the handler distills
     // attention() into a tending/latest audit fact per scope.
@@ -185,10 +269,20 @@ export class PlatformStack extends cdk.Stack {
     const gateway = new HttpServiceCell(this, 'GatewayService', {
       name: 'gateway',
       entry: serviceEntry('gateway'),
+      // The MCP-Apps card widget (ADR-0034/0035): esbuilt to `app.js` beside the
+      // handler, inlined by `widgets.ts` into the `ui://parc/card` resource. Uses the
+      // shared `platform/ui` render vocabulary + marked.
+      clientEntry: path.join(__dirname, '..', '..', 'services', 'gateway', 'client', 'main.ts'),
       // Both the bare resource identifier (`/mcp`, advertised in the PRM) and its
       // sub-paths. CloudFront's `/mcp/*` pattern does not match the bare `/mcp`.
       routes: ['/mcp', '/mcp/*'],
       eventBus,
+      // The gateway forwards (synchronously invokes) the workspace cell and waits,
+      // so its timeout must outlast the workspace's; 256 MB also throttled its own
+      // resolveTarget/scope work. Raise to 512 MB / 60 s so a slow downstream batch
+      // no longer surfaces as a CloudFront 502 (telemetry 2026-06-25).
+      memorySize: 512,
+      timeoutSeconds: 60,
     });
 
     // ── Reflexive control plane (dynamic cells, tier 2) ──────────────
@@ -210,7 +304,7 @@ export class PlatformStack extends cdk.Stack {
       routes: [],
       persistence: { dynamo: true },
       commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'describeTypes', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'listFiles', 'deleteFile', 'deploy', 'putData', 'getData', 'listData'],
-      emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed'],
+      emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed', 'cell.data.changed'],
       eventBus,
       // esbuild-wasm transpiles submitted TypeScript cells; install (don't bundle)
       // it so its .wasm ships in the asset. react/react-dom ship too so the cell

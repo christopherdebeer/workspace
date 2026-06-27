@@ -14,7 +14,7 @@
         "context": "string[]? — substrate keys a decision should read"
       },
       "handlers": {
-        "open": [{ "path": "/#/m/${id}" }],
+        "open": [{ "path": "/m/${id}" }],
         "render": [{ "renderer": "_renderers/machine" }, { "hint": "fields" }]
       }
     },
@@ -73,13 +73,13 @@
       "schema": {
         "machine": "string — the machine being run",
         "node": "string — the run's current node",
-        "status": "'running' | 'done' | 'blocked' | 'sectioning' | 'voting' | 'awaiting-decision'",
+        "status": "'running' | 'done' | 'blocked' | 'failed' | 'waiting' | 'sectioning' | 'voting'",
         "via": "string? — the transition that produced this state",
         "trace": "{node,via?,at?}[]? — the ordered execution path",
         "at": "string? — ISO time of the last transition"
       },
       "handlers": {
-        "open": [{ "path": "/#/r/${id}" }],
+        "open": [{ "path": "/r/${key}" }],
         "render": [{ "hint": "fields" }]
       }
     }

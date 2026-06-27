@@ -25,9 +25,13 @@ import {
   ServiceContext,
   requireUser,
   grantScopesOf,
+  hasScope,
+  ServiceAuthError,
+  type Identity,
   createObservedState,
   type ObservedState,
   type Entry,
+  type EntryMeta,
   type ReadResult,
   type QueryResult,
   type NeighborsResult,
@@ -39,7 +43,6 @@ import {
   type FactTimer,
   type CommandHandler,
   type RegisteredCommand,
-  type Identity,
   type SalienceLens,
   type SalienceOptions,
   schemaHints,
@@ -47,6 +50,24 @@ import {
   resolveType,
   extractTypeRules,
   type TypeRules,
+  type VectorStore,
+  type Embedder,
+  type VectorFilter,
+  type StateStore,
+  indexForScope,
+  embeddableText,
+  metadataForFact,
+  selectNeighbors,
+  similarConfig,
+  refreshSimilarEdges,
+  authoredPairs,
+  pairKey,
+  suggestionCandidates,
+  dropSimilarPair,
+  RATIFY_LINK_TYPES,
+  type SuggestionCandidate,
+  SIMILAR_REL,
+  SIMILAR_WRITER,
 } from '../../platform/runtime';
 import {
   createDeclarativeActions,
@@ -73,6 +94,7 @@ import {
 import { createServiceClient } from '../../platform/runtime/service-client';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
+import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
 import {
   createDynamoGrantStore,
   grantCovers,
@@ -100,6 +122,12 @@ import {
 export interface WorkspaceDeps {
   state: ObservedState;
   grants: GrantStore;
+  /** Semantic-search backend (ADR-0030). Optional: absent → `search` reports that
+   *  semantic search isn't configured (the substrate degrades to `query`/`contains`). */
+  vectors?: { store: VectorStore; embedder: Embedder };
+  /** Raw state store — used by `reindex` to write inferred `similarTo` edges directly
+   *  (ADR-0031, the edge-write seam). Absent in lighter test builders → edge pass skipped. */
+  store?: StateStore;
 }
 export type DepsBuilder = (ctx: ServiceContext) => WorkspaceDeps;
 
@@ -111,10 +139,13 @@ function tableName(ctx: ServiceContext): string {
   return table;
 }
 
-/** Production deps: observed state + grants over the shared substrate table. */
+/** Production deps: observed state + grants over the shared substrate table, plus the
+ *  semantic-search backend when `VECTOR_BUCKET` is configured (ADR-0030 — else `search`
+ *  degrades to a hint). `vectorsFromEnv` keeps the v3 SDK lazy (loaded on first use). */
 export const dynamoDeps: DepsBuilder = (ctx) => {
   const table = tableName(ctx);
-  return { state: createObservedState(createDynamoStateStore(table)), grants: createDynamoGrantStore(table) };
+  const store = createDynamoStateStore(table);
+  return { state: createObservedState(store), grants: createDynamoGrantStore(table), vectors: vectorsFromEnv(), store };
 };
 
 /**
@@ -126,6 +157,11 @@ export const dynamoDeps: DepsBuilder = (ctx) => {
  */
 const TYPE_DECLS_TTL_MS = 60_000;
 let typeDeclsCache: { at: number; decls: Record<string, Record<string, unknown>> } | null = null;
+/** Test seam: drop the process-wide type-vocabulary cache (consistent with the
+ *  runtime's `__setLambda`/`__setEventBridge` injection seams). */
+export function __resetTypeDeclsCache(): void {
+  typeDeclsCache = null;
+}
 async function typeDeclsFor(ctx: ServiceContext): Promise<Record<string, Record<string, unknown>>> {
   if (typeDeclsCache && Date.now() - typeDeclsCache.at < TYPE_DECLS_TTL_MS) return typeDeclsCache.decls;
   let decls: Record<string, Record<string, unknown>> = {};
@@ -150,6 +186,160 @@ async function typeRulesFor(ctx: ServiceContext): Promise<Record<string, TypeRul
     if (r.manager || r.refs || r.keyPattern) rules[type] = r;
   }
   return rules;
+}
+
+/**
+ * The per-type **affordance** a read inlines for the types present in its result
+ * (ADR-0029 R1). Handed a fact, an agent answers "what can I DO with this, and
+ * where?" from the *same* response — `types[fact._meta.type].handlers[intent]`
+ * (an act target / surface / renderer) and `.manager` (the owning cell) — instead
+ * of a second `read("$types")` + manual correlation. `label` is the type's label
+ * *path* (e.g. `value.title`), matching `$types`' `present.label`.
+ */
+export interface TypeAffordance {
+  icon?: string;
+  label?: string;
+  render?: unknown;
+  handlers?: Record<string, unknown>;
+  manager?: string;
+}
+
+/** Build the inline `types` map for the type names present in a read result
+ *  (ADR-0029 R1). One `resolveType` per *distinct type* (not per entry → no
+ *  per-fact bloat), from the already-cached canonical vocabulary; an undeclared
+ *  type (empty affordance) is omitted, and `_`-prefixed plumbing types are
+ *  skipped. Slice-local `_types/<T>` overrides are NOT folded in here (rare —
+ *  `read("$types")` still returns the fully-merged view). */
+function affordancesForTypes(
+  typeNames: Iterable<string | null | undefined>,
+  decls: Record<string, Record<string, unknown>>,
+): Record<string, TypeAffordance> {
+  const present = new Set<string>();
+  for (const t of typeNames) if (typeof t === 'string' && t && !t.startsWith('_')) present.add(t);
+  const out: Record<string, TypeAffordance> = {};
+  for (const t of present) {
+    const rt = resolveType(decls[t], t);
+    const aff: TypeAffordance = {};
+    if (rt.present.icon !== undefined) aff.icon = rt.present.icon;
+    if (rt.present.label !== undefined) aff.label = rt.present.label;
+    if (rt.present.render !== undefined) aff.render = rt.present.render;
+    if (rt.handlers !== undefined) aff.handlers = rt.handlers;
+    if (rt.manager !== undefined) aff.manager = rt.manager;
+    if (Object.keys(aff).length) out[t] = aff;
+  }
+  return out;
+}
+
+/** The `_meta.type` of every entry in a read container (entry array or key→Entry
+ *  map), plus any standalone type strings (e.g. elided stubs). For `affordancesForTypes`. */
+function typesOf(
+  container: Array<{ _meta?: { type?: string | null } }> | Record<string, { _meta?: { type?: string | null } }> | undefined,
+  ...extra: Array<string | null | undefined>
+): Array<string | null | undefined> {
+  const list = container ? (Array.isArray(container) ? container : Object.values(container)) : [];
+  return [...list.map((e) => e?._meta?.type), ...extra];
+}
+
+/** Attach the inline `types` affordance map to a single returned fact (`peek`),
+ *  leaving a `null` (absent) fact untouched (ADR-0029 R1). */
+function withAffordance(entry: Entry | null, decls: Record<string, Record<string, unknown>>): Entry | (Entry & { types: Record<string, TypeAffordance> }) | null {
+  if (!entry) return entry;
+  const types = affordancesForTypes([entry._meta.type], decls);
+  return Object.keys(types).length ? { ...entry, types } : entry;
+}
+
+/** High-volume runtime/machine fact types that cluster by *format* rather than meaning
+ *  (ADR-0032) — excluded from `suggestions` by default so the candidate list stays
+ *  curatable; `includeRuntime: true` surfaces them. */
+const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim', 'canvas-element']);
+
+/** The leading segment of a fact key — the "namespace" for an overview breakdown
+ *  (`kb/concept_x` → `kb`, `cell:abc` → `cell`, `tending/latest` → `tending`). */
+function keyPrefix(key: string): string {
+  const slash = key.indexOf('/');
+  const colon = key.indexOf(':');
+  const cut = [slash, colon].filter((i) => i >= 0).sort((a, b) => a - b)[0];
+  return cut === undefined ? key : key.slice(0, cut);
+}
+
+export interface RecallOverview {
+  /** A broad, succinct orientation over the assembled view (ADR-0033). */
+  overview: {
+    total: number;
+    /** Facts merged in from other slices' grants (counted in `total`). */
+    granted: number;
+    bands: { focus: number; peripheral: number; elided: number };
+    byType: Array<{ type: string | null; count: number }>;
+    byPrefix: Array<{ prefix: string; count: number }>;
+  };
+  /** The top facts by salience, in full — the entry points worth reading now. */
+  focus: Record<string, Entry>;
+  /** How to dig deeper — this is progressive disclosure, not the whole view. */
+  hints: string[];
+  types?: Record<string, TypeAffordance>;
+}
+
+/** Cap on facts returned in full in an overview's `focus` block. */
+const OVERVIEW_FOCUS = 12;
+
+/**
+ * Distil the assembled, scored view into a broad+succinct orientation (ADR-0033) —
+ * the default for a bare `recall()` so a context-less agent gets counts + the top
+ * facts + drill pointers, not a full dump it must parse. `merged` is the scored
+ * entry map; `bands` are the shaping counts (reused so we don't re-tier).
+ */
+function buildOverview(
+  merged: Record<string, Entry>,
+  bands: { focus: number; peripheral: number; elided: number },
+  granted: number,
+  decls: Record<string, Record<string, unknown>>,
+): RecallOverview {
+  const entries = Object.entries(merged);
+  const byType = new Map<string | null, number>();
+  const byPrefix = new Map<string, number>();
+  for (const [key, e] of entries) {
+    byType.set(e._meta.type ?? null, (byType.get(e._meta.type ?? null) ?? 0) + 1);
+    byPrefix.set(keyPrefix(key), (byPrefix.get(keyPrefix(key)) ?? 0) + 1);
+  }
+  const topN = <K,>(m: Map<K, number>, n: number): Array<{ count: number; k: K }> =>
+    [...m.entries()].map(([k, count]) => ({ k, count })).sort((a, b) => b.count - a.count).slice(0, n);
+  const focusEntries = entries
+    .sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))
+    .slice(0, OVERVIEW_FOCUS);
+  const focus: Record<string, Entry> = {};
+  for (const [k, e] of focusEntries) focus[k] = e;
+  const types = affordancesForTypes(typesOf(focus), decls);
+  return {
+    overview: {
+      total: entries.length,
+      granted,
+      bands,
+      byType: topN(byType, 15).map(({ k, count }) => ({ type: k, count })),
+      byPrefix: topN(byPrefix, 12).map(({ k, count }) => ({ prefix: k, count })),
+    },
+    focus,
+    hints: [
+      'This is a succinct overview (the default). For the whole shaped view: recall({ view: "full" }).',
+      'Drill by structure: query({ type | prefix | tag | contains }) — filtered + paged.',
+      'Drill by meaning: search({ text }) — semantic candidates across your slice.',
+      'One fact: peek({ key }); its links: neighbors({ key }); the graph: read("$graph").',
+      'Connection candidates the index proposes: suggestions().',
+    ],
+    ...(Object.keys(types).length ? { types } : {}),
+  };
+}
+
+/** A short human label for a fact, for surfaces that show a key without its full value
+ *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
+function labelForRecord(key: string, value: unknown): string {
+  if (value && typeof value === 'object') {
+    const v = value as Record<string, unknown>;
+    for (const f of ['title', 'name', 'label', 'summary'] as const) {
+      if (typeof v[f] === 'string' && v[f]) return (v[f] as string).slice(0, 120);
+    }
+  }
+  if (typeof value === 'string' && value) return value.slice(0, 120);
+  return key;
 }
 
 export interface RememberInput {
@@ -189,6 +379,15 @@ export interface IngestResult {
   errors: Array<{ key: string; error: string }>;
 }
 export interface RecallInput {
+  /**
+   * Default (when bare): `'overview'` — a broad, succinct orientation (counts by
+   * type/prefix, salience bands, the top focus facts, drill hints) instead of the
+   * whole shaped view (ADR-0033). `'full'` returns every focus/peripheral fact with
+   * elided stubs. Passing ANY shaping arg (elision/expand/lens/salience/explain)
+   * implies `'full'` — so configured callers are unaffected; only the context-less
+   * bare `recall()` gets the overview.
+   */
+  view?: 'overview' | 'full';
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
@@ -222,6 +421,79 @@ export interface QueryInput {
   contains?: string;
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
   explain?: boolean;
+}
+export interface SearchInput {
+  /** Natural-language query — embedded and matched by meaning (ADR-0030). */
+  text: string;
+  /** Restrict to one fact type (also the granular `read:type:<T>` pin). */
+  type?: string;
+  /** Restrict to facts carrying this (primary) tag. */
+  tag?: string;
+  /** Max results (1–50, default 10). */
+  limit?: number;
+}
+export interface SearchHit {
+  key: string;
+  value: unknown;
+  _meta: EntryMeta;
+  /** Cosine similarity to the query (1 = closest). */
+  score: number;
+}
+export interface SearchResult {
+  entries: SearchHit[];
+  count: number;
+  total: number;
+  /** Inline affordances (ADR-0029 R1) for the types present — present when ≥1 declared. */
+  types?: Record<string, TypeAffordance>;
+  /** Present when no vector backend is configured (degraded to query/contains). */
+  hint?: string;
+}
+export interface ReindexInput {
+  /** Only reindex facts of this type. */
+  type?: string;
+  /** Only reindex keys with this prefix. */
+  prefix?: string;
+  /** Cap on facts scanned (1–5000, default 2000). */
+  max?: number;
+}
+export interface PruneSimilarInput {
+  /** Cap on inferred edges deleted in one pass (default: all redundant). */
+  max?: number;
+}
+export interface SuggestionsInput {
+  /** Cap on candidates returned (default 25). */
+  limit?: number;
+  /** Include high-volume runtime/machine facts (transcripts, agent-runs, cells, …) that
+   *  are filtered out by default as format-clustered noise. */
+  includeRuntime?: boolean;
+}
+/** A ratification candidate enriched with each endpoint's type + a short label. */
+export interface SuggestionEntry extends SuggestionCandidate {
+  fromLabel: string;
+  fromType: string | null;
+  toLabel: string;
+  toType: string | null;
+}
+export interface SuggestionsResult {
+  suggestions: SuggestionEntry[];
+  /** The recommended relation vocabulary to ratify a suggestion into. */
+  vocab: readonly string[];
+  /** Total candidates before `limit` (so a caller knows there are more). */
+  total: number;
+}
+export interface RatifyInput {
+  from: string;
+  to: string;
+  /** The relation to assert — recommended one of `RATIFY_LINK_TYPES`, but any string is accepted. */
+  rel: string;
+  /** Edge strength (default null = full authored weight). */
+  strength?: number | null;
+}
+export interface RatifyResult {
+  edge: LinkResult;
+  /** Inferred `similarTo` edges dropped between the pair (the suggestion, now redundant). */
+  dropped: number;
+  ratified: true;
 }
 export interface LinkInput {
   from: string;
@@ -375,9 +647,14 @@ export interface DenyGrantInput {
 export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   remember: CommandHandler<RememberInput, Entry & { hints?: string[] }>;
   ingest: CommandHandler<IngestInput, IngestResult>;
-  recall: CommandHandler<RecallInput | undefined, ReadResult>;
+  recall: CommandHandler<RecallInput | undefined, ReadResult | RecallOverview>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
+  search: CommandHandler<SearchInput, SearchResult>;
+  reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
+  pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
+  suggestions: CommandHandler<SuggestionsInput | undefined, SuggestionsResult>;
+  ratify: CommandHandler<RatifyInput, RatifyResult>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
@@ -425,6 +702,11 @@ interface ToolDescriptor {
   resultSchema?: Record<string, unknown>;
   /** Scope the gateway enforces before forwarding (null = any authenticated user). */
   scope: string | null;
+  /** An any-of family gate (docs/auth-consent-plan.md §B): a token holding any scope
+   *  under this pattern (e.g. `write:type:*`) passes the gateway gate, and this
+   *  handler then enforces the concrete fact type. Lets a type-scoped token write
+   *  only its declared types while coarse `write:workspace` tokens are unaffected. */
+  scopeFamily?: string;
   /** `read` = side-effect-free (observe); `act` = may mutate. Routes read/act dispatch. */
   kind: 'read' | 'act';
 }
@@ -478,6 +760,24 @@ const KEYED_ENTRY_SCHEMA = {
   properties: { key: { type: 'string' }, value: { description: 'The stored JSON value' }, _meta: META_SCHEMA },
 } as const;
 
+/** The inline affordance map a read carries for the types present in its result
+ *  (ADR-0029 R1) — collapses `query → $types → correlate → act` into `query → act`. */
+const TYPES_AFFORDANCE_SCHEMA = {
+  type: 'object',
+  description:
+    "What you can DO with each type in this result, keyed by type name (present only when ≥1 returned type is declared). For a fact of type T: types[T].handlers[intent] (open/edit/render/create → an act target, cell surface, or renderer) and types[T].manager (the owning cell) — no separate read('$types') needed. `label` is the type's label path (e.g. value.title).",
+  additionalProperties: {
+    type: 'object',
+    properties: {
+      icon: { type: 'string' },
+      label: { type: 'string', description: 'Label path (where a fact of this type gets its display label)' },
+      render: { description: 'Render binding: a { hint } or { viewer } ref' },
+      handlers: { type: 'object', description: 'intent → surface | act target | renderer | hint' },
+      manager: { type: 'string', description: 'The cell that manages this type' },
+    },
+  },
+} as const;
+
 const EDGE_SCHEMA = {
   type: 'object',
   properties: {
@@ -506,6 +806,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
     scope: null,
+    scopeFamily: 'write:type:*',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -553,6 +854,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       'Bulk intake: write up to 100 facts in one call (imports, capture backfills). Each fact takes the same fields as `remember` (no `ifRevision`); failures are reported per-fact, the rest are written. May not write `_actions/` or `_views/`.',
     scope: null,
+    scopeFamily: 'write:type:*',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -601,13 +903,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'recall',
     description:
-      'Your whole workspace view, salience-shaped: focus/peripheral facts arrive in full, everything below the elide threshold collapses to `{key, type, score}` stubs under `elided` — re-read with `expand: [keys]` (or `peek`) to pull any back in full. For a targeted subset, prefer `query`. Granted facts appear under `<owner>/<key>`. Tune your own default shaping by writing a `_config/salience` fact (e.g. `{ focusThreshold: 0.62, elideThreshold: 0.62 }` for a focused <30-item view); precedence is defaults ← that config ← `lens` ← per-call `salience`.',
+      'Orient in your workspace. BY DEFAULT (bare call) returns a broad, succinct OVERVIEW — total + granted counts, salience bands, top types & key-prefixes, and the top ~12 focus facts in full — plus `hints` on how to drill (query/search/peek/neighbors). This is progressive disclosure: skim here, then narrow. For the WHOLE shaped view pass `view:"full"` (or any shaping arg): focus/peripheral facts in full, low-salience collapsed to `{key,type,score}` stubs under `elided` (re-read with `expand:[keys]` or `peek`). For a targeted subset prefer `query`. Granted facts appear under `<owner>/<key>`. Tune shaping by writing a `_config/salience` fact; precedence is defaults ← that config ← `lens` ← per-call `salience`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        elision: { type: 'string', enum: ['auto', 'none'], description: "'auto' (default) collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
+        view: { type: 'string', enum: ['overview', 'full'], description: "'overview' (default for a bare call) = succinct orientation + drill hints; 'full' = the whole salience-shaped view" },
+        elision: { type: 'string', enum: ['auto', 'none'], description: "(implies view:full) 'auto' collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
         expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
         lens: LENS_SCHEMA,
@@ -618,14 +921,29 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
     resultSchema: {
       type: 'object',
+      description: 'Default (bare): an overview — { overview: { total, granted, bands, byType[], byPrefix[] }, focus: {key→entry}, hints[] }. With view:"full"/any shaping arg: the shaped view below.',
       properties: {
-        entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts', additionalProperties: ENTRY_SCHEMA },
+        overview: {
+          type: 'object',
+          description: 'Default orientation: counts by type & key-prefix, salience bands, totals',
+          properties: {
+            total: { type: 'number' },
+            granted: { type: 'number', description: 'Facts merged in from grants' },
+            bands: { type: 'object', properties: { focus: { type: 'number' }, peripheral: { type: 'number' }, elided: { type: 'number' } } },
+            byType: { type: 'array', items: { type: 'object', properties: { type: { type: ['string', 'null'] }, count: { type: 'number' } } } },
+            byPrefix: { type: 'array', items: { type: 'object', properties: { prefix: { type: 'string' }, count: { type: 'number' } } } },
+          },
+        },
+        focus: { type: 'object', description: 'Top facts by salience, in full (overview mode)', additionalProperties: ENTRY_SCHEMA },
+        hints: { type: 'array', items: { type: 'string' }, description: 'How to drill deeper (overview mode)' },
+        entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts (full mode)', additionalProperties: ENTRY_SCHEMA },
         elided: {
           type: 'array',
-          description: 'Stubs for withheld entries (score-descending)',
+          description: 'Stubs for withheld entries, score-descending (full mode)',
           items: { type: 'object', properties: { key: { type: 'string' }, type: { type: ['string', 'null'] }, score: { type: 'number' } } },
         },
-        _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total }' },
+        _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total } (full mode)' },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -633,6 +951,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: 'peek',
     description: 'Read one fact by key from your slice (no salience shaping). Returns null when the key is absent — including a lapsed lease — so it doubles as an existence probe. Pass `owner` to read a fact another user granted you.',
     scope: null,
+    scopeFamily: 'read:type:*',
     kind: 'read',
     inputSchema: {
       type: 'object',
@@ -643,13 +962,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       required: ['key'],
       additionalProperties: false,
     },
-    resultSchema: { ...ENTRY_SCHEMA, description: 'The fact, or null when absent' },
+    resultSchema: { ...ENTRY_SCHEMA, properties: { ...ENTRY_SCHEMA.properties, types: TYPES_AFFORDANCE_SCHEMA }, description: 'The fact (with an inline `types` affordance map), or null when absent' },
   },
   {
     name: 'query',
     description:
       'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Use this instead of recall when you want a targeted subset.',
     scope: null,
+    scopeFamily: 'read:type:*',
     kind: 'read',
     inputSchema: {
       type: 'object',
@@ -675,6 +995,40 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         count: { type: 'number', description: 'Entries in this page' },
         total: { type: 'number', description: 'Entries matching overall' },
         nextCursor: { type: 'string', description: 'Present when more pages remain' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+      },
+    },
+  },
+  {
+    name: 'search',
+    description:
+      'Semantic search: find facts by MEANING, not exact words. Embeds your text and ranks facts (and file content) by similarity across your slice + everything shared with you, then re-reads each hit authoritatively (so a result is always live + permitted). Complements `query` (structured type/tag/prefix filter) and `query.contains` (exact substring) — use `search` for "facts about X" when you do not know the exact wording. Restrict with `type`/`tag`. Returns the same `{entries, types}` shape as query. If the deployment has no vector backend, returns empty with a `hint`.',
+    scope: null,
+    scopeFamily: 'read:type:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Natural-language query, matched by meaning' },
+        type: { type: 'string', description: 'Only facts of this type (also the granular read:type pin)' },
+        tag: { type: 'string', description: 'Only facts carrying this (primary) tag' },
+        limit: { type: 'number', description: 'Max results (1–50, default 10)' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        entries: {
+          type: 'array',
+          description: 'Ranked hits — { key, value, _meta, score } where score is cosine similarity (1 = closest)',
+          items: { type: 'object', properties: { key: { type: 'string' }, value: {}, _meta: META_SCHEMA, score: { type: 'number' } } },
+        },
+        count: { type: 'number' },
+        total: { type: 'number' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+        hint: { type: 'string', description: 'Present only when semantic search is not configured (degraded to query/contains)' },
       },
     },
   },
@@ -701,6 +1055,70 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         ...EDGE_SCHEMA.properties,
         fromExists: { type: 'boolean', description: 'from resolves to a live fact' },
         toExists: { type: 'boolean', description: 'to resolves to a live fact' },
+      },
+    },
+  },
+  {
+    name: 'suggestions',
+    description:
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Cap on candidates returned (default 25)' },
+        includeRuntime: { type: 'boolean', description: 'Include runtime/machine facts (transcripts, agent-runs, cells) filtered out by default' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        suggestions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+              fromLabel: { type: 'string' },
+              fromType: { type: 'string' },
+              toLabel: { type: 'string' },
+              toType: { type: 'string' },
+              strength: { type: 'number' },
+              createdAt: { type: 'string' },
+            },
+          },
+        },
+        vocab: { type: 'array', items: { type: 'string' }, description: 'Recommended relations to ratify into' },
+        total: { type: 'number', description: 'Candidates before limit' },
+      },
+    },
+  },
+  {
+    name: 'ratify',
+    description:
+      'Accept a suggested connection (ADR-0032): write a typed, directed, authored edge `from --rel--> to` (full weight — you assert it, not the machine) and drop the redundant inferred `similarTo` between the pair. `rel` should be one of refines/grounds/duplicates/contradicts/elaborates/relatesTo (any string accepted). The substrate-native way to graduate a machine hint into curated structure; pairs come from `suggestions`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Source fact key' },
+        to: { type: 'string', description: 'Target fact key' },
+        rel: { type: 'string', description: 'Relation to assert (refines/grounds/duplicates/contradicts/elaborates/relatesTo)' },
+        strength: { type: 'number', description: 'Optional edge strength (default full authored weight)' },
+      },
+      required: ['from', 'to', 'rel'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        edge: { ...EDGE_SCHEMA },
+        dropped: { type: 'number', description: 'Inferred similarTo edges removed between the pair' },
+        ratified: { type: 'boolean' },
       },
     },
   },
@@ -742,6 +1160,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         outbound: { type: 'array', items: EDGE_SCHEMA },
         inbound: { type: 'array', items: EDGE_SCHEMA },
         entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist', additionalProperties: ENTRY_SCHEMA },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -787,6 +1206,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         membership: { type: 'string', enum: ['intensional', 'extensional'] },
         order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
         members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta); extensional members also carry `placement` {seq, fold} from their ordering decoration' },
+        types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
   },
@@ -920,6 +1340,53 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         action: { type: 'string' },
         params: { type: 'object' },
         writes: { type: 'array', description: 'The applied writes, each `{ key, value, _meta }`', items: KEYED_ENTRY_SCHEMA },
+      },
+    },
+  },
+  {
+    name: 'reindex',
+    description:
+      'Backfill semantic search (ADR-0030/0031): scan your slice (optionally by type/prefix), embed each text-bearing fact into your vector index, then wire inferred `similarTo` edges. Runs ASYNC + CHUNKED — a full slice far exceeds the sync request budget, so this dispatches and returns immediately; poll the `_reindex/<you>` status fact for { status: running|done, phase: embed|edges, indexed, edges }. The batch replay beside the live stream indexer; use after enabling search or changing the embedding model. Admin-only.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Only reindex facts of this type' },
+        prefix: { type: 'string', description: 'Only reindex keys with this prefix' },
+        max: { type: 'number', description: 'Optional cap on facts processed in the embed phase' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: "'started' (async dispatched), or 'unconfigured'" },
+        poll: { type: 'string', description: 'Status fact key to peek for progress' },
+        hint: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'pruneSimilar',
+    description:
+      'Prune redundant inferred `similarTo` edges (ADR-0031/0032): delete every `platform/vectors`-written kinship edge whose endpoints are ALREADY connected by an authored edge (in either direction) — a real link a person/grant asserted makes the machine-inferred hint redundant, both as structure and as a salience signal. Synchronous, vector-free (pure edge scan + deletes). The live indexer/reindex now skip these on create (dedup-on-create); this is the one-time backfill for edges written before that. Admin-only.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        max: { type: 'number', description: 'Cap on edges deleted in one pass (default: all redundant)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: "'pruned' or 'unconfigured'" },
+        scanned: { type: 'number', description: 'Inferred similarTo edges examined' },
+        pruned: { type: 'number', description: 'Redundant edges deleted' },
+        remaining: { type: 'number', description: 'Redundant edges left (when capped by max)' },
       },
     },
   },
@@ -1362,6 +1829,56 @@ async function resolveRequest(
   ctx.logger.info('grant request resolved', { owner, requester: req.requester, resource: req.resource, status });
 }
 
+/**
+ * Granular type-scope enforcement (docs/auth-consent-plan.md §B). A token scoped to
+ * specific fact types (`write:type:<T>`) — but NOT the coarse `write:workspace` —
+ * may write ONLY facts of those types. Inert for everything that exists today:
+ *  - internal/trusted callers carry no scopes → allowed (Mode-1 bypasses the PEP);
+ *  - coarse/admin/platform tokens hold `write:workspace` → allowed;
+ * so only a *granular-only* external token is constrained, refined per the exact
+ * fact type. The gateway's `scopeFamily: 'write:type:*'` gate lets such a token
+ * reach this handler; this is where the concrete type is actually checked. A
+ * type-scoped token may not write system vocabulary (`_…`) or untyped facts.
+ */
+function enforceTypeWrite(identity: Identity, type: string | undefined, key: string): void {
+  if (!identity.scopes?.length) return; // internal/trusted Mode-1 caller (no PEP)
+  if (hasScope(identity, 'write:workspace')) return; // coarse / admin / platform:*
+  const t = type && !key.startsWith('_') ? type : null;
+  if (t && hasScope(identity, `write:type:${t}`)) return;
+  throw new ServiceAuthError(
+    t
+      ? `scope_denied: writing type "${t}" requires "write:type:${t}" or "write:workspace"; your token holds neither.`
+      : `scope_denied: a type-scoped token may only write typed, non-system facts (key "${key}"${type ? '' : ', untyped'}); needs "write:workspace".`,
+  );
+}
+
+/**
+ * Granular type-scope enforcement for the READ side (docs/auth-consent-plan.md §B) —
+ * the symmetric sibling of `enforceTypeWrite`. A token scoped to specific fact types
+ * (`read:type:<T>`) but NOT the coarse `read:workspace` may observe ONLY facts of
+ * those types. Inert for everything that exists today: internal callers carry no
+ * scopes; coarse/admin/platform tokens hold `read:workspace`.
+ *
+ * Unlike a write (which always names exactly one type), a read can fan out across
+ * many types at once — `recall`/`neighbors`/`members`/… return whole shaped views.
+ * Rather than silently *elide* facts a granular token may not see (which would make
+ * a partial view look complete), this **denies** any read that is not pinned to a
+ * single held type: a type-scoped reader must `peek` a fact of a held type or
+ * `query` with an explicit held `type`. Pass `type=undefined` to mean "whole-view /
+ * untyped read" — always denied for a granular-only token.
+ */
+function enforceTypeRead(identity: Identity, type: string | undefined, key: string): void {
+  if (!identity.scopes?.length) return; // internal/trusted Mode-1 caller (no PEP)
+  if (hasScope(identity, 'read:workspace')) return; // coarse / admin / platform:*
+  const t = type && !key.startsWith('_') ? type : null;
+  if (t && hasScope(identity, `read:type:${t}`)) return;
+  throw new ServiceAuthError(
+    t
+      ? `scope_denied: reading type "${t}" requires "read:type:${t}" or "read:workspace"; your token holds neither.`
+      : `scope_denied: a type-scoped read token must target a single held fact type — peek a typed fact or query with an explicit \`type\`; a whole-view/untyped read needs "read:workspace".`,
+  );
+}
+
 /** Build the workspace vocabulary over a given way of constructing its deps. */
 export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
   return {
@@ -1371,6 +1888,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const { state, grants } = build(ctx);
       const scope = input.owner && input.owner !== caller ? input.owner : caller;
       if (scope !== caller) await requireWriteThrough(grants, caller, scope, input.key);
+      enforceTypeWrite(ctx.identity, input.type, input.key); // granular type-scope (§B); inert for coarse tokens
       const entry = await state.put(
         {
           scope,
@@ -1414,6 +1932,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         if (f.key.startsWith(ACTIONS_PREFIX) || f.key.startsWith(VIEWS_PREFIX)) {
           throw new Error(`ingest may not write the declared vocabulary ("${f.key}")`);
         }
+        enforceTypeWrite(ctx.identity, f.type, f.key); // granular type-scope (§B); inert for coarse tokens
       }
       const { state } = build(ctx);
       const errors: IngestResult['errors'] = [];
@@ -1490,7 +2009,29 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       }
 
       // Shape the whole assembled view once (lens echoes into _shaping).
-      return state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      const decls = await typeDeclsFor(ctx);
+
+      // ADR-0033: progressive disclosure by default. A *bare* recall (the context-less
+      // agent's first read) returns a broad, succinct overview — counts + top focus +
+      // drill hints — not the whole view. Any shaping arg (or view:'full') opts into the
+      // full shaped view, so configured callers are unchanged.
+      const shapedAny = input as Record<string, unknown> | undefined;
+      const askedFull =
+        input?.view === 'full' ||
+        (input?.view !== 'overview' &&
+          !!shapedAny &&
+          ['elision', 'expand', 'lens', 'salience', 'explain', 'includeSuperseded'].some((k) => shapedAny[k] !== undefined));
+      if (!askedFull) {
+        const c = shaped._shaping.counts;
+        const granted = Object.keys(merged).length - Object.keys(own.entries).length;
+        return buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+      }
+
+      // R1 (ADR-0029): inline affordances — include elided stubs' types so an
+      // agent can act on a withheld fact's type after `expand`.
+      const types = affordancesForTypes(typesOf(shaped.entries, ...(shaped.elided ?? []).map((s) => s.type)), decls);
+      return Object.keys(types).length ? { ...shaped, types } : shaped;
     },
 
     async peek(input, ctx) {
@@ -1506,15 +2047,20 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
               `Request one: act("workspace.requestGrant", { resource: "workspace:${input.owner}:${input.key}:read" })`,
           );
         }
-        return state.get(input.owner, input.key, ctx.identity);
+        const granted = await state.get(input.owner, input.key, ctx.identity);
+        enforceTypeRead(ctx.identity, granted?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
+        return withAffordance(granted, await typeDeclsFor(ctx));
       }
-      return state.get(caller, input.key, ctx.identity);
+      const own = await state.get(caller, input.key, ctx.identity);
+      enforceTypeRead(ctx.identity, own?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
+      return withAffordance(own, await typeDeclsFor(ctx));
     },
 
     async query(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
-      return state.query(
+      enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
+      const result = await state.query(
         scope,
         {
           type: input?.type,
@@ -1532,6 +2078,131 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
         },
         ctx.identity,
       );
+      // R1 (ADR-0029): inline what the agent can DO with each returned type.
+      const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
+      return Object.keys(types).length ? { ...result, types } : result;
+    },
+
+    async search(input, ctx) {
+      const viewer = requireUser(ctx.identity);
+      const { state, grants, vectors } = build(ctx);
+      // No backend wired → degrade gracefully (the substrate still has query/contains).
+      if (!vectors) {
+        return {
+          entries: [],
+          count: 0,
+          total: 0,
+          hint: 'semantic search is not configured on this deployment — use workspace.query (type/tag/prefix filter) or query `contains` (substring search)',
+        };
+      }
+      const text = typeof input?.text === 'string' ? input.text.trim() : '';
+      if (!text) throw new Error('text is required');
+      enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`
+      const limit = Math.min(Math.max(1, input?.limit ?? 10), 50);
+      const topK = limit * 4; // over-fetch; the authoritative re-read + grant post-filter trim
+
+      const [queryVector] = await vectors.embedder.embed([text]);
+      // Filter on string metadata only (type/tag) — safest across S3 Vectors filter
+      // value types. `superseded` is NOT filtered here: the authoritative re-read
+      // (Decision 1) drops retired facts, so the filter is pure optimization, and a
+      // boolean-filter edge case must never break the whole query.
+      const filter: VectorFilter = {};
+      if (input?.type) filter.type = input.type;
+      if (input?.tag) filter.tag = input.tag;
+      const queryOpts = Object.keys(filter).length ? { topK, filter } : { topK };
+
+      // Candidate generation (ADR-0030 Decision 1: the index is NOT an authority).
+      // The readable index set mirrors recall's fold: own slice + every applicable
+      // grant's owner (direct/public/group). Each hit is re-read authoritatively below.
+      type Cand = { owner: string; key: string; outKey: string; score: number };
+      const cands: Cand[] = [];
+      const dim = vectors.embedder.dimension;
+      const ownMatches = await vectors.store.query(indexForScope(viewer, dim), queryVector, queryOpts).catch(() => []);
+      for (const m of ownMatches) cands.push({ owner: viewer, key: m.key, outKey: m.key, score: m.score });
+      for (const g of await applicableGrants(grants, viewer)) {
+        if (g.owner === viewer) continue;
+        const matches = await vectors.store.query(indexForScope(g.owner, dim), queryVector, queryOpts).catch(() => []);
+        for (const m of matches) {
+          if (!grantCovers(g.key, m.key)) continue; // whole-slice / prefix / exact — exactly as peek
+          cands.push({ owner: g.owner, key: m.key, outKey: `${g.owner}/${m.key}`, score: m.score });
+        }
+      }
+
+      // Collapse a key reachable via >1 path to its best score, then rank.
+      const best = new Map<string, Cand>();
+      for (const c of cands) {
+        const prev = best.get(c.outKey);
+        if (!prev || c.score > prev.score) best.set(c.outKey, c);
+      }
+      const ranked = [...best.values()].sort((a, b) => b.score - a.score);
+
+      // Authoritative re-read (Decision 1): scope/grant/timer/supersession re-enforced
+      // on the LIVE substrate with the viewer's identity. A stale or wrong vector — a
+      // superseded fact still in the index, a lapsed lease — is dropped here, never leaked.
+      const entries: Array<{ key: string; value: unknown; _meta: EntryMeta; score: number }> = [];
+      for (const c of ranked) {
+        if (entries.length >= limit) break;
+        const e = await state.get(c.owner, c.key, ctx.identity);
+        if (!e || e._meta.superseded) continue;
+        entries.push({ key: c.outKey, value: e.value, _meta: e._meta, score: Number(c.score.toFixed(4)) });
+      }
+
+      const types = affordancesForTypes(typesOf(entries), await typeDeclsFor(ctx)); // R1 envelope
+      const result = { entries, count: entries.length, total: entries.length };
+      return Object.keys(types).length ? { ...result, types } : result;
+    },
+
+    async reindex(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // Admin-only backfill. ASYNC + CHUNKED (ADR-0030/0031): a full slice is ~hundreds
+      // of Titan calls — far over the ~30s edge cap AND the 60s Lambda — so the command
+      // only *dispatches*: it records a `running` status fact and emits the first
+      // continuation event, returning immediately. `createReindexHandler` then processes
+      // one bounded page per invocation off the stream, chaining continuation events
+      // (embed all → then similarTo edges, which need the full index present). Poll the
+      // status fact. The live stream indexer keeps NEW writes indexed; this is the replay.
+      if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
+        throw new ServiceAuthError('reindex requires workspace:admin');
+      }
+      const { state, vectors } = build(ctx);
+      if (!vectors) return { status: 'unconfigured', hint: 'semantic search is not configured on this deployment' };
+      const statusKey = `_reindex/${scope}`;
+      const value: Record<string, unknown> = { status: 'running', phase: 'embed', indexed: 0, skipped: 0, edges: 0, startedAt: new Date().toISOString() };
+      if (input?.type) value.type = input.type;
+      if (input?.prefix) value.prefix = input.prefix;
+      if (input?.max) value.max = input.max;
+      await state.put({ scope, key: statusKey, value, via: 'reindex', type: 'reindex-status' }, ctx.identity);
+      await ctx.events.emit('workspace.reindex.requested', { scope, type: input?.type, prefix: input?.prefix, max: input?.max, phase: 'embed', indexed: 0, skipped: 0, edges: 0 });
+      ctx.logger.info('reindex dispatched (async, chunked)', { scope, type: input?.type, prefix: input?.prefix });
+      return { status: 'started', poll: statusKey, hint: `reindex runs async in chunks; poll peek("${statusKey}") for { status, phase, indexed, edges }` };
+    },
+
+    async pruneSimilar(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // Vector-free, synchronous edge hygiene (ADR-0031/0032): delete inferred
+      // `similarTo` edges whose endpoints an authored edge already connects. A real
+      // link a person/grant asserted makes the machine's kinship hint redundant — as
+      // structure (it surfaces twice in neighbors/$graph) and as a salience signal
+      // (centrality would double-count the same relationship). The live indexer +
+      // reindex now skip these on create; this is the one-time backfill.
+      if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
+        throw new ServiceAuthError('pruneSimilar requires workspace:admin');
+      }
+      const { store } = build(ctx);
+      if (!store) return { status: 'unconfigured', scanned: 0, pruned: 0, remaining: 0 };
+      const existing = await store.listEdges(scope);
+      const authored = authoredPairs(existing);
+      const redundant = existing.filter(
+        (e) =>
+          e.rel === SIMILAR_REL &&
+          e.writer === SIMILAR_WRITER &&
+          authored.has(pairKey(e.from, e.to)),
+      );
+      const cap = input?.max && input.max > 0 ? input.max : redundant.length;
+      const toDelete = redundant.slice(0, cap);
+      for (const e of toDelete) await store.deleteEdge(scope, e.from, e.rel, e.to);
+      ctx.logger.info('pruneSimilar complete', { scope, scanned: redundant.length, pruned: toDelete.length });
+      return { status: 'pruned', scanned: redundant.length, pruned: toDelete.length, remaining: redundant.length - toDelete.length };
     },
 
     async link(input, ctx) {
@@ -1541,6 +2212,50 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const edge = await state.link(scope, input.from, input.rel, input.to, input.strength ?? null, ctx.identity);
       ctx.logger.info('workspace edge linked', { scope, from: edge.from, rel: edge.rel, to: edge.to });
       return edge;
+    },
+
+    async suggestions(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // ADR-0032: the inferred `similarTo` edges ARE the suggestions — list them as
+      // ratification candidates (deduped to unordered pairs, ranked by cosine), enriched
+      // with each endpoint's type + label so a human/grant can judge the connection. The
+      // slice's records are read once to type/label every candidate and to filter out
+      // high-volume runtime/system facts (transcripts, agent-runs, cells, `_` plumbing)
+      // that cluster by format rather than meaning — unless `includeRuntime`.
+      const { store } = build(ctx);
+      if (!store) return { suggestions: [], vocab: RATIFY_LINK_TYPES, total: 0 };
+      const limit = input?.limit && input.limit > 0 ? input.limit : 25;
+      const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
+      const typeByKey = new Map(records.map((r) => [r.key, r.type]));
+      const labelByKey = new Map(records.map((r) => [r.key, labelForRecord(r.key, r.value)]));
+      const isNoise = (k: string): boolean =>
+        k.startsWith('_') || SUGGESTION_RUNTIME_TYPES.has(typeByKey.get(k) ?? '');
+      let candidates = suggestionCandidates(edges); // already score-desc
+      if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
+      const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => ({
+        ...c,
+        fromType: typeByKey.get(c.from) ?? null,
+        fromLabel: labelByKey.get(c.from) ?? c.from,
+        toType: typeByKey.get(c.to) ?? null,
+        toLabel: labelByKey.get(c.to) ?? c.to,
+      }));
+      return { suggestions, vocab: RATIFY_LINK_TYPES, total: candidates.length };
+    },
+
+    async ratify(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.from || !input?.to || !input?.rel) throw new Error('from, to, and rel are required');
+      if (input.from === input.to) throw new Error('cannot ratify a self-link');
+      // ADR-0032 Option C: graduate a machine suggestion into curated structure. The
+      // authored edge is written through the normal `link` path (writer = you, full
+      // weight), then the now-redundant inferred `similarTo` between the pair is dropped
+      // (dedup-on-create would prune it on the next reindex anyway; this is immediate).
+      const { state, store } = build(ctx);
+      const edge = await state.link(scope, input.from, input.rel, input.to, input.strength ?? null, ctx.identity);
+      let dropped = 0;
+      if (store) dropped = await dropSimilarPair(store, scope, input.from, input.to, await store.listEdges(scope));
+      ctx.logger.info('suggestion ratified', { scope, from: input.from, rel: input.rel, to: input.to, dropped });
+      return { edge, dropped, ratified: true };
     },
 
     async unlink(input, ctx) {
@@ -1554,7 +2269,9 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
+      const result = await state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
+      const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx)); // R1 (ADR-0029)
+      return Object.keys(types).length ? { ...result, types } : result;
     },
 
     async links(input, ctx) {
@@ -1577,7 +2294,9 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const scope = requireUser(ctx.identity);
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
-      return state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
+      const result = await state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
+      const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx)); // R1 (ADR-0029)
+      return Object.keys(types).length ? { ...result, types } : result;
     },
 
     async changes(input, ctx) {
@@ -1636,8 +2355,8 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
 
     async tend(_input, ctx) {
       const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
-      return runTend(state, scope, ctx, 'manual', ctx.identity);
+      const { state, store } = build(ctx);
+      return runTend(state, scope, ctx, 'manual', ctx.identity, store);
     },
 
     async registerView(input, ctx) {
@@ -1916,6 +2635,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
       const tools = TOOL_DESCRIPTORS.map((t) => ({
         ...t,
         scope: t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+        ...(t.scopeFamily ? { scopeFamily: t.scopeFamily } : {}),
       }));
       return { tools };
     },
@@ -1929,9 +2649,12 @@ export interface TendReport {
   stale: number;
   unlinked: number;
   dangling: number;
+  /** Ratification candidates: inferred `similarTo` pairs no authored edge connects (ADR-0032). */
+  suggestions: number;
   staleSample: Array<{ key: string; updatedAt: string; type: string | null }>;
   unlinkedSample: string[];
   danglingSample: Array<{ from: string; rel: string; to: string; reason: string }>;
+  suggestionsSample: Array<{ from: string; to: string }>;
 }
 
 /**
@@ -1946,17 +2669,23 @@ async function runTend(
   ctx: ServiceContext,
   via: string,
   writer: { user?: string; scopes: string[] },
+  store?: Pick<StateStore, 'listEdges'>,
 ): Promise<TendReport> {
   const att = await state.attention(scope, {});
+  // ADR-0032: surface ratification candidates as part of standing health — the
+  // inferred `similarTo` pairs a person/grant might want to promote to a typed edge.
+  const candidates = store ? suggestionCandidates(await store.listEdges(scope)) : [];
   const report: TendReport = {
     at: new Date().toISOString(),
     scope,
     stale: att.stale.length,
     unlinked: att.unlinked.length,
     dangling: att.dangling.length,
+    suggestions: candidates.length,
     staleSample: att.stale.slice(0, 5),
     unlinkedSample: att.unlinked.slice(0, 5),
     danglingSample: att.dangling.slice(0, 3),
+    suggestionsSample: candidates.slice(0, 5).map((c) => ({ from: c.from, to: c.to })),
   };
   const entry = await state.put(
     { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },
@@ -1984,9 +2713,9 @@ export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
       ctx.logger.warn('tend requested without scopes');
       return;
     }
-    const { state } = build(ctx);
+    const { state, store } = build(ctx);
     for (const scope of scopes) {
-      await runTend(state, scope, ctx, 'schedule', { user: 'platform/tend', scopes: [] });
+      await runTend(state, scope, ctx, 'schedule', { user: 'platform/tend', scopes: [] }, store);
     }
   };
 }
@@ -2202,6 +2931,31 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
 
     const actions = createDeclarativeActions(state);
     const identity: Identity = { user: 'platform/reaction', scopes: [] };
+
+    // Dead-letter a swallowed reaction failure as an OBSERVABLE fact, so a silently
+    // broken reaction (e.g. an invoke that throws before writing) surfaces in the
+    // substrate — not just a buried CloudWatch `warn`. Keyed `_reaction-errors/<id>`:
+    // the `_` prefix means the reactor skips it (line above), and we write via
+    // state.put without emitting `workspace.fact.written`, so there is no loop.
+    // Best-effort: the error path must never throw. Latest-error-per-subscription
+    // (overwrite) keeps it bounded.
+    const recordReactionError = async (subId: string, kind: 'invoke' | 'deliver', target: string, err: unknown): Promise<void> => {
+      try {
+        await state.put(
+          {
+            scope,
+            key: `_reaction-errors/${subId}`,
+            value: { subscription: subId, kind, target, key, error: (err as Error)?.message ?? String(err), at: new Date().toISOString() },
+            via: 'platform/reaction',
+            type: 'reaction-error',
+            tags: ['reaction-error'],
+          },
+          identity,
+        );
+      } catch {
+        /* best-effort — a dead-letter write must never break the reactor */
+      }
+    };
     for (const sub of hits) {
       if (revision > (sub.maxDepth ?? 50)) {
         ctx.logger.warn('reaction skipped: depth cap', { scope, key, revision, subscription: sub.id });
@@ -2224,7 +2978,10 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // the rail's key-patterns cell-side.
         let deliverParams = params;
         const grants = (params as Record<string, unknown>).grants as { read?: unknown; write?: unknown } | undefined;
-        if (grants && target.name === 'models') {
+        // Mint a per-run token for a models AGENT (work/decide) or a run CODE step
+        // (ADR-0026 work-code rail) — both call REAL tools as the owner, scoped to
+        // the rail's grants. The token rides in as `token` (models.agent / run.exec).
+        if (grants && (target.name === 'models' || target.name === 'run')) {
           const scopes: string[] = [];
           if (grants.read) scopes.push('workspace:read');
           if (grants.write) scopes.push('workspace:write');
@@ -2242,6 +2999,7 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
           ctx.logger.info('reaction delivered', { scope, key, subscription: sub.id, deliver: sub.deliver });
         } catch (err) {
           ctx.logger.warn('reaction deliver failed', { scope, subscription: sub.id, deliver: sub.deliver, error: (err as Error).message });
+          await recordReactionError(sub.id, 'deliver', sub.deliver, err);
         }
         continue;
       }
@@ -2258,6 +3016,7 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // `from` ≠ the current node). Anything else is a real fault.
         if (err instanceof ActionInvokeError && (err.code === 'precondition_failed' || err.code === 'action_disabled')) continue;
         ctx.logger.warn('reaction invoke failed', { scope, subscription: sub.id, invoke: sub.invoke, error: (err as Error).message });
+        await recordReactionError(sub.id, 'invoke', sub.invoke as string, err);
       }
     }
   };
@@ -2356,6 +3115,190 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
     );
     await ctx.events.emit('workspace.fact.written', { scope: owner, key, revision: entry._meta.revision });
     ctx.logger.info('cell lifecycle projected', { scope: owner, key, status: value.status, revision: entry._meta.revision });
+
+    // ADR-0027 Inc 3: on deploy, project a `file`-typed SOURCE MANIFEST so a cell's
+    // src/ tree is a queryable fact (`query type=file prefix="cells/"`) and linkable
+    // — "any file is a fact". A listing, not per-file (those stay in S3, read on
+    // demand via cells.readFile). undefined fields are stripped at the write (fix #1).
+    if (meta.detailType === 'cell.deployed') {
+      const manifestKey = `cells/${cellId}/source-manifest`;
+      const manifest = {
+        path: `cells/${cellId}/src/`,
+        contentType: 'application/vnd.parc.cell-source-manifest+json',
+        cell: base.address,
+        files: Array.isArray(detail.files) ? (detail.files as string[]) : value.files ?? [],
+        version: typeof detail.version === 'string' ? detail.version : undefined,
+        clientEntry: (detail.clientEntry as string | null | undefined) ?? null,
+        source: 'cells:deployed',
+      };
+      const m = await state.put(
+        { scope: owner, key: manifestKey, value: manifest, via: 'cells:deployed', type: 'file', tags: ['file', 'cell-source'] },
+        writer,
+      );
+      await ctx.events.emit('workspace.fact.written', { scope: owner, key: manifestKey, revision: m._meta.revision });
+    }
+  };
+}
+
+/** The platform principal that the async reindex writes under (status fact + edges). */
+const REINDEX_IDENTITY: Identity = { user: 'platform/reindex', scopes: [] };
+const REINDEX_CHUNK = Number(process.env.VECTOR_REINDEX_CHUNK ?? 50);
+
+interface ReindexParams {
+  type?: string;
+  prefix?: string;
+  max?: number;
+  phase: 'embed' | 'edges';
+  cursor?: string;
+  indexed: number;
+  skipped: number;
+  edges: number;
+}
+
+/** Process ONE bounded page of a reindex (ADR-0030/0031), returning whether the whole
+ *  job is done and the next continuation params. Two phases: `embed` fills the vector
+ *  index page by page; once exhausted it flips to `edges`, which (re-embedding each
+ *  fact only to get its query vector — the index is already full) wires `similarTo`
+ *  edges against the complete index. Each call stays well under the 60s Lambda. */
+async function reindexChunk(deps: WorkspaceDeps, scope: string, p: ReindexParams): Promise<{ done: boolean; next: ReindexParams }> {
+  const { state, vectors, store } = deps;
+  if (!vectors) return { done: true, next: p };
+  const dim = vectors.embedder.dimension;
+  const index = indexForScope(scope, dim);
+  let { indexed, skipped, edges } = p;
+
+  const page = await state.query(scope, { type: p.type, prefix: p.prefix, limit: REINDEX_CHUNK, cursor: p.cursor }, REINDEX_IDENTITY);
+  const embeddable = page.entries
+    .map((e) => ({ key: e.key, text: embeddableText(e.key, e.value), type: e._meta.type, tags: e._meta.tags }))
+    .filter((e): e is { key: string; text: string; type: string | null; tags: string[] } => !!e.text);
+
+  if (p.phase === 'embed') {
+    await vectors.store.ensureIndex(index, { dimension: dim });
+    skipped += page.entries.length - embeddable.length;
+    if (embeddable.length) {
+      const vecs = await vectors.embedder.embed(embeddable.map((e) => e.text));
+      await vectors.store.put(index, embeddable.map((e, i) => ({ key: e.key, vector: vecs[i], metadata: metadataForFact({ type: e.type ?? undefined, tags: e.tags, superseded: false }) })));
+      indexed += embeddable.length;
+    }
+    const capped = p.max !== undefined && indexed + skipped >= p.max;
+    if (page.nextCursor && !capped) return { done: false, next: { ...p, cursor: page.nextCursor, indexed, skipped, edges } };
+    // Embed complete → start the edge phase from the top (the full index is now present).
+    return { done: false, next: { ...p, phase: 'edges', cursor: undefined, indexed, skipped, edges } };
+  }
+
+  // phase === 'edges'
+  const sim = similarConfig();
+  if (sim.enabled && store && embeddable.length) {
+    const now = new Date().toISOString();
+    const existing = await store.listEdges(scope);
+    const vecs = await vectors.embedder.embed(embeddable.map((e) => e.text)); // re-embed only to get the query vector (index already full)
+    for (let i = 0; i < embeddable.length; i++) {
+      const matches = await vectors.store.query(index, vecs[i], { topK: sim.k + 1 });
+      const neighbors = selectNeighbors(matches, embeddable[i].key, { k: sim.k, minScore: sim.minScore });
+      await refreshSimilarEdges(store, scope, embeddable[i].key, neighbors, sim.strength, existing, now);
+      edges += neighbors.length;
+    }
+  }
+  if (page.nextCursor) return { done: false, next: { ...p, cursor: page.nextCursor, indexed, skipped, edges } };
+  return { done: true, next: { ...p, cursor: undefined, indexed, skipped, edges } };
+}
+
+/** The async reindex worker (`workspace.reindex.requested`): runs one chunk, writes the
+ *  pollable `_reindex/<scope>` status, and either chains the next continuation event or
+ *  marks the job done. A chunk failure throws → EventBridge retries it (idempotent:
+ *  re-embed/re-put + refreshSimilarEdges reconcile). */
+export function createReindexHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'workspace') {
+      ctx.logger.warn('workspace.reindex.requested from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const scope = typeof detail.scope === 'string' ? detail.scope : '';
+    if (!scope) return;
+    const deps = build(ctx);
+    const statusKey = `_reindex/${scope}`;
+    const params: ReindexParams = {
+      type: typeof detail.type === 'string' ? detail.type : undefined,
+      prefix: typeof detail.prefix === 'string' ? detail.prefix : undefined,
+      max: typeof detail.max === 'number' ? detail.max : undefined,
+      phase: detail.phase === 'edges' ? 'edges' : 'embed',
+      cursor: typeof detail.cursor === 'string' ? detail.cursor : undefined,
+      indexed: Number(detail.indexed ?? 0),
+      skipped: Number(detail.skipped ?? 0),
+      edges: Number(detail.edges ?? 0),
+    };
+    const index = deps.vectors ? indexForScope(scope, deps.vectors.embedder.dimension) : '';
+    try {
+      const { done, next } = await reindexChunk(deps, scope, params);
+      const base = { phase: next.phase, indexed: next.indexed, skipped: next.skipped, edges: next.edges, index };
+      if (done) {
+        await deps.state.put({ scope, key: statusKey, value: { status: 'done', ...base, finishedAt: new Date().toISOString() }, via: 'reindex', type: 'reindex-status' }, REINDEX_IDENTITY);
+        ctx.logger.info('reindex complete', { scope, ...base });
+      } else {
+        await deps.state.put({ scope, key: statusKey, value: { status: 'running', ...base, cursor: next.cursor, updatedAt: new Date().toISOString() }, via: 'reindex', type: 'reindex-status' }, REINDEX_IDENTITY);
+        await ctx.events.emit('workspace.reindex.requested', { scope, type: next.type, prefix: next.prefix, max: next.max, phase: next.phase, cursor: next.cursor, indexed: next.indexed, skipped: next.skipped, edges: next.edges });
+      }
+    } catch (err) {
+      ctx.logger.error('reindex chunk failed (EventBridge will retry)', { scope, phase: params.phase, error: (err as Error).message });
+      throw err;
+    }
+  };
+}
+
+/**
+ * ADR-0027 Inc 2: mirror a cell DATA blob into a `file` fact when `cells.putData`
+ * writes one (`cell.data.changed`). The fact lands in the UPLOADING user's slice
+ * (their file), keyed `file/cells/<cellId>/data/<key>`, as a thin pointer (s3Key +
+ * metadata, never the bytes). Makes blobs queryable/linkable/shareable. NB: presigned
+ * direct-to-S3 uploads bypass the handler, so they aren't mirrored — capturing those
+ * needs an S3→EventBridge rule (deferred; documented in ADR-0027).
+ */
+export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'cells') {
+      ctx.logger.warn('cell.data.changed from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const cellId = typeof detail.cellId === 'string' ? detail.cellId : '';
+    const user = typeof detail.user === 'string' ? detail.user : '';
+    const key = typeof detail.key === 'string' ? detail.key : '';
+    if (!cellId || !user || !key) {
+      ctx.logger.warn('cell.data.changed missing cellId/user/key refused', {});
+      return;
+    }
+    const { state } = build(ctx);
+    const writer: Identity = { user: 'platform/cells', scopes: [] };
+    const factKey = `file/cells/${cellId}/data/${key}`;
+    const s3Key = `cells/${cellId}/data/${user}/${key}`;
+    // A delete-op retires the mirrored file fact (cells.deleteData).
+    if (detail.op === 'delete') {
+      const existing = await state.get(user, factKey);
+      if (existing && !existing._meta.superseded) {
+        await state.supersede(user, factKey, null, writer, {});
+        ctx.logger.info('cell data file-fact retired', { scope: user, key: factKey });
+      }
+      return;
+    }
+    const value = {
+      path: s3Key,
+      s3Key,
+      contentType: typeof detail.contentType === 'string' ? detail.contentType : 'application/octet-stream',
+      bytes: typeof detail.bytes === 'number' ? detail.bytes : undefined,
+      url: typeof detail.url === 'string' ? detail.url : undefined,
+      cell: typeof detail.name === 'string' && typeof detail.owner === 'string' ? `@${detail.owner}/${detail.name}` : undefined,
+      // ADR-0030 (blob text extraction): a small TEXT blob carries a bounded preview
+      // on the event (putData) — inline it as `content` so the fact is full-text
+      // searchable (embeddableText prefers `content`). Binary/large blobs omit it and
+      // stay thin pointers (ADR-0027 §1).
+      content: typeof detail.content === 'string' ? detail.content : undefined,
+      source: 'cells.putData',
+    };
+    const entry = await state.put(
+      { scope: user, key: factKey, value, via: 'cells:data', type: 'file', tags: ['file', 'cell-data'] },
+      writer,
+    );
+    await ctx.events.emit('workspace.fact.written', { scope: user, key: factKey, revision: entry._meta.revision });
+    ctx.logger.info('cell data mirrored to file fact', { scope: user, key: factKey });
   };
 }
 

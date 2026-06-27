@@ -36,6 +36,7 @@ import {
   handleDeviceInit,
   handleDeviceInfo,
   handleDeviceApprove,
+  handleRefreshSession,
   validateBearer,
 } from './oauth';
 import {
@@ -110,6 +111,19 @@ interface ValidateTokenInput {
 async function validateToken(input: ValidateTokenInput) {
   if (!input?.token) return null;
   return validateBearer(input.token, store);
+}
+
+/**
+ * Edge silent-refresh: the dispatch tier calls this on a top-level navigation when
+ * the access cookie is missing/expired but a `parc_refresh` cookie is present. It
+ * rotates a fresh access+refresh pair and returns the identity + the Set-Cookie
+ * strings dispatch re-primes the browser with — keeping a long-grant session alive
+ * across navigations/tab-closes without a passkey round-trip. Self-authorizing (the
+ * refresh token is the credential), like validateToken.
+ */
+async function refreshSession(input: { refreshToken?: string }) {
+  if (!input?.refreshToken) return null;
+  return handleRefreshSession(input.refreshToken, store, OAUTH_CONFIG);
 }
 
 /**
@@ -199,6 +213,44 @@ async function listTokens(_input: unknown, ctx: ServiceContext) {
 async function tokens(_input: unknown, ctx: ServiceContext) {
   const all = await store.listUserTokens(await callerAccountId(ctx));
   return { tokens: all };
+}
+
+interface UpdateTokenInput {
+  tokenId: string;
+  label?: string;
+  scope?: string;
+  expiresInSec?: number | null;
+}
+/**
+ * Steward a token you own (token-as-principal, docs/token-as-principal-plan.md):
+ * relabel, re-scope, and/or re-horizon it. `scope` is clamped to your own standing
+ * (effective = requested ∩ your grant — narrow-only, exactly like mintToken), and
+ * re-scoping resets the token's effective focus to the new grant. Lets a connected
+ * client's credential be upgraded/downgraded over its life without re-minting.
+ */
+async function updateToken(input: UpdateTokenInput, ctx: ServiceContext) {
+  const userId = await callerAccountId(ctx);
+  if (!input?.tokenId) throw new Error('tokenId is required');
+  let scope: string | undefined;
+  if (typeof input.scope === 'string' && input.scope.trim()) {
+    const requested = input.scope.split(/[\s,]+/).filter(Boolean);
+    const ceiling = grantScopesOf(ctx.identity);
+    const effective = intersectScopes(requested, ceiling);
+    if (!effective.length) {
+      throw new Error(
+        `scope_denied: none of the requested scopes (${requested.join(' ')}) are within your ceiling (${ceiling.join(' ') || 'none'}). A token can only narrow, never widen.`,
+      );
+    }
+    scope = effective.join(' ');
+  }
+  const summary = await store.updateToken(input.tokenId, userId, {
+    label: input.label,
+    scope,
+    expiresInSec: input.expiresInSec ?? undefined,
+  });
+  if (!summary) return { updated: false };
+  await ctx.events.emit('auth.token.updated', { userId, id: input.tokenId, ...(scope ? { scope } : {}) });
+  return { updated: true, token: summary };
 }
 
 interface RevokeTokenInput {
@@ -331,6 +383,31 @@ function describeTools() {
         },
       },
       {
+        name: 'updateToken',
+        description:
+          'Steward a token you own: relabel, re-scope (clamped to your own standing — narrow-only, like mintToken; re-scoping resets the token to its new grant), and/or re-horizon its expiry. The edit/upgrade half of token-as-principal — change a connected client\'s credential over its life without re-minting.',
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tokenId: { type: 'string', description: 'The token id (from auth.tokens)' },
+            label: { type: 'string', description: 'Rename the credential' },
+            scope: { type: 'string', description: 'New space-separated scope (intersected with your ceiling)' },
+            expiresInSec: { type: ['number', 'null'], description: 'New lifetime in seconds (≤0/null = non-expiring)' },
+          },
+          required: ['tokenId'],
+          additionalProperties: false,
+        },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            updated: { type: 'boolean' },
+            token: { type: 'object', description: 'The updated token summary (when updated)' },
+          },
+        },
+      },
+      {
         name: 'revokeToken',
         description: 'Revoke one of your tokens by id (from auth.tokens). Idempotent.',
         scope: null,
@@ -429,10 +506,12 @@ export const handler = defineService({
   name: 'auth',
   commands: {
     validateToken,
+    refreshSession,
     mintToken,
     mintTokenFor,
     listTokens,
     tokens,
+    updateToken,
     revokeToken,
     scope: scopeView,
     focusScope,

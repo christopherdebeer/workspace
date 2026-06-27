@@ -203,6 +203,17 @@ export function grantScopesOf(identity: Identity): string[] {
 }
 
 /**
+ * Whether the identity holds at least one scope UNDER a family pattern — e.g. any
+ * `write:type:*`. This is the REVERSE of `hasScope`: `hasScope` asks "does a held
+ * scope COVER the required one?"; this asks "is some held scope covered BY the
+ * family?". It backs an *any-of* gate ("may write SOME type") that a downstream
+ * handler then refines against the concrete fact type (docs/auth-consent-plan.md §B).
+ */
+export function holdsUnder(identity: Identity, family: string): boolean {
+  return identity.scopes.some((held) => matchesScope(family, held));
+}
+
+/**
  * Whether the identity's **grant ceiling** covers `scope` — i.e. the token was
  * consented for it, even if the session has narrowed it out of the effective set.
  * This is the line between a self-serve widen (`scope_offer` → `auth.requestScope`,

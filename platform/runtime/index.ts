@@ -17,6 +17,7 @@ export {
   requireScope,
   hasScope,
   hasGrantScope,
+  holdsUnder,
   grantScopesOf,
   matchesScope,
   intersectScopePatterns,
@@ -55,6 +56,25 @@ export { resolvePresent, resolveLabel } from './present';
 export type { Affordance, Presentable } from './present';
 export { parseTypeSchema, missingRequired, schemaHints, mergeTypeDecl, resolveType } from './type-schema';
 export type { FieldSpec, FieldType, Type, KeyEdge } from './type-schema';
+export {
+  PUBLIC_INDEX,
+  indexForScope,
+  embeddableText,
+  metadataForFact,
+  isTextLikeContentType,
+  BLOB_INLINE_MAX_BYTES,
+  SIMILAR_REL,
+  SIMILAR_WRITER,
+  selectNeighbors,
+  similarConfig,
+  normalize,
+  cosineSimilarity,
+  HashingEmbedder,
+  MemoryVectorStore,
+} from './vectors';
+export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig } from './vectors';
+export { refreshSimilarEdges, dropSimilarEdges, authoredPairs, pairKey, suggestionCandidates, dropSimilarPair, RATIFY_LINK_TYPES } from './similar-edges';
+export type { EdgeIO, SuggestionCandidate, RatifyLinkType } from './similar-edges';
 export { createDeclarationRegistry } from './declarations';
 export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {

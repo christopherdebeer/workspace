@@ -33,6 +33,7 @@ import {
   defineMcpService,
   hasScope,
   hasGrantScope,
+  holdsUnder,
   ServiceAuthError,
   McpToolDefinition,
   ServiceContext,
@@ -41,6 +42,7 @@ import {
   mergeTypeDecl,
   resolveType,
 } from '../../platform/runtime';
+import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -68,6 +70,10 @@ interface ProviderTool {
   /** The declared result envelope, when the provider documents it. */
   resultSchema?: Record<string, unknown>;
   scope: string | null;
+  /** An any-of family gate: a token holding any scope under this pattern (e.g.
+   *  `write:type:*`) satisfies the gate, which the provider's handler then refines
+   *  per the concrete request (docs/auth-consent-plan.md §B). */
+  scopeFamily?: string | null;
   kind: 'read' | 'act';
 }
 
@@ -93,6 +99,8 @@ interface Capability {
   description: string;
   inputSchema: Record<string, unknown>;
   scope: string | null;
+  /** Any-of family gate (see ProviderTool.scopeFamily). */
+  scopeFamily?: string | null;
   forward: (input: unknown, ctx: ServiceContext) => Promise<unknown>;
 }
 
@@ -178,6 +186,7 @@ async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capab
     description: d.description,
     inputSchema: d.inputSchema,
     scope: d.scope,
+    scopeFamily: d.scopeFamily ?? null,
     forward: (input, c) => c.serviceClient(cell).command(command, input ?? {}),
   };
 }
@@ -256,7 +265,7 @@ function summarizeCatalog(caps: CatalogEntry[]): {
   }
   return {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
-    hint: 'Summary view. read("$catalog") without detail returns full input/result schemas.',
+    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target.',
   };
 }
 
@@ -280,8 +289,13 @@ interface DispatchInput {
  *       ceiling, so the fix is a wider credential (human re-consent at
  *       /oauth/authorize, or `auth.mintToken`).
  */
-function enforceScope(ctx: ServiceContext, target: string, scope: string): void {
+function enforceScope(ctx: ServiceContext, target: string, scope: string, family?: string | null): void {
   if (hasScope(ctx.identity, scope)) return;
+  // Any-of family gate: a token scoped to specific members of a family (e.g.
+  // `write:type:note`) passes here; the provider's handler then refines against the
+  // concrete request (the exact fact type). Coarse tokens satisfy `scope` above; a
+  // token holding neither falls through to the offer/denied paths.
+  if (family && holdsUnder(ctx.identity, family)) return;
   if (hasGrantScope(ctx.identity, scope)) {
     throw new ServiceAuthError(
       `scope_offer: "${target}" needs "${scope}", which is within your grant but not your session's active scope [${
@@ -289,10 +303,17 @@ function enforceScope(ctx: ServiceContext, target: string, scope: string): void 
       }]. Widen it (no re-consent): act("auth.requestScope", { scopes: ["${scope}"] }), then retry.`,
     );
   }
+  // In-band scope elevation (docs/token-as-principal-plan.md §C): hand back a ready
+  // elevation URL so a connected agent can present the human a one-click widen
+  // (passkey → approve → a wider token), instead of just naming the endpoint.
+  const base = process.env.PUBLIC_BASE_URL ?? '';
+  const q = new URLSearchParams({ scope });
+  if (ctx.identity.tokenId) q.set('elevate', ctx.identity.tokenId);
+  const elevateUrl = `${base}/oauth/authorize?${q.toString()}`;
   throw new ServiceAuthError(
     `scope_denied: "${target}" requires scope "${scope}" and your grant is [${
       (ctx.identity.grantScopes ?? ctx.identity.scopes).join(' ') || 'none'
-    }]. A token is a ceiling — sign in again requesting the scope at /oauth/authorize (humans), or ask your human to re-consent / mint you a wider token via auth.mintToken (agents).`,
+    }]. A token is a ceiling. Elevate (passkey → approve): ${elevateUrl} — open it (humans), or hand it to your human (agents); then retry. (Agents may instead mint a wider token via auth.mintToken.)`,
   );
 }
 
@@ -347,9 +368,12 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
+    // ADR-0033: progressive disclosure by default — a bare `$catalog` returns the
+    // grouped one-line menu (skim), not every input/result schema. `detail:"full"`
+    // (or "schemas") returns the heavy full contract.
     const detail = (input?.input as { detail?: string } | undefined)?.detail;
-    if (detail === 'summary') return summarizeCatalog(caps);
-    return { capabilities: caps };
+    if (detail === 'full' || detail === 'schemas') return { capabilities: caps };
+    return summarizeCatalog(caps);
   }
   if (target === TYPES) return buildTypes(ctx);
   // $graph — the Reference projection (authored + derived), the self-model's third surface.
@@ -370,7 +394,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
-  if (cap.scope) enforceScope(ctx, target, cap.scope);
+  if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
   return cap.forward(input?.input, ctx);
 }
 
@@ -380,7 +404,7 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
-  if (cap.scope) enforceScope(ctx, target, cap.scope);
+  if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
   return cap.forward(input?.input, ctx);
 }
 
@@ -407,7 +431,7 @@ const READ_SCHEMA = {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
     input: {
       ...INPUT_PROP,
-      description: `${INPUT_PROP.description} For "${CATALOG}": { detail: "summary" } returns capabilities grouped by cell, one line each, no schemas.`,
+      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema.`,
     },
   },
   additionalProperties: false,
@@ -424,16 +448,27 @@ const tools: Record<string, McpToolDefinition> = {
     title: 'Who am I',
     description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: { type: 'object', properties: { user: { type: 'string' }, scopes: { type: 'array' }, grant: { type: 'array' } } },
     annotations: { readOnlyHint: true },
     handler: whoamiTool,
+    // The simplest MCP-Apps canary (ADR-0034): a tiny deterministic result rendered
+    // by the generic card — the first thing to confirm the host renders ui:// at all.
+    ui: { resourceUri: CARD_URI },
   },
   read: {
     title: 'Observe the substrate',
     description:
-      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; input {detail:"summary"} returns the grouped one-line menu. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (auth/workspace/gateway/dispatch/cells), redacted.',
+      'Observe a parc.land substrate capability (side-effect-free), or discover them. Pass target="$catalog" (or omit target) to list every capability you can read/act on, as data — always current, no reconnect; the grouped one-line menu is the default, {detail:"full"} adds every schema. The self-model surfaces: "$catalog" (capabilities), "$types" (the type vocabulary — how to open/edit/render a fact of each type, and which cell manages it), "$graph" (the Reference projection — authored + derived edges), "$grants" (the authority self-model — what you may see and do), and "$cells" (each accessible cell\'s contract — the types it publishes, surfaces it backs, and substrate it may touch). Admins (platform:* scope): read("platform.logs", { service }) tails a tier-1 service\'s logs (auth/workspace/gateway/dispatch/cells), redacted.',
     inputSchema: READ_SCHEMA,
+    // Permissive outputSchema so spec-strict clients surface `structuredContent`
+    // (read returns a different object per target — a generic object shape).
+    outputSchema: { type: 'object', description: 'The observed capability result (shape varies by target).' },
     annotations: { readOnlyHint: true },
     handler: read as McpToolDefinition['handler'],
+    // ADR-0034 tier-0: the generic card widget renders the read's structuredContent
+    // in the conversation. Static tool→UI binding per the MCP-Apps spec (the host
+    // preloads it); the card handles the empty/non-object case gracefully.
+    ui: { resourceUri: CARD_URI },
   },
   act: {
     title: 'Act on the substrate',
@@ -466,7 +501,7 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
       mcp_endpoint: `${origin}/mcp`,
       name: 'parc.land substrate',
       tools: ['whoami', 'read', 'act'],
-      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer to list what you can do ({detail:"summary"} for the grouped one-line menu).',
+      note: 'Stable surface: whoami/read/act. Capability lives in arguments — call read("$catalog") with a bearer for the grouped one-line menu of what you can do ({detail:"full"} adds schemas).',
     },
   };
 }
@@ -480,11 +515,19 @@ export const handler = defineMcpService({
   // client knowing what "read/act" means here.
   instructions:
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
-    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog", {detail:"summary"}) for the grouped menu, ' +
-    'read("$catalog") for full schemas. Targets look like workspace.query or @owner/cell.tool. ' +
-    'Prefer workspace.query (filtered, paged) over workspace.recall (the whole shaped view) for targeted reads. ' +
+    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog") for the grouped one-line menu ' +
+    '({detail:"full"} adds every schema). Targets look like workspace.query or @owner/cell.tool. ' +
+    'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,
+  // ADR-0034: declare the MCP-Apps UI extension (spec 2026-01-26 nests it under
+  // `capabilities.extensions` with the supported `mimeTypes`) + serve the `ui://`
+  // widget resources the tools bind to via their `_meta.ui.resourceUri`.
+  capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [UI_MIME] } } },
+  resources: {
+    read: (uri: string) => resolveUiResource(uri),
+    list: () => listUiResources(),
+  },
   http: [
     { method: 'GET', path: '/mcp', handler: info },
     { method: 'GET', path: '/mcp/whoami', handler: whoamiHttp },

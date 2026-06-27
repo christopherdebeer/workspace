@@ -19,6 +19,8 @@ import {
   ServiceAuthError,
   ServiceContext,
   RegisteredCommand,
+  isTextLikeContentType,
+  BLOB_INLINE_MAX_BYTES,
 } from '../../platform/runtime';
 import { createRegistry, CellRecord, CellRegistry, DeployState } from './registry';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
@@ -1155,13 +1157,38 @@ async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknow
   const { record, bucket } = await resolveAuthorized(input, user);
   if (body.length > 8 * 1024 * 1024) throw new Error('blob too large (>8MB)');
   const key = cleanPath(input.key);
-  await putObject(bucket, dataKey(record.cellId, user, input.key), body, input.contentType ?? fetchedType ?? 'application/octet-stream');
+  const resolvedType = input.contentType ?? fetchedType ?? 'application/octet-stream';
+  await putObject(bucket, dataKey(record.cellId, user, input.key), body, resolvedType);
+  // ADR-0030 (blob text extraction): for a SMALL TEXT blob, carry a bounded UTF-8
+  // preview on the event so the workspace can inline searchable `content` on the
+  // `file` fact (ADR-0027 §1 — small text inlines; binary/large stay pointers, and a
+  // Textract lane is the follow-up for true binary). The producer already holds the
+  // bytes, so this needs no S3 read-back or new IAM downstream.
+  let content: string | undefined;
+  if (isTextLikeContentType(resolvedType) && body.length <= BLOB_INLINE_MAX_BYTES) {
+    const text = (typeof body === 'string' ? body : body.toString('utf8')).trim();
+    if (text) content = text.slice(0, 8000);
+  }
   // Blobs under public/ in a public cell are web-served (see the `_data`
   // intercept in callCell) — hand back the address so a client can embed it.
   const url =
     record.public && key.startsWith('public/')
       ? `/@${record.owner}/${record.name}/_data/${user}/${key}`
       : null;
+  // ADR-0027 Inc 2: mirror the blob into a `file` fact (the workspace projects it
+  // into the uploading user's slice). Synchronous-write path only — presigned
+  // direct-to-S3 uploads bypass this (documented follow-up: an S3→EventBridge rule).
+  await ctx.events.emit('cell.data.changed', {
+    cellId: record.cellId,
+    owner: record.owner,
+    name: record.name,
+    user,
+    key,
+    bytes: body.length,
+    contentType: resolvedType,
+    ...(content ? { content } : {}),
+    ...(url ? { url } : {}),
+  });
   return { ok: true, cellId: record.cellId, user, key, bytes: body.length, url };
 }
 
@@ -1195,6 +1222,19 @@ async function listData(input: DataRefInput, ctx: ServiceContext): Promise<unkno
   const prefix = dataPrefix(record.cellId, target);
   const keys = await listObjects(bucket, prefix);
   return { cellId: record.cellId, user: target, keys: keys.map((k) => k.slice(prefix.length)).filter(Boolean) };
+}
+
+async function deleteData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
+  const user = requireUser(ctx.identity);
+  if (!input?.key) throw new Error('key is required');
+  const { record, bucket } = await resolveAuthorized(input, user);
+  const target = targetDataUser(input, user, record);
+  const key = cleanPath(input.key);
+  await deleteObject(bucket, dataKey(record.cellId, target, input.key));
+  // Retire the mirrored `file` fact (ADR-0027 Inc 2): the workspace supersedes it
+  // on a delete-op `cell.data.changed`.
+  await ctx.events.emit('cell.data.changed', { cellId: record.cellId, owner: record.owner, name: record.name, user: target, key, op: 'delete' });
+  return { ok: true, cellId: record.cellId, user: target, key, deleted: true };
 }
 
 // ─── registry-driven cell tools ──────────────────────────────────
@@ -1453,7 +1493,7 @@ async function platformLogs(input: PlatformLogsInput, ctx: ServiceContext): Prom
   requireUser(ctx.identity);
   const known = Object.keys(PLATFORM_SERVICE_LABELS);
   const service = (input?.service ?? '').trim();
-  if (!service) return { services: known, hint: 'Pass `service` (one of services[]) + optional since/limit/filter.' };
+  if (!service) return { services: known, hint: 'Pass `service` (one of services[]) + optional since (e.g. 30m), limit (default 200, returns the most-recent tail), filter (a CloudWatch pattern — server-side grep, e.g. "reaction invoke failed" or a correlationId).' };
   const label = PLATFORM_SERVICE_LABELS[service];
   if (!label) throw new Error(`Unknown platform service "${service}". Known: ${known.join(', ')}`);
   const stack = process.env.PLATFORM_STACK_NAME;
@@ -1463,7 +1503,7 @@ async function platformLogs(input: PlatformLogsInput, ctx: ServiceContext): Prom
   if (!logGroupName) return { service, count: 0, events: [], note: `no log group matching "${prefix}"` };
   const events = await getLogsByGroupName(logGroupName, {
     startTimeMs: Date.now() - sinceToMs(input.since),
-    limit: input.limit ?? 100,
+    limit: input.limit ?? 200,
     filterPattern: input.filter,
   });
   ctx.logger.info('platform logs read', { service, logGroup: logGroupName, count: events.length });
@@ -1858,6 +1898,24 @@ const TOOLS: Record<string, ToolSpec> = {
     },
     handler: listData as RegisteredCommand,
   },
+  deleteData: {
+    description: "Delete a blob from a cell's data space (your own by default; another user's only if you own the cell). Idempotent. Also retires the mirrored `file/cells/<id>/data/<key>` fact.",
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cellId: { type: 'string' },
+        owner: { type: 'string' },
+        name: { type: 'string' },
+        key: { type: 'string' },
+        user: { type: 'string', description: 'Whose data (owner-only for others); defaults to you' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    handler: deleteData as RegisteredCommand,
+  },
 };
 
 /** Tool manifest for the gateway: name, schema, and the scope it should enforce. */
@@ -1903,6 +1961,7 @@ export const handler = defineService({
       'cell.delete.requested',
       'cell.deployed',
       'cell.files.changed',
+      'cell.data.changed',
     ],
     // forge consumes its own `cell.deploy.requested` (routed back by the
     // CellDeployRoute in platform-stack) to run the bundle asynchronously.

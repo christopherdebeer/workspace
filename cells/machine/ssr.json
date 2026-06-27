@@ -1,8 +1,11 @@
 {
   "reads": [
-    { "as": "machines", "target": "workspace.query", "input": { "type": "machine", "limit": 100 } },
-    { "as": "nodes", "target": "workspace.query", "input": { "type": "machine-node", "limit": 500 } },
-    { "as": "rails", "target": "workspace.query", "input": { "type": "machine-rail", "limit": 500 } },
-    { "as": "runs", "target": "workspace.query", "input": { "type": "machine-run", "rankBy": "recency", "limit": 60 } }
+    { "as": "machines", "target": "workspace.query", "input": { "type": "machine", "limit": 100 }, "paths": ["/", "/m/:m", "/r/*key"] },
+    { "as": "runs", "target": "workspace.query", "input": { "type": "machine-run", "rankBy": "recency", "limit": 60 }, "paths": ["/", "/m/:m", "/r/*key"] },
+    { "as": "nodes", "target": "workspace.query", "input": { "prefix": "machine/${m}/node/", "limit": 500 }, "paths": ["/m/:m"] },
+    { "as": "rails", "target": "workspace.query", "input": { "prefix": "machine/${m}/rail/", "limit": 500 }, "paths": ["/m/:m"] },
+    { "as": "nodes", "target": "workspace.query", "input": { "type": "machine-node", "limit": 500 }, "paths": ["/", "/r/*key"] },
+    { "as": "rails", "target": "workspace.query", "input": { "type": "machine-rail", "limit": 500 }, "paths": ["/", "/r/*key"] },
+    { "as": "run", "target": "workspace.peek", "input": { "key": "${key}" }, "paths": ["/r/*key"] }
   ]
 }

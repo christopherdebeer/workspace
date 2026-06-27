@@ -33,6 +33,35 @@ function cellCeiling(redirectUri: string | undefined): string[] | null {
   return ['workspace:read', 'workspace:write', `cell:${label.slice(0, i)}/${label.slice(i + 1)}:*`];
 }
 
+/**
+ * The cell a sign-in originates at, derived from the redirect_uri — so consent can
+ * name the *cell* ("Authorize @c15r/machine") rather than only the shared client.
+ * Handles both forms: a host-isolated cell host (`<name>-<owner>.on.parc.land`) and
+ * an apex path (`/@<owner>/<name>/…`). Returns null for a plain platform redirect.
+ */
+function cellFromRedirect(redirectUri: string | undefined): { owner: string; name: string; address: string } | null {
+  if (!redirectUri) return null;
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return null;
+  }
+  const suffix = process.env.CELL_DOMAIN_SUFFIX; // e.g. ".on.parc.land"
+  if (suffix && u.host.endsWith(suffix)) {
+    const label = u.host.slice(0, -suffix.length);
+    const i = label.indexOf('-');
+    if (i > 0) {
+      const owner = label.slice(0, i);
+      const name = label.slice(i + 1);
+      return { owner, name, address: `@${owner}/${name}` };
+    }
+  }
+  const m = u.pathname.match(/^\/@([^/]+)\/([^/]+)/);
+  if (m) return { owner: m[1], name: m[2], address: `@${m[1]}/${m[2]}` };
+  return null;
+}
+
 export interface OAuthConfig {
   serverName: string;
   serverDescription?: string;
@@ -89,11 +118,34 @@ const SCOPE_CATALOG: Record<string, ScopeMeta> = {
 export function scopeMeta(scope: string): ScopeMeta {
   const known = SCOPE_CATALOG[scope];
   if (known) return known;
+  // Granular per-type scopes (ADR-0023): render legibly so the consent screen
+  // shows "Write \"note\" facts", not the raw `write:type:note`.
+  const typed = /^(read|write):type:([^:]+)$/.exec(scope);
+  if (typed) {
+    const verb = typed[1] as 'read' | 'write';
+    const t = typed[2];
+    return verb === 'read'
+      ? { verb, title: `Read "${t}" facts`, description: `See only facts of type "${t}" in your slice.` }
+      : { verb, title: `Write "${t}" facts`, description: `Create, edit, and retire only facts of type "${t}" in your slice.` };
+  }
   const verb: ScopeMeta['verb'] =
     /(:admin$|^platform:\*$|^auth:)/.test(scope) ? 'admin'
     : /(^write:|:write$|^act:|:create$|^cells:)/.test(scope) ? 'write'
     : 'read';
   return { verb, title: scope, description: '' };
+}
+
+/**
+ * A granular per-type scope the workspace OWNER may always grant over their own
+ * slice — `read:type:<T>` / `write:type:<T>` (ADR-0023). These are *requested* by a
+ * client (open-ended in `<T>`), so they can't live in the static `scopesSupported`;
+ * instead the consent flow admits a requested one into the offer because the
+ * authenticated owner is inherently entitled to grant it (and the workspace handler
+ * still enforces the concrete type per `enforceTypeWrite`/`enforceTypeRead`). Bounded
+ * to read/write families only — never admin/platform/cell scopes.
+ */
+export function isSelfGrantableGranular(scope: string): boolean {
+  return /^(read|write):type:[^:]+$/.test(scope);
 }
 
 const DEFAULT_EXPIRY = 3600;
@@ -133,6 +185,21 @@ function sessionCookie(token: string, maxAgeSecs: number): string {
 }
 function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+}
+/**
+ * The long-lived navigation REFRESH cookie. Carries the opaque refresh token at
+ * the grant horizon (e.g. 30d), so a top-level navigation can silently re-mint a
+ * short access token at the edge (dispatch) without a passkey round-trip — the fix
+ * for "I picked 30 days but get signed out within the hour". Same hardening as the
+ * session cookie (HttpOnly/Secure/SameSite=Lax), and the edge only consumes it on
+ * a safe top-level navigation, so it can never authorize a mutation.
+ */
+const REFRESH_COOKIE = 'parc_refresh';
+function refreshCookie(token: string, maxAgeSecs: number): string {
+  return `${REFRESH_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor(maxAgeSecs))}`;
+}
+function clearRefreshCookie(): string {
+  return `${REFRESH_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
 function okWithCookies(body: unknown, cookies: string[], status = 200): ServiceHttpResponse {
   return { statusCode: status, headers: NO_STORE, body, cookies };
@@ -229,7 +296,10 @@ export async function handleConsent(
   const user = await store.getUserById(session.userId);
   const allowed = new Set(grantableScopes(config, user?.username ?? ''));
   const requested = (b.scope ?? '').split(/\s+/).filter(Boolean);
-  const granted = requested.filter((s) => allowed.has(s)).join(' ');
+  // Admit the static grantable set, plus any requested per-type scope the owner is
+  // inherently entitled to grant over their own slice (ADR-0023) — these are
+  // open-ended in <T> so they can't sit in scopesSupported.
+  const granted = requested.filter((s) => allowed.has(s) || isSelfGrantableGranular(s)).join(' ');
 
   const code = generateToken('authz');
   await store.saveAuthCode({
@@ -257,15 +327,26 @@ export async function handleGrantableScopes(
   store: AuthStore,
   config: OAuthConfig,
 ): Promise<ServiceHttpResponse> {
-  const { sessionId, clientId } = req.json<{ sessionId: string; clientId?: string }>();
+  const { sessionId, clientId, redirectUri, scope: requestedScope } = req.json<{ sessionId: string; clientId?: string; redirectUri?: string; scope?: string }>();
   const session = await store.validateSession(sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   const user = await store.getUserById(session.userId);
-  const scopes = grantableScopes(config, user?.username ?? '');
+  const base = grantableScopes(config, user?.username ?? '');
+  // The client may also request open-ended per-type scopes (read:type:<T> /
+  // write:type:<T>, ADR-0023); surface the requested ones the owner may self-grant
+  // so they appear as per-type checkboxes (and so a granular elevation URL — ADR-0022
+  // — actually offers the scope it asks for). Bounded to read/write type families.
+  const extra = (requestedScope ?? '')
+    .split(/\s+/)
+    .filter((s) => s && isSelfGrantableGranular(s) && !base.includes(s));
+  const scopes = [...base, ...extra];
   // Capability metadata so the consent screen can group + label scopes.
   const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));
   // The client's human name (from DCR) so consent shows "parc.land", not a UUID.
   const client = clientId ? await store.getOAuthClient(clientId) : null;
+  // The cell the sign-in originates at (from the redirect_uri), so consent can name
+  // the *cell* as the subject acting in your workspace (docs/auth-consent-plan.md §A).
+  const cell = cellFromRedirect(redirectUri);
   // The grant-lifetime ceiling lets the consent screen offer a "this access lasts…"
   // picker bounded by policy (docs/capability-consent.md).
   return ok({
@@ -273,6 +354,7 @@ export async function handleGrantableScopes(
     scopes,
     catalog,
     clientName: client?.clientName ?? null,
+    ...(cell ? { resource: { kind: 'cell', address: cell.address } } : {}),
     maxGrantSecs: grantCeilingSecs(config),
   });
 }
@@ -353,10 +435,14 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
     if (accessExpiry !== undefined) response.expires_in = accessExpiry;
     if (withRefresh) response.refresh_token = result.refreshToken;
-    // Also set the httpOnly navigation cookie so SSR/page loads are identified; it
-    // tracks the access token's life (refresh rotates it client-side).
+    // Set the httpOnly navigation cookies: the short-lived access cookie identifies
+    // SSR/page loads, and the long-lived refresh cookie lets the edge silently
+    // re-mint the access token on a later navigation (so the chosen grant horizon
+    // actually keeps the browser signed in — not just the access TTL).
     const cookieMaxAge = accessExpiry ?? 30 * 24 * 3600;
-    return okWithCookies(response, [sessionCookie(result.token, cookieMaxAge)]);
+    const cookies = [sessionCookie(result.token, cookieMaxAge)];
+    if (withRefresh && result.refreshToken) cookies.push(refreshCookie(result.refreshToken, refreshLifetime));
+    return okWithCookies(response, cookies);
   }
 
   if (body.grant_type === 'refresh_token') {
@@ -364,10 +450,13 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     if (neverExpires) return ok({ error: 'unsupported_grant_type', error_description: 'Tokens are non-expiring' }, 400);
     const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry, refreshExpiry);
     if (!result) return ok({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
-    // Refresh keeps the navigation cookie current (the access token rotated).
+    // Refresh keeps BOTH navigation cookies current (access + rotated refresh), so
+    // the edge silent-refresh path can keep re-priming the session up to the grant.
+    const cookies = [sessionCookie(result.token, configuredExpiry)];
+    if (result.refreshToken) cookies.push(refreshCookie(result.refreshToken, refreshExpiry));
     return okWithCookies(
       { access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken },
-      [sessionCookie(result.token, configuredExpiry)],
+      cookies,
     );
   }
 
@@ -409,8 +498,9 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
 export async function handleRevoke(req: ServiceHttpRequest, store: AuthStore): Promise<ServiceHttpResponse> {
   const body = parseTokenBody(req);
   if (body.token) await store.revokeByTokenValue(body.token);
-  // Drop the navigation cookie too, so sign-out clears the SSR session.
-  return okWithCookies({}, [clearSessionCookie()]);
+  // Drop both navigation cookies too, so sign-out clears the SSR session and the
+  // edge can't silently re-mint from a lingering refresh cookie.
+  return okWithCookies({}, [clearSessionCookie(), clearRefreshCookie()]);
 }
 
 // ─── Device authorization grant ──────────────────────────────────
@@ -471,6 +561,40 @@ export interface ValidatedToken {
   /** The token id — the handle a session uses to mutate its own effective scope. */
   tokenId: string;
   clientId: string | null;
+}
+
+/**
+ * Edge silent-refresh (consumed by the dispatch SSR path via the `refreshSession`
+ * command): given the value of the `parc_refresh` cookie, rotate a fresh
+ * access+refresh pair and return the resolved identity + the `Set-Cookie` strings
+ * that re-prime the browser. Returns null when the refresh token is invalid/expired
+ * or the deployment is non-expiring. This is what makes a 30-day grant actually keep
+ * a browser signed in for 30 days: a navigation re-mints a short access token with
+ * no passkey round-trip, while access tokens stay short for API clients.
+ */
+export interface RefreshedSession {
+  userId: string;
+  scope: string;
+  effectiveScope: string | null;
+  tokenId: string | null;
+  setCookies: string[];
+}
+export async function handleRefreshSession(refreshToken: string, store: AuthStore, config: OAuthConfig): Promise<RefreshedSession | null> {
+  if (!refreshToken) return null;
+  const configuredExpiry = config.tokenExpirySecs ?? DEFAULT_EXPIRY;
+  const refreshExpiry = config.refreshExpirySecs ?? DEFAULT_REFRESH_EXPIRY;
+  if (configuredExpiry <= 0) return null; // non-expiring deployments don't refresh
+  const result = await store.refreshUnifiedToken(sha256(refreshToken), configuredExpiry, refreshExpiry);
+  if (!result) return null;
+  const validated = await validateBearer(result.token, store);
+  if (!validated) return null;
+  return {
+    userId: validated.userId,
+    scope: validated.scope,
+    effectiveScope: validated.effectiveScope,
+    tokenId: validated.tokenId,
+    setCookies: [sessionCookie(result.token, configuredExpiry), refreshCookie(result.refreshToken, refreshExpiry)],
+  };
 }
 
 export async function validateBearer(token: string, store: AuthStore): Promise<ValidatedToken | null> {

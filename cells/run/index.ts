@@ -29,11 +29,39 @@ const SUBSTRATE = process.env.SUBSTRATE_TABLE ?? '';
 const BUS = process.env.EVENT_BUS_NAME ?? '';
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
 const SELF_SOURCE = process.env.SERVICE_NAME ?? ''; // = cell-run-<hash>, the IAM-pinned source
+const GATEWAY_MCP = process.env.GATEWAY_MCP_URL ?? 'https://parc.land/mcp';
 let SELF_FUNCTION = '';
+
+/* ── gateway tool proxy (ADR-0028, mirrors @c15r/models real-tool proxy) ──
+ * The direct parc.read/query/emit bindings touch only the owner's slice via the
+ * cell's ambient IAM. `parc.call` instead proxies to the /mcp gateway as a SCOPED
+ * principal (a per-run token), so code reaches the FULL read/act surface
+ * (workspace.*, @owner/cell.tool, whoami, $catalog…) under the gateway PEP — i.e.
+ * bounded by the token's scope (incl. read:type/write:type), not ambient IAM.
+ * NOTE: this is the same logic as cells/models/index.ts; vendor a shared module
+ * when a second consumer lands (cf. the vendored substrate.js client). */
+const READ_VERBS = new Set(['query', 'peek', 'read', 'get', 'list', 'neighbors', 'links', 'recall', 'search', 'describe', 'whoami', 'stats', 'tags', 'history', 'tending', 'salience', 'graph', 'catalog', 'types', 'shared', 'members', 'attention', 'changes', 'views', 'groups']);
+const toolVerb = (target: string): 'read' | 'act' => (READ_VERBS.has(target.split('.').pop() ?? target) ? 'read' : 'act');
+
+async function callGatewayTool(token: string, target: string, input?: unknown): Promise<unknown> {
+  const verb = toolVerb(target);
+  const res = await fetch(GATEWAY_MCP, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: verb, arguments: input === undefined ? { target } : { target, input } } }),
+  });
+  if (!res.ok) return { error: `gateway HTTP ${res.status}` };
+  const rpc = await res.json();
+  const text = rpc?.result?.content?.[0]?.text ?? '';
+  let value: unknown = text;
+  try { value = JSON.parse(text); } catch { /* raw text result */ }
+  if (rpc?.error || rpc?.result?.isError) return { error: typeof value === 'string' ? value : JSON.stringify(value) };
+  return value;
+}
 
 /* ── the substrate binding handed to user code ──────────────────── */
 
-function makeParc(emitted: Array<{ key: string; value: unknown }>) {
+function makeParc(emitted: Array<{ key: string; value: unknown }>, token?: string) {
   return {
     /** Read one fact from the owner's slice (live value). */
     async read(key: string): Promise<unknown> {
@@ -73,6 +101,18 @@ function makeParc(emitted: Array<{ key: string; value: unknown }>) {
       }));
       emitted.push({ key, value });
     },
+    /**
+     * Call ANY MCP capability through the gateway as the run's scoped principal
+     * (ADR-0028) — `read` and `act` are auto-routed by the target verb. Needs a
+     * per-run `token` passed to exec; without one this throws (the direct
+     * read/query/emit above stay available for the owner-slice fast path). The
+     * token's scope is the ceiling — a machine work-code rail mints it narrowed.
+     */
+    async call(target: string, input?: unknown): Promise<unknown> {
+      if (!token) throw new Error('parc.call needs a scoped token — pass `token` to exec (the full /mcp surface is gated by it)');
+      if (typeof target !== 'string' || !target) throw new Error('parc.call(target, input): target is required');
+      return callGatewayTool(token, target, input);
+    },
   };
 }
 
@@ -84,6 +124,9 @@ interface ExecInput {
   /** Inputs available to the code as `input`. */
   input?: unknown;
   async?: boolean;
+  /** Per-run scoped bearer (ADR-0028): enables `parc.call` over the /mcp gateway.
+   *  Omitted = only the direct owner-slice read/query/emit are available. */
+  token?: string;
 }
 
 async function execJs(input: ExecInput): Promise<unknown> {
@@ -94,7 +137,7 @@ async function execJs(input: ExecInput): Promise<unknown> {
     error: (...a: unknown[]) => logs.push('ERROR: ' + a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')),
     warn: (...a: unknown[]) => logs.push('WARN: ' + a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')),
   };
-  const parc = makeParc(emitted);
+  const parc = makeParc(emitted, input.token);
   // The code is an async function body; `return` yields the result.
   const fn = new Function('parc', 'input', 'console', 'fetch', `return (async () => { ${input.code}\n })()`);
   let result: unknown;
@@ -126,24 +169,49 @@ async function putJob(jobId: string, patch: Record<string, unknown>): Promise<vo
   }));
 }
 
+/**
+ * Dual-write a lean `run-job` observability fact (ADR-0026 Inc B) via the organ
+ * path, alongside the authoritative `JOB#` row above. This makes a run queryable,
+ * linkable, and salient (`query type=run-job`) WITHOUT moving the async-poll source
+ * of truth onto the eventually-consistent organ path — `fetch` still reads `JOB#`
+ * (strongly consistent). The fact is a projection: status + shape, never the full
+ * (possibly large/arbitrary) result. Best-effort — never fails the run.
+ */
+async function emitJobFact(jobId: string, value: Record<string, unknown>): Promise<void> {
+  if (!BUS) return;
+  try {
+    await events.send(new PutEventsCommand({
+      Entries: [{
+        EventBusName: BUS,
+        Source: SELF_SOURCE,
+        DetailType: 'substrate.write.requested',
+        Detail: JSON.stringify({ key: `run-job/${jobId}`, value: { jobId, ...value }, via: 'run', type: 'run-job', tags: ['run', 'run-job'] }),
+      }],
+    }));
+  } catch { /* observability only — a dropped projection must not fail the job */ }
+}
+
 async function runJob(jobId: string): Promise<void> {
   const job = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
   const input = (job.Item as { input?: ExecInput } | undefined)?.input;
   if (!input) return;
-  let out: unknown;
+  let out: { result?: unknown; logs?: string[]; emitted?: string[]; error?: string };
   try {
-    out = await exec(input);
+    out = (await exec(input)) as typeof out;
   } catch (err) {
     await putJob(jobId, { status: 'error', input, error: (err as Error).message });
+    await emitJobFact(jobId, { status: 'error', at: new Date().toISOString(), error: (err as Error).message });
     return;
   }
   try {
     await putJob(jobId, { status: 'done', input, out });
+    await emitJobFact(jobId, { status: 'done', at: new Date().toISOString(), emitted: out.emitted ?? [], logs: out.logs?.length ?? 0, error: out.error });
   } catch (err) {
     // A save failure must not impersonate the user's code: the marshaller's
     // advice ("Pass options.removeUndefinedValues…") is meaningless to someone
     // who wrote Fibonacci. Name the failing stage instead.
     await putJob(jobId, { status: 'error', input, error: `failed to persist result: ${(err as Error).message}` });
+    await emitJobFact(jobId, { status: 'error', at: new Date().toISOString(), error: `failed to persist result: ${(err as Error).message}` });
   }
 }
 
@@ -153,7 +221,7 @@ const TOOLS = [
   {
     name: 'exec',
     description:
-      'Run code server-side with substrate-native access. The code is a JS async function body; `return` yields the result. Bindings: parc.read(key) / parc.query({prefix,limit}) → {entries:[{key,value}],count} (same envelope as workspace.query) / parc.emit(key,value,{type,tags}) (organ-path write to your slice), console (captured), input, fetch. Returns {result, logs, emitted, error}. async:true for long runs → {jobId}, poll fetch. v0 is js/ts.',
+      'Run code server-side with substrate-native access. The code is a JS async function body; `return` yields the result. Bindings: parc.read(key) / parc.query({prefix,limit}) → {entries:[{key,value}],count} (same envelope as workspace.query) / parc.emit(key,value,{type,tags}) (organ-path write to your slice) / parc.call(target,input) (ADR-0028: call ANY /mcp capability — workspace.*, @owner/cell.tool, whoami — as the run\'s scoped principal; requires `token`), console (captured), input, fetch. Returns {result, logs, emitted, error}. async:true for long runs → {jobId}, poll fetch. v0 is js/ts.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -162,6 +230,7 @@ const TOOLS = [
         lang: { type: 'string', description: 'js | ts (more via container runtime — deferred)' },
         input: { description: 'Any JSON value, available as `input`' },
         async: { type: 'boolean' },
+        token: { type: 'string', description: 'Per-run scoped bearer — enables parc.call over the /mcp gateway (the full read/act surface, bounded by this token\'s scope). Omit for owner-slice read/query/emit only.' },
       },
       required: ['code'],
       additionalProperties: false,
@@ -191,6 +260,7 @@ async function toolCall(name: string, args: Record<string, unknown>): Promise<un
       const jobId = randomUUID().slice(0, 13);
       const { async: _a, ...rest } = input;
       await putJob(jobId, { status: 'pending', input: rest });
+      await emitJobFact(jobId, { status: 'pending', at: new Date().toISOString(), lang: (rest.lang ?? 'js'), codeBytes: rest.code.length });
       await lambda.send(new InvokeCommand({ FunctionName: SELF_FUNCTION, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify({ __job: jobId })) }));
       return { jobId, status: 'pending' };
     }
