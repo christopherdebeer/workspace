@@ -1,17 +1,18 @@
 /**
  * The parc.land conversation widget (ADR-0034/0035/0036) — the browser bundle behind
- * `ui://parc/card`, esbuilt to `app.js` and inlined by the gateway. Uses the SHARED
- * render vocabulary (`platform/ui/render-hints` + `marked`) AND REUSES the `viewers`
- * cell's renderers (json tree / csv table / mermaid) — the same modules canvas + lit
- * use — so a typed fact renders the same way on every surface (ADR-0036). Machines
- * render their run trace as a mermaid flowchart.
+ * `ui://parc/card`, esbuilt to `app.js` and inlined by the gateway.
  *
- * MCP client to the HOST (spec 2026-01-26): handshake (ui/initialize → initialized) →
- * render the structuredContent the host pushes. Cell-declared `ui://` renderers are
- * fetched over the host resources/read proxy (ADR-0034 Inc 2′), falling back to the hint.
- * Sizing: the spec leaves frame size to the host, so we report ours via window.mcpApp
- * .resize(), a ResizeObserver, and ui-size-change messages — whichever the host honours.
+ * Built on the OFFICIAL @modelcontextprotocol/ext-apps `App` SDK rather than a
+ * hand-rolled postMessage protocol — the SDK owns the lifecycle (ui/initialize →
+ * initialized), `autoResize` (the correct `ui/notifications/size-changed` mechanism the
+ * host honours — what we were getting wrong by hand), and the host-proxied
+ * `callServerTool`/`readServerResource` bridge (under our gateway's enforceScope).
+ *
+ * Rendering reuses the SHARED render vocabulary (`platform/ui/render-hints` + `marked`)
+ * and the `viewers` cell renderers (json/csv/mermaid) — the same modules home/canvas/lit
+ * use — so a typed fact renders identically on every surface (ADR-0036).
  */
+import { App } from '@modelcontextprotocol/ext-apps';
 import { marked } from 'marked';
 import { hintToHtml, bodyText, resolvePath, escapeHtml } from '../../../platform/ui/render-hints';
 import { json as vwJson, csv as vwCsv, mermaid as vwMermaid } from '../../../cells/viewers/client/main';
@@ -39,12 +40,11 @@ function chips(arr: string[]): string {
 function rowList(pairs: Array<[string, unknown]>): string {
   return '<div class="rows">' + pairs.map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>`).join('') + '</div>';
 }
-/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) and re-renders. */
+/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) + re-renders. */
 function drillRows(pairs: Array<[string, unknown]>, input: (k: string) => unknown): string {
   return '<div class="rows">' + pairs.map(([k, v]) =>
     `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify(input(String(k))))}">${esc(k)}</div><div class="v">${esc(v)}</div>`).join('') + '</div>';
 }
-
 function viewerContent(name: string, value: unknown): string {
   if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return bodyText(value) || (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -81,34 +81,31 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string): strin
   const viewer = aff.render && aff.render.viewer;
   let body = '';
   if (viewer && VIEWERS[viewer]) {
-    mounts.push({ slot, view: VIEWERS[viewer], content: viewerContent(viewer, entry.value) }); // reuse the viewers cell
+    mounts.push({ slot, view: VIEWERS[viewer], content: viewerContent(viewer, entry.value) });
   } else if (t === 'machine-run' && entry.value && typeof entry.value === 'object') {
     mounts.push({ slot, view: vwMermaid as ElView, content: machineRunMermaid(entry.value as Record<string, unknown>) });
   } else if (rh && typeof rh.renderer === 'string' && rh.renderer.indexOf('ui://') === 0) {
-    fetchRenderer(rh.renderer, slot); // (ADR-0034 Inc 2′) cell-declared renderer over the host proxy
+    fetchRenderer(rh.renderer, slot);
     body = hint('fields', entry.value);
   } else {
     body = rh && rh.hint ? hint(rh.hint, entry.value) : '';
     if (!body) body = hint('fields', entry.value) || `<pre>${esc(JSON.stringify(entry.value, null, 2)).slice(0, 800)}</pre>`;
   }
   const sc = entry && entry._meta && typeof entry._meta.score === 'number' ? entry._meta.score.toFixed(2) : '';
-  // A neighbors-traversal affordance — clicking issues a host-proxied read + re-renders.
   const nav = key ? `<button class="mini" title="neighbors" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key }))}">↹</button>` : '';
   return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc ? `<span class="sc">${sc}</span>` : ''}${nav}</div><div id="${slot}">${body}</div></div>`;
 }
-/** The ratification queue (ADR-0032/0036): each suggested pair, ratify-as-<rel> buttons
- *  that act through the host proxy; the view re-renders after. */
+function entriesBlock(map: Record<string, Entry>, types: Types): string {
+  return Object.keys(map).map((k, i) => typedCard(k, map[k], types, 'slot-' + i)).join('');
+}
 function renderSuggestions(d: Record<string, unknown>): string {
   const vocab = (Array.isArray(d.vocab) ? d.vocab : ['relatesTo']) as string[];
   const items = (d.suggestions as Array<Record<string, unknown>> || []).map((c) => {
-    const chips = vocab.map((rel) => `<button class="chip act" data-call="act" data-target="workspace.ratify" data-input="${esc(JSON.stringify({ from: c.from, to: c.to, rel }))}">${esc(rel)}</button>`).join('');
+    const chips2 = vocab.map((rel) => `<button class="chip act" data-call="act" data-target="workspace.ratify" data-input="${esc(JSON.stringify({ from: c.from, to: c.to, rel }))}">${esc(rel)}</button>`).join('');
     const score = c.score != null ? Number(c.score).toFixed(2) : '';
-    return `<div class="fc"><div class="fc-h"><span class="lb">${esc(c.fromLabel || c.from)} ↔ ${esc(c.toLabel || c.to)}</span><span class="sp"></span><span class="sc">${score}</span></div><div class="chips"><span class="hint">ratify as</span> ${chips}</div></div>`;
+    return `<div class="fc"><div class="fc-h"><span class="lb">${esc(c.fromLabel || c.from)} ↔ ${esc(c.toLabel || c.to)}</span><span class="sp"></span><span class="sc">${score}</span></div><div class="chips"><span class="hint">ratify as</span> ${chips2}</div></div>`;
   }).join('');
   return `<h2>Suggestions (${esc(d.total ?? 0)})</h2>${items || '<div class="hint">none</div>'}`;
-}
-function entriesBlock(map: Record<string, Entry>, types: Types): string {
-  return Object.keys(map).map((k, i) => typedCard(k, map[k], types, 'slot-' + i)).join('');
 }
 function overview(o: Record<string, unknown>): string {
   let h = '';
@@ -144,71 +141,31 @@ function render(data: unknown): void {
     if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
   }
   root.innerHTML = header() + b;
-  // Mount reused viewers (json/csv/mermaid) into their slots after the HTML is in place.
   for (const m of mounts) {
     const el = document.getElementById(m.slot);
     if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
   }
-  scheduleReport();
 }
 
-// ── sizing — exactly the official ext-apps SDK mechanism (the one claude.ai honours,
-// per Val.town). The View posts `ui/notifications/size-changed` { width, height } in px;
-// height is measured by briefly forcing html to `max-content` then getBoundingClientRect,
-// width is window.innerWidth; observe BOTH documentElement + body, rAF-debounced, send
-// only on change. Legacy {type:'resize'} + window.mcpApp.resize kept for non-SDK hosts.
-let lastW = 0;
-let lastH = 0;
-let rafId = 0;
-function measure(): { width: number; height: number } {
-  const html = document.documentElement;
-  const prev = html.style.height;
-  html.style.height = 'max-content';
-  const height = Math.ceil(html.getBoundingClientRect().height);
-  html.style.height = prev;
-  return { width: window.innerWidth, height };
-}
-function reportSize(): void {
-  const { width, height } = measure();
-  if (width === lastW && height === lastH) return;
-  lastW = width;
-  lastH = height;
-  try { window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { width, height } }, '*'); } catch { /* sandbox */ }
-  try { window.parent.postMessage({ type: 'resize', width, height }, '*'); } catch { /* legacy hosts */ }
-  const host = (window as unknown as { mcpApp?: { resize?: (w: number, h: number) => void } }).mcpApp;
-  try { if (host && typeof host.resize === 'function') host.resize(width, height); } catch { /* host opt */ }
-}
-/** rAF-debounced (matches the SDK) — coalesces bursts + reflects rendered content. */
-function scheduleReport(): void {
-  try { if (rafId) cancelAnimationFrame(rafId); rafId = requestAnimationFrame(() => { rafId = 0; reportSize(); }); } catch { reportSize(); }
-}
-try { const ro = new ResizeObserver(scheduleReport); ro.observe(document.documentElement); ro.observe(document.body); } catch { /* no RO */ }
-
-// ── MCP-Apps host channel (spec 2026-01-26) ──────────────────────────────────
-const INIT_ID = 1;
-let inited = false;
-let rid = 100;
-const pending: Record<number, (v: unknown) => void> = {};
-function send(msg: Record<string, unknown>): void {
-  try { window.parent.postMessage(Object.assign({ jsonrpc: '2.0' }, msg), '*'); } catch { /* sandbox */ }
-}
-function request(method: string, params: unknown): Promise<unknown> {
-  return new Promise((resolve) => {
-    const id = ++rid;
-    pending[id] = resolve;
-    send({ id, method, params });
-    setTimeout(() => { if (pending[id]) { delete pending[id]; resolve(null); } }, 4000);
-  });
-}
-// ── interactivity: widget-initiated reads/acts via the host proxy (ADR-0036) ──
-// The widget is an MCP client to the host; tools/call is proxied to our gateway under
-// the connection's auth (enforceScope). So a drill/ratify re-renders the card IN PLACE
-// — progressive disclosure with no new model turn, no model-context cost.
+// ── host channel via the official SDK ────────────────────────────────────────
+const app = new App({ name: 'parc.land card', version: '1.0.0' }, {}, { autoResize: true });
 let currentRead: { target: string; input: unknown } | null = null;
-async function callTool(kind: 'read' | 'act', target: string, input: unknown): Promise<unknown> {
-  const r = await request('tools/call', { name: kind, arguments: { target, input } });
-  return (r as { structuredContent?: unknown })?.structuredContent ?? null;
+
+async function callServer(kind: 'read' | 'act', target: string, input: unknown): Promise<unknown> {
+  const r = await app.callServerTool({ name: kind, arguments: { target, input } });
+  return (r as { structuredContent?: unknown }).structuredContent ?? null;
 }
+/** (ADR-0034 Inc 2′) fetch a cell-declared ui:// renderer over the host proxy + inject it. */
+function fetchRenderer(uri: string, slot: string): void {
+  app.readServerResource({ uri }).then((r) => {
+    const c = (r as { contents?: Array<{ text?: string }> }).contents?.[0];
+    if (!c || typeof c.text !== 'string') return; // degrade to the hint render already shown
+    const el = document.getElementById(slot);
+    if (el) el.innerHTML = c.text;
+  }).catch(() => { /* degrade */ });
+}
+// Delegated interactivity: drill (read) / ratify (act) re-render the card IN PLACE —
+// progressive disclosure, no new model turn, all under the gateway's enforceScope.
 document.addEventListener('click', async (ev) => {
   const el = (ev.target as HTMLElement)?.closest?.('[data-call]') as HTMLElement | null;
   if (!el) return;
@@ -218,30 +175,19 @@ document.addEventListener('click', async (ev) => {
   let input: unknown = {};
   try { input = JSON.parse(el.getAttribute('data-input') || '{}'); } catch { /* default {} */ }
   el.classList.add('busy');
-  if (kind === 'read') {
-    const sc = await callTool('read', target, input);
-    currentRead = { target, input };
-    if (sc) render(sc);
-  } else {
-    await callTool('act', target, input);
-    const rr = currentRead || { target: 'workspace.suggestions', input: {} };
-    const sc = await callTool('read', rr.target, rr.input); // refresh the current view
-    if (sc) render(sc);
-  }
+  try {
+    if (kind === 'read') {
+      const sc = await callServer('read', target, input);
+      currentRead = { target, input };
+      if (sc) render(sc);
+    } else {
+      await callServer('act', target, input);
+      const rr = currentRead || { target: 'workspace.suggestions', input: {} };
+      const sc = await callServer('read', rr.target, rr.input);
+      if (sc) render(sc);
+    }
+  } catch { el.classList.remove('busy'); }
 });
-function fetchRenderer(uri: string, slot: string): void {
-  request('resources/read', { uri }).then((r) => {
-    const c = (r as { contents?: Array<{ text?: string }> })?.contents?.[0];
-    if (!c || !c.text) return; // degrade to the hint render already shown
-    const el = document.getElementById(slot);
-    if (el) { el.innerHTML = c.text; scheduleReport(); }
-  });
-}
-window.addEventListener('message', (ev: MessageEvent) => {
-  const m = ev.data as { jsonrpc?: string; id?: number; result?: unknown; method?: string; params?: { structuredContent?: unknown } };
-  if (!m || m.jsonrpc !== '2.0') return;
-  if (m.id != null && pending[m.id]) { const cb = pending[m.id]; delete pending[m.id]; cb(m.result ?? null); return; }
-  if (!inited && m.id === INIT_ID && m.result) { inited = true; send({ method: 'ui/notifications/initialized' }); return; }
-  if (m.method === 'ui/notifications/tool-result' && m.params) render(m.params.structuredContent);
-});
-send({ id: INIT_ID, method: 'ui/initialize', params: { capabilities: {}, clientInfo: { name: 'parc.land card', version: '1.0.0' }, protocolVersion: '2026-01-26' } });
+
+app.addEventListener('toolresult', (params) => render((params as { structuredContent?: unknown }).structuredContent));
+app.connect().catch(() => { /* not in a host */ });
