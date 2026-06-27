@@ -57,6 +57,15 @@ const SHELL_HEAD = `<!doctype html>
   pre { background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; overflow: auto; font-size: 12px; max-height: 280px; }
   img { max-width: 100%; border-radius: 8px; display: block; }
   .hint { font-size: 11px; opacity: .55; margin-top: 12px; }
+  /* Progressive disclosure (ADR-0036): the open view is GLANCEABLE — long lists cap to
+     a head + a "+N more" toggle, and long fact bodies clamp to a few lines with a fade +
+     "show more". Both reveal already-present data locally (no server round-trip). */
+  .more-btn { cursor: pointer; margin: 6px 0 2px; padding: 3px 10px; font: 12px/1 inherit; border-radius: 999px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: #6d5ef0; }
+  .more-btn:hover { background: color-mix(in srgb, #6d5ef0 12%, transparent); }
+  .clamp { max-height: 5.6em; overflow: hidden; position: relative; }
+  .clamp::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2.2em; background: linear-gradient(transparent, Canvas); pointer-events: none; }
+  .clamp.open { max-height: none; } .clamp.open::after { display: none; }
+  [hidden] { display: none !important; }
   /* Loading skeleton — gives the card presence + a sensible initial height before the
      first tool-result arrives (it then grows-to-content). */
   .skel { display: flex; flex-direction: column; gap: 9px; padding: 4px 0; }

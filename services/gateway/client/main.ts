@@ -40,10 +40,22 @@ function chips(arr: string[]): string {
 function rowList(pairs: Array<[string, unknown]>): string {
   return '<div class="rows">' + pairs.map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>`).join('') + '</div>';
 }
-/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) + re-renders. */
-function drillRows(pairs: Array<[string, unknown]>, input: (k: string) => unknown): string {
-  return '<div class="rows">' + pairs.map(([k, v]) =>
-    `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify(input(String(k))))}">${esc(k)}</div><div class="v">${esc(v)}</div>`).join('') + '</div>';
+/** Unique element ids for the local expand/collapse toggles. */
+let uid = 0;
+const nextId = (): string => 'x' + uid++;
+/** A "+N more" button that reveals a hidden block (local, no server round-trip). */
+function toggleBtn(id: string, moreLabel: string): string {
+  return `<button class="more-btn" data-toggle="${id}" data-more="${esc(moreLabel)}" data-less="show less">${esc(moreLabel)}</button>`;
+}
+/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) + re-renders.
+ *  Progressive: only the first `cap` rows show; the rest collapse behind a "+N more" toggle. */
+function drillRows(pairs: Array<[string, unknown]>, input: (k: string) => unknown, cap = 6): string {
+  const row = ([k, v]: [string, unknown]): string =>
+    `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify(input(String(k))))}">${esc(k)}</div><div class="v">${esc(v)}</div>`;
+  const head = `<div class="rows">${pairs.slice(0, cap).map(row).join('')}</div>`;
+  if (pairs.length <= cap) return head;
+  const id = nextId();
+  return head + `<div id="${id}" hidden><div class="rows">${pairs.slice(cap).map(row).join('')}</div></div>` + toggleBtn(id, `+${pairs.length - cap} more`);
 }
 function viewerContent(name: string, value: unknown): string {
   if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -73,7 +85,7 @@ function machineRunMermaid(v: Record<string, unknown>): string {
 
 /** One fact rendered by its TYPE affordance: a viewer (json/csv/mermaid), a machine-run
  *  trace diagram, a cell-declared ui:// renderer, or the present.render hint. */
-function typedCard(key: string, entry: Entry, types: Types, slot: string): string {
+function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp = false): string {
   const t = (entry && entry._meta && entry._meta.type) || null;
   const aff = (t && types && types[t]) || {};
   const label = (aff.label && resolvePath(entry, aff.label)) || (entry.value as Record<string, unknown>)?.title || (entry.value as Record<string, unknown>)?.name || key;
@@ -93,19 +105,31 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string): strin
   }
   const sc = entry && entry._meta && typeof entry._meta.score === 'number' ? entry._meta.score.toFixed(2) : '';
   const nav = key ? `<button class="mini" title="neighbors" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key }))}">↹</button>` : '';
-  return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc ? `<span class="sc">${sc}</span>` : ''}${nav}</div><div id="${slot}">${body}</div></div>`;
+  // Clamp only TEXT bodies (md/code/fields/pre) in list contexts — viewer/machine-run
+  // mounts fill the slot later (body === '') and must not be height-capped.
+  const showClamp = clamp && !!body;
+  const clampBtn = showClamp ? `<button class="more-btn clamp-btn" data-clamp="${slot}" hidden>show more</button>` : '';
+  return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc ? `<span class="sc">${sc}</span>` : ''}${nav}</div><div id="${slot}"${showClamp ? ' class="clamp"' : ''}>${body}</div>${clampBtn}</div>`;
 }
-function entriesBlock(map: Record<string, Entry>, types: Types): string {
-  return Object.keys(map).map((k, i) => typedCard(k, map[k], types, 'slot-' + i)).join('');
+/** A fact list, rendered GLANCEABLE: clamped cards, capped to a head + "+N more". */
+function entriesBlock(map: Record<string, Entry>, types: Types, cap = 5): string {
+  const cards = Object.keys(map).map((k, i) => typedCard(k, map[k], types, 'slot-' + i, true));
+  if (cards.length <= cap) return cards.join('');
+  const id = nextId();
+  return cards.slice(0, cap).join('') + `<div id="${id}" hidden>${cards.slice(cap).join('')}</div>` + toggleBtn(id, `+${cards.length - cap} more`);
 }
 function renderSuggestions(d: Record<string, unknown>): string {
   const vocab = (Array.isArray(d.vocab) ? d.vocab : ['relatesTo']) as string[];
-  const items = (d.suggestions as Array<Record<string, unknown>> || []).map((c) => {
+  const cards = (d.suggestions as Array<Record<string, unknown>> || []).map((c) => {
     const chips2 = vocab.map((rel) => `<button class="chip act" data-call="act" data-target="workspace.ratify" data-input="${esc(JSON.stringify({ from: c.from, to: c.to, rel }))}">${esc(rel)}</button>`).join('');
     const score = c.score != null ? Number(c.score).toFixed(2) : '';
     return `<div class="fc"><div class="fc-h"><span class="lb">${esc(c.fromLabel || c.from)} ↔ ${esc(c.toLabel || c.to)}</span><span class="sp"></span><span class="sc">${score}</span></div><div class="chips"><span class="hint">ratify as</span> ${chips2}</div></div>`;
-  }).join('');
-  return `<h2>Suggestions (${esc(d.total ?? 0)})</h2>${items || '<div class="hint">none</div>'}`;
+  });
+  let items: string;
+  if (!cards.length) items = '<div class="hint">none</div>';
+  else if (cards.length <= 5) items = cards.join('');
+  else { const id = nextId(); items = cards.slice(0, 5).join('') + `<div id="${id}" hidden>${cards.slice(5).join('')}</div>` + toggleBtn(id, `+${cards.length - 5} more`); }
+  return `<h2>Suggestions (${esc(d.total ?? 0)})</h2>${items}`;
 }
 function overview(o: Record<string, unknown>): string {
   let h = '';
@@ -145,6 +169,14 @@ function render(data: unknown): void {
     const el = document.getElementById(m.slot);
     if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
   }
+  // Reveal a "show more" only on bodies that actually overflow the clamp; un-clamp the rest.
+  for (const node of Array.from(document.querySelectorAll('.clamp'))) {
+    const slot = node as HTMLElement;
+    const btn = slot.nextElementSibling as HTMLElement | null;
+    if (!btn || !btn.classList.contains('clamp-btn')) continue;
+    if (slot.scrollHeight - slot.clientHeight > 8) btn.removeAttribute('hidden');
+    else slot.classList.remove('clamp');
+  }
 }
 
 // ── host channel via the official SDK ────────────────────────────────────────
@@ -166,8 +198,26 @@ function fetchRenderer(uri: string, slot: string): void {
 }
 // Delegated interactivity: drill (read) / ratify (act) re-render the card IN PLACE —
 // progressive disclosure, no new model turn, all under the gateway's enforceScope.
+/** Local expand/collapse — reveal an already-rendered hidden block; no server round-trip. */
+function toggleHidden(btn: HTMLElement): void {
+  const el = document.getElementById(btn.getAttribute('data-toggle') || '');
+  if (!el) return;
+  if (el.hasAttribute('hidden')) { el.removeAttribute('hidden'); btn.textContent = btn.getAttribute('data-less') || 'show less'; }
+  else { el.setAttribute('hidden', ''); btn.textContent = btn.getAttribute('data-more') || 'show more'; }
+}
+/** Local clamp toggle — expand/collapse a single clamped fact body in place. */
+function toggleClamp(btn: HTMLElement): void {
+  const el = document.getElementById(btn.getAttribute('data-clamp') || '');
+  if (!el) return;
+  btn.textContent = el.classList.toggle('open') ? 'show less' : 'show more';
+}
 document.addEventListener('click', async (ev) => {
-  const el = (ev.target as HTMLElement)?.closest?.('[data-call]') as HTMLElement | null;
+  const tgt = ev.target as HTMLElement;
+  const tog = tgt?.closest?.('[data-toggle]') as HTMLElement | null;
+  if (tog) { ev.preventDefault(); toggleHidden(tog); return; }
+  const clmp = tgt?.closest?.('[data-clamp]') as HTMLElement | null;
+  if (clmp) { ev.preventDefault(); toggleClamp(clmp); return; }
+  const el = tgt?.closest?.('[data-call]') as HTMLElement | null;
   if (!el) return;
   ev.preventDefault();
   const kind = (el.getAttribute('data-call') === 'act' ? 'act' : 'read') as 'read' | 'act';
