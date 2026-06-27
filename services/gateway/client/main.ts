@@ -117,27 +117,6 @@ function viewerContent(name: string, value: unknown): string {
   if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return bodyText(value) || (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
 }
-function mmEsc(s: unknown): string {
-  return String(s).replace(/["\n|]/g, ' ');
-}
-/** A machine-run's trace → a mermaid flowchart with the current node highlighted. */
-function machineRunMermaid(v: Record<string, unknown>): string {
-  let trace = Array.isArray(v.trace) ? (v.trace as Array<{ node?: string; via?: string }>) : [];
-  if (!trace.length && v.node) trace = [{ node: v.node as string }];
-  const lines = ['flowchart TD'];
-  for (let i = 0; i < trace.length; i++) {
-    const lbl = mmEsc(trace[i].node || '?');
-    if (i > 0) {
-      const via = trace[i].via ? `|${mmEsc(trace[i].via)}|` : '';
-      lines.push(`  n${i - 1} -->${via} n${i}["${lbl}"]`);
-    } else lines.push(`  n0["${lbl}"]`);
-  }
-  let cur = -1;
-  for (let j = trace.length - 1; j >= 0; j--) if (trace[j].node === v.node) { cur = j; break; }
-  if (cur < 0) cur = trace.length - 1;
-  if (cur >= 0) { lines.push('  classDef cur fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push(`  class n${cur} cur;`); }
-  return lines.join('\n');
-}
 
 /** One fact rendered by its TYPE affordance: a viewer (json/csv/mermaid), a machine-run
  *  trace diagram, a cell-declared ui:// renderer, or the present.render hint. */
@@ -150,11 +129,14 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp 
   let body = '';
   if (viewer && VIEWERS[viewer]) {
     mounts.push({ slot, view: VIEWERS[viewer], content: viewerContent(viewer, entry.value) });
-  } else if (t === 'machine-run' && entry.value && typeof entry.value === 'object') {
-    mounts.push({ slot, view: vwMermaid as ElView, content: machineRunMermaid(entry.value as Record<string, unknown>) });
   } else if (rh && typeof rh.renderer === 'string' && rh.renderer.indexOf('ui://') === 0) {
-    fetchRenderer(rh.renderer, slot);
+    // ADR-0039: a cell-authored renderer. Show the hint render immediately, then
+    // swap in the cell's renderer once it loads over the host proxy (degrades to
+    // the hint if the cell, the provider hop, or the host CSP can't serve it). The
+    // machine-run trace diagram, formerly hardcoded HERE, now lives in the machine
+    // cell and arrives this way — render federated, not centralised.
     body = hint('fields', entry.value);
+    fetchRenderer(rh.renderer, slot, t as string, entry.value);
   } else {
     body = rh && rh.hint ? hint(rh.hint, entry.value) : '';
     if (!body) body = hint('fields', entry.value) || `<pre>${esc(JSON.stringify(entry.value, null, 2)).slice(0, 800)}</pre>`;
@@ -530,14 +512,46 @@ function hostBridges(): string {
   const f = (ok: unknown): string => (ok ? '✓' : '✗');
   return `<div class="hint">host bridges · ctx ${f(c.updateModelContext)} · msg ${f(c.message)} · sampling ${f(c.sampling)}</div>`;
 }
-/** (ADR-0034 Inc 2′) fetch a cell-declared ui:// renderer over the host proxy + inject it. */
-function fetchRenderer(uri: string, slot: string): void {
+// ── ADR-0039: the FEDERATION consumer — run a cell-authored renderer ──────────
+// A cell serves a renderer SCRIPT that self-registers under its type on the shared
+// `window.__parcRender` map; the card fetches it once over the host `resources/read`
+// proxy (gateway provider hop → owning cell), injects it as an inline <script> (the
+// same `script-src` the inlined card itself relies on — no eval/module/iframe, which
+// the sandbox forbids), then calls it with the fact value + a small host API for
+// in-card interactivity. This is the ElementView contract canvas/lit already use,
+// now reaching the conversation: one renderer, every surface (the CALM invariant),
+// authored by the type's cell, changed by a cell deploy — not a platform cdk deploy.
+type RendererFn = (host: HTMLElement, value: unknown, api: RendererApi) => void;
+interface RendererApi {
+  call: (kind: 'read' | 'act', target: string, input: unknown) => Promise<unknown>;
+  esc: (s: unknown) => string;
+  md: (s: string) => string;
+}
+const rendererApi: RendererApi = { call: callServer, esc: (s) => esc(String(s ?? '')), md };
+const loadedRenderers = new Set<string>();
+function rendererRegistry(): Record<string, RendererFn> {
+  const w = window as unknown as { __parcRender?: Record<string, RendererFn> };
+  return (w.__parcRender = w.__parcRender || {});
+}
+/** Fetch + execute a cell-declared `ui://` renderer for a typed fact; degrade to the
+ *  hint render already in the slot on any failure (offline, CSP, cell down). */
+function fetchRenderer(uri: string, slot: string, type: string, value: unknown): void {
   app.readServerResource({ uri }).then((r) => {
-    const c = (r as { contents?: Array<{ text?: string }> }).contents?.[0];
-    if (!c || typeof c.text !== 'string') return; // degrade to the hint render already shown
+    const src = (r as { contents?: Array<{ text?: string }> }).contents?.[0]?.text;
     const el = document.getElementById(slot);
-    if (el) el.innerHTML = c.text;
-  }).catch(() => { /* degrade */ });
+    if (!el) return;
+    const reg = rendererRegistry();
+    if (typeof src === 'string' && src && !loadedRenderers.has(uri)) {
+      loadedRenderers.add(uri);
+      try {
+        const s = document.createElement('script');
+        s.textContent = src; // inline <script> executes synchronously on insert
+        document.head.appendChild(s);
+      } catch { /* CSP blocked injection — keep the hint render */ }
+    }
+    const fn = type && reg[type];
+    if (typeof fn === 'function') { try { el.innerHTML = ''; fn(el, value, rendererApi); } catch { /* keep the hint */ } }
+  }).catch(() => { /* degrade to the hint render already shown */ });
 }
 // Delegated interactivity: drill (read) / ratify (act) re-render the card IN PLACE —
 // progressive disclosure, no new model turn, all under the gateway's enforceScope.

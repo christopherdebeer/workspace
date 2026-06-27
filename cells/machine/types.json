@@ -80,7 +80,7 @@
       },
       "handlers": {
         "open": [{ "path": "/r/${key}" }],
-        "render": [{ "hint": "fields" }]
+        "render": [{ "renderer": "ui://@c15r/machine/renderers/machine-run.js" }, { "hint": "fields" }]
       }
     }
   ]

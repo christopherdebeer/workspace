@@ -66,7 +66,18 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         if (env.__command === 'describeTools') result = { tools: CELLS_TOOLS };
         else if (env.__command === 'describeCellTools') result = { tools: cellTools };
         else if (env.__command === 'describeTypes') result = { types: globalTypes };
-        else {
+        else if (env.__command === 'call') {
+          // ADR-0039 provider hop: the gateway fetches a cell-authored renderer asset
+          // via cells.call (GET). Echo the request so the test can assert the routing,
+          // and return a renderer-script HTTP response.
+          lastCall = { fn: 'cells', command: 'call', payload: env.payload };
+          result = {
+            statusCode: 200,
+            headers: { 'content-type': 'application/javascript; charset=utf-8' },
+            body: "window.__parcRender['machine-run']=function(){};",
+            isBase64Encoded: false,
+          };
+        } else {
           lastCall = { fn: 'cells', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
         }
@@ -277,6 +288,23 @@ describe('resource cell (MCP gateway, read/act)', () => {
 
     const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
     expect(missing.error?.code).toBe(-32602);
+  });
+
+  it('resources/read federates a cell-authored renderer (ui://@owner/name/<path>) via cells.call (ADR-0039)', async () => {
+    const read = await mcp('creator', 'resources/read', {
+      uri: 'ui://@c15r/machine/renderers/machine-run.js',
+    });
+    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
+    expect(contents[0].uri).toBe('ui://@c15r/machine/renderers/machine-run.js');
+    expect(contents[0].mimeType).toContain('javascript');
+    expect(contents[0].text).toContain("__parcRender['machine-run']");
+    // The gateway resolved it by fetching the OWNING cell's served asset (GET) —
+    // the provider hop, not a platform-bundled renderer.
+    expect(lastCall).toEqual({
+      fn: 'cells',
+      command: 'call',
+      payload: { owner: 'c15r', name: 'machine', method: 'GET', path: '/renderers/machine-run.js' },
+    });
   });
 
   it('tools/list carries spec annotations and titles for the three verbs', async () => {

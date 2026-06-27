@@ -87,6 +87,51 @@ export const view = {
 };
 `;
 
+/**
+ * ADR-0039 — the machine cell's CONVERSATIONAL renderer for `machine-run` facts,
+ * served at `/renderers/machine-run.js` and declared on the type as
+ * `handlers.render[].renderer = ui://@c15r/machine/renderers/machine-run.js`. The
+ * parc.land card (the conversation surface) fetches this over the host proxy and
+ * runs it. This is the SAME trace→mermaid diagram that used to be hardcoded in the
+ * gateway card; it now lives with the type it renders, so changing it is a cell
+ * deploy, not a platform cdk deploy. A self-registering classic script (no module/
+ * eval — the card's sandbox forbids those): it adds itself to `window.__parcRender`
+ * under its type name. Backtick-free so it nests in this template literal.
+ */
+const MACHINE_RUN_RENDERER_SRC = `
+(function(){
+  var reg = (window.__parcRender = window.__parcRender || {});
+  var M;
+  function loadMermaid(){
+    if(!M){ M = import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then(function(m){ m.default.initialize({startOnLoad:false,securityLevel:'strict',theme:'neutral'}); return m.default; }); }
+    return M;
+  }
+  function e(s){ return String(s==null?'':s).replace(/["\\n|]/g,' '); }
+  function toMermaid(v){
+    var trace = Array.isArray(v.trace) ? v.trace : [];
+    if(!trace.length && v.node) trace = [{node: v.node}];
+    var lines = ['flowchart TD'];
+    for(var i=0;i<trace.length;i++){
+      var lbl = e(trace[i].node || '?');
+      if(i>0){ var via = trace[i].via ? '|'+e(trace[i].via)+'|' : ''; lines.push('  n'+(i-1)+' -->'+via+' n'+i+'["'+lbl+'"]'); }
+      else lines.push('  n0["'+lbl+'"]');
+    }
+    var cur=-1; for(var j=trace.length-1;j>=0;j--){ if(trace[j].node===v.node){ cur=j; break; } }
+    if(cur<0) cur=trace.length-1;
+    if(cur>=0){ lines.push('  classDef cur fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push('  class n'+cur+' cur;'); }
+    return lines.join('\\n');
+  }
+  var seq=0;
+  reg['machine-run'] = function(host, value){
+    try{
+      host.textContent='…';
+      var src = toMermaid(value || {});
+      loadMermaid().then(function(m){ return m.render('mr'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg; }).catch(function(err){ host.textContent = 'machine-run: '+((err&&err.message)||err); });
+    }catch(err){ host.textContent = 'machine-run render error'; }
+  };
+})();
+`;
+
 const TOOLS = [
   {
     name: 'bootstrap',
@@ -290,6 +335,13 @@ export const handler = async (event) => {
   // ── the SSR React SPA (the user frontend) ──────────────────────────────
   if (method === 'GET' && path === '/app.js') {
     return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*' }, body: readFile('app.js') };
+  }
+  // ADR-0039: the conversational renderer for `machine-run`, fetched by the parc.land
+  // card via the gateway provider hop (ui://@c15r/machine/renderers/machine-run.js).
+  // ACAO:* + cacheable — it is non-sensitive static renderer code (data arrives via
+  // the host-proxied tool calls, never embedded here).
+  if (method === 'GET' && path === '/renderers/machine-run.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_RUN_RENDERER_SRC };
   }
   const isAppRoute = path === '/' || path === '' || path.startsWith('/m/') || path.startsWith('/r/');
   if ((method === 'GET' || method === 'HEAD') && isAppRoute) {

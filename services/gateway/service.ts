@@ -525,7 +525,7 @@ export const handler = defineMcpService({
   // widget resources the tools bind to via their `_meta.ui.resourceUri`.
   capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [UI_MIME] } } },
   resources: {
-    read: (uri: string) => resolveUiResource(uri),
+    read: (uri: string, ctx: ServiceContext) => resolveUiResource(uri, ctx),
     list: () => listUiResources(),
   },
   http: [

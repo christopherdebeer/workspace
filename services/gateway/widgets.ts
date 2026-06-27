@@ -11,6 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ServiceContext } from '../../platform/runtime';
 
 export const UI_MIME = 'text/html;profile=mcp-app';
 export const CARD_URI = 'ui://parc/card';
@@ -129,10 +130,59 @@ function cardHtml(): string {
   return SHELL_HEAD + appJs() + SHELL_TAIL;
 }
 
-/** Resolve a `ui://` widget URI to its HTML contents, or null if unknown. The card
- *  reuses the `viewers` cell renderers; mermaid lazy-loads from the jsDelivr CDN, so the
- *  resource declares it in `_meta.ui.csp.resourceDomains` (default CSP is `'none'`). */
-export function resolveUiResource(uri: string): { uri: string; mimeType: string; text: string; _meta?: Record<string, unknown> } | null {
+type UiResource = { uri: string; mimeType: string; text: string; _meta?: Record<string, unknown> };
+
+/**
+ * ADR-0039 — the FEDERATION provider hop. A cell-authored renderer is addressed
+ * `ui://@<owner>/<name>/<path>`; the gateway resolves it by fetching the owning
+ * cell's served asset server-side (over the same `cells.call` invoke the gateway
+ * already uses for `@owner/cell.tool`), so a type's conversational renderer is
+ * authored + deployed by its cell at runtime — no platform `cdk deploy`. The card
+ * (the consumer) requests this over the host `resources/read` proxy under our
+ * enforceScope. The serving cell decides what to return (a renderer script, HTML,
+ * etc.); we pass its content-type straight through.
+ *
+ * Cached per-URI with a short TTL — the asset is stable between cell deploys and
+ * this Lambda is ephemeral, so a coarse TTL is enough (a cell-version key is the
+ * ADR-0035 follow-up).
+ */
+const CELL_RENDERER_RE = /^ui:\/\/@([^/]+)\/([^/]+)\/(.+)$/;
+const CELL_RENDERER_TTL_MS = 60_000;
+const cellRendererCache = new Map<string, { at: number; resource: UiResource }>();
+
+async function resolveCellRenderer(uri: string, ctx: ServiceContext): Promise<UiResource | null> {
+  const m = CELL_RENDERER_RE.exec(uri);
+  if (!m) return null;
+  const [, owner, name, path] = m;
+  const cached = cellRendererCache.get(uri);
+  if (cached && Date.now() - cached.at < CELL_RENDERER_TTL_MS) return cached.resource;
+  try {
+    const res = (await ctx
+      .serviceClient('cells')
+      .command('call', { owner, name, method: 'GET', path: `/${path}` })) as {
+      statusCode?: number;
+      headers?: Record<string, string>;
+      body?: string;
+      isBase64Encoded?: boolean;
+    } | null;
+    if (!res || typeof res.body !== 'string' || (typeof res.statusCode === 'number' && res.statusCode >= 400)) return null;
+    const text = res.isBase64Encoded ? Buffer.from(res.body, 'base64').toString('utf8') : res.body;
+    const resource: UiResource = {
+      uri,
+      mimeType: res.headers?.['content-type'] || res.headers?.['Content-Type'] || 'application/javascript; charset=utf-8',
+    text };
+    cellRendererCache.set(uri, { at: Date.now(), resource });
+    return resource;
+  } catch {
+    return null; // the card degrades to the type's render hint
+  }
+}
+
+/** Resolve a `ui://` widget URI to its contents, or null if unknown. `ui://parc/card`
+ *  is the platform floor (served from this bundle); `ui://@owner/name/<path>` federates
+ *  to the owning cell (ADR-0039). The card reuses these over the host proxy; mermaid/d3
+ *  lazy-load from the jsDelivr CDN, declared in `_meta.ui.csp.resourceDomains`. */
+export function resolveUiResource(uri: string, ctx?: ServiceContext): UiResource | Promise<UiResource | null> | null {
   if (uri === CARD_URI) {
     return {
       uri,
@@ -148,6 +198,7 @@ export function resolveUiResource(uri: string): { uri: string; mimeType: string;
       },
     };
   }
+  if (ctx && CELL_RENDERER_RE.test(uri)) return resolveCellRenderer(uri, ctx);
   return null;
 }
 
