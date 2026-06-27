@@ -220,6 +220,7 @@ function render(data: unknown): void {
     if (!b) b = `<pre>${esc(JSON.stringify(d, null, 2))}</pre>`;
     if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
   }
+  b += hostBridges();
   currentData = data;
   root.innerHTML = header(viewStack.length > 0) + b;
   for (const m of mounts) {
@@ -237,10 +238,30 @@ let currentRead: { target: string; input: unknown } | null = null;
 // host-pushed top-level view too (audit: no-back-navigation).
 let currentData: unknown = null;
 const viewStack: unknown[] = [];
+// Host capabilities discovered at the ui/initialize handshake (ADR-0037). Tells us which
+// view→model bridges this host honours; null until connect() resolves.
+let hostCaps: ReturnType<App['getHostCapabilities']> = undefined;
 
 async function callServer(kind: 'read' | 'act', target: string, input: unknown): Promise<unknown> {
   const r = await app.callServerTool({ name: kind, arguments: { target, input } });
   return (r as { structuredContent?: unknown }).structuredContent ?? null;
+}
+// ── ADR-0037: close the loop — make widget interactions visible to the agent ──
+/** Bridge a widget event into the model's context for its NEXT turn (no turn now,
+ *  last-write-wins). Silent + best-effort: gated on the host advertising the capability,
+ *  swallows rejection. A note TO the model — not a substrate write (that already happened
+ *  via the host-proxied act under enforceScope). */
+function notifyModel(text: string, structured?: Record<string, unknown>): void {
+  if (!hostCaps || !(hostCaps as { updateModelContext?: unknown }).updateModelContext) return;
+  app.updateModelContext({ content: [{ type: 'text', text }], ...(structured ? { structuredContent: structured } : {}) }).catch(() => { /* host declined */ });
+}
+/** A one-line readout of which view→model bridges this host honours — answers, empirically,
+ *  what claude.ai supports (ADR-0037 (a)). Subtle footer; '' until connected. */
+function hostBridges(): string {
+  if (!hostCaps) return '';
+  const c = hostCaps as { updateModelContext?: unknown; message?: unknown; sampling?: unknown };
+  const f = (ok: unknown): string => (ok ? '✓' : '✗');
+  return `<div class="hint">host bridges · ctx ${f(c.updateModelContext)} · msg ${f(c.message)} · sampling ${f(c.sampling)}</div>`;
 }
 /** (ADR-0034 Inc 2′) fetch a cell-declared ui:// renderer over the host proxy + inject it. */
 function fetchRenderer(uri: string, slot: string): void {
@@ -308,10 +329,15 @@ document.addEventListener('click', async (ev) => {
   try {
     if (kind === 'read') {
       const sc = await callServer('read', target, input);
-      if (sc) { viewStack.push(currentData); currentRead = { target, input }; render(sc); }
-      else el.classList.remove('busy');
+      if (sc) {
+        viewStack.push(currentData); currentRead = { target, input }; render(sc);
+        // Ambient awareness: tell the agent what the human is now looking at (ADR-0037).
+        notifyModel(`The user is viewing ${target}${input && Object.keys(input as object).length ? ' ' + JSON.stringify(input) : ''} in the parc.land card.`, { event: 'view', target, input });
+      } else el.classList.remove('busy');
     } else {
       await callServer('act', target, input);
+      // Decision made in the UI → make the agent aware without a substrate re-scan (ADR-0037).
+      notifyModel(`The user performed ${target} with ${JSON.stringify(input)} in the parc.land card (the substrate write has been applied).`, { event: 'act', target, input });
       const rr = currentRead || { target: 'workspace.suggestions', input: {} };
       const sc = await callServer('read', rr.target, rr.input);
       if (sc) render(sc); else el.classList.remove('busy');
@@ -321,4 +347,10 @@ document.addEventListener('click', async (ev) => {
 
 // A fresh top-level result from the host resets the drill history.
 app.addEventListener('toolresult', (params) => { viewStack.length = 0; render((params as { structuredContent?: unknown }).structuredContent); });
-app.connect().catch(() => { /* not in a host */ });
+app.connect().then(() => {
+  // ADR-0037 (a): probe + record which view→model bridges the host honours.
+  hostCaps = app.getHostCapabilities();
+  const c = (hostCaps || {}) as { updateModelContext?: unknown; message?: unknown; sampling?: unknown };
+  app.sendLog({ level: 'info', logger: 'parc.card', data: `host bridges: updateModelContext=${!!c.updateModelContext} message=${!!c.message} sampling=${!!c.sampling}` }).catch(() => { /* logging not supported */ });
+  if (currentData != null) render(currentData); // repaint footer now that caps are known
+}).catch(() => { /* not in a host */ });
