@@ -63,6 +63,9 @@ const SHELL_HEAD = `<!doctype html>
   .sim i { display: block; height: 100%; background: #6d5ef0; }
   a.wikilink { color: #6d5ef0; text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, #6d5ef0 50%, transparent); cursor: pointer; }
   a.wikilink:hover { text-decoration: underline; }
+  /* D3 force graph viewport (ADR-0038 Inc 2 rich) — a fixed-height pan/zoom canvas. */
+  .graph { height: 460px; margin: 6px 0; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 10px; overflow: hidden; background: color-mix(in srgb, currentColor 3%, transparent); }
+  .graph svg { display: block; width: 100%; height: 100%; }
   /* Progressive disclosure (ADR-0036): the open view is GLANCEABLE — long lists cap to
      a head + a "+N more" toggle, and long fact bodies clamp to a few lines with a fade +
      "show more". Both reveal already-present data locally (no server round-trip). */

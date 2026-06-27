@@ -33,6 +33,13 @@
   per-op icons + relative time + a head-seq empty state; graph cap 50→120. Deferred (warns): inline tend/undo
   actions, D3/zoomable graph + centrality-ranked selection, `platform.logs` log-feed formatting, redundant
   header chrome.
+- **Status (Inc 2 graph → D3, 2026-06-27):** The graph is now a real **D3 force-directed** SVG (replacing the
+  static mermaid diagram), addressing the audit's not-zoomable / cap-too-low / can't-traverse warns: **zoom /
+  pan / drag**, node size = **degree (centrality)**, **seed** nodes (the result set) filled vs one-hop
+  **neighbours** outlined, authored edges solid / derived dashed, and **tap-a-node → in-card peek** (graph
+  traversal). `d3` is **lazy-loaded from the CDN the resource already allows** (same path as mermaid), so the
+  inlined bundle is unchanged (~2 KB delta). Cap raised to 120. Remaining graph follow-up: centrality-ranked
+  *selection* when the slice exceeds the cap (currently first-N).
 - **Status (orig):** Proposed. A holistic audit of the MCP-Apps card (`services/gateway/client/main.ts`) against the
   *whole* read/act surface — not the happy-path subset the 2026-06-27 validation exercised. Names the systemic
   gap (most reads dump raw JSON), the nuance gaps (search-as-cards vs graph, dead links, thin docs, plain-text

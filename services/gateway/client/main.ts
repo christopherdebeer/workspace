@@ -260,30 +260,73 @@ function genericStructured(d: Record<string, unknown>): string {
   if (scalars.length) h = rowList(scalars) + h;
   return h || `<pre>${esc(JSON.stringify(d, null, 2))}</pre>`;
 }
-/** A node-link graph (graph/links `{edges}`) as a mermaid diagram — authored edges solid,
- *  derived dashed. Capped for legibility (ADR-0038 Inc 2 cheap cut; D3 follow-up later). */
-function graphMermaid(edges: Edge[]): string {
-  const ids = new Map<string, string>();
-  const nid = (k: string): string => { if (!ids.has(k)) ids.set(k, 'n' + ids.size); return ids.get(k) as string; };
-  const short = (k: string): string => (k.length > 24 ? k.slice(0, 22) + '…' : k);
-  const lines = ['flowchart LR'];
-  for (const e of edges) {
-    const arrow = e.derived ? '-.->' : '-->';
-    const lbl = e.rel ? `|${mmEsc(e.rel)}|` : '';
-    lines.push(`  ${nid(e.from)}["${mmEsc(short(e.from))}"] ${arrow}${lbl} ${nid(e.to)}["${mmEsc(short(e.to))}"]`);
-  }
-  return lines.join('\n');
+// A node-link graph as a D3 **force-directed** SVG (ADR-0038 Inc 2, rich follow-up).
+// d3 is lazy-loaded from the CDN the resource already allows (mermaid uses the same), so
+// it never bloats the inlined bundle. Node size = degree (centrality); seed nodes (the
+// result set) filled, one-hop neighbours outlined; authored edges solid, derived dashed;
+// zoom / pan / drag; tap a node → in-card peek (host-proxied traversal).
+/* eslint-disable @typescript-eslint/no-explicit-any */
+let d3Mod: Promise<any> | null = null;
+function loadD3(): Promise<any> {
+  // @ts-ignore — a URL module specifier has no local types; intentional (matches viewers).
+  if (!d3Mod) d3Mod = import(/* @vite-ignore */ 'https://cdn.jsdelivr.net/npm/d3@7/+esm').catch(() => null);
+  return d3Mod;
+}
+function shortKey(k: string): string { return k.length > 30 ? k.slice(0, 28) + '…' : k; }
+function graphView(slot: string, edges: Edge[], seed: Set<string>): void {
+  const host = document.getElementById(slot);
+  if (!host) return;
+  const deg = new Map<string, number>();
+  for (const e of edges) { deg.set(e.from, (deg.get(e.from) || 0) + 1); deg.set(e.to, (deg.get(e.to) || 0) + 1); }
+  const hasSeed = seed.size > 0;
+  const nodes = [...deg.keys()].map((id) => ({ id, deg: deg.get(id) || 1, seed: !hasSeed || seed.has(id) }));
+  const links = edges.map((e) => ({ source: e.from, target: e.to, derived: !!e.derived }));
+  loadD3().then((d3: any) => {
+    if (!d3) { host.innerHTML = '<div class="hint">graph renderer unavailable (offline)</div>'; return; }
+    const W = host.clientWidth || 360, H = 460;
+    host.innerHTML = '';
+    const svg = d3.select(host).append('svg').attr('width', '100%').attr('height', H).attr('viewBox', `0 0 ${W} ${H}`).style('touch-action', 'none');
+    const g = svg.append('g');
+    svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (ev: any) => g.attr('transform', ev.transform)));
+    const link = g.append('g').attr('stroke', 'currentColor').attr('stroke-opacity', 0.3).selectAll('line').data(links).join('line')
+      .attr('stroke-width', 1).attr('stroke-dasharray', (d: any) => (d.derived ? '3,3' : null));
+    const node = g.append('g').selectAll('g').data(nodes).join('g').style('cursor', 'pointer')
+      .on('click', (_e: any, d: any) => { void navigate('workspace.peek', { key: d.id }); });
+    node.append('circle').attr('r', (d: any) => 4 + Math.min(13, Math.sqrt(d.deg) * 3))
+      .attr('fill', (d: any) => (d.seed ? '#6d5ef0' : 'transparent')).attr('stroke', '#6d5ef0').attr('stroke-width', 1.5);
+    node.append('title').text((d: any) => `${d.id} · ${d.deg}`);
+    const label = g.append('g').attr('font-size', 9).attr('fill', 'currentColor').attr('opacity', 0.7).selectAll('text')
+      .data(nodes.filter((d) => d.seed || d.deg > 2)).join('text').text((d: any) => shortKey(d.id)).attr('dx', 9).attr('dy', 3);
+    const sim = d3.forceSimulation(nodes)
+      .force('link', d3.forceLink(links).id((d: any) => d.id).distance(64).strength(0.5))
+      .force('charge', d3.forceManyBody().strength(-170))
+      .force('center', d3.forceCenter(W / 2, H / 2))
+      .force('collide', d3.forceCollide().radius(18));
+    sim.on('tick', () => {
+      link.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y).attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y);
+      node.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
+      label.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
+    });
+    node.call(d3.drag()
+      .on('start', (ev: any, d: any) => { if (!ev.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (ev: any, d: any) => { d.fx = ev.x; d.fy = ev.y; })
+      .on('end', (ev: any, d: any) => { if (!ev.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+    setTimeout(() => sim.stop(), 5000); // settle then freeze
+  });
 }
 function renderGraph(d: Record<string, unknown>): string {
   const edges = (Array.isArray(d.edges) ? d.edges : []) as Edge[];
-  if (!edges.length) return '<h2>Graph</h2><div class="hint">No edges in this slice.</div>';
+  if (!edges.length) return '<h2>Graph</h2><div class="hint">No edges here.</div>';
   const cap = 120;
   const shown = edges.slice(0, cap);
+  const seed = new Set((Array.isArray((d as { _seed?: unknown })._seed) ? (d as { _seed?: string[] })._seed : []) as string[]);
   const slot = 'g' + nextId();
-  mounts.push({ slot, view: vwMermaid as ElView, content: graphMermaid(shown) });
-  const note = edges.length > cap ? `<div class="hint">showing ${cap} of ${edges.length} edges</div>` : '';
-  return `<h2>Graph (${edges.length} edges)</h2>${note}<div id="${slot}"></div>`;
+  const note = edges.length > cap ? ` · showing ${cap} of ${edges.length}` : '';
+  // Built after innerHTML is live (the slot must exist) — a 0ms task runs post-render.
+  setTimeout(() => graphView(slot, shown, seed), 0);
+  return `<h2>Graph (${edges.length} edges)</h2><div class="hint">tap a node to open · drag to pan · scroll / pinch to zoom${note}</div><div id="${slot}" class="graph"></div>`;
 }
+/* eslint-enable @typescript-eslint/no-explicit-any */
 function renderAttention(d: Record<string, unknown>): string {
   const stale = (d.stale as Array<{ key: string; updatedAt?: string; type?: string }>) || [];
   const unlinked = (d.unlinked as string[]) || [];
@@ -587,7 +630,7 @@ async function showGraphOf(keys: string[]): Promise<void> {
   const r = await callServer('read', 'workspace.links', {}) as { edges?: Edge[] } | null;
   const edges = (r && Array.isArray(r.edges) ? r.edges : []).filter((e) => set.has(e.from) || set.has(e.to));
   viewStack.push(currentData);
-  render({ edges });
+  render({ edges, _seed: keys }); // seed = the result set; one-hop neighbours render outlined
 }
 document.addEventListener('click', async (ev) => {
   const tgt = ev.target as HTMLElement;
