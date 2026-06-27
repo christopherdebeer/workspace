@@ -24,12 +24,11 @@ const SHELL_HEAD = `<!doctype html>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  /* The host (claude.ai mobile) gives a fixed, often small frame and doesn't honour
-     runtime resize — so #root is the scroll container (fills the frame, scrolls within),
-     and the header is a thin sticky marker to maximise content space. */
-  html, body { height: 100%; }
-  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; overflow: hidden; }
-  #root { height: 100vh; overflow: auto; padding: 10px 12px; }
+  /* Grow-to-content: the body flows to its natural content height and the widget posts
+     that height to the host (Val.town's working pattern) — NOT a fixed-height scroll box,
+     which would cap scrollHeight at the frame and defeat the resize signal. Thin sticky
+     header to maximise content space. */
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; padding: 10px 12px; }
   .hdr { position: sticky; top: 0; z-index: 2; background: Canvas; display: flex; align-items: center; gap: 6px;
          font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .5;
          padding: 1px 0 3px; margin: 0 0 6px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); }

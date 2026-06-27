@@ -149,19 +149,32 @@ function render(data: unknown): void {
     const el = document.getElementById(m.slot);
     if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
   }
-  reportSize();
+  scheduleReport();
 }
 
-// ── sizing (the spec leaves frame size to the host; report ours every way) ───
+// ── sizing: grow-to-content. The host (Val.town proves claude.ai honours this) resizes
+// the frame when the widget posts its content height — but the signal must carry the
+// TRUE scrollHeight and fire AFTER the data-driven paint, not on the initial skeleton.
+// We post several known shapes ({type:'resize'} is the one the Val.town diff points at)
+// and also try window.mcpApp.resize, then re-fire on any later growth (async mermaid).
 function reportSize(): void {
-  const h = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+  const h = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0, document.documentElement.offsetHeight) + 4;
   const w = document.documentElement.scrollWidth;
+  for (const msg of [
+    { type: 'resize', height: h, width: w },
+    { type: 'ui-size-change', height: h, width: w },
+    { jsonrpc: '2.0', method: 'ui/notifications/size-change', params: { height: h, width: w } },
+  ]) {
+    try { window.parent.postMessage(msg, '*'); } catch { /* sandbox */ }
+  }
   const host = (window as unknown as { mcpApp?: { resize?: (w: number, h: number) => void } }).mcpApp;
   try { if (host && typeof host.resize === 'function') host.resize(w, h); } catch { /* host opt */ }
-  try { window.parent.postMessage({ type: 'ui-size-change', height: h, width: w }, '*'); } catch { /* mcp-ui style */ }
-  try { window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-change', params: { height: h, width: w } }, '*'); } catch { /* spec-ish */ }
 }
-try { new ResizeObserver(() => reportSize()).observe(document.body); } catch { /* no RO */ }
+/** Report AFTER paint (double rAF) so the height reflects rendered content, not skeleton. */
+function scheduleReport(): void {
+  try { requestAnimationFrame(() => requestAnimationFrame(reportSize)); } catch { reportSize(); }
+}
+try { new ResizeObserver(() => reportSize()).observe(document.documentElement); } catch { /* no RO */ }
 
 // ── MCP-Apps host channel (spec 2026-01-26) ──────────────────────────────────
 const INIT_ID = 1;
@@ -213,7 +226,7 @@ function fetchRenderer(uri: string, slot: string): void {
     const c = (r as { contents?: Array<{ text?: string }> })?.contents?.[0];
     if (!c || !c.text) return; // degrade to the hint render already shown
     const el = document.getElementById(slot);
-    if (el) { el.innerHTML = c.text; reportSize(); }
+    if (el) { el.innerHTML = c.text; scheduleReport(); }
   });
 }
 window.addEventListener('message', (ev: MessageEvent) => {
