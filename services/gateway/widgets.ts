@@ -34,6 +34,7 @@ const SHELL_HEAD = `<!doctype html>
          padding: 1px 0 3px; margin: 0 0 6px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); }
   .hdr .dot { width: 6px; height: 6px; border-radius: 50%; background: #6d5ef0; }
   .hdr .sp { flex: 1; } .hdr .tag { display: none; }
+  .hdr .back { font-size: 13px; line-height: 1; padding: 1px 6px; margin-right: 2px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, #6d5ef0 14%, transparent); border: 1px solid color-mix(in srgb, #6d5ef0 35%, transparent); }
   .who { font-size: 18px; font-weight: 650; }

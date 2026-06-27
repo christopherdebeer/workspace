@@ -31,8 +31,9 @@ type Types = Record<string, { icon?: string; label?: string; render?: { viewer?:
 /** Viewer mounts queued during string render, applied after innerHTML is set. */
 let mounts: Array<{ slot: string; view: ElView; content: string }> = [];
 
-function header(): string {
-  return '<div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div>';
+function header(back: boolean): string {
+  const b = back ? '<button class="mini back" data-back="1" title="back">←</button>' : '';
+  return `<div class="hdr">${b}<span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div>`;
 }
 function chips(arr: string[]): string {
   return '<div class="chips">' + arr.map((s) => `<span class="chip">${esc(s)}</span>`).join('') + '</div>';
@@ -47,15 +48,53 @@ const nextId = (): string => 'x' + uid++;
 function toggleBtn(id: string, moreLabel: string): string {
   return `<button class="more-btn" data-toggle="${id}" data-more="${esc(moreLabel)}" data-less="show less">${esc(moreLabel)}</button>`;
 }
-/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) + re-renders.
- *  Progressive: only the first `cap` rows show; the rest collapse behind a "+N more" toggle. */
-function drillRows(pairs: Array<[string, unknown]>, input: (k: string) => unknown, cap = 6): string {
-  const row = ([k, v]: [string, unknown]): string =>
-    `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify(input(String(k))))}">${esc(k)}</div><div class="v">${esc(v)}</div>`;
-  const head = `<div class="rows">${pairs.slice(0, cap).map(row).join('')}</div>`;
-  if (pairs.length <= cap) return head;
+/** A `.rows` grid, capped to `cap` visible rows + a "+N more" toggle for the rest. */
+function rowsBlock(rows: string[], cap = 6): string {
+  const head = `<div class="rows">${rows.slice(0, cap).join('')}</div>`;
+  if (rows.length <= cap) return head;
   const id = nextId();
-  return head + `<div id="${id}" hidden><div class="rows">${pairs.slice(cap).map(row).join('')}</div></div>` + toggleBtn(id, `+${pairs.length - cap} more`);
+  return head + `<div id="${id}" hidden><div class="rows">${rows.slice(cap).join('')}</div></div>` + toggleBtn(id, `+${rows.length - cap} more`);
+}
+/** Rows that drill: clicking issues a host-proxied read (query by type/prefix) + re-renders. */
+function drillRows(pairs: Array<[string, unknown]>, input: (k: string) => unknown, cap = 6): string {
+  return rowsBlock(pairs.map(([k, v]) =>
+    `<div class="k drill" data-call="read" data-target="workspace.query" data-input="${esc(JSON.stringify(input(String(k))))}">${esc(k)}</div><div class="v">${esc(v)}</div>`), cap);
+}
+type Edge = { from: string; rel: string; to: string; strength?: number | null; derived?: boolean };
+/** A neighbor key's short label — the resolved entry's type-affordance label/title, else the key. */
+function neighborLabel(key: string, entries: Record<string, Entry>, types: Types): string {
+  const ent = entries[key];
+  const v = ent && (ent.value as Record<string, unknown> | undefined);
+  if (ent && v) {
+    const t = ent._meta && ent._meta.type;
+    const aff = (t && types[t]) || {};
+    const lbl = (aff.label && resolvePath(ent, aff.label)) || v.title || v.name;
+    if (lbl) return String(lbl).slice(0, 60);
+  }
+  return key;
+}
+/** One edge section (outbound/inbound) — each neighbor drillable: a host-proxied peek. */
+function neighborSection(edges: Edge[], entries: Record<string, Entry>, types: Types, incoming: boolean): string {
+  return rowsBlock(edges.map((e) => {
+    const nk = incoming ? e.from : e.to;
+    const der = e.derived ? ' <span class="hint">· derived</span>' : '';
+    const aff = entries[nk] && entries[nk]._meta && entries[nk]._meta.type && types[(entries[nk]._meta as { type?: string }).type as string];
+    const ic = (aff && aff.icon) ? esc(aff.icon) + ' ' : '';
+    return `<div class="k drill" data-call="read" data-target="workspace.peek" data-input="${esc(JSON.stringify({ key: nk }))}"><span class="ty">${esc(e.rel)}</span> ${ic}${esc(neighborLabel(nk, entries, types))}${der}</div><div class="v">${esc(e.strength != null ? Number(e.strength).toFixed(2) : '')}</div>`;
+  }));
+}
+/** The neighbours shape `{outbound, inbound, entries}` → drillable edge sections (graph
+ *  traversal, one hop). Renders the EDGES even when no neighbor `entries` resolved — so an
+ *  el:/opaque-keyed or derived-only fact no longer falls through to a raw-JSON dump. */
+function renderNeighbors(d: Record<string, unknown>, types: Types): string {
+  const out = (Array.isArray(d.outbound) ? d.outbound : []) as Edge[];
+  const inb = (Array.isArray(d.inbound) ? d.inbound : []) as Edge[];
+  const entries = (d.entries as Record<string, Entry>) || {};
+  let h = '';
+  if (out.length) h += `<h2>Outbound (${out.length})</h2>` + neighborSection(out, entries, types, false);
+  if (inb.length) h += `<h2>Inbound (${inb.length})</h2>` + neighborSection(inb, entries, types, true);
+  if (!h) h = '<div class="hint">No links yet — this fact has no edges.</div>';
+  return h;
 }
 function viewerContent(name: string, value: unknown): string {
   if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -123,7 +162,11 @@ function renderSuggestions(d: Record<string, unknown>): string {
   const cards = (d.suggestions as Array<Record<string, unknown>> || []).map((c) => {
     const chips2 = vocab.map((rel) => `<button class="chip act" data-call="act" data-target="workspace.ratify" data-input="${esc(JSON.stringify({ from: c.from, to: c.to, rel }))}">${esc(rel)}</button>`).join('');
     const score = c.score != null ? Number(c.score).toFixed(2) : '';
-    return `<div class="fc"><div class="fc-h"><span class="lb">${esc(c.fromLabel || c.from)} ↔ ${esc(c.toLabel || c.to)}</span><span class="sp"></span><span class="sc">${score}</span></div><div class="chips"><span class="hint">ratify as</span> ${chips2}</div></div>`;
+    // Peek both facts inline BEFORE ratifying — you can't truthfully assert refines/
+    // duplicates/… for opaque keys sight-unseen (audit: blind-ratification).
+    const pid = nextId();
+    const peek = `<button class="mini" data-peek="${esc(JSON.stringify([c.from, c.to]))}" data-into="${pid}" title="peek both facts">👁 peek</button>`;
+    return `<div class="fc"><div class="fc-h"><span class="lb">${esc(c.fromLabel || c.from)} ↔ ${esc(c.toLabel || c.to)}</span><span class="sp"></span><span class="sc">${score}</span>${peek}</div><div id="${pid}"></div><div class="chips"><span class="hint">ratify as</span> ${chips2}</div></div>`;
   });
   let items: string;
   if (!cards.length) items = '<div class="hint">none</div>';
@@ -146,6 +189,17 @@ function whoami(d: Record<string, unknown>): string {
   if (Array.isArray(d.grant) && JSON.stringify(d.grant) !== JSON.stringify(d.scopes)) h += '<h2>Grant ceiling</h2>' + chips(d.grant as string[]);
   return h;
 }
+/** Reveal a "show more" only on bodies that actually overflow the clamp; un-clamp the rest.
+ *  Runs after innerHTML is live (post-render and after async inline injections). */
+function measureClamps(): void {
+  for (const node of Array.from(document.querySelectorAll('.clamp'))) {
+    const slot = node as HTMLElement;
+    const btn = slot.nextElementSibling as HTMLElement | null;
+    if (!btn || !btn.classList.contains('clamp-btn')) continue;
+    if (slot.scrollHeight - slot.clientHeight > 8) btn.removeAttribute('hidden');
+    else slot.classList.remove('clamp');
+  }
+}
 function render(data: unknown): void {
   const root = document.getElementById('root');
   if (!root) return;
@@ -155,33 +209,34 @@ function render(data: unknown): void {
   else {
     const d = data as Record<string, unknown>;
     const types = (d.types as Types) || {};
+    const isNeighbors = Array.isArray(d.outbound) || Array.isArray(d.inbound);
     if (d.overview) b += overview(d.overview as Record<string, unknown>);
     else if (d.user && Array.isArray(d.scopes)) b += whoami(d);
     else if (Array.isArray(d.suggestions) && Array.isArray(d.vocab)) { b += renderSuggestions(d); currentRead = { target: 'workspace.suggestions', input: {} }; }
+    else if (isNeighbors) b += renderNeighbors(d, types);
     if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus as Record<string, Entry>, types);
-    else if (d.entries) b += entriesBlock(d.entries as Record<string, Entry>, types);
+    else if (d.entries && !isNeighbors) b += entriesBlock(d.entries as Record<string, Entry>, types);
     else if (d.value && d._meta) b += typedCard((d.key as string) || '', d as Entry, types, 'slot-one');
     if (!b) b = `<pre>${esc(JSON.stringify(d, null, 2))}</pre>`;
     if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
   }
-  root.innerHTML = header() + b;
+  currentData = data;
+  root.innerHTML = header(viewStack.length > 0) + b;
   for (const m of mounts) {
     const el = document.getElementById(m.slot);
     if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
   }
-  // Reveal a "show more" only on bodies that actually overflow the clamp; un-clamp the rest.
-  for (const node of Array.from(document.querySelectorAll('.clamp'))) {
-    const slot = node as HTMLElement;
-    const btn = slot.nextElementSibling as HTMLElement | null;
-    if (!btn || !btn.classList.contains('clamp-btn')) continue;
-    if (slot.scrollHeight - slot.clientHeight > 8) btn.removeAttribute('hidden');
-    else slot.classList.remove('clamp');
-  }
+  measureClamps();
 }
 
 // ── host channel via the official SDK ────────────────────────────────────────
 const app = new App({ name: 'parc.land card', version: '1.0.0' }, {}, { autoResize: true });
 let currentRead: { target: string; input: unknown } | null = null;
+// Drill history: each forward drill pushes the view it leaves; the header ← pops it.
+// Snapshots of rendered data (not re-reads) so back is instant and works for the
+// host-pushed top-level view too (audit: no-back-navigation).
+let currentData: unknown = null;
+const viewStack: unknown[] = [];
 
 async function callServer(kind: 'read' | 'act', target: string, input: unknown): Promise<unknown> {
   const r = await app.callServerTool({ name: kind, arguments: { target, input } });
@@ -211,12 +266,37 @@ function toggleClamp(btn: HTMLElement): void {
   if (!el) return;
   btn.textContent = el.classList.toggle('open') ? 'show less' : 'show more';
 }
+/** Peek both facts of a suggestion inline (host-proxied) so a ratification is informed. */
+async function peekPair(keys: [string, string], into: HTMLElement, btn: HTMLElement): Promise<void> {
+  btn.classList.add('busy');
+  try {
+    const reads = await Promise.all(keys.map((k) => callServer('read', 'workspace.peek', { key: k })));
+    into.innerHTML = keys.map((k, i) => {
+      const v = (reads[i] as { value?: unknown } | null)?.value;
+      const t = bodyText(v) || (v != null ? JSON.stringify(v) : '(not readable)');
+      const sid = 'p' + uid++;
+      return `<div class="fc"><div class="fc-h"><span class="lb">${esc(k)}</span></div><div id="${sid}" class="md clamp">${md(String(t).slice(0, 1500))}</div><button class="more-btn clamp-btn" data-clamp="${sid}" hidden>show more</button></div>`;
+    }).join('');
+    measureClamps();
+  } catch { into.innerHTML = '<div class="hint">peek failed</div>'; }
+  btn.classList.remove('busy');
+}
 document.addEventListener('click', async (ev) => {
   const tgt = ev.target as HTMLElement;
   const tog = tgt?.closest?.('[data-toggle]') as HTMLElement | null;
   if (tog) { ev.preventDefault(); toggleHidden(tog); return; }
   const clmp = tgt?.closest?.('[data-clamp]') as HTMLElement | null;
   if (clmp) { ev.preventDefault(); toggleClamp(clmp); return; }
+  const back = tgt?.closest?.('[data-back]') as HTMLElement | null;
+  if (back) { ev.preventDefault(); if (viewStack.length) render(viewStack.pop()); return; }
+  const pk = tgt?.closest?.('[data-peek]') as HTMLElement | null;
+  if (pk) {
+    ev.preventDefault();
+    const into = document.getElementById(pk.getAttribute('data-into') || '');
+    if (into && !into.innerHTML) { try { await peekPair(JSON.parse(pk.getAttribute('data-peek') || '[]'), into, pk); } catch { /* ignore */ } }
+    else if (into) into.innerHTML = ''; // toggle off
+    return;
+  }
   const el = tgt?.closest?.('[data-call]') as HTMLElement | null;
   if (!el) return;
   ev.preventDefault();
@@ -228,16 +308,17 @@ document.addEventListener('click', async (ev) => {
   try {
     if (kind === 'read') {
       const sc = await callServer('read', target, input);
-      currentRead = { target, input };
-      if (sc) render(sc);
+      if (sc) { viewStack.push(currentData); currentRead = { target, input }; render(sc); }
+      else el.classList.remove('busy');
     } else {
       await callServer('act', target, input);
       const rr = currentRead || { target: 'workspace.suggestions', input: {} };
       const sc = await callServer('read', rr.target, rr.input);
-      if (sc) render(sc);
+      if (sc) render(sc); else el.classList.remove('busy');
     }
   } catch { el.classList.remove('busy'); }
 });
 
-app.addEventListener('toolresult', (params) => render((params as { structuredContent?: unknown }).structuredContent));
+// A fresh top-level result from the host resets the drill history.
+app.addEventListener('toolresult', (params) => { viewStack.length = 0; render((params as { structuredContent?: unknown }).structuredContent); });
 app.connect().catch(() => { /* not in a host */ });

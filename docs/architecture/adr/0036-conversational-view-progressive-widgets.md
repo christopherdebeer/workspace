@@ -1,5 +1,14 @@
 # ADR-0036 — The conversational view: progressive, interactive widgets for cell-owned types & tools
 
+- **Status (audit follow-ups, 2026-06-27):** Live-validated twice in claude.ai mobile. Round 2 (after the
+  SDK/`autoResize` sizing fix) confirmed **all 7 surfaces grow to content** and the open views are now
+  **glanceable** — long drill lists / fact lists cap to a head + "+N more", long bodies clamp with a
+  "show more" (measured post-render), all revealing in place with no server round-trip. Three audit findings
+  fixed: (1) **neighbours** now renders its `{outbound,inbound}` edges as drillable peek rows — it no longer
+  falls through to a raw-JSON dump when no neighbor `entries` resolve (e.g. `el:`/derived-only facts);
+  (2) **back navigation** — every drill pushes a view snapshot, the header `←` pops it (instant, no re-read);
+  (3) **informed ratification** — each suggestion has a 👁 peek that fetches both facts inline before the
+  ratify chips. Remaining: minor whoami spacing.
 - **Status:** Accepted — **Tier 1 (interactive, high-traffic reads) + Tier 2 (viewers/machine) shipped.**
   The card is now an interactive, self-navigating substrate browser: overview `byType`/`byPrefix` rows
   **drill** (host-proxied `workspace.query`), each fact card has a **neighbors** traversal, and the
