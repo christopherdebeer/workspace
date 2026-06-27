@@ -58,6 +58,11 @@ const SHELL_HEAD = `<!doctype html>
   pre { background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; overflow: auto; font-size: 12px; max-height: 280px; }
   img { max-width: 100%; border-radius: 8px; display: block; }
   .hint { font-size: 11px; opacity: .55; margin-top: 12px; }
+  /* Similarity / salience bar on ranked cards (ADR-0038 Inc 6). */
+  .sim { display: inline-block; width: 36px; height: 4px; border-radius: 2px; background: color-mix(in srgb, currentColor 14%, transparent); overflow: hidden; vertical-align: middle; }
+  .sim i { display: block; height: 100%; background: #6d5ef0; }
+  a.wikilink { color: #6d5ef0; text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, #6d5ef0 50%, transparent); cursor: pointer; }
+  a.wikilink:hover { text-decoration: underline; }
   /* Progressive disclosure (ADR-0036): the open view is GLANCEABLE — long lists cap to
      a head + a "+N more" toggle, and long fact bodies clamp to a few lines with a fade +
      "show more". Both reveal already-present data locally (no server round-trip). */

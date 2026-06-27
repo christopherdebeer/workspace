@@ -7,7 +7,19 @@
   and `view` (evaluated value by its render hint). A **generic structured fallback** (`genericStructured`)
   renders any remaining array-bearing shape (`actions`/`views`/`subscriptions`/`groups`/`shared`/`$catalog`/
   `$types`) as capped list sections + fields instead of a raw-JSON `<pre>` — which now appears only as a true
-  last resort. Inc 2–6 below remain.
+  last resort.
+- **Status (Inc 2–6 shipped, 2026-06-27):** **Inc 5** — `enforceScope`'s teaching denial is parsed from the
+  tool-call `isError` text into an action panel: `scope_offer` → a **"widen session"** tap (`act
+  auth.requestScope`, no passkey) → auto-retry; `scope_denied` → **"escalate (passkey)"** → `openLink` the
+  elevation URL → **retry**; both notify the agent (ADR-0037). **Inc 3** — a wiki-link `marked` extension
+  (mirroring lit's resolver) renders `[[target]]` → an in-card link; clicks on wiki/substrate links peek in
+  place (host-proxied), external links go via `openLink`; single facts lazily show **"Linked from"**
+  (inbound `neighbors`). **Inc 2** — a **"view as graph"** toggle on any fact list builds a mermaid node-link
+  graph of the result set's edges + one-hop neighbours (`workspace.links`, filtered). **Inc 4** — a `doc:` /
+  `doc`-typed fact lazily assembles its ordered `members` as blocks below the metadata. **Inc 6** — ranked
+  results show a **similarity/salience bar**, the degraded-search `hint` is surfaced, and array entries
+  (search) are keyed by their real fact key (fixing the array-index mis-key). D3 force layout (vs mermaid)
+  remains the one deferred follow-up.
 - **Status (orig):** Proposed. A holistic audit of the MCP-Apps card (`services/gateway/client/main.ts`) against the
   *whole* read/act surface — not the happy-path subset the 2026-06-27 validation exercised. Names the systemic
   gap (most reads dump raw JSON), the nuance gaps (search-as-cards vs graph, dead links, thin docs, plain-text

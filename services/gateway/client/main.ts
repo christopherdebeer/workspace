@@ -18,6 +18,23 @@ import { hintToHtml, bodyText, resolvePath, escapeHtml } from '../../../platform
 import { json as vwJson, csv as vwCsv, mermaid as vwMermaid } from '../../../cells/viewers/client/main';
 
 marked.setOptions({ gfm: true, breaks: false });
+// [[wiki-links]] (ADR-0038 Inc 3) — mirror the lit cell's resolver so a link is the same
+// first-class substrate edge on every surface. `[[target]]`/`[[target|label]]`: a bare
+// target → `doc:<slug>`, an explicit key (`doc:x`, `cell:y`) is used as-is. We emit the
+// resolved KEY as data-key so the card intercepts the click into a host-proxied peek
+// (in-card navigation) rather than a dead browser nav. (Consolidate into platform/ui later.)
+function resolveWikiTarget(raw: string): { key: string; label: string } {
+  const [t, l] = raw.split('|');
+  const target = (t || '').trim();
+  const key = target.includes(':') ? target : `doc:${target.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+  return { key, label: (l ?? target).trim() || target };
+}
+marked.use({ extensions: [{
+  name: 'wikilink', level: 'inline',
+  start(src: string) { return src.indexOf('[['); },
+  tokenizer(src: string) { const m = /^\[\[([^\]]+)\]\]/.exec(src); return m ? { type: 'wikilink', raw: m[0], text: m[1] } : undefined; },
+  renderer(tok: { text: string }) { const { key, label } = resolveWikiTarget(tok.text); return `<a class="wikilink" data-key="${escapeHtml(key)}" href="#">${escapeHtml(label)}</a>`; },
+}] } as unknown as Parameters<typeof marked.use>[0]);
 const esc = escapeHtml;
 const md = (s: string): string => marked.parse(s.replace(/\r\n/g, '\n'), { async: false }) as string;
 const hint = (h: string, v: unknown): string => hintToHtml(h, v, { md, esc });
@@ -25,7 +42,7 @@ const hint = (h: string, v: unknown): string => hintToHtml(h, v, { md, esc });
 type ElView = { mount(el: { id: string; content: string }): HTMLElement };
 const VIEWERS: Record<string, ElView> = { json: vwJson as ElView, csv: vwCsv as ElView, mermaid: vwMermaid as ElView };
 
-type Entry = { value?: unknown; _meta?: { type?: string | null; score?: number } };
+type Entry = { value?: unknown; _meta?: { type?: string | null; score?: number }; key?: string; score?: number };
 type Types = Record<string, { icon?: string; label?: string; render?: { viewer?: string }; handlers?: { render?: Array<{ hint?: string; renderer?: string }> } }>;
 
 /** Viewer mounts queued during string render, applied after innerHTML is set. */
@@ -142,17 +159,31 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp 
     body = rh && rh.hint ? hint(rh.hint, entry.value) : '';
     if (!body) body = hint('fields', entry.value) || `<pre>${esc(JSON.stringify(entry.value, null, 2)).slice(0, 800)}</pre>`;
   }
-  const sc = entry && entry._meta && typeof entry._meta.score === 'number' ? entry._meta.score.toFixed(2) : '';
+  // Score: top-level (search cosine) or _meta.score (salience). Render a small bar so
+  // ranked results read as a ranking, not a column of bare numbers (ADR-0038 Inc 6).
+  const scoreNum = typeof entry.score === 'number' ? entry.score : (entry._meta && typeof entry._meta.score === 'number' ? entry._meta.score : null);
+  const sc = scoreNum != null ? `<span class="sim" title="${scoreNum.toFixed(3)}"><i style="width:${Math.max(4, Math.min(100, Math.round(scoreNum * 100)))}%"></i></span><span class="sc">${scoreNum.toFixed(2)}</span>` : '';
   const nav = key ? `<button class="mini" title="neighbors" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key }))}">↹</button>` : '';
   // Clamp only TEXT bodies (md/code/fields/pre) in list contexts — viewer/machine-run
   // mounts fill the slot later (body === '') and must not be height-capped.
   const showClamp = clamp && !!body;
   const clampBtn = showClamp ? `<button class="more-btn clamp-btn" data-clamp="${slot}" hidden>show more</button>` : '';
-  return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc ? `<span class="sc">${sc}</span>` : ''}${nav}</div><div id="${slot}"${showClamp ? ' class="clamp"' : ''}>${body}</div>${clampBtn}</div>`;
+  return `<div class="fc"><div class="fc-h"><span class="ic">${esc(aff.icon || '•')}</span><span class="lb">${esc(String(label).slice(0, 100))}</span><span class="sp"></span>${t ? `<span class="ty">${esc(t)}</span>` : ''}${sc}${nav}</div><div id="${slot}"${showClamp ? ' class="clamp"' : ''}>${body}</div>${clampBtn}</div>`;
 }
+/** Normalize entries (a `{key:Entry}` map OR a ranked `Entry[]` array, e.g. search) to a
+ *  list that preserves the real fact key — so drills/neighbours/graph use the key, not an
+ *  array index (the latent search-mis-key bug, ADR-0038 Inc 6). */
+function toEntryList(e: unknown): Array<{ key: string; entry: Entry }> {
+  if (Array.isArray(e)) return e.map((it, i) => ({ key: (it && (it as Entry).key) || String(i), entry: it as Entry }));
+  if (e && typeof e === 'object') return Object.keys(e).map((k) => ({ key: k, entry: (e as Record<string, Entry>)[k] }));
+  return [];
+}
+let lastEntryKeys: string[] = []; // keys of the most recent fact list — for graph mode (Inc 2)
 /** A fact list, rendered GLANCEABLE: clamped cards, capped to a head + "+N more". */
-function entriesBlock(map: Record<string, Entry>, types: Types, cap = 5): string {
-  const cards = Object.keys(map).map((k, i) => typedCard(k, map[k], types, 'slot-' + i, true));
+function entriesBlock(e: unknown, types: Types, cap = 5): string {
+  const list = toEntryList(e);
+  lastEntryKeys = list.map((x) => x.key).filter((k) => k && !/^\d+$/.test(k));
+  const cards = list.map((x, i) => typedCard(x.key, x.entry, types, 'slot-' + i, true));
   if (cards.length <= cap) return cards.join('');
   const id = nextId();
   return cards.slice(0, cap).join('') + `<div id="${id}" hidden>${cards.slice(cap).join('')}</div>` + toggleBtn(id, `+${cards.length - cap} more`);
@@ -303,6 +334,41 @@ function renderView(d: Record<string, unknown>, types: Types): string {
   }
   return h;
 }
+/** A "view as graph" affordance shown under a fact list (ADR-0038 Inc 2). */
+function graphToggle(): string {
+  return lastEntryKeys.length ? `<button class="more-btn" data-graph="1">⊹ view as graph</button>` : '';
+}
+/** A single fact (peek) + lit-doc assembly + backlinks, both lazily fetched (Inc 3/4). */
+function renderSingleFact(d: Record<string, unknown>, types: Types): string {
+  const key = (d.key as string) || '';
+  let b = typedCard(key, d as Entry, types, 'slot-one');
+  const t = d._meta && (d._meta as { type?: string }).type;
+  if (key.indexOf('doc:') === 0 || t === 'doc') { const slot = 'doc' + nextId(); b += `<div id="${slot}"></div>`; lazyDoc(key, slot, types); }
+  if (key) { const slot = 'bl' + nextId(); b += `<div id="${slot}"></div>`; lazyBacklinks(key, slot, types); }
+  return b;
+}
+/** Assemble a lit doc from its ordered `members` (host-proxied), rendered in place. */
+function lazyDoc(key: string, slot: string, types: Types): void {
+  callServer('read', 'workspace.members', { key }).then((r) => {
+    const m = r as { members?: Entry[]; types?: Types } | null;
+    const el = document.getElementById(slot);
+    if (!el || !m || !Array.isArray(m.members) || !m.members.length) return;
+    const saved = lastEntryKeys;
+    el.innerHTML = `<h2>Document (${m.members.length} blocks)</h2>` + entriesBlock(m.members, m.types || types);
+    lastEntryKeys = saved;
+    measureClamps();
+  }).catch(() => { /* not a collection / degrade */ });
+}
+/** "Linked from" — inbound references for a fact (host-proxied neighbors, dir:in). */
+function lazyBacklinks(key: string, slot: string, types: Types): void {
+  callServer('read', 'workspace.neighbors', { key, dir: 'in' }).then((r) => {
+    const n = r as { inbound?: Edge[]; entries?: Record<string, Entry>; types?: Types } | null;
+    const el = document.getElementById(slot);
+    if (!el || !n || !Array.isArray(n.inbound) || !n.inbound.length) return;
+    el.innerHTML = `<h2>Linked from (${n.inbound.length})</h2>` + neighborSection(n.inbound, n.entries || {}, n.types || types, true);
+    measureClamps();
+  }).catch(() => { /* degrade */ });
+}
 /** Reveal a "show more" only on bodies that actually overflow the clamp; un-clamp the rest.
  *  Runs after innerHTML is live (post-render and after async inline injections). */
 function measureClamps(): void {
@@ -339,10 +405,12 @@ function render(data: unknown): void {
       for (const m of d.members as Array<Entry & { key?: string }>) map[m.key || nextId()] = m;
       b += `<h2>Members (${(d.members as unknown[]).length})</h2>` + entriesBlock(map, types);
     }
-    if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus as Record<string, Entry>, types);
-    else if (d.entries && !isNeighbors) b += entriesBlock(d.entries as Record<string, Entry>, types);
-    else if (d.value && d._meta) b += typedCard((d.key as string) || '', d as Entry, types, 'slot-one');
+    lastEntryKeys = [];
+    if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus, types) + graphToggle();
+    else if (d.entries && !isNeighbors) b += entriesBlock(d.entries, types) + graphToggle();
+    else if (d.value && d._meta) b += renderSingleFact(d, types);
     if (!b) b = genericStructured(d);
+    if (typeof d.hint === 'string' && d.hint) b += `<div class="hint">${esc(d.hint)}</div>`; // degraded-search note etc.
     if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
   }
   b += hostBridges();
@@ -427,6 +495,66 @@ async function peekPair(keys: [string, string], into: HTMLElement, btn: HTMLElem
   } catch { into.innerHTML = '<div class="hint">peek failed</div>'; }
   btn.classList.remove('busy');
 }
+// ── ADR-0038 Inc 5: grant escalation — surface a teaching denial as an action ──
+type Call = { kind: 'read' | 'act'; target: string; input: unknown };
+let pendingRetry: Call | null = null;
+function errorText(r: unknown): string {
+  const c = (r as { content?: Array<{ text?: string }> }).content;
+  return (Array.isArray(c) ? c.map((x) => x?.text || '').join(' ') : '') || 'The request failed.';
+}
+/** Parse enforceScope's teaching denial into an actionable escalation (ADR-0023). */
+function parseEscalation(text: string): { mode: 'offer' | 'denied'; scope?: string; url?: string } | null {
+  if (text.indexOf('scope_offer:') >= 0) return { mode: 'offer', scope: /needs "([^"]+)"/.exec(text)?.[1] };
+  if (text.indexOf('scope_denied:') >= 0) return { mode: 'denied', scope: /requires scope "([^"]+)"/.exec(text)?.[1], url: /(https?:\/\/\S*\/oauth\/authorize\S*)/.exec(text)?.[1] };
+  return null;
+}
+function renderErrorPanel(text: string, escal: ReturnType<typeof parseEscalation>): void {
+  const root = document.getElementById('root'); if (!root) return;
+  let chips = '';
+  if (escal?.mode === 'offer' && escal.scope) chips += `<button class="chip act" data-widen="${esc(escal.scope)}">widen session</button>`;
+  if (escal?.mode === 'denied' && escal.url) chips += `<button class="chip act" data-elevate="${esc(escal.url)}">escalate (passkey)</button>`;
+  if (pendingRetry) chips += '<button class="chip" data-retry="1">retry</button>';
+  const title = escal ? 'Access needed' : 'That didn’t work';
+  currentData = null;
+  root.innerHTML = header(viewStack.length > 0) + `<div class="fc"><div class="fc-h"><span class="ic">${escal ? '🔒' : '⚠️'}</span><span class="lb">${title}</span></div><div class="md">${md(text.slice(0, 600))}</div>${chips ? `<div class="chips">${chips}</div>` : ''}</div>` + hostBridges();
+}
+function handleError(r: unknown, orig: Call): void {
+  const text = errorText(r);
+  const escal = parseEscalation(text);
+  if (escal) { pendingRetry = orig; if (escal.mode === 'offer') notifyModel(`A "${orig.target}" call needs scope "${escal.scope}" (within grant); the user was offered a one-tap widen.`, { event: 'scope_offer', ...orig }); else notifyModel(`A "${orig.target}" call was denied (scope "${escal.scope}" exceeds the token ceiling); the user was offered grant elevation.`, { event: 'scope_denied', ...orig }); }
+  viewStack.push(currentData);
+  renderErrorPanel(text, escal);
+}
+/** Host-proxied read that re-renders + records the navigation; routes errors to escalation. */
+async function navigate(target: string, input: unknown): Promise<void> {
+  const r = await app.callServerTool({ name: 'read', arguments: { target, input } });
+  if ((r as { isError?: boolean }).isError) { handleError(r, { kind: 'read', target, input }); return; }
+  const sc = (r as { structuredContent?: unknown }).structuredContent ?? null;
+  if (sc) { viewStack.push(currentData); currentRead = { target, input }; render(sc); notifyModel(`The user is viewing ${target}${input && Object.keys(input as object).length ? ' ' + JSON.stringify(input) : ''} in the parc.land card.`, { event: 'view', target, input }); }
+}
+/** Host-proxied act → notify the agent → refresh the current view; errors → escalation. */
+async function perform(target: string, input: unknown): Promise<void> {
+  const r = await app.callServerTool({ name: 'act', arguments: { target, input } });
+  if ((r as { isError?: boolean }).isError) { handleError(r, { kind: 'act', target, input }); return; }
+  notifyModel(`The user performed ${target} with ${JSON.stringify(input)} in the parc.land card (the substrate write has been applied).`, { event: 'act', target, input });
+  const rr = currentRead || { target: 'workspace.suggestions', input: {} };
+  const sc = await callServer('read', rr.target, rr.input);
+  if (sc) render(sc);
+}
+async function retryPending(): Promise<void> {
+  if (!pendingRetry) return;
+  const p = pendingRetry; pendingRetry = null;
+  if (p.kind === 'read') await navigate(p.target, p.input); else await perform(p.target, p.input);
+}
+/** Graph mode (Inc 2): the current result set as a node-link graph — its authored edges
+ *  plus next neighbours (one hop). Reads all slice edges once and filters to the set. */
+async function showGraphOf(keys: string[]): Promise<void> {
+  const set = new Set(keys);
+  const r = await callServer('read', 'workspace.links', {}) as { edges?: Edge[] } | null;
+  const edges = (r && Array.isArray(r.edges) ? r.edges : []).filter((e) => set.has(e.from) || set.has(e.to));
+  viewStack.push(currentData);
+  render({ edges });
+}
 document.addEventListener('click', async (ev) => {
   const tgt = ev.target as HTMLElement;
   const tog = tgt?.closest?.('[data-toggle]') as HTMLElement | null;
@@ -443,6 +571,22 @@ document.addEventListener('click', async (ev) => {
     else if (into) into.innerHTML = ''; // toggle off
     return;
   }
+  // Escalation actions (Inc 5)
+  const widen = tgt?.closest?.('[data-widen]') as HTMLElement | null;
+  if (widen) { ev.preventDefault(); widen.classList.add('busy'); const s = widen.getAttribute('data-widen') || ''; try { const r = await app.callServerTool({ name: 'act', arguments: { target: 'auth.requestScope', input: { scopes: [s] } } }); if (!(r as { isError?: boolean }).isError) { notifyModel(`The user widened the session scope to include "${s}".`, { event: 'widen', scope: s }); await retryPending(); } else widen.classList.remove('busy'); } catch { widen.classList.remove('busy'); } return; }
+  const elev = tgt?.closest?.('[data-elevate]') as HTMLElement | null;
+  if (elev) { ev.preventDefault(); const u = elev.getAttribute('data-elevate') || ''; app.openLink({ url: u }).catch(() => { /* host declined */ }); notifyModel(`The user was sent to ${u} to elevate their grant (passkey approval); they can retry after approving.`, { event: 'elevate' }); return; }
+  const retry = tgt?.closest?.('[data-retry]') as HTMLElement | null;
+  if (retry) { ev.preventDefault(); retry.classList.add('busy'); await retryPending(); return; }
+  // Graph mode (Inc 2)
+  const graph = tgt?.closest?.('[data-graph]') as HTMLElement | null;
+  if (graph) { ev.preventDefault(); graph.classList.add('busy'); await showGraphOf(lastEntryKeys.slice()); return; }
+  // In-card link navigation (Inc 3): wiki/substrate links peek in place; external → openLink.
+  const wl = tgt?.closest?.('a[data-key]') as HTMLElement | null;
+  if (wl) { ev.preventDefault(); await navigate('workspace.peek', { key: wl.getAttribute('data-key') }); return; }
+  const ext = tgt?.closest?.('a[href^="http"]') as HTMLAnchorElement | null;
+  if (ext) { ev.preventDefault(); app.openLink({ url: ext.href }).catch(() => { /* host declined */ }); return; }
+  // Drill (read) / act
   const el = tgt?.closest?.('[data-call]') as HTMLElement | null;
   if (!el) return;
   ev.preventDefault();
@@ -451,23 +595,8 @@ document.addEventListener('click', async (ev) => {
   let input: unknown = {};
   try { input = JSON.parse(el.getAttribute('data-input') || '{}'); } catch { /* default {} */ }
   el.classList.add('busy');
-  try {
-    if (kind === 'read') {
-      const sc = await callServer('read', target, input);
-      if (sc) {
-        viewStack.push(currentData); currentRead = { target, input }; render(sc);
-        // Ambient awareness: tell the agent what the human is now looking at (ADR-0037).
-        notifyModel(`The user is viewing ${target}${input && Object.keys(input as object).length ? ' ' + JSON.stringify(input) : ''} in the parc.land card.`, { event: 'view', target, input });
-      } else el.classList.remove('busy');
-    } else {
-      await callServer('act', target, input);
-      // Decision made in the UI → make the agent aware without a substrate re-scan (ADR-0037).
-      notifyModel(`The user performed ${target} with ${JSON.stringify(input)} in the parc.land card (the substrate write has been applied).`, { event: 'act', target, input });
-      const rr = currentRead || { target: 'workspace.suggestions', input: {} };
-      const sc = await callServer('read', rr.target, rr.input);
-      if (sc) render(sc); else el.classList.remove('busy');
-    }
-  } catch { el.classList.remove('busy'); }
+  try { if (kind === 'read') await navigate(target, input); else await perform(target, input); }
+  finally { el.classList.remove('busy'); }
 });
 
 // A fresh top-level result from the host resets the drill history.
