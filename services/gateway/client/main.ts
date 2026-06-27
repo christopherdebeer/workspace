@@ -152,29 +152,37 @@ function render(data: unknown): void {
   scheduleReport();
 }
 
-// ── sizing: grow-to-content. The host (Val.town proves claude.ai honours this) resizes
-// the frame when the widget posts its content height — but the signal must carry the
-// TRUE scrollHeight and fire AFTER the data-driven paint, not on the initial skeleton.
-// We post several known shapes ({type:'resize'} is the one the Val.town diff points at)
-// and also try window.mcpApp.resize, then re-fire on any later growth (async mermaid).
+// ── sizing — exactly the official ext-apps SDK mechanism (the one claude.ai honours,
+// per Val.town). The View posts `ui/notifications/size-changed` { width, height } in px;
+// height is measured by briefly forcing html to `max-content` then getBoundingClientRect,
+// width is window.innerWidth; observe BOTH documentElement + body, rAF-debounced, send
+// only on change. Legacy {type:'resize'} + window.mcpApp.resize kept for non-SDK hosts.
+let lastW = 0;
+let lastH = 0;
+let rafId = 0;
+function measure(): { width: number; height: number } {
+  const html = document.documentElement;
+  const prev = html.style.height;
+  html.style.height = 'max-content';
+  const height = Math.ceil(html.getBoundingClientRect().height);
+  html.style.height = prev;
+  return { width: window.innerWidth, height };
+}
 function reportSize(): void {
-  const h = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0, document.documentElement.offsetHeight) + 4;
-  const w = document.documentElement.scrollWidth;
-  for (const msg of [
-    { type: 'resize', height: h, width: w },
-    { type: 'ui-size-change', height: h, width: w },
-    { jsonrpc: '2.0', method: 'ui/notifications/size-change', params: { height: h, width: w } },
-  ]) {
-    try { window.parent.postMessage(msg, '*'); } catch { /* sandbox */ }
-  }
+  const { width, height } = measure();
+  if (width === lastW && height === lastH) return;
+  lastW = width;
+  lastH = height;
+  try { window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { width, height } }, '*'); } catch { /* sandbox */ }
+  try { window.parent.postMessage({ type: 'resize', width, height }, '*'); } catch { /* legacy hosts */ }
   const host = (window as unknown as { mcpApp?: { resize?: (w: number, h: number) => void } }).mcpApp;
-  try { if (host && typeof host.resize === 'function') host.resize(w, h); } catch { /* host opt */ }
+  try { if (host && typeof host.resize === 'function') host.resize(width, height); } catch { /* host opt */ }
 }
-/** Report AFTER paint (double rAF) so the height reflects rendered content, not skeleton. */
+/** rAF-debounced (matches the SDK) — coalesces bursts + reflects rendered content. */
 function scheduleReport(): void {
-  try { requestAnimationFrame(() => requestAnimationFrame(reportSize)); } catch { reportSize(); }
+  try { if (rafId) cancelAnimationFrame(rafId); rafId = requestAnimationFrame(() => { rafId = 0; reportSize(); }); } catch { reportSize(); }
 }
-try { new ResizeObserver(() => reportSize()).observe(document.documentElement); } catch { /* no RO */ }
+try { const ro = new ResizeObserver(scheduleReport); ro.observe(document.documentElement); ro.observe(document.body); } catch { /* no RO */ }
 
 // ── MCP-Apps host channel (spec 2026-01-26) ──────────────────────────────────
 const INIT_ID = 1;
