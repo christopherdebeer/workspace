@@ -100,6 +100,13 @@ export const view = {
  */
 const MACHINE_RUN_RENDERER_SRC = `
 (function(){
+  // VALIDATION SENTINEL (ADR-0039): bump BUILD + cells.deploy ONLY (no cdk deploy)
+  // to prove the renderer changed via the cell plane. The footer badge below is
+  // emitted ONLY by this cell-served renderer — the old hardcoded card path
+  // mounted the bare SVG with no badge — so its presence in claude.ai is
+  // conclusive proof the federated ui:// renderer ran (not a cached card, not the
+  // fields-hint fallback).
+  var BUILD = 'v1';
   var reg = (window.__parcRender = window.__parcRender || {});
   var M;
   function loadMermaid(){
@@ -121,13 +128,16 @@ const MACHINE_RUN_RENDERER_SRC = `
     if(cur>=0){ lines.push('  classDef cur fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push('  class n'+cur+' cur;'); }
     return lines.join('\\n');
   }
+  function badge(){
+    return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ rendered by @c15r/machine · federated ui:// renderer · '+BUILD+'</div>';
+  }
   var seq=0;
   reg['machine-run'] = function(host, value){
     try{
       host.textContent='…';
       var src = toMermaid(value || {});
-      loadMermaid().then(function(m){ return m.render('mr'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg; }).catch(function(err){ host.textContent = 'machine-run: '+((err&&err.message)||err); });
-    }catch(err){ host.textContent = 'machine-run render error'; }
+      loadMermaid().then(function(m){ return m.render('mr'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + badge(); }).catch(function(err){ host.innerHTML = '<div class="hint">machine-run: '+e((err&&err.message)||err)+'</div>' + badge(); });
+    }catch(err){ host.innerHTML = '<div class="hint">machine-run render error</div>' + badge(); }
   };
 })();
 `;
