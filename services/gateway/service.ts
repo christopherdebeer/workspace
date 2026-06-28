@@ -90,6 +90,8 @@ interface CellTool {
   tool: string;
   /** Third-party-author disclosure (set by cells for non-owner callers). */
   disclosure?: { author: string; reads: string[]; note: string };
+  /** ADR-0039 Inc 2: a cell-authored renderer for this tool's result. */
+  ui?: { renderer: string; as?: string };
 }
 
 /** A resolved, dispatchable capability. */
@@ -101,6 +103,8 @@ interface Capability {
   scope: string | null;
   /** Any-of family gate (see ProviderTool.scopeFamily). */
   scopeFamily?: string | null;
+  /** ADR-0039 Inc 2: a cell-authored renderer for this capability's result. */
+  ui?: { renderer: string; as?: string };
   forward: (input: unknown, ctx: ServiceContext) => Promise<unknown>;
 }
 
@@ -167,6 +171,7 @@ async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capab
       description: d.description,
       inputSchema: d.inputSchema,
       scope: d.scope,
+      ...(d.ui ? { ui: d.ui } : {}),
       forward: (input, c) => c.serviceClient('cells').command('callCellTool', { owner, name, tool, args: input ?? {} }),
     };
   }
@@ -364,6 +369,19 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
   };
 }
 
+/**
+ * ADR-0039 Inc 2 — stamp a capability's declared renderer onto its (object) result
+ * as `_render`, so the conversation card runs the cell-authored renderer for the
+ * TOOL result (the per-tool analogue of a type's `handlers.render`). Static
+ * declaration on the tool, delivery on the result — parc can't bind per-tool widgets
+ * in `tools/list` (3 tools, one card). Only objects are stamped; arrays/scalars pass
+ * through untouched, and a renderer-less capability is unchanged.
+ */
+function withRender(result: unknown, cap: Capability): unknown {
+  if (!cap.ui?.renderer || !result || typeof result !== 'object' || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), _render: { renderer: cap.ui.renderer, as: cap.ui.as ?? cap.target } };
+}
+
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
@@ -395,7 +413,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return cap.forward(input?.input, ctx);
+  return withRender(await cap.forward(input?.input, ctx), cap);
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
@@ -405,7 +423,7 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return cap.forward(input?.input, ctx);
+  return withRender(await cap.forward(input?.input, ctx), cap);
 }
 
 function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[]; grant: string[] } {

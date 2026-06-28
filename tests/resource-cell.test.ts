@@ -384,6 +384,29 @@ describe('resource cell (MCP gateway, read/act)', () => {
     });
   });
 
+  it('stamps a cell tool\'s declared renderer onto its result as _render (ADR-0039 Inc 2)', async () => {
+    cellTools = [
+      {
+        name: 'machine-1__define_machine', address: '@c15r/machine', description: 'Define.', inputSchema: { type: 'object' },
+        scope: null, kind: 'act', cellId: 'machine-1', tool: 'define_machine',
+        ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' },
+      },
+    ];
+    const res = await callTool('creator', 'act', { target: '@c15r/machine.define_machine', input: { name: 'm', dryRun: true } });
+    expect(res.isError).toBeUndefined();
+    const out = res.parsed as { echoed?: unknown; _render?: { renderer: string; as: string } };
+    // The gateway forwarded the call AND stamped the tool's renderer directive.
+    expect(out._render).toEqual({ renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' });
+    expect(out.echoed).toEqual({ owner: 'c15r', name: 'machine', tool: 'define_machine', args: { name: 'm', dryRun: true } });
+
+    // A tool WITHOUT a ui declaration gets no _render (no accidental stamping).
+    cellTools = [
+      { name: 'tools-demo-1__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const plain = await callTool('creator', 'act', { target: '@alice/tools-demo.echo', input: { x: 1 } });
+    expect((plain.parsed as { _render?: unknown })._render).toBeUndefined();
+  });
+
   it('unknown target is a tool error, not a transport error', async () => {
     const res = await callTool('creator', 'act', { target: 'workspace.nope' });
     expect(res.isError).toBe(true);

@@ -436,6 +436,19 @@ function render(data: unknown): void {
   const root = document.getElementById('root');
   if (!root) return;
   mounts = [];
+  // ADR-0039 Inc 2: a tool RESULT may carry a cell-authored renderer directive
+  // (`_render`, stamped by the gateway from the tool's declared `ui`). Run it the
+  // same way as a type renderer — same __parcRender consumer — handed the whole
+  // result; the generic structured view is the placeholder/degraded fallback.
+  const rd = data && typeof data === 'object' ? (data as { _render?: { renderer?: string; as?: string } })._render : null;
+  if (rd && typeof rd.renderer === 'string' && rd.renderer.indexOf('ui://') === 0) {
+    currentData = data;
+    const slot = nextId();
+    root.innerHTML = header(viewStack.length > 0) + `<div id="${slot}">${genericStructured(data as Record<string, unknown>)}</div>` + hostBridges();
+    fetchRenderer(rd.renderer, slot, rd.as || rd.renderer, data);
+    measureClamps();
+    return;
+  }
   let b = '';
   if (!data || typeof data !== 'object') b = `<pre>${esc(String(data))}</pre>`;
   else {

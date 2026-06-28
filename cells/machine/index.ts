@@ -192,6 +192,43 @@ const MACHINE_DEF_RENDERER_SRC = `
 })();
 `;
 
+/**
+ * ADR-0039 Inc 2 — a TOOL-result renderer: the conversational card for
+ * `define_machine`'s result (a plan/preview structure, not a fact). Declared on the
+ * tool descriptor (`ui`) rather than on a type; the gateway stamps it onto the result
+ * as `_render` and the card runs it through the same `window.__parcRender` consumer
+ * — keyed by `as` ("machine.define_machine") rather than a fact type. Renders the
+ * validation + the fan of facts/actions/subscriptions a define would write (and what
+ * it would supersede). Backtick-free so it nests in this template literal.
+ */
+const MACHINE_DEFINE_RENDERER_SRC = `
+(function(){
+  var BUILD = 'v1';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  function e(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+  function li(a){ return '<ul style="margin:4px 0 6px;padding-left:18px">'+(a||[]).map(function(x){ return '<li>'+e(typeof x==='string'?x:JSON.stringify(x))+'</li>'; }).join('')+'</ul>'; }
+  function badge(){ return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ rendered by @c15r/machine · TOOL renderer (define_machine) · '+BUILD+'</div>'; }
+  reg['machine.define_machine'] = function(host, value){
+    var v = value || {};
+    var val = v.validation || {};
+    var facts = v.facts || [], actions = v.actions || [], subs = v.subscriptions || [], sup = v.wouldSupersede || v.superseded || [];
+    var st = val.stats || {};
+    var ok = val.ok !== false;
+    var errs = (val.errors || []).map(function(x){ return x && x.message ? x.message : String(x); });
+    var h = '';
+    h += '<div style="font-size:14px;font-weight:650;margin-bottom:2px">'+(v.dryRun?'⊘ Plan (dry run)':'✓ Defined')+': '+e(v.name||v.machine||'machine')+'</div>';
+    h += '<div style="margin:2px 0">'+(ok?'<span style="color:#3a3">✓ valid</span>':'<span style="color:#c33">✗ '+e(errs.join('; '))+'</span>')+'</div>';
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;font-variant-numeric:tabular-nums">';
+    h += '<span>'+(st.nodes!=null?st.nodes:'?')+' nodes</span><span>·</span><span>'+(st.rails!=null?st.rails:'?')+' rails</span>'+(st.cyclic?'<span>·</span><span>cyclic</span>':'');
+    h += '</div>';
+    h += '<div style="opacity:.85">'+facts.length+' facts · '+actions.length+' actions · '+subs.length+' subscriptions'+(sup.length?(' · '+sup.length+' superseded'):'')+'</div>';
+    if(facts.length) h += '<details style="margin-top:4px"><summary>facts ('+facts.length+')</summary>'+li(facts)+'</details>';
+    if(sup.length) h += '<details><summary>would supersede ('+sup.length+')</summary>'+li(sup)+'</details>';
+    host.innerHTML = h + badge();
+  };
+})();
+`;
+
 const TOOLS = [
   {
     name: 'bootstrap',
@@ -238,6 +275,9 @@ const TOOLS = [
       required: ['name'],
     },
     scope: null,
+    // ADR-0039 Inc 2: a cell-authored renderer for this TOOL's result (plan/preview).
+    // The gateway stamps it onto the result as `_render`; the card runs it under `as`.
+    ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' },
   },
   {
     name: 'trigger_run',
@@ -407,6 +447,11 @@ export const handler = async (event) => {
   // via the host-proxied call). Same federation rail as machine-run.
   if (method === 'GET' && path === '/renderers/machine.js') {
     return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_DEF_RENDERER_SRC };
+  }
+  // ADR-0039 Inc 2: a TOOL-result renderer (define_machine), declared on the tool's
+  // `ui` and stamped onto the result by the gateway as `_render`.
+  if (method === 'GET' && path === '/renderers/define-plan.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_DEFINE_RENDERER_SRC };
   }
   const isAppRoute = path === '/' || path === '' || path.startsWith('/m/') || path.startsWith('/r/');
   if ((method === 'GET' || method === 'HEAD') && isAppRoute) {
