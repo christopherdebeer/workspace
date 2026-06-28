@@ -106,7 +106,7 @@ const MACHINE_RUN_RENDERER_SRC = `
   // mounted the bare SVG with no badge — so its presence in claude.ai is
   // conclusive proof the federated ui:// renderer ran (not a cached card, not the
   // fields-hint fallback).
-  var BUILD = 'v1';
+  var BUILD = 'v2';
   var reg = (window.__parcRender = window.__parcRender || {});
   var M;
   function loadMermaid(){
@@ -154,7 +154,7 @@ const MACHINE_RUN_RENDERER_SRC = `
  */
 const MACHINE_DEF_RENDERER_SRC = `
 (function(){
-  var BUILD = 'v1';
+  var BUILD = 'v2';
   var reg = (window.__parcRender = window.__parcRender || {});
   var M;
   function loadMermaid(){
