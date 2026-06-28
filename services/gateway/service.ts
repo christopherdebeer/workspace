@@ -497,6 +497,14 @@ const tools: Record<string, McpToolDefinition> = {
     // substrate side supersedes-not-deletes, but act spans both.
     annotations: { readOnlyHint: false },
     handler: act as McpToolDefinition['handler'],
+    // ADR-0039 Inc 2: act must ALSO bind the card, or an act result's widget never
+    // fires. `toContent` already returns structuredContent for every tool, but the
+    // host only renders a widget for a tool that declares `_meta.ui.resourceUri` in
+    // tools/list — which whoami/read had and act did not. Without this, a tool
+    // renderer for an act-kind capability (e.g. define_machine's `_render` stamp) is
+    // invisible: the data path exists but no shell hosts it. The card handles
+    // mutation results additively (it never replaces the model's text channel).
+    ui: { resourceUri: CARD_URI },
   },
 };
 

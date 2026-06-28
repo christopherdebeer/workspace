@@ -261,6 +261,9 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(whoami._meta?.ui?.resourceUri).toBe('ui://parc/card');
     expect(whoami._meta?.ui?.visibility).toContain('app');
     expect(tools.find((t) => t.name === 'read')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+    // ADR-0039 Inc 2: act is widget-bound too, so an act result's renderer (the
+    // `_render` stamp) actually has a shell to render in.
+    expect(tools.find((t) => t.name === 'act')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
 
     // Inc 0: an object result is mirrored as structuredContent (the widget's data channel)…
     const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });

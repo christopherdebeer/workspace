@@ -190,6 +190,15 @@ contract can grow without breaking deployed cells — but the aim is to seed it 
      *any* cell tool gets a bespoke conversational renderer by a cell deploy — the type-renderer win, extended
      to the verb surface. Visibility/security unchanged (the renderer is static code; data + actions still go
      through the host proxy under `enforceScope`; `visibility:["app"]` tools can drive widget-only flows).
+  - **Correction (caught in review): `act` must itself be widget-bound.** The first Inc 2 pass stamped
+    `_render` on results but left a hole — most cell tools (incl. `define_machine`) are `kind:"act"`, invoked
+    via the **`act`** MCP tool, and `act` had **no `_meta.ui.resourceUri`** in `tools/list` (only `whoami`/`read`
+    did). `toContent` returns `structuredContent` for every tool, but the host renders a widget only for a tool
+    that declares the static binding — so an act result's renderer had the data but no shell to fire in. Fix:
+    bind the card to `act` too (`tools.act.ui = { resourceUri: CARD_URI }`). The card hosts mutation results
+    additively (never replacing the model's text). Lesson: the `_render` data path and the **tool's widget
+    binding** are two separate requirements; a tool renderer needs both. (Headless validation of the stamp was
+    necessary but not sufficient — it proved the data, not that a widget fires.)
 - **Inc 3 — `viewers` as `ui://`.** Serve the json/csv/mermaid viewers as cell-authored renderers and drop the
   card's build-time import — the biggest single decoupling, pure reuse.
 - **Inc 4 — lit's wiki-link resolver + doc assembly federate** (or consolidate into `platform/ui` as the
