@@ -10,6 +10,18 @@
   `handlers.render[].renderer = ui://@c15r/machine/renderers/machine-run.js`) and reaches the conversation
   over this rail. 487 tests (the loop is unit-proven via `cells.call`; the consumer's inline-script
   injection under the live host CSP is the remaining claude.ai verification — see Risks).
+- **Status (live validation, 2026-06-28):** **Deployed branch-head to prod and validated the federation rail
+  end-to-end, server-side.** CDK deploy of the gateway (`deploy.yml` workflow_dispatch on the branch) +
+  `cells.deploy @c15r/machine` (via `scripts/cell-sync.mjs`, token minted with `auth.mintToken`). Checkpoints
+  **A** `$types` federates `machine-run.handlers.render[0].renderer = ui://@c15r/machine/renderers/machine-run.js`;
+  **B** the cell serves the asset (200, `application/javascript`, ACAO:*); **C** the deployed gateway's
+  provider hop resolves `resources/read` of that `ui://`; **D** a real `machine-run` read inlines the
+  affordance. **The money-shot:** bumping the renderer's `BUILD` sentinel `v1→v2` and running `cells.deploy`
+  **alone — no CDK** — flipped the gateway-served resource to `v2`. Rendering now changes through the cell
+  plane. A **second renderer** (the `machine` *definition* card — interactive: it fetches its nodes/rails over
+  the host-proxied `api.call`) was added, which surfaced the spine/renderer boundary below. The one remaining
+  step is the in-host visual (claude.ai), which the `v1/v2` footer badge makes conclusive (the badge is
+  emitted *only* by the cell renderer; the card's hardcoded path was deleted).
 - **Date:** 2026-06-27
 - **Depends on:** ADR-0034 (the conversation surface; the single `read`-bound card; host-proxied
   `resources/read`/`tools/call`), ADR-0035 (`ui://` as the universal render resource — this builds its
@@ -98,6 +110,44 @@ invariant the prior ADRs invoked but couldn't actually satisfy while the rendere
   through the host `tools/call`/`resources/read` proxy under `enforceScope`. The provider hop authorises via
   the same `cells.call` access check as any cell reach.
 
+## The spine vs. the renderers — what is tier1, what is tier2
+
+The live validation exposed the real boundary (it's not "rendering = tier2, full stop"). Adding the second
+renderer — the `machine` *definition* card — **still needed a CDK deploy**, and the reason names the rule:
+
+- **Renderers are tier2.** Authoring or changing a per-type renderer is a `cells.deploy` — proven by the
+  `v1→v2` money-shot. This is the federation ADR-0039 delivers.
+- **The spine is tier1.** The *contract* between the card (host) and a renderer — the function signature
+  `fn(host, value, api)` and what `api` carries — lives in the gateway bundle. The machine-definition
+  renderer is *decomposed* (its nodes/rails are separate facts), so it must fetch its children, which needs
+  the fact **`key`** — and the v1 spine didn't pass `key`. Extending `api` with `key` is a gateway change.
+
+That split is correct and healthy: the spine is the thin, stable protocol; the renderers are the open,
+federated population on top of it. **But** the machine-definition card *should* have been tier2-only — it was
+tier1 here only because the v1 spine was under-specified. The lesson, made a decision below: **specify a
+generous, stable renderer API up front**, so the common case (new per-type renderers) never touches tier1.
+Each spine extension is a one-time platform cost that unlocks a whole *class* of tier2 renderers; the goal is
+to need them rarely.
+
+## Decision — the renderer API contract (stable, generous)
+
+A cell renderer is a self-registering classic script that adds `fn(host, value, api)` to `window.__parcRender`
+under a **render key** (the fact type for type renderers; an explicit name for tool renderers — below). To
+minimise future tier1 churn, the `api` is frozen broad now:
+
+```
+api = {
+  call(kind, target, input)  // host-proxied read/act under enforceScope — fetch children, act in place
+  key                        // the fact's substrate key (decomposed renderers fetch by prefix)
+  meta                       // the fact's _meta (salience, type, provenance)
+  esc(s), md(s)              // shared escapers/markdown so renderers don't re-bundle
+  surface                    // "conversation" — lets one renderer adapt across surfaces later
+}
+```
+
+Renderers read only what they need; adding a *field* is backward-compatible (old renderers ignore it), so the
+contract can grow without breaking deployed cells — but the aim is to seed it wide enough that it rarely must.
+
 ## Risks / open questions
 
 - **Inline-script injection under the live host CSP (the one unproven hop).** The consumer relies on the
@@ -113,11 +163,36 @@ invariant the prior ADRs invoked but couldn't actually satisfy while the rendere
 
 ## Increments
 
-- **Inc 1 — provider hop + consumer + first renderer (shipped).** This ADR. `machine-run` federated; card
-  special-case removed; unit-proven via `cells.call`.
-- **Inc 2 — `viewers` as `ui://` (next).** Serve the json/csv/mermaid viewers as cell-authored renderers and
-  drop the card's build-time import — the biggest single decoupling, pure reuse.
-- **Inc 3 — lit's wiki-link resolver + doc assembly federate** (or consolidate into `platform/ui` as the
+- **Inc 1 — provider hop + consumer + first renderer (shipped + live-validated).** This ADR. `machine-run`
+  federated; card special-case removed; unit-proven via `cells.call`; deployed + the `v1→v2` money-shot.
+- **Inc 1b — second renderer: the `machine` *definition* card, interactive (shipped).** Proved the pattern
+  generalises and that a renderer can be *decomposed* — it fetches its nodes/rails over `api.call` and
+  assembles the graph. This is also what surfaced the spine/renderer boundary + the `key` spine extension.
+- **Inc 2 — federate `ui://` for cell TOOLS, not just types (designed; the answer to "beyond type
+  renderers").** Today only *fact types* bind a renderer (`handlers.render`). A cell tool (`@owner/cell.tool`,
+  invoked via `act`/`read`) returns a *structure*, and rich rendering of that result is still card-side
+  (`_view` shape dispatch). Federate it the same way:
+  1. **Declare on the tool.** A cell's tool descriptor (its `_tools` manifest, surfaced via
+     `cells.describeCellTools`) gains an optional `ui: { renderer: "ui://@owner/cell/renderers/foo.js", as?:
+     "<renderKey>" }` — the per-tool analogue of `handlers.render`, and of MCP-Apps' static per-tool
+     `_meta.ui.resourceUri` (which parc can't use directly: 3 tools, one card, so the binding can't live in
+     `tools/list`).
+  2. **Gateway stamps the result.** When the gateway forwards `@owner/cell.tool`, it already has the
+     descriptor (dispatch resolves it); if it declares a renderer, attach a result-level directive
+     `_render: { renderer, as }` to the envelope (beside `structuredContent`). No per-tool MCP binding needed —
+     the declaration is static on the tool, the *delivery* is on the result.
+  3. **Card runs it — same consumer.** `render()` checks for a top-level `_render` directive *first*; if
+     present, `fetchRenderer(renderer, slot, as, wholeResult, key)` — the identical `__parcRender` registry +
+     injection path as type renderers, just keyed by `as` and handed the whole tool result as `value`. Absent
+     ⇒ today's shape/type dispatch. This unifies type renderers and tool renderers into one mechanism; the
+     only deltas are the *trigger* (fact type vs. result directive) and the *value* (a fact vs. the result).
+  - **Spine cost:** one tier1 change (the `_render` directive: gateway attach + card dispatch). After it,
+     *any* cell tool gets a bespoke conversational renderer by a cell deploy — the type-renderer win, extended
+     to the verb surface. Visibility/security unchanged (the renderer is static code; data + actions still go
+     through the host proxy under `enforceScope`; `visibility:["app"]` tools can drive widget-only flows).
+- **Inc 3 — `viewers` as `ui://`.** Serve the json/csv/mermaid viewers as cell-authored renderers and drop the
+  card's build-time import — the biggest single decoupling, pure reuse.
+- **Inc 4 — lit's wiki-link resolver + doc assembly federate** (or consolidate into `platform/ui` as the
   shared, dependency-free floor — the ADR-0035 `render-hints` pattern), removing the lit-specific logic from
   the card.
-- **Inc 4 — per-shape `_view` stays gatewayside; audit what else in the card is actually cell-owned.**
+- **Inc 5 — per-shape `_view` stays gatewayside; audit what else in the card is actually cell-owned.**
