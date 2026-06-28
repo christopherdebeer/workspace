@@ -450,8 +450,8 @@ function render(data: unknown): void {
     return;
   }
   let b = '';
-  if (!data || typeof data !== 'object') b = `<pre>${esc(String(data))}</pre>`;
-  else {
+  let rich = false;
+  if (data && typeof data === 'object') {
     const d = data as Record<string, unknown>;
     const types = (d.types as Types) || {};
     const isNeighbors = Array.isArray(d.outbound) || Array.isArray(d.inbound);
@@ -476,20 +476,58 @@ function render(data: unknown): void {
     if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus, types) + graphToggle();
     else if (d.entries && !isNeighbors) b += entriesBlock(d.entries, types) + graphToggle();
     else if (d.value && d._meta) b += renderSingleFact(d, types);
-    if (!b) b = genericStructured(d);
-    // Short hints (e.g. degraded-search note) help the human; the long model-facing
-    // guidance hints ($catalog/$types/$grants) just leak chrome — suppress those (audit).
-    if (typeof d.hint === 'string' && d.hint && d.hint.length < 140) b += `<div class="hint">${esc(d.hint)}</div>`;
-    if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
+    // A "rich" surface = one of the known shapes above fired (or a typed-fact list/
+    // single fact, whose own renderers/hints carry the weight). A plain result — a
+    // scalar, {ok}, a write confirmation, an opaque object — leaves b empty and
+    // collapses to the thin affordance (ADR-0039: the shell stays minimal until a
+    // substrate type/tool actually provides a richer surface; the `_render` tool
+    // path is handled in the early-return above).
+    rich = b.length > 0;
+    if (rich) {
+      // Short hints (e.g. degraded-search note) help the human; the long model-facing
+      // guidance hints ($catalog/$types/$grants) just leak chrome — suppress those (audit).
+      if (typeof d.hint === 'string' && d.hint && d.hint.length < 140) b += `<div class="hint">${esc(d.hint)}</div>`;
+      if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
+    }
   }
-  b += hostBridges();
   currentData = data;
-  root.innerHTML = header(viewStack.length > 0) + b;
-  for (const m of mounts) {
-    const el = document.getElementById(m.slot);
-    if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
+  if (rich) {
+    root.innerHTML = header(viewStack.length > 0) + b + hostBridges();
+    for (const m of mounts) {
+      const el = document.getElementById(m.slot);
+      if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
+    }
+  } else {
+    root.innerHTML = thinAffordance(data);
   }
   measureClamps();
+}
+/** The thin default (ADR-0039): a single low-weight line — a dot + a terse summary +
+ *  an expand toggle that reveals the raw structured view on demand. Shown when no rich
+ *  surface applies, so trivial results (a scalar, {ok}, an act write-confirmation) don't
+ *  inflate into a full card. Tap to expand → the generic structured view in place. */
+function thinAffordance(data: unknown): string {
+  const back = viewStack.length ? '<button class="mini back" data-back="1" title="back">←</button>' : '';
+  const id = nextId();
+  const raw = data && typeof data === 'object'
+    ? genericStructured(data as Record<string, unknown>)
+    : `<pre>${esc(String(data))}</pre>`;
+  return `<div class="thin">${back}<span class="tdot"></span><span class="tsum">${esc(summarize(data))}</span>`
+    + `<button class="texp" data-toggle="${id}" data-more="⌄" data-less="⌃">⌄</button></div>`
+    + `<div id="${id}" hidden class="thin-raw">${raw}</div>`;
+}
+/** A terse one-liner for the thin affordance: the decision-relevant scalar fields, else
+ *  the field names. Never the whole payload — that lives behind the expand. */
+function summarize(data: unknown): string {
+  if (data == null) return 'ok';
+  if (typeof data !== 'object') return String(data).slice(0, 100);
+  const o = data as Record<string, unknown>;
+  const pick = ['ok', 'status', 'op', 'key', 'id', 'target', 'run', 'machine', 'triggered', 'bootstrapped', 'written', 'deleted', 'revoked', 'count', 'total'];
+  const parts: string[] = [];
+  for (const k of pick) if (k in o && o[k] != null && typeof o[k] !== 'object') parts.push(`${k} ${String(o[k]).slice(0, 40)}`);
+  if (parts.length) return parts.slice(0, 3).join(' · ');
+  const keys = Object.keys(o).filter((k) => k !== '_render' && k !== 'hint');
+  return keys.length ? keys.slice(0, 5).join(', ') : 'result';
 }
 
 // ── host channel via the official SDK ────────────────────────────────────────

@@ -76,6 +76,15 @@ const SHELL_HEAD = `<!doctype html>
   .clamp::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2.2em; background: linear-gradient(transparent, Canvas); pointer-events: none; }
   .clamp.open { max-height: none; } .clamp.open::after { display: none; }
   [hidden] { display: none !important; }
+  /* Thin affordance (ADR-0039): the default low-weight state — a one-line dot +
+     summary + expand. The card only grows beyond this when a substrate type/tool
+     provides a richer surface (a known shape, a typed renderer, or a tool _render). */
+  .thin { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .72; padding: 1px 0; }
+  .thin .tdot { width: 6px; height: 6px; border-radius: 50%; background: #6d5ef0; flex: none; }
+  .thin .tsum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .thin .texp { cursor: pointer; border: none; background: transparent; color: inherit; opacity: .6; font-size: 12px; line-height: 1; padding: 0 4px; }
+  .thin .texp:hover { opacity: 1; }
+  .thin-raw { margin-top: 8px; }
   /* Loading skeleton — gives the card presence + a sensible initial height before the
      first tool-result arrives (it then grows-to-content). */
   .skel { display: flex; flex-direction: column; gap: 9px; padding: 4px 0; }
@@ -89,7 +98,7 @@ const SHELL_HEAD = `<!doctype html>
 <body>
 <!-- The header renders immediately — so "parc.land" proves this IS our iframe even
      before data arrives. The render logic + handshake come from the inlined app.js. -->
-<div id="root"><div class="hdr"><span class="dot"></span>parc.land<span class="sp"></span><span class="tag">widget</span></div><div class="skel"><div class="ln w1"></div><div class="ln tall"></div><div class="ln w2"></div><div class="ln w3"></div></div></div>
+<div id="root"><div class="thin"><span class="tdot"></span><span class="tsum" style="opacity:.5">parc.land…</span></div></div>
 <script>`;
 
 const SHELL_TAIL = `</script>

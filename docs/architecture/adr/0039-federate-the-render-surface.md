@@ -148,6 +148,23 @@ api = {
 Renderers read only what they need; adding a *field* is backward-compatible (old renderers ignore it), so the
 contract can grow without breaking deployed cells — but the aim is to seed it wide enough that it rarely must.
 
+## Decision — the shell is thin by default; richness is earned
+
+Binding `act` (above) makes *every* result render a card, which made the shell's weight a first-class
+concern. The resolution: **the card chrome stays a small, low-weight affordance and only expands to a rich
+surface when a substrate type/tool actually provides one.** The card renders rich when — and only when —
+one of these fires: a known result *shape* (overview/whoami/suggestions/neighbors/graph/attention/
+grantRequests/changes/grants/view/$catalog/$types/members), a typed-fact list/single fact (whose own
+renderers/hints carry the weight), or a tool `_render` directive. A plain result — a scalar, `{ok}`, an act
+write-confirmation, an opaque object — collapses to a **one-line affordance** (a dot + a terse summary + an
+expand toggle that reveals the generic structured view on demand). The pre-data state is likewise a thin
+shimmer line, not a full skeleton.
+
+The line is principled: *rich when something is declared/known to render richly, thin when there isn't.* It
+keeps the validated interactive surfaces (ADR-0036/0038) while ensuring the now-universal `act` binding
+doesn't inflate trivial results into full cards. (Tighter variant, if wanted: demote the built-in shapes to
+opt-in too, so ONLY declared renderers/`_render` are rich — a one-condition change to the rich test.)
+
 ## Risks / open questions
 
 - **Inline-script injection under the live host CSP (the one unproven hop).** The consumer relies on the
