@@ -142,6 +142,56 @@ const MACHINE_RUN_RENDERER_SRC = `
 })();
 `;
 
+/**
+ * ADR-0039 — the machine cell's CONVERSATIONAL renderer for the `machine` DEFINITION
+ * (the identity fact `machine/<name>`), served at `/renderers/machine.js` and declared
+ * on the type. Unlike machine-run, the identity fact carries no graph — the nodes/rails
+ * are separate `machine-node`/`machine-rail` facts nested under the key — so this
+ * renderer is INTERACTIVE: it fetches its children over the host-proxied `api.call`
+ * (`api.key` → `workspace.query` by prefix) and assembles the node/rail graph. That
+ * exercises the federated renderer's read path (host proxy under enforceScope), not
+ * just static rendering. Backtick-free so it nests in this template literal.
+ */
+const MACHINE_DEF_RENDERER_SRC = `
+(function(){
+  var BUILD = 'v1';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  var M;
+  function loadMermaid(){
+    if(!M){ M = import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then(function(m){ m.default.initialize({startOnLoad:false,securityLevel:'strict',theme:'neutral'}); return m.default; }); }
+    return M;
+  }
+  function e(s){ return String(s==null?'':s).replace(/["\\n|]/g,' '); }
+  function sid(s){ return String(s==null?'n':s).replace(/[^A-Za-z0-9_]/g,'_'); }
+  function entriesOf(r){ return (r && Array.isArray(r.entries)) ? r.entries : []; }
+  function toMermaid(nodes, rails, entry){
+    var lines = ['flowchart TD'];
+    for(var i=0;i<nodes.length;i++){ var v=nodes[i].value||{}; lines.push('  '+sid(v.name)+'["'+e(v.title||v.name)+'"]'); }
+    for(var j=0;j<rails.length;j++){ var r=rails[j].value||{}; var lbl=e(r.mode||r.when||''); lines.push('  '+sid(r.from)+' -->'+(lbl?'|'+lbl+'|':'')+' '+sid(r.to)); }
+    if(entry){ lines.push('  classDef entry fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push('  class '+sid(entry)+' entry;'); }
+    return lines.join('\\n');
+  }
+  function badge(n, m){
+    return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ machine definition · '+n+' nodes · '+m+' rails · federated ui:// renderer · '+BUILD+'</div>';
+  }
+  var seq=0;
+  reg['machine'] = function(host, value, api){
+    var key = (api && api.key) || '';
+    if(!key || !api || typeof api.call !== 'function'){ host.innerHTML = '<div class="hint">machine: no key/host context</div>'; return; }
+    host.textContent = 'assembling machine…';
+    Promise.all([
+      api.call('read','workspace.query',{ prefix: key + '/node/', limit: 300 }),
+      api.call('read','workspace.query',{ prefix: key + '/rail/', limit: 300 })
+    ]).then(function(res){
+      var nodes = entriesOf(res[0]), rails = entriesOf(res[1]);
+      if(!nodes.length && !rails.length){ host.innerHTML = '<div class="hint">'+e((value&&value.title)||key)+' — no nodes/rails found</div>' + badge(0,0); return; }
+      var src = toMermaid(nodes, rails, value && value.entry);
+      return loadMermaid().then(function(m){ return m.render('md'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + badge(nodes.length, rails.length); });
+    }).catch(function(err){ host.innerHTML = '<div class="hint">machine: '+e((err&&err.message)||err)+'</div>' + badge(0,0); });
+  };
+})();
+`;
+
 const TOOLS = [
   {
     name: 'bootstrap',
@@ -352,6 +402,11 @@ export const handler = async (event) => {
   // the host-proxied tool calls, never embedded here).
   if (method === 'GET' && path === '/renderers/machine-run.js') {
     return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_RUN_RENDERER_SRC };
+  }
+  // ADR-0039: the machine DEFINITION renderer (interactive — assembles nodes/rails
+  // via the host-proxied call). Same federation rail as machine-run.
+  if (method === 'GET' && path === '/renderers/machine.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_DEF_RENDERER_SRC };
   }
   const isAppRoute = path === '/' || path === '' || path.startsWith('/m/') || path.startsWith('/r/');
   if ((method === 'GET' || method === 'HEAD') && isAppRoute) {

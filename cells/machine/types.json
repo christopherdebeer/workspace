@@ -15,7 +15,7 @@
       },
       "handlers": {
         "open": [{ "path": "/m/${id}" }],
-        "render": [{ "renderer": "_renderers/machine" }, { "hint": "fields" }]
+        "render": [{ "renderer": "ui://@c15r/machine/renderers/machine.js" }, { "renderer": "_renderers/machine" }, { "hint": "fields" }]
       }
     },
     {

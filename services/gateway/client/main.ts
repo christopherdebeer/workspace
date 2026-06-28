@@ -136,7 +136,7 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp 
     // machine-run trace diagram, formerly hardcoded HERE, now lives in the machine
     // cell and arrives this way — render federated, not centralised.
     body = hint('fields', entry.value);
-    fetchRenderer(rh.renderer, slot, t as string, entry.value);
+    fetchRenderer(rh.renderer, slot, t as string, entry.value, key);
   } else {
     body = rh && rh.hint ? hint(rh.hint, entry.value) : '';
     if (!body) body = hint('fields', entry.value) || `<pre>${esc(JSON.stringify(entry.value, null, 2)).slice(0, 800)}</pre>`;
@@ -526,8 +526,11 @@ interface RendererApi {
   call: (kind: 'read' | 'act', target: string, input: unknown) => Promise<unknown>;
   esc: (s: unknown) => string;
   md: (s: string) => string;
+  /** The fact's substrate key — a decomposed renderer (e.g. a machine definition,
+   *  whose nodes/rails are separate facts) needs it to fetch its children via call. */
+  key?: string;
 }
-const rendererApi: RendererApi = { call: callServer, esc: (s) => esc(String(s ?? '')), md };
+const baseRendererApi = { call: callServer, esc: (s: unknown) => esc(String(s ?? '')), md };
 const loadedRenderers = new Set<string>();
 function rendererRegistry(): Record<string, RendererFn> {
   const w = window as unknown as { __parcRender?: Record<string, RendererFn> };
@@ -535,7 +538,7 @@ function rendererRegistry(): Record<string, RendererFn> {
 }
 /** Fetch + execute a cell-declared `ui://` renderer for a typed fact; degrade to the
  *  hint render already in the slot on any failure (offline, CSP, cell down). */
-function fetchRenderer(uri: string, slot: string, type: string, value: unknown): void {
+function fetchRenderer(uri: string, slot: string, type: string, value: unknown, key?: string): void {
   app.readServerResource({ uri }).then((r) => {
     const src = (r as { contents?: Array<{ text?: string }> }).contents?.[0]?.text;
     const el = document.getElementById(slot);
@@ -550,7 +553,7 @@ function fetchRenderer(uri: string, slot: string, type: string, value: unknown):
       } catch { /* CSP blocked injection — keep the hint render */ }
     }
     const fn = type && reg[type];
-    if (typeof fn === 'function') { try { el.innerHTML = ''; fn(el, value, rendererApi); } catch { /* keep the hint */ } }
+    if (typeof fn === 'function') { try { el.innerHTML = ''; fn(el, value, { ...baseRendererApi, key }); } catch { /* keep the hint */ } }
   }).catch(() => { /* degrade to the hint render already shown */ });
 }
 // Delegated interactivity: drill (read) / ratify (act) re-render the card IN PLACE —
