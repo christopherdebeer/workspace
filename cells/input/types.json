@@ -4,6 +4,21 @@
       "type": "capture",
       "icon": "📥",
       "manager": "@c15r/input",
+      "note": "An inbox capture (the input organ): a source clipped into the daily log. Keyed inbox/<ts>, tagged `log:<date>` and linked `on` the day's `log:<date>` fact. `value.captured` is the YYYY-MM-DD (the lit daily-log view opens on it); `value.day` is a ref to `log:<date>` that projects the `on` edge (ADR-0003 derived edge). Captured from the PWA (as the signed-in user) or the `@c15r/input.capture` tool (organ path).",
+      "schema": {
+        "url": "string? — the source URL",
+        "content": "string — markdown body (a checkbox link + optional clipped quote)",
+        "captured": "string — YYYY-MM-DD day it was captured",
+        "title": "string? — source title",
+        "day": "ref? — the daily log (log:<date>) this capture is filed under"
+      },
+      "fields": [
+        { "name": "url", "type": "string", "required": false, "description": "the source URL" },
+        { "name": "content", "type": "string", "required": true, "description": "markdown body" },
+        { "name": "captured", "type": "string", "required": true, "description": "YYYY-MM-DD day it was captured" },
+        { "name": "title", "type": "string", "required": false, "description": "source title" },
+        { "name": "day", "type": "ref", "rel": "on", "required": false, "description": "the daily log (log:<date>) this capture is filed under" }
+      ],
       "handlers": {
         "open": [
           { "cell": "/lit", "path": "?doc=log:${value.captured}" },
