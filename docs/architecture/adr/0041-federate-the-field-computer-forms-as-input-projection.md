@@ -1,11 +1,21 @@
 # ADR-0041 — Federate the field computer: forms as the human projection of `inputSchema`
 
-- **Status:** Proposed. ADR-0039 federated the **output** half of the render surface (`ui://` renderers consumed
-  by the conversation card). The **field computer** — the home console where a human drives the *same
-  read/act wire an agent does* — never joined it: it renders results as raw `JSON.stringify` and takes args as
-  a raw-JSON textarea. This ADR makes the field computer a federated-render *consumer* (output) **and** names
-  the symmetric missing half: a capability's `inputSchema` is a declaration the agent fills as JSON and the
-  human should fill as a **form** — the input twin of `ui://` rendering.
+- **Status:** Inc 1 shipped (2026-06-30). ADR-0039 federated the **output** half of the render surface (`ui://`
+  renderers consumed by the conversation card). The **field computer** — the home console where a human drives
+  the *same read/act wire an agent does* — never joined it: it renders results as raw `JSON.stringify` and
+  takes args as a raw-JSON textarea. This ADR makes the field computer a federated-render *consumer* (output)
+  **and** names the symmetric missing half: a capability's `inputSchema` is a declaration the agent fills as
+  JSON and the human should fill as a **form** — the input twin of `ui://` rendering.
+- **Security correction (load-bearing, caught before ship):** a federated renderer may be authored by ANY cell
+  the caller can reach — including another tenant's (`@alice/notes`), not just the caller's own — so it is
+  untrusted code by construction. The card is safe injecting it directly only because the *whole card* already
+  runs inside claude.ai's sandboxed, opaque-origin iframe with no ambient session (ADR-0034). Home is **not**
+  sandboxed — it's the first-party, session-bearing origin — so it must never inject a renderer into its own
+  document. It instead builds its own child sandbox: a `sandbox="allow-scripts"` iframe (deliberately omitting
+  `allow-same-origin`, giving it an opaque origin) and becomes that sandbox's **host** over a small `postMessage`
+  protocol — the same host/view split ADR-0034 uses between claude.ai and the card, run locally
+  (`platform/ui/federated-renderer.ts`: `mountSandboxedRenderer` + `SANDBOX_HOST_HTML`). The renderer contract
+  (`fn(host, value, api)`) is unchanged — a cell author doesn't know or care which host is running it.
 - **Date:** 2026-06-30
 - **Depends on:** ADR-0002 (type-as-one-object — `present`/`handlers`, the `open|edit|create|render|embed|
   preview` intents), ADR-0039 (federated render surface + the `__parcRender` consumer + tool `_render`),
@@ -76,8 +86,12 @@ JSON-Schema form floor — the input analogue of the hint floor.
 
 ## Increments
 
-- **Inc 1 — federated output in the field computer.** `OutputStack` renders via `platform/ui/render-hints` +
-  typed-fact rendering + `_render`/`ui://` renderers (reuse ADR-0039). Highest visible win, mostly reuse.
+- **Inc 1 — federated output in the field computer (shipped).** `OutputStack`/`FactBody` render typed facts,
+  list results, and tool `_render` directives via the existing `typeDecls`/`resolve` machinery home already
+  had — a `ui://` renderer runs sandboxed (`FederatedRendererFrame`, ADR-0034's host/view split rebuilt locally
+  for a first-party surface); the gateway card's own renderer path was refactored onto the same shared
+  `platform/ui/federated-renderer` module (its "already sandboxed" half) so the two surfaces share one
+  implementation, not a divergent copy. JSON `<pre>` remains the fallback for plain/error/probe results.
 - **Inc 2 — the schema-form floor.** `platform/ui/form`: JSON-Schema → a lean form; the field computer uses it
   instead of the raw-JSON textarea (JSON toggle retained).
 - **Inc 3 — federated `ui://` forms.** `tool._meta.ui.form` / type `handlers.create` → a cell-authored arg UI;

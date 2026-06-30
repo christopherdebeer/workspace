@@ -17,6 +17,7 @@ import { dirname } from 'node:path';
 const MAP = {
   'platform/ui/index.tsx': ['cells/starter/shared/ui.tsx', 'cells/home/shared/ui.tsx'],
   'platform/ui/vocab.ts': ['cells/home/shared/vocab.ts'],
+  'platform/ui/federated-renderer.ts': ['cells/home/shared/federated-renderer.ts'],
 };
 
 for (const [src, targets] of Object.entries(MAP)) {

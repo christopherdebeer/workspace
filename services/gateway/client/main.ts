@@ -15,6 +15,7 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { marked } from 'marked';
 import { hintToHtml, bodyText, resolvePath, escapeHtml } from '../../../platform/ui/render-hints';
+import { fetchAndRunRenderer } from '../../../platform/ui/federated-renderer';
 import { json as vwJson, csv as vwCsv, mermaid as vwMermaid } from '../../../cells/viewers/client/main';
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -566,27 +567,14 @@ function hostBridges(): string {
 // ── ADR-0039: the FEDERATION consumer — run a cell-authored renderer ──────────
 // A cell serves a renderer SCRIPT that self-registers under its type on the shared
 // `window.__parcRender` map; the card fetches it once over the host `resources/read`
-// proxy (gateway provider hop → owning cell), injects it as an inline <script> (the
-// same `script-src` the inlined card itself relies on — no eval/module/iframe, which
-// the sandbox forbids), then calls it with the fact value + a small host API for
-// in-card interactivity. This is the ElementView contract canvas/lit already use,
-// now reaching the conversation: one renderer, every surface (the CALM invariant),
-// authored by the type's cell, changed by a cell deploy — not a platform cdk deploy.
-type RendererFn = (host: HTMLElement, value: unknown, api: RendererApi) => void;
-interface RendererApi {
-  call: (kind: 'read' | 'act', target: string, input: unknown) => Promise<unknown>;
-  esc: (s: unknown) => string;
-  md: (s: string) => string;
-  /** The fact's substrate key — a decomposed renderer (e.g. a machine definition,
-   *  whose nodes/rails are separate facts) needs it to fetch its children via call. */
-  key?: string;
-}
+// proxy (gateway provider hop → owning cell) and injects it as an inline <script>.
+// Safe here specifically because the WHOLE CARD already runs inside claude.ai's
+// sandboxed, opaque-origin iframe with no ambient parc.land session (ADR-0034) —
+// the card injecting into "its own" document still lands inside that sandbox. A
+// first-party, session-bearing surface (e.g. home) must NOT do this directly; it
+// builds its own child sandbox instead (`platform/ui/federated-renderer`'s
+// `mountSandboxedRenderer`, used by the field computer, ADR-0041).
 const baseRendererApi = { call: callServer, esc: (s: unknown) => esc(String(s ?? '')), md };
-const loadedRenderers = new Set<string>();
-function rendererRegistry(): Record<string, RendererFn> {
-  const w = window as unknown as { __parcRender?: Record<string, RendererFn> };
-  return (w.__parcRender = w.__parcRender || {});
-}
 /** Fetch + execute a cell-declared `ui://` renderer for a typed fact; degrade to the
  *  hint render already in the slot on any failure (offline, CSP, cell down). */
 function fetchRenderer(uri: string, slot: string, type: string, value: unknown, key?: string): void {
@@ -594,17 +582,7 @@ function fetchRenderer(uri: string, slot: string, type: string, value: unknown, 
     const src = (r as { contents?: Array<{ text?: string }> }).contents?.[0]?.text;
     const el = document.getElementById(slot);
     if (!el) return;
-    const reg = rendererRegistry();
-    if (typeof src === 'string' && src && !loadedRenderers.has(uri)) {
-      loadedRenderers.add(uri);
-      try {
-        const s = document.createElement('script');
-        s.textContent = src; // inline <script> executes synchronously on insert
-        document.head.appendChild(s);
-      } catch { /* CSP blocked injection — keep the hint render */ }
-    }
-    const fn = type && reg[type];
-    if (typeof fn === 'function') { try { el.innerHTML = ''; fn(el, value, { ...baseRendererApi, key }); } catch { /* keep the hint */ } }
+    void fetchAndRunRenderer(uri, type, el, value, { ...baseRendererApi, key }, async () => (typeof src === 'string' ? src : null));
   }).catch(() => { /* degrade to the hint render already shown */ });
 }
 // Delegated interactivity: drill (read) / ratify (act) re-render the card IN PLACE —

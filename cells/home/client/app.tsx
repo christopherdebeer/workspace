@@ -13,6 +13,7 @@ import * as React from 'react';
 import { marked } from 'marked';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme } from '../shared/ui';
 import { resolve, declFor, type TypeDecl } from '../shared/vocab';
+import { mountSandboxedRenderer, SANDBOX_HOST_HTML } from '../shared/federated-renderer';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './bridge';
 
@@ -178,6 +179,92 @@ async function mcpCall(verb: string, target: string, input?: unknown): Promise<{
     /* not JSON — keep the raw text (e.g. an error message) */
   }
   return { ok: !rpc.result?.isError, value };
+}
+
+/** Resolve a `ui://` resource (a cell-authored renderer script) over the SAME
+ *  authenticated `/mcp` endpoint `mcpCall` uses — the JSON-RPC `resources/read`
+ *  method, the gateway's federation provider hop (ADR-0039). Returns its text
+ *  content, or null. NEVER execute this text in home's own document — it is
+ *  potentially third-party cell code; see `FederatedRendererFrame`, which runs
+ *  it inside an isolated sandbox iframe instead (ADR-0041). */
+async function mcpResourceRead(uri: string): Promise<string | null> {
+  try {
+    const res = await authFetch('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'resources/read', params: { uri } }),
+    });
+    if (!res.ok) return null;
+    const rpc = (await res.json()) as { result?: { contents?: Array<{ text?: string }> } };
+    const text = rpc.result?.contents?.[0]?.text;
+    return typeof text === 'string' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run a cell-authored `ui://` renderer for a fact or tool result, isolated in a
+ * sandboxed iframe (ADR-0041) — never injected into home's own document, since
+ * the renderer may be authored by another tenant's cell. `placeholder` shows
+ * until the sandbox confirms a successful render; on any failure (offline, CSP,
+ * cell down, no renderer registered) it stays up — the same graceful-degrade
+ * contract the conversation card uses (ADR-0039).
+ */
+function FederatedRendererFrame({
+  uri,
+  type,
+  value,
+  factKey,
+  placeholder,
+}: {
+  uri: string;
+  type: string;
+  value: unknown;
+  factKey?: string;
+  placeholder?: React.ReactNode;
+}): React.JSX.Element {
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
+  const [height, setHeight] = useState(0);
+  const [settled, setSettled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    let disposed = false;
+    let handle: ReturnType<typeof mountSandboxedRenderer> | null = null;
+    const onLoad = (): void => {
+      if (disposed) return;
+      handle = mountSandboxedRenderer(iframe, {
+        call: (kind, target, input) => mcpCall(kind, target, input).then((r) => (r.ok ? r.value : Promise.reject(new Error(String(r.value))))),
+        onResize: setHeight,
+        onSettled: setSettled,
+      });
+      void mcpResourceRead(uri).then((src) => {
+        if (!disposed) handle?.render(src, type, value, factKey);
+      });
+    };
+    iframe.addEventListener('load', onLoad);
+    return () => {
+      disposed = true;
+      iframe.removeEventListener('load', onLoad);
+      handle?.dispose();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uri, type, factKey]);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {settled !== true ? placeholder ?? null : null}
+      <iframe
+        ref={iframeRef}
+        srcDoc={SANDBOX_HOST_HTML}
+        sandbox="allow-scripts"
+        title="federated renderer"
+        style={{ display: settled === true ? 'block' : 'none', width: '100%', border: 'none', height: Math.max(24, height) }}
+      />
+    </div>
+  );
 }
 
 // ─── the scenery (the painted assets) ──────────────────────────────
@@ -1182,7 +1269,23 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
  * that the peek modal carries the full content.
  */
 function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
-  const hint = resolve(e, 'render', typeDecls)?.hint;
+  const resolved = resolve(e, 'render', typeDecls);
+  // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
+  // run it sandboxed (ADR-0041), the FieldsBody hint as the degrade-to placeholder
+  // (mirroring the conversation card's hint-then-swap pattern). Not clamped: a
+  // renderer's content (a graph, a diagram) isn't a clampable text body.
+  if (resolved?.renderer && resolved.renderer.startsWith('ui://')) {
+    return (
+      <FederatedRendererFrame
+        uri={resolved.renderer}
+        type={e._meta?.type ?? ''}
+        value={e.value}
+        factKey={e.key}
+        placeholder={<FieldsBody value={e.value} />}
+      />
+    );
+  }
+  const hint = resolved?.hint;
   if (hint) {
     const el = HintBody({ kind: hint, e });
     if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
@@ -2112,6 +2215,10 @@ interface Output {
   ok: boolean;
   value: unknown;
   at: number;
+  /** The `key` arg the command was called with, if any — a fallback identity for
+   *  a fact-shaped result whose value omits its own key (e.g. `workspace.peek`
+   *  returns `{value,_meta}` only; the caller already knows the key it asked for). */
+  argsKey?: string;
 }
 
 /** Subsequence fuzzy match (canvas palette's model): all query chars in order. */
@@ -2279,10 +2386,11 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
 
   const invoke = async (cmd: Cmd, input: unknown): Promise<void> => {
     setBusy(true);
+    const argsKey = input && typeof input === 'object' && typeof (input as { key?: unknown }).key === 'string' ? (input as { key: string }).key : undefined;
     try {
       const r = await cmd.run(input);
       counter.current += 1;
-      setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: r.ok, value: r.value, at: Date.now() }, ...prev].slice(0, 40));
+      setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: r.ok, value: r.value, at: Date.now(), argsKey }, ...prev].slice(0, 40));
     } catch (e) {
       counter.current += 1;
       setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: false, value: String(e), at: Date.now() }, ...prev]);
@@ -2461,6 +2569,80 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
   );
 }
 
+/** A tool result's federation directive (ADR-0039 Inc 2): `_render:{renderer,as}`. */
+function renderDirective(v: unknown): { renderer: string; as: string } | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = (v as { _render?: { renderer?: string; as?: string } })._render;
+  return r && typeof r.renderer === 'string' && r.renderer.indexOf('ui://') === 0 ? { renderer: r.renderer, as: r.as || r.renderer } : null;
+}
+/** A single-fact-shaped result — `workspace.peek`'s `{value,_meta}` (ENTRY_SCHEMA). */
+function isFactShaped(v: unknown): v is { key?: string; value: unknown; _meta?: ListEntry['_meta'] } {
+  return !!v && typeof v === 'object' && 'value' in (v as object) && '_meta' in (v as object);
+}
+/** Normalize a `{entries: {...}|[...]}` result (query/search/list shapes) to a keyed list. */
+function entriesOf(v: unknown): ListEntry[] {
+  const e = v && typeof v === 'object' ? (v as { entries?: unknown }).entries : undefined;
+  if (Array.isArray(e)) return e.map((it, i) => ({ key: (it as ListEntry)?.key || String(i), value: (it as ListEntry)?.value, _meta: (it as ListEntry)?._meta }));
+  if (e && typeof e === 'object') return Object.entries(e as Record<string, ListEntry>).map(([k, it]) => ({ key: k, value: it?.value, _meta: it?._meta }));
+  return [];
+}
+
+/**
+ * A tool result rendered by what it IS — a federated `ui://` renderer (a tool's
+ * `_render` directive), a single typed fact, or a list of typed facts — instead
+ * of always `JSON.stringify` (ADR-0041 Inc 1: the field computer joins the
+ * federated render surface the conversation card already uses, ADR-0039).
+ * Errors and the two HTTP probes (raw JSON, not substrate facts) keep the JSON
+ * view; any shape this doesn't recognise falls back to it too.
+ */
+function ResultBody({ o }: { o: Output }): React.JSX.Element {
+  const fallback = (
+    <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.55rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.76rem', color: o.ok ? machine.text : '#e08c7a', maxHeight: 320 }}>
+      <code>{typeof o.value === 'string' ? o.value : JSON.stringify(o.value, null, 2)}</code>
+    </pre>
+  );
+  if (!o.ok || o.kind === 'probe') return fallback;
+  const rd = renderDirective(o.value);
+  if (rd) return <FederatedRendererFrame uri={rd.renderer} type={rd.as} value={o.value} factKey={o.argsKey} placeholder={fallback} />;
+  const screen = { background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.55rem', color: machine.text } as const;
+  if (isFactShaped(o.value)) {
+    const e: ListEntry = { key: (o.value as { key?: string }).key || o.argsKey || '', value: (o.value as { value: unknown }).value, _meta: (o.value as { _meta?: ListEntry['_meta'] })._meta };
+    const to = factHref(e);
+    const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
+    return (
+      <div style={{ ...screen, display: 'grid', gap: '0.3rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
+          {to ? <a href={to} style={{ color: machine.green, fontFamily: theme.serif, fontWeight: 600, textDecoration: 'none' }}>{title}</a> : <strong style={{ fontFamily: theme.serif }}>{title}</strong>}
+          {e.key ? <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem' }}>{e.key}</span> : null}
+        </div>
+        <FactBody e={e} full />
+      </div>
+    );
+  }
+  const list = entriesOf(o.value);
+  if (list.length) {
+    return (
+      <div style={{ ...screen, display: 'grid', gap: '0.4rem', maxHeight: 420, overflowY: 'auto' }}>
+        {list.slice(0, 12).map((e) => {
+          const to = factHref(e);
+          const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
+          return (
+            <div key={e.key} style={{ display: 'grid', gap: '0.15rem', paddingBottom: '0.4rem', borderBottom: `1px solid ${machine.border}` }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                {to ? <a href={to} style={{ color: machine.green, textDecoration: 'none', fontWeight: 600, fontSize: '0.82rem' }}>{title}</a> : <span style={{ fontSize: '0.82rem' }}>{title}</span>}
+                <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.65rem' }}>{e.key}</span>
+              </div>
+              <FactBody e={e} />
+            </div>
+          );
+        })}
+        {list.length > 12 ? <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.7rem' }}>+{list.length - 12} more</span> : null}
+      </div>
+    );
+  }
+  return fallback;
+}
+
 /** Results stack, newest first — the machine's running tape. */
 function OutputStack({ outputs, onClear }: { outputs: Output[]; onClear: () => void }): React.JSX.Element | null {
   if (outputs.length === 0) return null;
@@ -2483,9 +2665,7 @@ function OutputStack({ outputs, onClear }: { outputs: Output[]; onClear: () => v
               {new Date(o.at).toLocaleTimeString()}
             </span>
           </div>
-          <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.55rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.76rem', color: o.ok ? machine.text : '#e08c7a', maxHeight: 320 }}>
-          <code>{typeof o.value === 'string' ? o.value : JSON.stringify(o.value, null, 2)}</code>
-          </pre>
+          <ResultBody o={o} />
         </div>
       ))}
     </div>
