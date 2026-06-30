@@ -20,8 +20,12 @@ export function escapeHtml(s: unknown): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
 }
 
-/** Fields that carry a fact's prose body, in priority order (matches home's `bodyText`). */
-const BODY_FIELDS = ['content', 'body', 'text', 'description', 'note', 'md', 'markdown'] as const;
+/** Fields that carry a fact's prose body, in priority order (matches home's `bodyText`).
+ *  `statement` is `claim`'s assertion (ADR-0040's `claim` type, `{statement,
+ *  confidence, support[]}`) — without it here, a claim falls through to the
+ *  `fields` hint's per-field 160-char cap (`fieldsToHtml`), visibly truncating
+ *  a normal-length sentence mid-word with no ellipsis. */
+const BODY_FIELDS = ['content', 'body', 'text', 'description', 'note', 'statement', 'md', 'markdown'] as const;
 
 /** The markdown/text body of a fact value (a string, or its first content-ish field). */
 export function bodyText(v: unknown): string {
