@@ -41,6 +41,28 @@ const TOOLS = [
 const todayUTC = (): string => new Date().toISOString().split('T')[0];
 const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
+/** A short, human-readable slug for a capture KEY (ADR-0040: keys are link targets,
+ *  so a capture is addressable/linkable, not opaque). Kebab-case, ≤48 chars. */
+const slugify = (s: unknown): string =>
+  String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/g, '');
+/** Pick the most meaningful slug: title → the URL's last path segment (or host) →
+ *  the opening words of the body. Falls back to a base36 timestamp so a key always
+ *  exists. `inbox/<date>/<slug>` keeps the day a prefix-query + the slug linkable. */
+function captureSlug(parts: { title?: string; url?: string; content?: string }): string {
+  const fromTitle = slugify(parts.title);
+  if (fromTitle) return fromTitle;
+  if (parts.url) {
+    try {
+      const u = new URL(parts.url);
+      const last = u.pathname.split('/').filter(Boolean).pop();
+      const s = slugify(last) || slugify(u.hostname);
+      if (s) return s;
+    } catch { /* not a URL */ }
+  }
+  const fromBody = slugify(parts.content);
+  return fromBody || Date.now().toString(36);
+}
+
 /** ISO week label `YYYY-wWW` — copied verbatim from the input PWA so day facts
  *  this tool writes match the ones the browser writes. */
 const isoWeekOf = (d: string): string => {
@@ -81,7 +103,7 @@ async function capture(args: { url?: string; title?: string; text?: string; day?
   let content = `- [ ] [${title ?? url}](${url})`;
   if (text) content += `\n\n    > ${text.replace(/\n/g, '\n    > ')}`;
 
-  const key = `inbox/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  const key = `inbox/${day}/${captureSlug({ title, url, content })}`;
   await emitWrites([
     // The capture fact: tagged `log:<day>` (drives the daily-log view) and carrying
     // `day` (a ref → the `on` edge into the day fact; ADR-0003 derived edge — the
