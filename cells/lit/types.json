@@ -64,6 +64,24 @@
           "to": "doc:{doc}"
         }
       ]
+    },
+    {
+      "type": "log",
+      "icon": "🗓️",
+      "label": "value.title",
+      "manager": "@c15r/lit",
+      "note": "A daily log — the chronological spine (Karpathy's log.md; ADR-0040). Keyed `log:<YYYY-MM-DD>`: a thin day fact that the day's captures tag and link `on`. lit renders it as the day's captures in temporal order (a view over the day, not a doc with membership). Holds {date, week, month, year, title} for navigation. Owned by lit (the wiki/render layer); written by @c15r/input (the intake organ) — complementary without coupling, the contract is the fact + the `on` edge.",
+      "schema": {
+        "date": "string — YYYY-MM-DD",
+        "week": "string — YYYY-wWW",
+        "month": "string — YYYY-MM",
+        "year": "string — YYYY",
+        "title": "string — the date label"
+      },
+      "handlers": {
+        "open": [{ "cell": "/lit", "path": "?doc=log:${value.date}" }],
+        "render": [{ "hint": "markdown" }]
+      }
     }
   ]
 }
