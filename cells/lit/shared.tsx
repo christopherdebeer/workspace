@@ -90,22 +90,15 @@ export function encodeKeyPath(key: string): string {
   return encodeURIComponent(key).replace(/%2F/g, '/').replace(/%3A/g, ':');
 }
 
-/** The owning principal, set ONCE by each side before any render (server:
- *  `OWNER`, its env-configured cell owner; client: the kernel's `cellAddress`)
- *  — `shared.tsx` has no `location`/env of its own, but every internal href
- *  needs a stable absolute prefix so a same-cell link is correct whether THIS
- *  request reached lit via the apex `/@owner/lit` path or a subdomain (apex is
- *  always valid, so every internal href targets it — the convention the doc
- *  page's own "← documents" link already used). Both sides MUST set the same
- *  value before rendering — the SSR/hydration parity contract (identical
- *  input → identical markup) depends on it. */
-let CURRENT_OWNER = 'c15r';
-export function setOwner(owner: string): void { CURRENT_OWNER = owner; }
-/** The path-based route for a fact key — `/@owner/lit/r/<key>`, lit's one
- *  generic reader route (doc/log/any-other-type all resolve through it; see
- *  `client/main.tsx` `Route()` and `index.ts`'s SSR handler) — a stable,
- *  shareable address: the URL IS the key. */
-export const factRoute = (key: string): string => `/@${CURRENT_OWNER}/lit/r/${encodeKeyPath(key)}`;
+/** The path-based route for a fact key — `/r/<key>`, lit's one generic reader
+ *  route (doc/log/any-other-type all resolve through it; see `client/main.tsx`
+ *  `Route()` and `index.ts`'s SSR handler) — a stable, shareable address: the
+ *  URL IS the key. Deliberately a BARE absolute path, no `/@owner/lit` prefix:
+ *  a tier-2 cell like lit is reached ONLY on its own subdomain
+ *  (`<owner>-lit.on.parc.land`) — see `cells/home/index.ts`'s
+ *  `installServerBridge` comment ("no user cells on the apex") — so a
+ *  same-cell link just needs to be absolute from THIS domain's root. */
+export const factRoute = (key: string): string => `/r/${encodeKeyPath(key)}`;
 
 // [[wiki-links]] — a link is a first-class substrate edge, not a bolted-on index.
 // `[[target]]` / `[[target|label]]`: a bare target resolves to `doc:<slug>`, an
@@ -225,7 +218,7 @@ export function DocView({ vm }: { vm: Extract<ViewModel, { kind: 'doc' }> }): Re
   return (
     <>
       <header>
-        <a className="back" href={`/@${vm.owner}/lit`}>← documents</a>
+        <a className="back" href="/">← documents</a>
         <h1>{vm.title || vm.id}</h1>
         {vm.summary ? <p className="summary">{vm.summary}</p> : null}
       </header>
@@ -265,7 +258,7 @@ export function FactView({ vm }: { vm: Extract<ViewModel, { kind: 'fact' }> }): 
   return (
     <>
       <header>
-        <a className="back" href={`/@${vm.owner}/lit`}>← documents</a>
+        <a className="back" href="/">← documents</a>
         <h1>{vm.title}</h1>
         <p className="summary fact-meta">{[vm.type, vm.key].filter(Boolean).join(' · ')}</p>
       </header>

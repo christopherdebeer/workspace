@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { Surface, renderMarkdown, setOwner, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef } from './shared';
+import { Surface, renderMarkdown, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef } from './shared';
 import { bodyText, fieldsToHtml } from './render-hints';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
@@ -14,8 +14,6 @@ const respond = (statusCode: number, contentType: string, body: string) => ({
 
 const OWNER = process.env.CELL_OWNER || 'c15r';
 const TABLE = process.env.SUBSTRATE_TABLE || '';
-// Must run before any SSR render — see `setOwner`'s doc comment (shared.tsx).
-setOwner(OWNER);
 
 // ── server-side substrate read (the canvas pattern) ────────────────
 // The cell's IAM role grants `STATE#<owner>` reads only (LeadingKeys), so the

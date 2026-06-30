@@ -21,7 +21,7 @@ import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/
 import { read, act } from './lib/substrate.ts';
 import { bodyText, fieldsToHtml } from '../render-hints';
 import {
-  Surface, FactView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, setOwner, factRoute,
+  Surface, FactView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
   type ViewModel, type BlockData, type DocValue, type LinkRef,
 } from '../shared';
 
@@ -33,9 +33,6 @@ interface Entry { key: string; value: any; _meta?: Meta }
 const appRoot = document.getElementById('app')!;
 const cellOwner = (): string => (cellAddress() as { owner?: string } | null)?.owner ?? 'c15r';
 let typeDecls: Record<string, { viewer?: string }> = {};
-// Must run before any render — see `setOwner`'s doc comment (shared.tsx): the
-// SSR/hydration parity contract needs both sides resolving the same owner.
-setOwner(cellOwner());
 
 // The shared @c15r/viewers `repl` view reaches the run organ (@c15r/run.exec /
 // .fetch) and persists outputs through these globals — reference, not copy, the
@@ -543,7 +540,7 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   return (
     <>
       <header>
-        <a className="back" href={`/@${cellOwner()}/lit`}>← documents</a>
+        <a className="back" href="/">← documents</a>
         <h1>{meta.title || docId}</h1>
         {meta.summary ? <p className="summary">{meta.summary}</p> : null}
         <p className="doc-controls summary">
@@ -646,7 +643,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
 ListEditor.MissingDoc = function MissingDoc({ docId }: { docId: string }): React.JSX.Element {
   return (
     <>
-      <header><a className="back" href={`/@${cellOwner()}/lit`}>← documents</a><h1>{docId}</h1></header>
+      <header><a className="back" href="/">← documents</a><h1>{docId}</h1></header>
       <main><p className="boot">no document “{docId}”</p></main>
     </>
   );
@@ -698,7 +695,7 @@ function LogView({ docId }: { docId: string }): React.JSX.Element {
 
   return (
     <>
-      <header><a className="back" href={`/@${cellOwner()}/lit`}>← documents</a><h1>📥 {label}</h1><LogNav label={label} /></header>
+      <header><a className="back" href="/">← documents</a><h1>📥 {label}</h1><LogNav label={label} /></header>
       <main>
         {groups === null ? <p className="boot">loading…</p> : groups.length === 0 || groups.every(([, e]) => !e.length)
           ? <p className="boot">{isDay ? 'nothing captured this day' : 'nothing captured in this period'}</p>
