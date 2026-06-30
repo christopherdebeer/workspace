@@ -2137,8 +2137,12 @@ const PROBE_CMDS: Cmd[] = [
     needsArgs: false,
     search: 'probe whoami identity who am i',
     run: async () => {
-      const r = await getJson('/mcp/whoami');
-      return { ok: r.status === 200, value: r.body };
+      // `/mcp/whoami` requires the session bearer — use authFetch (not the bare
+      // getJson the public oauth probe uses), or the gateway returns invalid_token.
+      const res = await authFetch('/mcp/whoami');
+      let body: unknown;
+      try { body = await res.json(); } catch { body = await res.text(); }
+      return { ok: res.status === 200, value: body };
     },
   },
   {
@@ -2214,7 +2218,12 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
   useEffect(() => {
     if (!authed) return;
     let live = true;
-    mcpCall('read', '$catalog')
+    // `{detail:'full'}` returns the flat { capabilities:[…] } the console maps; a
+    // bare $catalog returns the ADR-0033 grouped summary ({ cells:[{capabilities}] })
+    // with no top-level .capabilities — which silently emptied the console. Request
+    // full, and flatten the grouped shape too so a future default change can't
+    // re-break it.
+    mcpCall('read', '$catalog', { detail: 'full' })
       .then((r) => {
         if (!live) return;
         if (!r.ok) {
@@ -2222,7 +2231,8 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
           setCmds([...PROBE_CMDS]);
           return;
         }
-        const caps = (r.value as { capabilities?: Capability[] }).capabilities ?? [];
+        const v = r.value as { capabilities?: Capability[]; cells?: Array<{ capabilities?: Capability[] }> };
+        const caps = v.capabilities ?? (v.cells ?? []).flatMap((c) => c.capabilities ?? []);
         setCmds([...caps.map(capToCmd), ...PROBE_CMDS]);
       })
       .catch((e) => {
