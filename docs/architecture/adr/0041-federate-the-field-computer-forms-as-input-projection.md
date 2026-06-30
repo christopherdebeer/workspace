@@ -101,8 +101,19 @@ JSON-Schema form floor — the input analogue of the hint floor.
   across the switch) for power use or a shape the floor can't walk; `argSkeleton`/`argSkeletonObject` seed
   both views identically. Palette-parameterized (`FormPalette`) so it sits naturally in the machine's dark
   housing today and any other surface's own theme later (Inc 4).
-- **Inc 3 — federated `ui://` forms.** `tool._meta.ui.form` / type `handlers.create` → a cell-authored arg UI;
-  the field computer (and the card) fetch+run it, falling back to the schema-form floor.
+- **Inc 3 — federated `ui://` forms (shipped).** A cell tool descriptor's `ui` gains `form` (alongside
+  ADR-0039 Inc 2's `renderer`/`as`) — the per-tool analogue of a type's `handlers.create`. Spine: `cells.
+  describeCellTools` forwards it; the gateway surfaces `ui.form` on the **`$catalog` entry itself** (unlike
+  `renderer`, a human must see it BEFORE invoking, to fill the form — `_render` stays a post-invocation
+  result stamp). Consumer: `platform/ui/federated-renderer`'s sandbox protocol gained a SEPARATE `__parcForm`
+  registry/message pair (`parc-mount-form`/`parc-form-change`) beside the existing render one — a form is the
+  INPUT twin of a renderer (`fn(host, schema, value, api)`, reporting edits via `api.onChange` rather than
+  settling once) and runs under the identical sandbox (still untrusted code). The field computer's
+  `FederatedFormFrame` mounts it ONCE (not on every keystroke — remounting on every parent re-render would
+  rebuild the sandboxed DOM and drop focus mid-edit) with the Inc 2 `SchemaForm` floor as the loading/failure
+  placeholder, same graceful-degrade contract as output renderers. Demonstrated on `@c15r/input.capture`: a
+  form offering a live preview of the composed capture markdown — genuine value the generic floor can't
+  provide (it doesn't know the type's compose rule), bounded in scope (proves the wire, doesn't gold-plate).
 - **Inc 4 — one form, every input.** Point lit's doc edit / home's knowledge create at the same
   `platform/ui/form`; retire the bespoke editors where the floor suffices.
 

@@ -90,8 +90,9 @@ interface CellTool {
   tool: string;
   /** Third-party-author disclosure (set by cells for non-owner callers). */
   disclosure?: { author: string; reads: string[]; note: string };
-  /** ADR-0039 Inc 2: a cell-authored renderer for this tool's result. */
-  ui?: { renderer: string; as?: string };
+  /** ADR-0039 Inc 2 / ADR-0041 Inc 3: a cell-authored renderer (output) and/or
+   *  a cell-authored argument form (input) for this tool. */
+  ui?: { renderer?: string; as?: string; form?: string };
 }
 
 /** A resolved, dispatchable capability. */
@@ -103,8 +104,8 @@ interface Capability {
   scope: string | null;
   /** Any-of family gate (see ProviderTool.scopeFamily). */
   scopeFamily?: string | null;
-  /** ADR-0039 Inc 2: a cell-authored renderer for this capability's result. */
-  ui?: { renderer: string; as?: string };
+  /** ADR-0039 Inc 2 / ADR-0041 Inc 3: a cell-authored renderer/form for this capability. */
+  ui?: { renderer?: string; as?: string; form?: string };
   forward: (input: unknown, ctx: ServiceContext) => Promise<unknown>;
 }
 
@@ -119,6 +120,13 @@ interface CatalogEntry {
   scope: string | null;
   /** Third-party-author disclosure for cell tools (docs/capability-consent.md). */
   disclosure?: { author: string; reads: string[]; note: string };
+  /** ADR-0041 Inc 3: a cell-authored argument FORM for this capability, surfaced
+   *  on the catalog entry (unlike `renderer`, a human must see this BEFORE
+   *  invoking — it replaces the schema-form floor for THIS target). The output
+   *  `renderer`/`as` aren't surfaced here; they apply post-invocation (`_render`
+   *  on the result, ADR-0039 Inc 2) and a caller doesn't need them to decide
+   *  whether/how to call. */
+  ui?: { form?: string };
 }
 
 /** One capability in the summary catalog: enough to decide, not to call. */
@@ -229,6 +237,7 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
         ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
         scope: t.scope ?? null,
         ...(t.disclosure ? { disclosure: t.disclosure } : {}),
+        ...(t.ui?.form ? { ui: { form: t.ui.form } } : {}),
       });
     }
   } catch (err) {

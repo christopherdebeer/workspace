@@ -1274,11 +1274,14 @@ interface CellToolDescriptor {
    * developer" surface, shown at discovery/first-invoke for humans and agents.
    */
   disclosure?: { author: string; reads: string[]; writes?: string[]; note: string };
-  /** ADR-0039 Inc 2: a cell-authored conversational renderer for this TOOL's
-   *  result (the per-tool analogue of a type's `handlers.render`). The gateway
-   *  stamps it onto the result as `_render`; the card runs it. `as` is the
-   *  `window.__parcRender` key the served renderer registers under. */
-  ui?: { renderer: string; as?: string };
+  /** ADR-0039 Inc 2 / ADR-0041 Inc 3: a cell-authored conversational renderer
+   *  (`renderer`/`as` — output) and/or a bespoke argument form (`form` — input)
+   *  for this TOOL, the per-tool analogue of a type's `handlers.render`/`create`.
+   *  The gateway stamps `renderer` onto the result as `_render` (the card runs
+   *  it); `form` is surfaced directly on the catalog capability (a human must
+   *  see it BEFORE invoking, to fill the form). `as`/`form` name the
+   *  `window.__parcRender`/`__parcForm` keys the served scripts register under. */
+  ui?: { renderer?: string; as?: string; form?: string };
 }
 
 /** Selector: omit to enumerate all accessible cells (catalog); give one to resolve a single target. */
@@ -1370,7 +1373,7 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
             cellId: cell.cellId,
             tool,
             ...(disclosure ? { disclosure } : {}),
-            ...(t.ui && typeof t.ui === 'object' ? { ui: t.ui as { renderer: string; as?: string } } : {}),
+            ...(t.ui && typeof t.ui === 'object' ? { ui: t.ui as { renderer?: string; as?: string; form?: string } } : {}),
           });
         }
       } catch (err) {

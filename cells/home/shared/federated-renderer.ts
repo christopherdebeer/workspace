@@ -50,6 +50,26 @@ export interface RendererApi {
   key?: string;
 }
 
+/**
+ * ADR-0041 Inc 3 — the INPUT twin of `RendererFn`. Where a renderer DISPLAYS a
+ * value, a form COLLECTS one: it mounts into `host` against a JSON Schema +
+ * the current value, and calls `api.onChange(next)` on every edit. It never
+ * submits — the embedding surface (the field computer, the card) owns the
+ * Run/Submit action and the current value, exactly mirroring how
+ * `platform/ui/form`'s `SchemaForm` only emits `onChange`. Self-registers
+ * under a SEPARATE namespace (`window.__parcForm`) from output renderers
+ * (`window.__parcRender`) — a tool may declare both for the same target. Same
+ * untrusted-by-construction status as `RendererFn`, so it runs under the same
+ * sandbox rules.
+ */
+export type FormRendererFn = (host: HTMLElement, schema: unknown, value: Record<string, unknown>, api: FormRendererApi) => void;
+
+export interface FormRendererApi extends Omit<RendererApi, 'key'> {
+  /** Report the form's current value — call on every edit; the host keeps it
+   *  as the live arguments and is what actually runs the capability. */
+  onChange: (value: Record<string, unknown>) => void;
+}
+
 const loadedRenderers = new Set<string>();
 
 export function rendererRegistry(): Record<string, RendererFn> {
@@ -122,6 +142,7 @@ export const SANDBOX_HOST_HTML = `<!doctype html><html><head><meta charset="utf-
 </head><body><div id="root"></div><script>
 (function(){
   var reg = (window.__parcRender = window.__parcRender || {});
+  var formReg = (window.__parcForm = window.__parcForm || {});
   var seq = 0, pending = {};
   function call(kind, target, input){
     return new Promise(function(resolve, reject){
@@ -155,6 +176,24 @@ export const SANDBOX_HOST_HTML = `<!doctype html><html><head><meta charset="utf-
       } catch (e) {
         parent.postMessage({ source: 'parc-sandbox', type: 'parc-render-failed', error: String((e && e.message) || e) }, '*');
       }
+    } else if (m.type === 'parc-mount-form') {
+      // ADR-0041 Inc 3: the INPUT twin of parc-render — mounts a form instead of
+      // displaying a value, and reports edits back via parc-form-change rather
+      // than settling once. The host (not this sandbox) decides when to submit.
+      try {
+        if (m.src) { var fs = document.createElement('script'); fs.textContent = m.src; document.head.appendChild(fs); }
+        var ffn = m.formType && formReg[m.formType];
+        if (typeof ffn === 'function') {
+          root.innerHTML = '';
+          ffn(root, m.schema, m.value || {}, { call: call, esc: esc, md: md, onChange: function(v){ parent.postMessage({ source: 'parc-sandbox', type: 'parc-form-change', value: v }, '*'); } });
+          parent.postMessage({ source: 'parc-sandbox', type: 'parc-rendered' }, '*');
+        } else {
+          parent.postMessage({ source: 'parc-sandbox', type: 'parc-render-failed' }, '*');
+        }
+        reportSize();
+      } catch (e) {
+        parent.postMessage({ source: 'parc-sandbox', type: 'parc-render-failed', error: String((e && e.message) || e) }, '*');
+      }
     } else if (m.type === 'parc-call-result') {
       var p = pending[m.id];
       if (p) { delete pending[m.id]; if (m.ok) p.resolve(m.value); else p.reject(new Error(String(m.error || 'call failed'))); }
@@ -164,10 +203,18 @@ export const SANDBOX_HOST_HTML = `<!doctype html><html><head><meta charset="utf-
 })();
 </script></body></html>`;
 
+type QueuedMount =
+  | { kind: 'render'; src: string | null; type: string; value: unknown; key?: string }
+  | { kind: 'form'; src: string | null; type: string; schema: unknown; value: Record<string, unknown> };
+
 export interface SandboxedRendererHandle {
   /** Send a renderer's source + the value into the sandbox (queued until the
    *  sandbox signals ready). Call again to re-render with a new value. */
   render(src: string | null, type: string, value: unknown, key?: string): void;
+  /** ADR-0041 Inc 3 — mount a FORM (the input twin of `render`): the sandbox
+   *  runs the form against `schema`/`value` and reports edits via the host's
+   *  `onFormChange`. Call again (e.g. on a schema change) to remount. */
+  mountForm(src: string | null, type: string, schema: unknown, value: Record<string, unknown>): void;
   /** Stop listening — call on unmount. */
   dispose(): void;
 }
@@ -178,8 +225,8 @@ export interface SandboxedRendererHandle {
  * surface — home, or any first-party React page) holds the real session;
  * `call` is the parent's own authenticated read/act (e.g. home's `mcpCall`).
  * The iframe can reach nothing but `postMessage` to this parent, so a
- * cell-authored renderer — however untrusted — never touches the parent's
- * cookies, storage, or DOM.
+ * cell-authored renderer or form — however untrusted — never touches the
+ * parent's cookies, storage, or DOM.
  */
 export function mountSandboxedRenderer(
   iframe: HTMLIFrameElement,
@@ -187,17 +234,23 @@ export function mountSandboxedRenderer(
     call: (kind: 'read' | 'act', target: string, input: unknown) => Promise<unknown>;
     onResize?: (height: number) => void;
     onSettled?: (ok: boolean) => void;
+    /** ADR-0041 Inc 3 — fires on every edit inside a mounted FORM. */
+    onFormChange?: (value: Record<string, unknown>) => void;
   },
 ): SandboxedRendererHandle {
   let ready = false;
-  let queued: { src: string | null; type: string; value: unknown; key?: string } | null = null;
+  let queued: QueuedMount | null = null;
   const post = (msg: Record<string, unknown>): void => {
     iframe.contentWindow?.postMessage({ source: 'parc-host', ...msg }, '*');
+  };
+  const send = (q: QueuedMount): void => {
+    if (q.kind === 'render') post({ type: 'parc-render', src: q.src, rendererType: q.type, value: q.value, key: q.key });
+    else post({ type: 'parc-mount-form', src: q.src, formType: q.type, schema: q.schema, value: q.value });
   };
   const onMessage = (ev: MessageEvent): void => {
     if (!iframe.contentWindow || ev.source !== iframe.contentWindow) return; // only this sandbox
     const m = ev.data as
-      | { source?: string; type?: string; id?: number; kind?: 'read' | 'act'; target?: string; input?: unknown; height?: number; ok?: boolean; error?: string }
+      | { source?: string; type?: string; id?: number; kind?: 'read' | 'act'; target?: string; input?: unknown; height?: number; ok?: boolean; error?: string; value?: Record<string, unknown> }
       | null;
     if (!m || m.source !== 'parc-sandbox') return;
     if (m.type === 'parc-ready') {
@@ -205,7 +258,7 @@ export function mountSandboxedRenderer(
       if (queued) {
         const q = queued;
         queued = null;
-        post({ type: 'parc-render', src: q.src, rendererType: q.type, value: q.value, key: q.key });
+        send(q);
       }
     } else if (m.type === 'parc-call' && m.kind && m.target) {
       opts
@@ -218,13 +271,21 @@ export function mountSandboxedRenderer(
       opts.onSettled?.(true);
     } else if (m.type === 'parc-render-failed') {
       opts.onSettled?.(false);
+    } else if (m.type === 'parc-form-change' && m.value && typeof m.value === 'object') {
+      opts.onFormChange?.(m.value);
     }
   };
   window.addEventListener('message', onMessage);
   return {
     render: (src, type, value, key) => {
-      if (ready) post({ type: 'parc-render', src, rendererType: type, value, key });
-      else queued = { src, type, value, key };
+      const q: QueuedMount = { kind: 'render', src, type, value, key };
+      if (ready) send(q);
+      else queued = q;
+    },
+    mountForm: (src, type, schema, value) => {
+      const q: QueuedMount = { kind: 'form', src, type, schema, value };
+      if (ready) send(q);
+      else queued = q;
     },
     dispose: () => window.removeEventListener('message', onMessage),
   };

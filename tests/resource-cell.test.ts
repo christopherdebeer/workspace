@@ -410,6 +410,27 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect((plain.parsed as { _render?: unknown })._render).toBeUndefined();
   });
 
+  it('surfaces a cell tool\'s declared argument form on the $catalog entry, but not its renderer (ADR-0041 Inc 3)', async () => {
+    cellTools = [
+      {
+        name: 'machine-1__define_machine', address: '@c15r/machine', description: 'Define.', inputSchema: { type: 'object' },
+        scope: null, kind: 'act', cellId: 'machine-1', tool: 'define_machine',
+        ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine', form: 'ui://@c15r/machine/forms/define_machine.js' },
+      },
+      { name: 'tools-demo-1__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const cat = await callTool('creator', 'read', { target: '$catalog', input: { detail: 'full' } });
+    const caps = (cat.parsed as { capabilities: Array<{ target: string; ui?: { form?: string; renderer?: string } }> }).capabilities;
+    const def = caps.find((c) => c.target === '@c15r/machine.define_machine');
+    expect(def?.ui).toEqual({ form: 'ui://@c15r/machine/forms/define_machine.js' });
+    // The output renderer is post-invocation (_render on the result); the catalog
+    // (a pre-invocation surface) carries only what a caller needs to decide HOW to
+    // call — the form, not the renderer.
+    expect(def?.ui?.renderer).toBeUndefined();
+    const echo = caps.find((c) => c.target === '@alice/tools-demo.echo');
+    expect(echo?.ui).toBeUndefined();
+  });
+
   it('unknown target is a tool error, not a transport error', async () => {
     const res = await callTool('creator', 'act', { target: 'workspace.nope' });
     expect(res.isError).toBe(true);

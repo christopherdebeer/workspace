@@ -17,6 +17,69 @@ const json = (statusCode: number, body: unknown) => respond(statusCode, 'applica
  * organ path (`substrate.write.requested` → the owner's slice, cell-attested),
  * so the tool needs no token. Mirrors `cells/input/client/main.ts` `capture()`. */
 
+/**
+ * ADR-0041 Inc 3 — a cell-authored argument FORM for `capture` (the input twin
+ * of ADR-0039 Inc 2's tool renderers). The generic schema-form floor already
+ * covers `url`/`title`/`text`/`day` fine — four plain strings — so this form's
+ * value-add is something the floor genuinely can't do: a LIVE preview of the
+ * composed capture markdown (mirroring `capture()`'s exact compose logic
+ * below) as the user types, so they see what will actually be written before
+ * running it. Self-registers under `window.__parcForm['input.capture']`
+ * (`as`, declared on the tool below) — fetched + run sandboxed by the field
+ * computer / card (ADR-0041), never executed against the caller's own origin.
+ * Backtick-free so it nests in this template literal.
+ */
+const CAPTURE_FORM_SRC = `
+(function(){
+  var reg = (window.__parcForm = window.__parcForm || {});
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function field(label, name, val, long){
+    var tag = long ? 'textarea' : 'input';
+    var attrs = long ? ' rows="2"' : ' type="text"';
+    return '<label style="display:grid;gap:.25rem;font:12px ui-monospace,monospace">' + esc(label)
+      + '<' + tag + ' data-f="' + esc(name) + '"' + attrs + ' style="padding:.5rem .6rem;border-radius:6px;border:1px solid currentColor;background:transparent;color:inherit;font:13px -apple-system,sans-serif;width:100%;box-sizing:border-box">'
+      + (long ? esc(val||'') : '') + '</' + tag + '>'
+      + (!long ? '' : '') + '</label>';
+  }
+  function compose(v){
+    var url = (v.url||'').trim(), title = (v.title||'').trim(), text = (v.text||'').trim();
+    if(!url) return null;
+    var content = '- [ ] [' + (title || url) + '](' + url + ')';
+    if(text) content += '\\n\\n    > ' + text.replace(/\\n/g, '\\n    > ');
+    return content;
+  }
+  reg['input.capture'] = function(host, schema, value, api){
+    var v = Object.assign({ url: '', title: '', text: '', day: '' }, value || {});
+    host.innerHTML =
+      '<div style="display:grid;gap:.6rem">'
+      + field('url *', 'url', v.url, false)
+      + field('title', 'title', v.title, false)
+      + field('text (clip / highlight)', 'text', v.text, true)
+      + field('day (YYYY-MM-DD, defaults to today)', 'day', v.day, false)
+      + '<div style="display:grid;gap:.25rem"><span style="font:12px ui-monospace,monospace;opacity:.7">preview</span>'
+      + '<pre id="parc-capture-preview" style="white-space:pre-wrap;background:rgba(127,127,127,.12);border-radius:6px;padding:.55rem;margin:0;font:12.5px ui-monospace,monospace;min-height:1.4em"></pre></div>'
+      + '</div>';
+    function paint(){
+      var c = compose(v);
+      var pre = host.querySelector('#parc-capture-preview');
+      pre.textContent = c || '(enter a url to preview)';
+    }
+    var inputs = host.querySelectorAll('[data-f]');
+    for(var i=0;i<inputs.length;i++){
+      (function(el){
+        el.value = v[el.getAttribute('data-f')] || '';
+        el.addEventListener('input', function(){
+          v = Object.assign({}, v); v[el.getAttribute('data-f')] = el.value;
+          paint();
+          api.onChange(v);
+        });
+      })(inputs[i]);
+    }
+    paint();
+  };
+})();
+`;
+
 const TOOLS = [
   {
     name: 'capture',
@@ -35,6 +98,10 @@ const TOOLS = [
       additionalProperties: false,
     },
     scope: null,
+    // ADR-0041 Inc 3: a cell-authored argument form (a live compose preview the
+    // generic schema-form floor can't offer). The gateway surfaces `form` on the
+    // $catalog entry; the field computer/card fetch + run it sandboxed.
+    ui: { form: 'ui://@c15r/input/forms/capture.js', as: 'input.capture' },
   },
 ];
 
@@ -139,6 +206,12 @@ export const handler = async (event: any) => {
     } catch (err) {
       return json(500, { error: (err as Error).message });
     }
+  }
+  // ADR-0041 Inc 3: the capture tool's bespoke argument form (a live compose
+  // preview), fetched by the gateway provider hop over the host-mediated
+  // resources/read call and run sandboxed — non-sensitive static UI code.
+  if (method === 'GET' && path === '/forms/capture.js') {
+    return respond(200, 'application/javascript; charset=utf-8', CAPTURE_FORM_SRC);
   }
 
   // — the capture PWA (static, read-only) —

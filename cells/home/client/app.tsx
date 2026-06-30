@@ -268,6 +268,83 @@ function FederatedRendererFrame({
   );
 }
 
+/**
+ * Run a cell-authored argument FORM (ADR-0041 Inc 3) — the input twin of
+ * `FederatedRendererFrame`, same sandbox. Mounted ONCE with the schema +
+ * starting value (not on every keystroke — re-mounting on every parent
+ * re-render would rebuild the sandboxed form's DOM and drop focus/cursor
+ * mid-edit); from then on the sandbox owns its own field state and reports
+ * edits up via `onChange`. `placeholder` (the schema-form floor, ADR-0041
+ * Inc 2) shows until the federated form confirms it mounted, and stays up
+ * forever if it never does — the same graceful degrade as output renderers.
+ */
+function FederatedFormFrame({
+  uri,
+  type,
+  schema,
+  initialValue,
+  onChange,
+  placeholder,
+}: {
+  uri: string;
+  type: string;
+  schema: unknown;
+  initialValue: Record<string, unknown>;
+  onChange: (v: Record<string, unknown>) => void;
+  placeholder?: React.ReactNode;
+}): React.JSX.Element {
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
+  const [height, setHeight] = useState(0);
+  const [settled, setSettled] = useState<boolean | null>(null);
+  const initialValueRef = React.useRef(initialValue);
+  const schemaRef = React.useRef(schema);
+  const onChangeRef = React.useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    let disposed = false;
+    let handle: ReturnType<typeof mountSandboxedRenderer> | null = null;
+    const onLoad = (): void => {
+      if (disposed) return;
+      handle = mountSandboxedRenderer(iframe, {
+        call: (kind, target, input) => mcpCall(kind, target, input).then((r) => (r.ok ? r.value : Promise.reject(new Error(String(r.value))))),
+        onResize: setHeight,
+        onSettled: setSettled,
+        onFormChange: (v) => onChangeRef.current(v),
+      });
+      void mcpResourceRead(uri).then((src) => {
+        if (!disposed) handle?.mountForm(src, type, schemaRef.current, initialValueRef.current);
+      });
+    };
+    iframe.addEventListener('load', onLoad);
+    return () => {
+      disposed = true;
+      iframe.removeEventListener('load', onLoad);
+      handle?.dispose();
+    };
+    // Deliberately NOT depending on schema/initialValue/onChange — see the doc
+    // comment above. A genuinely new form (a different command) gets a fresh
+    // `uri`/`type` and so a fresh mount; the SAME form's value changes flow
+    // through the live `onChangeRef`, never a remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uri, type]);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {settled !== true ? placeholder ?? null : null}
+      <iframe
+        ref={iframeRef}
+        srcDoc={SANDBOX_HOST_HTML}
+        sandbox="allow-scripts"
+        title="federated form"
+        style={{ display: settled === true ? 'block' : 'none', width: '100%', border: 'none', height: Math.max(24, height) }}
+      />
+    </div>
+  );
+}
+
 // ─── the scenery (the painted assets) ──────────────────────────────
 
 /** The painted valley. `tall` = the landing hero; short = the dashboard strip. */
@@ -2192,6 +2269,8 @@ interface Capability {
   description: string;
   scope: string | null;
   inputSchema?: FormFieldSchema;
+  /** ADR-0041 Inc 3: a cell-authored argument form for this capability. */
+  ui?: { form?: string; as?: string };
 }
 
 /** A starter argument object from a capability's input schema — required keys
@@ -2224,6 +2303,8 @@ interface Cmd {
   scope: string | null;
   description: string;
   schema?: Capability['inputSchema'];
+  /** ADR-0041 Inc 3: a cell-authored argument form, if this capability declares one. */
+  ui?: Capability['ui'];
   needsArgs: boolean;
   run: (input: unknown) => Promise<{ ok: boolean; value: unknown }>;
   search: string;
@@ -2298,7 +2379,11 @@ function capToCmd(cap: Capability): Cmd {
   const dot = cap.target.lastIndexOf('.');
   const ns = dot > 0 ? cap.target.slice(0, dot) : cap.target;
   const verb = cap.target.slice(dot + 1);
-  const needsArgs = Object.keys(cap.inputSchema?.properties ?? {}).length > 0;
+  // A bespoke form (ADR-0041 Inc 3) may cover args the declared schema doesn't
+  // even list (a minimal/empty inputSchema, fully driven by the custom UI) —
+  // such a target still needs the focused arg-entry view, not an immediate
+  // zero-arg call.
+  const needsArgs = Object.keys(cap.inputSchema?.properties ?? {}).length > 0 || !!cap.ui?.form;
   return {
     id: cap.target,
     ns,
@@ -2308,6 +2393,7 @@ function capToCmd(cap: Capability): Cmd {
     scope: cap.scope,
     description: cap.description,
     schema: cap.inputSchema,
+    ui: cap.ui,
     needsArgs,
     search: `${cap.target} ${cap.description} ${cap.scope ?? ''}`.toLowerCase(),
     run: (input) => mcpCall(cap.kind === 'read' ? 'read' : 'act', cap.target, input),
@@ -2408,8 +2494,9 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
       setArgs(JSON.stringify(skeleton, null, 2));
       // A schema the form floor can't walk at all (no object/properties — rare,
       // but some targets accept a bare scalar or an open `additionalProperties`
-      // bag) starts in raw JSON since there's nothing to render as fields.
-      setRawJson(!isFormable(cmd.schema));
+      // bag) starts in raw JSON UNLESS a cell-authored form (ADR-0041 Inc 3)
+      // covers it regardless of the declared schema's shape.
+      setRawJson(!cmd.ui?.form && !isFormable(cmd.schema));
     } else {
       void invoke(cmd, {});
     }
@@ -2499,7 +2586,24 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
             }}
             style={{ display: 'grid', gap: '0.5rem' }}
           >
-            {!rawJson && isFormable(focused.schema) ? (
+            {!rawJson && focused.ui?.form ? (
+              <FederatedFormFrame
+                uri={focused.ui.form}
+                type={focused.ui.as || focused.id}
+                schema={focused.schema}
+                initialValue={formValue}
+                onChange={setFormValue}
+                placeholder={
+                  <div style={{ ...screen, padding: '0.65rem' }}>
+                    {isFormable(focused.schema) ? (
+                      <SchemaForm schema={focused.schema} value={formValue} onChange={setFormValue} palette={machineFormPalette} />
+                    ) : (
+                      <span style={{ color: machine.dim, fontSize: '0.78rem' }}>loading form…</span>
+                    )}
+                  </div>
+                }
+              />
+            ) : !rawJson && isFormable(focused.schema) ? (
               <div style={{ ...screen, padding: '0.65rem' }}>
                 <SchemaForm schema={focused.schema} value={formValue} onChange={setFormValue} palette={machineFormPalette} />
               </div>
@@ -2521,7 +2625,7 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
               >
                 {busy ? 'Running…' : `run · ${focused.kind}("${focused.label}")  ⌘↵`}
               </button>
-              {isFormable(focused.schema) ? (
+              {focused.ui?.form || isFormable(focused.schema) ? (
                 <button
                   onClick={toggleRawJson}
                   style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.74rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
