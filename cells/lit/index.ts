@@ -151,8 +151,8 @@ const CRITICAL_CSS = `:root{--ink:#1c1c1a;--faint:#8a8a82;--paper:#fbfbf8;--line
 #app{max-width:720px;margin:0 auto;padding:1rem 1.1rem 4rem}.boot{color:var(--faint)}
 header{margin:.6rem 0 1.4rem}header h1{margin:.2rem 0 0;font-size:1.6rem;line-height:1.25}header .summary{margin:.3rem 0 0;color:var(--faint)}
 .back{color:var(--accent);text-decoration:none;font-size:.85rem}
-.doc-list{display:grid;gap:.7rem}.doc-card{display:block;border:1px solid var(--line);border-radius:12px;background:#fff;padding:.8rem 1rem;text-decoration:none;color:inherit}
-.doc-card h2{margin:0;font-size:1.05rem}.doc-card p{margin:.25rem 0 0;color:var(--faint);font-size:.9rem}.doc-meta{display:block;margin-top:.4rem;color:var(--faint);font-size:.75rem}
+.doc-list{display:grid}.doc-row{display:grid;gap:.15rem;padding:.6rem .1rem;border-top:1px solid var(--line);text-decoration:none;color:inherit}
+.doc-list .doc-row:first-child{border-top:0}.doc-row-title{font-size:1rem;font-weight:600}.doc-row-summary{color:var(--faint);font-size:.88rem}.doc-row-meta{color:var(--faint);font-size:.74rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .block{padding:.2rem 0 .4rem}.block+.block{border-top:1px solid var(--line)}.block-body :first-child{margin-top:0}
 pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
 img{max-width:100%}a{color:var(--accent)}
@@ -254,6 +254,12 @@ async function buildListVM(patterns: string[], isOwner: boolean): Promise<ViewMo
     const slash = rest.lastIndexOf('/');
     if (slash > 0) counts.set(rest.slice(0, slash), (counts.get(rest.slice(0, slash)) ?? 0) + 1);
   }
+  // `score` (true salience) is deliberately left undefined here — it needs a
+  // trajectory+edges fold (`platform/runtime/state.ts` `computeScore`), too
+  // costly to do per-doc on every list SSR over this cell's lightweight direct-
+  // DDB path. The client's live refresh (`ListEditor`) gets it for free from
+  // its own `workspace.query`, which already computes it — same "fast SSR
+  // shell, richer live data after hydration" pattern as the rest of lit.
   const items: ListItem[] = docs.map((f) => {
     const v = f.value as DocValue;
     const id = f.key.slice('doc:'.length);

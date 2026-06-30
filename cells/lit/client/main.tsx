@@ -21,8 +21,8 @@ import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/
 import { read, act } from './lib/substrate.ts';
 import { bodyText, fieldsToHtml } from '../render-hints';
 import {
-  Surface, FactView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
-  type ViewModel, type BlockData, type DocValue, type LinkRef,
+  Surface, FactView, DocRow, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
+  type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem,
 } from '../shared';
 
 const { useState, useEffect, useRef, useCallback } = React;
@@ -595,17 +595,26 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
 
 /* ── list ──────────────────────────────────────────────────────────────── */
 
-function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }): React.JSX.Element {
+function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }): React.JSX.Element {
   // Seed from the SSR ViewModel (no "loading documents…" gap); the effect refreshes.
-  const [docs, setDocs] = useState<Array<{ id: string; v: DocValue; updated: string }> | null>(seed ?? null);
+  // SSR omits `score` (true salience needs a trajectory+edges fold this cell's
+  // lightweight direct-DDB SSR path doesn't carry) — this client refresh gets it
+  // for free from the SAME `workspace.query` it's already making, so the salience
+  // figure simply appears a moment after first paint, same pattern as everything
+  // else here (fast SSR shell, richer live data once hydrated).
+  const [docs, setDocs] = useState<ListItem[] | null>(seed ?? null);
   useEffect(() => {
     void (async () => {
       const res = await read<{ entries: Entry[] }>('workspace.query', { type: 'doc', limit: 100 });
-      const list = (res.entries ?? []).filter((e) => e.key.startsWith('doc:'))
+      const list: ListItem[] = (res.entries ?? []).filter((e) => e.key.startsWith('doc:'))
         .sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'))
-        .map((e) => ({ id: e.key.slice(4), v: e.value as DocValue, updated: e._meta?.updatedAt ?? '' }));
+        .map((e) => {
+          const v = e.value as DocValue;
+          const id = e.key.slice(4);
+          return { id, title: v.title || id, summary: v.summary, blocks: 0, updated: e._meta?.updatedAt ?? '', score: (e._meta as { score?: number } | undefined)?.score };
+        });
       setDocs(list);
-      cacheSet('list', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list.map((d) => ({ id: d.id, title: d.v.title || d.id, summary: d.v.summary, blocks: 0, updated: d.updated })) });
+      cacheSet('list', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list });
     })();
   }, []);
 
@@ -618,13 +627,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
         {editable ? <a className="back" href={factRoute(`log:${today}`)}>📥 today's log →</a> : null}
       </header>
       <main className="doc-list">
-        {docs === null ? <p className="boot">loading documents…</p> : docs.length === 0 ? <p className="boot">no documents yet</p> : docs.map((d) => (
-          <a className="doc-card" href={factRoute(`doc:${d.id}`)} key={d.id}>
-            <h2>{d.v.title || d.id}</h2>
-            {d.v.summary ? <p>{d.v.summary}</p> : null}
-            <span className="doc-meta">{(d.updated || '').slice(0, 10)}</span>
-          </a>
-        ))}
+        {docs === null ? <p className="boot">loading documents…</p> : docs.length === 0 ? <p className="boot">no documents yet</p> : docs.map((d) => <DocRow d={d} key={d.id} />)}
       </main>
       {editable ? (
         <button className="btn add-block" onClick={async () => {
@@ -788,17 +791,6 @@ function AnonView({ vm }: { vm: ViewModel }): React.JSX.Element {
 /** Seeds reconstructed from the SSR ViewModel so an interactive view's first
  *  render equals the server paint (killing the post-hydration "loading…" flash). */
 type DocSeed = Extract<ViewModel, { kind: 'doc' }>;
-type ListSeed = Array<{ id: string; v: DocValue; updated: string }>;
-
-function listSeed(vm: Extract<ViewModel, { kind: 'list' }>): ListSeed {
-  // Only `.length`, title, summary and updated are read for the cards; the real
-  // BlockRef contents arrive with the background refresh.
-  return vm.docs.map((d) => ({
-    id: d.id,
-    v: { title: d.title, summary: d.summary, blocks: new Array(d.blocks).fill({ key: '' }) },
-    updated: d.updated,
-  }));
-}
 
 /** The route key for THIS page load — either the new path form (`/r/<key>`,
  *  found anywhere in `pathname` so it works whether lit is mounted at the
@@ -829,7 +821,7 @@ function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewMode
     const seed = initialVm && initialVm.kind === 'fact' && initialVm.key === key ? initialVm : undefined;
     return <FactPage routeKey={key} seed={seed} />;
   }
-  const seed = initialVm && initialVm.kind === 'list' ? listSeed(initialVm) : undefined;
+  const seed = initialVm && initialVm.kind === 'list' ? initialVm.docs : undefined;
   return <ListEditor editable={editable} seed={seed} />;
 }
 

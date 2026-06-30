@@ -28,7 +28,7 @@ export interface DocValue {
 }
 /** A block resolved for render: its markdown (or a fold title) + identity. */
 export interface BlockData { key: string; md: string; fold?: boolean }
-export interface ListItem { id: string; title: string; summary?: string; blocks: number; updated: string }
+export interface ListItem { id: string; title: string; summary?: string; blocks: number; updated: string; score?: number }
 /** A neighbour edge, resolved to a human label for display (its title/name/key). */
 export interface LinkRef { key: string; label: string; rel: string; type?: string | null }
 
@@ -187,6 +187,26 @@ export function Block({ data }: { data: BlockData }): React.JSX.Element {
   );
 }
 
+/** One row in the doc list — title prominent, an optional summary, and a
+ *  TERTIARY meta line (updated date, salience score once loaded, block count)
+ *  kept small/faint. A list, not a card grid: chrome should stay out of the
+ *  way of scanning many docs at once. Shared by `ListView` (SSR) and
+ *  `ListEditor` (the client's interactive version) so the two never drift. */
+export function DocRow({ d }: { d: ListItem }): React.JSX.Element {
+  const meta = [
+    (d.updated || '').slice(0, 10),
+    d.score != null ? `salience ${d.score.toFixed(2)}` : null,
+    `${d.blocks} block${d.blocks === 1 ? '' : 's'}`,
+  ].filter(Boolean).join(' · ');
+  return (
+    <a className="doc-row" href={factRoute(`doc:${d.id}`)}>
+      <span className="doc-row-title">{d.title || d.id}</span>
+      {d.summary ? <span className="doc-row-summary">{d.summary}</span> : null}
+      <span className="doc-row-meta">{meta}</span>
+    </a>
+  );
+}
+
 export function ListView({ vm }: { vm: Extract<ViewModel, { kind: 'list' }> }): React.JSX.Element {
   const lead = vm.isOwner
     ? 'your documents — ordered paths through the substrate'
@@ -201,13 +221,7 @@ export function ListView({ vm }: { vm: Extract<ViewModel, { kind: 'list' }> }): 
         {vm.docs.length === 0 ? (
           <p className="boot">no documents yet</p>
         ) : (
-          vm.docs.map((d) => (
-            <a className="doc-card" href={factRoute(`doc:${d.id}`)} key={d.id}>
-              <h2>{d.title || d.id}</h2>
-              {d.summary ? <p>{d.summary}</p> : null}
-              <span className="doc-meta">{d.blocks} blocks · {(d.updated || '').slice(0, 10)}</span>
-            </a>
-          ))
+          vm.docs.map((d) => <DocRow d={d} key={d.id} />)
         )}
       </main>
     </>
