@@ -21,8 +21,8 @@ import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/
 import { read, act } from './lib/substrate.ts';
 import { bodyText, fieldsToHtml } from '../render-hints';
 import {
-  Surface, FactView, DocRow, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
-  type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem,
+  Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
+  type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem, type TypeItem,
 } from '../shared';
 
 const { useState, useEffect, useRef, useCallback } = React;
@@ -614,7 +614,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
           return { id, title: v.title || id, summary: v.summary, blocks: 0, updated: e._meta?.updatedAt ?? '', score: (e._meta as { score?: number } | undefined)?.score };
         });
       setDocs(list);
-      cacheSet('list', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list });
+      cacheSet('$docs', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list });
     })();
   }, []);
 
@@ -622,6 +622,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
   return (
     <>
       <header>
+        <a className="back" href="/">← home</a>
         <h1>lit</h1>
         <p className="summary">documents — ordered paths through the substrate</p>
         {editable ? <a className="back" href={factRoute(`log:${today}`)}>📥 today's log →</a> : null}
@@ -771,6 +772,34 @@ function FactPage({ routeKey, seed }: { routeKey: string; seed?: Extract<ViewMod
   return <div ref={ref}><FactView vm={vm} /></div>;
 }
 
+/* ── type collections (a `[[type:project|Projects]]` wiki-link target) ──── */
+
+async function loadTypeCollection(type: string): Promise<TypeItem[]> {
+  const res = await read<{ entries: Entry[] }>('workspace.query', { type, limit: 100 });
+  return (res.entries ?? [])
+    .sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'))
+    .map((e) => {
+      const v = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
+      const title = (typeof v.title === 'string' && v.title) || (typeof v.name === 'string' && v.name) || deriveId(e.key);
+      const summaryRaw = typeof v.summary === 'string' ? v.summary : typeof v.statement === 'string' ? v.statement : bodyText(e.value);
+      return { key: e.key, title, summary: summaryRaw ? summaryRaw.slice(0, 160) : undefined, updated: e._meta?.updatedAt ?? '', score: (e._meta as { score?: number } | undefined)?.score };
+    });
+}
+
+function TypeCollectionPage({ type, seed }: { type: string; seed?: Extract<ViewModel, { kind: 'type' }> }): React.JSX.Element {
+  const [items, setItems] = useState<TypeItem[] | null>(seed?.items ?? null);
+  useEffect(() => {
+    setItems(seed?.items ?? null);
+    void (async () => {
+      const list = await loadTypeCollection(type);
+      setItems(list);
+      cacheSet(`type:${type}`, { kind: 'type', owner: cellOwner(), isOwner: true, type, items: list });
+    })();
+  }, [type]);
+  if (items === null) return <p className="boot">loading {type}…</p>;
+  return <TypeView vm={{ kind: 'type', owner: cellOwner(), isOwner: true, type, items }} />;
+}
+
 /* ── anonymous read-only ───────────────────────────────────────────────── */
 
 function AnonView({ vm }: { vm: ViewModel }): React.JSX.Element {
@@ -809,20 +838,50 @@ function currentRouteKey(): string | null {
   return /[:/]/.test(qd) ? qd : `doc:${qd}`;
 }
 
+/** The root (`/`, no route key): a curated welcome page beats a flat list, so
+ *  try `doc:welcome` first and fall back to the doc list when there isn't one
+ *  — mirrors `index.ts`'s `buildRootVM` exactly, so SSR and a cold client-only
+ *  load (no SSR seed at all, e.g. anonymous-without-public-content) agree. */
+function RootRoute({ editable }: { editable: boolean }): React.JSX.Element {
+  const [state, setState] = useState<'loading' | 'welcome' | 'list'>('loading');
+  useEffect(() => {
+    void (async () => { setState((await fetchFact('doc:welcome')) ? 'welcome' : 'list'); })();
+  }, []);
+  if (state === 'loading') return <p className="boot">loading…</p>;
+  if (state === 'welcome') return <DocEditor docId="welcome" editable={editable} />;
+  return <ListEditor editable={editable} />;
+}
+
 function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewModel | null }): React.JSX.Element {
   const key = currentRouteKey();
   if (key && /^log:/.test(key)) return <LogView docId={key} />;
+  if (key === '$docs') {
+    const seed = initialVm && initialVm.kind === 'list' ? initialVm.docs : undefined;
+    return <ListEditor editable={editable} seed={seed} />;
+  }
   if (key && key.startsWith('doc:')) {
     const docId = key.slice(4);
     const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? initialVm : undefined;
     return <DocEditor docId={docId} editable={editable} seed={seed} />;
   }
+  if (key && key.startsWith('type:')) {
+    const type = key.slice(5);
+    const seed = initialVm && initialVm.kind === 'type' && initialVm.type === type ? initialVm : undefined;
+    return <TypeCollectionPage type={type} seed={seed} />;
+  }
   if (key) {
     const seed = initialVm && initialVm.kind === 'fact' && initialVm.key === key ? initialVm : undefined;
     return <FactPage routeKey={key} seed={seed} />;
   }
-  const seed = initialVm && initialVm.kind === 'list' ? initialVm.docs : undefined;
-  return <ListEditor editable={editable} seed={seed} />;
+  // Root: the SSR seed already resolved welcome-vs-list (buildRootVM); a cold
+  // client-only load (no seed) probes for the welcome doc itself.
+  if (initialVm && initialVm.kind === 'doc' && initialVm.id === 'welcome') {
+    return <DocEditor docId="welcome" editable={editable} seed={initialVm} />;
+  }
+  if (initialVm && initialVm.kind === 'list') {
+    return <ListEditor editable={editable} seed={initialVm.docs} />;
+  }
+  return <RootRoute editable={editable} />;
 }
 
 function Workspace({ initialVm }: { initialVm: ViewModel | null }): React.JSX.Element {
@@ -875,7 +934,7 @@ function cacheSet(id: string, vm: ViewModel): void {
 }
 function cachedVmForLocation(): ViewModel | null {
   const key = currentRouteKey();
-  if (!key) return cacheGet('list');
+  if (!key) return cacheGet('doc:welcome') ?? cacheGet('$docs'); // root: welcome doc, else the list
   if (key.startsWith('log:')) return null; // logs are derived views, not cached
   return cacheGet(key);
 }

@@ -31,6 +31,9 @@ export interface BlockData { key: string; md: string; fold?: boolean }
 export interface ListItem { id: string; title: string; summary?: string; blocks: number; updated: string; score?: number }
 /** A neighbour edge, resolved to a human label for display (its title/name/key). */
 export interface LinkRef { key: string; label: string; rel: string; type?: string | null }
+/** One member of a `type:<type>` collection — a generic-key sibling of `ListItem`
+ *  (no `doc:` prefix assumed, no block count: a collection spans every type). */
+export interface TypeItem { key: string; title: string; summary?: string; updated: string; score?: number }
 
 /** The serialized first-paint state the server hands the client to hydrate. */
 export type ViewModel =
@@ -40,7 +43,10 @@ export type ViewModel =
   // lit-authored `doc:` — read-only here (editing a foreign type stays in its
   // own managing cell / the field computer); shown via the hint floor
   // (render-hints.ts) with both directions of links, symmetric.
-  | { kind: 'fact'; owner: string; isOwner: boolean; key: string; type?: string | null; title: string; bodyHtml: string; fieldsHtml: string; backlinks: LinkRef[]; links: LinkRef[] };
+  | { kind: 'fact'; owner: string; isOwner: boolean; key: string; type?: string | null; title: string; bodyHtml: string; fieldsHtml: string; backlinks: LinkRef[]; links: LinkRef[] }
+  // `type:<type>` — a hub view: every fact of one type, a jumping-off point a
+  // `[[type:project|Projects]]` wiki-link can target (see the welcome doc).
+  | { kind: 'type'; owner: string; isOwner: boolean; type: string; items: TypeItem[] };
 
 /* ── markdown → HTML (deterministic; identical on both sides) ──────────────
  * `marked` is the single source of truth, declared once in `client/imports.json`
@@ -105,11 +111,11 @@ export const factRoute = (key: string): string => `/r/${encodeKeyPath(key)}`;
 // explicit key (`doc:x`, `reading/y`) is used as-is. The inline extension runs in
 // the shared marked instance, so SSR and client render identically.
 const slug = (s: string): string => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-/** A target with no spaces and a `:`/`/` separator IS a real substrate key
- *  (`reading/foo`, `cell:y`) — used as-is, addressing any fact directly.
- *  Anything else (plain prose, possibly containing a literal `/`) is a doc
- *  title and gets slugified, same as before. */
-const looksLikeKey = (s: string): boolean => !/\s/.test(s) && (s.includes(':') || s.includes('/'));
+/** A target with no spaces and a `:`/`/` separator (or the substrate's own
+ *  `$`-reserved-name convention, e.g. `$docs`) IS a real key/route — used as-is,
+ *  addressing any fact or pseudo-view directly. Anything else (plain prose,
+ *  possibly containing a literal `/`) is a doc title and gets slugified. */
+const looksLikeKey = (s: string): boolean => !/\s/.test(s) && (s.includes(':') || s.includes('/') || s.startsWith('$'));
 export function resolveWikiTarget(raw: string): { key: string; href: string; label: string } {
   const [t, l] = raw.split('|');
   const target = (t || '').trim();
@@ -214,6 +220,7 @@ export function ListView({ vm }: { vm: Extract<ViewModel, { kind: 'list' }> }): 
   return (
     <>
       <header>
+        <a className="back" href="/">← home</a>
         <h1>lit</h1>
         <p className="summary">{lead}</p>
       </header>
@@ -223,6 +230,36 @@ export function ListView({ vm }: { vm: Extract<ViewModel, { kind: 'list' }> }): 
         ) : (
           vm.docs.map((d) => <DocRow d={d} key={d.id} />)
         )}
+      </main>
+    </>
+  );
+}
+
+/** One row in a `type:<type>` collection — `DocRow`'s sibling for a generic
+ *  key (no `doc:` prefix assumed, no block count). */
+export function FactRow({ d }: { d: TypeItem }): React.JSX.Element {
+  const meta = [(d.updated || '').slice(0, 10), d.score != null ? `salience ${d.score.toFixed(2)}` : null].filter(Boolean).join(' · ');
+  return (
+    <a className="doc-row" href={factRoute(d.key)}>
+      <span className="doc-row-title">{d.title}</span>
+      {d.summary ? <span className="doc-row-summary">{d.summary}</span> : null}
+      <span className="doc-row-meta">{meta}</span>
+    </a>
+  );
+}
+
+/** The `type:<type>` hub view — every fact of one kind, a wiki-link target
+ *  (`[[type:project|Projects]]`) for the welcome doc to point at. */
+export function TypeView({ vm }: { vm: Extract<ViewModel, { kind: 'type' }> }): React.JSX.Element {
+  return (
+    <>
+      <header>
+        <a className="back" href="/">← home</a>
+        <h1>{vm.type}</h1>
+        <p className="summary">{vm.items.length} {vm.type} fact{vm.items.length === 1 ? '' : 's'}</p>
+      </header>
+      <main className="doc-list">
+        {vm.items.length === 0 ? <p className="boot">no {vm.type} facts yet</p> : vm.items.map((d) => <FactRow d={d} key={d.key} />)}
       </main>
     </>
   );
@@ -306,5 +343,6 @@ export function FactView({ vm }: { vm: Extract<ViewModel, { kind: 'fact' }> }): 
 export function Surface({ vm }: { vm: ViewModel }): React.JSX.Element {
   if (vm.kind === 'list') return <ListView vm={vm} />;
   if (vm.kind === 'fact') return <FactView vm={vm} />;
+  if (vm.kind === 'type') return <TypeView vm={vm} />;
   return <DocView vm={vm} />;
 }

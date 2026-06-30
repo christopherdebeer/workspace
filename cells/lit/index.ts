@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { Surface, renderMarkdown, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef } from './shared';
+import { Surface, renderMarkdown, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef, type TypeItem } from './shared';
 import { bodyText, fieldsToHtml } from './render-hints';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
@@ -97,6 +97,27 @@ async function edgesTo(to: string): Promise<EdgeItem[]> {
     }),
   );
   return (r.Items ?? []) as EdgeItem[];
+}
+
+/** Every fact of one type, via the `gsi-type` index (`gsi2pk=TYPE#<scope>#<type>`,
+ *  `gsi2sk=<updatedAt>`) — already indexed for exactly this, so a `type:<type>`
+ *  collection (ADR-0040 hub view) is a single cheap query, unlike salience
+ *  (which needs a trajectory+edges fold — see `buildListVM`'s comment). Most
+ *  recently updated first; `Limit` applies before the superseded-filter, so a
+ *  superseded item can shrink the visible count below it — acceptable, same as
+ *  `queryPrefix`'s own pagination elsewhere in this file. */
+async function queryByType(type: string, limit = 100): Promise<Fact[]> {
+  const r = await ddb().send(
+    new Query({
+      TableName: TABLE,
+      IndexName: 'gsi-type',
+      KeyConditionExpression: 'gsi2pk = :pk',
+      ExpressionAttributeValues: { ':pk': `TYPE#${OWNER}#${type}` },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+  return ((r.Items ?? []) as Fact[]).filter((f) => !f.superseded);
 }
 
 /** A fact's id: the part after a `prefix:` or `prefix/` in its key — mirrors
@@ -230,15 +251,42 @@ async function buildFactVM(key: string, patterns: string[], isOwner: boolean): P
   return { kind: 'fact', owner: OWNER, isOwner, key, type: fact._meta?.type ?? null, title, bodyHtml, fieldsHtml, links, backlinks };
 }
 
+/** The `type:<type>` hub-view ViewModel: every fact of one kind — a
+ *  `[[type:project|Projects]]` wiki-link target. Gated per-item like the doc
+ *  list (an anonymous reader only sees what `_public/` covers). */
+async function buildTypeVM(type: string, patterns: string[], isOwner: boolean): Promise<ViewModel> {
+  const facts = (await queryByType(type)).filter((f) => isOwner || covers0(patterns, f.key));
+  const items: TypeItem[] = facts.map((f) => {
+    const v = f.value && typeof f.value === 'object' ? (f.value as Record<string, unknown>) : {};
+    const title = (typeof v.title === 'string' && v.title) || (typeof v.name === 'string' && v.name) || deriveId(f.key);
+    const summaryRaw = typeof v.summary === 'string' ? v.summary : typeof v.statement === 'string' ? v.statement : bodyText(f.value);
+    return { key: f.key, title, summary: summaryRaw ? summaryRaw.slice(0, 160) : undefined, updated: f._meta?.updatedAt ?? '' };
+  });
+  return { kind: 'type', owner: OWNER, isOwner, type, items };
+}
+
 /** Dispatch a route key (from `/r/<key>` or the legacy `?doc=` query param,
  *  already normalized to a full key by the caller) to the right ViewModel
- *  builder — `doc:` keeps its bespoke ordered-cells view; `log:` stays
- *  client-only (derived/grouped, not worth a second SSR path yet); anything
- *  else is the generic reader. */
+ *  builder — `$docs` is the reserved escape hatch to the flat doc list (moved
+ *  off `/` once a welcome doc exists, see `buildRootVM`); `doc:` keeps its
+ *  bespoke ordered-cells view; `log:` stays client-only (derived/grouped, not
+ *  worth a second SSR path yet); `type:<type>` is the hub-collection view;
+ *  anything else is the generic reader. */
 async function buildKeyVM(key: string, patterns: string[], isOwner: boolean): Promise<ViewModel | null> {
+  if (key === '$docs') return buildListVM(patterns, isOwner);
   if (key.startsWith('doc:')) return buildDocVM(key.slice(4), patterns, isOwner);
   if (key.startsWith('log:')) return null;
+  if (key.startsWith('type:')) return buildTypeVM(key.slice(5), patterns, isOwner);
   return buildFactVM(key, patterns, isOwner);
+}
+
+/** The root (`/`, no key): a curated landing page is better than a flat list,
+ *  so try the welcome doc first — falling back to the doc list when there
+ *  isn't one (a fresh substrate with no welcome doc authored yet still gets a
+ *  working root, never a 404). */
+async function buildRootVM(patterns: string[], isOwner: boolean): Promise<ViewModel> {
+  const welcome = await buildDocVM('welcome', patterns, isOwner);
+  return welcome ?? (await buildListVM(patterns, isOwner));
 }
 
 /** The list ViewModel: one card per doc the caller may see (own slice, or what the
@@ -274,15 +322,16 @@ async function buildListVM(patterns: string[], isOwner: boolean): Promise<ViewMo
   return { kind: 'list', owner: OWNER, isOwner, docs: items };
 }
 
-/** Render the list (no key) or a fact/doc at `key`, server-side, when there's
- *  public content or the caller is the owner — else the bare interactive shell
- *  (the client renders with its own session). Shared by both URL forms: the
- *  new path route and the legacy `?doc=` query param. */
+/** Render the root (no key — the welcome doc, falling back to the list) or a
+ *  fact/doc/collection at `key`, server-side, when there's public content or
+ *  the caller is the owner — else the bare interactive shell (the client
+ *  renders with its own session). Shared by both URL forms: the new path
+ *  route and the legacy `?doc=` query param. */
 async function renderRoute(key: string | undefined, isOwner: boolean) {
   try {
     const patterns = await publicPatterns();
     if (patterns.length || isOwner) {
-      const vm = key ? await buildKeyVM(key, patterns, isOwner) : await buildListVM(patterns, isOwner);
+      const vm = key ? await buildKeyVM(key, patterns, isOwner) : await buildRootVM(patterns, isOwner);
       if (vm) {
         const inner = renderToString(createElement(Surface, { vm }));
         return respond(200, 'text/html; charset=utf-8', ssrPage(inner, vm));
