@@ -1,10 +1,24 @@
 # ADR-0040 — The substrate as a self-maintaining wiki: turn on the compile loop
 
-- **Status:** Proposed. Names the isomorphism between Karpathy's *LLM Wiki* and the parc.land substrate,
-  identifies the **one missing piece** (a reactive compile-on-ingest organ + accretion-back), and folds the
-  in-flight "fix the capture key / fix the daily-log / own the `log` type / make input↔lit compose" items into
-  **consequences of one loop** rather than four independent patches. Dogfooded on the Karpathy gist as source #1.
-- **Date:** 2026-06-29
+- **Status:** Accepted — **Inc 0 + Inc 1 shipped/live (2026-06-30).** Names the isomorphism between Karpathy's
+  *LLM Wiki* and the parc.land substrate, identifies the **one missing piece** (a reactive compile-on-ingest
+  organ + accretion-back), and folds the in-flight "fix the capture key / fix the daily-log / own the `log`
+  type / make input↔lit compose" items into **consequences of one loop** rather than four independent patches.
+- **Status (Inc 0 — spine + named sources, shipped 2026-06-30):** `@c15r/lit` now **owns the `log` type**
+  (manager + `open` handler; the legacy unowned `_types/log` override retired) — fixing both daily-log bugs
+  (home's "no handling cell" + the dead link). Capture keys are now **expressive** (`inbox/<date>/<slug>`,
+  slug from title → URL segment/host → body) in both the `@c15r/input.capture` tool and the PWA — captures are
+  link targets, and the day is a prefix-query. The **Karpathy gist is ingested in full** as
+  `reading/llm-wiki-karpathy` (raw layer, auto-embedded), and automatic `similarTo` (ADR-0030) **compounded it
+  on ingest** — wiring it to the substrate's own thesis (`blk:welcome-keeps`), its tending ancestor
+  (`el:k-ancestor-workspace`), a 2021 digital-garden capture, and the weave (lint) machine's transcript. The
+  document about compounding cross-referenced itself with zero compile code.
+- **Status (Inc 1 — the compile organ, live 2026-06-30):** the `_subscriptions/wiki.compile` reaction is
+  registered (`match:{type:'reading'}` → `deliver:@c15r/models.agent`) — a new source reactively spawns the
+  model agent, which reads it and emits a synthesis `claim` (assertion + `support` edges) cross-referenced to
+  the existing graph. Demonstrated on source #1. **Almost no new platform code** — the organ is *declared*
+  (a subscription + the existing `models.agent` + `claim`/`support` ref-edges), the substrate way.
+- **Date:** 2026-06-29 (Inc 0/1 shipped 2026-06-30)
 - **Depends on / absorbs:** ADR-0018 (reactive substrate — stateless machine stepper, subscriptions→actions),
   ADR-0030 (automatic embedding via the DynamoDB stream), ADR-0032 (`similarTo` as a *ratifiable* typed
   suggestion — human-in-the-loop accretion), ADR-0003 (reference/embedded edges), ADR-0027 (files-as-facts —
