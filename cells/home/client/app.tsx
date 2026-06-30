@@ -14,6 +14,7 @@ import { marked } from 'marked';
 import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme } from '../shared/ui';
 import { resolve, declFor, type TypeDecl } from '../shared/vocab';
 import { mountSandboxedRenderer, SANDBOX_HOST_HTML } from '../shared/federated-renderer';
+import { SchemaForm, isFormable, type FormFieldSchema, type FormPalette } from '../shared/form';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './bridge';
 
@@ -2171,25 +2172,45 @@ const machine = {
   border: '#2c4a3c',
 } as const;
 
+/** The schema-form floor (ADR-0041 Inc 2), in the machine's own dark palette —
+ *  so a generated form looks native inside the housing, not pasted from the
+ *  light park theme the rest of home uses. */
+const machineFormPalette: FormPalette = {
+  text: machine.text,
+  dim: machine.dim,
+  border: machine.border,
+  inputBg: machine.screen,
+  accent: machine.green,
+  danger: '#e08c7a',
+  mono: theme.mono,
+  sans: theme.mono, // the machine's voice stays monospace even for prose fields
+};
+
 interface Capability {
   target: string;
   kind: 'read' | 'act';
   description: string;
   scope: string | null;
-  inputSchema?: { properties?: Record<string, { type?: string }>; required?: string[] };
+  inputSchema?: FormFieldSchema;
 }
 
-/** A starter JSON argument object from a capability's input schema. */
-function argSkeleton(schema?: Capability['inputSchema']): string {
+/** A starter argument object from a capability's input schema — required keys
+ *  (or, lacking any, every declared key) pre-seeded with a type-appropriate
+ *  empty value. Shared by the JSON-textarea view (stringified) and the
+ *  schema-form view (used as-is); both views edit the SAME underlying shape. */
+function argSkeletonObject(schema?: Capability['inputSchema']): Record<string, unknown> {
   const props = schema?.properties ?? {};
   const keys = schema?.required?.length ? schema.required : Object.keys(props);
-  if (keys.length === 0) return '{}';
   const obj: Record<string, unknown> = {};
   for (const k of keys) {
     const t = props[k]?.type;
     obj[k] = t === 'number' ? 0 : t === 'boolean' ? false : t === 'array' ? [] : t === 'object' ? {} : '';
   }
-  return JSON.stringify(obj, null, 2);
+  return obj;
+}
+/** A starter JSON argument object from a capability's input schema. */
+function argSkeleton(schema?: Capability['inputSchema']): string {
+  return JSON.stringify(argSkeletonObject(schema), null, 2);
 }
 
 // A unified palette command: every capability from $catalog plus a couple of
@@ -2318,6 +2339,10 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
   const [sel, setSel] = useState(0);
   const [focused, setFocused] = useState<Cmd | null>(null);
   const [args, setArgs] = useState('{}');
+  const [formValue, setFormValue] = useState<Record<string, unknown>>({});
+  // 'form' when the schema supports it (the default — ADR-0041 Inc 2); 'json' is
+  // the raw-JSON fallback/power-user escape hatch, always available via toggle.
+  const [rawJson, setRawJson] = useState(false);
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const counter = React.useRef(0);
@@ -2378,7 +2403,13 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
   const select = (cmd: Cmd): void => {
     if (cmd.needsArgs) {
       setFocused(cmd);
-      setArgs(argSkeleton(cmd.schema));
+      const skeleton = argSkeletonObject(cmd.schema);
+      setFormValue(skeleton);
+      setArgs(JSON.stringify(skeleton, null, 2));
+      // A schema the form floor can't walk at all (no object/properties — rare,
+      // but some targets accept a bare scalar or an open `additionalProperties`
+      // bag) starts in raw JSON since there's nothing to render as fields.
+      setRawJson(!isFormable(cmd.schema));
     } else {
       void invoke(cmd, {});
     }
@@ -2404,6 +2435,10 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
 
   const runFocused = (): void => {
     if (!focused) return;
+    if (!rawJson) {
+      void invoke(focused, formValue);
+      return;
+    }
     let input: unknown;
     try {
       input = args.trim() ? JSON.parse(args) : {};
@@ -2413,6 +2448,26 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
       return;
     }
     void invoke(focused, input);
+  };
+
+  /** Toggle form ↔ raw-JSON, carrying the same value across (best-effort: a hand
+   *  edited JSON view that doesn't parse just stays in JSON mode rather than
+   *  losing the user's in-progress edit). */
+  const toggleRawJson = (): void => {
+    if (rawJson) {
+      try {
+        const parsed = args.trim() ? JSON.parse(args) : {};
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          setFormValue(parsed as Record<string, unknown>);
+          setRawJson(false);
+        }
+      } catch {
+        /* invalid JSON — stay in raw mode, the textarea keeps the user's edit */
+      }
+    } else {
+      setArgs(JSON.stringify(formValue, null, 2));
+      setRawJson(true);
+    }
   };
 
   const inputColor = machine.text;
@@ -2435,28 +2490,46 @@ function Console({ authed }: { authed: boolean }): React.JSX.Element {
             {focused.scope ? <MonoPill>{focused.scope}</MonoPill> : null}
           </div>
           {focused.description ? <span style={{ color: machine.dim, fontSize: '0.8rem' }}>{focused.description}</span> : null}
-          <textarea
-            value={args}
-            onChange={(e) => setArgs(e.target.value)}
-            rows={Math.min(12, Math.max(2, args.split('\n').length))}
-            spellCheck={false}
-            autoFocus
+          <div
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 runFocused();
               }
             }}
-            style={{ ...screen, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem' }}
-          />
-          <div>
-            <button
-              onClick={runFocused}
-              disabled={busy}
-              style={{ padding: '0.45rem 0.9rem', borderRadius: 6, border: `1px solid ${machine.green}`, background: 'transparent', color: machine.green, fontFamily: theme.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
-            >
-              {busy ? 'Running…' : `run · ${focused.kind}("${focused.label}")  ⌘↵`}
-            </button>
+            style={{ display: 'grid', gap: '0.5rem' }}
+          >
+            {!rawJson && isFormable(focused.schema) ? (
+              <div style={{ ...screen, padding: '0.65rem' }}>
+                <SchemaForm schema={focused.schema} value={formValue} onChange={setFormValue} palette={machineFormPalette} />
+              </div>
+            ) : (
+              <textarea
+                value={args}
+                onChange={(e) => setArgs(e.target.value)}
+                rows={Math.min(12, Math.max(2, args.split('\n').length))}
+                spellCheck={false}
+                autoFocus
+                style={{ ...screen, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem' }}
+              />
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <button
+                onClick={runFocused}
+                disabled={busy}
+                style={{ padding: '0.45rem 0.9rem', borderRadius: 6, border: `1px solid ${machine.green}`, background: 'transparent', color: machine.green, fontFamily: theme.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
+              >
+                {busy ? 'Running…' : `run · ${focused.kind}("${focused.label}")  ⌘↵`}
+              </button>
+              {isFormable(focused.schema) ? (
+                <button
+                  onClick={toggleRawJson}
+                  style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.74rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                >
+                  {rawJson ? 'form' : 'raw json'}
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
         <OutputStack outputs={outputs} onClear={() => setOutputs([])} />

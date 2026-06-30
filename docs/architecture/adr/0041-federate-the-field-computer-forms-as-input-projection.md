@@ -92,8 +92,15 @@ JSON-Schema form floor — the input analogue of the hint floor.
   for a first-party surface); the gateway card's own renderer path was refactored onto the same shared
   `platform/ui/federated-renderer` module (its "already sandboxed" half) so the two surfaces share one
   implementation, not a divergent copy. JSON `<pre>` remains the fallback for plain/error/probe results.
-- **Inc 2 — the schema-form floor.** `platform/ui/form`: JSON-Schema → a lean form; the field computer uses it
-  instead of the raw-JSON textarea (JSON toggle retained).
+- **Inc 2 — the schema-form floor (shipped).** `platform/ui/form` (`SchemaForm`): an object schema's properties
+  render as real fields (text/textarea/number/boolean/enum-select/comma-separated array), each carrying its
+  `description` + a required marker; a field whose shape isn't recognised (nested object, `oneOf`/`anyOf`,
+  array-of-objects) degrades to its OWN small raw-JSON box rather than blocking the whole form. No untrusted
+  code runs here — a schema is inert data, so (unlike Inc 1's renderer) this needs no sandbox. The field
+  computer defaults to the form and keeps a `raw json` toggle (round-trips through the same value, carried
+  across the switch) for power use or a shape the floor can't walk; `argSkeleton`/`argSkeletonObject` seed
+  both views identically. Palette-parameterized (`FormPalette`) so it sits naturally in the machine's dark
+  housing today and any other surface's own theme later (Inc 4).
 - **Inc 3 — federated `ui://` forms.** `tool._meta.ui.form` / type `handlers.create` → a cell-authored arg UI;
   the field computer (and the card) fetch+run it, falling back to the schema-form floor.
 - **Inc 4 — one form, every input.** Point lit's doc edit / home's knowledge create at the same
