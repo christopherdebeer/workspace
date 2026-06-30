@@ -1486,13 +1486,31 @@ const editInput: React.CSSProperties = {
   color: theme.text,
 };
 
-const isJsonField = (t?: string): boolean => t === 'ref' || t === 'array' || t === 'object';
+/** A `$types[type].fields` entry's `type` (a loose vocabulary: string/number/
+ *  boolean/markdown/ref/array/object) isn't JSON-Schema — adapt it to the
+ *  `FormFieldSchema` shape `SchemaForm` (ADR-0041 Inc 2) already walks, so the
+ *  field computer's form floor and a fact's own editor are ONE renderer, not
+ *  two (Inc 4). `ref`/`array`/`object` map to no JSON-Schema scalar type, so
+ *  `SchemaForm` degrades them to its per-field raw-JSON box — the same
+ *  fallback `isJsonField` hand-rolled here before.
+ */
+function fieldsToFormSchema(fields: FormField[]): FormFieldSchema {
+  const properties: Record<string, FormFieldSchema> = {};
+  const required: string[] = [];
+  for (const f of fields) {
+    const type = f.type === 'markdown' ? 'string' : f.type === 'string' || f.type === 'boolean' || f.type === 'number' ? f.type : undefined;
+    properties[f.name] = { type, description: f.description };
+    if (f.required) required.push(f.name);
+  }
+  return { type: 'object', properties, required };
+}
 
 /**
  * Generic editor (ADR-0002). When the type declares `fields`, render a **form**
- * (one input per field, required marked) — schema declared once drives validate +
- * form + agent `create`. Otherwise fall back to text (string value) / raw JSON.
- * `workspace.remember`'s advisory `hints` flow back via `onSaved`.
+ * via the shared `SchemaForm` floor (ADR-0041 Inc 2/4) — one form renderer for
+ * tool args, type-create, and fact-edit alike. Otherwise fall back to text
+ * (string value) / raw JSON. `workspace.remember`'s advisory `hints` flow back
+ * via `onSaved`.
  */
 function FactEditor({
   e,
@@ -1507,37 +1525,18 @@ function FactEditor({
 }): React.JSX.Element {
   const isStr = typeof e.value === 'string';
   const base = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
-  const useForm = !isStr && Array.isArray(fields) && fields.length > 0;
+  const schema = Array.isArray(fields) && fields.length > 0 ? fieldsToFormSchema(fields) : undefined;
+  const useForm = !isStr && isFormable(schema);
 
-  const [form, setForm] = useState<Record<string, unknown>>(() => {
-    const o: Record<string, unknown> = {};
-    if (useForm) for (const f of fields!) o[f.name] = isJsonField(f.type) && base[f.name] != null && typeof base[f.name] !== 'string' ? JSON.stringify(base[f.name]) : base[f.name];
-    return o;
-  });
+  const [form, setForm] = useState<Record<string, unknown>>(base);
   const [text, setText] = useState(isStr ? (e.value as string) : JSON.stringify(e.value ?? {}, null, 2));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const set = (name: string, v: unknown): void => setForm((f) => ({ ...f, [name]: v }));
-
   const save = async (): Promise<void> => {
     let value: unknown;
     if (useForm) {
-      const out: Record<string, unknown> = { ...base };
-      for (const f of fields!) {
-        let v = form[f.name];
-        if (isJsonField(f.type) && typeof v === 'string') {
-          try {
-            v = v.trim() ? JSON.parse(v) : undefined;
-          } catch {
-            setErr(`Field "${f.name}" must be valid JSON`);
-            return;
-          }
-        }
-        if (v === undefined || v === '') delete out[f.name];
-        else out[f.name] = v;
-      }
-      value = out;
+      value = form;
     } else if (isStr) {
       value = text;
     } else {
@@ -1560,32 +1559,10 @@ function FactEditor({
     onSaved(value, Array.isArray(hints) ? hints : undefined);
   };
 
-  const fieldInput = (f: FormField): React.JSX.Element => {
-    const v = form[f.name];
-    if (f.type === 'boolean') return <input type="checkbox" checked={!!v} onChange={(ev) => set(f.name, ev.target.checked)} />;
-    if (f.type === 'number')
-      return <input type="number" value={v == null ? '' : String(v)} onChange={(ev) => set(f.name, ev.target.value === '' ? undefined : Number(ev.target.value))} style={editInput} />;
-    if (f.type === 'markdown' || isJsonField(f.type))
-      return <textarea value={typeof v === 'string' ? v : ''} onChange={(ev) => set(f.name, ev.target.value)} rows={f.type === 'markdown' ? 4 : 2} spellCheck={false} style={{ ...editInput, fontFamily: isJsonField(f.type) ? theme.mono : 'inherit' }} />;
-    return <input value={typeof v === 'string' ? v : ''} onChange={(ev) => set(f.name, ev.target.value)} style={editInput} />;
-  };
-
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       {useForm ? (
-        <div style={{ display: 'grid', gap: '0.55rem' }}>
-          {fields!.map((f) => (
-            <label key={f.name} style={{ display: 'grid', gap: '0.2rem' }}>
-              <span style={{ fontSize: '0.72rem', color: theme.dim, fontFamily: theme.mono }}>
-                {f.name}
-                {f.required ? <span style={{ color: theme.accent }}> *</span> : null}
-                {f.type ? <span style={{ opacity: 0.6 }}> · {f.type}</span> : null}
-              </span>
-              {fieldInput(f)}
-              {f.description ? <span style={{ fontSize: '0.68rem', color: theme.dim }}>{f.description}</span> : null}
-            </label>
-          ))}
-        </div>
+        <SchemaForm schema={schema} value={form} onChange={setForm} />
       ) : (
         <>
           <textarea

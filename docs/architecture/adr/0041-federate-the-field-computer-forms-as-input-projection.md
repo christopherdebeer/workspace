@@ -1,6 +1,6 @@
 # ADR-0041 — Federate the field computer: forms as the human projection of `inputSchema`
 
-- **Status:** Inc 1 shipped (2026-06-30). ADR-0039 federated the **output** half of the render surface (`ui://`
+- **Status:** Inc 1–4 shipped (2026-06-30). ADR-0039 federated the **output** half of the render surface (`ui://`
   renderers consumed by the conversation card). The **field computer** — the home console where a human drives
   the *same read/act wire an agent does* — never joined it: it renders results as raw `JSON.stringify` and
   takes args as a raw-JSON textarea. This ADR makes the field computer a federated-render *consumer* (output)
@@ -114,8 +114,27 @@ JSON-Schema form floor — the input analogue of the hint floor.
   placeholder, same graceful-degrade contract as output renderers. Demonstrated on `@c15r/input.capture`: a
   form offering a live preview of the composed capture markdown — genuine value the generic floor can't
   provide (it doesn't know the type's compose rule), bounded in scope (proves the wire, doesn't gold-plate).
-- **Inc 4 — one form, every input.** Point lit's doc edit / home's knowledge create at the same
-  `platform/ui/form`; retire the bespoke editors where the floor suffices.
+- **Inc 4 — one form, every input (shipped).** Audited both candidate bespoke editors and applied the floor
+  where the shape actually fits, per the ADR's own qualifier ("where the floor suffices") — not uniformly:
+  - **Home's `FactEditor`** (`cells/home/client/app.tsx`) was a hand-rolled field renderer keyed off
+    `$types[type].fields` — text/textarea/number/checkbox/JSON-textarea per field, required marker, raw-JSON
+    fallback — duplicating `SchemaForm`'s feature set under a different (non-JSON-Schema) vocabulary. A small
+    adapter (`fieldsToFormSchema`) maps that loose `{name,type,required,description}[]` vocabulary onto
+    `FormFieldSchema` (`markdown`→`string`; `ref`/`array`/`object`, having no JSON-Schema scalar counterpart,
+    map to `type: undefined` so `SchemaForm` degrades them to its own per-field raw-JSON box — the exact
+    fallback `FactEditor` hand-rolled before). `FactEditor` now renders `<SchemaForm schema={schema}
+    value={form} onChange={setForm} />` directly; the hand-rolled `fieldInput`/`isJsonField` are gone. One
+    form renderer now drives tool args (the field computer Console), `ui://`-form-declaring tools
+    (`@c15r/input.capture`), *and* fact editing (`FactDetail`/`FactEditor`) — the CALM invariant from the
+    Decision section, realised.
+  - **Lit's doc-edit** (`cells/lit/client/main.tsx`, `CellView`) was audited and deliberately left alone: it
+    edits ONE cell's raw markdown `content` string (a doc is a sequence of markdown blocks; a heading/fence on
+    save re-splits into multiple cells) — a single-field prose editor, not a `properties`-shaped multi-field
+    schema. `SchemaForm` is the floor for object-shaped `inputSchema`/`fields`; a one-field markdown blob has
+    no multi-field structure for it to walk, so applying it here would wrap a `<textarea>` in machinery for no
+    behavioural change. This is the floor's scope working as designed (Inc 2's "degrades gracefully past
+    that" boundary), not a gap — confirmed against `cells/lit/types.json`'s `doc`/`doc-block` schemas, which
+    are themselves single-field (`{content: "string — markdown..."}`).
 
 ## Open questions
 
