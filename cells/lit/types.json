@@ -14,12 +14,12 @@
       "handlers": {
         "open": [
           {
-            "path": "?doc=${match}"
+            "path": "/r/doc:${match}"
           }
         ],
         "edit": [
           {
-            "path": "?doc=${match}&edit=1"
+            "path": "/r/doc:${match}?edit=1"
           }
         ],
         "render": [
@@ -79,7 +79,7 @@
         "title": "string — the date label"
       },
       "handlers": {
-        "open": [{ "cell": "/lit", "path": "?doc=log:${value.date}" }],
+        "open": [{ "cell": "/lit", "path": "/r/log:${value.date}" }],
         "render": [{ "hint": "markdown" }]
       }
     }

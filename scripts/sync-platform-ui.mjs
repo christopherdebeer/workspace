@@ -19,6 +19,9 @@ const MAP = {
   'platform/ui/vocab.ts': ['cells/home/shared/vocab.ts'],
   'platform/ui/federated-renderer.ts': ['cells/home/shared/federated-renderer.ts'],
   'platform/ui/form.tsx': ['cells/home/shared/form.tsx'],
+  // A sibling FILE (not cells/lit/shared/render-hints.ts) — lit already has a
+  // top-level `shared.tsx` module; a `shared/` directory would collide with it.
+  'platform/ui/render-hints.ts': ['cells/lit/render-hints.ts'],
 };
 
 for (const [src, targets] of Object.entries(MAP)) {

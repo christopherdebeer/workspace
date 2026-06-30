@@ -439,15 +439,15 @@ export function hrefOf(e: FactEntry): string | null {
   const v = (e.value ?? {}) as Record<string, unknown>;
   const tags = e._meta?.tags ?? [];
   const owner = cellAddress()?.owner ?? 'c15r';
-  if (e.key.startsWith('doc:')) return cellUrl(owner, 'lit', `?doc=${encodeURIComponent(e.key.slice(4))}`);
+  if (e.key.startsWith('doc:')) return cellUrl(owner, 'lit', `/r/${encodeURIComponent(e.key).replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
   if (t === 'capture' || e.key.startsWith('inbox/')) {
     return typeof v.captured === 'string'
-      ? cellUrl(owner, 'lit', `?doc=${encodeURIComponent(`log:${v.captured}`)}`)
+      ? cellUrl(owner, 'lit', `/r/log:${encodeURIComponent(v.captured)}`)
       : cellUrl(owner, 'input');
   }
   if (t === 'cell' && typeof v.address === 'string') return v.address;
   const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return cellUrl(owner, 'lit', `?doc=${encodeURIComponent(docTag.slice(4))}`);
+  if (docTag) return cellUrl(owner, 'lit', `/r/${encodeURIComponent(docTag).replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
   const boardTag = tags.find((x) => x.startsWith('canvas:'));
   if (boardTag) return cellUrl(owner, 'canvas', `?canvas=${encodeURIComponent(boardTag.slice(7))}`);
   return null;

@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { Surface, type ViewModel, type ListItem, type BlockData, type DocValue } from './shared';
+import { Surface, renderMarkdown, setOwner, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef } from './shared';
+import { bodyText, fieldsToHtml } from './render-hints';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -13,6 +14,8 @@ const respond = (statusCode: number, contentType: string, body: string) => ({
 
 const OWNER = process.env.CELL_OWNER || 'c15r';
 const TABLE = process.env.SUBSTRATE_TABLE || '';
+// Must run before any SSR render — see `setOwner`'s doc comment (shared.tsx).
+setOwner(OWNER);
 
 // ── server-side substrate read (the canvas pattern) ────────────────
 // The cell's IAM role grants `STATE#<owner>` reads only (LeadingKeys), so the
@@ -40,7 +43,7 @@ function ddb(): Ddb {
   return doc;
 }
 
-interface Fact { key: string; value: unknown; superseded?: boolean; _meta?: { updatedAt?: string } }
+interface Fact { key: string; value: unknown; superseded?: boolean; _meta?: { updatedAt?: string; type?: string | null } }
 
 async function getFact(key: string): Promise<Fact | null> {
   const r = await ddb().send(new Get({ TableName: TABLE, Key: { pk: `STATE#${OWNER}`, sk: `KEY#${key}` } }));
@@ -65,6 +68,59 @@ async function queryPrefix(prefix: string): Promise<Fact[]> {
     ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (ExclusiveStartKey);
   return out;
+}
+
+interface EdgeItem { from: string; rel: string; to: string }
+
+/** Outbound edges FROM a key (`platform/infra/substrate-table.ts`'s key layout:
+ *  `sk=EDGE#<from>|<rel>|<to>`, a contiguous prefix scan). Server-side mirror of
+ *  `workspace.neighbors`'s `outbound` — direct DDB, same table the cell already
+ *  reads facts from, no MCP round trip needed for SSR. */
+async function edgesFrom(from: string): Promise<EdgeItem[]> {
+  const r = await ddb().send(
+    new Query({
+      TableName: TABLE,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+      ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': `EDGE#${from}|` },
+    }),
+  );
+  return (r.Items ?? []) as EdgeItem[];
+}
+
+/** Inbound edges TO a key, via the `gsi-in` index (`gsi1pk=IN#<scope>#<to>`) —
+ *  the substrate's one inbound-edge index, same one `workspace.neighbors` reads. */
+async function edgesTo(to: string): Promise<EdgeItem[]> {
+  const r = await ddb().send(
+    new Query({
+      TableName: TABLE,
+      IndexName: 'gsi-in',
+      KeyConditionExpression: 'gsi1pk = :pk',
+      ExpressionAttributeValues: { ':pk': `IN#${OWNER}#${to}` },
+    }),
+  );
+  return (r.Items ?? []) as EdgeItem[];
+}
+
+/** A fact's id: the part after a `prefix:` or `prefix/` in its key — mirrors
+ *  `platform/ui/vocab.ts`'s `deriveId` (kept tiny + duplicated rather than wired
+ *  cross-module; index.ts is the no-DOM server half, vocab.ts assumes the
+ *  client's `$types` aggregation, a dependency this SSR path doesn't carry). */
+function deriveId(key: string): string {
+  const ci = key.indexOf(':');
+  const si = key.indexOf('/');
+  const i = ci >= 0 && (si < 0 || ci < si) ? ci : si;
+  return i >= 0 ? key.slice(i + 1) : key;
+}
+
+/** A neighbour key resolved to a `LinkRef` — its title/name as the label (else
+ *  the key itself) plus its type, fetched alongside so a link reads as a name,
+ *  not an opaque key. Best-effort: a missing/foreign-scope fact just labels
+ *  itself by key with no type. */
+async function linkRefOf(key: string, rel: string): Promise<LinkRef> {
+  const f = await getFact(key).catch(() => null);
+  const v = f?.value as Record<string, unknown> | undefined;
+  const t = typeof v?.title === 'string' ? (v.title as string) : typeof v?.name === 'string' ? (v.name as string) : undefined;
+  return { key, rel, label: t || deriveId(key), type: f?._meta?.type ?? null };
 }
 
 /** Does a `_public/<pattern>` cover this key? (`*` = whole slice, trailing `*` = prefix, else exact.) */
@@ -103,7 +159,8 @@ header{margin:.6rem 0 1.4rem}header h1{margin:.2rem 0 0;font-size:1.6rem;line-he
 pre{background:#f4f4ee;border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
 img{max-width:100%}a{color:var(--accent)}
 .doc-controls{display:flex;gap:.4rem;margin-top:.5rem}.pill{border:1px solid var(--line);background:transparent;color:var(--faint);border-radius:999px;padding:.12rem .7rem;font-size:.8rem;cursor:pointer}.pill.on{color:var(--paper);background:var(--accent);border-color:var(--accent)}
-.wikilink{border-bottom:1px dotted var(--accent);text-decoration:none}.backlinks{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line)}.backlinks h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:0 0 .5rem}.backlinks ul{list-style:none;padding:0;margin:0;display:grid;gap:.3rem}
+.wikilink{border-bottom:1px dotted var(--accent);text-decoration:none}.backlinks{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line)}.backlinks+.backlinks{margin-top:1.4rem}.backlinks h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:0 0 .5rem}.backlinks ul{list-style:none;padding:0;margin:0;display:grid;gap:.3rem}.backlinks .rel{color:var(--faint);font-size:.78rem}
+.fact-meta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem;word-break:break-all}.block-body dl.f{margin:0;display:grid;gap:.35rem}.block-body dl.f div{display:flex;gap:.5rem}.block-body dl.f dt{color:var(--faint);font-size:.8rem;min-width:7rem}.block-body dl.f dd{margin:0}
 .md-fence{border-left:2px solid var(--line);padding-left:.9rem;margin:.6rem 0}
 .embed-agent{border:1px solid var(--line);border-radius:10px;padding:.7rem .8rem;margin:.6rem 0;background:#fff}.agent-head{font-size:.8rem;color:var(--faint);margin-bottom:.4rem}.agent-prompt{background:#f4f4ee;margin:0 0 .5rem;white-space:pre-wrap}.agent-out{margin-top:.5rem}.agent-out:empty{display:none}.vw-attrib{font-size:.72rem;color:var(--faint);margin-top:.5rem}`;
 
@@ -150,6 +207,42 @@ async function buildDocVM(id: string, patterns: string[], isOwner: boolean): Pro
   return { kind: 'doc', owner: OWNER, isOwner, id, title: dv.title || id, summary: dv.summary, blocks };
 }
 
+/** The generic fact ViewModel (ADR-0040 wiki): ANY fact lit doesn't own a
+ *  bespoke view for — rendered through the same hint floor every surface
+ *  shares (`render-hints.ts`), with both edge directions resolved to labelled
+ *  links. The substrate-native reader: the URL is the key, the page is
+ *  whatever that key actually holds. */
+async function buildFactVM(key: string, patterns: string[], isOwner: boolean): Promise<ViewModel | null> {
+  if (!isOwner && !covers0(patterns, key)) return null;
+  const fact = await getFact(key);
+  if (!fact) return null;
+  const value = fact.value;
+  const v = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const title = (typeof v.title === 'string' && v.title) || (typeof v.name === 'string' && v.name) || deriveId(key);
+  const body = bodyText(value);
+  const bodyHtml = body ? renderMarkdown(body) : '';
+  const fieldsHtml = bodyHtml ? '' : fieldsToHtml(value);
+  const [out, inb] = await Promise.all([edgesFrom(key), edgesTo(key)]);
+  const byTarget = <T extends { key: string }>(refs: T[]): T[] => {
+    const seen = new Set<string>();
+    return refs.filter((r) => (r.key === key || seen.has(r.key) ? false : (seen.add(r.key), true))).slice(0, 24);
+  };
+  const links = byTarget(await Promise.all(out.map((e) => linkRefOf(e.to, e.rel))));
+  const backlinks = byTarget(await Promise.all(inb.map((e) => linkRefOf(e.from, e.rel))));
+  return { kind: 'fact', owner: OWNER, isOwner, key, type: fact._meta?.type ?? null, title, bodyHtml, fieldsHtml, links, backlinks };
+}
+
+/** Dispatch a route key (from `/r/<key>` or the legacy `?doc=` query param,
+ *  already normalized to a full key by the caller) to the right ViewModel
+ *  builder — `doc:` keeps its bespoke ordered-cells view; `log:` stays
+ *  client-only (derived/grouped, not worth a second SSR path yet); anything
+ *  else is the generic reader. */
+async function buildKeyVM(key: string, patterns: string[], isOwner: boolean): Promise<ViewModel | null> {
+  if (key.startsWith('doc:')) return buildDocVM(key.slice(4), patterns, isOwner);
+  if (key.startsWith('log:')) return null;
+  return buildFactVM(key, patterns, isOwner);
+}
+
 /** The list ViewModel: one card per doc the caller may see (own slice, or what the
  *  `_public/` index covers for anyone else). */
 async function buildListVM(patterns: string[], isOwner: boolean): Promise<ViewModel> {
@@ -177,6 +270,26 @@ async function buildListVM(patterns: string[], isOwner: boolean): Promise<ViewMo
   return { kind: 'list', owner: OWNER, isOwner, docs: items };
 }
 
+/** Render the list (no key) or a fact/doc at `key`, server-side, when there's
+ *  public content or the caller is the owner — else the bare interactive shell
+ *  (the client renders with its own session). Shared by both URL forms: the
+ *  new path route and the legacy `?doc=` query param. */
+async function renderRoute(key: string | undefined, isOwner: boolean) {
+  try {
+    const patterns = await publicPatterns();
+    if (patterns.length || isOwner) {
+      const vm = key ? await buildKeyVM(key, patterns, isOwner) : await buildListVM(patterns, isOwner);
+      if (vm) {
+        const inner = renderToString(createElement(Surface, { vm }));
+        return respond(200, 'text/html; charset=utf-8', ssrPage(inner, vm));
+      }
+    }
+  } catch (err) {
+    console.warn('[lit ssr] fell back to shell', (err as Error).message);
+  }
+  return respond(200, 'text/html; charset=utf-8', read('static/index.html'));
+}
+
 export const handler = async (event: {
   requestContext?: { http?: { method?: string } };
   rawPath?: string;
@@ -189,33 +302,34 @@ export const handler = async (event: {
   if (method !== 'GET' && method !== 'HEAD') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
+    // `x-cell-caller` is the dispatch-validated identity (gateway sets it from a
+    // bearer; the dispatch tier sets it from the session cookie on navigations).
+    // The owner viewing their own lit gets every fact server-rendered; anyone
+    // else gets only what the `_public/` index covers. Trustworthy: the cell is
+    // reachable only via cells.call, never directly, so the header can't be forged.
+    const caller = event.headers?.['x-cell-caller'];
+    const isOwner = !!caller && caller === OWNER;
+    // The path-based reader route (ADR-0040: the URL IS the key) — `/r/<key>`,
+    // any fact key verbatim (`/` and `:` literal, the substrate's own
+    // separators; everything else percent-decoded per segment).
+    if (path === '/r' || path.startsWith('/r/')) {
+      const tail = path === '/r' ? '' : path.slice('/r/'.length);
+      const key = tail
+        .split('/')
+        .map((seg) => { try { return decodeURIComponent(seg); } catch { return seg; } })
+        .join('/');
+      return await renderRoute(key || undefined, isOwner);
+    }
     if (path === '/' || path === '') {
       // The cell event carries rawQueryString (the parsed map isn't reliably
       // populated through the dispatch path) — parse it like the canvas cell.
       const qs = new URLSearchParams(event.rawQueryString || '');
-      const id = qs.get('doc') ?? event.queryStringParameters?.doc ?? undefined;
-      // `x-cell-caller` is the dispatch-validated identity (gateway sets it from
-      // a bearer; the dispatch tier sets it from the session cookie on navigations).
-      // The owner viewing their own lit gets every doc server-rendered; anyone
-      // else gets only what the `_public/` index covers. Trustworthy: the cell is
-      // reachable only via cells.call, never directly, so the header can't be forged.
-      const caller = event.headers?.['x-cell-caller'];
-      const isOwner = !!caller && caller === OWNER;
-      // SSR first paint when there's public content OR the owner is signed in;
-      // otherwise serve the bare interactive shell (the client renders with the session).
-      try {
-        const patterns = await publicPatterns();
-        if (patterns.length || isOwner) {
-          const vm = id ? await buildDocVM(id, patterns, isOwner) : await buildListVM(patterns, isOwner);
-          if (vm) {
-            const inner = renderToString(createElement(Surface, { vm }));
-            return respond(200, 'text/html; charset=utf-8', ssrPage(inner, vm));
-          }
-        }
-      } catch (err) {
-        console.warn('[lit ssr] fell back to shell', (err as Error).message);
-      }
-      return respond(200, 'text/html; charset=utf-8', read('static/index.html'));
+      const rawDoc = qs.get('doc') ?? event.queryStringParameters?.doc ?? undefined;
+      // Legacy convenience (pre-dates the `/r/` route, kept for old links and
+      // other cells' `?doc=` open handlers): a bare id means `doc:<id>`; a
+      // value already carrying `:`/`/` (e.g. `log:2026-06-30`) is a full key.
+      const key = rawDoc === undefined ? undefined : /[:/]/.test(rawDoc) ? rawDoc : `doc:${rawDoc}`;
+      return await renderRoute(key, isOwner);
     }
   } catch (err) {
     return respond(404, 'application/json', JSON.stringify({ error: (err as Error).message }));

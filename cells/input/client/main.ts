@@ -226,7 +226,7 @@ async function render(capturedNow: { key: string; content: string } | null): Pro
 
   const meta = el('div', 'meta');
   const day = el('a', '', `today's log →`) as HTMLAnchorElement;
-  day.href = `/@c15r/lit?doc=log:${today()}`;
+  day.href = `/@c15r/lit/r/log:${today()}`;
   meta.appendChild(day);
   const buffer = el('a', '', 'open in lit') as HTMLAnchorElement;
   buffer.href = '/@c15r/lit';

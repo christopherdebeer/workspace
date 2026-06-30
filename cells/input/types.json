@@ -21,7 +21,7 @@
       ],
       "handlers": {
         "open": [
-          { "cell": "/lit", "path": "?doc=log:${value.captured}" },
+          { "cell": "/lit", "path": "/r/log:${value.captured}" },
           { "path": "" }
         ],
         "render": [{ "hint": "markdown" }]
