@@ -1952,37 +1952,29 @@ function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
     );
   }
 
-  // A canvas view IS a board. The embed is now the cell's zero-JS static SSR
-  // thumbnail (?embed=1): server-rendered, edge-cached, no app mounted — so
-  // many pinned boards show real previews inline without the crash. Lazy-loaded
-  // and click-through to the interactive board.
+  // A canvas view IS a board. ADR-0043: render it through canvas's federated
+  // `ui://` renderer inside home's OWN opaque-origin sandbox (the harness home
+  // already runs for machine-run et al.), NOT an origin-iframe to canvas's
+  // session-less `?embed=1` origin. The old embed severed the viewer's session,
+  // so a PRIVATE board fell to canvas's anon sign-in shell ("pointless"); here
+  // home holds the session and proxies the renderer's board reads under the
+  // viewer's identity, so private boards paint. Degrades to the label placeholder
+  // if the renderer can't run (offline, CSP, cell down).
   if (type === 'canvas') {
-    // Address the board by its VIEW id so SSR honours the view's declared
-    // viewport (the "look here") instead of fitting the whole board.
     const href = localize(hint?.href ?? `/@c15r/canvas?view=${encodeURIComponent(def.id)}`);
-    const embedSrc = localize(`/@c15r/canvas?view=${encodeURIComponent(def.id)}&embed=1&w=620&h=240`);
     return (
       <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
-        {/* The iframe is purely visual (pointer-events:none); a transparent
-            overlay link captures the tap so page scroll passes straight through
-            — iframes otherwise swallow touch on iOS even when inert. */}
-        <div style={{ position: 'relative', height: 240 }}>
-          <iframe
-            src={embedSrc}
-            title={label}
-            loading="lazy"
-            scrolling="no"
-            tabIndex={-1}
-            aria-hidden
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', background: '#fff', pointerEvents: 'none' }}
-          />
-          <a
-            href={href}
-            title={`Open ${label}`}
-            aria-label={`Open ${label}`}
-            style={{ position: 'absolute', inset: 0, display: 'block' }}
-          />
-        </div>
+        <FederatedRendererFrame
+          uri="ui://@c15r/canvas/renderers/board.js"
+          type="canvas"
+          value={{ viewId: def.id }}
+          factKey={def.id}
+          placeholder={
+            <div style={{ height: 240, display: 'grid', placeItems: 'center', color: theme.dim, fontSize: '0.85rem', fontFamily: theme.serif }}>
+              🌲 {label}…
+            </div>
+          }
+        />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0.9rem', gap: '0.5rem' }}>
           <strong style={{ fontFamily: theme.serif }}>🌲 {label}</strong>
           <a href={href} style={{ color: theme.accent, fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>

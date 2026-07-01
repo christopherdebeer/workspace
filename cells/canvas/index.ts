@@ -13,6 +13,155 @@ const respond = (statusCode: number, contentType: string, body: string) => ({
 const OWNER = process.env.CELL_OWNER || 'c15r';
 const TABLE = process.env.SUBSTRATE_TABLE || '';
 
+/**
+ * ADR-0043 — the canvas cell's FEDERATED `ui://` renderer for a `canvas` view
+ * (surface C: a host — home, lit — embedding a board INSIDE itself). This is
+ * the fix for "canvas on home just shows a sign-in": the old path iframed a
+ * host page to canvas's OWN session-less origin (`?embed=1`), which severed the
+ * viewer's session, so a PRIVATE board fell to the anon shell. Here the HOST
+ * holds the session and resolves the data; this renderer only PAINTS, fetching
+ * the board's facts over the host-proxied `api.call('read', …)` (so per-fact
+ * grants are enforced under the viewer's identity) and running inside the host's
+ * opaque-origin sandbox (no ambient session — it may be another tenant's cell).
+ *
+ * A self-registering classic script (no module/eval — the sandbox forbids both)
+ * that adds itself to `window.__parcRender['canvas']`, matching the machine
+ * cell's `machine-run`/`machine` renderers. It ports canvas's OWN pure render
+ * primitives (from `shared/render.ts`) inline, since a sandbox script can't
+ * import the monorepo — canvas keeps ownership of how a board draws. Backtick-
+ * free so it nests in this template literal.
+ *
+ * Data path (ADR-0043 Inc 1): canvas's split model keeps geometry in placement
+ * facts (`_canvas/<board>/el:<id>`) and content in separate `el:<id>` facts, so
+ * this fetches BOTH by prefix and joins — two host-proxied reads (mirrors how
+ * machine's renderer fetches its decomposed `<key>/node/` children). A single-
+ * call board read is the Inc 4 fidelity/perf follow-up.
+ */
+const BOARD_RENDERER_SRC = `
+(function(){
+  var BUILD = 'v1';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  var STYLE_ID = 'parc-canvas-board-css';
+  function ensureCss(){
+    if (document.getElementById(STYLE_ID)) return;
+    var s = document.createElement('style'); s.id = STYLE_ID;
+    s.textContent = [
+      '.pc-board{position:relative;width:100%;height:240px;overflow:hidden;background:#fff;border-radius:8px}',
+      '.pc-cam{position:absolute;top:0;left:0;transform-origin:0 0;overflow:visible}',
+      '.pc-el{position:absolute;box-sizing:content-box;padding:2px;font:13px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}',
+      '.pc-el .content{width:100%;height:100%;overflow:hidden}',
+      '.pc-el[data-t="text"] .content,.pc-el[data-t="markdown"] .content{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.2;white-space:normal}',
+      '.pc-el img.content{object-fit:cover;max-width:100%}',
+      '.pc-el h1,.pc-el h2,.pc-el h3{margin:.1em 0;font-size:1.05em}',
+      '.pc-el p{margin:.15em 0}',
+      '.pc-badge{font:11px ui-monospace,Menlo,monospace;opacity:.6;padding:4px 2px 0}'
+    ].join('');
+    document.head.appendChild(s);
+  }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function escAttr(s){ return esc(s).replace(/\\n/g,'&#10;'); }
+  // A compact markdown subset ported from shared/render.ts (headings, bold,
+  // italic, code, links, images, lists, hr, blockquote, paragraphs).
+  function mdInline(s){
+    var t = esc(s);
+    t = t.replace(/\`([^\`]+)\`/g, function(_m,c){ return '<code>'+c+'</code>'; });
+    t = t.replace(/!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)/g, function(_m,a,u){ return '<img alt="'+a+'" src="'+u+'">'; });
+    t = t.replace(/\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g, function(_m,a,u){ return '<a href="'+u+'" target="_blank" rel="noopener">'+a+'</a>'; });
+    t = t.replace(/\\*\\*([^*]+)\\*\\*/g, function(_m,c){ return '<strong>'+c+'</strong>'; });
+    t = t.replace(/(^|[^*])\\*([^*]+)\\*/g, function(_m,p,c){ return p+'<em>'+c+'</em>'; });
+    return t;
+  }
+  function renderMd(src){
+    var lines = String(src==null?'':src).replace(/\\r\\n/g,'\\n').split('\\n');
+    var out=[], para=[], list=null;
+    function flush(){ if(para.length){ out.push('<p>'+mdInline(para.join(' '))+'</p>'); para=[]; } }
+    function closeList(){ if(list){ out.push('</'+list+'>'); list=null; } }
+    for (var i=0;i<lines.length;i++){
+      var line = lines[i].replace(/\\s+$/,'');
+      if(!line.trim()){ flush(); closeList(); continue; }
+      var h = line.match(/^(#{1,6})\\s+(.*)$/);
+      if(h){ flush(); closeList(); var n=h[1].length; out.push('<h'+n+'>'+mdInline(h[2])+'</h'+n+'>'); continue; }
+      if(/^(---|\\*\\*\\*|___)\\s*$/.test(line)){ flush(); closeList(); out.push('<hr>'); continue; }
+      if(/^>\\s?/.test(line)){ flush(); closeList(); out.push('<blockquote>'+mdInline(line.replace(/^>\\s?/,''))+'</blockquote>'); continue; }
+      var ul = line.match(/^[-*+]\\s+(.*)$/), ol = line.match(/^\\d+\\.\\s+(.*)$/);
+      if(ul||ol){ flush(); var ty=ul?'ul':'ol'; if(list!==ty){ closeList(); list=ty; out.push('<'+ty+'>'); } out.push('<li>'+mdInline((ul?ul[1]:ol[1]))+'</li>'); continue; }
+      closeList(); para.push(line);
+    }
+    flush(); closeList(); return out.join('');
+  }
+  function contentHtml(c, w, h){
+    var color = c.color ? 'color:'+escAttr(c.color) : '';
+    var text = c.content==null?'':c.content;
+    if (c.type==='text') return '<p class="content" style="'+color+'">'+esc(text)+'</p>';
+    if (c.type==='markdown') return '<div class="content" style="'+color+'">'+renderMd(text)+'</div>';
+    if (c.type==='html') return '<div class="content">'+text+'</div>';
+    if (c.type==='img'){ var src = c.src || ('https://placehold.co/'+Math.round(w)+'x'+Math.round(h)+'?text='+encodeURIComponent(text)); return '<img class="content" src="'+escAttr(src)+'">'; }
+    return '<div class="content" style="opacity:.5">'+esc(c.type)+'</div>';
+  }
+  function elHtml(p, c){
+    var scale = p.scale||1;
+    var w = p.width*scale, hh = p.height*scale;
+    var left = (p.x - w/2), top = (p.y - hh/2);
+    var style = 'left:'+left.toFixed(1)+'px;top:'+top.toFixed(1)+'px;width:'+w.toFixed(1)+'px;height:'+hh.toFixed(1)+'px;z-index:'+(Math.floor(p.zIndex||0)||1);
+    return '<div class="pc-el" data-t="'+escAttr(c.type)+'" style="'+style+'">'+contentHtml(c,w,hh)+'</div>';
+  }
+  function fitCam(els, W, H){
+    var xs=[], ys=[];
+    for (var i=0;i<els.length;i++){ var e=els[i], p=e.placement; if(p.static) continue; var s=p.scale||1; xs.push(p.x-(p.width*s)/2, p.x+(p.width*s)/2); ys.push(p.y-(p.height*s)/2, p.y+(p.height*s)/2); }
+    if(!xs.length) return {scale:1,tx:0,ty:0};
+    var minX=Math.min.apply(null,xs), minY=Math.min.apply(null,ys);
+    var bw=Math.max.apply(null,xs)-minX, bh=Math.max.apply(null,ys)-minY, pad=16;
+    var scale=Math.min(1,(W-pad*2)/Math.max(bw,1),(H-pad*2)/Math.max(bh,1));
+    return {scale:scale, tx:(W-scale*bw)/2-scale*minX, ty:(H-scale*bh)/2-scale*minY};
+  }
+  function resolveViewId(value, key){
+    var vid = (value && (value.viewId || value.id)) || key || '';
+    return String(vid);
+  }
+  function entriesOf(r){ return (r && (r.entries || r.items)) || []; }
+  reg['canvas'] = function(host, value, api){
+    ensureCss();
+    host.innerHTML = '<div class="pc-badge">loading board…</div>';
+    if (!api || typeof api.call !== 'function'){ host.innerHTML = '<div class="pc-badge">no host channel</div>'; return; }
+    var vid = resolveViewId(value, api.key);
+    var viewKey = vid.indexOf('_views/')===0 ? vid : ('_views/'+vid);
+    function deriveBoard(){ var k = vid.indexOf('_views/')===0 ? vid.slice(7) : vid; return k.indexOf('canvas:')===0 ? k.slice(7) : k; }
+    // 1) resolve the board (the view fact declares render.board) — fall back to
+    //    deriving it from the id if the view fact is absent.
+    api.call('read','workspace.peek',{ key: viewKey }).then(function(rec){
+      var v = rec && (rec.value!==undefined ? rec.value : rec);
+      var board = (v && v.render && v.render.board) || (value && (value.board || (value.render && value.render.board))) || deriveBoard();
+      if (!board){ host.innerHTML='<div class="pc-badge">no board</div>'; return; }
+      // 2) placements (geometry) + 3) content, each a prefix read; joined here.
+      return Promise.all([
+        api.call('read','workspace.query',{ prefix:'_canvas/'+board+'/el:', limit:400, rankBy:'recency' }),
+        api.call('read','workspace.query',{ prefix:'el:', limit:1200, rankBy:'recency' })
+      ]).then(function(res){ paint(board, entriesOf(res[0]), entriesOf(res[1])); });
+    }).catch(function(err){ host.innerHTML = '<div class="pc-badge">board unavailable: '+esc((err&&err.message)||err)+'</div>'; });
+
+    function paint(board, places, contents){
+      var cmap = {};
+      for (var i=0;i<contents.length;i++){ var ce=contents[i]; if(ce&&ce.key) cmap[ce.key]=ce.value; }
+      var els=[], pre='_canvas/'+board+'/';
+      for (var j=0;j<places.length;j++){
+        var pe=places[j]; if(!pe||!pe.key) continue;
+        var elKey = pe.key.slice(pre.length); // el:<id>
+        var c = cmap[elKey], p = pe.value;
+        if(!c || !c.type || !p || typeof p.x!=='number' || p.static) continue;
+        els.push({ placement:p, content:c });
+      }
+      if(!els.length){ host.innerHTML = '<div class="pc-badge">empty board</div>'; return; }
+      var root = host; var W = (root.clientWidth||600), H = 240;
+      var cam = fitCam(els, W, H);
+      var inner = '';
+      for (var k=0;k<els.length;k++) inner += elHtml(els[k].placement, els[k].content);
+      host.innerHTML = '<div class="pc-board"><div class="pc-cam" style="transform:translate('+cam.tx.toFixed(1)+'px,'+cam.ty.toFixed(1)+'px) scale('+cam.scale.toFixed(4)+')">'+inner+'</div></div>'
+        + '<div class="pc-badge">🌲 rendered by @c15r/canvas · federated ui:// · '+BUILD+'</div>';
+    }
+  };
+})();
+`;
+
 // The AWS SDK v3 ships in the node20 Lambda runtime, but load it LAZILY: a
 // missing module then degrades SSR to the static fallback (caught below)
 // instead of crashing the cell's import — the bare app + app.js must never 500.
@@ -419,6 +568,17 @@ export const handler = async (event: any) => {
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
     if (path === '/style.css') return respond(200, 'text/css; charset=utf-8', read('static/style.css'));
+    // ADR-0043 — the federated `ui://` board renderer (surface C). Non-sensitive
+    // static code (ACAO:* + cacheable); the gateway provider hop fetches it for a
+    // host, which runs it sandboxed and proxies its data reads. Board data never
+    // travels here — only through the host-proxied `api.call`.
+    if (path === '/renderers/board.js') {
+      return {
+        statusCode: 200,
+        headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' },
+        body: BOARD_RENDERER_SRC,
+      };
+    }
 
     const qs = new URLSearchParams((event.rawQueryString as string) || '');
     // The board now lives in the PATH (`/@owner/canvas/<board>`); the gateway

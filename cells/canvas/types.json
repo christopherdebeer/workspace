@@ -6,7 +6,8 @@
       "manager": "@c15r/canvas",
       "handlers": {
         "open": [{ "path": "?canvas=${match}" }],
-        "embed": [{ "path": "?canvas=${match}&embed=1" }]
+        "embed": [{ "path": "?canvas=${match}&embed=1" }],
+        "render": [{ "renderer": "ui://@c15r/canvas/renderers/board.js" }, { "hint": "fields" }]
       }
     }
   ]
