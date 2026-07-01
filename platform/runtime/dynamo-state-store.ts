@@ -167,10 +167,10 @@ export function createDynamoStateStore(tableName: string): StateStore {
       }
     },
 
-    async list(scope: string): Promise<StateRecord[]> {
+    async list(scope: string, keyPrefix?: string): Promise<StateRecord[]> {
       const items = await queryAll({
         KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
-        ExpressionAttributeValues: { ':pk': statePk(scope), ':p': 'KEY#' },
+        ExpressionAttributeValues: { ':pk': statePk(scope), ':p': `KEY#${keyPrefix ?? ''}` },
       });
       return items.map(toRecord);
     },

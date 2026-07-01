@@ -64,13 +64,14 @@ export interface CellReader {
   /** One fact, RAW (the stored record — no salience, no attention write). The
    *  SSR-safe `peek`: a doc's body, a single fact by key. */
   peek(key: string): Promise<StateRecord | null>;
-  /** CHEAP list of live records (optionally key-prefix-filtered), RAW and
-   *  UNRANKED — one slice scan, NO salience. Use this for "just the facts" cell
-   *  SSR (a notes list, a doc's blocks by prefix). Prefer it over `query` on a
-   *  large slice: `query` additionally scans the whole trajectory + every edge to
-   *  compute salience, which is pathologically expensive when you only need the
-   *  rows (it will time out an SSR Lambda on a big slice). Reach for `query` only
-   *  when you actually need the ranking. */
+  /** CHEAP list of live records, RAW and UNRANKED — a prefix-scoped partition
+   *  read (`begins_with KEY#<prefix>`, so it reads ONLY that namespace, not the
+   *  whole slice), NO salience. Use this for "just the facts" cell SSR (a notes
+   *  list `list('note:')`, a doc's decorations `list('_doc/<id>/')`). Prefer it
+   *  over `query` on a large slice: `query` scans the whole trajectory + every
+   *  edge to compute salience, which times out an SSR Lambda on a big slice —
+   *  and even a prefix-less whole-slice read can, so pass a prefix. Reach for
+   *  `query` only when you actually need the ranking. */
   list(prefix?: string): Promise<StateRecord[]>;
   /** Salience-ranked projection over the slice (filter by type/tag/prefix/contains).
    *  Heavier than `list` — computes salience over the WHOLE slice (trajectory +
@@ -111,8 +112,10 @@ export function createCellReader(
     peek: (key) => store.get(scope, key),
     list: async (prefix) => {
       const nowMs = Date.now();
-      const recs = await store.list(scope);
-      return recs.filter((r) => !r.superseded && isTimerLive(r, nowMs) && (prefix === undefined || r.key.startsWith(prefix)));
+      // Prefix pushed to the store's partition query (`begins_with KEY#<prefix>`),
+      // so a cell reading a small namespace never scans the whole slice.
+      const recs = await store.list(scope, prefix);
+      return recs.filter((r) => !r.superseded && isTimerLive(r, nowMs));
     },
     query: (opts) => state.query(scope, { ...opts, typeRules: opts?.typeRules ?? typeRules }),
     byType: (type, opts) => state.query(scope, { ...opts, type, typeRules: opts?.typeRules ?? typeRules }),

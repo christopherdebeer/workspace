@@ -268,7 +268,11 @@ export interface StateStore {
    * `StatePreconditionError`.
    */
   put(record: StateRecord, guard?: PutGuard): Promise<void>;
-  list(scope: string): Promise<StateRecord[]>;
+  /** All live+superseded fact records in a scope, or — with `keyPrefix` — only
+   *  those whose key begins with it (a prefix-scoped partition read, e.g.
+   *  `note:` / `_doc/<id>/`). The prefix is pushed to the store query so a cell
+   *  reading a small namespace doesn't scan the whole slice (ADR-0042 Inc 1a). */
+  list(scope: string, keyPrefix?: string): Promise<StateRecord[]>;
   /** Records of a given indexable `type` within a scope (GSI-backed in prod). */
   listByType(scope: string, type: string): Promise<StateRecord[]>;
   putEdge(edge: EdgeRecord): Promise<void>;
@@ -1640,9 +1644,9 @@ export function createMemoryStateStore(): StateStore {
       }
       records.set(k(record.scope, record.key), { ...record, writers: [...record.writers], tags: [...record.tags] });
     },
-    async list(scope: string): Promise<StateRecord[]> {
+    async list(scope: string, keyPrefix?: string): Promise<StateRecord[]> {
       return [...records.values()]
-        .filter((r) => r.scope === scope)
+        .filter((r) => r.scope === scope && (keyPrefix === undefined || r.key.startsWith(keyPrefix)))
         .map((r) => ({ ...r, writers: [...r.writers], tags: [...r.tags] }));
     },
     async listByType(scope: string, type: string): Promise<StateRecord[]> {
