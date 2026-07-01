@@ -58,6 +58,7 @@ export { createObservedState, createMemoryStateStore, computeScore, extractTypeR
 // ADR-0044 Inc 1: the v2 (aws-sdk) store is DELETED — the v3 store (shared
 // state-store-codec, lazy @aws-sdk/* requires) is the one DynamoDB StateStore.
 export { createDynamoStateStoreV3 as createDynamoStateStore } from './dynamo-state-store-v3';
+export { buildTypeVocabulary } from './type-vocabulary';
 // The canonical cell-SSR reader (ADR-0042 Inc 1): the observed-state read
 // pipeline bound to one cell's scope, so a cell reads its slice the way the
 // gateway does (salience, edges, membership) instead of hand-rolling raw DDB.

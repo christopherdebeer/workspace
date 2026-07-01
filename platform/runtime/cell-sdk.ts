@@ -32,6 +32,10 @@ export { createDynamoStateStoreV3 as createDynamoStateStore } from './dynamo-sta
 export { createObservedState, createMemoryStateStore, computeScore, deriveBackboneEdges, extractTypeRules } from './state';
 export { resolvePresent, resolveLabel } from './present';
 export { resolveType, mergeTypeDecl, parseTypeSchema, missingRequired, schemaHints } from './type-schema';
+// ADR-0044 Inc 2: the $types merge as a library — a cell assembles the inputs
+// (registry types via a cached read; slice overrides via reader.list('_types/'))
+// and resolves the vocabulary locally, no gateway hop.
+export { buildTypeVocabulary } from './type-vocabulary';
 export { matchesSelector } from './selector';
 export { layer } from './resolution';
 

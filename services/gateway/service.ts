@@ -39,8 +39,7 @@ import {
   ServiceContext,
   ServiceHttpRequest,
   ServiceHttpResponse,
-  mergeTypeDecl,
-  resolveType,
+  buildTypeVocabulary,
 } from '../../platform/runtime';
 import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
 
@@ -352,26 +351,12 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
           .catch(() => ({ entries: [] }))
       : Promise.resolve({ entries: [] }),
   ]);
-  // Per-facet resolve (mergeTypeDecl): a slice `_types/<type>` override wins facet
-  // by facet, so overriding only `icon` no longer drops the canonical handlers/schema.
-  const types: Record<string, unknown> = { ...(global?.types ?? {}) };
-  for (const e of slice?.entries ?? []) {
-    const t = e.key.slice('_types/'.length);
-    types[t] = mergeTypeDecl(types[t], e.value);
-  }
-  // Additively attach the resolved `shape.fields` (ADR-0002) and `present` facet
-  // (ADR-0012: { icon, label, render } — the legacy `{icon,titlePath,href}` normalised
-  // once, server-side) so clients consume one resolved shape instead of re-deriving it.
-  // Flat keys are retained — existing consumers are unaffected (ADR-0014 row 3 enabler).
-  for (const [t, decl] of Object.entries(types)) {
-    const resolved = resolveType(decl, t);
-    const extra: Record<string, unknown> = {};
-    if (resolved.shape.fields) extra.fields = resolved.shape.fields;
-    if (resolved.present.icon !== undefined || resolved.present.label !== undefined || resolved.present.render !== undefined) {
-      extra.present = resolved.present;
-    }
-    if (Object.keys(extra).length) types[t] = { ...(decl as Record<string, unknown>), ...extra };
-  }
+  // The MERGE is a library now (ADR-0044 Inc 2 — `buildTypeVocabulary`,
+  // platform/runtime): per-facet slice-override resolution (mergeTypeDecl) plus
+  // the additively-attached `fields`/`present` facets, ONE resolver shared with
+  // cell SSR via the cell SDK — so `$types` stopped being wire-only. The
+  // gateway keeps only its transport (the two service reads above).
+  const types = buildTypeVocabulary(global?.types, slice?.entries as Array<{ key: string; value: unknown }> | undefined);
   return {
     types,
     hint: 'A fact of type T resolves through types[T].handlers[intent] (open/edit/render/create) — a surface (a cell URL), an act target, or a renderer; templated with ${id}/${match}/${value.path}.',
