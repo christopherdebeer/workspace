@@ -112,17 +112,49 @@ export function fileFactFromDoc(relPath, content) {
   };
 }
 
-const facts = [...walk(DOCS_ROOT)]
+const allFacts = [...walk(DOCS_ROOT)]
   .filter((p) => p.endsWith('.md'))
   .map((p) => fileFactFromDoc(relative(DOCS_ROOT, p), readFileSync(p, 'utf8')))
   .sort((a, b) => a.key.localeCompare(b.key));
 
+/** Change detection (ADR-0045 — docs-sync now runs on EVERY deploy, so blindly
+ *  re-ingesting ~60 unchanged docs would bump ~60 revisions per deploy and
+ *  pollute the trajectory with phantom activity). Read the live corpus's shas
+ *  and ingest only new/changed files. Best-effort: if the read fails, fall
+ *  through to the full (idempotent) ingest rather than skip the sync. */
+async function liveShas() {
+  const shas = new Map();
+  try {
+    let cursor;
+    do {
+      const res = await call('read', 'workspace.query', { type: 'file', prefix: KEY_PREFIX, limit: 100, ...(cursor ? { cursor } : {}) });
+      for (const e of res.entries ?? []) if (e?.key && e.value?.sha) shas.set(e.key, e.value.sha);
+      cursor = res.nextCursor;
+    } while (cursor);
+  } catch (err) {
+    console.warn(`  ! live sha read failed (${(err && err.message) || err}) — falling back to full ingest`);
+    return null;
+  }
+  return shas;
+}
+
+let facts = allFacts;
+if (COMMIT) {
+  const live = await liveShas();
+  if (live) facts = allFacts.filter((f) => live.get(f.key) !== f.value.sha);
+}
+
 const totalBytes = facts.reduce((n, f) => n + f.value.bytes, 0);
-console.log(`docs-sync: ${facts.length} markdown files, ${(totalBytes / 1024).toFixed(1)} KiB inline`);
+console.log(`docs-sync: ${allFacts.length} markdown files, ${facts.length} new/changed to ingest (${(totalBytes / 1024).toFixed(1)} KiB inline)`);
 for (const f of facts) console.log(`  ${f.key}  (${f.value.bytes}b${f.tags.includes('adr') ? ', adr' : ''})`);
 
 if (!COMMIT) {
-  console.log('\n(dry run — pass --commit to ingest + share. Nothing written.)');
+  console.log('\n(dry run — pass --commit to ingest + share. Change detection runs only with --commit.)');
+  process.exit(0);
+}
+
+if (facts.length === 0) {
+  console.log('✓ corpus already current — nothing to ingest.');
   process.exit(0);
 }
 

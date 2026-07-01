@@ -114,3 +114,19 @@ jobs:
           # Optional: WEBAUTHN_EXPECTED_ORIGINS pins extra allowed ceremony origins.
           PLATFORM_CELL_DOMAIN: ${{ vars.PLATFORM_CELL_DOMAIN }}
         run: npm run deploy
+
+      # ADR-0045: the repo's docs are a substrate corpus (file/docs/* facts,
+      # ADR-0027) — keep it current automatically. sha change-detection in the
+      # script means an unchanged corpus is a no-op (no revision churn). Gated
+      # on the PARC_TOKEN secret (mint a narrow write:workspace token via
+      # auth.mintToken and add it as a repo secret); never fails the deploy.
+      - name: Sync docs corpus into the substrate
+        continue-on-error: true
+        env:
+          PARC_TOKEN: ${{ secrets.PARC_TOKEN }}
+        run: |
+          if [ -z "$PARC_TOKEN" ]; then
+            echo "PARC_TOKEN secret not set — skipping docs-sync (mint one: act auth.mintToken {scope:'read:workspace write:workspace', label:'docs-sync-ci'})"
+            exit 0
+          fi
+          node scripts/docs-sync.mjs --commit
