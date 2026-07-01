@@ -1,0 +1,92 @@
+/**
+ * StateStore wire codec (ADR-0042 Inc 1, part of the platform-SDK-for-cells) —
+ * the PURE item⇄record mapping and key grammar the DynamoDB-backed `StateStore`s
+ * use. Extracted so the v3 (cell-ambient) store and any future store share ONE
+ * marshalling, and so the mapping is unit-testable WITHOUT a DynamoDB client or
+ * the AWS SDK (the part of a store port most likely to drift is the field
+ * coercion, not the `send` wiring). Mirrors the item shapes documented in
+ * `dynamo-state-store.ts`; the v2 store keeps its inline copy for now (a later
+ * consolidation can route it here too).
+ *
+ * No AWS import, no I/O — safe to bundle anywhere.
+ */
+import type { StateRecord, EdgeRecord } from './state';
+
+/** The substrate table's key grammar. `pk` repeats the scope so IAM
+ *  `dynamodb:LeadingKeys` conditions cover base-table AND index reads. */
+export const key = {
+  statePk: (scope: string): string => `STATE#${scope}`,
+  factSk: (k: string): string => `KEY#${k}`,
+  edgeSk: (from: string, rel: string, to: string): string => `EDGE#${from}|${rel}|${to}`,
+  trajPk: (scope: string): string => `TRAJ#${scope}`,
+  seqPk: (scope: string): string => `SEQ#${scope}`,
+  inPk: (scope: string, to: string): string => `IN#${scope}#${to}`,
+  inSk: (rel: string, from: string): string => `${rel}|${from}`,
+  typePk: (scope: string, type: string): string => `TYPE#${scope}#${type}`,
+  trajSk: (at: string, seq: number): string => `${at}#${String(seq).padStart(12, '0')}`,
+} as const;
+
+/** How long trajectory events live (s) — comfortably beyond the salience window. */
+export const TRAJECTORY_TTL_SEC = 24 * 60 * 60;
+
+type Item = Record<string, unknown>;
+const num = (v: unknown): number => Number(v);
+const arr = (v: unknown): string[] => (Array.isArray(v) ? (v as string[]) : []);
+
+/** A stored item → the `StateRecord` the observed-state pipeline reads. */
+export function itemToRecord(item: Item): StateRecord {
+  return {
+    scope: item.scope as string,
+    key: item.key as string,
+    value: item.value ?? null,
+    revision: num(item.revision),
+    seq: num(item.seq),
+    firstSeq: num(item.firstSeq),
+    writer: (item.writer as string | null) ?? null,
+    via: (item.via as string | null) ?? null,
+    createdAt: item.createdAt as string,
+    updatedAt: item.updatedAt as string,
+    writers: arr(item.writers),
+    superseded: !!item.superseded,
+    supersededBy: (item.supersededBy as string | null) ?? null,
+    type: (item.type as string | null) ?? null,
+    tags: arr(item.tags),
+    timerExpiresAt: (item.timerExpiresAt as string | null) ?? null,
+    timerEffect: (item.timerEffect as StateRecord['timerEffect']) ?? null,
+    ...(item.seedReads !== undefined ? { seedReads: num(item.seedReads) } : {}),
+    ...(item.seedWrites !== undefined ? { seedWrites: num(item.seedWrites) } : {}),
+  };
+}
+
+/** A stored edge item → an `EdgeRecord`. `score` (the persisted cosine, ADR-0032)
+ *  rides along only when present, distinct from the fixed `strength`. */
+export function itemToEdge(item: Item): EdgeRecord {
+  return {
+    scope: item.scope as string,
+    from: item.from as string,
+    rel: item.rel as string,
+    to: item.to as string,
+    strength: (item.strength as number | null) ?? null,
+    createdAt: item.createdAt as string,
+    writer: (item.writer as string | null) ?? null,
+    ...(item.score !== undefined && item.score !== null ? { score: num(item.score) } : {}),
+  };
+}
+
+/**
+ * Recursively drop `undefined` before an item reaches DynamoDB. A stored fact
+ * never legitimately carries `undefined` (absent === undefined on read), so
+ * stripping is loss-free — and it prevents a single absent field from failing
+ * the whole write (the v2 marshaller's silent-failure trap). This is the SDK
+ * equivalent of v3's `marshallOptions.removeUndefinedValues:true`; keep it so a
+ * store built without that option is still safe.
+ */
+export function stripUndefined<T>(v: T): T {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map((x) => stripUndefined(x)) as unknown as T;
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val !== undefined) out[k] = stripUndefined(val);
+  }
+  return out as T;
+}
