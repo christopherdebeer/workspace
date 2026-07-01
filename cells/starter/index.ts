@@ -38,12 +38,13 @@ const TABLE = process.env.SUBSTRATE_TABLE || '';
 
 const textOf = (v: unknown): string => (typeof v === 'string' ? v : ((v as { text?: string })?.text ?? ''));
 
-/** The owner's `note:` facts via `createCellReader.list` — the CHEAP, unranked
- *  read (one slice scan, no salience) against the cell's LeadingKeys-scoped
- *  partition, no bespoke DynamoDB. `list` not `query`: a notes list needs the
- *  rows, not a salience ranking, and `query` would additionally scan the whole
- *  trajectory + every edge (pathological on a large slice). The store lazy-loads
- *  the SDK, so a missing dep degrades to the anon shell (the caller catches). */
+/** The owner's `note:` facts via `createCellReader.list('note:')` — the CHEAP
+ *  read: a PREFIX-SCOPED partition query (`begins_with KEY#note:`, only the
+ *  `note:` namespace, not the whole slice), unranked, no salience. `list` not
+ *  `query`: a notes list needs the rows, not a ranking — and `query` (or a
+ *  prefix-less `list`) would scan the whole slice (trajectory + every edge for
+ *  salience), which times out on a large slice. The store lazy-loads the SDK, so
+ *  a missing dep degrades to the anon shell (the caller catches). */
 async function ownerNotes(): Promise<Note[]> {
   const reader = createCellReader(createDynamoStateStore(TABLE), OWNER);
   const recs = await reader.list('note:');

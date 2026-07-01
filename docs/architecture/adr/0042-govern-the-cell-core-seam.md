@@ -1,7 +1,8 @@
 # ADR-0042 — Govern the cell↔core seam (the interface is the entropy, not the core)
 
-- **Status:** Accepted — findings + sequenced decision. Inc 0 (surface the store) shipped 2026-07-01;
-  Inc 1–3 declared, not yet built.
+- **Status:** Accepted — findings + sequenced decision. Inc 0 (surface the store) + Inc 1 (the cell-SSR reader
+  library) + Inc 1a (the platform SDK for cells, delivery (a)) shipped and **live-verified** on `starter`
+  2026-07-01. Inc 2–3 declared, not yet built.
 - **Date:** 2026-07-01
 - **Supersedes nothing; complements `docs/architecture/breathe.md`.** breathe.md audited the **core**
   (`services/workspace`, `platform/runtime`) and proved it reduces to 3 nouns / 2 mechanisms / 1 signal with
@@ -121,6 +122,31 @@ Treat the seam as a first-class artifact with its own governance, mirroring how 
     duplication this ADR is closing, and drags in v2 aws-sdk). Recommendation: (a) — it also gives the
     `platform/ui` vendor-sync a real home and is the durable fix — but it is the biggest of the three and
     should be chosen deliberately, so the cell migrations wait on that pick.
+  - **Inc 1a — the platform SDK for cells, delivery (a), shipped + live-verified 2026-07-01.** Built and
+    proved the whole rail end-to-end: (1) `dynamo-state-store-v3.ts` — the `StateStore` on AWS SDK **v3**
+    (Node-20-ambient; SDK lazy-required, confined to typed interfaces), behaviourally identical to the v2 store
+    via a shared, unit-tested `state-store-codec.ts`; (2) `cell-sdk.ts` (`@parc/runtime/cell`) — the curated
+    cell entry re-exporting `createCellReader` + the pipeline + present/type resolvers + the v3 store, and
+    *nothing* that drags in v2 or vectors; (3) `scripts/build-cell-runtime.mjs` esbuilds it to a committed
+    ~48KB asset with the v3 SDK external, and `services/cells/transpile.ts` serves it as a `parc-sdk` virtual
+    module (a cell's `@parc/runtime/cell` resolves to it; its `@aws-sdk/*` stays external). A real-esbuild test
+    (`cell-runtime-sdk.test.ts`) proves the resolution; a jest `moduleNameMapper` maps the specifier to source
+    so cell tests import the real pipeline. **starter migrated** (`ownerNotes` → `createCellReader`), so the
+    template stops propagating raw-DDB SSR (driver #3). Deployed the cells service (the provisioner) + starter,
+    and verified live: a cell imports `@parc/runtime/cell`, resolves it, and reads its slice through the v3
+    store (`{ok:true, via:"@parc/runtime/cell", notes:1}`, ~120ms warm).
+  - **Two things live verification caught that the unit tests (5-fact memory store) could not** — both now
+    fixed and folded into the reader's contract: (i) `reader.query({prefix})` runs the FULL salience pipeline
+    (whole-slice `list` + `recentTrajectory(0)` + every edge) — it **timed out** the 10s cell Lambda on c15r's
+    large slice. (ii) even a salience-free `list` scanned the whole slice (`begins_with KEY#`) then filtered —
+    still ~100MB, still timed out. **Fix:** `StateStore.list` gained an optional `keyPrefix` pushed to the DDB
+    query (`begins_with KEY#<prefix>`) across all three stores (additive, behaviour-preserving), and the reader
+    grew a cheap `list(prefix)` beside the heavier `query`; both are documented so the next cell author picks
+    right. The lesson: the reader's full-pipeline reads (`query`/`neighbors`/`members`) are expensive on a large
+    slice by design — cell SSR that just needs rows must use `list(prefix)`.
+  - **A coupling this exposed (worth naming):** the SDK is pre-bundled INTO the cells service
+    (`CELL_RUNTIME_BUNDLE`), so evolving the cell SDK requires a **cells-service (platform) redeploy**, not just
+    a cell redeploy. Acceptable (the SDK is small + stable), but it means SDK changes are platform-tier.
 - **Inc 2 — `$types` as a library.** Extract `buildTypes` into a `platform/runtime` form —
   `buildTypeVocabulary(store, cellsRegistry)` — so a cell's SSR can resolve present/type **without** a gateway
   hop. This is the only genuinely structural gap and the highest-leverage: it collapses lit's whole
