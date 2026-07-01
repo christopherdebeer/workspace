@@ -56,6 +56,11 @@ export { createObservedState, createMemoryStateStore, computeScore, extractTypeR
 // The workspace + vector-indexer services already import it by deep path; six
 // cells re-implemented it because it wasn't discoverable here.
 export { createDynamoStateStore } from './dynamo-state-store';
+// The canonical cell-SSR reader (ADR-0042 Inc 1): the observed-state read
+// pipeline bound to one cell's scope, so a cell reads its slice the way the
+// gateway does (salience, edges, membership) instead of hand-rolling raw DDB.
+export { createCellReader } from './cell-reader';
+export type { CellReader, CellReaderDefaults } from './cell-reader';
 export { layer } from './resolution';
 export { matchesSelector } from './selector';
 export type { Selector, Selectable } from './selector';

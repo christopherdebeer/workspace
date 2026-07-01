@@ -99,12 +99,28 @@ Treat the seam as a first-class artifact with its own governance, mirroring how 
 - **Inc 0 — surface the store (shipped).** Export `createDynamoStateStore` and `deriveBackboneEdges` from the
   `platform/runtime` barrel. Pure-additive, zero behaviour change; the one move that makes the good API
   *discoverable* so the six raw-DDB reimplementations become deletable. (Done 2026-07-01.)
-- **Inc 1 — a canonical cell-SSR reader.** A thin `platform/runtime` helper — `createCellReader(tableName,
-  owner)` → `{ query, peek, neighbors, members, byType }` over `createObservedState(createDynamoStateStore())`
-  scoped to the cell's IAM partition — so a cell's SSR calls the *same* pipeline the gateway does (salience,
-  reference derivation, membership) instead of hand-rolling. Point **starter** at it (kills the anti-pattern at
-  the template), then migrate lit/canvas SSR and delete their `edgesFrom/edgesTo/queryByType/getFact`. Behaviour
-  test: each migrated SSR path renders identically before/after.
+- **Inc 1 — a canonical cell-SSR reader.** *Library half shipped 2026-07-01; cell-delivery half gated (see
+  finding).* `platform/runtime/cell-reader.ts` — `createCellReader(store, scope, { typeRules?, salience? })` →
+  `{ peek, query, byType, neighbors, members, graph }` over `createObservedState(store)` bound to one scope. It
+  surfaces ONLY the pipeline's non-attention reads (safe under a read-only SSR IAM role — `get`/`read` write the
+  trajectory and are withheld) and takes `typeRules` optionally, degrading honestly: without the vocabulary it
+  still returns salience-scored facts + authored edges, but key-encoded membership (a doc's blocks) resolves
+  empty — the exact `$types` dependency Inc 2 closes. Proven behaviour-preserving vs the gateway pipeline by
+  `tests/cell-reader.test.ts` (7 cases, incl. the with/without-`typeRules` membership split). Store-injected, so
+  it is pure/testable and a caller supplies its own DynamoDB client.
+  - **Finding that reframes the second half (delivery):** a forge-deployed cell **cannot import
+    `platform/runtime`** — the cell server bundler (`services/cells/transpile.ts:168`) bundles only
+    `react`/`react-dom`/`scheduler` from disk and leaves every other bare import external (expected from the
+    Node 20 Lambda runtime, which ships AWS SDK **v3** but the store uses **v2**). This is *why* cells hand-roll
+    the pipeline, vendor `platform/ui` via `sync-platform-ui.mjs`, and import the kernel by URL — the same root
+    category as driver #4, not a v2/v3 nit. So "point starter/lit/canvas at `createCellReader`" needs a
+    **delivery mechanism** first, a design fork worth an explicit decision: (a) a disk-bundled *platform SDK for
+    cells* — extend the bundler's `SERVER_BUNDLED` / expose a resolvable `@parc/runtime` (pairs with a v3-backed
+    `StateStore` so it's Node-20-ambient); (b) publish the reader (+ a v3 store) to esm.sh / a URL a cell
+    imports like the kernel; (c) source-vendor it per cell via the sync script (fast, but adds to the very
+    duplication this ADR is closing, and drags in v2 aws-sdk). Recommendation: (a) — it also gives the
+    `platform/ui` vendor-sync a real home and is the durable fix — but it is the biggest of the three and
+    should be chosen deliberately, so the cell migrations wait on that pick.
 - **Inc 2 — `$types` as a library.** Extract `buildTypes` into a `platform/runtime` form —
   `buildTypeVocabulary(store, cellsRegistry)` — so a cell's SSR can resolve present/type **without** a gateway
   hop. This is the only genuinely structural gap and the highest-leverage: it collapses lit's whole
