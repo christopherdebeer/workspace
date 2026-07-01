@@ -4,6 +4,12 @@
   program decided and sequenced. This ADR **consolidates and supersedes the scattered open increments** of
   ADR-0038/0039/0042/0043 into one backlog (§Increments) — where an increment below covers one of those, the
   original ADR's entry is subsumed here.
+  **Program progress (2026-07-01):** Inc 1 ✅ (v2 store deleted; workspace + vector-indexer on v3) ·
+  Inc 2 ✅ (`buildTypeVocabulary` library; gateway rewired; cell-SDK exports it) · Inc 3 ✅ (`@parc/ui`
+  virtual module in both forge bundles; `sync-platform-ui.mjs` + six copies DELETED; home/lit/starter on
+  `@parc/ui`) · Inc 6 ✅ (`docs/cell-contract.md`) · Inc 7 ✅ (canvas scene, ~800 ms at 1024 MB) ·
+  Inc 4 + Inc 5 open (renderer rung removal; monolith splits) · present-dogfooding half of Inc 2
+  (gateway/card/kernel `hrefOf` through `resolvePresent`) rides Inc 4.
 - **Date:** 2026-07-01
 - **Method:** the ADR-0042 discipline at corpus scale — five parallel readers (ADRs 0001–0016, 0017–0033,
   0034–0043; tier-1 implementation; tier-2 cells), then a single synthesis. Grounded in line counts, import
