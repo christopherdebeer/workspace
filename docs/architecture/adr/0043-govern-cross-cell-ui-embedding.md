@@ -155,11 +155,31 @@ session, so per-fact grants are enforced for free.
   (the render-hints/federated-renderer sibling) so every first-party React/DOM surface embeds a foreign fact the
   same way — one host implementation, not a per-cell copy (the ADR-0042 "the pipeline is importable; stop
   reimplementing it" lesson, applied to the embed host).
-- **Inc 4 — a data-fidelity follow-up for canvas.** Inc 1's renderer reconstructs the board from two prefix queries
-  (placements + content, joined client-side) because canvas's content facts (`el:<id>`) don't nest under the board
-  the way placements do. If that proves slow/over-fetching on large slices, give canvas a single host-proxioned
-  board read (a dedicated read tool, or re-key content under the board) so the renderer fetches the scene in one
-  call — the canvas analogue of machine's clean `<key>/node/` prefix. Deferred until Inc 1 measures it live.
+- **Inc 1b — draw the board's edges (shipped).** The first renderer painted only elements. Canvas boards draw
+  connections by projecting substrate LINKS (`workspace.links`) among the board's elements — so the renderer now
+  reads links too and draws them as an SVG under the elements in the same camera transform. Styled by relation,
+  mirroring the live board's hierarchy: authored links (`relates`/`informs`/…) read as real connections; inferred
+  `similarTo` edges are a faint constellation (parcland is 333 `similarTo` : 13 authored), so a 240px thumbnail
+  shows structure, not a similarity haze.
+- **Inc 4 — server-assembled `scene` read: ATTEMPTED, REVERTED (a live-caught finding).** To stop the renderer
+  re-deriving the board (join placements+content, project edges) from raw reads, canvas grew a `scene` **read tool**
+  (`read("@c15r/canvas.scene")` → assembled `{elements, edges}`, gated like SSR). It worked functionally (127
+  elements + 346 edges in one call) but **regressed latency badly**: a forge-deployed runtime cell is **128 MB
+  (~1/12 vCPU, and `cells.configureCell` exposes timeout but NOT memory)**, so assembling + JSON-serialising the
+  ~98 KB scene ran **~7.8 s and often hit the 10 s cell timeout**. The lesson (an ADR-0042-style live finding): the
+  original renderer's reads went through **tier-1 `workspace`** (well-resourced), and moving the heavy assembly into
+  the tiny canvas cell was the regression, not a fix. Reverted to reading through `workspace`. **Corollary on edge
+  scoping:** a board's edges *cannot* be prefix-scoped to one board — substrate links are keyed by element
+  (`EDGE#<from>|…`, `from`/`to` = `el:<id>`), shared across boards; board membership lives only in the placement
+  facts. True board-scoping needs one `edgesFrom` query per element (127 for parcland), which the 128 MB cell timed
+  out on live. So the renderer reads element-sourced links through fast tier-1 `workspace` and filters to the
+  board's element set after the read — the practical scoping the substrate's key model allows.
+- **Inc 5 — a data-fidelity follow-up for canvas (open).** The renderer still over-fetches content/links (whole-`el:`
+  reads filtered client-side) because content facts (`el:<id>`) and links aren't board-nested. A genuinely cheaper
+  board read needs a **data-model change** — re-key content + project a board-scoped edge index under
+  `_canvas/<board>/` — so a board's scene reads by one prefix, OR a **larger cell tier** for canvas so a `scene`
+  tool (Inc 4) becomes viable. Both are larger changes; deferred. Through tier-1 `workspace` the current over-fetch
+  is fast enough in practice.
 
 ## Consequences & trade-offs
 

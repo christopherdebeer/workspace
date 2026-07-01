@@ -31,15 +31,20 @@ const TABLE = process.env.SUBSTRATE_TABLE || '';
  * import the monorepo — canvas keeps ownership of how a board draws. Backtick-
  * free so it nests in this template literal.
  *
- * Data path (ADR-0043 Inc 1): canvas's split model keeps geometry in placement
- * facts (`_canvas/<board>/el:<id>`) and content in separate `el:<id>` facts, so
- * this fetches BOTH by prefix and joins — two host-proxied reads (mirrors how
- * machine's renderer fetches its decomposed `<key>/node/` children). A single-
- * call board read is the Inc 4 fidelity/perf follow-up.
+ * Data path: canvas's split model keeps geometry in placement facts
+ * (`_canvas/<board>/el:<id>`), content in separate `el:<id>` facts, and edges as
+ * substrate LINKS keyed by element (`el:<id>`, not board). So the renderer reads
+ * placements + content + links over the host proxy and joins/filters to the board
+ * client-side. The reads go through tier-1 `workspace` (well-resourced), NOT the
+ * canvas cell — which matters: ADR-0043 Inc 4 tried moving the assembly into a
+ * canvas `scene` read tool, but the runtime cell is 128 MB (~1/12 vCPU) and the
+ * assembly+serialisation ran ~8 s / timed out. Reverted; the fast path is reading
+ * through workspace. Edges can't be board-prefix-scoped (they're element-keyed,
+ * shared across boards) — the board filter is applied after the read.
  */
 const BOARD_RENDERER_SRC = `
 (function(){
-  var BUILD = 'v3';
+  var BUILD = 'v4';
   var reg = (window.__parcRender = window.__parcRender || {});
   var STYLE_ID = 'parc-canvas-board-css';
   function ensureCss(){
@@ -118,50 +123,66 @@ const BOARD_RENDERER_SRC = `
     var vid = (value && (value.viewId || value.id)) || key || '';
     return String(vid);
   }
+  function entriesOf(r){ return (r && (r.entries || r.items)) || []; }
   reg['canvas'] = function(host, value, api){
     ensureCss();
     host.innerHTML = '<div class="pc-badge">loading board…</div>';
     if (!api || typeof api.call !== 'function'){ host.innerHTML = '<div class="pc-badge">no host channel</div>'; return; }
     var vid = resolveViewId(value, api.key);
-    // ONE host-proxied read: canvas assembles the whole scene server-side (the
-    // board's elements joined from placement+content, and its edges) — the same
-    // shape SSR builds — so this renderer no longer re-derives it from three raw
-    // reads. {view} is resolved to its board by the tool (a bare board id works
-    // too — readView degrades to deriving the board from the id).
-    api.call('read','@c15r/canvas.scene',{ view: vid }).then(function(scene){
-      if (!scene || scene.denied){ host.innerHTML = '<div class="pc-badge">🌲 '+esc((value&&value.label)||vid)+' — private</div>'; return; }
-      paint(scene.elements||[], scene.edges||[]);
+    var viewKey = vid.indexOf('_views/')===0 ? vid : ('_views/'+vid);
+    function deriveBoard(){ var k = vid.indexOf('_views/')===0 ? vid.slice(7) : vid; return k.indexOf('canvas:')===0 ? k.slice(7) : k; }
+    // 1) resolve the board (the view fact declares render.board) — fall back to
+    //    deriving it from the id if the view fact is absent.
+    api.call('read','workspace.peek',{ key: viewKey }).then(function(rec){
+      var v = rec && (rec.value!==undefined ? rec.value : rec);
+      var board = (v && v.render && v.render.board) || (value && (value.board || (value.render && value.render.board))) || deriveBoard();
+      if (!board){ host.innerHTML='<div class="pc-badge">no board</div>'; return; }
+      // 2) placements (geometry) + 3) content + 4) links (element→element edges),
+      // each a scoped read; joined here — the same three sources the live board
+      // assembles from (placements/content facts + workspace.links projection).
+      return Promise.all([
+        api.call('read','workspace.query',{ prefix:'_canvas/'+board+'/el:', limit:400, rankBy:'recency' }),
+        api.call('read','workspace.query',{ prefix:'el:', limit:1200, rankBy:'recency' }),
+        api.call('read','workspace.links',{ prefix:'el:' }).catch(function(){ return { edges:[] }; })
+      ]).then(function(res){ paint(board, entriesOf(res[0]), entriesOf(res[1]), (res[2] && res[2].edges) || []); });
     }).catch(function(err){ host.innerHTML = '<div class="pc-badge">board unavailable: '+esc((err&&err.message)||err)+'</div>'; });
 
-    function paint(els, links){
-      var rendered=[], center={};
-      for (var j=0;j<els.length;j++){
-        var e=els[j]; if(!e) continue; var p=e.placement, c=e.content;
+    function paint(board, places, contents, links){
+      var cmap = {};
+      for (var i=0;i<contents.length;i++){ var ce=contents[i]; if(ce&&ce.key) cmap[ce.key]=ce.value; }
+      var els=[], center={}, pre='_canvas/'+board+'/';
+      for (var j=0;j<places.length;j++){
+        var pe=places[j]; if(!pe||!pe.key) continue;
+        var elKey = pe.key.slice(pre.length); // el:<id>
+        var c = cmap[elKey], p = pe.value;
         if(!c || !c.type || !p || typeof p.x!=='number' || p.static) continue;
-        rendered.push(e);
-        center[e.id] = { x:p.x, y:p.y }; // placement (x,y) is the element CENTER
+        els.push({ placement:p, content:c });
+        center[elKey] = { x:p.x, y:p.y }; // placement (x,y) is the element CENTER
       }
-      if(!rendered.length){ host.innerHTML = '<div class="pc-badge">empty board</div>'; return; }
-      var W = (host.clientWidth||600), H = 240;
-      var cam = fitCam(rendered, W, H);
-      // Edges the scene already projected (links among present elements). Drawn as
-      // an SVG UNDER the elements, in the SAME canvas coord space (inside the cam
-      // transform), non-scaling stroke for crisp hairlines. Style by relation,
-      // mirroring the live board's hierarchy: authored links read as real
-      // connections; inferred similarTo edges are a faint constellation, not
-      // foreground -- so a thumbnail shows structure, not a similarity haze.
+      if(!els.length){ host.innerHTML = '<div class="pc-badge">empty board</div>'; return; }
+      var root = host; var W = (root.clientWidth||600), H = 240;
+      var cam = fitCam(els, W, H);
+      // Edges: project workspace.links whose BOTH endpoints (el:<id> keys) are
+      // present elements on this board — the same rule the live board uses. Drawn
+      // as an SVG UNDER the elements, in the SAME canvas coord space (inside the
+      // cam transform), so a non-scaling stroke keeps hairlines crisp at any zoom.
+      // Style by relation, mirroring the live board's hierarchy: authored links
+      // (relates/informs/...) read as real connections; inferred similarTo edges
+      // are the faint semantic constellation, not foreground -- so a thumbnail
+      // shows structure, not a similarity haze. Authored drawn last (on top).
       var faint='', strong='';
       for (var m=0;m<(links?links.length:0);m++){
         var l=links[m]; if(!l) continue;
-        var a=center[l.source], b=center[l.target];
+        var a=center[l.from], b=center[l.to];
         if(!a||!b) continue;
         var seg = '<line x1="'+a.x.toFixed(1)+'" y1="'+a.y.toFixed(1)+'" x2="'+b.x.toFixed(1)+'" y2="'+b.y.toFixed(1)+'" vector-effect="non-scaling-stroke" ';
         if (l.rel === 'similarTo') faint += seg + 'stroke="rgba(150,140,120,.16)" stroke-width="1" />';
         else strong += seg + 'stroke="#8a8172" stroke-width="1.5" />';
       }
-      var edgesSvg = (faint+strong) ? '<svg class="pc-edges" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none">'+faint+strong+'</svg>' : '';
+      var lines = faint + strong;
+      var edgesSvg = lines ? '<svg class="pc-edges" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none">'+lines+'</svg>' : '';
       var inner = '';
-      for (var k=0;k<rendered.length;k++) inner += elHtml(rendered[k].placement, rendered[k].content);
+      for (var k=0;k<els.length;k++) inner += elHtml(els[k].placement, els[k].content);
       host.innerHTML = '<div class="pc-board"><div class="pc-cam" style="transform:translate('+cam.tx.toFixed(1)+'px,'+cam.ty.toFixed(1)+'px) scale('+cam.scale.toFixed(4)+')">'+edgesSvg+inner+'</div></div>'
         + '<div class="pc-badge">🌲 rendered by @c15r/canvas · federated ui:// · '+BUILD+'</div>';
     }
@@ -379,90 +400,6 @@ async function readBoard(board: string): Promise<BoardElement[]> {
   return out;
 }
 
-/**
- * The board's edges: substrate links whose BOTH endpoints are elements on this
- * board (`el:<id>`) — the same projection the live board draws (storage.ts). Read
- * from the owner's `EDGE#` items (canvas's IAM slice, one partition scan), filtered
- * to the board's element set and deduped. `source`/`target` are the bare element
- * ids (the renderer keys elements by id), `rel` the relation (so a consumer can
- * style authored vs inferred `similarTo`).
- */
-async function readBoardEdges(elementKeys: Set<string>): Promise<Array<{ source: string; target: string; rel: string }>> {
-  if (!TABLE || !elementKeys.size) return [];
-  const out: Array<{ source: string; target: string; rel: string }> = [];
-  const seen = new Set<string>();
-  let ExclusiveStartKey: Record<string, unknown> | undefined;
-  const client = ddb();
-  try {
-    do {
-      const r = await client.send(
-        new Query({
-          TableName: TABLE,
-          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
-          ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': 'EDGE#' },
-          ExclusiveStartKey,
-        }),
-      );
-      for (const it of (r.Items ?? []) as Array<{ from?: string; to?: string; rel?: string }>) {
-        const { from, to, rel } = it;
-        if (!from || !to || !rel || !elementKeys.has(from) || !elementKeys.has(to)) continue;
-        const sig = `${from}|${rel}|${to}`;
-        if (seen.has(sig)) continue;
-        seen.add(sig);
-        out.push({ source: from.replace(/^el:/, ''), target: to.replace(/^el:/, ''), rel });
-      }
-      ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
-    } while (ExclusiveStartKey);
-  } catch (e) {
-    console.warn('[canvas scene] edges lookup failed', (e as Error).message);
-  }
-  return out;
-}
-
-/**
- * ADR-0043 Inc 4 — the assembled board SCENE, server-side: the same data SSR
- * builds (elements joined from placement+content) plus the board's edges. This is
- * the read the federated `ui://` renderer resolves via one host-proxied `read`,
- * so a host embeds a board without re-deriving the join/projection (killing the
- * renderer's earlier whole-slice over-fetch). Authorised exactly like SSR: the
- * owner always; a non-owner only for a board a `_public/` pattern covers
- * (`denied` otherwise, so the renderer shows a private placeholder, never data).
- */
-async function sceneOf(opts: { board?: string; view?: string; isOwner?: boolean; patterns?: string[] }): Promise<{
-  board: string | null;
-  elements: BoardElement[];
-  edges: Array<{ source: string; target: string; rel: string }>;
-  denied?: boolean;
-}> {
-  let board = opts.board;
-  if (opts.view) board = (await readView(opts.view)).board;
-  if (!board) return { board: null, elements: [], edges: [] };
-  if (!mayRenderBoard(board, !!opts.isOwner, opts.patterns ?? [])) return { board, elements: [], edges: [], denied: true };
-  const els = await readBoard(board);
-  const edges = await readBoardEdges(new Set(els.map((e) => `el:${e.id}`)));
-  return { board, elements: els, edges };
-}
-
-/** The cell's tool surface (ADR-0043 Inc 4). `scene` is a READ — the gateway
- *  routes `read("@c15r/canvas.scene", …)` here (`POST /_tools/scene`). */
-const TOOLS = [
-  {
-    name: 'scene',
-    description:
-      'The assembled board scene for a federated ui:// renderer/embed: the board\'s elements (placement + content, joined) and its edges (links among those elements), server-assembled — the read a host resolves so a renderer paints a board without re-deriving it. Pass {view} (resolves to its board, honouring the view) or {board}. Authorised like SSR: the owner always; others only for a `_public/`-shared board (else `denied`).',
-    kind: 'read' as const,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        board: { type: 'string', description: 'board id' },
-        view: { type: 'string', description: 'view id (_views/<id>) — resolves to its board' },
-      },
-      additionalProperties: false,
-    },
-    scope: null,
-  },
-];
-
 /** A camera that frames the board's bounding box within a viewport (w×h). */
 function fitCamera(els: BoardElement[], w = 1200, h = 800): { scale: number; tx: number; ty: number } {
   const xs: number[] = [];
@@ -655,26 +592,6 @@ const MOUNT = `/@${OWNER}/canvas`;
 export const handler = async (event: any) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
-
-  // Cell tool surface (ADR-0043 Inc 4). `scene` is a READ (side-effect-free)
-  // invoked via POST /_tools/scene by the gateway's read dispatch — so it is
-  // handled BEFORE the GET-only guard below (the rest of the cell is read-only
-  // HTML). Authorised like SSR via the dispatch-validated `x-cell-caller`.
-  if (method === 'GET' && path === '/_tools') return respond(200, 'application/json', JSON.stringify({ tools: TOOLS }));
-  if (method === 'POST' && path === '/_tools/scene') {
-    try {
-      const a = event.body ? (JSON.parse(event.body) as { board?: string; view?: string }) : {};
-      const caller = event.headers?.['x-cell-caller'] as string | undefined;
-      const isOwner = !!caller && caller === OWNER;
-      const patterns = !isOwner ? await publicPatterns() : [];
-      const scene = await sceneOf({ board: a.board, view: a.view, isOwner, patterns });
-      return respond(200, 'application/json', JSON.stringify(scene));
-    } catch (err) {
-      // A read tool must not 500 the host — degrade to an empty scene.
-      return respond(200, 'application/json', JSON.stringify({ board: null, elements: [], edges: [], error: (err as Error).message }));
-    }
-  }
-
   if (method !== 'GET') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
