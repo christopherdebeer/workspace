@@ -86,9 +86,12 @@ surface changes.
 
 ## Open
 
-- **Two lattice categories missing:** the Farnam extraction notes *Military and War* and *Human Nature
-  and Judgment* were truncated at capture (~30 models). Re-extract from the canonical URL and ingest —
-  pure capture work, the pipeline is ready.
+- ~~**Two lattice categories missing**~~ — **RESOLVED 2026-07-01:** re-extracted *Military and War* (5)
+  and *Human Nature and Judgment* (23) from the canonical page (the page's own markup: plain strongs,
+  numbered strongs, a/b/c sub-findings folded into Representativeness, one split heading merged),
+  ingested as 28 more `model/<slug>` facts — **the lattice is complete at 98 models across all 8
+  categories** — and the source reading's content + note updated to record completion. The stream
+  indexer wired the new batch immediately (survivorship-bias ↔ hindsight-bias, 0.42).
 - **Ratification ergonomics** (ADR-0032 Inc 3) now has a concrete population to serve: model↔fact
   suggestions are exactly the edges a human would enjoy typing (`applies-to`, `explains`,
   `warned-about`). Revisit when tending surfaces them.
