@@ -93,7 +93,7 @@ import {
 } from './subscriptions';
 import { createServiceClient } from '../../platform/runtime/service-client';
 import type { EventBridgeHandler } from '../../platform/runtime';
-import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
+import { createDynamoStateStoreV3 as createDynamoStateStore } from '../../platform/runtime/dynamo-state-store-v3';
 import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
 import {
   createDynamoGrantStore,

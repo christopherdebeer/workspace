@@ -8,7 +8,7 @@
  */
 import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
-import { stripUndefined } from '../platform/runtime/dynamo-state-store';
+import { stripUndefined } from '../platform/runtime/state-store-codec';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';

@@ -55,7 +55,9 @@ export { createObservedState, createMemoryStateStore, computeScore, extractTypeR
 // partition, instead of hand-rolling raw `STATE#<owner>`/`KEY#`/`gsi-*` queries.
 // The workspace + vector-indexer services already import it by deep path; six
 // cells re-implemented it because it wasn't discoverable here.
-export { createDynamoStateStore } from './dynamo-state-store';
+// ADR-0044 Inc 1: the v2 (aws-sdk) store is DELETED — the v3 store (shared
+// state-store-codec, lazy @aws-sdk/* requires) is the one DynamoDB StateStore.
+export { createDynamoStateStoreV3 as createDynamoStateStore } from './dynamo-state-store-v3';
 // The canonical cell-SSR reader (ADR-0042 Inc 1): the observed-state read
 // pipeline bound to one cell's scope, so a cell reads its slice the way the
 // gateway does (salience, edges, membership) instead of hand-rolling raw DDB.
