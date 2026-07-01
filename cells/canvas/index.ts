@@ -39,7 +39,7 @@ const TABLE = process.env.SUBSTRATE_TABLE || '';
  */
 const BOARD_RENDERER_SRC = `
 (function(){
-  var BUILD = 'v1';
+  var BUILD = 'v2';
   var reg = (window.__parcRender = window.__parcRender || {});
   var STYLE_ID = 'parc-canvas-board-css';
   function ensureCss(){
@@ -132,30 +132,53 @@ const BOARD_RENDERER_SRC = `
       var v = rec && (rec.value!==undefined ? rec.value : rec);
       var board = (v && v.render && v.render.board) || (value && (value.board || (value.render && value.render.board))) || deriveBoard();
       if (!board){ host.innerHTML='<div class="pc-badge">no board</div>'; return; }
-      // 2) placements (geometry) + 3) content, each a prefix read; joined here.
+      // 2) placements (geometry) + 3) content + 4) links (element→element edges),
+      // each a scoped read; joined here — the same three sources the live board
+      // assembles from (placements/content facts + workspace.links projection).
       return Promise.all([
         api.call('read','workspace.query',{ prefix:'_canvas/'+board+'/el:', limit:400, rankBy:'recency' }),
-        api.call('read','workspace.query',{ prefix:'el:', limit:1200, rankBy:'recency' })
-      ]).then(function(res){ paint(board, entriesOf(res[0]), entriesOf(res[1])); });
+        api.call('read','workspace.query',{ prefix:'el:', limit:1200, rankBy:'recency' }),
+        api.call('read','workspace.links',{ prefix:'el:' }).catch(function(){ return { edges:[] }; })
+      ]).then(function(res){ paint(board, entriesOf(res[0]), entriesOf(res[1]), (res[2] && res[2].edges) || []); });
     }).catch(function(err){ host.innerHTML = '<div class="pc-badge">board unavailable: '+esc((err&&err.message)||err)+'</div>'; });
 
-    function paint(board, places, contents){
+    function paint(board, places, contents, links){
       var cmap = {};
       for (var i=0;i<contents.length;i++){ var ce=contents[i]; if(ce&&ce.key) cmap[ce.key]=ce.value; }
-      var els=[], pre='_canvas/'+board+'/';
+      var els=[], center={}, pre='_canvas/'+board+'/';
       for (var j=0;j<places.length;j++){
         var pe=places[j]; if(!pe||!pe.key) continue;
         var elKey = pe.key.slice(pre.length); // el:<id>
         var c = cmap[elKey], p = pe.value;
         if(!c || !c.type || !p || typeof p.x!=='number' || p.static) continue;
         els.push({ placement:p, content:c });
+        center[elKey] = { x:p.x, y:p.y }; // placement (x,y) is the element CENTER
       }
       if(!els.length){ host.innerHTML = '<div class="pc-badge">empty board</div>'; return; }
       var root = host; var W = (root.clientWidth||600), H = 240;
       var cam = fitCam(els, W, H);
+      // Edges: project workspace.links whose BOTH endpoints (el:<id> keys) are
+      // present elements on this board — the same rule the live board uses. Drawn
+      // as an SVG UNDER the elements, in the SAME canvas coord space (inside the
+      // cam transform), so a non-scaling stroke keeps hairlines crisp at any zoom.
+      // Style by relation, mirroring the live board's hierarchy: authored links
+      // (relates/informs/...) read as real connections; inferred similarTo edges
+      // are the faint semantic constellation, not foreground -- so a thumbnail
+      // shows structure, not a similarity haze. Authored drawn last (on top).
+      var faint='', strong='';
+      for (var m=0;m<(links?links.length:0);m++){
+        var l=links[m]; if(!l) continue;
+        var a=center[l.from], b=center[l.to];
+        if(!a||!b) continue;
+        var seg = '<line x1="'+a.x.toFixed(1)+'" y1="'+a.y.toFixed(1)+'" x2="'+b.x.toFixed(1)+'" y2="'+b.y.toFixed(1)+'" vector-effect="non-scaling-stroke" ';
+        if (l.rel === 'similarTo') faint += seg + 'stroke="rgba(150,140,120,.16)" stroke-width="1" />';
+        else strong += seg + 'stroke="#8a8172" stroke-width="1.5" />';
+      }
+      var lines = faint + strong;
+      var edgesSvg = lines ? '<svg class="pc-edges" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none">'+lines+'</svg>' : '';
       var inner = '';
       for (var k=0;k<els.length;k++) inner += elHtml(els[k].placement, els[k].content);
-      host.innerHTML = '<div class="pc-board"><div class="pc-cam" style="transform:translate('+cam.tx.toFixed(1)+'px,'+cam.ty.toFixed(1)+'px) scale('+cam.scale.toFixed(4)+')">'+inner+'</div></div>'
+      host.innerHTML = '<div class="pc-board"><div class="pc-cam" style="transform:translate('+cam.tx.toFixed(1)+'px,'+cam.ty.toFixed(1)+'px) scale('+cam.scale.toFixed(4)+')">'+edgesSvg+inner+'</div></div>'
         + '<div class="pc-badge">🌲 rendered by @c15r/canvas · federated ui:// · '+BUILD+'</div>';
     }
   };
