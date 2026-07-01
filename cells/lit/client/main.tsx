@@ -16,9 +16,10 @@ import './main.css';
 (window as any).__lit_module = true; // watchdog marker: the module executed
 import * as React from 'react';
 import { hydrateRoot, createRoot } from 'react-dom/client';
-import { ensureAuth, isAuthed } from './lib/auth.ts';
+import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
+import { mountSandboxedRenderer, SANDBOX_HOST_HTML } from '../federated-renderer';
 import { bodyText, fieldsToHtml } from '../render-hints';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
@@ -229,6 +230,27 @@ function parseFence(info: string, body: string): Fence {
   return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
 }
 
+/** Resolve a `ui://` renderer script over the authenticated `/mcp`
+ *  `resources/read` (the gateway provider hop, ADR-0039). The returned text is
+ *  NEVER executed in lit's own document — it may be another tenant's cell code;
+ *  it runs only inside the opaque-origin sandbox the board fence builds
+ *  (ADR-0041's security correction / ADR-0043). */
+async function mcpResourceRead(uri: string): Promise<string | null> {
+  try {
+    const res = await authFetch('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'resources/read', params: { uri } }),
+    });
+    if (!res.ok) return null;
+    const rpc = (await res.json()) as { result?: { contents?: Array<{ text?: string }> } };
+    const text = rpc.result?.contents?.[0]?.text;
+    return typeof text === 'string' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void> }): Promise<void> {
   // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
   // — not just the first-word lang — drives routing.
@@ -358,13 +380,43 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
     }
     if (lang === 'board') {
       const wrap = el('div', 'embed-board');
-      const frame = document.createElement('iframe');
-      const w = Math.round(Math.min(680, root.clientWidth || 680));
-      frame.src = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`);
-      frame.loading = 'lazy';
-      wrap.appendChild(frame);
       const open = el('a', 'embed-open', 'open board ↗') as HTMLAnchorElement;
       open.href = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}`);
+      if (isAuthed()) {
+        // ADR-0043 Inc 2: an authed reader gets canvas's federated ui:// renderer
+        // inside lit's OWN opaque-origin sandbox (allow-scripts, no
+        // allow-same-origin), with the renderer's reads proxied through lit's
+        // session — so a PRIVATE board paints. The old origin-iframe to canvas's
+        // `?embed=1` was a third-party context: no session → the sign-in shell.
+        // (The discarded-on-rerender message listener is inert — it filters on
+        // this iframe's contentWindow — matching the fence-enhancement model.)
+        const frame = document.createElement('iframe');
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = SANDBOX_HOST_HTML;
+        frame.title = `board ${arg}`;
+        frame.style.cssText = 'width:100%;height:280px;border:0;display:block;background:#fff';
+        frame.addEventListener('load', () => {
+          const handle = mountSandboxedRenderer(frame, {
+            call: (kind, target, input) => (kind === 'read' ? read(target, input) : act(target, input)),
+            onResize: (h) => { frame.style.height = `${Math.max(120, Math.min(520, h))}px`; },
+            onSettled: (ok) => { if (!ok) frame.replaceWith(el('div', 'embed-view', `board ${arg}: renderer unavailable`)); },
+          });
+          void mcpResourceRead(`ui://@${cellOwner()}/canvas/renderers/board.js`).then((src) => {
+            handle.render(src, 'canvas', { viewId: arg }, arg);
+          });
+        });
+        wrap.appendChild(frame);
+      } else {
+        // Anonymous reader → canvas's zero-JS public thumbnail (?embed=1). This
+        // stays an origin iframe deliberately: a `_public/` board SSRs fine with
+        // no session, and a private board shows an anon reader nothing they may
+        // see anyway — the surface-B public fast path ADR-0043 keeps.
+        const frame = document.createElement('iframe');
+        const w = Math.round(Math.min(680, root.clientWidth || 680));
+        frame.src = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`);
+        frame.loading = 'lazy';
+        wrap.appendChild(frame);
+      }
       wrap.appendChild(open);
       pre.replaceWith(wrap);
     } else if (!isAuthed()) {

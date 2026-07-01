@@ -145,11 +145,16 @@ session, so per-fact grants are enforced for free.
   `FederatedRendererFrame`; lit: build/borrow the same `mountSandboxedRenderer` host). Deploy canvas
   (`cells.deploy`), verify **live** that a private board renders inside home under the owner's session (not a
   sign-in shell). This is the canvas analogue of ADR-0039's `machine-run` money-shot.
-- **Inc 2 — retire the remaining origin-iframe / foreign-module embeds.** lit's `@c15r/viewers` ES-module import
-  (`import('https://parc.land/@c15r/viewers/app.js')` executed in lit's own document) is the same untrusted-code-in-
-  first-party-doc smell for the same-owner case; fold it onto `ui://` (this is ADR-0039 Inc 3 "viewers as `ui://`",
-  now with a concrete consumer). Audit for any other `cellUrl(…, embed=1)` / cross-origin `<iframe src>` /
-  cross-origin dynamic `import()` and convert or justify each.
+- **Inc 2 — retire the remaining origin-iframe / foreign-module embeds.** **Part A (lit's board fence) shipped:**
+  an authed reader's ` ```board ` fence now runs canvas's federated renderer inside lit's own opaque-origin sandbox
+  (`federated-renderer.ts` synced into lit; renderer fetched via authenticated `resources/read`; reads proxied
+  through lit's session via kernel `read`/`act`) — so a private board paints in a doc. An anonymous reader keeps
+  the zero-JS `?embed=1` origin-iframe deliberately: a `_public/` board SSRs fine sessionless, and a private board
+  shows an anon reader nothing they may see anyway (the surface-B public fast path). **Part B open:** lit's
+  `@c15r/viewers` ES-module import (`import('https://parc.land/@c15r/viewers/app.js')` executed in lit's own
+  document) is the same untrusted-code-in-first-party-doc smell for the same-owner case; fold it onto `ui://`
+  (ADR-0039 Inc 3 "viewers as `ui://`", now with a concrete consumer). Audit for any other `cellUrl(…, embed=1)` /
+  cross-origin `<iframe src>` / cross-origin dynamic `import()` and convert or justify each.
 - **Inc 3 — a shared first-party embed component.** Home's `FederatedRendererFrame` and lit's board fence will both
   wrap `mountSandboxedRenderer` with near-identical resolve-fetch-mount-degrade logic. Lift it into `platform/ui`
   (the render-hints/federated-renderer sibling) so every first-party React/DOM surface embeds a foreign fact the

@@ -17,7 +17,9 @@ import { dirname } from 'node:path';
 const MAP = {
   'platform/ui/index.tsx': ['cells/starter/shared/ui.tsx', 'cells/home/shared/ui.tsx'],
   'platform/ui/vocab.ts': ['cells/home/shared/vocab.ts'],
-  'platform/ui/federated-renderer.ts': ['cells/home/shared/federated-renderer.ts'],
+  // lit gets a sibling FILE for the same shared.tsx-collision reason as its
+  // render-hints copy below.
+  'platform/ui/federated-renderer.ts': ['cells/home/shared/federated-renderer.ts', 'cells/lit/federated-renderer.ts'],
   'platform/ui/form.tsx': ['cells/home/shared/form.tsx'],
   // A sibling FILE (not cells/lit/shared/render-hints.ts) — lit already has a
   // top-level `shared.tsx` module; a `shared/` directory would collide with it.
