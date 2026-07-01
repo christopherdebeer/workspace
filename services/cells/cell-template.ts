@@ -194,7 +194,13 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
           Handler: 'index.handler',
           Role: { 'Fn::GetAtt': ['CellRole', 'Arn'] },
           Code: { S3Bucket: p.codeBucket, S3Key: p.codeKey },
-          MemorySize: p.memorySize ?? 128,
+          // 512 default (was 128): Lambda CPU scales with memory (~1 vCPU at
+          // 1769MB), and 128MB (~1/12 vCPU) starved SSR/scene assembly — the
+          // ADR-0043 Inc 4 finding (a ~98KB JSON scene took ~8s / timed out).
+          // Cost is memory×duration, so CPU-bound work at 4× memory runs ~4×
+          // faster for near-identical cost. Per-cell override: memoryMb on
+          // cells.create / cells.configureCell.
+          MemorySize: p.memorySize ?? 512,
           Timeout: p.timeoutSeconds ?? 10,
           Environment: {
             Variables: {
