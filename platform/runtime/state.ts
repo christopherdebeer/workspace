@@ -593,7 +593,7 @@ export const BACKBONE_RELS = {
 /** Reference relations that express *membership in a collection* (ADR-0005): a fact
  *  `inView` a view, `inDoc` a doc. A collection's extensional members are the facts
  *  with one of these edges pointing at it. */
-export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc']);
+export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc', 'onBoard']);
 
 /**
  * Per-rule Reference strength (ADR-0009). Derived edges carry graded weight so a

@@ -3,6 +3,7 @@
  * remember, ingest, supersede, plus the write-through grant guard.
  */
 import { requireUser, schemaHints, mergeTypeDecl, resolveType, type FactTimer } from '../../platform/runtime';
+import { RENDERERS_PREFIX } from '../../platform/runtime/state';
 import { ACTIONS_PREFIX } from './actions';
 import { VIEWS_PREFIX } from './views';
 import { grantCovers, GROUPS_NS, PUBLIC_NS, type GrantStore } from './grants';
@@ -67,7 +68,12 @@ async function requireWriteThrough(
   owner: string,
   key: string,
 ): Promise<void> {
-  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(GRANTS_NS) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
+  // `_renderers/` is EXECUTABLE content: lit/canvas run a renderer fact's source
+  // in the owner's own session-bearing page (plugins-as-content). That is safe
+  // exactly and only as "your slice, your code" — so a granted writer must never
+  // plant one (ADR-0044 Inc 4; ADR-0046 records the trust rule). Foreign-authored
+  // renderers have a sandboxed path: ui:// federation.
+  if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(RENDERERS_PREFIX) || key.startsWith(GRANTS_NS) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
     throw new Error(`write-through may not touch the reserved namespace ("${key}")`);
   }
   const held = await grants.listForGrantee(caller);

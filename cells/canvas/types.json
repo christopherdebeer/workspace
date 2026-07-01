@@ -5,9 +5,56 @@
       "icon": "🌲",
       "manager": "@c15r/canvas",
       "handlers": {
-        "open": [{ "path": "?canvas=${match}" }],
-        "embed": [{ "path": "?canvas=${match}&embed=1" }],
-        "render": [{ "renderer": "ui://@c15r/canvas/renderers/board.js" }, { "hint": "fields" }]
+        "open": [
+          {
+            "path": "?canvas=${match}"
+          }
+        ],
+        "embed": [
+          {
+            "path": "?canvas=${match}&embed=1"
+          }
+        ],
+        "render": [
+          {
+            "renderer": "ui://@c15r/canvas/renderers/board.js"
+          },
+          {
+            "hint": "fields"
+          }
+        ]
+      },
+      "note": "A BOARD's identity fact, keyed canvas:<board> (ADR-0046) — the node board-membership edges point at (placements project `<fact> onBoard canvas:<board>`). Value: {board, title?}."
+    },
+    {
+      "type": "canvas-placement",
+      "icon": "📍",
+      "manager": "@c15r/canvas",
+      "note": "A board PLACEMENT (ADR-0046): the edge-with-properties that puts a fact on a board. Keyed _canvas/<board>/<factKey>; the key-encoded rule projects `<factKey> onBoard canvas:<board>` into the Reference graph (the membership edge — ADR-0016: an edge with attributes is a fact whose key encodes its endpoints, exactly like lit's doc-order). Geometry (x/y/width/height/scale/rotation/zIndex…) are THIS fact's value — properties of the membership, never of the placed fact. The placed fact is unchanged by being placed (no-graduation).",
+      "keyPattern": "_canvas/{board}/{el}",
+      "keyEdges": [
+        {
+          "from": "{el}",
+          "rel": "onBoard",
+          "to": "canvas:{board}"
+        }
+      ],
+      "schema": {
+        "x": "number — board-space center x",
+        "y": "number — board-space center y",
+        "width": "number",
+        "height": "number",
+        "scale": "number?",
+        "rotation": "number?",
+        "zIndex": "number?",
+        "static": "boolean? — screen-fixed (excluded from fit cameras)"
+      },
+      "handlers": {
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
       }
     }
   ]

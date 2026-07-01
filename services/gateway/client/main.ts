@@ -15,27 +15,18 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { marked } from 'marked';
 import { hintToHtml, bodyText, resolvePath, escapeHtml } from '../../../platform/ui/render-hints';
+import { wikiLinkExtension } from '../../../platform/ui/wiki-link';
 import { fetchAndRunRenderer } from '../../../platform/ui/federated-renderer';
 import { json as vwJson, csv as vwCsv, mermaid as vwMermaid } from '../../../cells/viewers/client/main';
 
 marked.setOptions({ gfm: true, breaks: false });
-// [[wiki-links]] (ADR-0038 Inc 3) — mirror the lit cell's resolver so a link is the same
-// first-class substrate edge on every surface. `[[target]]`/`[[target|label]]`: a bare
-// target → `doc:<slug>`, an explicit key (`doc:x`, `cell:y`) is used as-is. We emit the
-// resolved KEY as data-key so the card intercepts the click into a host-proxied peek
-// (in-card navigation) rather than a dead browser nav. (Consolidate into platform/ui later.)
-function resolveWikiTarget(raw: string): { key: string; label: string } {
-  const [t, l] = raw.split('|');
-  const target = (t || '').trim();
-  const key = target.includes(':') ? target : `doc:${target.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
-  return { key, label: (l ?? target).trim() || target };
-}
-marked.use({ extensions: [{
-  name: 'wikilink', level: 'inline',
-  start(src: string) { return src.indexOf('[['); },
-  tokenizer(src: string) { const m = /^\[\[([^\]]+)\]\]/.exec(src); return m ? { type: 'wikilink', raw: m[0], text: m[1] } : undefined; },
-  renderer(tok: { text: string }) { const { key, label } = resolveWikiTarget(tok.text); return `<a class="wikilink" data-key="${escapeHtml(key)}" href="#">${escapeHtml(label)}</a>`; },
-}] } as unknown as Parameters<typeof marked.use>[0]);
+// [[wiki-links]] (ADR-0038 Inc 3, consolidated per ADR-0044 Inc 4) — the ONE
+// resolver lives in platform/ui/wiki-link; this surface only chooses the anchor:
+// the resolved KEY rides data-key so the card intercepts the click into a
+// host-proxied peek (in-card navigation) rather than a dead browser nav.
+marked.use({
+  extensions: [wikiLinkExtension(({ key, label }) => `<a class="wikilink" data-key="${escapeHtml(key)}" href="#">${escapeHtml(label)}</a>`)],
+} as unknown as Parameters<typeof marked.use>[0]);
 const esc = escapeHtml;
 const md = (s: string): string => marked.parse(s.replace(/\r\n/g, '\n'), { async: false }) as string;
 const hint = (h: string, v: unknown): string => hintToHtml(h, v, { md, esc });

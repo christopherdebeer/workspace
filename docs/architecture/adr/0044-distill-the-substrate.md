@@ -8,8 +8,17 @@
   Inc 2 ✅ (`buildTypeVocabulary` library; gateway rewired; cell-SDK exports it) · Inc 3 ✅ (`@parc/ui`
   virtual module in both forge bundles; `sync-platform-ui.mjs` + six copies DELETED; home/lit/starter on
   `@parc/ui`) · Inc 6 ✅ (`docs/cell-contract.md`) · Inc 7 ✅ (canvas scene, ~800 ms at 1024 MB) ·
-  Inc 4 + Inc 5 open (renderer rung removal; monolith splits) · present-dogfooding half of Inc 2
-  (gateway/card/kernel `hrefOf` through `resolvePresent`) rides Inc 4.
+  Inc 5 ✅ (both monoliths split — workspace handlers.ts → 9 group modules, home app.tsx → 7 surface
+  modules with byte-identical SSR; both live) · **Inc 4 in progress:** wiki-link resolver consolidated
+  into `platform/ui/wiki-link` (and the card's stale colon-only copy UPGRADED to lit's evolved
+  semantics — the drift the consolidation exists to stop, caught in the act); `_renderers/` decision
+  taken — it stays as the deliberately OWNER-ONLY plugins-as-content rung (the property `ui://`
+  structurally can't express: a viewer authored as one fact, live, no deploy), with the trust hole
+  closed (write-through into `_renderers/` now blocked, so a granted writer can no longer plant
+  executable code in your page; foreign code's path is `ui://`). Remaining: viewers→`ui://` on the
+  card (drop the build-time import; unify the viewer-name/type-name dispatch namespaces) and kernel
+  `hrefOf`'s hardcoded lit/input/canvas fallbacks onto declared `handlers.open` — both scoped by the
+  Inc 4 survey (2026-07-01), next session.
 - **Date:** 2026-07-01
 - **Method:** the ADR-0042 discipline at corpus scale — five parallel readers (ADRs 0001–0016, 0017–0033,
   0034–0043; tier-1 implementation; tier-2 cells), then a single synthesis. Grounded in line counts, import

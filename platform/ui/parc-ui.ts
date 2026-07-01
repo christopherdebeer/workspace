@@ -16,6 +16,7 @@
  * cells/lit/federated-renderer.ts). One source, no drift.
  */
 export * from './render-hints';
+export * from './wiki-link';
 export * from './vocab';
 export * from './federated-renderer';
 export * from './form';
