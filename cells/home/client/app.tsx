@@ -10,11 +10,8 @@
  * speaks; the park language lives in headings and copy, never in targets.
  */
 import * as React from 'react';
+import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme, resolve, declFor, type TypeDecl, mountSandboxedRenderer, SANDBOX_HOST_HTML, SchemaForm, isFormable, type FormFieldSchema, type FormPalette } from '@parc/ui';
 import { marked } from 'marked';
-import { Page, Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme } from '../shared/ui';
-import { resolve, declFor, type TypeDecl } from '../shared/vocab';
-import { mountSandboxedRenderer, SANDBOX_HOST_HTML } from '../shared/federated-renderer';
-import { SchemaForm, isFormable, type FormFieldSchema, type FormPalette } from '../shared/form';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './bridge';
 

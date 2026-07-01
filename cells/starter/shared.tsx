@@ -3,14 +3,14 @@
  *
  * The canonical cell reference: ONE React tree rendered to a string on the
  * server (renderToString) and hydrated on the client (hydrateRoot), built from
- * the shared `platform/ui` kit (source-bundled via scripts/sync-platform-ui.mjs,
+ * the shared `platform/ui` kit (the `@parc/ui` virtual module (ADR-0044 Inc 3),
  * so it renders the SAME components with this cell's own React on both sides).
  * Presentational only — no hooks/handlers here, so server markup === first
  * client render (no flash). Interactivity, auth and substrate live in client/.
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
 import { marked } from 'marked';
-import { Page, Card, Heading, Badge, theme } from './shared/ui';
+import { Page, Card, Heading, Badge, theme } from '@parc/ui';
 
 /** A `note` fact, the type this cell manages — `{ text }` markdown. */
 export interface Note {

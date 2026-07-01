@@ -19,8 +19,7 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
-import { mountSandboxedRenderer, SANDBOX_HOST_HTML } from '../federated-renderer';
-import { bodyText, fieldsToHtml } from '../render-hints';
+import { mountSandboxedRenderer, SANDBOX_HOST_HTML, bodyText, fieldsToHtml } from '@parc/ui';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
   type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem, type TypeItem,

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { Surface, renderMarkdown, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef, type TypeItem } from './shared';
-import { bodyText, fieldsToHtml } from './render-hints';
+import { bodyText, fieldsToHtml } from '@parc/ui';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({

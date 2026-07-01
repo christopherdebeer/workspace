@@ -14,7 +14,7 @@
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
 import { marked } from 'marked';
-import { bodyText, fieldsToHtml } from './render-hints';
+import { bodyText, fieldsToHtml } from '@parc/ui';
 
 /** A document is a *view* over facts: thin metadata only. Membership + order live
  *  entirely in substrate-native `_doc/<id>/<factKey>={seq,fold}` decorations — any

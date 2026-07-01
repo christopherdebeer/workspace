@@ -27,6 +27,36 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'platform/runtime/cell-sdk.ts');
 const out = join(root, 'services/cells/cell-runtime.generated.ts');
 
+// ── @parc/ui (ADR-0044 Inc 3): platform/ui pre-bundled for BOTH cell bundles.
+// ESM (the client bundle needs importable ESM; esbuild interops it into the CJS
+// server bundle), react EXTERNAL (server resolves forge's disk react — one React
+// per cell — client resolves esm.sh at the cell's own pin).
+const uiEntry = join(root, 'platform/ui/parc-ui.ts');
+const uiOut = join(root, 'services/cells/cell-ui.generated.ts');
+const uiRes = await build({
+  entryPoints: [uiEntry],
+  bundle: true,
+  format: 'esm',
+  target: 'es2020',
+  platform: 'neutral',
+  jsx: 'automatic',
+  write: false,
+  external: ['react', 'react-dom', 'react/*', 'react-dom/*'],
+  logLevel: 'warning',
+});
+const uiCode = uiRes.outputFiles?.[0]?.text ?? '';
+if (!uiCode) throw new Error('empty @parc/ui bundle');
+if (/@aws-sdk|aws-sdk/.test(uiCode)) throw new Error('AWS SDK leaked into the @parc/ui bundle');
+writeFileSync(
+  uiOut,
+  `/* GENERATED — do NOT edit. Built from platform/ui/parc-ui.ts by\n` +
+    ` * scripts/build-cell-runtime.mjs. The pre-bundled @parc/ui kit (ADR-0044\n` +
+    ` * Inc 3), served to forge cells as a virtual module by transpile.ts for\n` +
+    ` * BOTH the server and browser bundles. react/react-dom are external. */\n` +
+    `export const CELL_UI_BUNDLE = ${JSON.stringify(uiCode)};\n`,
+);
+console.log(`wrote ${uiOut} (${(uiCode.length / 1024).toFixed(1)}kb bundle)`);
+
 const res = await build({
   entryPoints: [entry],
   bundle: true,

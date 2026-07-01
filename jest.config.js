@@ -11,6 +11,8 @@ module.exports = {
     // migrated cell resolves the same pipeline. Its v3 store lazy-requires the
     // SDK, so importing is safe even without @aws-sdk installed.
     '^@parc/runtime/cell$': '<rootDir>/platform/runtime/cell-sdk.ts',
+    // `@parc/ui` — the platform UI kit virtual module (ADR-0044 Inc 3), same deal.
+    '^@parc/ui$': '<rootDir>/platform/ui/parc-ui.ts',
   },
   transform: {
     // Transpile-only (isolatedModules in tsconfig.test.json): full type-checking

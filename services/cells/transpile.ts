@@ -8,6 +8,7 @@
  * self-contained module; bundling imported modules is a later enhancement.
  */
 import { CELL_RUNTIME_BUNDLE } from './cell-runtime.generated';
+import { CELL_UI_BUNDLE } from './cell-ui.generated';
 
 type Esbuild = typeof import('esbuild-wasm');
 
@@ -22,6 +23,11 @@ let initPromise: Promise<void> | undefined;
  *  (which the in-Lambda bundler can't reach) or hand-rolling raw DDB. */
 const PARC_SDK_PKG = '@parc/runtime';
 const PARC_SDK_NS = 'parc-sdk';
+// ADR-0044 Inc 3: `@parc/ui` — the platform UI kit as a virtual module, served
+// to BOTH bundles (server SSR + browser app.js) so an isomorphic cell imports
+// one kit instead of carrying synced source copies.
+const PARC_UI_PKG = '@parc/ui';
+const PARC_UI_NS = 'parc-ui';
 
 /** Inject an esbuild implementation (tests, to avoid loading the WASM). */
 export function __setEsbuild(stub: Esbuild | undefined): void {
@@ -152,8 +158,13 @@ export async function bundleClientFiles(
               if (!key) return { errors: [{ text: `cannot resolve "${args.path}" from "${args.importer}"` }] };
               return { path: key, namespace: 'vfs' };
             }
+            // `@parc/ui` → the pre-bundled platform UI kit; its own bare imports
+            // (react, react/jsx-runtime) fall through to the esm.sh external
+            // branch below — the same resolution cell source gets.
+            if (barePackage(args.path) === PARC_UI_PKG) return { path: args.path, namespace: PARC_UI_NS };
             return { path: resolveBareImport(args.path, imports), external: true };
           });
+          build.onLoad({ filter: /.*/, namespace: PARC_UI_NS }, () => ({ contents: CELL_UI_BUNDLE, loader: 'js' }));
           build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => {
             const contents = files[args.path] ?? '';
             // `import './x.css'` injects the styles at load time.
@@ -269,6 +280,20 @@ export async function bundleFiles(
             // and its only bare imports are the runtime-provided v3 AWS SDK (+ node
             // builtins) — externalize them, never try to resolve from the wasm fs.
             if (args.namespace === PARC_SDK_NS) return { path: args.path, external: true };
+            // Inside the pre-bundled @parc/ui kit: its only bare imports are react
+            // (+ react/jsx-runtime) — resolve them from forge's DISK react (the
+            // SERVER_BUNDLED set) so the cell holds ONE React instance; anything
+            // else is runtime-provided.
+            if (args.namespace === PARC_UI_NS) {
+              if (SERVER_BUNDLED.has(barePackage(args.path))) {
+                try {
+                  return { path: require.resolve(args.path) };
+                } catch {
+                  /* fall through */
+                }
+              }
+              return { path: args.path, external: true };
+            }
             // Imports from a bundled npm file (real fs, e.g. react-dom pulling in
             // scheduler) use esbuild's default node_modules resolution.
             if (args.namespace !== 'vfs') return undefined;
@@ -276,6 +301,7 @@ export async function bundleFiles(
             // holding the pre-bundled read/present pipeline (any subpath resolves to
             // the one bundle; the entry IS `cell-sdk`).
             if (barePackage(args.path) === PARC_SDK_PKG) return { path: args.path, namespace: PARC_SDK_NS };
+            if (barePackage(args.path) === PARC_UI_PKG) return { path: args.path, namespace: PARC_UI_NS };
             if (args.path.startsWith('.')) {
               const key = resolveKey(files, resolveRelative(args.importer, args.path));
               if (!key) return { errors: [{ text: `cannot resolve "${args.path}" from "${args.importer}"` }] };
@@ -305,6 +331,7 @@ export async function bundleFiles(
           });
           // The platform SDK for cells — one pre-bundled module, served verbatim.
           build.onLoad({ filter: /.*/, namespace: PARC_SDK_NS }, () => ({ contents: CELL_RUNTIME_BUNDLE, loader: 'js' }));
+          build.onLoad({ filter: /.*/, namespace: PARC_UI_NS }, () => ({ contents: CELL_UI_BUNDLE, loader: 'js' }));
           build.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => ({
             contents: files[args.path] ?? '',
             loader: loaderFor(args.path),
