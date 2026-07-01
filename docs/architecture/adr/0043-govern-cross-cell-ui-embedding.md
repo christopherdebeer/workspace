@@ -1,10 +1,20 @@
 # ADR-0043 — Govern cross-cell UI embedding: one `present` declaration, three projection surfaces
 
-- **Status:** Survey complete; the rule is decided; Inc 1 (canvas-on-home + canvas-on-lit via `ui://`) in progress.
+- **Status:** Survey complete; the rule is decided; **Inc 1 shipped and live-verified on 2026-07-01** (canvas
+  serves a federated `ui://` board renderer; home renders it through its opaque-origin sandbox instead of the
+  origin-iframe). lit's board fence + the shared embed component (Inc 2/3) declared, not yet built.
   Mirrors ADR-0042's method — a broad+deep survey of the actual implementations first, then a sequenced decision —
   because the same failure mode applies: we cannot presume from the vision docs that cells expose UI uniformly.
   They do not. The survey (7 cells + the federation infra) found the mechanism is **already built and live-proven**
   for one surface and **bypassed by a legacy origin-iframe** for another.
+  **Inc 1 live proof (server-side, 2026-07-01):** (a) canvas serves `/renderers/board.js` (200,
+  `application/javascript`, ACAO:\*, cacheable); (b) the deployed gateway's provider hop resolves
+  `resources/read ui://@c15r/canvas/renderers/board.js` to the renderer source; (c) `$types` federates
+  `canvas.handlers.render[0].renderer = ui://@c15r/canvas/renderers/board.js`; (d) the renderer's data path
+  returns real board facts under the viewer's session — `peek _views/canvas:parcland` → `render.board=parcland`,
+  `query {prefix:'_canvas/parcland/el:'}` → 127 placements, `query {prefix:'el:'}` → 212 content facts (≤ the
+  renderer's 1200 limit), joined by `el:<id>`. The in-browser paint reuses the machine-run sandbox harness already
+  live-proven (ADR-0039), fed by this verified data. `cells.deploy` on canvas + home; `npm run build` + 504 tests green.
 - **Date:** 2026-07-01
 - **Depends on:** ADR-0034 (the host/sandbox split; opaque-origin iframe; host-proxied `resources/read`/`tools/call`),
   ADR-0035 (`ui://` as the universal render resource — *inline where React, `ui://` where foreign*), ADR-0039
