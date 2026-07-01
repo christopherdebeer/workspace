@@ -1,0 +1,1061 @@
+/**
+ * Workspace MCP tool descriptors (ADR-0044 Inc 5): how the `/mcp` gateway
+ * discovers and advertises this cell's tools — the descriptor type, the shared
+ * result-schema fragments, and the TOOL_DESCRIPTORS catalog.
+ */
+import { NOTE_MAX } from './grant-requests';
+
+/** How the `/mcp` gateway discovers and advertises a cell's tools. */
+export interface ToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  /**
+   * The result envelope, declared. Self-documentation has two directions: an
+   * input schema teaches the call, a result schema teaches the read — and an
+   * undeclared envelope is exactly where shapes drift apart. Kept shallow.
+   */
+  resultSchema?: Record<string, unknown>;
+  /** Scope the gateway enforces before forwarding (null = any authenticated user). */
+  scope: string | null;
+  /** An any-of family gate (docs/auth-consent-plan.md §B): a token holding any scope
+   *  under this pattern (e.g. `write:type:*`) passes the gateway gate, and this
+   *  handler then enforces the concrete fact type. Lets a type-scoped token write
+   *  only its declared types while coarse `write:workspace` tokens are unaffected. */
+  scopeFamily?: string;
+  /** `read` = side-effect-free (observe); `act` = may mutate. Routes read/act dispatch. */
+  kind: 'read' | 'act';
+}
+
+// ── shared result-schema fragments (shallow on purpose — catalog weight is an
+//    ergonomic budget; see docs/trajectory/2026-06-12-mcp-agent-ergonomics-review.md) ──
+
+const META_SCHEMA = {
+  type: 'object',
+  description:
+    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided. With a read `explain:true`, also `explain: { signals, weights, contribution, degree }` — the score breakdown for tuning.',
+} as const;
+
+/** Per-call salience lens — an ergonomic bias over the tuned defaults. */
+const LENS_SCHEMA = {
+  type: 'string',
+  enum: ['salience', 'recent', 'connected', 'durable', 'active'],
+  description:
+    'Salience lens (default salience): recent=freshness, connected=graph degree, durable=earned/cumulative, active=read/written now. Recomputes the score, so it shifts BOTH ranking and focus/peripheral/elided tiers.',
+} as const;
+
+/** Import-only provenance: preserve a migrated fact's timestamps + earned counts. */
+const IMPORT_SCHEMA = {
+  type: 'object',
+  description:
+    'Import-only: { createdAt?, updatedAt? (ISO — preserve true age for recency), seedReads?, seedWrites? (cumulative legacy counts, folded into standing) }.',
+  properties: {
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+    seedReads: { type: 'number' },
+    seedWrites: { type: 'number' },
+  },
+  additionalProperties: false,
+} as const;
+
+/** Raw per-call salience override (escape hatch); merges over the lens + defaults. */
+const SALIENCE_OVERRIDE_SCHEMA = {
+  type: 'object',
+  description:
+    'Precise salience override, merged over the lens + defaults: { halfLifeMs?, windowMs?, recencyWeight?, velocityWeight?, attentionWeight?, standingWeight?, centralityWeight?, standingSaturation?, centralitySaturation?, focusThreshold?, elideThreshold? }. Not auto-normalized — you own the weights.',
+  additionalProperties: true,
+} as const;
+
+const ENTRY_SCHEMA = {
+  type: 'object',
+  properties: { value: { description: 'The stored JSON value' }, _meta: META_SCHEMA },
+} as const;
+
+const KEYED_ENTRY_SCHEMA = {
+  type: 'object',
+  properties: { key: { type: 'string' }, value: { description: 'The stored JSON value' }, _meta: META_SCHEMA },
+} as const;
+
+/** The inline affordance map a read carries for the types present in its result
+ *  (ADR-0029 R1) — collapses `query → $types → correlate → act` into `query → act`. */
+const TYPES_AFFORDANCE_SCHEMA = {
+  type: 'object',
+  description:
+    "What you can DO with each type in this result, keyed by type name (present only when ≥1 returned type is declared). For a fact of type T: types[T].handlers[intent] (open/edit/render/create → an act target, cell surface, or renderer) and types[T].manager (the owning cell) — no separate read('$types') needed. `label` is the type's label path (e.g. value.title).",
+  additionalProperties: {
+    type: 'object',
+    properties: {
+      icon: { type: 'string' },
+      label: { type: 'string', description: 'Label path (where a fact of this type gets its display label)' },
+      render: { description: 'Render binding: a { hint } or { viewer } ref' },
+      handlers: { type: 'object', description: 'intent → surface | act target | renderer | hint' },
+      manager: { type: 'string', description: 'The cell that manages this type' },
+    },
+  },
+} as const;
+
+const EDGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    from: { type: 'string' },
+    rel: { type: 'string' },
+    to: { type: 'string' },
+    strength: { type: ['number', 'null'] },
+    createdAt: { type: 'string' },
+    writer: { type: ['string', 'null'] },
+    derived: { type: 'boolean', description: 'Present and true for a derived structural-backbone edge (instanceOf/managedBy/rendersWith/inView); absent for authored edges' },
+  },
+} as const;
+
+/**
+ * The workspace vocabulary as MCP tool descriptors. Every command operates on the
+ * caller's own slice (or subsets explicitly granted to them) — ownership/slice
+ * isolation is the primary boundary. On top of that, `describeTools` derives a
+ * verb scope from `kind` (reads → `read:workspace`, acts → `write:workspace`) so
+ * a token's read/write consent is actually enforced; `scope: null` here means
+ * "no explicit scope — gate by verb". An explicit scope (e.g. `workspace:admin`)
+ * overrides the verb default.
+ */
+export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
+  {
+    name: 'remember',
+    description:
+      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
+    scope: null,
+    scopeFamily: 'write:type:*',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Fact key within your slice' },
+        owner: { type: 'string', description: "Write-through: the slice owner to write into (requires their `write` grant covering the key)" },
+        value: { description: 'Any JSON value to remember' },
+        via: { type: 'string', description: 'Optional label for how this was written (e.g. an action name)' },
+        type: { type: 'string', description: 'Optional indexable fact type (e.g. "decision", "todo")' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags (filterable in query)' },
+        ifRevision: { type: 'number', description: 'Only write if the stored revision equals this (0 = key must not exist)' },
+        ifAbsent: { type: 'boolean', description: 'Only write if the key does not exist (treats an expired lease as absent)' },
+        timer: {
+          type: 'object',
+          description:
+            'Lease/reveal timer, evaluated at read: effect "delete" = live now, vanishes at expiry (a lease); "enable" = dormant until expiry.',
+          properties: {
+            ms: { type: 'number', description: 'Relative expiry in ms' },
+            at: { type: 'string', description: 'Absolute ISO expiry (exactly one of ms/at)' },
+            effect: { type: 'string', enum: ['delete', 'enable'] },
+          },
+          required: ['effect'],
+          additionalProperties: false,
+        },
+        import: IMPORT_SCHEMA,
+      },
+      required: ['key', 'value'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      ...ENTRY_SCHEMA,
+      description: 'The written fact, plus optional advisory `hints` (the write always succeeds)',
+      properties: {
+        ...((ENTRY_SCHEMA as { properties?: Record<string, unknown> }).properties ?? {}),
+        hints: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Advisory notes — missing recommended fields for the type, or that the type could declare a schema. Never blocks the write.',
+        },
+      },
+    },
+  },
+  {
+    name: 'ingest',
+    description:
+      'Bulk intake: write up to 100 facts in one call (imports, capture backfills). Each fact takes the same fields as `remember` (no `ifRevision`); failures are reported per-fact, the rest are written. May not write `_actions/` or `_views/`.',
+    scope: null,
+    scopeFamily: 'write:type:*',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        facts: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string' },
+              value: {},
+              via: { type: 'string' },
+              type: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+              ifAbsent: { type: 'boolean' },
+              import: IMPORT_SCHEMA,
+            },
+            required: ['key', 'value'],
+            additionalProperties: false,
+          },
+        },
+        via: { type: 'string', description: 'Default `via` for facts that do not set their own' },
+        edges: {
+          type: 'array',
+          description: 'Edges to write after the facts (bulk graph import): { from, rel, to, strength? }',
+          items: {
+            type: 'object',
+            properties: { from: { type: 'string' }, rel: { type: 'string' }, to: { type: 'string' }, strength: { type: 'number' } },
+            required: ['from', 'rel', 'to'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['facts'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        ingested: { type: 'number' },
+        errors: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, error: { type: 'string' } } } },
+      },
+    },
+  },
+  {
+    name: 'recall',
+    description:
+      'Orient in your workspace. BY DEFAULT (bare call) returns a broad, succinct OVERVIEW — total + granted counts, salience bands, top types & key-prefixes, and the top ~12 focus facts in full — plus `hints` on how to drill (query/search/peek/neighbors). This is progressive disclosure: skim here, then narrow. For the WHOLE shaped view pass `view:"full"` (or any shaping arg): focus/peripheral facts in full, low-salience collapsed to `{key,type,score}` stubs under `elided` (re-read with `expand:[keys]` or `peek`). For a targeted subset prefer `query`. Granted facts appear under `<owner>/<key>`. Tune shaping by writing a `_config/salience` fact; precedence is defaults ← that config ← `lens` ← per-call `salience`.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: { type: 'string', enum: ['overview', 'full'], description: "'overview' (default for a bare call) = succinct orientation + drill hints; 'full' = the whole salience-shaped view" },
+        elision: { type: 'string', enum: ['auto', 'none'], description: "(implies view:full) 'auto' collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
+        expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
+        includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
+        lens: LENS_SCHEMA,
+        salience: SALIENCE_OVERRIDE_SCHEMA,
+        explain: { type: 'boolean', description: 'Attach `_meta.explain` to each entry — the salience breakdown (signals · weights · contributions · degree) so you can see *why* a fact scored, and tune accordingly' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      description: 'Default (bare): an overview — { overview: { total, granted, bands, byType[], byPrefix[] }, focus: {key→entry}, hints[] }. With view:"full"/any shaping arg: the shaped view below.',
+      properties: {
+        overview: {
+          type: 'object',
+          description: 'Default orientation: counts by type & key-prefix, salience bands, totals',
+          properties: {
+            total: { type: 'number' },
+            granted: { type: 'number', description: 'Facts merged in from grants' },
+            bands: { type: 'object', properties: { focus: { type: 'number' }, peripheral: { type: 'number' }, elided: { type: 'number' } } },
+            byType: { type: 'array', items: { type: 'object', properties: { type: { type: ['string', 'null'] }, count: { type: 'number' } } } },
+            byPrefix: { type: 'array', items: { type: 'object', properties: { prefix: { type: 'string' }, count: { type: 'number' } } } },
+          },
+        },
+        focus: { type: 'object', description: 'Top facts by salience, in full (overview mode)', additionalProperties: ENTRY_SCHEMA },
+        hints: { type: 'array', items: { type: 'string' }, description: 'How to drill deeper (overview mode)' },
+        entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts (full mode)', additionalProperties: ENTRY_SCHEMA },
+        elided: {
+          type: 'array',
+          description: 'Stubs for withheld entries, score-descending (full mode)',
+          items: { type: 'object', properties: { key: { type: 'string' }, type: { type: ['string', 'null'] }, score: { type: 'number' } } },
+        },
+        _shaping: { type: 'object', description: 'Thresholds + counts: { focus, peripheral, elided, total } (full mode)' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+      },
+    },
+  },
+  {
+    name: 'peek',
+    description: 'Read one fact by key from your slice (no salience shaping). Returns null when the key is absent — including a lapsed lease — so it doubles as an existence probe. Pass `owner` to read a fact another user granted you.',
+    scope: null,
+    scopeFamily: 'read:type:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Fact key to read' },
+        owner: { type: 'string', description: 'Read-through: the slice owner to read from (requires a grant covering the key)' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: { ...ENTRY_SCHEMA, properties: { ...ENTRY_SCHEMA.properties, types: TYPES_AFFORDANCE_SCHEMA }, description: 'The fact (with an inline `types` affordance map), or null when absent' },
+  },
+  {
+    name: 'query',
+    description:
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Use this instead of recall when you want a targeted subset.',
+    scope: null,
+    scopeFamily: 'read:type:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Only facts of this type' },
+        tag: { type: 'string', description: 'Only facts carrying this tag' },
+        prefix: { type: 'string', description: 'Only keys with this prefix' },
+        contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },
+        rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
+        lens: LENS_SCHEMA,
+        salience: SALIENCE_OVERRIDE_SCHEMA,
+        explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
+        limit: { type: 'number', description: 'Max entries to return' },
+        cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
+        includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        entries: { type: 'array', items: KEYED_ENTRY_SCHEMA },
+        count: { type: 'number', description: 'Entries in this page' },
+        total: { type: 'number', description: 'Entries matching overall' },
+        nextCursor: { type: 'string', description: 'Present when more pages remain' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+      },
+    },
+  },
+  {
+    name: 'search',
+    description:
+      'Semantic search: find facts by MEANING, not exact words. Embeds your text and ranks facts (and file content) by similarity across your slice + everything shared with you, then re-reads each hit authoritatively (so a result is always live + permitted). Complements `query` (structured type/tag/prefix filter) and `query.contains` (exact substring) — use `search` for "facts about X" when you do not know the exact wording. Restrict with `type`/`tag`. Returns the same `{entries, types}` shape as query. If the deployment has no vector backend, returns empty with a `hint`.',
+    scope: null,
+    scopeFamily: 'read:type:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Natural-language query, matched by meaning' },
+        type: { type: 'string', description: 'Only facts of this type (also the granular read:type pin)' },
+        tag: { type: 'string', description: 'Only facts carrying this (primary) tag' },
+        limit: { type: 'number', description: 'Max results (1–50, default 10)' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        entries: {
+          type: 'array',
+          description: 'Ranked hits — { key, value, _meta, score } where score is cosine similarity (1 = closest)',
+          items: { type: 'object', properties: { key: { type: 'string' }, value: {}, _meta: META_SCHEMA, score: { type: 'number' } } },
+        },
+        count: { type: 'number' },
+        total: { type: 'number' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+        hint: { type: 'string', description: 'Present only when semantic search is not configured (degraded to query/contains)' },
+      },
+    },
+  },
+  {
+    name: 'link',
+    description:
+      'Add a typed, directed edge `from --rel--> to` between two fact keys in your slice (e.g. rel: "grounds", "refines", "relates"). The result carries `fromExists`/`toExists` hints — a dangling edge is allowed, but you learn at write time, not at the next tending pass.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Source fact key' },
+        rel: { type: 'string', description: 'Edge type (a verb, e.g. "grounds")' },
+        to: { type: 'string', description: 'Target fact key' },
+        strength: { type: 'number', description: 'Optional edge strength' },
+      },
+      required: ['from', 'rel', 'to'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      ...EDGE_SCHEMA,
+      properties: {
+        ...EDGE_SCHEMA.properties,
+        fromExists: { type: 'boolean', description: 'from resolves to a live fact' },
+        toExists: { type: 'boolean', description: 'to resolves to a live fact' },
+      },
+    },
+  },
+  {
+    name: 'suggestions',
+    description:
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Cap on candidates returned (default 25)' },
+        includeRuntime: { type: 'boolean', description: 'Include runtime/machine facts (transcripts, agent-runs, cells) filtered out by default' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        suggestions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+              fromLabel: { type: 'string' },
+              fromType: { type: 'string' },
+              toLabel: { type: 'string' },
+              toType: { type: 'string' },
+              strength: { type: 'number' },
+              createdAt: { type: 'string' },
+            },
+          },
+        },
+        vocab: { type: 'array', items: { type: 'string' }, description: 'Recommended relations to ratify into' },
+        total: { type: 'number', description: 'Candidates before limit' },
+      },
+    },
+  },
+  {
+    name: 'ratify',
+    description:
+      'Accept a suggested connection (ADR-0032): write a typed, directed, authored edge `from --rel--> to` (full weight — you assert it, not the machine) and drop the redundant inferred `similarTo` between the pair. `rel` should be one of refines/grounds/duplicates/contradicts/elaborates/relatesTo (any string accepted). The substrate-native way to graduate a machine hint into curated structure; pairs come from `suggestions`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Source fact key' },
+        to: { type: 'string', description: 'Target fact key' },
+        rel: { type: 'string', description: 'Relation to assert (refines/grounds/duplicates/contradicts/elaborates/relatesTo)' },
+        strength: { type: 'number', description: 'Optional edge strength (default full authored weight)' },
+      },
+      required: ['from', 'to', 'rel'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        edge: { ...EDGE_SCHEMA },
+        dropped: { type: 'number', description: 'Inferred similarTo edges removed between the pair' },
+        ratified: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'unlink',
+    description: 'Remove an edge previously added with `link`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string' },
+        rel: { type: 'string' },
+        to: { type: 'string' },
+      },
+      required: ['from', 'rel', 'to'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+  {
+    name: 'neighbors',
+    description: "The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop. Includes the derived structural backbone (edges flagged `derived:true`): a fact `instanceOf` its `_types/<type>`, a type `managedBy` its cell and `rendersWith` its renderer, and a fact `inView` any view whose query selects it — so even an unlinked fact has a direction to explore.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'The fact key to look around' },
+        dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'Direction (default both)' },
+        rel: { type: 'string', description: 'Only edges of this type' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        outbound: { type: 'array', items: EDGE_SCHEMA },
+        inbound: { type: 'array', items: EDGE_SCHEMA },
+        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist', additionalProperties: ENTRY_SCHEMA },
+        types: TYPES_AFFORDANCE_SCHEMA,
+      },
+    },
+  },
+  {
+    name: 'links',
+    description: 'Every edge in your slice (optionally filtered by a from/to key prefix) — boards and graph surfaces project their edges from this.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefix: { type: 'string', description: 'Only edges whose from or to starts with this prefix' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+  },
+  {
+    name: 'graph',
+    description:
+      "The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary).",
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+  },
+  {
+    name: 'members',
+    description:
+      "A collection's member facts (ADR-0005). **Intensional** when the fact carries a `query` (a view) — its query is evaluated (`order:\"query\"`); **extensional** otherwise — the facts with an inbound membership edge (`inView`/`inDoc`) in the Reference projection (e.g. a doc's blocks). Extensional members come back in **narrative order** when placed by an ordering decoration (a doc-order `seq` → `order:\"seq\"`), else salience-ranked (`order:\"salience\"`). One read for 'a view's facts' and 'a doc's members' alike.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'The collection fact key (a view, a doc, …)' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        membership: { type: 'string', enum: ['intensional', 'extensional'] },
+        order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
+        members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta); extensional members also carry `placement` {seq, fold} from their ordering decoration' },
+        types: TYPES_AFFORDANCE_SCHEMA,
+      },
+    },
+  },
+  {
+    name: 'changes',
+    description:
+      'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. Pass sinceSeq:"head" to get just the head seq and start tailing in one call. The change feed.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sinceSeq: {
+          description: 'Return events with seq greater than this number (default 0), or "head" for no events + the current head seq',
+          oneOf: [{ type: 'number' }, { type: 'string', enum: ['head'] }],
+        },
+        limit: { type: 'number', description: 'Max events' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        events: { type: 'array', items: { type: 'object', properties: { op: { type: 'string' }, key: { type: ['string', 'null'] }, at: { type: 'string' }, seq: { type: 'number' } } } },
+        seq: { type: 'number', description: 'Current head — resume from here' },
+      },
+    },
+  },
+  {
+    name: 'attention',
+    description:
+      'What needs tending, as a derived read: stale facts, unlinked facts, and dangling edges. `_`-prefixed system namespaces (canvas elements, declared vocabulary) are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        staleMs: { type: 'number', description: 'Staleness threshold in ms (default 14 days)' },
+        limit: { type: 'number', description: 'Max items per category (default 25)' },
+        includeSystem: { type: 'boolean', description: 'Also surface `_`-prefixed system namespaces (default false)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        stale: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, updatedAt: { type: 'string' }, type: { type: ['string', 'null'] } } } },
+        unlinked: { type: 'array', items: { type: 'string' } },
+        dangling: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, rel: { type: 'string' }, to: { type: 'string' }, reason: { type: 'string' } } } },
+      },
+    },
+  },
+  {
+    name: 'registerAction',
+    description:
+      'Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic, lease-bound claim.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'object',
+          description: 'The action definition',
+          properties: {
+            id: { type: 'string' },
+            description: { type: 'string' },
+            if: { type: 'array', description: 'Preconditions (AND): [{ key, path?, op: exists|absent|eq|ne|gt|lt, value? }]', items: { type: 'object' } },
+            enabled: { type: 'array', description: 'Availability conditions (same shape as if)', items: { type: 'object' } },
+            writes: {
+              type: 'array',
+              description: 'Declared writes: [{ key, value?, ifAbsent?, timer?, type?, tags? }]',
+              items: { type: 'object' },
+            },
+            params: { type: 'object', description: 'Param schema: { <name>: { type?, description?, enum?, required? } }' },
+          },
+          required: ['id', 'writes'],
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'object', description: 'The registered definition, echoed' },
+        contested: { type: 'array', description: 'Other actions declaring writes to the same keys (surfaced, not blocked)' },
+      },
+    },
+  },
+  {
+    name: 'actions',
+    description: 'List the declared actions in your slice (the registered no-code vocabulary).',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { actions: { type: 'array', items: { type: 'object', description: 'Action definitions' } } } },
+  },
+  {
+    name: 'deleteAction',
+    description: 'Retire a declared action (supersedes its `_actions/<id>` fact).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+  {
+    name: 'invoke',
+    description:
+      'Invoke a declared action by id with params. Checks enabled + if conditions (a failed precondition is a 409-style error), then applies the declared writes with substitution. The substrate interprets; no code runs.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'The action id' },
+        params: { type: 'object', description: 'Arguments for the action' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        invoked: { type: 'boolean' },
+        action: { type: 'string' },
+        params: { type: 'object' },
+        writes: { type: 'array', description: 'The applied writes, each `{ key, value, _meta }`', items: KEYED_ENTRY_SCHEMA },
+      },
+    },
+  },
+  {
+    name: 'reindex',
+    description:
+      'Backfill semantic search (ADR-0030/0031): scan your slice (optionally by type/prefix), embed each text-bearing fact into your vector index, then wire inferred `similarTo` edges. Runs ASYNC + CHUNKED — a full slice far exceeds the sync request budget, so this dispatches and returns immediately; poll the `_reindex/<you>` status fact for { status: running|done, phase: embed|edges, indexed, edges }. The batch replay beside the live stream indexer; use after enabling search or changing the embedding model. Admin-only.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Only reindex facts of this type' },
+        prefix: { type: 'string', description: 'Only reindex keys with this prefix' },
+        max: { type: 'number', description: 'Optional cap on facts processed in the embed phase' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: "'started' (async dispatched), or 'unconfigured'" },
+        poll: { type: 'string', description: 'Status fact key to peek for progress' },
+        hint: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'pruneSimilar',
+    description:
+      'Prune redundant inferred `similarTo` edges (ADR-0031/0032): delete every `platform/vectors`-written kinship edge whose endpoints are ALREADY connected by an authored edge (in either direction) — a real link a person/grant asserted makes the machine-inferred hint redundant, both as structure and as a salience signal. Synchronous, vector-free (pure edge scan + deletes). The live indexer/reindex now skip these on create (dedup-on-create); this is the one-time backfill for edges written before that. Admin-only.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        max: { type: 'number', description: 'Cap on edges deleted in one pass (default: all redundant)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: "'pruned' or 'unconfigured'" },
+        scanned: { type: 'number', description: 'Inferred similarTo edges examined' },
+        pruned: { type: 'number', description: 'Redundant edges deleted' },
+        remaining: { type: 'number', description: 'Redundant edges left (when capped by max)' },
+      },
+    },
+  },
+  {
+    name: 'tend',
+    description:
+      'Run a tending pass now: attention() distilled into a `tending/latest` audit fact (stale / unlinked / dangling, with samples) — the just-in-time cron made manual. A daily schedule writes the same report.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      description: 'The tending report (also written to `tending/latest`)',
+      properties: {
+        at: { type: 'string' },
+        scope: { type: 'string' },
+        stale: { type: 'number' },
+        unlinked: { type: 'number' },
+        dangling: { type: 'number' },
+        staleSample: { type: 'array' },
+        unlinkedSample: { type: 'array' },
+        danglingSample: { type: 'array' },
+      },
+    },
+  },
+  {
+    name: 'registerView',
+    description:
+      'Register a named view: `{ id, query, reduce?, path?, render? }` stored as a fact at `_views/<id>`. A view is a stored projection (the query primitive as data) with an optional reduction (list|count|latest|sum) and a render hint — the same declaration is a dashboard surface for humans and an affordance for agents.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: {
+          type: 'object',
+          description: 'The view definition',
+          properties: {
+            id: { type: 'string' },
+            description: { type: 'string' },
+            query: { type: 'object', description: 'Query options: { type?, tag?, prefix?, rankBy?, limit?, includeSuperseded? }' },
+            reduce: { type: 'string', enum: ['list', 'count', 'latest', 'sum'] },
+            path: { type: 'string', description: 'Dot-path into each value, for sum' },
+            render: { type: 'object', description: 'Render hint: { type: metric|table|feed|list|markdown, label?, ... }' },
+          },
+          required: ['id', 'query'],
+        },
+      },
+      required: ['view'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', description: 'The registered view definition, echoed' },
+  },
+  {
+    name: 'views',
+    description: 'List the registered views in your slice.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { views: { type: 'array', items: { type: 'object', description: 'View definitions' } } } },
+  },
+  {
+    name: 'view',
+    description: 'Evaluate a registered view against the current slice — returns its value, count, and render hint.',
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The view id' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        description: { type: 'string' },
+        render: { type: ['object', 'null'], description: 'The render hint' },
+        value: { description: 'The evaluated value, per the view’s reduce' },
+        count: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'deleteView',
+    description: 'Retire a registered view (supersedes its `_views/<id>` fact).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+  {
+    name: 'registerSubscription',
+    description:
+      'Register a reaction: `{ id, match:{type?,keyPrefix?,cel?}, invoke|deliver, params?, maxDepth? }` stored as a fact at `_subscriptions/<id>`. When a fact write matches `match`, the reactor fires — either `invoke` (a declared action id, in-process) or `deliver` (a cell tool "@owner/name.tool", called AS you, for reactions that need a cell, e.g. a model deciding an agent rail) — with `params` templated from the event (${key} ${keySuffix} ${scope} ${value.<path>}). The generic primitive behind reactive machines — a tier-2 cell makes a process reactive by registering subscriptions, no platform change needed.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        subscription: {
+          type: 'object',
+          description: 'The subscription definition',
+          properties: {
+            id: { type: 'string' },
+            match: { type: 'object', description: 'Predicate over the changed fact: { type?, keyPrefix?, cel? }' },
+            invoke: { type: 'string', description: 'Declared action id to invoke when matched (exactly one of invoke/deliver)' },
+            deliver: { type: 'string', description: 'Cell tool address "@owner/name.tool" to call as the slice owner (exactly one of invoke/deliver)' },
+            params: { type: 'object', description: 'Arg templates over the event: { name: "${keySuffix}" | "${value.x}" | … }' },
+            maxDepth: { type: 'number', description: 'Loop bound: skip when the triggering fact revision exceeds this (default 50)' },
+            label: { type: 'string' },
+          },
+          required: ['id', 'match'],
+        },
+      },
+      required: ['subscription'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', description: 'The registered subscription definition, echoed' },
+  },
+  {
+    name: 'subscriptions',
+    description: 'List the reaction subscriptions in your slice.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: { type: 'object', properties: { subscriptions: { type: 'array', items: { type: 'object', description: 'Subscription definitions' } } } },
+  },
+  {
+    name: 'deleteSubscription',
+    description: 'Retire a reaction subscription (supersedes its `_subscriptions/<id>` fact).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+  {
+    name: 'supersede',
+    description:
+      'Retire a fact (it stops surfacing in recall but is not deleted). Optionally point it at a successor key; `migrateLinks` carries its edges to the successor so the graph does not rot. Returns the retired fact, or null when the key never existed.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Fact key to retire' },
+        by: { type: 'string', description: 'Optional successor key' },
+        migrateLinks: { type: 'boolean', description: 'Re-point edges at the successor (requires `by`)' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: { ...ENTRY_SCHEMA, description: 'The retired fact, or null when the key never existed' },
+  },
+  {
+    name: 'share',
+    description:
+      'Grant access to a fact, a key prefix (`inbox/*`), or your whole slice (omit `key`). Share `to` a user, to `public` (the universal audience — anyone, including unauthenticated readers; read-only), or to `group:<name>` (a named audience you define with `workspace.group`). mode "read" (default) makes it appear in their recall; mode "write" additionally lets them remember into the covered keys of your slice (write-through — their identity is stamped as the writer).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'A username, "public" (anyone), or "group:<name>" (a named audience)' },
+        key: { type: 'string', description: 'A fact key, a prefix ending in `*` (e.g. "inbox/*"), or omit for your whole slice' },
+        mode: { type: 'string', enum: ['read', 'write'], description: 'read (default) = visibility; write = write-through too (not allowed for public)' },
+      },
+      required: ['to'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { owner: { type: 'string' }, grantee: { type: 'string' }, key: { type: 'string', description: '"*" = whole slice' }, mode: { type: 'string' }, createdAt: { type: 'string' } },
+    },
+  },
+  {
+    name: 'unshare',
+    description: 'Revoke a share previously made with `share`.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'The user to revoke' },
+        key: { type: 'string', description: 'The fact key, or omit for the whole-slice share' },
+      },
+      required: ['to'],
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+  {
+    name: 'shared',
+    description: 'List what you have shared with others and what others have shared with you (each grant: owner, grantee, key pattern, mode).',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        shared: { type: 'array', description: 'Grants you have made' },
+        receiving: { type: 'array', description: 'Grants made to you' },
+      },
+    },
+  },
+  {
+    name: 'grants',
+    description:
+      'The authority self-model (also `read("$grants")`): *what you may see and do*, resolving the three enforcement layers into one surface — `scope` (token: active + ceiling), `slice` (your own partition, full authority), and `grant` (the subsets you `shared`/`receiving` + the `groups` you belong to or define). The authority surface beside `$catalog` (capabilities), `$types` (vocabulary), and `$graph` (references). Inspect-only — it reports authority, it does not change it.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        principal: { type: 'string' },
+        scope: { type: 'object', description: '{ active: enforced now, ceiling: the grant max }' },
+        slice: { type: 'string', description: 'Your own slice — full authority' },
+        grant: { type: 'object', description: '{ shared[], receiving[], groups[] }' },
+        hint: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'group',
+    description:
+      'Define or patch a named audience (a group of principals) you can then `share` to with `to: "group:<name>"`. Pass `members` to set the membership wholesale, or `add`/`remove` to patch it. The group is stored as a `_groups/<name>` fact in your slice; recall resolves group shares for members without scanning. You are always implicitly in your own audiences.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The audience handle (bare name)' },
+        members: { type: 'array', items: { type: 'string' }, description: 'Replace the membership with exactly these principals' },
+        add: { type: 'array', items: { type: 'string' }, description: 'Add these principals' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Remove these principals' },
+        label: { type: 'string' },
+        note: { type: 'string' },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        members: { type: 'array', items: { type: 'string' } },
+        label: { type: 'string' },
+        note: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'groups',
+    description: 'List the named audiences you have defined, each with its current membership.',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: { groups: { type: 'array', description: 'Your audiences: { name, members[], label?, note? }' } },
+    },
+  },
+  {
+    name: 'requestGrant',
+    description:
+      'Ask a resource owner for access you were denied. The request lands as a fact in the owner\'s slice (provenance-stamped as you), surfaces in their grantRequests inbox, and the outcome is written back into your slice under `_grants/answers/`. Resources use the scope grammar: "workspace:<owner>:<keyPattern>:<read|write>" or "cell:<owner>/<name>:<tool|*>".',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resource: { type: 'string', description: 'e.g. "workspace:alice:inbox/*:write" or "cell:alice/regwatch:save_prompt"' },
+        note: { type: 'string', description: `Why you need it (≤${NOTE_MAX} chars)` },
+      },
+      required: ['resource'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        requested: { type: 'boolean' },
+        owner: { type: 'string' },
+        resource: { type: 'string' },
+        key: { type: 'string', description: "The request fact key in the owner's slice" },
+      },
+    },
+  },
+  {
+    name: 'grantRequests',
+    description:
+      'Your grant inbox: pending requests on resources you own (resolve with approveGrant/denyGrant), plus the outcomes of requests you made (answers land in your slice when the owner resolves).',
+    scope: null,
+    kind: 'read',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        incoming: {
+          type: 'array',
+          description: 'Pending requests: [{ key, requester, resource, note?, requestedAt }]',
+        },
+        answers: {
+          type: 'array',
+          description: 'Outcomes of your requests: [{ key, resource, status, by, at, reason? }]',
+        },
+      },
+    },
+  },
+  {
+    name: 'approveGrant',
+    description:
+      'Approve a pending grant request (by its fact key from grantRequests): applies the grant — workspace resources via share, cell resources via cells.grant — then resolves the request and notifies the requester.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'The request fact key' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { approved: { type: 'boolean' }, resource: { type: 'string' }, grantee: { type: 'string' } },
+    },
+  },
+  {
+    name: 'denyGrant',
+    description: 'Deny a pending grant request (by its fact key), optionally with a reason the requester will see.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'The request fact key' },
+        reason: { type: 'string', description: `Optional reason (≤${NOTE_MAX} chars)` },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { denied: { type: 'boolean' }, resource: { type: 'string' }, grantee: { type: 'string' } },
+    },
+  },
+];
