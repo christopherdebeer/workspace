@@ -166,7 +166,11 @@ session, so per-fact grants are enforced for free.
   mirroring the live board's hierarchy: authored links (`relates`/`informs`/…) read as real connections; inferred
   `similarTo` edges are a faint constellation (parcland is 333 `similarTo` : 13 authored), so a 240px thumbnail
   shows structure, not a similarity haze.
-- **Inc 4 — server-assembled `scene` read: ATTEMPTED, REVERTED (a live-caught finding).** To stop the renderer
+- **Inc 4 — server-assembled `scene` read: ATTEMPTED, REVERTED, then REINSTATED (ADR-0044 Inc 7, 2026-07-01).**
+  The revert below stands as the record of the 128 MB finding; the resolution was raising the cell tier (forge
+  default 512 MB + a `memoryMb` knob on `cells.create`/`cells.configureCell`; canvas at 1024 MB). Live proof:
+  the same `scene` assembly that ran ~7.8–10 s at 128 MB completes in **~800 ms at 1024 MB** (cells.logs REPORT),
+  and the v5 renderer makes ONE host-proxied read. Original finding, kept for the record: To stop the renderer
   re-deriving the board (join placements+content, project edges) from raw reads, canvas grew a `scene` **read tool**
   (`read("@c15r/canvas.scene")` → assembled `{elements, edges}`, gated like SSR). It worked functionally (127
   elements + 346 edges in one call) but **regressed latency badly**: a forge-deployed runtime cell is **128 MB

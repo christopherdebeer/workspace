@@ -148,8 +148,10 @@ subsumed.
 6. **The cell-contract page** — one doc naming the five slots (reads/writes/types/renderers/tools) with
    starter as the worked example; fold the scattered contract knowledge (ssr.json, types.json, `/_tools`,
    organ path, `x-parc-writes`) into it. *(new)*
-7. **Canvas scene, reinstated on the raised cell tier** — with the 512 MB default + `memoryMb` knob
-   (shipped alongside this ADR), re-land the assembled `scene` read and the thin renderer; measure live.
-   *(subsumes 0043 Inc 4/5's "bigger tier" arm)*
+7. **Canvas scene, reinstated on the raised cell tier — SHIPPED + live-verified (2026-07-01).** The 512 MB
+   default + `memoryMb` knob landed (cells-service CDK deploy, run 28547218384); canvas raised to 1024 MB via
+   `cells.configureCell`; the assembled `scene` read + thin v5 renderer re-landed. **Live measurement: ~800 ms
+   at 1024 MB vs ~7.8–10 s at 128 MB** for the same 127-element / 346-edge board — the ~10× CPU-scaling
+   prediction, confirmed. *(subsumes 0043 Inc 4/5's "bigger tier" arm)*
 
 Each increment ends with a live proof (L5), not a green CI run.
