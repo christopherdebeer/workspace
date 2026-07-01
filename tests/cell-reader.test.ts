@@ -67,6 +67,19 @@ describe('createCellReader — peek / query / byType', () => {
     expect(res.entries.map((e) => e.key).sort()).toEqual(['blk-1', 'blk-2']);
     expect(res.entries.every((e) => e._meta.type === 'doc-block')).toBe(true);
   });
+
+  it('list is the CHEAP unranked read: prefix-filtered raw records, no salience', async () => {
+    const store = await seedDoc('c15r');
+    const r = createCellReader(store, 'c15r');
+    const recs = await r.list('blk-');
+    expect(recs.map((x) => x.key).sort()).toEqual(['blk-1', 'blk-2']);
+    // Raw StateRecords — no `_meta.score` (list never runs the salience pipeline).
+    for (const rec of recs) expect((rec as unknown as { _meta?: unknown })._meta).toBeUndefined();
+    // No prefix → the whole live slice; superseded excluded by construction.
+    const all = await r.list();
+    expect(all.length).toBeGreaterThanOrEqual(5);
+    expect(all.every((x) => x.superseded === false)).toBe(true);
+  });
 });
 
 describe('createCellReader — members (key-encoded), the $types dependency', () => {

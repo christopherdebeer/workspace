@@ -34,6 +34,7 @@
  */
 import {
   createObservedState,
+  isTimerLive,
   type StateStore,
   type ObservedState,
   type StateRecord,
@@ -63,7 +64,17 @@ export interface CellReader {
   /** One fact, RAW (the stored record — no salience, no attention write). The
    *  SSR-safe `peek`: a doc's body, a single fact by key. */
   peek(key: string): Promise<StateRecord | null>;
-  /** Salience-ranked projection over the slice (filter by type/tag/prefix/contains). */
+  /** CHEAP list of live records (optionally key-prefix-filtered), RAW and
+   *  UNRANKED — one slice scan, NO salience. Use this for "just the facts" cell
+   *  SSR (a notes list, a doc's blocks by prefix). Prefer it over `query` on a
+   *  large slice: `query` additionally scans the whole trajectory + every edge to
+   *  compute salience, which is pathologically expensive when you only need the
+   *  rows (it will time out an SSR Lambda on a big slice). Reach for `query` only
+   *  when you actually need the ranking. */
+  list(prefix?: string): Promise<StateRecord[]>;
+  /** Salience-ranked projection over the slice (filter by type/tag/prefix/contains).
+   *  Heavier than `list` — computes salience over the WHOLE slice (trajectory +
+   *  all edges). Use only when the ranking matters; else use `list`. */
   query(opts?: QueryOptions): Promise<QueryResult>;
   /** Every fact of one type, salience-ranked — `query({ type })` with the
    *  bound `typeRules`. The hub-collection read. */
@@ -98,6 +109,11 @@ export function createCellReader(
     state,
     scope,
     peek: (key) => store.get(scope, key),
+    list: async (prefix) => {
+      const nowMs = Date.now();
+      const recs = await store.list(scope);
+      return recs.filter((r) => !r.superseded && isTimerLive(r, nowMs) && (prefix === undefined || r.key.startsWith(prefix)));
+    },
     query: (opts) => state.query(scope, { ...opts, typeRules: opts?.typeRules ?? typeRules }),
     byType: (type, opts) => state.query(scope, { ...opts, type, typeRules: opts?.typeRules ?? typeRules }),
     neighbors: (key, opts) => state.neighbors(scope, key, { ...opts, typeRules: opts?.typeRules ?? typeRules }),
