@@ -35,6 +35,29 @@ export { primeViews, loadViews } from './views';
 const { useState, useEffect } = React;
 
 /**
+ * The graph shell's parachute. A render error anywhere under the graph/palette
+ * would otherwise rethrow inside react-dom's cross-origin (esm.sh) frames and
+ * reach window.onerror as a masked "Script error." with no detail — a boundary
+ * receives the REAL error in-JS, so we can show it and keep the page usable
+ * (the legacy dashboard stays one state-flip away via the caller's fallback).
+ */
+class GraphBoundary extends React.Component<
+  { fallback: (err: Error) => React.ReactNode; children: React.ReactNode },
+  { err: Error | null }
+> {
+  state: { err: Error | null } = { err: null };
+  static getDerivedStateFromError(err: Error): { err: Error } {
+    return { err };
+  }
+  componentDidCatch(err: Error): void {
+    console.error('[home graph]', err);
+  }
+  render(): React.ReactNode {
+    return this.state.err ? this.props.fallback(this.state.err) : this.props.children;
+  }
+}
+
+/**
  * The server's first-paint seed: the resolved session plus the substrate-backed
  * data the cell read directly (LeadingKeys-scoped STATE#/TRAJ# — see index.ts).
  * Seeding these makes the dashboard render with REAL content server-side and the
@@ -480,7 +503,19 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {!session.ready ? null : !authed ? (
         <Landing session={session} />
       ) : !legacy ? (
-        <>
+        <GraphBoundary
+          fallback={(err) => (
+            <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: '#241f18', color: '#efe9dc', padding: '1rem' }}>
+              <div style={{ maxWidth: 640 }}>
+                <p style={{ fontFamily: theme.mono }}>the graph hit an error:</p>
+                <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', color: '#e8a0a0', maxHeight: '40vh', overflowY: 'auto' }}>{err.message}{'\n'}{err.stack?.split('\n').slice(0, 8).join('\n')}</pre>
+                <button onClick={() => setLegacy(true)} style={{ background: 'none', color: '#f5c453', border: '1px solid #3d362b', borderRadius: 8, padding: '0.4rem 0.9rem', cursor: 'pointer' }}>
+                  open the dashboard instead
+                </button>
+              </div>
+            </div>
+          )}
+        >
           <FullGraph selectedKey={selectedKey} onSelect={(n) => setSelectedKey(n?.key ?? null)} />
           <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />
           <div style={{ position: 'fixed', top: 10, left: 12, right: 12, zIndex: 30, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none' }}>
@@ -492,7 +527,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
               dashboard
             </button>
           </div>
-        </>
+        </GraphBoundary>
       ) : (
         <>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', alignItems: 'center' }}>

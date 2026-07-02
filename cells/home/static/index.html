@@ -11,14 +11,33 @@
   <div id="root"></div>
   <div id="err-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#7a1f1f;color:#fff;font:12px/1.4 monospace;padding:6px 10px;z-index:9999;white-space:pre-wrap;"></div>
   <script>
+    // ?debug=1 injects the eruda mobile devtools BEFORE the app module loads
+    // (module scripts are deferred, document.write here still beats them).
+    // Sticky via localStorage so in-app navigations keep the console;
+    // ?debug=0 turns it back off.
+    (function () {
+      try {
+        var q = new URLSearchParams(location.search).get('debug');
+        if (q === '0') localStorage.removeItem('parc.debug');
+        else if (q === '1') localStorage.setItem('parc.debug', '1');
+        if (q === '1' || localStorage.getItem('parc.debug') === '1') {
+          document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/eruda@3" crossorigin="anonymous"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt>window.eruda && eruda.init();<\/scr' + 'ipt>');
+        }
+      } catch (e) { /* storage blocked — no debug console */ }
+    })();
     window.addEventListener('error', function (e) {
       var b = document.getElementById('err-banner'); b.style.display = 'block';
-      b.textContent = 'error: ' + (e.message || e.type) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+      var stack = e.error && e.error.stack ? '\n' + String(e.error.stack).split('\n').slice(0, 4).join('\n') : '';
+      var masked = e.message === 'Script error.' && !e.filename ? ' (cross-origin masked — reload with ?debug=1 for the full console)' : '';
+      b.textContent = 'error: ' + (e.message || e.type) + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '') + masked + stack;
     });
     window.addEventListener('unhandledrejection', function (e) {
       var b = document.getElementById('err-banner'); b.style.display = 'block';
-      b.textContent = 'rejection: ' + (e.reason && (e.reason.message || String(e.reason)));
+      var r = e.reason;
+      b.textContent = 'rejection: ' + (r && (r.message || String(r))) + (r && r.stack ? '\n' + String(r.stack).split('\n').slice(0, 4).join('\n') : '');
     });
+    document.getElementById('err-banner').addEventListener('click', function () { this.style.display = 'none'; });
   </script>
   <script type="module" src="/@c15r/home/app.js"></script>
 </body>

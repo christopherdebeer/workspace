@@ -72,6 +72,32 @@ Authed home becomes **a full-viewport force graph with the field computer as its
   highlights them (accent ring, others dimmed), and **fits them to the viewport** — search, query,
   and recall now visibly reshape the graph.
 
+## v2.1 (field debugging + the orphan question)
+
+A reported click-crash surfaced as a masked `Script error.` (Safari masks exceptions whose top
+frames are cross-origin — both react-dom via esm.sh and d3 via jsdelivr qualify, so ANY render or
+handler error on home was unreadable in the field). A full jsdom harness replaying the real bundle
+against live substrate data (all 140 nodes clicked, real peek/neighbors/type-vocabulary) found no
+reproducible fault, so v2.1 ships the observability to catch it where it happens:
+
+- `?debug=1` injects the **eruda** mobile console before the app module loads (sticky via
+  `localStorage['parc.debug']`; `?debug=0` clears it).
+- `guard()` wraps every d3-dispatched handler (click/dblclick/zoom/drag/result-listener) and
+  re-reports via `window.reportError` from same-origin code — the masked error keeps its message
+  and stack.
+- A **GraphBoundary** around the graph branch catches React render errors in-JS (boundaries see the
+  real error object, unmaskable), shows message + stack, and offers the dashboard as an exit.
+- The err-banner shows stack lines, explains masking, and dismisses on tap.
+
+**Orphan nodes** (the "dispersed collection"): live-data analysis showed no fact is truly
+edgeless — every apparent orphan had edges in the full projection whose far ends missed the
+140-node salience band (the graph only draws an edge when both ends are visible). 29 of 41 were
+`canvas-placement` decorations whose only edge is `instanceOf → _types/canvas-placement`: geometry,
+not knowledge (ADR-0046 — the el already carries the `onBoard` edge). v2.1 filters
+reserved-namespace keys (`_…`) and `canvas-placement` facts out of the node band. The structural
+fix for the REST (cells, machine-runs with off-band neighbourhoods) is the one-hop-expand
+follow-up below.
+
 ## Follow-ups (still open)
 
 - **One-hop expand from the context panel** (pull neighbours into the live sim as nodes — the

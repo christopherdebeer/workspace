@@ -73,12 +73,35 @@ function keysOfResult(value: unknown): string[] {
   if (!v || typeof v !== 'object') return [];
   const out = new Set<string>();
   const entries = v.entries;
-  if (Array.isArray(entries)) for (const e of entries) if (e?.key) out.add(String(e.key));
-  else if (entries && typeof entries === 'object') for (const k of Object.keys(entries)) out.add(k);
+  if (Array.isArray(entries)) {
+    for (const e of entries) if (e?.key) out.add(String(e.key));
+  } else if (entries && typeof entries === 'object') {
+    for (const k of Object.keys(entries)) out.add(k);
+  }
   if (v.focus && typeof v.focus === 'object') for (const k of Object.keys(v.focus)) out.add(k);
   if (Array.isArray(v.members)) for (const m of v.members) if (m?.key) out.add(String(m.key));
   if (typeof v.key === 'string' && v.value !== undefined) out.add(v.key);
   return [...out];
+}
+
+/** Substrate plumbing stays out of the node band: reserved-namespace keys
+ *  (`_canvas/…` placements, `_home/layout`, `_types/…`) are projections'
+ *  raw material, not knowledge — a placement's geometry already surfaces as
+ *  the el's `onBoard` edge (ADR-0046); showing the decoration fact too would
+ *  scatter edgeless satellites across the graph. */
+const isPlumbing = (e: ListEntry): boolean => e.key.startsWith('_') || (e._meta?.type ?? '') === 'canvas-placement';
+
+/** Errors thrown inside d3-dispatched handlers surface as a masked
+ *  "Script error." on Safari (the dispatch frames are cross-origin CDN code).
+ *  Re-reporting from this same-origin module keeps the message + stack. */
+function guard<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
+  return (...a: A) => {
+    try {
+      fn(...a);
+    } catch (err) {
+      (window.reportError ?? console.error)(err);
+    }
+  };
 }
 
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
@@ -108,7 +131,8 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">graph renderer unavailable (offline?)</div>';
         return;
       }
-      const entries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
+      const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
+      const entries = allEntries.filter((e) => !isPlumbing(e));
       const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
       const byKey = new Map(entries.map((e) => [e.key, e]));
       const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
@@ -131,13 +155,13 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       el.innerHTML = '';
       const svg = d3.select(el).append('svg').attr('width', '100%').attr('height', '100%').style('display', 'block').style('touch-action', 'none');
       const g = svg.append('g');
-      const zoom = d3.zoom().scaleExtent([0.15, 4]).on('zoom', (ev: any) => {
+      const zoom = d3.zoom().scaleExtent([0.15, 4]).on('zoom', guard((ev: any) => {
         g.attr('transform', ev.transform);
         // Secondary edge labels (membership/derived) fade in once zoomed close.
         edgeLabel.attr('display', (d: any) => (d.rel === 'similarTo' ? 'none' : d.derived && ev.transform.k < 1.3 ? 'none' : null));
-      });
+      }));
       svg.call(zoom);
-      svg.on('click', () => api.current?.select(null));
+      svg.on('click', guard(() => api.current?.select(null)));
 
       const link = g
         .append('g')
@@ -243,18 +267,18 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         },
       };
 
-      node.on('click', (ev: any, d: any) => {
+      node.on('click', guard((ev: any, d: any) => {
         ev.stopPropagation();
         api.current?.select(d.id);
-      });
-      node.on('dblclick', (ev: any, d: any) => {
+      }));
+      node.on('dblclick', guard((ev: any, d: any) => {
         ev.stopPropagation();
         openFact({ key: d.id } as ListEntry);
-      });
+      }));
 
       // Console results (search / query / recall / neighbors) light up the graph
       // and the camera fits to them — the palette drives the territory.
-      onResult = (ev: Event): void => {
+      onResult = guard((ev: Event): void => {
         const detail = (ev as CustomEvent<{ ok: boolean; value: unknown }>).detail;
         if (!detail?.ok) return;
         const keys = keysOfResult(detail.value).filter((k) => nodes.some((n: any) => n.id === k));
@@ -263,7 +287,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         selKey = null;
         paint();
         fitTo(hiSet);
-      };
+      });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
       sim = d3
@@ -283,20 +307,20 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       node.call(
         d3
           .drag()
-          .on('start', (ev: any, d: any) => {
+          .on('start', guard((ev: any, d: any) => {
             sim.alphaTarget(0.25).restart();
             d.fx = d.x;
             d.fy = d.y;
-          })
-          .on('drag', (ev: any, d: any) => {
+          }))
+          .on('drag', guard((ev: any, d: any) => {
             d.fx = ev.x;
             d.fy = ev.y;
-          })
-          .on('end', (ev: any, d: any) => {
+          }))
+          .on('end', guard((ev: any, d: any) => {
             sim.alphaTarget(0);
             d.fx = null;
             d.fy = null;
-          }),
+          })),
       );
 
       ro = new ResizeObserver(() => {
@@ -308,7 +332,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         setTimeout(() => sim?.stop(), 3000);
       });
       ro.observe(el);
-    })();
+    })().catch((err) => (window.reportError ?? console.error)(err));
 
     return () => {
       disposed = true;
