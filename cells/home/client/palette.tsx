@@ -30,17 +30,29 @@ const chip: React.CSSProperties = {
 
 interface NeighborRef { key: string; rel: string; entry: ListEntry }
 
-/** The selected fact's context: peeked content + its neighbourhood as chips. */
-function ContextPanel({ factKey, onSelectKey, onClear }: { factKey: string; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
+/** The selected fact's context: peeked content + its neighbourhood as chips +
+ *  the verbs that can act on it (ADR-0049 — `$catalog {for}`; tapping one
+ *  seeds the console). */
+function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: string; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
+  const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
   const [showBody, setShowBody] = useState(false);
 
   useEffect(() => {
     let live = true;
     setEntry(null);
     setNeighbors([]);
+    setVerbs([]);
     setShowBody(false);
+    // The contextual capability menu — what can ACT on this fact, inferred
+    // from its type signals (ADR-0049). Type-specific tools lead; the
+    // always-applicable workspace verbs stay in the console's full list.
+    void mcpCall('read', '$catalog', { for: factKey }).then((r) => {
+      if (!live || !r.ok) return;
+      const v = r.value as { capabilities?: Array<{ target: string; kind: string }> } | null;
+      setVerbs((v?.capabilities ?? []).slice(0, 6));
+    });
     void mcpCall('read', 'workspace.peek', { key: factKey }).then((r) => {
       if (!live || !r.ok) return;
       const v = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
@@ -95,6 +107,15 @@ function ContextPanel({ factKey, onSelectKey, onClear }: { factKey: string; onSe
           <FactBody e={entry} full />
         </div>
       ) : null}
+      {verbs.length ? (
+        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2 }}>
+          {verbs.map((v) => (
+            <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent }} title={v.target} onClick={() => onCommand(v.target)}>
+              ⚡ {v.target.slice(v.target.lastIndexOf('.') + 1)}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {neighbors.length ? (
         <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2 }}>
           {neighbors.map((n) => (
@@ -112,6 +133,13 @@ function ContextPanel({ factKey, onSelectKey, onClear }: { factKey: string; onSe
 export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  // ADR-0049: a context-panel verb chip opens the console pre-searched to that
+  // target (nonce so the same chip re-seeds after manual edits).
+  const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
+  const onCommand = useCallback((target: string) => {
+    setSeed((s) => ({ q: target, n: (s?.n ?? 0) + 1 }));
+    setOpen(true);
+  }, []);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
 
   useEffect(() => {
@@ -157,10 +185,10 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         color: ink.text,
       }}
     >
-      {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {open ? (
         <div style={{ maxHeight: '56vh', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel }}>
-          <Console authed={authed} />
+          <Console authed={authed} seed={seed} />
         </div>
       ) : null}
       <div

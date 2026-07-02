@@ -1,6 +1,8 @@
 # ADR-0049 — Capabilities in context: the catalog shaped by what you're holding
 
-- **Status:** proposed 2026-07-02 (design settled; implementation next increment). Companion to
+- **Status:** Inc 1 shipped 2026-07-02 — `$catalog {for}/{forType}` live at the gateway (capabilities
+  INFERRED from type signals via manager cells) + palette verb chips seeding the console. Open:
+  tool-valued type handlers (declared verbs beyond inference). Companion to
   ADR-0048 — the same audit, applied to the CAPABILITY surface instead of the fact surface.
 - **Depends on:** ADR-0029 R1 (inline type affordances on reads), ADR-0048 (shaping vocabulary),
   ADR-0044 L1 (declare once, project everywhere).
@@ -11,7 +13,7 @@
 always the WHOLE verb surface, regardless of what the caller is looking at. Meanwhile the
 capability-by-type projection already half-exists:
 
-- **ADR-0029 R1** infects every read with a `types` map — but it stops at DECLARED HANDLERS
+- **ADR-0029 R1** stamps every read with a `types` map — but it stops at DECLARED HANDLERS
   (open/edit/render/create as surfaces/hints). It cannot say "`@c15r/machine.step` exists, takes
   `{key, input}`" for a machine fact.
 - **`$cells`** (7.4 KB) knows each cell's tools and published types; **`$types`** (34 KB) knows

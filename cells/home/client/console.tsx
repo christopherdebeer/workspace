@@ -199,7 +199,7 @@ function MonoPill({ children, color }: { children: React.ReactNode; color?: stri
  * straight away); results stack below, newest first. The human drives the same
  * read/act wire an agent does.
  */
-export function Console({ authed }: { authed: boolean }): React.JSX.Element {
+export function Console({ authed, seed }: { authed: boolean; seed?: { q: string; n: number } | null }): React.JSX.Element {
   const [cmds, setCmds] = useState<Cmd[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -213,6 +213,16 @@ export function Console({ authed }: { authed: boolean }): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const counter = React.useRef(0);
+
+  // ADR-0049: a contextual verb chip (palette selection) seeds the search box —
+  // the nonce lets the same target re-seed after the user edits the query.
+  useEffect(() => {
+    if (!seed) return;
+    setQuery(seed.q);
+    setFocused(null);
+    setSel(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.n]);
 
   useEffect(() => {
     if (!authed) return;

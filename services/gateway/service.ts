@@ -41,6 +41,7 @@ import {
   ServiceHttpResponse,
   buildTypeVocabulary,
 } from '../../platform/runtime';
+import { typeSignals } from '../../platform/ui/vocab';
 import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -278,7 +279,76 @@ function summarizeCatalog(caps: CatalogEntry[]): {
   }
   return {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
-    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target.',
+    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target. Holding a fact? read("$catalog", { for: "<key>" }) returns just what can act on it (ADR-0049).',
+  };
+}
+
+// ─── contextual capabilities (ADR-0049) ───────────────────────────
+
+/** The workspace verbs that act on ANY fact — the floor of a contextual menu. */
+const CORE_FACT_VERBS = new Set([
+  'workspace.peek',
+  'workspace.neighbors',
+  'workspace.members',
+  'workspace.link',
+  'workspace.unlink',
+  'workspace.remember',
+  'workspace.supersede',
+  'workspace.share',
+]);
+
+/** A type's `manager` ref, normalised to the catalog's cell-name form
+ *  (`c15r/machine` → `@c15r/machine`; tier-1 names pass through). */
+function managerCell(ref: unknown): string | null {
+  if (typeof ref !== 'string' || !ref) return null;
+  return ref.includes('/') ? (ref.startsWith('@') ? ref : `@${ref}`) : ref;
+}
+
+/**
+ * `$catalog {for: <key>}` / `{forType: <type>}` — the catalog shaped by what
+ * the caller is holding (ADR-0049). Capabilities are INFERRED by type: the
+ * fact's type signals (declared type → key prefix → tag prefixes, the same
+ * ladder the render floor walks) resolve to declarations, each declaration's
+ * manager cell contributes its tools WITH schemas (the escalation tier, small
+ * because it's scoped), and the generally-applicable workspace verbs ride
+ * along as one-liners. A filter over what the token could already call —
+ * presentation, never authority.
+ */
+export function buildContextualCatalog(
+  caps: CatalogEntry[],
+  types: Record<string, unknown>,
+  subject: { key?: string; type?: string; meta?: { type?: string | null; tags?: string[] } },
+): {
+  for: string;
+  signals: string[];
+  types: Record<string, unknown>;
+  capabilities: CatalogEntry[];
+  workspace: CatalogSummaryEntry[];
+  hint: string;
+} {
+  const signals = subject.type
+    ? [{ type: subject.type, match: '' }]
+    : typeSignals({ key: subject.key ?? '', _meta: subject.meta ?? undefined });
+  const matched: Record<string, unknown> = {};
+  const managers = new Set<string>();
+  for (const s of signals) {
+    const d = types[s.type] as { icon?: unknown; label?: unknown; manager?: unknown; handlers?: unknown } | undefined;
+    if (!d || matched[s.type]) continue;
+    matched[s.type] = { icon: d.icon, label: d.label, manager: d.manager, handlers: d.handlers };
+    const cell = managerCell(d.manager);
+    if (cell) managers.add(cell);
+  }
+  const capabilities = caps.filter((c) => managers.has(cellOf(c.target)));
+  const workspace = caps
+    .filter((c) => CORE_FACT_VERBS.has(c.target))
+    .map((c) => ({ target: c.target, kind: c.kind, summary: firstSentence(c.description) }));
+  return {
+    for: subject.key ?? subject.type ?? '',
+    signals: signals.map((s) => s.type),
+    types: matched,
+    capabilities,
+    workspace,
+    hint: 'What can act on THIS: the type declarations it matches, the managing cells\' tools (full schemas), and the always-applicable workspace verbs (one-liners — resolve or read("$catalog",{detail:"full"}) for their schemas).',
   };
 }
 
@@ -380,11 +450,25 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
+    const opts = input?.input as { detail?: string; for?: string; forType?: string } | undefined;
+    // ADR-0049: `{for: <key>}` / `{forType: <type>}` — the contextual menu, a
+    // few KB inferred from the fact's type signals instead of the whole surface.
+    if (opts?.for || opts?.forType) {
+      const { types } = await buildTypes(ctx);
+      let meta: { type?: string | null; tags?: string[] } | undefined;
+      if (opts.for && !opts.forType) {
+        const fact = await ctx
+          .serviceClient('workspace')
+          .command<{ _meta?: { type?: string | null; tags?: string[] } } | null>('peek', { key: opts.for })
+          .catch(() => null);
+        meta = fact?._meta;
+      }
+      return buildContextualCatalog(caps, types, { key: opts.for, type: opts.forType, meta });
+    }
     // ADR-0033: progressive disclosure by default — a bare `$catalog` returns the
     // grouped one-line menu (skim), not every input/result schema. `detail:"full"`
     // (or "schemas") returns the heavy full contract.
-    const detail = (input?.input as { detail?: string } | undefined)?.detail;
-    if (detail === 'full' || detail === 'schemas') return { capabilities: caps };
+    if (opts?.detail === 'full' || opts?.detail === 'schemas') return { capabilities: caps };
     return summarizeCatalog(caps);
   }
   if (target === TYPES) return buildTypes(ctx);
@@ -443,7 +527,7 @@ const READ_SCHEMA = {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
     input: {
       ...INPUT_PROP,
-      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema.`,
+      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
     },
   },
   additionalProperties: false,
