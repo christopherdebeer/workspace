@@ -198,7 +198,7 @@ function MonoPill({ children, color }: { children: React.ReactNode; color?: stri
  * straight away); results stack below, newest first. The human drives the same
  * read/act wire an agent does.
  */
-function Console({ authed }: { authed: boolean }): React.JSX.Element {
+export function Console({ authed }: { authed: boolean }): React.JSX.Element {
   const [cmds, setCmds] = useState<Cmd[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');

@@ -17,6 +17,8 @@ import * as React from 'react';
 import { Page, Card, Heading, Button, Anchor, theme, type TypeDecl } from '@parc/ui';
 import { useAuth, mcpCall, type Session } from './lib';
 import { Landing, Wordmark, DashboardHeader, StatCards, RecentActivity, QuickCapture, loadDashboard, type DashboardData } from './dashboard';
+import { FullGraph, type GraphNode } from './graph';
+import { Palette } from './palette';
 import { setTypeDecls, loadTypeDecls, typeIcon, factTitle, factHref, FactBody, EditLink, FactDetailHost, WorkspaceWindow, type WorkspaceSeed, type ListEntry } from './facts';
 import { IdentityShell, type IdentityData } from './identity';
 import { Views, ViewSurface, viewIcon, loadViews, CellsConsole, type CellRow, type ViewDef } from './views';
@@ -433,6 +435,11 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const [dash, setDash] = useState<DashboardData | null>(initial?.dash ?? null);
   const { sections, save } = useLayout(authed, initial?.layout);
   const [customizing, setCustomizing] = useState(false);
+  // ADR-0047: the graph IS the authed home; the section dashboard stays one
+  // toggle away (state, not a route — SSR always renders the graph shell, so
+  // server and first client paint agree by construction).
+  const [legacy, setLegacy] = useState(false);
+  const [selected, setSelected] = useState<GraphNode | null>(null);
 
   useEffect(() => {
     // SSR already seeded the snapshot — trust it (no refetch flash). Only the
@@ -469,9 +476,29 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     <Page>
       {!session.ready ? null : !authed ? (
         <Landing session={session} />
+      ) : !legacy ? (
+        <>
+          <FullGraph onSelect={setSelected} />
+          <Palette authed={authed} selected={selected} onClear={() => setSelected(null)} />
+          <div style={{ position: 'fixed', top: 10, left: 12, right: 12, zIndex: 30, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none' }}>
+            <span style={{ pointerEvents: 'auto', filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))' }}><Wordmark /></span>
+            <button
+              onClick={() => setLegacy(true)}
+              style={{ pointerEvents: 'auto', background: 'rgba(24,21,17,0.8)', color: '#efe9dc', border: '1px solid #3d362b', borderRadius: 8, fontSize: '0.75rem', fontFamily: theme.mono, padding: '0.3rem 0.7rem', cursor: 'pointer' }}
+            >
+              dashboard
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', alignItems: 'center' }}>
+            <button
+              onClick={() => setLegacy(false)}
+              style={{ background: 'none', color: theme.dim, border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: '0.78rem', padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+            >
+              ⊹ graph
+            </button>
             <button
               onClick={() => setCustomizing((c) => !c)}
               style={{ background: customizing ? theme.accent : 'none', color: customizing ? theme.cream : theme.dim, border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: '0.78rem', padding: '0.25rem 0.7rem', cursor: 'pointer' }}

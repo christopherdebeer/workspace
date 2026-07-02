@@ -336,7 +336,7 @@ export interface Edge {
 const FACT_DETAIL_EVENT = 'home:fact-detail';
 
 /** Open the progressive detail modal for a fact (or a bare {key}; hydrated by peek). */
-function openFact(e: ListEntry): void {
+export function openFact(e: ListEntry): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry>(FACT_DETAIL_EVENT, { detail: e }));
 }
 
