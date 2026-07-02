@@ -1,59 +1,111 @@
 /**
- * Palette (ADR-0047) — the field computer wearing the canvas palette's shell.
+ * Palette (ADR-0047, v2) — the field computer wearing the canvas palette's shell.
  *
- * The deep review of both surfaces decided the fusion: the field computer has
- * the ENGINE a capability palette needs (live `$catalog` discovery, the
- * three-tier arg collection — ui:// form / SchemaForm / raw JSON — and rich
- * result rendering with an output tape), and the canvas palette has the SHELL
- * (a persistent floating bottom bar with no scrim, ⌘K summon, detents, and
- * context sensitivity from what's selected on the surface behind it).
+ * A fixed bottom-center floating bar over the graph (no scrim — the graph stays
+ * live). Collapsed = one pill; ⌘K opens the detented sheet holding the Console
+ * (the engine, reused whole); Esc closes. Positionable on desktop (drag the
+ * handle; double-tap re-docks); a full-width bottom sheet on small screens.
  *
- * So: a fixed bottom-center bar over the graph. Collapsed = one pill. Expanded
- * = a detented sheet holding the Console (the engine, reused whole). When a
- * graph node is selected, a CONTEXT ROW appears above the pill — icon, title,
- * and the fact's affordances (peek / open) — the canvas `visible(controller)`
- * idea, driven by declared type handlers instead of hardcoded verbs.
- * Positionable on desktop (drag the handle; double-tap the handle to re-dock);
- * on small screens it stays a full-width bottom sheet.
+ * v2 (use feedback): the CONTEXT ROW grew into a context PANEL — selecting a
+ * graph node peeks the fact and shows its CONTENT (FactBody, the shared render
+ * floor) plus its NEIGHBOURHOOD as chips; tapping a neighbour chip changes the
+ * selection, which pans the graph (App owns `selectedKey`; the graph eases its
+ * camera to any external selection). Peek still opens the full progressive
+ * detail modal; open follows the type's declared surface.
  */
 import * as React from 'react';
 import { Console } from './console';
-import { openFact, typeIcon, factTitle, factHref, type ListEntry } from './facts';
-import { localize } from './lib';
-import type { GraphNode } from './graph';
+import { openFact, typeIcon, factTitle, factHref, FactBody, type ListEntry } from './facts';
+import { localize, mcpCall } from './lib';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
 const ink = { bg: '#181511', panel: '#221d16', line: '#3d362b', text: '#efe9dc', dim: '#9a917f', accent: '#f5c453', mono: 'ui-monospace, SFMono-Regular, Menlo, monospace' };
 
-function ContextRow({ node, onClear }: { node: GraphNode; onClear: () => void }): React.JSX.Element {
-  const entry = { key: node.key, value: {}, _meta: { type: node.type ?? undefined } } as unknown as ListEntry;
-  const href = factHref(entry);
-  const chip: React.CSSProperties = {
-    background: 'none', border: `1px solid ${ink.line}`, color: ink.text, borderRadius: 999,
-    fontSize: '0.72rem', fontFamily: ink.mono, padding: '0.15rem 0.6rem', cursor: 'pointer', textDecoration: 'none',
-  };
+const chip: React.CSSProperties = {
+  background: 'none', border: `1px solid ${ink.line}`, color: ink.text, borderRadius: 999,
+  fontSize: '0.72rem', fontFamily: ink.mono, padding: '0.15rem 0.6rem', cursor: 'pointer', textDecoration: 'none',
+  maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
+
+interface NeighborRef { key: string; rel: string; entry: ListEntry }
+
+/** The selected fact's context: peeked content + its neighbourhood as chips. */
+function ContextPanel({ factKey, onSelectKey, onClear }: { factKey: string; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
+  const [entry, setEntry] = useState<ListEntry | null>(null);
+  const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
+  const [showBody, setShowBody] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setEntry(null);
+    setNeighbors([]);
+    setShowBody(false);
+    void mcpCall('read', 'workspace.peek', { key: factKey }).then((r) => {
+      if (!live || !r.ok) return;
+      const v = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
+      if (v) setEntry({ key: factKey, value: v.value, _meta: v._meta });
+    });
+    void mcpCall('read', 'workspace.neighbors', { key: factKey }).then((r) => {
+      if (!live || !r.ok) return;
+      const v = r.value as { outbound?: Array<{ to: string; rel: string }>; inbound?: Array<{ from: string; rel: string }>; entries?: Record<string, ListEntry> } | null;
+      const seen = new Set<string>([factKey]);
+      const out: NeighborRef[] = [];
+      for (const e of v?.outbound ?? []) {
+        if (seen.has(e.to)) continue;
+        seen.add(e.to);
+        out.push({ key: e.to, rel: e.rel, entry: v?.entries?.[e.to] ?? ({ key: e.to } as ListEntry) });
+      }
+      for (const e of v?.inbound ?? []) {
+        if (seen.has(e.from)) continue;
+        seen.add(e.from);
+        out.push({ key: e.from, rel: `← ${e.rel}`, entry: v?.entries?.[e.from] ?? ({ key: e.from } as ListEntry) });
+      }
+      setNeighbors(out.slice(0, 12));
+    });
+    return () => {
+      live = false;
+    };
+  }, [factKey]);
+
+  const e = entry ?? ({ key: factKey } as ListEntry);
+  const href = factHref(e);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.7rem', borderBottom: `1px solid ${ink.line}`, minWidth: 0 }}>
-      <span aria-hidden>{typeIcon(entry)}</span>
-      <button
-        onClick={() => openFact({ key: node.key } as ListEntry)}
-        title={node.key}
-        style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.8rem', cursor: 'pointer', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}
-      >
-        {node.label || node.key}
-      </button>
-      <button style={chip} onClick={() => openFact({ key: node.key } as ListEntry)}>peek</button>
-      {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
-      <button style={{ ...chip, border: 'none', color: ink.dim }} onClick={onClear} aria-label="clear selection">×</button>
+    <div style={{ display: 'grid', gap: '0.35rem', padding: '0.45rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+        <span aria-hidden>{typeIcon(e)}</span>
+        <button
+          onClick={() => setShowBody((b) => !b)}
+          title={factKey}
+          style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.8rem', cursor: 'pointer', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}
+        >
+          {entry ? factTitle(e) : factKey} <span style={{ color: ink.dim }}>{showBody ? '▾' : '▸'}</span>
+        </button>
+        <button style={chip} onClick={() => openFact({ key: factKey } as ListEntry)}>peek</button>
+        {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
+        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none' }} onClick={onClear} aria-label="clear selection">×</button>
+      </div>
+      {showBody && entry ? (
+        <div style={{ maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.82rem' }}>
+          <FactBody e={entry} full />
+        </div>
+      ) : null}
+      {neighbors.length ? (
+        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2 }}>
+          {neighbors.map((n) => (
+            <button key={`${n.rel}:${n.key}`} style={chip} title={`${n.rel} · ${n.key}`} onClick={() => onSelectKey(n.key)}>
+              {typeIcon(n.entry)} {factTitle(n.entry) || n.key}
+              <span style={{ color: ink.dim }}> · {n.rel.replace('← ', '⭠')}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function Palette({ authed, selected, onClear }: { authed: boolean; selected: GraphNode | null; onClear: () => void }): React.JSX.Element {
+export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  // Desktop repositioning: a drag offset from the bottom-center dock. Small
-  // screens ignore it (full-width sheet). Double-tap the handle re-docks.
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
 
@@ -71,7 +123,7 @@ export function Palette({ authed, selected, onClear }: { authed: boolean; select
   }, []);
 
   const onHandleDown = useCallback((e: React.PointerEvent) => {
-    if (window.innerWidth < 700) return; // bottom sheet on small screens — not draggable
+    if (window.innerWidth < 700) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     drag.current = { px: e.clientX, py: e.clientY, x: pos?.x ?? 0, y: pos?.y ?? 0 };
   }, [pos]);
@@ -100,7 +152,7 @@ export function Palette({ authed, selected, onClear }: { authed: boolean; select
         color: ink.text,
       }}
     >
-      {selected ? <ContextRow node={selected} onClear={onClear} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} /> : null}
       {open ? (
         <div style={{ maxHeight: '56vh', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel }}>
           <Console authed={authed} />

@@ -17,7 +17,7 @@ import * as React from 'react';
 import { Page, Card, Heading, Button, Anchor, theme, type TypeDecl } from '@parc/ui';
 import { useAuth, mcpCall, type Session } from './lib';
 import { Landing, Wordmark, DashboardHeader, StatCards, RecentActivity, QuickCapture, loadDashboard, type DashboardData } from './dashboard';
-import { FullGraph, type GraphNode } from './graph';
+import { FullGraph } from './graph';
 import { Palette } from './palette';
 import { setTypeDecls, loadTypeDecls, typeIcon, factTitle, factHref, FactBody, EditLink, FactDetailHost, WorkspaceWindow, type WorkspaceSeed, type ListEntry } from './facts';
 import { IdentityShell, type IdentityData } from './identity';
@@ -439,7 +439,10 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // toggle away (state, not a route — SSR always renders the graph shell, so
   // server and first client paint agree by construction).
   const [legacy, setLegacy] = useState(false);
-  const [selected, setSelected] = useState<GraphNode | null>(null);
+  // App owns selection BY KEY (not node object): the palette's neighbour chips
+  // and the graph's taps both funnel here, and the graph pans to any selection
+  // it didn't originate (ADR-0047 v2).
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
     // SSR already seeded the snapshot — trust it (no refetch flash). Only the
@@ -478,8 +481,8 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
         <Landing session={session} />
       ) : !legacy ? (
         <>
-          <FullGraph onSelect={setSelected} />
-          <Palette authed={authed} selected={selected} onClear={() => setSelected(null)} />
+          <FullGraph selectedKey={selectedKey} onSelect={(n) => setSelectedKey(n?.key ?? null)} />
+          <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />
           <div style={{ position: 'fixed', top: 10, left: 12, right: 12, zIndex: 30, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none' }}>
             <span style={{ pointerEvents: 'auto', filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))' }}><Wordmark /></span>
             <button

@@ -1,7 +1,9 @@
 # ADR-0047 — Home is the graph; the field computer is its palette
 
-- **Status:** v1 shipped 2026-07-02 (graph shell live as the authed default; legacy dashboard one toggle
-  away). Follow-ups listed below.
+- **Status:** v2 shipped 2026-07-02 (v1 same day). v2 answered first-use feedback: edge contrast +
+  rel labels, labels participate in the sim, selection is key-owned by App (graph pans to external
+  selections; palette context panel gained content preview + neighbour chips), and console results
+  reach the graph (highlight + fit-to-viewport). Remaining follow-ups listed below.
 - **Date:** 2026-07-02
 - **Depends on:** ADR-0038 Inc 2 (the card's D3 grammar — lazy CDN d3, zoom/drag, degree sizing,
   authored-solid/derived-dashed), ADR-0041 (the field computer engine: catalog discovery, the form
@@ -52,13 +54,31 @@ Authed home becomes **a full-viewport force graph with the field computer as its
   button (column mode). SSR always renders the graph shell for the authed owner, so server and first
   client paint agree by construction; d3 mounts client-side into the empty stage.
 
-## Follow-ups (scoped, not shipped in v1)
+## v2 (first-use feedback, same day)
 
-- **One-hop expand from the context row** (pull `workspace.neighbors` into the live sim — the card's
-  neighbour model, in place).
+- **Edge contrast**: v1's ink-derived strokes (`#5a5142`) vanished on the dusk background; edges are
+  now warm-light (`#cfc4aa` authored / `#e8ddc2` structural) at rel-tiered opacity — authored solid,
+  membership dashed, derived dashed fainter, `similarTo` the barely-there constellation.
+- **Edge rel labels** with a dark halo (`paint-order: stroke`); `similarTo` never labels, derived
+  rels fade in past 1.3× zoom (the "edge labels on zoom" follow-up, landed).
+- **Labels participate in the sim**: collision radius extends by rendered label width, so node
+  labels stop overlapping visually instead of only node circles avoiding each other.
+- **Selection is key-owned by App** (`selectedKey: string`), flowing both ways: graph taps set it;
+  the palette's context panel grew a peeked **content preview** (`FactBody full`, collapsible) and
+  **neighbour chips** (`workspace.neighbors`, outbound + inbound); tapping a chip changes selection
+  and the graph **pans its camera** to any selection it didn't originate (500ms ease, echo-guarded).
+- **Console results reach the graph**: `invoke()` dispatches `home:console-result`; the graph
+  extracts fact keys from any result shape (entries list / focus / members / single fact),
+  highlights them (accent ring, others dimmed), and **fits them to the viewport** — search, query,
+  and recall now visibly reshape the graph.
+
+## Follow-ups (still open)
+
+- **One-hop expand from the context panel** (pull neighbours into the live sim as nodes — the
+  card's neighbour model, in place; chips currently navigate, not expand).
 - **Selected-node → palette command seeding** (e.g. selecting a machine offers `machine.step`; the
-  context row learns the canvas palette's `visible()` richness from declared handlers).
+  context panel learns the canvas palette's `visible()` richness from declared handlers).
 - **Recents + empty-Enter capture** in the palette (the canvas overloaded-Enter idea: unmatched text
   becomes a `workspace.remember` capture).
 - **Graph refresh/live tail** (changes feed → incremental node/edge updates instead of load-once).
-- **Edge labels on zoom** and a type legend.
+- **Type legend.**

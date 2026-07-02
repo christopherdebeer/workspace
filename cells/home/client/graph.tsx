@@ -1,21 +1,25 @@
 /**
- * FullGraph (ADR-0047) — home's primary surface: the salience-shaped slice as a
- * full-viewport force graph. The substrate thesis made literal: the graph IS the
- * workspace, and every other affordance floats over it.
+ * FullGraph (ADR-0047, v2) — home's primary surface: the salience-shaped slice
+ * as a full-viewport force graph. The graph IS the workspace; everything else
+ * floats over it.
  *
  * Data: `workspace.query {rankBy:'salience', limit:140}` picks the nodes (the
- * focus band + top peripheral — progressive disclosure, not the whole slice),
- * `workspace.graph` supplies the full Reference projection (authored + derived),
- * filtered to edges among visible nodes. Node radius = salience (score) with a
- * degree assist; node hue = type (stable hash); the edge grammar mirrors the
- * canvas board renderer: authored solid, `similarTo` the faint constellation,
- * membership (onBoard/inDoc/inView — the ADR-0046 structure) a light dash,
- * other derived edges dashed.
+ * focus band — progressive disclosure, not the whole slice), `workspace.graph`
+ * supplies the full Reference projection (authored + derived), filtered to
+ * edges among visible nodes. Node radius = salience score (degree assist);
+ * node hue = type (stable hash). Edge grammar mirrors the board renderer:
+ * authored solid, `similarTo` the faint constellation, membership
+ * (onBoard/inDoc/inView — ADR-0046) a light dash, other derived dashed.
  *
- * Client-only: d3 lazy-loads from the CDN (the card's loader pattern, ADR-0038);
- * SSR renders the empty stage and the sim mounts into it — hydration-safe by
- * construction. Tap selects (the palette shows context), double-tap peeks
- * (`openFact` modal), background tap clears.
+ * v2 (use feedback): edges lifted to warm-light strokes (they were invisible
+ * against the dusk bg); non-similarTo edges carry their `rel` label (midpoint,
+ * dark halo; derived/membership labels fade in past zoom 1.3×); LABELS
+ * PARTICIPATE IN THE SIM — a labeled node's collide radius extends to cover
+ * its text extent, so labels stop overlapping visually; external SELECTION
+ * (`selectedKey` prop) pans/eases the camera to the node and rings it; and
+ * console results reach the graph over the `home:console-result` CustomEvent
+ * (the openFact pattern) — a search/query/recall's returned keys get an accent
+ * ring while everything else dims, and the camera FITS to them.
  */
 import * as React from 'react';
 import { mcpCall } from './lib';
@@ -29,6 +33,9 @@ export interface GraphNode {
   score: number;
   label: string;
 }
+
+/** Console → graph seam (dispatched by Console.invoke; the openFact pattern). */
+export const CONSOLE_RESULT_EVENT = 'home:console-result';
 
 interface GEdge {
   from: string;
@@ -46,22 +53,41 @@ const hueOf = (t: string): number => {
   for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 360;
   return h;
 };
-const nodeColor = (t: string | null): string => (t ? `hsl(${hueOf(t)} 42% 52%)` : '#9a917f');
+const nodeColor = (t: string | null): string => (t ? `hsl(${hueOf(t)} 42% 55%)` : '#9a917f');
 
 const MEMBER_RELS = new Set(['onBoard', 'inDoc', 'inView']);
-function edgeStyle(e: GEdge): { dash?: string; opacity: number; width: number } {
-  if (e.rel === 'similarTo') return { opacity: 0.08, width: 1 };
-  if (MEMBER_RELS.has(e.rel)) return { dash: '2,3', opacity: 0.22, width: 1 };
-  if (e.derived) return { dash: '3,3', opacity: 0.16, width: 1 };
-  return { opacity: 0.4, width: 1.4 };
+// v2: warm-light strokes — the v1 #5a5142 vanished into the dusk background.
+function edgeStyle(e: GEdge): { stroke: string; dash?: string; opacity: number; width: number } {
+  if (e.rel === 'similarTo') return { stroke: '#cfc4aa', opacity: 0.12, width: 1 };
+  if (MEMBER_RELS.has(e.rel)) return { stroke: '#cfc4aa', dash: '2,3', opacity: 0.32, width: 1 };
+  if (e.derived) return { stroke: '#cfc4aa', dash: '3,3', opacity: 0.26, width: 1 };
+  return { stroke: '#e8ddc2', opacity: 0.55, width: 1.5 };
 }
 
 const shortLabel = (s: string): string => (s.length > 26 ? s.slice(0, 25) + '…' : s);
 
-export function FullGraph({ onSelect }: { onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+/** Extract fact keys from an arbitrary console result (search/query/recall/
+ *  neighbors/single-fact shapes) — best-effort, empty = no graph reaction. */
+function keysOfResult(value: unknown): string[] {
+  const v = value as Record<string, any> | null;
+  if (!v || typeof v !== 'object') return [];
+  const out = new Set<string>();
+  const entries = v.entries;
+  if (Array.isArray(entries)) for (const e of entries) if (e?.key) out.add(String(e.key));
+  else if (entries && typeof entries === 'object') for (const k of Object.keys(entries)) out.add(k);
+  if (v.focus && typeof v.focus === 'object') for (const k of Object.keys(v.focus)) out.add(k);
+  if (Array.isArray(v.members)) for (const m of v.members) if (m?.key) out.add(String(m.key));
+  if (typeof v.key === 'string' && v.value !== undefined) out.add(v.key);
+  return [...out];
+}
+
+export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
+  // The imperative surface the effects below share (built once the sim mounts).
+  const api = useRef<{ select: (key: string | null, pan?: boolean) => void } | null>(null);
+  const lastExternal = useRef<string | null>(null);
 
   useEffect(() => {
     const el = host.current;
@@ -69,6 +95,7 @@ export function FullGraph({ onSelect }: { onSelect: (n: GraphNode | null) => voi
     let disposed = false;
     let sim: any = null;
     let ro: ResizeObserver | null = null;
+    let onResult: ((ev: Event) => void) | null = null;
 
     (async () => {
       const [nodesRes, edgesRes, d3] = await Promise.all([
@@ -104,23 +131,50 @@ export function FullGraph({ onSelect }: { onSelect: (n: GraphNode | null) => voi
       el.innerHTML = '';
       const svg = d3.select(el).append('svg').attr('width', '100%').attr('height', '100%').style('display', 'block').style('touch-action', 'none');
       const g = svg.append('g');
-      svg.call(
-        d3.zoom().scaleExtent([0.15, 4]).on('zoom', (ev: any) => g.attr('transform', ev.transform)),
-      );
-      // Background tap clears the selection (the palette collapses its context row).
-      svg.on('click', () => selectRef.current(null));
+      const zoom = d3.zoom().scaleExtent([0.15, 4]).on('zoom', (ev: any) => {
+        g.attr('transform', ev.transform);
+        // Secondary edge labels (membership/derived) fade in once zoomed close.
+        edgeLabel.attr('display', (d: any) => (d.rel === 'similarTo' ? 'none' : d.derived && ev.transform.k < 1.3 ? 'none' : null));
+      });
+      svg.call(zoom);
+      svg.on('click', () => api.current?.select(null));
 
       const link = g
         .append('g')
         .selectAll('line')
         .data(links)
         .join('line')
-        .attr('stroke', '#5a5142')
+        .attr('stroke', (d: any) => edgeStyle(d).stroke)
         .attr('stroke-opacity', (d: any) => edgeStyle(d).opacity)
         .attr('stroke-width', (d: any) => edgeStyle(d).width)
         .attr('stroke-dasharray', (d: any) => edgeStyle(d).dash ?? null);
 
+      // v2: `rel` labels on edges (similarTo excluded — the constellation stays
+      // quiet). Authored labels always; derived/membership past zoom 1.3×.
+      const edgeLabel = g
+        .append('g')
+        .selectAll('text')
+        .data(links.filter((l: any) => l.rel !== 'similarTo'))
+        .join('text')
+        .text((d: any) => d.rel)
+        .attr('font-size', 7.5)
+        .attr('font-family', 'ui-monospace, monospace')
+        .attr('fill', '#bfb49a')
+        .attr('fill-opacity', 0.8)
+        .attr('text-anchor', 'middle')
+        .attr('pointer-events', 'none')
+        .attr('paint-order', 'stroke')
+        .attr('stroke', '#241f18')
+        .attr('stroke-width', 2.5)
+        .attr('display', (d: any) => (d.derived ? 'none' : null));
+
       const r = (d: any): number => 4 + d.score * 13 + Math.min(6, Math.sqrt(d.deg) * 1.4);
+      const labeled = (d: any): boolean => d.score > 0.4 || d.deg > 4;
+      // v2: labels participate in the sim — a labeled node's collision footprint
+      // extends rightward over its text, approximated as a wider circle, so the
+      // layout itself keeps labels from stacking.
+      const collideR = (d: any): number => (labeled(d) ? r(d) + 6 + d.label.length * 2.4 : r(d) + 6);
+
       const node = g
         .append('g')
         .selectAll('circle')
@@ -137,41 +191,93 @@ export function FullGraph({ onSelect }: { onSelect: (n: GraphNode | null) => voi
       const label = g
         .append('g')
         .selectAll('text')
-        .data(nodes.filter((n: any) => n.score > 0.45 || n.deg > 5))
+        .data(nodes.filter(labeled))
         .join('text')
         .text((d: any) => d.label)
         .attr('font-size', 10)
         .attr('font-family', 'ui-monospace, monospace')
         .attr('fill', '#efe9dc')
-        .attr('fill-opacity', 0.75)
-        .attr('pointer-events', 'none');
+        .attr('fill-opacity', 0.8)
+        .attr('pointer-events', 'none')
+        .attr('paint-order', 'stroke')
+        .attr('stroke', '#241f18')
+        .attr('stroke-width', 3);
 
-      const select = (d: any | null): void => {
-        node.attr('stroke', (n: any) => (d && n.id === d.id ? '#f5c453' : '#2e2a22')).attr('stroke-width', (n: any) => (d && n.id === d.id ? 2.5 : 1));
-        selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : null);
+      // ── selection + highlight (the shared imperative surface) ──
+      let selKey: string | null = null;
+      let hiSet: Set<string> | null = null;
+      const paint = (): void => {
+        node
+          .attr('stroke', (n: any) => (n.id === selKey ? '#f5c453' : hiSet?.has(n.id) ? '#f5c453' : '#2e2a22'))
+          .attr('stroke-width', (n: any) => (n.id === selKey ? 3 : hiSet?.has(n.id) ? 2 : 1))
+          .attr('fill-opacity', (n: any) => (hiSet && !hiSet.has(n.id) && n.id !== selKey ? 0.25 : 0.85));
+        link.attr('stroke-opacity', (d: any) => {
+          const base = edgeStyle(d).opacity;
+          if (!hiSet) return base;
+          return hiSet.has(d.source.id) || hiSet.has(d.target.id) ? base : base * 0.25;
+        });
+        label.attr('fill-opacity', (n: any) => (hiSet && !hiSet.has(n.id) && n.id !== selKey ? 0.3 : 0.8));
       };
+      const panTo = (d: any): void => {
+        const t = d3.zoomTransform(svg.node());
+        svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(W / 2 - t.k * d.x, H / 2 - t.k * d.y).scale(t.k));
+      };
+      const fitTo = (keys: Set<string>): void => {
+        const pts = nodes.filter((n: any) => keys.has(n.id));
+        if (!pts.length) return;
+        const xs = pts.map((p: any) => p.x), ys = pts.map((p: any) => p.y);
+        const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
+        const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
+        const k = Math.min(3, 0.9 / Math.max((maxX - minX) / W, (maxY - minY) / H));
+        svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity.translate(W / 2 - k * (minX + maxX) / 2, H / 2 - k * (minY + maxY) / 2).scale(k));
+      };
+      api.current = {
+        select: (key: string | null, pan = false) => {
+          lastExternal.current = key; // a tap-select's prop echo must not re-pan
+          selKey = key;
+          if (key) hiSet = null; // an explicit selection clears a result highlight
+          paint();
+          const d = key ? nodes.find((n: any) => n.id === key) : null;
+          if (d && pan) panTo(d);
+          selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
+        },
+      };
+
       node.on('click', (ev: any, d: any) => {
         ev.stopPropagation();
-        select(d);
+        api.current?.select(d.id);
       });
       node.on('dblclick', (ev: any, d: any) => {
         ev.stopPropagation();
         openFact({ key: d.id } as ListEntry);
       });
 
+      // Console results (search / query / recall / neighbors) light up the graph
+      // and the camera fits to them — the palette drives the territory.
+      onResult = (ev: Event): void => {
+        const detail = (ev as CustomEvent<{ ok: boolean; value: unknown }>).detail;
+        if (!detail?.ok) return;
+        const keys = keysOfResult(detail.value).filter((k) => nodes.some((n: any) => n.id === k));
+        if (!keys.length) return;
+        hiSet = new Set(keys);
+        selKey = null;
+        paint();
+        fitTo(hiSet);
+      };
+      window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
+
       sim = d3
         .forceSimulation(nodes)
-        .force('link', d3.forceLink(links).id((d: any) => d.id).distance(70).strength(0.4))
-        .force('charge', d3.forceManyBody().strength(-190))
+        .force('link', d3.forceLink(links).id((d: any) => d.id).distance(74).strength(0.4))
+        .force('charge', d3.forceManyBody().strength(-200))
         .force('center', d3.forceCenter(W / 2, H / 2))
-        .force('collide', d3.forceCollide((d: any) => r(d) + 6))
+        .force('collide', d3.forceCollide(collideR))
         .on('tick', () => {
           link.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y).attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y);
+          edgeLabel.attr('x', (d: any) => (d.source.x + d.target.x) / 2).attr('y', (d: any) => (d.source.y + d.target.y) / 2 - 2);
           node.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
           label.attr('x', (d: any) => d.x + r(d) + 3).attr('y', (d: any) => d.y + 3);
         });
-      // Settle then freeze (drag re-warms) — a big graph gets a longer runway
-      // than the card's 5s, then stops burning CPU.
       setTimeout(() => sim?.stop(), 9000);
 
       node.call(
@@ -208,9 +314,18 @@ export function FullGraph({ onSelect }: { onSelect: (n: GraphNode | null) => voi
       disposed = true;
       sim?.stop();
       ro?.disconnect();
+      if (onResult) window.removeEventListener(CONSOLE_RESULT_EVENT, onResult);
+      api.current = null;
       el.innerHTML = '';
     };
   }, []);
+
+  // External selection (context-row neighbor chips, etc.): pan the camera there.
+  useEffect(() => {
+    if (selectedKey === lastExternal.current) return;
+    lastExternal.current = selectedKey;
+    api.current?.select(selectedKey, true);
+  }, [selectedKey]);
 
   return (
     <div

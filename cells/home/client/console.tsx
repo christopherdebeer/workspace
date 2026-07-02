@@ -9,6 +9,7 @@ import { authFetch } from './bridge';
 import { getJson, mcpCall, computerUrl } from './lib';
 import { FederatedRendererFrame, FederatedFormFrame } from './federated';
 import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
+import { CONSOLE_RESULT_EVENT } from './graph';
 
 const { useState, useEffect } = React;
 
@@ -289,6 +290,9 @@ export function Console({ authed }: { authed: boolean }): React.JSX.Element {
       const r = await cmd.run(input);
       counter.current += 1;
       setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: r.ok, value: r.value, at: Date.now(), argsKey }, ...prev].slice(0, 40));
+      // ADR-0047 v2: results reach beyond the tape — the graph listens and
+      // highlights/fits whatever facts the result names.
+      window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: r.ok, value: r.value } }));
     } catch (e) {
       counter.current += 1;
       setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: false, value: String(e), at: Date.now() }, ...prev]);
