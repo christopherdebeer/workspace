@@ -388,9 +388,12 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
     },
 
     actions: {
-      log: (c, e, meta) => {
+      log: (_c, e, meta) => {
         const stateValue = meta.state.value as any;
-        console.log('[FSM]', `${stateValue.mode}:${stateValue.gesture}`, { c, e, meta });
+        // Scalars only: logging {c, e, meta} pinned the whole controller +
+        // canvasState into the console buffer per transition — with the sticky
+        // on-device console (?debug=1 → eruda) that alone OOMed iOS.
+        console.log('[FSM]', `${stateValue.mode}:${stateValue.gesture}`, e.type);
       },
       clearLasso: (ctx) => {
         ctx.draft && delete ctx.draft.start;
@@ -475,7 +478,15 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
          draft : (_c,e,{state}) => {
            const c   = state.context.controller;
            const box = c.getGroupBBox();
+           // Per-element start geometry, so the resize applies ONE factor
+           // relative to gesture start instead of compounding per move.
+           const start = new Map();
+           [...c.selectedElementIds].forEach((id: string) => {
+             const el = c.findElementById(id);
+             if (el) start.set(id, { x: el.x, y: el.y, scale: el.scale || 1 });
+           });
            return {
+             startPositions : start,
              resize : {
                startX : e.xy.x,
                startY : e.xy.y,

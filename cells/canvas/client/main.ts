@@ -16,6 +16,7 @@ import { installEdgeInspector } from './lib/network/edgeInspect.ts';
 import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import { canvasPath, boardFromPath } from './lib/url.ts';
+import { sanitizeElementGeometry, isFiniteNum } from './lib/geometry.ts';
 import { fitRegion, type BBox } from '../shared/frame.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -160,7 +161,9 @@ class CanvasController {
         let safeActions: any = {};
         Object.entries(helperActions).forEach(([key, fn]: [string, any]) => {
             safeActions[key] = (ctx: any, ev: any, meta?: any) => {
-                console.log(`[Gesture Action: ${key}]`);
+                // apply* actions fire per pointermove — logging them floods the
+                // sticky on-device console (eruda) into an iOS memory problem.
+                if (!key.startsWith('apply')) console.log(`[Gesture Action: ${key}]`);
                 try {
                     // run the real helper
                     return (fn as any)(ctx, ev, meta);
@@ -297,8 +300,16 @@ class CanvasController {
 
     _pushHistorySnapshot(label) {
         const snap = this._snapshot(label);
+        // Byte-budget the history as well as counting entries: 100 clones of a
+        // big board is hundreds of MB — on iOS that heap alone kills the tab.
+        try { (snap as any).bytes = JSON.stringify(snap.data).length; } catch { (snap as any).bytes = 0; }
         this._undo.push(snap);
         if (this._undo.length > this._maxHistory) this._undo.shift();
+        const budget = 24 * 1024 * 1024; // ~24MB of snapshot JSON, all entries
+        let total = this._undo.reduce((a, s) => a + ((s as any).bytes || 0), 0);
+        while (total > budget && this._undo.length > 3) {
+            total -= (this._undo.shift() as any).bytes || 0;
+        }
         this._redo.length = 0;            // clear redo chain
     }
 
@@ -488,9 +499,12 @@ class CanvasController {
             const saved = localStorage.getItem(key);
             if (saved) {
                 const vs = JSON.parse(saved);
-                this.viewState.scale = vs.scale || 1;
-                this.viewState.translateX = vs.translateX || 0;
-                this.viewState.translateY = vs.translateY || 0;
+                // Clamp the restored camera: a corrupt/out-of-range saved view
+                // (e.g. persisted mid-runaway) must not re-poison this session.
+                const s = isFiniteNum(vs.scale) ? vs.scale : 1;
+                this.viewState.scale = Math.min(Math.max(s || 1, this.MIN_SCALE), this.MAX_SCALE);
+                this.viewState.translateX = isFiniteNum(vs.translateX) ? Math.min(Math.max(vs.translateX, -1e7), 1e7) : 0;
+                this.viewState.translateY = isFiniteNum(vs.translateY) ? Math.min(Math.max(vs.translateY, -1e7), 1e7) : 0;
             }
         } catch (e) {
             console.warn("No local viewState found", e);
@@ -508,6 +522,17 @@ class CanvasController {
 
     updateCanvasTransform() {
         if ((this.canvas as any).controller !== this) return;
+
+        // Circuit breaker: a non-finite camera (NaN/Infinity from any upstream
+        // math fault) would put `scale(NaN)` on the compositor and every later
+        // screenToCanvas call on garbage. Reset to identity instead.
+        const { scale, translateX, translateY } = this.viewState;
+        if (!isFiniteNum(scale) || scale <= 0 || !isFiniteNum(translateX) || !isFiniteNum(translateY)) {
+            console.warn('[canvas] non-finite viewState — resetting camera', { scale, translateX, translateY });
+            this.viewState.scale = 1;
+            this.viewState.translateX = 0;
+            this.viewState.translateY = 0;
+        }
 
         this.container.style.transform = `translate(${this.viewState.translateX}px, ${this.viewState.translateY}px) scale(${this.viewState.scale})`;
         this.container.style.setProperty('--translateX', String(this.viewState.translateX));
@@ -616,7 +641,6 @@ class CanvasController {
 
     renderElementsImmediately() {
         if ((this.canvas as any).controller !== this) return;
-        console.log(`requestRender()`);
         const existingIds = new Set(Object.keys(this.elementNodesMap));
         const usedIds = new Set();
 
@@ -1504,6 +1528,9 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
         if (!node?.textContent) return false;
         const h = JSON.parse(node.textContent) as { canvasId?: string; cam?: { scale: number; translateX: number; translateY: number }; frame?: BBox; elements?: any[] };
         if (h.canvasId !== canvasId || !Array.isArray(h.elements) || !h.elements.length) return false;
+        // Heal any out-of-bounds geometry a past runaway gesture persisted —
+        // rendering a poisoned fact at face value is the iOS tab-kill.
+        h.elements.forEach((el) => sanitizeElementGeometry(el));
 
         registerSubstrateTypes(); // built-in element renderers (text/markdown/html/img/…)
         clearSsrPaint();

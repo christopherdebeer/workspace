@@ -66,7 +66,9 @@ export function installPointerAdapter(
       ev, // raw DOM event
       ...extra
     };
-    if (payload.type !== 'POINTER_MOVE') console.log("[FSM] Pointer adapter event send:", active.size, (ev as PointerEvent).pointerId, payload)
+    // Scalars only — the full payload carries the raw event + view + selection,
+    // which the sticky on-device console would retain per pointer event.
+    if (payload.type !== 'POINTER_MOVE') console.log('[FSM] send', payload.type, { pointers: active.size, id: (ev as PointerEvent).pointerId, el: payload.elementId, handle: payload.handle });
     service.send(payload);
   };
 
@@ -81,11 +83,16 @@ export function installPointerAdapter(
       || elementNode
       || rootEl) as Element;
 
-    // 3) capture on that node and store it
-    captureNode.setPointerCapture(ev.pointerId);
-    capturedTargets.set(ev.pointerId, captureNode);
-
-    (ev.target as Element).setPointerCapture(ev.pointerId);
+    // 3) capture on that node and store it. setPointerCapture THROWS
+    // (NotFoundError) when the pointer is already gone — iOS Safari does this
+    // mid-handler when a system gesture claims the touch. Uncaught, it aborts
+    // this listener and leaves a PHANTOM entry in `active`, after which every
+    // one-finger drag reads as a two-pointer pinch against a stale coordinate.
+    try {
+      captureNode.setPointerCapture(ev.pointerId);
+      capturedTargets.set(ev.pointerId, captureNode);
+      (ev.target as Element).setPointerCapture(ev.pointerId);
+    } catch { /* pointer already inactive — proceed uncaptured */ }
     send('POINTER_DOWN', ev);
     startLongPress(ev);
 
@@ -118,9 +125,10 @@ export function installPointerAdapter(
     ev.preventDefault();
     cancelLongPress();
     active.delete(ev.pointerId);
-    // release capture on whichever node we grabbed
+    // release capture on whichever node we grabbed (throws if the capture
+    // never took or the node left the DOM — either way there's nothing to do)
     const capNode = capturedTargets.get(ev.pointerId) || rootEl;
-    capNode.releasePointerCapture(ev.pointerId);
+    try { capNode.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
     capturedTargets.delete(ev.pointerId);
 
     send('POINTER_UP', ev);
@@ -155,6 +163,26 @@ export function installPointerAdapter(
   }
 
 
+  /* Phantom-pointer reset: iOS Safari can swallow the pointerup/pointercancel
+     for a touch that ends while the app backgrounds or a system gesture takes
+     over. The stranded `active` entry then makes every later one-finger drag
+     look like a pinch against a stale coordinate — the intermittent "pinch out
+     of nowhere" that runs the scale math on garbage. Losing focus/visibility
+     ends every gesture. */
+  const resetPointers = (): void => {
+    if (!active.size && !capturedTargets.size) return;
+    cancelLongPress();
+    for (const [id, node] of capturedTargets) {
+      try { node.releasePointerCapture(id); } catch { /* already gone */ }
+    }
+    capturedTargets.clear();
+    active.clear();
+    service.send({ type: 'POINTER_UP', xy: { x: 0, y: 0 }, active: {}, hitElement: false, elementId: null, handle: null, edgeLabel: false, edgeLine: false, edgeId: null, frameId: null, selected: selected(), view: getViewState(), ev: null });
+  };
+  const onVisibility = (): void => { if (document.visibilityState === 'hidden') resetPointers(); };
+  window.addEventListener('blur', resetPointers);
+  document.addEventListener('visibilitychange', onVisibility);
+
   /* listeners — bound to the canvas AND the static layer (a sibling, so
      stuck-to-screen elements stay selectable / un-stickable). */
   const roots: HTMLElement[] = [rootEl];
@@ -179,5 +207,7 @@ export function installPointerAdapter(
     rootEl.removeEventListener('wheel', onWheel);
     window.removeEventListener('keydown', onKeydown);
     window.removeEventListener('keyup', onKeyup);
+    window.removeEventListener('blur', resetPointers);
+    document.removeEventListener('visibilitychange', onVisibility);
   };
 }

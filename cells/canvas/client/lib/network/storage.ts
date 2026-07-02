@@ -21,6 +21,7 @@ import { elementRegistry } from '../elements/elementRegistry.ts';
 import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
+import { sanitizeElementGeometry } from '../geometry.ts';
 import { regionBBox, fitRegion, type Region, type Placed, type BBox } from '../../../shared/frame.ts';
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -676,6 +677,9 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const el: any = { width: 240, height: 120, rotation: 0, ...value, ...(pl ?? {}) };
       if (!el.id) el.id = e.key.startsWith('el:') ? e.key.slice(3) : e.key;
       el._factKey = e.key;
+      // Heal poisoned geometry (a past runaway pinch persisted scale in the
+      // hundreds) BEFORE it renders — at face value it's the iOS tab-kill.
+      if (sanitizeElementGeometry(el)) console.warn('[canvas] healed out-of-bounds geometry', e.key);
       decorateFactCard(el, e._meta);
       if (pl && typeof pl.x === 'number')
         placed.push({
@@ -863,8 +867,10 @@ function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: an
   const el = cc.canvasState.elements.find((e: any) => e.id === id);
   if (el) {
     Object.assign(el, entry.value);
+    sanitizeElementGeometry(el);
   } else {
     const nu: any = { width: 240, height: 120, rotation: 0, ...entry.value };
+    sanitizeElementGeometry(nu);
     if (!nu.id) nu.id = id;
     nu._factKey = key;
     decorateFactCard(nu, entry._meta);
@@ -911,6 +917,7 @@ function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: 
     delete pl.height;
   }
   Object.assign(el, pl);
+  sanitizeElementGeometry(el);
   delete el._synthesized;
   synthOrigin.delete(id);
   return true;
@@ -1114,6 +1121,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
     const el: any = { width: 240, height: 120, rotation: 0, ...(typeof value === 'object' ? value : { content: String(value) }) };
     if (!el.id) el.id = idOfKey(k);
     el._factKey = k;
+    sanitizeElementGeometry(el);
     decorateFactCard(el, entry._meta);
     const a = (i / Math.max(newKeys.length, 1)) * 2 * Math.PI - Math.PI / 2;
     const r = 260 + 26 * Math.floor(i / 12);
@@ -1183,6 +1191,11 @@ function startFlightRecorder(): void {
         svg: document.querySelectorAll('#edges-layer *').length,
         // SMIL/CSS animations + media that keep the compositor busy on iOS.
         anim: document.querySelectorAll('animate,animateTransform,animateMotion,[style*="animation"]').length,
+        // The largest painted side (width×scale) on the board — the runaway-
+        // pinch signature: a crash record with maxSide in the tens of
+        // thousands says compositor OOM, not a JS leak.
+        maxSide: Math.round((cc?.canvasState?.elements ?? []).reduce(
+          (m: number, e: any) => Math.max(m, Math.max(e.width || 0, e.height || 0) * (e.scale || 1)), 0)),
         warm: warmRaf !== 0,
         // Every module-level map — any monotonic climber here is a real leak.
         maps: { lw: lastWritten.size, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size, pend: pending.size },
