@@ -10,7 +10,7 @@
 import * as React from 'react';
 import { hydrateRoot, createRoot } from 'react-dom/client';
 import { Surface, type ViewModel, type Note } from '../shared';
-import { Card, Heading, Button, TextInput, theme } from '../shared/ui';
+import { Card, Heading, Button, TextInput, theme } from '@parc/ui';
 import { ensureAuth, isAuthed } from './lib/auth';
 import { read, act } from './lib/substrate';
 

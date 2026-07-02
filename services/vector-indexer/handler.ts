@@ -22,7 +22,7 @@ import {
   type StateStore,
 } from '../../platform/runtime';
 import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
-import { createDynamoStateStore } from '../../platform/runtime/dynamo-state-store';
+import { createDynamoStateStoreV3 as createDynamoStateStore } from '../../platform/runtime/dynamo-state-store-v3';
 
 const unmarshall = DynamoDB.Converter.unmarshall;
 

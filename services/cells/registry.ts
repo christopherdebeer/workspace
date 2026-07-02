@@ -76,6 +76,9 @@ export interface CellRecord {
   deploy?: DeployState;
   /** Lambda timeout override (seconds, 10–300). */
   timeoutSeconds?: number;
+  /** Lambda memory override (MB, 128–3008; template default 512). CPU scales
+   *  with memory — the latency knob for CPU-bound SSR/scene assembly. */
+  memoryMb?: number;
   createdAt: string;
   updatedAt: string;
 }

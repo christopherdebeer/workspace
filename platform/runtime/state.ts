@@ -268,7 +268,11 @@ export interface StateStore {
    * `StatePreconditionError`.
    */
   put(record: StateRecord, guard?: PutGuard): Promise<void>;
-  list(scope: string): Promise<StateRecord[]>;
+  /** All live+superseded fact records in a scope, or — with `keyPrefix` — only
+   *  those whose key begins with it (a prefix-scoped partition read, e.g.
+   *  `note:` / `_doc/<id>/`). The prefix is pushed to the store query so a cell
+   *  reading a small namespace doesn't scan the whole slice (ADR-0042 Inc 1a). */
+  list(scope: string, keyPrefix?: string): Promise<StateRecord[]>;
   /** Records of a given indexable `type` within a scope (GSI-backed in prod). */
   listByType(scope: string, type: string): Promise<StateRecord[]>;
   putEdge(edge: EdgeRecord): Promise<void>;
@@ -589,7 +593,7 @@ export const BACKBONE_RELS = {
 /** Reference relations that express *membership in a collection* (ADR-0005): a fact
  *  `inView` a view, `inDoc` a doc. A collection's extensional members are the facts
  *  with one of these edges pointing at it. */
-export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc']);
+export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc', 'onBoard']);
 
 /**
  * Per-rule Reference strength (ADR-0009). Derived edges carry graded weight so a
@@ -1045,8 +1049,9 @@ export interface ObservedState {
    *  facts with an inbound membership edge (`inView`/`inDoc`) in the projection.
    *  Salience-ranked; ordered extensional membership (by decoration `seq`) is a follow-on. */
   members(scope: string, key: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<MembersResult>;
-  /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call. */
-  changes(scope: string, sinceSeq: number | 'head', limit?: number): Promise<ChangesResult>;
+  /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call.
+   *  `limit` pages FORWARD from sinceSeq; `last` keeps the NEWEST n instead (still ascending) — the "recent activity" window (ADR-0048). */
+  changes(scope: string, sinceSeq: number | 'head', limit?: number, last?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
   attention(scope: string, opts?: AttentionOptions): Promise<AttentionResult>;
   /** Retire `key` by pointing it at successor `by` (or just marking it). */
@@ -1518,7 +1523,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return { key, membership: 'extensional', order: ordered ? 'seq' : 'salience', members };
     },
 
-    async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
+    async changes(scope, sinceSeq, limit?, last?): Promise<ChangesResult> {
       const head = await store.currentSeq(scope);
       // 'head' = "where do I start tailing from?" — answered without paying
       // for (or wading through) the scope's whole recent history.
@@ -1528,7 +1533,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const events = (await store.recentTrajectory(scope, 0))
         .filter((e) => e.seq > sinceSeq)
         .sort((a, b) => a.seq - b.seq);
-      const limited = limit !== undefined ? events.slice(0, Math.max(0, limit)) : events;
+      // `limit` pages FORWARD (tailing); `last` keeps the NEWEST n, still
+      // ascending — the "recent activity" window (ADR-0048).
+      const limited =
+        last !== undefined ? (last > 0 ? events.slice(-last) : []) : limit !== undefined ? events.slice(0, Math.max(0, limit)) : events;
       return { events: limited, seq: head };
     },
 
@@ -1640,9 +1648,9 @@ export function createMemoryStateStore(): StateStore {
       }
       records.set(k(record.scope, record.key), { ...record, writers: [...record.writers], tags: [...record.tags] });
     },
-    async list(scope: string): Promise<StateRecord[]> {
+    async list(scope: string, keyPrefix?: string): Promise<StateRecord[]> {
       return [...records.values()]
-        .filter((r) => r.scope === scope)
+        .filter((r) => r.scope === scope && (keyPrefix === undefined || r.key.startsWith(keyPrefix)))
         .map((r) => ({ ...r, writers: [...r.writers], tags: [...r.tags] }));
     },
     async listByType(scope: string, type: string): Promise<StateRecord[]> {

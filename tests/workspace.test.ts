@@ -8,7 +8,7 @@
  */
 import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, __resetTypeDeclsCache } from '../services/workspace/handlers';
 import { resolveParams } from '../services/workspace/subscriptions';
-import { stripUndefined } from '../platform/runtime/dynamo-state-store';
+import { stripUndefined } from '../platform/runtime/state-store-codec';
 import { createMemoryGrantStore } from '../services/workspace/grants';
 import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
@@ -1732,5 +1732,105 @@ describe('granular type-scopes (write:type:<T> / read:type:<T> — ADR-0023 §B 
     await expect(cmds.query({ type: 'note' }, noteReader)).resolves.toBeDefined();
     await expect(cmds.query({ type: 'todo' }, noteReader)).rejects.toThrow(/scope_denied.*read:type:todo/);
     await expect(cmds.query({}, noteReader)).rejects.toThrow(/scope_denied/);
+  });
+});
+
+describe('read-response shaping (ADR-0048 — reads answer at the caller\'s altitude)', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const me = (): ServiceContext => ctxFor('shaper').ctx;
+  const LONG = 'x'.repeat(1000);
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'kb/big', value: { title: 'Big fact', content: LONG, nested: { deep: { deeper: { most: 1 } } } }, type: 'note' }, me());
+    await cmds.remember({ key: 'kb/small', value: 'tiny', type: 'note' }, me());
+    await cmds.link({ from: 'kb/big', rel: 'related', to: 'kb/small' }, me());
+    await cmds.link({ from: 'kb/small', rel: 'refines', to: 'kb/big' }, me());
+  });
+
+  it('query shape:"card" truncates long strings, keeps titles + short values; full stays the default', async () => {
+    const card = await cmds.query({ shape: 'card' }, me());
+    const big = card.entries.find((e) => e.key === 'kb/big') as { value: { title: string; content: string }; _meta: { shaped?: string } };
+    expect(big.value.title).toBe('Big fact'); // label paths survive
+    expect(big.value.content.length).toBeLessThan(LONG.length);
+    expect(big.value.content.endsWith('…')).toBe(true);
+    expect(big._meta.shaped).toBe('card');
+    const small = card.entries.find((e) => e.key === 'kb/small') as { value: unknown };
+    expect(small.value).toBe('tiny'); // short values pass through whole
+
+    const full = await cmds.query(undefined, me());
+    const bigFull = full.entries.find((e) => e.key === 'kb/big') as { value: { content: string }; _meta: { shaped?: string } };
+    expect(bigFull.value.content.length).toBe(LONG.length); // default unchanged
+    expect(bigFull._meta.shaped).toBeUndefined();
+  });
+
+  it('query shape:"refs" drops values, keeps the _meta essentials', async () => {
+    const refs = await cmds.query({ shape: 'refs' }, me());
+    const big = refs.entries.find((e) => e.key === 'kb/big') as { value?: unknown; _meta: { type?: string; score?: number; shaped?: string } };
+    expect('value' in big).toBe(false);
+    expect(big._meta.type).toBe('note');
+    expect(big._meta.shaped).toBe('refs');
+  });
+
+  it('card summarises structure past depth 2 but keeps the field names above it', async () => {
+    const card = await cmds.query({ shape: 'card' }, me());
+    const big = card.entries.find((e) => e.key === 'kb/big') as { value: { nested: { deep: unknown } } };
+    expect(typeof big.value.nested).toBe('object'); // depth 1 kept
+    expect(typeof big.value.nested.deep).toBe('string'); // depth 2 summarised to "{n fields}"
+  });
+
+  it('neighbors shape:"card" shapes the entries map; the edges stay complete', async () => {
+    const nb = await cmds.neighbors({ key: 'kb/small', shape: 'card' }, me());
+    expect(nb.inbound.length + nb.outbound.length).toBeGreaterThanOrEqual(2);
+    const big = nb.entries['kb/big'] as { value?: { content?: string }; _meta: { shaped?: string } };
+    expect(big._meta.shaped).toBe('card');
+    expect((big.value?.content ?? '').length).toBeLessThan(LONG.length);
+  });
+
+  it('graph/links scope by keys + rels and report total; {limit: 0} is "just count"', async () => {
+    const scoped = await cmds.graph({ keys: ['kb/big'] }, me());
+    expect(scoped.edges.length).toBeGreaterThanOrEqual(2);
+    expect(scoped.edges.every((e) => e.from === 'kb/big' || e.to === 'kb/big')).toBe(true);
+    expect(scoped.total).toBe(scoped.edges.length);
+
+    const relOnly = await cmds.graph({ keys: ['kb/big'], rels: ['related'] }, me());
+    expect(relOnly.edges.every((e) => e.rel === 'related')).toBe(true);
+    expect(relOnly.edges.length).toBeGreaterThanOrEqual(1);
+
+    const counted = await cmds.links({ limit: 0 }, me());
+    expect(counted.edges).toEqual([]);
+    expect(counted.total).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a bare changes() is bounded to the newest events; last/sinceSeq keep expressivity', async () => {
+    const bare = await cmds.changes(undefined, me());
+    expect(bare.events.length).toBeLessThanOrEqual(200);
+    expect(bare.events.length).toBeGreaterThan(0);
+
+    const last1 = await cmds.changes({ last: 1 }, me());
+    expect(last1.events.length).toBe(1);
+    // `last` keeps the NEWEST event; every other event's seq is <= it
+    expect(Math.max(...bare.events.map((e) => e.seq))).toBe(last1.events[0].seq);
+
+    const forward = await cmds.changes({ sinceSeq: 0, limit: 2 }, me());
+    expect(forward.events.length).toBe(2);
+    expect(forward.events[0].seq).toBeLessThan(forward.events[1].seq); // oldest-first paging unchanged
+  });
+
+  it('recall full view defaults to card entries; expand and shape:"full" restore whole values', async () => {
+    const res = await cmds.recall({ view: 'full' }, me());
+    if (!('entries' in res)) throw new Error('expected full view');
+    const big = res.entries['kb/big'] as { value: { content: string } };
+    expect(big.value.content.length).toBeLessThan(LONG.length);
+
+    const expanded = await cmds.recall({ view: 'full', expand: ['kb/big'] }, me());
+    if (!('entries' in expanded)) throw new Error('expected full view');
+    expect((expanded.entries['kb/big'].value as { content: string }).content.length).toBe(LONG.length);
+
+    const whole = await cmds.recall({ view: 'full', shape: 'full' }, me());
+    if (!('entries' in whole)) throw new Error('expected full view');
+    expect((whole.entries['kb/big'].value as { content: string }).content.length).toBe(LONG.length);
   });
 });

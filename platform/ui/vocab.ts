@@ -56,8 +56,11 @@ export interface VocabFact {
   _meta?: { type?: string | null; tags?: string[] };
 }
 
-/** A fact's id: the part after a `prefix:` or `prefix/` in its key. */
-export function deriveId(key: string): string {
+/** A fact's id: the part after a `prefix:` or `prefix/` in its key. Tolerates a
+ *  missing key (a partial fact — e.g. a bare `{value,_meta}` map entry) — the
+ *  floor degrades, it never throws. */
+export function deriveId(key: string | undefined): string {
+  if (!key) return '';
   if (key.includes(':')) return key.slice(key.indexOf(':') + 1);
   if (key.includes('/')) return key.slice(key.indexOf('/') + 1);
   return key;
@@ -79,9 +82,10 @@ function prefixOf(s: string): { type: string; rest: string } | null {
  */
 export function typeSignals(fact: VocabFact): Array<{ type: string; match: string }> {
   const out: Array<{ type: string; match: string }> = [];
+  const key = fact.key ?? '';
   const t = fact._meta?.type;
-  if (t) out.push({ type: t, match: deriveId(fact.key) });
-  const kp = prefixOf(fact.key);
+  if (t) out.push({ type: t, match: deriveId(key) });
+  const kp = prefixOf(key);
   if (kp) out.push({ type: kp.type, match: kp.rest });
   for (const tag of fact._meta?.tags ?? []) {
     const tp = prefixOf(tag);

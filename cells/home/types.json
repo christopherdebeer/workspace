@@ -5,86 +5,170 @@
       "icon": "🧠",
       "manager": "@c15r/home",
       "note": "A durable note/fact in the personal knowledge base. Opens in the home peek modal; no bespoke editor, so it edits generically.",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "decision",
       "icon": "⚖️",
       "manager": "@c15r/home",
       "note": "A recorded decision (what was chosen and why).",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "project",
       "icon": "📦",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "question",
       "icon": "❓",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "concept",
       "icon": "💡",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "pattern",
       "icon": "🧩",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "protocol",
       "icon": "📐",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "source",
       "icon": "🔗",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "reading",
       "icon": "📖",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "prompt",
       "icon": "💬",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "todo",
       "icon": "☑️",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "bug",
       "icon": "🐞",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "fixed",
       "icon": "✅",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "shipped",
       "icon": "🚀",
       "manager": "@c15r/home",
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
     },
     {
       "type": "file",
@@ -102,7 +186,60 @@
         "url": "string? — public URL when servable",
         "source": "string — provenance (docs-sync | s3:PutObject | cells:deployed)"
       },
-      "handlers": { "render": [{ "hint": "markdown" }] }
+      "handlers": {
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
+    },
+    {
+      "type": "mental-model",
+      "icon": "🧭",
+      "label": "value.name",
+      "manager": "@c15r/home",
+      "note": "One mental model of the latticework (ADR-0045): a named, simplified explanation of how something works, held as ONE fact per model (keyed model/<slug>) so the vector index embeds each individually and inferred similarTo edges (ADR-0030/0031/0032) surface the right model as a LENS beside otherwise-unlinked facts — the latticework as live graph structure, not a list inside a reading blob. `source` refs the reading it was extracted from (projects a `from` edge).",
+      "schema": {
+        "name": "string — the model's canonical name",
+        "gloss": "string — one-line explanation of the model",
+        "category": "string — latticework discipline (general-thinking-tools | physics-chemistry-biology | systems | numeracy | microeconomics | art | …)",
+        "source": "ref? — the reading this model was extracted from"
+      },
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "the model's canonical name"
+        },
+        {
+          "name": "gloss",
+          "type": "string",
+          "required": true,
+          "description": "one-line explanation of the model"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "latticework discipline"
+        },
+        {
+          "name": "source",
+          "type": "ref",
+          "rel": "from",
+          "required": false,
+          "description": "the reading this model was extracted from"
+        }
+      ],
+      "handlers": {
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      }
     }
   ]
 }

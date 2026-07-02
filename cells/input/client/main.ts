@@ -55,11 +55,24 @@ function composeContent(p: Pending): { content: string; title?: string; url?: st
   return { content, title, url };
 }
 
+/** Human-readable capture slug (ADR-0040): keys are link targets — title → URL last
+ *  segment/host → opening words → base36 ts. `inbox/<date>/<slug>`, day a prefix. */
+const slugify = (s: unknown): string =>
+  String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/g, '');
+function captureSlug(parts: { title?: string; url?: string; content?: string }): string {
+  const fromTitle = slugify(parts.title);
+  if (fromTitle) return fromTitle;
+  if (parts.url) {
+    try { const u = new URL(parts.url); const s = slugify(u.pathname.split('/').filter(Boolean).pop()) || slugify(u.hostname); if (s) return s; } catch { /* not a URL */ }
+  }
+  return slugify(parts.content) || Date.now().toString(36);
+}
+
 async function capture(p: Pending): Promise<{ key: string; content: string }> {
   const { content, title, url } = composeContent(p);
   if (!content) throw new Error('nothing to capture');
-  const key = `inbox/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   const day = today();
+  const key = `inbox/${day}/${captureSlug({ title, url, content })}`;
   await mcp('act', 'workspace.remember', {
     key,
     value: { content, ...(title ? { title } : {}), ...(url ? { url } : {}), captured: day },
@@ -213,7 +226,7 @@ async function render(capturedNow: { key: string; content: string } | null): Pro
 
   const meta = el('div', 'meta');
   const day = el('a', '', `today's log →`) as HTMLAnchorElement;
-  day.href = `/@c15r/lit?doc=log:${today()}`;
+  day.href = `/@c15r/lit/r/log:${today()}`;
   meta.appendChild(day);
   const buffer = el('a', '', 'open in lit') as HTMLAnchorElement;
   buffer.href = '/@c15r/lit';

@@ -16,10 +16,14 @@ import './main.css';
 (window as any).__lit_module = true; // watchdog marker: the module executed
 import * as React from 'react';
 import { hydrateRoot, createRoot } from 'react-dom/client';
-import { ensureAuth, isAuthed } from './lib/auth.ts';
+import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
-import { Surface, renderMarkdown, splitCells, seqBetween, extractWikiTargets, type ViewModel, type BlockData, type DocValue } from '../shared';
+import { mountSandboxedRenderer, SANDBOX_HOST_HTML, bodyText, fieldsToHtml } from '@parc/ui';
+import {
+  Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
+  type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem, type TypeItem,
+} from '../shared';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -47,6 +51,14 @@ function contentOf(value: any): string {
   if (value && typeof value.content === 'string') return value.content;
   return '```json\n' + JSON.stringify(value, null, 2) + '\n```';
 }
+/** A fact's id: the part after a `prefix:` or `prefix/` in its key — mirrors
+ *  `index.ts`'s server-side `deriveId` (kept duplicated, not imported: this
+ *  module has no DOM-free server counterpart to share it with). */
+function deriveId(key: string): string {
+  const ci = key.indexOf(':'); const si = key.indexOf('/');
+  const i = ci >= 0 && (si < 0 || ci < si) ? ci : si;
+  return i >= 0 ? key.slice(i + 1) : key;
+}
 const mintCell = (): string => `cell:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 type LoadedCell = { key: string; content: string; fold: boolean; seq: number; score: number };
 
@@ -54,7 +66,7 @@ type LoadedCell = { key: string; content: string; fold: boolean; seq: number; sc
  *  decorations (`_doc/<id>/<key>` = {seq, fold}) — membership is any fact key the
  *  decorations point at. `projection` re-sorts the SAME membership — narrative by
  *  seq, salience by the cell's score. */
-async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[]; backlinks: Array<{ id: string; label: string }> } | null> {
+async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Promise<{ meta: DocValue; cells: LoadedCell[]; backlinks: LinkRef[] } | null> {
   const docFact = await fetchFact(`doc:${docId}`);
   if (!docFact) return null;
   const meta = docFact.value as DocValue;
@@ -74,18 +86,20 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   }));
   // members returns narrative (seq) order; the salience projection re-sorts by score.
   cells.sort((a, b) => (projection === 'salience' ? b.score - a.score : a.seq - b.seq));
-  // Backlinks: inbound edges to this doc, collapsed to distinct source docs
-  // (a link from a cell is attributed to the doc that cell belongs to).
-  const backlinks: Array<{ id: string; label: string }> = [];
+  // Backlinks: every inbound edge to this doc, by WHATEVER fact authored it —
+  // not just another doc (ADR-0040: lit reads the whole substrate, not only
+  // its own `doc:` namespace). Collapsed to distinct sources.
+  const backlinks: LinkRef[] = [];
   try {
-    const nb = await read<{ inbound: Array<{ from: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key: `doc:${docId}` });
+    const nb = await read<{ inbound: Array<{ from: string; rel: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key: `doc:${docId}` });
     const seen = new Set<string>();
     for (const e of nb.inbound ?? []) {
+      if (e.from === `doc:${docId}` || seen.has(e.from)) continue;
+      seen.add(e.from);
       const ent = nb.entries?.[e.from];
-      const id = e.from.startsWith('doc:') ? e.from.slice(4) : (ent?._meta?.tags ?? []).find((t) => t.startsWith('doc:'))?.slice(4);
-      if (!id || id === docId || seen.has(id)) continue;
-      seen.add(id);
-      backlinks.push({ id, label: id });
+      const ev = ent?.value as Record<string, unknown> | undefined;
+      const label = (typeof ev?.title === 'string' && ev.title) || (typeof ev?.name === 'string' && ev.name) || deriveId(e.from);
+      backlinks.push({ key: e.from, rel: e.rel, label: label as string, type: ent?._meta?.type ?? null });
     }
   } catch { /* best-effort */ }
   return { meta, cells, backlinks };
@@ -213,6 +227,27 @@ function parseFence(info: string, body: string): Fence {
     else if (file === undefined) file = t;
   }
   return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
+}
+
+/** Resolve a `ui://` renderer script over the authenticated `/mcp`
+ *  `resources/read` (the gateway provider hop, ADR-0039). The returned text is
+ *  NEVER executed in lit's own document — it may be another tenant's cell code;
+ *  it runs only inside the opaque-origin sandbox the board fence builds
+ *  (ADR-0041's security correction / ADR-0043). */
+async function mcpResourceRead(uri: string): Promise<string | null> {
+  try {
+    const res = await authFetch('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'resources/read', params: { uri } }),
+    });
+    if (!res.ok) return null;
+    const rpc = (await res.json()) as { result?: { contents?: Array<{ text?: string }> } };
+    const text = rpc.result?.contents?.[0]?.text;
+    return typeof text === 'string' ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void> }): Promise<void> {
@@ -344,13 +379,43 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
     }
     if (lang === 'board') {
       const wrap = el('div', 'embed-board');
-      const frame = document.createElement('iframe');
-      const w = Math.round(Math.min(680, root.clientWidth || 680));
-      frame.src = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`);
-      frame.loading = 'lazy';
-      wrap.appendChild(frame);
       const open = el('a', 'embed-open', 'open board ↗') as HTMLAnchorElement;
       open.href = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}`);
+      if (isAuthed()) {
+        // ADR-0043 Inc 2: an authed reader gets canvas's federated ui:// renderer
+        // inside lit's OWN opaque-origin sandbox (allow-scripts, no
+        // allow-same-origin), with the renderer's reads proxied through lit's
+        // session — so a PRIVATE board paints. The old origin-iframe to canvas's
+        // `?embed=1` was a third-party context: no session → the sign-in shell.
+        // (The discarded-on-rerender message listener is inert — it filters on
+        // this iframe's contentWindow — matching the fence-enhancement model.)
+        const frame = document.createElement('iframe');
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = SANDBOX_HOST_HTML;
+        frame.title = `board ${arg}`;
+        frame.style.cssText = 'width:100%;height:280px;border:0;display:block;background:#fff';
+        frame.addEventListener('load', () => {
+          const handle = mountSandboxedRenderer(frame, {
+            call: (kind, target, input) => (kind === 'read' ? read(target, input) : act(target, input)),
+            onResize: (h) => { frame.style.height = `${Math.max(120, Math.min(520, h))}px`; },
+            onSettled: (ok) => { if (!ok) frame.replaceWith(el('div', 'embed-view', `board ${arg}: renderer unavailable`)); },
+          });
+          void mcpResourceRead(`ui://@${cellOwner()}/canvas/renderers/board.js`).then((src) => {
+            handle.render(src, 'canvas', { viewId: arg }, arg);
+          });
+        });
+        wrap.appendChild(frame);
+      } else {
+        // Anonymous reader → canvas's zero-JS public thumbnail (?embed=1). This
+        // stays an origin iframe deliberately: a `_public/` board SSRs fine with
+        // no session, and a private board shows an anon reader nothing they may
+        // see anyway — the surface-B public fast path ADR-0043 keeps.
+        const frame = document.createElement('iframe');
+        const w = Math.round(Math.min(680, root.clientWidth || 680));
+        frame.src = cellUrl(cellOwner(), 'canvas', `?view=${encodeURIComponent(arg)}&embed=1&w=${w}&h=340`);
+        frame.loading = 'lazy';
+        wrap.appendChild(frame);
+      }
       wrap.appendChild(open);
       pre.replaceWith(wrap);
     } else if (!isAuthed()) {
@@ -474,7 +539,7 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   const [cells, setCells] = useState<LoadedCell[]>((seed?.blocks ?? []).map((b, i) => ({ key: b.key, content: b.md, fold: !!b.fold, seq: i + 1, score: 0 })));
   const [missing, setMissing] = useState(false);
   const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
-  const [backlinks, setBacklinks] = useState<Array<{ id: string; label: string }>>([]);
+  const [backlinks, setBacklinks] = useState<LinkRef[]>([]);
 
   const load = useCallback(async () => {
     const res = await loadDoc(docId, projection);
@@ -526,7 +591,7 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   return (
     <>
       <header>
-        <a className="back" href={`/@${cellOwner()}/lit`}>← documents</a>
+        <a className="back" href="/">← documents</a>
         <h1>{meta.title || docId}</h1>
         {meta.summary ? <p className="summary">{meta.summary}</p> : null}
         <p className="doc-controls summary">
@@ -566,7 +631,12 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
         {backlinks.length ? (
           <section className="backlinks">
             <h3>Linked from</h3>
-            <ul>{backlinks.map((b) => <li key={b.id}><a href={`?doc=${encodeURIComponent(b.id)}`}>[[{b.label}]]</a></li>)}</ul>
+            <ul>{backlinks.map((b) => (
+              <li key={b.key}>
+                <a href={factRoute(b.key)}>[[{b.label}]]</a>
+                {b.rel && b.rel !== 'related' ? <span className="rel"> · {b.rel}</span> : null}
+              </li>
+            ))}</ul>
           </section>
         ) : null}
       </main>
@@ -576,17 +646,26 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
 
 /* ── list ──────────────────────────────────────────────────────────────── */
 
-function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }): React.JSX.Element {
+function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }): React.JSX.Element {
   // Seed from the SSR ViewModel (no "loading documents…" gap); the effect refreshes.
-  const [docs, setDocs] = useState<Array<{ id: string; v: DocValue; updated: string }> | null>(seed ?? null);
+  // SSR omits `score` (true salience needs a trajectory+edges fold this cell's
+  // lightweight direct-DDB SSR path doesn't carry) — this client refresh gets it
+  // for free from the SAME `workspace.query` it's already making, so the salience
+  // figure simply appears a moment after first paint, same pattern as everything
+  // else here (fast SSR shell, richer live data once hydrated).
+  const [docs, setDocs] = useState<ListItem[] | null>(seed ?? null);
   useEffect(() => {
     void (async () => {
       const res = await read<{ entries: Entry[] }>('workspace.query', { type: 'doc', limit: 100 });
-      const list = (res.entries ?? []).filter((e) => e.key.startsWith('doc:'))
+      const list: ListItem[] = (res.entries ?? []).filter((e) => e.key.startsWith('doc:'))
         .sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'))
-        .map((e) => ({ id: e.key.slice(4), v: e.value as DocValue, updated: e._meta?.updatedAt ?? '' }));
+        .map((e) => {
+          const v = e.value as DocValue;
+          const id = e.key.slice(4);
+          return { id, title: v.title || id, summary: v.summary, blocks: 0, updated: e._meta?.updatedAt ?? '', score: (e._meta as { score?: number } | undefined)?.score };
+        });
       setDocs(list);
-      cacheSet('list', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list.map((d) => ({ id: d.id, title: d.v.title || d.id, summary: d.v.summary, blocks: 0, updated: d.updated })) });
+      cacheSet('$docs', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list });
     })();
   }, []);
 
@@ -594,18 +673,13 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
   return (
     <>
       <header>
+        <a className="back" href="/">← home</a>
         <h1>lit</h1>
         <p className="summary">documents — ordered paths through the substrate</p>
-        {editable ? <a className="back" href={`?doc=log:${today}`}>📥 today's log →</a> : null}
+        {editable ? <a className="back" href={factRoute(`log:${today}`)}>📥 today's log →</a> : null}
       </header>
       <main className="doc-list">
-        {docs === null ? <p className="boot">loading documents…</p> : docs.length === 0 ? <p className="boot">no documents yet</p> : docs.map((d) => (
-          <a className="doc-card" href={`?doc=${encodeURIComponent(d.id)}`} key={d.id}>
-            <h2>{d.v.title || d.id}</h2>
-            {d.v.summary ? <p>{d.v.summary}</p> : null}
-            <span className="doc-meta">{(d.updated || '').slice(0, 10)}</span>
-          </a>
-        ))}
+        {docs === null ? <p className="boot">loading documents…</p> : docs.length === 0 ? <p className="boot">no documents yet</p> : docs.map((d) => <DocRow d={d} key={d.id} />)}
       </main>
       {editable ? (
         <button className="btn add-block" onClick={async () => {
@@ -615,7 +689,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
           const k = mintCell();
           await saveCell(id, k, `# ${title}\n\nStart writing…`);
           await writeOrder(id, k, 1, false);
-          location.search = `?doc=${encodeURIComponent(id)}`;
+          location.href = factRoute(`doc:${id}`);
         }}>+ new document</button>
       ) : null}
     </>
@@ -624,7 +698,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListSeed }):
 ListEditor.MissingDoc = function MissingDoc({ docId }: { docId: string }): React.JSX.Element {
   return (
     <>
-      <header><a className="back" href={`/@${cellOwner()}/lit`}>← documents</a><h1>{docId}</h1></header>
+      <header><a className="back" href="/">← documents</a><h1>{docId}</h1></header>
       <main><p className="boot">no document “{docId}”</p></main>
     </>
   );
@@ -642,7 +716,7 @@ function LogNav({ label }: { label: string }): React.JSX.Element {
   const links: Array<[string, string]> = [];
   if (/^\d{4}-\d{2}-\d{2}$/.test(label)) { links.push([`week ${isoWeekOf(label).slice(5)}`, isoWeekOf(label)], [`month ${label.slice(5, 7)}`, label.slice(0, 7)], [`year ${label.slice(0, 4)}`, label.slice(0, 4)]); }
   else if (/^\d{4}-w\d{2}$/.test(label) || /^\d{4}-\d{2}$/.test(label)) links.push([`year ${label.slice(0, 4)}`, label.slice(0, 4)]);
-  return <p className="summary">{links.map(([t, id]) => <a className="back" style={{ marginRight: '0.8rem' }} href={`?doc=log:${encodeURIComponent(id)}`} key={id}>{t}</a>)}</p>;
+  return <p className="summary">{links.map(([t, id]) => <a className="back" style={{ marginRight: '0.8rem' }} href={factRoute(`log:${id}`)} key={id}>{t}</a>)}</p>;
 }
 function LogEntry({ e }: { e: Entry }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
@@ -676,13 +750,13 @@ function LogView({ docId }: { docId: string }): React.JSX.Element {
 
   return (
     <>
-      <header><a className="back" href={location.pathname}>← documents</a><h1>📥 {label}</h1><LogNav label={label} /></header>
+      <header><a className="back" href="/">← documents</a><h1>📥 {label}</h1><LogNav label={label} /></header>
       <main>
         {groups === null ? <p className="boot">loading…</p> : groups.length === 0 || groups.every(([, e]) => !e.length)
           ? <p className="boot">{isDay ? 'nothing captured this day' : 'nothing captured in this period'}</p>
           : groups.map(([day, entries]) => (
             <React.Fragment key={day || 'day'}>
-              {day ? <h2><a className="back" href={`?doc=log:${encodeURIComponent(day)}`}>🗓️ {day}</a></h2> : null}
+              {day ? <h2><a className="back" href={factRoute(`log:${day}`)}>🗓️ {day}</a></h2> : null}
               {entries.map((e) => <LogEntry e={e} key={e.key} />)}
             </React.Fragment>
           ))}
@@ -690,6 +764,91 @@ function LogView({ docId }: { docId: string }): React.JSX.Element {
       </main>
     </>
   );
+}
+
+/* ── generic fact reader (ADR-0040: any fact, not just a lit-authored doc) ──
+ * Mirrors `index.ts`'s `buildFactVM` exactly (same hint floor, same neighbour
+ * shape) so the client's own load matches what SSR would have produced —
+ * read-only: editing a foreign type stays in its own managing cell / the
+ * field computer (home's FactEditor), not lit. */
+async function loadFact(key: string): Promise<Extract<ViewModel, { kind: 'fact' }> | null> {
+  const fact = await fetchFact(key);
+  if (!fact) return null;
+  const value = fact.value;
+  const v = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const title = (typeof v.title === 'string' && v.title) || (typeof v.name === 'string' && v.name) || deriveId(key);
+  const body = bodyText(value);
+  const bodyHtml = body ? renderMarkdown(body) : '';
+  const fieldsHtml = bodyHtml ? '' : fieldsToHtml(value);
+  let links: LinkRef[] = [];
+  let backlinks: LinkRef[] = [];
+  try {
+    const nb = await read<{ inbound: Array<{ from: string; rel: string }>; outbound: Array<{ to: string; rel: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key });
+    const labelFor = (k: string): { label: string; type: string | null } => {
+      const ent = nb.entries?.[k];
+      const ev = ent?.value as Record<string, unknown> | undefined;
+      const l = (typeof ev?.title === 'string' && ev.title) || (typeof ev?.name === 'string' && ev.name) || deriveId(k);
+      return { label: l as string, type: ent?._meta?.type ?? null };
+    };
+    const dedupe = (refs: LinkRef[]): LinkRef[] => {
+      const seen = new Set<string>();
+      return refs.filter((r) => r.key !== key && !seen.has(r.key) && (seen.add(r.key), true)).slice(0, 24);
+    };
+    links = dedupe((nb.outbound ?? []).map((e) => ({ key: e.to, rel: e.rel, ...labelFor(e.to) })));
+    backlinks = dedupe((nb.inbound ?? []).map((e) => ({ key: e.from, rel: e.rel, ...labelFor(e.from) })));
+  } catch { /* best-effort */ }
+  return { kind: 'fact', owner: cellOwner(), isOwner: true, key, type: fact._meta?.type ?? null, title, bodyHtml, fieldsHtml, links, backlinks };
+}
+
+function FactPage({ routeKey, seed }: { routeKey: string; seed?: Extract<ViewModel, { kind: 'fact' }> }): React.JSX.Element {
+  const [vm, setVm] = useState<Extract<ViewModel, { kind: 'fact' }> | null>(seed ?? null);
+  const [missing, setMissing] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setVm(seed ?? null); setMissing(false);
+    void (async () => {
+      const res = await loadFact(routeKey);
+      if (!res) { setMissing(true); return; }
+      setVm(res);
+      cacheSet(routeKey, res);
+    })();
+  }, [routeKey]);
+
+  // Body markdown may carry fences (the SAME enhancement docs get).
+  useEffect(() => { if (ref.current) void enhanceFences(ref.current); }, [vm?.bodyHtml]);
+
+  if (missing) return <ListEditor.MissingDoc docId={routeKey} />;
+  if (!vm) return <p className="boot">loading {routeKey}…</p>;
+  return <div ref={ref}><FactView vm={vm} /></div>;
+}
+
+/* ── type collections (a `[[type:project|Projects]]` wiki-link target) ──── */
+
+async function loadTypeCollection(type: string): Promise<TypeItem[]> {
+  const res = await read<{ entries: Entry[] }>('workspace.query', { type, limit: 100 });
+  return (res.entries ?? [])
+    .sort((a, b) => Date.parse(b._meta?.updatedAt ?? '0') - Date.parse(a._meta?.updatedAt ?? '0'))
+    .map((e) => {
+      const v = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
+      const title = (typeof v.title === 'string' && v.title) || (typeof v.name === 'string' && v.name) || deriveId(e.key);
+      const summaryRaw = typeof v.summary === 'string' ? v.summary : typeof v.statement === 'string' ? v.statement : bodyText(e.value);
+      return { key: e.key, title, summary: summaryRaw ? summaryRaw.slice(0, 160) : undefined, updated: e._meta?.updatedAt ?? '', score: (e._meta as { score?: number } | undefined)?.score };
+    });
+}
+
+function TypeCollectionPage({ type, seed }: { type: string; seed?: Extract<ViewModel, { kind: 'type' }> }): React.JSX.Element {
+  const [items, setItems] = useState<TypeItem[] | null>(seed?.items ?? null);
+  useEffect(() => {
+    setItems(seed?.items ?? null);
+    void (async () => {
+      const list = await loadTypeCollection(type);
+      setItems(list);
+      cacheSet(`type:${type}`, { kind: 'type', owner: cellOwner(), isOwner: true, type, items: list });
+    })();
+  }, [type]);
+  if (items === null) return <p className="boot">loading {type}…</p>;
+  return <TypeView vm={{ kind: 'type', owner: cellOwner(), isOwner: true, type, items }} />;
 }
 
 /* ── anonymous read-only ───────────────────────────────────────────────── */
@@ -712,27 +871,68 @@ function AnonView({ vm }: { vm: ViewModel }): React.JSX.Element {
 /** Seeds reconstructed from the SSR ViewModel so an interactive view's first
  *  render equals the server paint (killing the post-hydration "loading…" flash). */
 type DocSeed = Extract<ViewModel, { kind: 'doc' }>;
-type ListSeed = Array<{ id: string; v: DocValue; updated: string }>;
 
-function listSeed(vm: Extract<ViewModel, { kind: 'list' }>): ListSeed {
-  // Only `.length`, title, summary and updated are read for the cards; the real
-  // BlockRef contents arrive with the background refresh.
-  return vm.docs.map((d) => ({
-    id: d.id,
-    v: { title: d.title, summary: d.summary, blocks: new Array(d.blocks).fill({ key: '' }) },
-    updated: d.updated,
-  }));
+/** The route key for THIS page load — either the new path form (`/r/<key>`,
+ *  found anywhere in `pathname` so it works whether lit is mounted at the
+ *  apex `/@owner/lit` or a bare subdomain root) or the legacy `?doc=` query
+ *  param (a bare value implies `doc:<value>`; an explicit `:`/`/`-bearing
+ *  value, e.g. `log:2026-06-30`, is used as-is) — mirrors `index.ts`'s
+ *  server-side normalization exactly, so both URL forms resolve identically. */
+function currentRouteKey(): string | null {
+  const m = location.pathname.match(/\/r\/(.+)$/);
+  if (m) {
+    const key = m[1].split('/').map((seg) => { try { return decodeURIComponent(seg); } catch { return seg; } }).join('/');
+    return key || null;
+  }
+  const qd = new URLSearchParams(location.search).get('doc');
+  if (qd == null) return null;
+  return /[:/]/.test(qd) ? qd : `doc:${qd}`;
+}
+
+/** The root (`/`, no route key): a curated welcome page beats a flat list, so
+ *  try `doc:welcome` first and fall back to the doc list when there isn't one
+ *  — mirrors `index.ts`'s `buildRootVM` exactly, so SSR and a cold client-only
+ *  load (no SSR seed at all, e.g. anonymous-without-public-content) agree. */
+function RootRoute({ editable }: { editable: boolean }): React.JSX.Element {
+  const [state, setState] = useState<'loading' | 'welcome' | 'list'>('loading');
+  useEffect(() => {
+    void (async () => { setState((await fetchFact('doc:welcome')) ? 'welcome' : 'list'); })();
+  }, []);
+  if (state === 'loading') return <p className="boot">loading…</p>;
+  if (state === 'welcome') return <DocEditor docId="welcome" editable={editable} />;
+  return <ListEditor editable={editable} />;
 }
 
 function Route({ editable, initialVm }: { editable: boolean; initialVm: ViewModel | null }): React.JSX.Element {
-  const docId = new URLSearchParams(location.search).get('doc');
-  if (docId && /^log:/.test(docId)) return <LogView docId={docId} />;
-  if (docId) {
+  const key = currentRouteKey();
+  if (key && /^log:/.test(key)) return <LogView docId={key} />;
+  if (key === '$docs') {
+    const seed = initialVm && initialVm.kind === 'list' ? initialVm.docs : undefined;
+    return <ListEditor editable={editable} seed={seed} />;
+  }
+  if (key && key.startsWith('doc:')) {
+    const docId = key.slice(4);
     const seed = initialVm && initialVm.kind === 'doc' && initialVm.id === docId ? initialVm : undefined;
     return <DocEditor docId={docId} editable={editable} seed={seed} />;
   }
-  const seed = initialVm && initialVm.kind === 'list' ? listSeed(initialVm) : undefined;
-  return <ListEditor editable={editable} seed={seed} />;
+  if (key && key.startsWith('type:')) {
+    const type = key.slice(5);
+    const seed = initialVm && initialVm.kind === 'type' && initialVm.type === type ? initialVm : undefined;
+    return <TypeCollectionPage type={type} seed={seed} />;
+  }
+  if (key) {
+    const seed = initialVm && initialVm.kind === 'fact' && initialVm.key === key ? initialVm : undefined;
+    return <FactPage routeKey={key} seed={seed} />;
+  }
+  // Root: the SSR seed already resolved welcome-vs-list (buildRootVM); a cold
+  // client-only load (no seed) probes for the welcome doc itself.
+  if (initialVm && initialVm.kind === 'doc' && initialVm.id === 'welcome') {
+    return <DocEditor docId="welcome" editable={editable} seed={initialVm} />;
+  }
+  if (initialVm && initialVm.kind === 'list') {
+    return <ListEditor editable={editable} seed={initialVm.docs} />;
+  }
+  return <RootRoute editable={editable} />;
 }
 
 function Workspace({ initialVm }: { initialVm: ViewModel | null }): React.JSX.Element {
@@ -784,9 +984,10 @@ function cacheSet(id: string, vm: ViewModel): void {
   try { localStorage.setItem(VM_CACHE + id, JSON.stringify(vm)); } catch { /* storage full/blocked */ }
 }
 function cachedVmForLocation(): ViewModel | null {
-  const docId = new URLSearchParams(location.search).get('doc');
-  if (docId && /^log:/.test(docId)) return null; // logs are derived views, not cached
-  return cacheGet(docId ? `doc:${docId}` : 'list');
+  const key = currentRouteKey();
+  if (!key) return cacheGet('doc:welcome') ?? cacheGet('$docs'); // root: welcome doc, else the list
+  if (key.startsWith('log:')) return null; // logs are derived views, not cached
+  return cacheGet(key);
 }
 
 const ssrVm = readInitialVm();

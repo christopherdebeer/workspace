@@ -182,7 +182,21 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
     synthOrigin.delete(el.id as string);
     delete (el as any)._synthesized;
   }
-  queueFact(`_canvas/${canvasId}/${key}`, placement);
+  // ADR-0046: the placement is the board-membership edge-with-properties — its
+  // declared type is what makes the key-encoded rule project `<fact> onBoard
+  // canvas:<board>` into the Reference graph (type:null projects nothing).
+  queueFact(`_canvas/${canvasId}/${key}`, placement, { type: 'canvas-placement' });
+  ensureBoardFact(canvasId);
+}
+
+/** ADR-0046: membership edges need a node to point at — mint the board's
+ *  identity fact (`canvas:<board>`, type canvas) once per session. Idempotent
+ *  in effect (same value each time; at most one revision bump per session). */
+const ensuredBoards = new Set<string>();
+function ensureBoardFact(canvasId: string): void {
+  if (!canvasId || ensuredBoards.has(canvasId)) return;
+  ensuredBoards.add(canvasId);
+  queueFact(`canvas:${canvasId}`, { board: canvasId }, { type: 'canvas' });
 }
 
 const linkedEdges = new Set<string>();
@@ -448,7 +462,8 @@ export async function addFactToCanvas(controller: any, key: string): Promise<voi
   // pinned placement at the viewport centre. queueFact dedupes on value, so the
   // value isn't rewritten — only the tag/placement land.
   queueFact(key, value, { ...(type ? { type } : {}), tags: newTags });
-  queueFact(`_canvas/${cid}/${key}`, { x: el.x, y: el.y, width: el.width, height: el.height });
+  queueFact(`_canvas/${cid}/${key}`, { x: el.x, y: el.y, width: el.width, height: el.height }, { type: 'canvas-placement' });
+  ensureBoardFact(cid);
   console.info('[canvas] added fact to board', { key, cid, type });
 }
 

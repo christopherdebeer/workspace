@@ -18,6 +18,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
+// The platform SDK for cells (ADR-0042 Inc 1a): the SAME observed-state read
+// pipeline the gateway runs, bound to this cell's IAM-scoped slice — so the
+// template models the canonical way to read the substrate in SSR (the reader),
+// NOT a hand-rolled raw-DDB scan. Delivered by the forge bundler as a virtual
+// module; its v3 store resolves `@aws-sdk/*` from the Node 20 runtime.
+import { createCellReader, createDynamoStateStore } from '@parc/runtime/cell';
 import { Surface, type ViewModel, type Note } from './shared';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
@@ -30,47 +36,19 @@ const respond = (statusCode: number, contentType: string, body: string, extra: R
 const OWNER = process.env.CELL_OWNER || 'c15r';
 const TABLE = process.env.SUBSTRATE_TABLE || '';
 
-interface Ddb {
-  send(cmd: unknown): Promise<{ Items?: Array<Record<string, unknown>>; LastEvaluatedKey?: unknown }>;
-}
-let doc: Ddb | undefined;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let Query: any;
-function ddb(): Ddb {
-  if (!doc) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const lib = require('@aws-sdk/lib-dynamodb');
-    Query = lib.QueryCommand;
-    doc = lib.DynamoDBDocumentClient.from(new DynamoDBClient({})) as Ddb;
-  }
-  return doc;
-}
-
-interface Fact { key: string; value: unknown; superseded?: boolean }
 const textOf = (v: unknown): string => (typeof v === 'string' ? v : ((v as { text?: string })?.text ?? ''));
 
-/** The owner's `note:` facts, read directly (LeadingKeys-scoped). */
+/** The owner's `note:` facts via `createCellReader.list('note:')` — the CHEAP
+ *  read: a PREFIX-SCOPED partition query (`begins_with KEY#note:`, only the
+ *  `note:` namespace, not the whole slice), unranked, no salience. `list` not
+ *  `query`: a notes list needs the rows, not a ranking — and `query` (or a
+ *  prefix-less `list`) would scan the whole slice (trajectory + every edge for
+ *  salience), which times out on a large slice. The store lazy-loads the SDK, so
+ *  a missing dep degrades to the anon shell (the caller catches). */
 async function ownerNotes(): Promise<Note[]> {
-  const out: Note[] = [];
-  let ExclusiveStartKey: Record<string, unknown> | undefined;
-  const client = ddb();
-  do {
-    const r = await client.send(
-      new Query({
-        TableName: TABLE,
-        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
-        ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': 'KEY#note:' },
-        ExclusiveStartKey,
-      }),
-    );
-    for (const it of (r.Items ?? []) as Fact[]) {
-      if (!it.superseded) out.push({ key: String(it.key).replace(/^KEY#/, ''), text: textOf(it.value) });
-    }
-    ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
-  } while (ExclusiveStartKey);
-  return out;
+  const reader = createCellReader(createDynamoStateStore(TABLE), OWNER);
+  const recs = await reader.list('note:');
+  return recs.map((r) => ({ key: r.key, text: textOf(r.value) }));
 }
 
 export const handler = async (event: {

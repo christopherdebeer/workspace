@@ -22,20 +22,21 @@ header h1 { margin: 0.2rem 0 0; font-size: 1.6rem; line-height: 1.25; }
 header .summary { margin: 0.3rem 0 0; color: var(--faint); }
 .back { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
 
-/* — doc list — */
-.doc-list { display: grid; gap: 0.7rem; }
-.doc-card {
-  display: block;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fff;
-  padding: 0.8rem 1rem;
+/* — doc list (a list, not a card grid — timestamps/salience/blocks are
+     tertiary: small, faint, last) — */
+.doc-list { display: grid; }
+.doc-row {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.6rem 0.1rem;
+  border-top: 1px solid var(--line);
   text-decoration: none;
   color: inherit;
 }
-.doc-card h2 { margin: 0; font-size: 1.05rem; }
-.doc-card p { margin: 0.25rem 0 0; color: var(--faint); font-size: 0.9rem; }
-.doc-meta { display: block; margin-top: 0.4rem; color: var(--faint); font-size: 0.75rem; }
+.doc-list .doc-row:first-child { border-top: 0; }
+.doc-row-title { font-size: 1rem; font-weight: 600; }
+.doc-row-summary { color: var(--faint); font-size: 0.88rem; }
+.doc-row-meta { color: var(--faint); font-size: 0.74rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* — blocks — */
 .block { position: relative; padding: 0.2rem 0 0.4rem; border-bottom: 1px solid transparent; }
@@ -124,9 +125,18 @@ header .summary { margin: 0.3rem 0 0; color: var(--faint); }
 .wikilink { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
 .wikilink:hover { border-bottom-style: solid; }
 .backlinks { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.backlinks + .backlinks { margin-top: 1.4rem; }
 .backlinks h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint); margin: 0 0 0.5rem; }
 .backlinks ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.3rem; }
 .backlinks a { color: var(--accent); text-decoration: none; }
+.backlinks .rel { color: var(--faint); font-size: 0.78rem; }
+
+/* — generic fact reader (any type, not just doc:) — */
+.fact-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; word-break: break-all; }
+.block-body dl.f { margin: 0; display: grid; gap: 0.35rem; }
+.block-body dl.f div { display: flex; gap: 0.5rem; }
+.block-body dl.f dt { color: var(--faint); font-size: 0.8rem; min-width: 7rem; }
+.block-body dl.f dd { margin: 0; }
 
 /* — markdown fence (```md renders as markdown) — */
 .md-fence { border-left: 2px solid var(--line); padding-left: 0.9rem; margin: 0.6rem 0; }

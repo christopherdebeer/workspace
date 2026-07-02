@@ -87,6 +87,148 @@ export const view = {
 };
 `;
 
+/**
+ * ADR-0039 — the machine cell's CONVERSATIONAL renderer for `machine-run` facts,
+ * served at `/renderers/machine-run.js` and declared on the type as
+ * `handlers.render[].renderer = ui://@c15r/machine/renderers/machine-run.js`. The
+ * parc.land card (the conversation surface) fetches this over the host proxy and
+ * runs it. This is the SAME trace→mermaid diagram that used to be hardcoded in the
+ * gateway card; it now lives with the type it renders, so changing it is a cell
+ * deploy, not a platform cdk deploy. A self-registering classic script (no module/
+ * eval — the card's sandbox forbids those): it adds itself to `window.__parcRender`
+ * under its type name. Backtick-free so it nests in this template literal.
+ */
+const MACHINE_RUN_RENDERER_SRC = `
+(function(){
+  // VALIDATION SENTINEL (ADR-0039): bump BUILD + cells.deploy ONLY (no cdk deploy)
+  // to prove the renderer changed via the cell plane. The footer badge below is
+  // emitted ONLY by this cell-served renderer — the old hardcoded card path
+  // mounted the bare SVG with no badge — so its presence in claude.ai is
+  // conclusive proof the federated ui:// renderer ran (not a cached card, not the
+  // fields-hint fallback).
+  var BUILD = 'v2';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  var M;
+  function loadMermaid(){
+    if(!M){ M = import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then(function(m){ m.default.initialize({startOnLoad:false,securityLevel:'strict',theme:'neutral'}); return m.default; }); }
+    return M;
+  }
+  function e(s){ return String(s==null?'':s).replace(/["\\n|]/g,' '); }
+  function toMermaid(v){
+    var trace = Array.isArray(v.trace) ? v.trace : [];
+    if(!trace.length && v.node) trace = [{node: v.node}];
+    var lines = ['flowchart TD'];
+    for(var i=0;i<trace.length;i++){
+      var lbl = e(trace[i].node || '?');
+      if(i>0){ var via = trace[i].via ? '|'+e(trace[i].via)+'|' : ''; lines.push('  n'+(i-1)+' -->'+via+' n'+i+'["'+lbl+'"]'); }
+      else lines.push('  n0["'+lbl+'"]');
+    }
+    var cur=-1; for(var j=trace.length-1;j>=0;j--){ if(trace[j].node===v.node){ cur=j; break; } }
+    if(cur<0) cur=trace.length-1;
+    if(cur>=0){ lines.push('  classDef cur fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push('  class n'+cur+' cur;'); }
+    return lines.join('\\n');
+  }
+  function badge(){
+    return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ rendered by @c15r/machine · federated ui:// renderer · '+BUILD+'</div>';
+  }
+  var seq=0;
+  reg['machine-run'] = function(host, value){
+    try{
+      host.textContent='…';
+      var src = toMermaid(value || {});
+      loadMermaid().then(function(m){ return m.render('mr'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + badge(); }).catch(function(err){ host.innerHTML = '<div class="hint">machine-run: '+e((err&&err.message)||err)+'</div>' + badge(); });
+    }catch(err){ host.innerHTML = '<div class="hint">machine-run render error</div>' + badge(); }
+  };
+})();
+`;
+
+/**
+ * ADR-0039 — the machine cell's CONVERSATIONAL renderer for the `machine` DEFINITION
+ * (the identity fact `machine/<name>`), served at `/renderers/machine.js` and declared
+ * on the type. Unlike machine-run, the identity fact carries no graph — the nodes/rails
+ * are separate `machine-node`/`machine-rail` facts nested under the key — so this
+ * renderer is INTERACTIVE: it fetches its children over the host-proxied `api.call`
+ * (`api.key` → `workspace.query` by prefix) and assembles the node/rail graph. That
+ * exercises the federated renderer's read path (host proxy under enforceScope), not
+ * just static rendering. Backtick-free so it nests in this template literal.
+ */
+const MACHINE_DEF_RENDERER_SRC = `
+(function(){
+  var BUILD = 'v2';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  var M;
+  function loadMermaid(){
+    if(!M){ M = import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then(function(m){ m.default.initialize({startOnLoad:false,securityLevel:'strict',theme:'neutral'}); return m.default; }); }
+    return M;
+  }
+  function e(s){ return String(s==null?'':s).replace(/["\\n|]/g,' '); }
+  function sid(s){ return String(s==null?'n':s).replace(/[^A-Za-z0-9_]/g,'_'); }
+  function entriesOf(r){ return (r && Array.isArray(r.entries)) ? r.entries : []; }
+  function toMermaid(nodes, rails, entry){
+    var lines = ['flowchart TD'];
+    for(var i=0;i<nodes.length;i++){ var v=nodes[i].value||{}; lines.push('  '+sid(v.name)+'["'+e(v.title||v.name)+'"]'); }
+    for(var j=0;j<rails.length;j++){ var r=rails[j].value||{}; var lbl=e(r.mode||r.when||''); lines.push('  '+sid(r.from)+' -->'+(lbl?'|'+lbl+'|':'')+' '+sid(r.to)); }
+    if(entry){ lines.push('  classDef entry fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push('  class '+sid(entry)+' entry;'); }
+    return lines.join('\\n');
+  }
+  function badge(n, m){
+    return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ machine definition · '+n+' nodes · '+m+' rails · federated ui:// renderer · '+BUILD+'</div>';
+  }
+  var seq=0;
+  reg['machine'] = function(host, value, api){
+    var key = (api && api.key) || '';
+    if(!key || !api || typeof api.call !== 'function'){ host.innerHTML = '<div class="hint">machine: no key/host context</div>'; return; }
+    host.textContent = 'assembling machine…';
+    Promise.all([
+      api.call('read','workspace.query',{ prefix: key + '/node/', limit: 300 }),
+      api.call('read','workspace.query',{ prefix: key + '/rail/', limit: 300 })
+    ]).then(function(res){
+      var nodes = entriesOf(res[0]), rails = entriesOf(res[1]);
+      if(!nodes.length && !rails.length){ host.innerHTML = '<div class="hint">'+e((value&&value.title)||key)+' — no nodes/rails found</div>' + badge(0,0); return; }
+      var src = toMermaid(nodes, rails, value && value.entry);
+      return loadMermaid().then(function(m){ return m.render('md'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + badge(nodes.length, rails.length); });
+    }).catch(function(err){ host.innerHTML = '<div class="hint">machine: '+e((err&&err.message)||err)+'</div>' + badge(0,0); });
+  };
+})();
+`;
+
+/**
+ * ADR-0039 Inc 2 — a TOOL-result renderer: the conversational card for
+ * `define_machine`'s result (a plan/preview structure, not a fact). Declared on the
+ * tool descriptor (`ui`) rather than on a type; the gateway stamps it onto the result
+ * as `_render` and the card runs it through the same `window.__parcRender` consumer
+ * — keyed by `as` ("machine.define_machine") rather than a fact type. Renders the
+ * validation + the fan of facts/actions/subscriptions a define would write (and what
+ * it would supersede). Backtick-free so it nests in this template literal.
+ */
+const MACHINE_DEFINE_RENDERER_SRC = `
+(function(){
+  var BUILD = 'v1';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  function e(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+  function li(a){ return '<ul style="margin:4px 0 6px;padding-left:18px">'+(a||[]).map(function(x){ return '<li>'+e(typeof x==='string'?x:JSON.stringify(x))+'</li>'; }).join('')+'</ul>'; }
+  function badge(){ return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ rendered by @c15r/machine · TOOL renderer (define_machine) · '+BUILD+'</div>'; }
+  reg['machine.define_machine'] = function(host, value){
+    var v = value || {};
+    var val = v.validation || {};
+    var facts = v.facts || [], actions = v.actions || [], subs = v.subscriptions || [], sup = v.wouldSupersede || v.superseded || [];
+    var st = val.stats || {};
+    var ok = val.ok !== false;
+    var errs = (val.errors || []).map(function(x){ return x && x.message ? x.message : String(x); });
+    var h = '';
+    h += '<div style="font-size:14px;font-weight:650;margin-bottom:2px">'+(v.dryRun?'⊘ Plan (dry run)':'✓ Defined')+': '+e(v.name||v.machine||'machine')+'</div>';
+    h += '<div style="margin:2px 0">'+(ok?'<span style="color:#3a3">✓ valid</span>':'<span style="color:#c33">✗ '+e(errs.join('; '))+'</span>')+'</div>';
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;font-variant-numeric:tabular-nums">';
+    h += '<span>'+(st.nodes!=null?st.nodes:'?')+' nodes</span><span>·</span><span>'+(st.rails!=null?st.rails:'?')+' rails</span>'+(st.cyclic?'<span>·</span><span>cyclic</span>':'');
+    h += '</div>';
+    h += '<div style="opacity:.85">'+facts.length+' facts · '+actions.length+' actions · '+subs.length+' subscriptions'+(sup.length?(' · '+sup.length+' superseded'):'')+'</div>';
+    if(facts.length) h += '<details style="margin-top:4px"><summary>facts ('+facts.length+')</summary>'+li(facts)+'</details>';
+    if(sup.length) h += '<details><summary>would supersede ('+sup.length+')</summary>'+li(sup)+'</details>';
+    host.innerHTML = h + badge();
+  };
+})();
+`;
+
 const TOOLS = [
   {
     name: 'bootstrap',
@@ -133,6 +275,9 @@ const TOOLS = [
       required: ['name'],
     },
     scope: null,
+    // ADR-0039 Inc 2: a cell-authored renderer for this TOOL's result (plan/preview).
+    // The gateway stamps it onto the result as `_render`; the card runs it under `as`.
+    ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' },
   },
   {
     name: 'trigger_run',
@@ -290,6 +435,23 @@ export const handler = async (event) => {
   // ── the SSR React SPA (the user frontend) ──────────────────────────────
   if (method === 'GET' && path === '/app.js') {
     return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*' }, body: readFile('app.js') };
+  }
+  // ADR-0039: the conversational renderer for `machine-run`, fetched by the parc.land
+  // card via the gateway provider hop (ui://@c15r/machine/renderers/machine-run.js).
+  // ACAO:* + cacheable — it is non-sensitive static renderer code (data arrives via
+  // the host-proxied tool calls, never embedded here).
+  if (method === 'GET' && path === '/renderers/machine-run.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_RUN_RENDERER_SRC };
+  }
+  // ADR-0039: the machine DEFINITION renderer (interactive — assembles nodes/rails
+  // via the host-proxied call). Same federation rail as machine-run.
+  if (method === 'GET' && path === '/renderers/machine.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_DEF_RENDERER_SRC };
+  }
+  // ADR-0039 Inc 2: a TOOL-result renderer (define_machine), declared on the tool's
+  // `ui` and stamped onto the result by the gateway as `_render`.
+  if (method === 'GET' && path === '/renderers/define-plan.js') {
+    return { statusCode: 200, headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }, body: MACHINE_DEFINE_RENDERER_SRC };
   }
   const isAppRoute = path === '/' || path === '' || path.startsWith('/m/') || path.startsWith('/r/');
   if ((method === 'GET' || method === 'HEAD') && isAppRoute) {

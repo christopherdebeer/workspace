@@ -13,6 +13,165 @@ const respond = (statusCode: number, contentType: string, body: string) => ({
 const OWNER = process.env.CELL_OWNER || 'c15r';
 const TABLE = process.env.SUBSTRATE_TABLE || '';
 
+/**
+ * ADR-0043 — the canvas cell's FEDERATED `ui://` renderer for a `canvas` view
+ * (surface C: a host — home, lit — embedding a board INSIDE itself). This is
+ * the fix for "canvas on home just shows a sign-in": the old path iframed a
+ * host page to canvas's OWN session-less origin (`?embed=1`), which severed the
+ * viewer's session, so a PRIVATE board fell to the anon shell. Here the HOST
+ * holds the session and resolves the data; this renderer only PAINTS, fetching
+ * the board's facts over the host-proxied `api.call('read', …)` (so per-fact
+ * grants are enforced under the viewer's identity) and running inside the host's
+ * opaque-origin sandbox (no ambient session — it may be another tenant's cell).
+ *
+ * A self-registering classic script (no module/eval — the sandbox forbids both)
+ * that adds itself to `window.__parcRender['canvas']`, matching the machine
+ * cell's `machine-run`/`machine` renderers. It ports canvas's OWN pure render
+ * primitives (from `shared/render.ts`) inline, since a sandbox script can't
+ * import the monorepo — canvas keeps ownership of how a board draws. Backtick-
+ * free so it nests in this template literal.
+ *
+ * Data path (ADR-0043 Inc 4, reinstated per ADR-0044 Inc 7): ONE host-proxied
+ * read — `@c15r/canvas.scene` — returns the server-assembled board (elements
+ * joined from placement+content, edges projected among them), the same shape
+ * SSR builds, so this renderer only paints. The first landing of this was
+ * reverted for latency: at the old 128 MB cell tier (~1/12 vCPU) the assembly
+ * ran ~8 s. With the cell tier raised (512 MB default, canvas at 1024 via
+ * cells.configureCell memoryMb) the CPU wall is gone and the assembled read is
+ * the canonical path again.
+ */
+const BOARD_RENDERER_SRC = `
+(function(){
+  var BUILD = 'v5';
+  var reg = (window.__parcRender = window.__parcRender || {});
+  var STYLE_ID = 'parc-canvas-board-css';
+  function ensureCss(){
+    if (document.getElementById(STYLE_ID)) return;
+    var s = document.createElement('style'); s.id = STYLE_ID;
+    s.textContent = [
+      '.pc-board{position:relative;width:100%;height:240px;overflow:hidden;background:#fff;border-radius:8px}',
+      '.pc-cam{position:absolute;top:0;left:0;transform-origin:0 0;overflow:visible}',
+      '.pc-el{position:absolute;box-sizing:content-box;padding:2px;font:13px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}',
+      '.pc-el .content{width:100%;height:100%;overflow:hidden}',
+      '.pc-el[data-t="text"] .content,.pc-el[data-t="markdown"] .content{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.2;white-space:normal}',
+      '.pc-el img.content{object-fit:cover;max-width:100%}',
+      '.pc-el h1,.pc-el h2,.pc-el h3{margin:.1em 0;font-size:1.05em}',
+      '.pc-el p{margin:.15em 0}',
+      '.pc-badge{font:11px ui-monospace,Menlo,monospace;opacity:.6;padding:4px 2px 0}'
+    ].join('');
+    document.head.appendChild(s);
+  }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function escAttr(s){ return esc(s).replace(/\\n/g,'&#10;'); }
+  // A compact markdown subset ported from shared/render.ts (headings, bold,
+  // italic, code, links, images, lists, hr, blockquote, paragraphs).
+  function mdInline(s){
+    var t = esc(s);
+    t = t.replace(/\`([^\`]+)\`/g, function(_m,c){ return '<code>'+c+'</code>'; });
+    t = t.replace(/!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)/g, function(_m,a,u){ return '<img alt="'+a+'" src="'+u+'">'; });
+    t = t.replace(/\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g, function(_m,a,u){ return '<a href="'+u+'" target="_blank" rel="noopener">'+a+'</a>'; });
+    t = t.replace(/\\*\\*([^*]+)\\*\\*/g, function(_m,c){ return '<strong>'+c+'</strong>'; });
+    t = t.replace(/(^|[^*])\\*([^*]+)\\*/g, function(_m,p,c){ return p+'<em>'+c+'</em>'; });
+    return t;
+  }
+  function renderMd(src){
+    var lines = String(src==null?'':src).replace(/\\r\\n/g,'\\n').split('\\n');
+    var out=[], para=[], list=null;
+    function flush(){ if(para.length){ out.push('<p>'+mdInline(para.join(' '))+'</p>'); para=[]; } }
+    function closeList(){ if(list){ out.push('</'+list+'>'); list=null; } }
+    for (var i=0;i<lines.length;i++){
+      var line = lines[i].replace(/\\s+$/,'');
+      if(!line.trim()){ flush(); closeList(); continue; }
+      var h = line.match(/^(#{1,6})\\s+(.*)$/);
+      if(h){ flush(); closeList(); var n=h[1].length; out.push('<h'+n+'>'+mdInline(h[2])+'</h'+n+'>'); continue; }
+      if(/^(---|\\*\\*\\*|___)\\s*$/.test(line)){ flush(); closeList(); out.push('<hr>'); continue; }
+      if(/^>\\s?/.test(line)){ flush(); closeList(); out.push('<blockquote>'+mdInline(line.replace(/^>\\s?/,''))+'</blockquote>'); continue; }
+      var ul = line.match(/^[-*+]\\s+(.*)$/), ol = line.match(/^\\d+\\.\\s+(.*)$/);
+      if(ul||ol){ flush(); var ty=ul?'ul':'ol'; if(list!==ty){ closeList(); list=ty; out.push('<'+ty+'>'); } out.push('<li>'+mdInline((ul?ul[1]:ol[1]))+'</li>'); continue; }
+      closeList(); para.push(line);
+    }
+    flush(); closeList(); return out.join('');
+  }
+  function contentHtml(c, w, h){
+    var color = c.color ? 'color:'+escAttr(c.color) : '';
+    var text = c.content==null?'':c.content;
+    if (c.type==='text') return '<p class="content" style="'+color+'">'+esc(text)+'</p>';
+    if (c.type==='markdown') return '<div class="content" style="'+color+'">'+renderMd(text)+'</div>';
+    if (c.type==='html') return '<div class="content">'+text+'</div>';
+    if (c.type==='img'){ var src = c.src || ('https://placehold.co/'+Math.round(w)+'x'+Math.round(h)+'?text='+encodeURIComponent(text)); return '<img class="content" src="'+escAttr(src)+'">'; }
+    return '<div class="content" style="opacity:.5">'+esc(c.type)+'</div>';
+  }
+  function elHtml(p, c){
+    var scale = p.scale||1;
+    var w = p.width*scale, hh = p.height*scale;
+    var left = (p.x - w/2), top = (p.y - hh/2);
+    var style = 'left:'+left.toFixed(1)+'px;top:'+top.toFixed(1)+'px;width:'+w.toFixed(1)+'px;height:'+hh.toFixed(1)+'px;z-index:'+(Math.floor(p.zIndex||0)||1);
+    return '<div class="pc-el" data-t="'+escAttr(c.type)+'" style="'+style+'">'+contentHtml(c,w,hh)+'</div>';
+  }
+  function fitCam(els, W, H){
+    var xs=[], ys=[];
+    for (var i=0;i<els.length;i++){ var e=els[i], p=e.placement; if(p.static) continue; var s=p.scale||1; xs.push(p.x-(p.width*s)/2, p.x+(p.width*s)/2); ys.push(p.y-(p.height*s)/2, p.y+(p.height*s)/2); }
+    if(!xs.length) return {scale:1,tx:0,ty:0};
+    var minX=Math.min.apply(null,xs), minY=Math.min.apply(null,ys);
+    var bw=Math.max.apply(null,xs)-minX, bh=Math.max.apply(null,ys)-minY, pad=16;
+    var scale=Math.min(1,(W-pad*2)/Math.max(bw,1),(H-pad*2)/Math.max(bh,1));
+    return {scale:scale, tx:(W-scale*bw)/2-scale*minX, ty:(H-scale*bh)/2-scale*minY};
+  }
+  function resolveViewId(value, key){
+    var vid = (value && (value.viewId || value.id)) || key || '';
+    return String(vid);
+  }
+  reg['canvas'] = function(host, value, api){
+    ensureCss();
+    host.innerHTML = '<div class="pc-badge">loading board…</div>';
+    if (!api || typeof api.call !== 'function'){ host.innerHTML = '<div class="pc-badge">no host channel</div>'; return; }
+    var vid = resolveViewId(value, api.key);
+    // ONE host-proxied read: canvas assembles the whole scene server-side (the
+    // board's elements joined from placement+content, and its edges) — the same
+    // shape SSR builds — so this renderer no longer re-derives it from three raw
+    // reads. {view} is resolved to its board by the tool (a bare board id works
+    // too — readView degrades to deriving the board from the id).
+    api.call('read','@c15r/canvas.scene',{ view: vid }).then(function(scene){
+      if (!scene || scene.denied){ host.innerHTML = '<div class="pc-badge">🌲 '+esc((value&&value.label)||vid)+' — private</div>'; return; }
+      paint(scene.elements||[], scene.edges||[]);
+    }).catch(function(err){ host.innerHTML = '<div class="pc-badge">board unavailable: '+esc((err&&err.message)||err)+'</div>'; });
+
+    function paint(els, links){
+      var rendered=[], center={};
+      for (var j=0;j<els.length;j++){
+        var e=els[j]; if(!e) continue; var p=e.placement, c=e.content;
+        if(!c || !c.type || !p || typeof p.x!=='number' || p.static) continue;
+        rendered.push(e);
+        center[e.id] = { x:p.x, y:p.y }; // placement (x,y) is the element CENTER
+      }
+      if(!rendered.length){ host.innerHTML = '<div class="pc-badge">empty board</div>'; return; }
+      var W = (host.clientWidth||600), H = 240;
+      var cam = fitCam(rendered, W, H);
+      // Edges the scene already projected (links among present elements). Drawn as
+      // an SVG UNDER the elements, in the SAME canvas coord space (inside the cam
+      // transform), non-scaling stroke for crisp hairlines. Style by relation,
+      // mirroring the live board's hierarchy: authored links read as real
+      // connections; inferred similarTo edges are a faint constellation, not
+      // foreground -- so a thumbnail shows structure, not a similarity haze.
+      var faint='', strong='';
+      for (var m=0;m<(links?links.length:0);m++){
+        var l=links[m]; if(!l) continue;
+        var a=center[l.source], b=center[l.target];
+        if(!a||!b) continue;
+        var seg = '<line x1="'+a.x.toFixed(1)+'" y1="'+a.y.toFixed(1)+'" x2="'+b.x.toFixed(1)+'" y2="'+b.y.toFixed(1)+'" vector-effect="non-scaling-stroke" ';
+        if (l.rel === 'similarTo') faint += seg + 'stroke="rgba(150,140,120,.16)" stroke-width="1" />';
+        else strong += seg + 'stroke="#8a8172" stroke-width="1.5" />';
+      }
+      var edgesSvg = (faint+strong) ? '<svg class="pc-edges" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none">'+faint+strong+'</svg>' : '';
+      var inner = '';
+      for (var k=0;k<rendered.length;k++) inner += elHtml(rendered[k].placement, rendered[k].content);
+      host.innerHTML = '<div class="pc-board"><div class="pc-cam" style="transform:translate('+cam.tx.toFixed(1)+'px,'+cam.ty.toFixed(1)+'px) scale('+cam.scale.toFixed(4)+')">'+edgesSvg+inner+'</div></div>'
+        + '<div class="pc-badge">🌲 rendered by @c15r/canvas · federated ui:// · '+BUILD+'</div>';
+    }
+  };
+})();
+`;
+
 // The AWS SDK v3 ships in the node20 Lambda runtime, but load it LAZILY: a
 // missing module then degrades SSR to the static fallback (caught below)
 // instead of crashing the cell's import — the bare app + app.js must never 500.
@@ -223,6 +382,101 @@ async function readBoard(board: string): Promise<BoardElement[]> {
   return out;
 }
 
+/**
+ * The board's edges: substrate links whose BOTH endpoints are elements on this
+ * board (`el:<id>`) — the same projection the live board draws (storage.ts). Read
+ * from the owner's `EDGE#` items (canvas's IAM slice, one partition scan), filtered
+ * to the board's element set and deduped. `source`/`target` are the bare element
+ * ids (the renderer keys elements by id), `rel` the relation (so a consumer can
+ * style authored vs inferred `similarTo`).
+ */
+async function readBoardEdges(elementKeys: Set<string>): Promise<Array<{ source: string; target: string; rel: string }>> {
+  if (!TABLE || !elementKeys.size) return [];
+  const out: Array<{ source: string; target: string; rel: string }> = [];
+  const seen = new Set<string>();
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  const client = ddb();
+  let pages = 0;
+  try {
+    do {
+      const r = await client.send(
+        new Query({
+          TableName: TABLE,
+          // Narrowed to edges SOURCED at an element (`sk` = `EDGE#<from>|<rel>|<to>`,
+          // and a board edge's `from` is always `el:…`) — edges can't be scoped
+          // tighter than this by key: links are element-keyed and shared across
+          // boards, so the board filter is the elementKeys check below.
+          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+          ExpressionAttributeValues: { ':pk': `STATE#${OWNER}`, ':p': 'EDGE#el:' },
+          ExclusiveStartKey,
+        }),
+      );
+      for (const it of (r.Items ?? []) as Array<{ from?: string; to?: string; rel?: string }>) {
+        const { from, to, rel } = it;
+        if (!from || !to || !rel || !elementKeys.has(from) || !elementKeys.has(to)) continue;
+        const sig = `${from}|${rel}|${to}`;
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        out.push({ source: from.replace(/^el:/, ''), target: to.replace(/^el:/, ''), rel });
+      }
+      ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (ExclusiveStartKey && ++pages < 20); // hard page cap — edges never hang the scene
+  } catch (e) {
+    console.warn('[canvas scene] edges lookup failed', (e as Error).message);
+  }
+  return out;
+}
+
+/**
+ * ADR-0043 Inc 4 — the assembled board SCENE, server-side: the same data SSR
+ * builds (elements joined from placement+content) plus the board's edges. This is
+ * the read the federated `ui://` renderer resolves via one host-proxied `read`,
+ * so a host embeds a board without re-deriving the join/projection (killing the
+ * renderer's earlier whole-slice over-fetch). Authorised exactly like SSR: the
+ * owner always; a non-owner only for a board a `_public/` pattern covers
+ * (`denied` otherwise, so the renderer shows a private placeholder, never data).
+ */
+async function sceneOf(opts: { board?: string; view?: string; isOwner?: boolean; patterns?: string[] }): Promise<{
+  board: string | null;
+  elements: BoardElement[];
+  edges: Array<{ source: string; target: string; rel: string }>;
+  denied?: boolean;
+}> {
+  let board = opts.board;
+  if (opts.view) board = (await readView(opts.view)).board;
+  if (!board) return { board: null, elements: [], edges: [] };
+  if (!mayRenderBoard(board, !!opts.isOwner, opts.patterns ?? [])) return { board, elements: [], edges: [], denied: true };
+  const els = await readBoard(board);
+  // Edges are an enhancement, not the essential payload — race them against a
+  // deadline so a pathological edge set can never hang the scene past the cell
+  // budget; the board still paints (edgeless) if they're slow.
+  const edges = await Promise.race([
+    readBoardEdges(new Set(els.map((e) => `el:${e.id}`))),
+    new Promise<Array<{ source: string; target: string; rel: string }>>((res) => setTimeout(() => res([]), 6000)),
+  ]);
+  return { board, elements: els, edges };
+}
+
+/** The cell's tool surface (ADR-0043 Inc 4). `scene` is a READ — the gateway
+ *  routes `read("@c15r/canvas.scene", …)` here (`POST /_tools/scene`). */
+const TOOLS = [
+  {
+    name: 'scene',
+    description:
+      'The assembled board scene for a federated ui:// renderer/embed: the board\'s elements (placement + content, joined) and its edges (links among those elements), server-assembled — the read a host resolves so a renderer paints a board without re-deriving it. Pass {view} (resolves to its board, honouring the view) or {board}. Authorised like SSR: the owner always; others only for a `_public/`-shared board (else `denied`).',
+    kind: 'read' as const,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board: { type: 'string', description: 'board id' },
+        view: { type: 'string', description: 'view id (_views/<id>) — resolves to its board' },
+      },
+      additionalProperties: false,
+    },
+    scope: null,
+  },
+];
+
 /** A camera that frames the board's bounding box within a viewport (w×h). */
 function fitCamera(els: BoardElement[], w = 1200, h = 800): { scale: number; tx: number; ty: number } {
   const xs: number[] = [];
@@ -415,10 +669,41 @@ const MOUNT = `/@${OWNER}/canvas`;
 export const handler = async (event: any) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+
+  // Cell tool surface (ADR-0043 Inc 4). `scene` is a READ (side-effect-free)
+  // invoked via POST /_tools/scene by the gateway's read dispatch — so it is
+  // handled BEFORE the GET-only guard below (the rest of the cell is read-only
+  // HTML). Authorised like SSR via the dispatch-validated `x-cell-caller`.
+  if (method === 'GET' && path === '/_tools') return respond(200, 'application/json', JSON.stringify({ tools: TOOLS }));
+  if (method === 'POST' && path === '/_tools/scene') {
+    try {
+      const a = event.body ? (JSON.parse(event.body) as { board?: string; view?: string }) : {};
+      const caller = event.headers?.['x-cell-caller'] as string | undefined;
+      const isOwner = !!caller && caller === OWNER;
+      const patterns = !isOwner ? await publicPatterns() : [];
+      const scene = await sceneOf({ board: a.board, view: a.view, isOwner, patterns });
+      return respond(200, 'application/json', JSON.stringify(scene));
+    } catch (err) {
+      // A read tool must not 500 the host — degrade to an empty scene.
+      return respond(200, 'application/json', JSON.stringify({ board: null, elements: [], edges: [], error: (err as Error).message }));
+    }
+  }
+
   if (method !== 'GET') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));
     if (path === '/style.css') return respond(200, 'text/css; charset=utf-8', read('static/style.css'));
+    // ADR-0043 — the federated `ui://` board renderer (surface C). Non-sensitive
+    // static code (ACAO:* + cacheable); the gateway provider hop fetches it for a
+    // host, which runs it sandboxed and proxies its data reads. Board data never
+    // travels here — only through the host-proxied `api.call`.
+    if (path === '/renderers/board.js') {
+      return {
+        statusCode: 200,
+        headers: { 'content-type': 'application/javascript; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' },
+        body: BOARD_RENDERER_SRC,
+      };
+    }
 
     const qs = new URLSearchParams((event.rawQueryString as string) || '');
     // The board now lives in the PATH (`/@owner/canvas/<board>`); the gateway

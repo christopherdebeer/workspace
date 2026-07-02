@@ -12,6 +12,6 @@
     "outDir": "dist"
   },
   "include": ["bin", "lib", "platform", "services"],
-  "// exclude": "Client-side browser code (services/**/client, *.tsx) is type-checked by tsconfig.client.json and bundled by esbuild; keep it out of the server (no-DOM/no-JSX) compile.",
-  "exclude": ["node_modules", "dist", "cdk.out", "**/*.tsx", "services/**/client/**"]
+  "// exclude": "Client-side browser code (services/**/client, *.tsx, platform/ui) is type-checked by tsconfig.client.json and bundled by esbuild; keep it out of the server (no-DOM/no-JSX) compile. platform/ui was previously included by accident — every prior file in it happened to avoid DOM globals (vocab.ts/render-hints.ts are pure logic); federated-renderer.ts is the first to need `lib: dom`, surfacing the gap.",
+  "exclude": ["node_modules", "dist", "cdk.out", "**/*.tsx", "services/**/client/**", "platform/ui/**"]
 }

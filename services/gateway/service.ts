@@ -39,9 +39,9 @@ import {
   ServiceContext,
   ServiceHttpRequest,
   ServiceHttpResponse,
-  mergeTypeDecl,
-  resolveType,
+  buildTypeVocabulary,
 } from '../../platform/runtime';
+import { typeSignals } from '../../platform/ui/vocab';
 import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -90,6 +90,9 @@ interface CellTool {
   tool: string;
   /** Third-party-author disclosure (set by cells for non-owner callers). */
   disclosure?: { author: string; reads: string[]; note: string };
+  /** ADR-0039 Inc 2 / ADR-0041 Inc 3: a cell-authored renderer (output) and/or
+   *  a cell-authored argument form (input) for this tool. */
+  ui?: { renderer?: string; as?: string; form?: string };
 }
 
 /** A resolved, dispatchable capability. */
@@ -101,6 +104,8 @@ interface Capability {
   scope: string | null;
   /** Any-of family gate (see ProviderTool.scopeFamily). */
   scopeFamily?: string | null;
+  /** ADR-0039 Inc 2 / ADR-0041 Inc 3: a cell-authored renderer/form for this capability. */
+  ui?: { renderer?: string; as?: string; form?: string };
   forward: (input: unknown, ctx: ServiceContext) => Promise<unknown>;
 }
 
@@ -115,6 +120,13 @@ interface CatalogEntry {
   scope: string | null;
   /** Third-party-author disclosure for cell tools (docs/capability-consent.md). */
   disclosure?: { author: string; reads: string[]; note: string };
+  /** ADR-0041 Inc 3: a cell-authored argument FORM for this capability, surfaced
+   *  on the catalog entry (unlike `renderer`, a human must see this BEFORE
+   *  invoking — it replaces the schema-form floor for THIS target). The output
+   *  `renderer`/`as` aren't surfaced here; they apply post-invocation (`_render`
+   *  on the result, ADR-0039 Inc 2) and a caller doesn't need them to decide
+   *  whether/how to call. */
+  ui?: { form?: string };
 }
 
 /** One capability in the summary catalog: enough to decide, not to call. */
@@ -167,6 +179,7 @@ async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capab
       description: d.description,
       inputSchema: d.inputSchema,
       scope: d.scope,
+      ...(d.ui ? { ui: d.ui } : {}),
       forward: (input, c) => c.serviceClient('cells').command('callCellTool', { owner, name, tool, args: input ?? {} }),
     };
   }
@@ -224,6 +237,7 @@ async function buildCatalog(ctx: ServiceContext): Promise<CatalogEntry[]> {
         ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
         scope: t.scope ?? null,
         ...(t.disclosure ? { disclosure: t.disclosure } : {}),
+        ...(t.ui?.form ? { ui: { form: t.ui.form } } : {}),
       });
     }
   } catch (err) {
@@ -265,7 +279,76 @@ function summarizeCatalog(caps: CatalogEntry[]): {
   }
   return {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
-    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target.',
+    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target. Holding a fact? read("$catalog", { for: "<key>" }) returns just what can act on it (ADR-0049).',
+  };
+}
+
+// ─── contextual capabilities (ADR-0049) ───────────────────────────
+
+/** The workspace verbs that act on ANY fact — the floor of a contextual menu. */
+const CORE_FACT_VERBS = new Set([
+  'workspace.peek',
+  'workspace.neighbors',
+  'workspace.members',
+  'workspace.link',
+  'workspace.unlink',
+  'workspace.remember',
+  'workspace.supersede',
+  'workspace.share',
+]);
+
+/** A type's `manager` ref, normalised to the catalog's cell-name form
+ *  (`c15r/machine` → `@c15r/machine`; tier-1 names pass through). */
+function managerCell(ref: unknown): string | null {
+  if (typeof ref !== 'string' || !ref) return null;
+  return ref.includes('/') ? (ref.startsWith('@') ? ref : `@${ref}`) : ref;
+}
+
+/**
+ * `$catalog {for: <key>}` / `{forType: <type>}` — the catalog shaped by what
+ * the caller is holding (ADR-0049). Capabilities are INFERRED by type: the
+ * fact's type signals (declared type → key prefix → tag prefixes, the same
+ * ladder the render floor walks) resolve to declarations, each declaration's
+ * manager cell contributes its tools WITH schemas (the escalation tier, small
+ * because it's scoped), and the generally-applicable workspace verbs ride
+ * along as one-liners. A filter over what the token could already call —
+ * presentation, never authority.
+ */
+export function buildContextualCatalog(
+  caps: CatalogEntry[],
+  types: Record<string, unknown>,
+  subject: { key?: string; type?: string; meta?: { type?: string | null; tags?: string[] } },
+): {
+  for: string;
+  signals: string[];
+  types: Record<string, unknown>;
+  capabilities: CatalogEntry[];
+  workspace: CatalogSummaryEntry[];
+  hint: string;
+} {
+  const signals = subject.type
+    ? [{ type: subject.type, match: '' }]
+    : typeSignals({ key: subject.key ?? '', _meta: subject.meta ?? undefined });
+  const matched: Record<string, unknown> = {};
+  const managers = new Set<string>();
+  for (const s of signals) {
+    const d = types[s.type] as { icon?: unknown; label?: unknown; manager?: unknown; handlers?: unknown } | undefined;
+    if (!d || matched[s.type]) continue;
+    matched[s.type] = { icon: d.icon, label: d.label, manager: d.manager, handlers: d.handlers };
+    const cell = managerCell(d.manager);
+    if (cell) managers.add(cell);
+  }
+  const capabilities = caps.filter((c) => managers.has(cellOf(c.target)));
+  const workspace = caps
+    .filter((c) => CORE_FACT_VERBS.has(c.target))
+    .map((c) => ({ target: c.target, kind: c.kind, summary: firstSentence(c.description) }));
+  return {
+    for: subject.key ?? subject.type ?? '',
+    signals: signals.map((s) => s.type),
+    types: matched,
+    capabilities,
+    workspace,
+    hint: 'What can act on THIS: the type declarations it matches, the managing cells\' tools (full schemas), and the always-applicable workspace verbs (one-liners — resolve or read("$catalog",{detail:"full"}) for their schemas).',
   };
 }
 
@@ -338,41 +421,54 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
           .catch(() => ({ entries: [] }))
       : Promise.resolve({ entries: [] }),
   ]);
-  // Per-facet resolve (mergeTypeDecl): a slice `_types/<type>` override wins facet
-  // by facet, so overriding only `icon` no longer drops the canonical handlers/schema.
-  const types: Record<string, unknown> = { ...(global?.types ?? {}) };
-  for (const e of slice?.entries ?? []) {
-    const t = e.key.slice('_types/'.length);
-    types[t] = mergeTypeDecl(types[t], e.value);
-  }
-  // Additively attach the resolved `shape.fields` (ADR-0002) and `present` facet
-  // (ADR-0012: { icon, label, render } — the legacy `{icon,titlePath,href}` normalised
-  // once, server-side) so clients consume one resolved shape instead of re-deriving it.
-  // Flat keys are retained — existing consumers are unaffected (ADR-0014 row 3 enabler).
-  for (const [t, decl] of Object.entries(types)) {
-    const resolved = resolveType(decl, t);
-    const extra: Record<string, unknown> = {};
-    if (resolved.shape.fields) extra.fields = resolved.shape.fields;
-    if (resolved.present.icon !== undefined || resolved.present.label !== undefined || resolved.present.render !== undefined) {
-      extra.present = resolved.present;
-    }
-    if (Object.keys(extra).length) types[t] = { ...(decl as Record<string, unknown>), ...extra };
-  }
+  // The MERGE is a library now (ADR-0044 Inc 2 — `buildTypeVocabulary`,
+  // platform/runtime): per-facet slice-override resolution (mergeTypeDecl) plus
+  // the additively-attached `fields`/`present` facets, ONE resolver shared with
+  // cell SSR via the cell SDK — so `$types` stopped being wire-only. The
+  // gateway keeps only its transport (the two service reads above).
+  const types = buildTypeVocabulary(global?.types, slice?.entries as Array<{ key: string; value: unknown }> | undefined);
   return {
     types,
     hint: 'A fact of type T resolves through types[T].handlers[intent] (open/edit/render/create) — a surface (a cell URL), an act target, or a renderer; templated with ${id}/${match}/${value.path}.',
   };
 }
 
+/**
+ * ADR-0039 Inc 2 — stamp a capability's declared renderer onto its (object) result
+ * as `_render`, so the conversation card runs the cell-authored renderer for the
+ * TOOL result (the per-tool analogue of a type's `handlers.render`). Static
+ * declaration on the tool, delivery on the result — parc can't bind per-tool widgets
+ * in `tools/list` (3 tools, one card). Only objects are stamped; arrays/scalars pass
+ * through untouched, and a renderer-less capability is unchanged.
+ */
+function withRender(result: unknown, cap: Capability): unknown {
+  if (!cap.ui?.renderer || !result || typeof result !== 'object' || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), _render: { renderer: cap.ui.renderer, as: cap.ui.as ?? cap.target } };
+}
+
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
+    const opts = input?.input as { detail?: string; for?: string; forType?: string } | undefined;
+    // ADR-0049: `{for: <key>}` / `{forType: <type>}` — the contextual menu, a
+    // few KB inferred from the fact's type signals instead of the whole surface.
+    if (opts?.for || opts?.forType) {
+      const { types } = await buildTypes(ctx);
+      let meta: { type?: string | null; tags?: string[] } | undefined;
+      if (opts.for && !opts.forType) {
+        const fact = await ctx
+          .serviceClient('workspace')
+          .command<{ _meta?: { type?: string | null; tags?: string[] } } | null>('peek', { key: opts.for })
+          .catch(() => null);
+        meta = fact?._meta;
+      }
+      return buildContextualCatalog(caps, types, { key: opts.for, type: opts.forType, meta });
+    }
     // ADR-0033: progressive disclosure by default — a bare `$catalog` returns the
     // grouped one-line menu (skim), not every input/result schema. `detail:"full"`
     // (or "schemas") returns the heavy full contract.
-    const detail = (input?.input as { detail?: string } | undefined)?.detail;
-    if (detail === 'full' || detail === 'schemas') return { capabilities: caps };
+    if (opts?.detail === 'full' || opts?.detail === 'schemas') return { capabilities: caps };
     return summarizeCatalog(caps);
   }
   if (target === TYPES) return buildTypes(ctx);
@@ -395,7 +491,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return cap.forward(input?.input, ctx);
+  return withRender(await cap.forward(input?.input, ctx), cap);
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
@@ -405,7 +501,7 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return cap.forward(input?.input, ctx);
+  return withRender(await cap.forward(input?.input, ctx), cap);
 }
 
 function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[]; grant: string[] } {
@@ -431,7 +527,7 @@ const READ_SCHEMA = {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
     input: {
       ...INPUT_PROP,
-      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema.`,
+      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
     },
   },
   additionalProperties: false,
@@ -479,6 +575,14 @@ const tools: Record<string, McpToolDefinition> = {
     // substrate side supersedes-not-deletes, but act spans both.
     annotations: { readOnlyHint: false },
     handler: act as McpToolDefinition['handler'],
+    // ADR-0039 Inc 2: act must ALSO bind the card, or an act result's widget never
+    // fires. `toContent` already returns structuredContent for every tool, but the
+    // host only renders a widget for a tool that declares `_meta.ui.resourceUri` in
+    // tools/list — which whoami/read had and act did not. Without this, a tool
+    // renderer for an act-kind capability (e.g. define_machine's `_render` stamp) is
+    // invisible: the data path exists but no shell hosts it. The card handles
+    // mutation results additively (it never replaces the model's text channel).
+    ui: { resourceUri: CARD_URI },
   },
 };
 
@@ -525,7 +629,7 @@ export const handler = defineMcpService({
   // widget resources the tools bind to via their `_meta.ui.resourceUri`.
   capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [UI_MIME] } } },
   resources: {
-    read: (uri: string) => resolveUiResource(uri),
+    read: (uri: string, ctx: ServiceContext) => resolveUiResource(uri, ctx),
     list: () => listUiResources(),
   },
   http: [

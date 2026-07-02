@@ -66,7 +66,18 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         if (env.__command === 'describeTools') result = { tools: CELLS_TOOLS };
         else if (env.__command === 'describeCellTools') result = { tools: cellTools };
         else if (env.__command === 'describeTypes') result = { types: globalTypes };
-        else {
+        else if (env.__command === 'call') {
+          // ADR-0039 provider hop: the gateway fetches a cell-authored renderer asset
+          // via cells.call (GET). Echo the request so the test can assert the routing,
+          // and return a renderer-script HTTP response.
+          lastCall = { fn: 'cells', command: 'call', payload: env.payload };
+          result = {
+            statusCode: 200,
+            headers: { 'content-type': 'application/javascript; charset=utf-8' },
+            body: "window.__parcRender['machine-run']=function(){};",
+            isBase64Encoded: false,
+          };
+        } else {
           lastCall = { fn: 'cells', command: env.__command, payload: env.payload };
           result = { echoed: env.payload };
         }
@@ -250,6 +261,9 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(whoami._meta?.ui?.resourceUri).toBe('ui://parc/card');
     expect(whoami._meta?.ui?.visibility).toContain('app');
     expect(tools.find((t) => t.name === 'read')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+    // ADR-0039 Inc 2: act is widget-bound too, so an act result's renderer (the
+    // `_render` stamp) actually has a shell to render in.
+    expect(tools.find((t) => t.name === 'act')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
 
     // Inc 0: an object result is mirrored as structuredContent (the widget's data channel)…
     const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });
@@ -277,6 +291,23 @@ describe('resource cell (MCP gateway, read/act)', () => {
 
     const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
     expect(missing.error?.code).toBe(-32602);
+  });
+
+  it('resources/read federates a cell-authored renderer (ui://@owner/name/<path>) via cells.call (ADR-0039)', async () => {
+    const read = await mcp('creator', 'resources/read', {
+      uri: 'ui://@c15r/machine/renderers/machine-run.js',
+    });
+    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
+    expect(contents[0].uri).toBe('ui://@c15r/machine/renderers/machine-run.js');
+    expect(contents[0].mimeType).toContain('javascript');
+    expect(contents[0].text).toContain("__parcRender['machine-run']");
+    // The gateway resolved it by fetching the OWNING cell's served asset (GET) —
+    // the provider hop, not a platform-bundled renderer.
+    expect(lastCall).toEqual({
+      fn: 'cells',
+      command: 'call',
+      payload: { owner: 'c15r', name: 'machine', method: 'GET', path: '/renderers/machine-run.js' },
+    });
   });
 
   it('tools/list carries spec annotations and titles for the three verbs', async () => {
@@ -354,6 +385,50 @@ describe('resource cell (MCP gateway, read/act)', () => {
       command: 'callCellTool',
       payload: { owner: 'alice', name: 'tools-demo', tool: 'echo', args: { message: 'hi' } },
     });
+  });
+
+  it('stamps a cell tool\'s declared renderer onto its result as _render (ADR-0039 Inc 2)', async () => {
+    cellTools = [
+      {
+        name: 'machine-1__define_machine', address: '@c15r/machine', description: 'Define.', inputSchema: { type: 'object' },
+        scope: null, kind: 'act', cellId: 'machine-1', tool: 'define_machine',
+        ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' },
+      },
+    ];
+    const res = await callTool('creator', 'act', { target: '@c15r/machine.define_machine', input: { name: 'm', dryRun: true } });
+    expect(res.isError).toBeUndefined();
+    const out = res.parsed as { echoed?: unknown; _render?: { renderer: string; as: string } };
+    // The gateway forwarded the call AND stamped the tool's renderer directive.
+    expect(out._render).toEqual({ renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' });
+    expect(out.echoed).toEqual({ owner: 'c15r', name: 'machine', tool: 'define_machine', args: { name: 'm', dryRun: true } });
+
+    // A tool WITHOUT a ui declaration gets no _render (no accidental stamping).
+    cellTools = [
+      { name: 'tools-demo-1__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const plain = await callTool('creator', 'act', { target: '@alice/tools-demo.echo', input: { x: 1 } });
+    expect((plain.parsed as { _render?: unknown })._render).toBeUndefined();
+  });
+
+  it('surfaces a cell tool\'s declared argument form on the $catalog entry, but not its renderer (ADR-0041 Inc 3)', async () => {
+    cellTools = [
+      {
+        name: 'machine-1__define_machine', address: '@c15r/machine', description: 'Define.', inputSchema: { type: 'object' },
+        scope: null, kind: 'act', cellId: 'machine-1', tool: 'define_machine',
+        ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine', form: 'ui://@c15r/machine/forms/define_machine.js' },
+      },
+      { name: 'tools-demo-1__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+    ];
+    const cat = await callTool('creator', 'read', { target: '$catalog', input: { detail: 'full' } });
+    const caps = (cat.parsed as { capabilities: Array<{ target: string; ui?: { form?: string; renderer?: string } }> }).capabilities;
+    const def = caps.find((c) => c.target === '@c15r/machine.define_machine');
+    expect(def?.ui).toEqual({ form: 'ui://@c15r/machine/forms/define_machine.js' });
+    // The output renderer is post-invocation (_render on the result); the catalog
+    // (a pre-invocation surface) carries only what a caller needs to decide HOW to
+    // call — the form, not the renderer.
+    expect(def?.ui?.renderer).toBeUndefined();
+    const echo = caps.find((c) => c.target === '@alice/tools-demo.echo');
+    expect(echo?.ui).toBeUndefined();
   });
 
   it('unknown target is a tool error, not a transport error', async () => {

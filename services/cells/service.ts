@@ -190,11 +190,21 @@ interface CreateCellInput {
    *  e.g. model providers — needs more; the EDGE still caps a synchronous
    *  round trip at ~30s, so >30s only helps fire-and-poll patterns. */
   timeoutSeconds?: number;
+  /** Lambda memory in MB (128–3008; default 512). CPU scales with memory
+   *  (~1 vCPU at 1769MB), so this is the LATENCY knob for CPU-bound SSR /
+   *  scene assembly — the ADR-0043 Inc 4 lesson. Cost ≈ memory×duration, so
+   *  raising it for CPU-bound work is close to cost-neutral. */
+  memoryMb?: number;
 }
 
 const clampTimeout = (n: unknown): number | undefined => {
   const v = Number(n);
   return Number.isFinite(v) ? Math.min(300, Math.max(10, Math.round(v))) : undefined;
+};
+
+const clampMemory = (n: unknown): number | undefined => {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.min(3008, Math.max(128, Math.round(v))) : undefined;
 };
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
@@ -242,6 +252,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
   await putObject(env.codeBucket, srcKey(cellId, 'index.ts'), input.code, 'text/plain');
 
   const timeoutSeconds = clampTimeout(input.timeoutSeconds);
+  const memoryMb = clampMemory(input.memoryMb);
   const template = buildCellTemplate({
     cellId,
     owner,
@@ -254,6 +265,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     accountId: env.accountId,
     substrateTable: env.substrateTable,
     timeoutSeconds,
+    memorySize: memoryMb,
   });
   await deployStack(stackName, template);
 
@@ -269,6 +281,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     grants,
     public: !!input.public,
     timeoutSeconds,
+    memoryMb,
     status: 'CREATING',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -578,6 +591,9 @@ interface DeleteInput {
 }
 interface ConfigureCellInput extends CellRef {
   timeoutSeconds?: number;
+  /** Lambda memory in MB (128–3008). The latency knob for CPU-bound cells;
+   *  changing it re-renders the stack (like timeoutSeconds). */
+  memoryMb?: number;
   /** Web-facing: anonymous GETs/HEADs are allowed through dispatch so the SPA
    *  shell loads for a signed-out visitor (the client then handles sign-in for
    *  the owner's data). Registry-only — no stack rebuild. */
@@ -593,13 +609,17 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
   if (record.owner !== user) throw new ServiceAuthError('Only the owner can reconfigure a cell');
   const newPublic = input.public === undefined ? record.public : !!input.public;
   // Flip `public` without touching the stack (it lives in the registry record).
-  if (input.timeoutSeconds === undefined) {
+  if (input.timeoutSeconds === undefined && input.memoryMb === undefined) {
     await registry.put({ ...record, public: newPublic, updatedAt: new Date().toISOString() });
     ctx.logger.info('cell reconfigured (registry)', { cellId, public: newPublic });
-    return { ok: true, cellId, public: newPublic, timeoutSeconds: record.timeoutSeconds ?? null };
+    return { ok: true, cellId, public: newPublic, timeoutSeconds: record.timeoutSeconds ?? null, memoryMb: record.memoryMb ?? null };
   }
-  const timeoutSeconds = clampTimeout(input.timeoutSeconds);
-  if (!timeoutSeconds) throw new Error('timeoutSeconds (10–300) is required');
+  // Stack-shape change: either knob may arrive alone; the other keeps its
+  // stored (or default) value so a memory-only change never resets timeout.
+  const timeoutSeconds = input.timeoutSeconds === undefined ? record.timeoutSeconds : clampTimeout(input.timeoutSeconds);
+  if (input.timeoutSeconds !== undefined && !timeoutSeconds) throw new Error('timeoutSeconds (10–300) is required');
+  const memoryMb = input.memoryMb === undefined ? record.memoryMb : clampMemory(input.memoryMb);
+  if (input.memoryMb !== undefined && !memoryMb) throw new Error('memoryMb (128–3008) is required');
   const codeKey = `cells/${cellId}/${randomUUID()}.zip`;
   // The template needs a code object; reuse the current src bundle so the
   // stack update does not revert live code.
@@ -628,14 +648,16 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
     accountId: env.accountId,
     substrateTable: env.substrateTable,
     timeoutSeconds,
+    memorySize: memoryMb,
   });
   await updateStack(record.stackName, template);
-  await registry.put({ ...record, public: newPublic, timeoutSeconds, updatedAt: new Date().toISOString() });
-  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds, public: newPublic });
+  await registry.put({ ...record, public: newPublic, timeoutSeconds, memoryMb, updatedAt: new Date().toISOString() });
+  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds, memoryMb, public: newPublic });
   return {
     ok: true,
     cellId,
     timeoutSeconds,
+    memoryMb,
     note: 'stack update in progress — static/client assets need a cells.deploy after it completes',
   };
 }
@@ -1274,6 +1296,14 @@ interface CellToolDescriptor {
    * developer" surface, shown at discovery/first-invoke for humans and agents.
    */
   disclosure?: { author: string; reads: string[]; writes?: string[]; note: string };
+  /** ADR-0039 Inc 2 / ADR-0041 Inc 3: a cell-authored conversational renderer
+   *  (`renderer`/`as` — output) and/or a bespoke argument form (`form` — input)
+   *  for this TOOL, the per-tool analogue of a type's `handlers.render`/`create`.
+   *  The gateway stamps `renderer` onto the result as `_render` (the card runs
+   *  it); `form` is surfaced directly on the catalog capability (a human must
+   *  see it BEFORE invoking, to fill the form). `as`/`form` name the
+   *  `window.__parcRender`/`__parcForm` keys the served scripts register under. */
+  ui?: { renderer?: string; as?: string; form?: string };
 }
 
 /** Selector: omit to enumerate all accessible cells (catalog); give one to resolve a single target. */
@@ -1365,6 +1395,7 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
             cellId: cell.cellId,
             tool,
             ...(disclosure ? { disclosure } : {}),
+            ...(t.ui && typeof t.ui === 'object' ? { ui: t.ui as { renderer?: string; as?: string; form?: string } } : {}),
           });
         }
       } catch (err) {
@@ -1582,6 +1613,7 @@ const TOOLS: Record<string, ToolSpec> = {
         share: { type: 'array', items: { type: 'string' }, description: 'Principals to share with' },
         public: { type: 'boolean', description: 'Web-facing: allow anonymous GETs via /@<owner>/<name>' },
         timeoutSeconds: { type: 'number', description: 'Lambda timeout 10–300s (default 10)' },
+        memoryMb: { type: 'number', description: 'Lambda memory 128–3008 MB (default 512). CPU scales with memory — the latency knob for CPU-bound SSR' },
       },
       required: ['name', 'code'],
       additionalProperties: false,
@@ -1826,7 +1858,7 @@ const TOOLS: Record<string, ToolSpec> = {
     handler: deploy as RegisteredCommand,
   },
   configureCell: {
-    description: "Reconfigure a cell you own: `timeoutSeconds` (10–300; re-renders the stack — run cells.deploy afterwards to restore client/static assets) and/or `public` (registry-only, no rebuild — web-facing so a signed-out visitor gets the SPA shell). Pass either or both.",
+    description: "Reconfigure a cell you own: `timeoutSeconds` (10–300) and/or `memoryMb` (128–3008; CPU scales with memory — the latency knob) re-render the stack — run cells.deploy afterwards to restore client/static assets; `public` (registry-only, no rebuild — web-facing so a signed-out visitor gets the SPA shell). Pass any combination.",
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1836,6 +1868,7 @@ const TOOLS: Record<string, ToolSpec> = {
         owner: { type: 'string' },
         name: { type: 'string' },
         timeoutSeconds: { type: 'number' },
+        memoryMb: { type: 'number', description: 'Lambda memory 128–3008 MB (default 512)' },
         public: { type: 'boolean', description: 'Allow anonymous GETs through dispatch (the SPA shell loads signed-out; the client handles sign-in for data)' },
       },
       additionalProperties: false,

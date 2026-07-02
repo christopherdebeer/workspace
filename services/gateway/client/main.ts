@@ -15,26 +15,18 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { marked } from 'marked';
 import { hintToHtml, bodyText, resolvePath, escapeHtml } from '../../../platform/ui/render-hints';
+import { wikiLinkExtension } from '../../../platform/ui/wiki-link';
+import { fetchAndRunRenderer } from '../../../platform/ui/federated-renderer';
 import { json as vwJson, csv as vwCsv, mermaid as vwMermaid } from '../../../cells/viewers/client/main';
 
 marked.setOptions({ gfm: true, breaks: false });
-// [[wiki-links]] (ADR-0038 Inc 3) — mirror the lit cell's resolver so a link is the same
-// first-class substrate edge on every surface. `[[target]]`/`[[target|label]]`: a bare
-// target → `doc:<slug>`, an explicit key (`doc:x`, `cell:y`) is used as-is. We emit the
-// resolved KEY as data-key so the card intercepts the click into a host-proxied peek
-// (in-card navigation) rather than a dead browser nav. (Consolidate into platform/ui later.)
-function resolveWikiTarget(raw: string): { key: string; label: string } {
-  const [t, l] = raw.split('|');
-  const target = (t || '').trim();
-  const key = target.includes(':') ? target : `doc:${target.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
-  return { key, label: (l ?? target).trim() || target };
-}
-marked.use({ extensions: [{
-  name: 'wikilink', level: 'inline',
-  start(src: string) { return src.indexOf('[['); },
-  tokenizer(src: string) { const m = /^\[\[([^\]]+)\]\]/.exec(src); return m ? { type: 'wikilink', raw: m[0], text: m[1] } : undefined; },
-  renderer(tok: { text: string }) { const { key, label } = resolveWikiTarget(tok.text); return `<a class="wikilink" data-key="${escapeHtml(key)}" href="#">${escapeHtml(label)}</a>`; },
-}] } as unknown as Parameters<typeof marked.use>[0]);
+// [[wiki-links]] (ADR-0038 Inc 3, consolidated per ADR-0044 Inc 4) — the ONE
+// resolver lives in platform/ui/wiki-link; this surface only chooses the anchor:
+// the resolved KEY rides data-key so the card intercepts the click into a
+// host-proxied peek (in-card navigation) rather than a dead browser nav.
+marked.use({
+  extensions: [wikiLinkExtension(({ key, label }) => `<a class="wikilink" data-key="${escapeHtml(key)}" href="#">${escapeHtml(label)}</a>`)],
+} as unknown as Parameters<typeof marked.use>[0]);
 const esc = escapeHtml;
 const md = (s: string): string => marked.parse(s.replace(/\r\n/g, '\n'), { async: false }) as string;
 const hint = (h: string, v: unknown): string => hintToHtml(h, v, { md, esc });
@@ -117,27 +109,6 @@ function viewerContent(name: string, value: unknown): string {
   if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return bodyText(value) || (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
 }
-function mmEsc(s: unknown): string {
-  return String(s).replace(/["\n|]/g, ' ');
-}
-/** A machine-run's trace → a mermaid flowchart with the current node highlighted. */
-function machineRunMermaid(v: Record<string, unknown>): string {
-  let trace = Array.isArray(v.trace) ? (v.trace as Array<{ node?: string; via?: string }>) : [];
-  if (!trace.length && v.node) trace = [{ node: v.node as string }];
-  const lines = ['flowchart TD'];
-  for (let i = 0; i < trace.length; i++) {
-    const lbl = mmEsc(trace[i].node || '?');
-    if (i > 0) {
-      const via = trace[i].via ? `|${mmEsc(trace[i].via)}|` : '';
-      lines.push(`  n${i - 1} -->${via} n${i}["${lbl}"]`);
-    } else lines.push(`  n0["${lbl}"]`);
-  }
-  let cur = -1;
-  for (let j = trace.length - 1; j >= 0; j--) if (trace[j].node === v.node) { cur = j; break; }
-  if (cur < 0) cur = trace.length - 1;
-  if (cur >= 0) { lines.push('  classDef cur fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push(`  class n${cur} cur;`); }
-  return lines.join('\n');
-}
 
 /** One fact rendered by its TYPE affordance: a viewer (json/csv/mermaid), a machine-run
  *  trace diagram, a cell-declared ui:// renderer, or the present.render hint. */
@@ -150,11 +121,14 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp 
   let body = '';
   if (viewer && VIEWERS[viewer]) {
     mounts.push({ slot, view: VIEWERS[viewer], content: viewerContent(viewer, entry.value) });
-  } else if (t === 'machine-run' && entry.value && typeof entry.value === 'object') {
-    mounts.push({ slot, view: vwMermaid as ElView, content: machineRunMermaid(entry.value as Record<string, unknown>) });
   } else if (rh && typeof rh.renderer === 'string' && rh.renderer.indexOf('ui://') === 0) {
-    fetchRenderer(rh.renderer, slot);
+    // ADR-0039: a cell-authored renderer. Show the hint render immediately, then
+    // swap in the cell's renderer once it loads over the host proxy (degrades to
+    // the hint if the cell, the provider hop, or the host CSP can't serve it). The
+    // machine-run trace diagram, formerly hardcoded HERE, now lives in the machine
+    // cell and arrives this way — render federated, not centralised.
     body = hint('fields', entry.value);
+    fetchRenderer(rh.renderer, slot, t as string, entry.value, key);
   } else {
     body = rh && rh.hint ? hint(rh.hint, entry.value) : '';
     if (!body) body = hint('fields', entry.value) || `<pre>${esc(JSON.stringify(entry.value, null, 2)).slice(0, 800)}</pre>`;
@@ -454,9 +428,22 @@ function render(data: unknown): void {
   const root = document.getElementById('root');
   if (!root) return;
   mounts = [];
+  // ADR-0039 Inc 2: a tool RESULT may carry a cell-authored renderer directive
+  // (`_render`, stamped by the gateway from the tool's declared `ui`). Run it the
+  // same way as a type renderer — same __parcRender consumer — handed the whole
+  // result; the generic structured view is the placeholder/degraded fallback.
+  const rd = data && typeof data === 'object' ? (data as { _render?: { renderer?: string; as?: string } })._render : null;
+  if (rd && typeof rd.renderer === 'string' && rd.renderer.indexOf('ui://') === 0) {
+    currentData = data;
+    const slot = nextId();
+    root.innerHTML = header(viewStack.length > 0) + `<div id="${slot}">${genericStructured(data as Record<string, unknown>)}</div>` + hostBridges();
+    fetchRenderer(rd.renderer, slot, rd.as || rd.renderer, data);
+    measureClamps();
+    return;
+  }
   let b = '';
-  if (!data || typeof data !== 'object') b = `<pre>${esc(String(data))}</pre>`;
-  else {
+  let rich = false;
+  if (data && typeof data === 'object') {
     const d = data as Record<string, unknown>;
     const types = (d.types as Types) || {};
     const isNeighbors = Array.isArray(d.outbound) || Array.isArray(d.inbound);
@@ -481,20 +468,58 @@ function render(data: unknown): void {
     if (d.focus) b += '<h2>Focus</h2>' + entriesBlock(d.focus, types) + graphToggle();
     else if (d.entries && !isNeighbors) b += entriesBlock(d.entries, types) + graphToggle();
     else if (d.value && d._meta) b += renderSingleFact(d, types);
-    if (!b) b = genericStructured(d);
-    // Short hints (e.g. degraded-search note) help the human; the long model-facing
-    // guidance hints ($catalog/$types/$grants) just leak chrome — suppress those (audit).
-    if (typeof d.hint === 'string' && d.hint && d.hint.length < 140) b += `<div class="hint">${esc(d.hint)}</div>`;
-    if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
+    // A "rich" surface = one of the known shapes above fired (or a typed-fact list/
+    // single fact, whose own renderers/hints carry the weight). A plain result — a
+    // scalar, {ok}, a write confirmation, an opaque object — leaves b empty and
+    // collapses to the thin affordance (ADR-0039: the shell stays minimal until a
+    // substrate type/tool actually provides a richer surface; the `_render` tool
+    // path is handled in the early-return above).
+    rich = b.length > 0;
+    if (rich) {
+      // Short hints (e.g. degraded-search note) help the human; the long model-facing
+      // guidance hints ($catalog/$types/$grants) just leak chrome — suppress those (audit).
+      if (typeof d.hint === 'string' && d.hint && d.hint.length < 140) b += `<div class="hint">${esc(d.hint)}</div>`;
+      if (Array.isArray(d.hints)) b += '<div class="hint">' + (d.hints as string[]).map(esc).join('<br>') + '</div>';
+    }
   }
-  b += hostBridges();
   currentData = data;
-  root.innerHTML = header(viewStack.length > 0) + b;
-  for (const m of mounts) {
-    const el = document.getElementById(m.slot);
-    if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
+  if (rich) {
+    root.innerHTML = header(viewStack.length > 0) + b + hostBridges();
+    for (const m of mounts) {
+      const el = document.getElementById(m.slot);
+      if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
+    }
+  } else {
+    root.innerHTML = thinAffordance(data);
   }
   measureClamps();
+}
+/** The thin default (ADR-0039): a single low-weight line — a dot + a terse summary +
+ *  an expand toggle that reveals the raw structured view on demand. Shown when no rich
+ *  surface applies, so trivial results (a scalar, {ok}, an act write-confirmation) don't
+ *  inflate into a full card. Tap to expand → the generic structured view in place. */
+function thinAffordance(data: unknown): string {
+  const back = viewStack.length ? '<button class="mini back" data-back="1" title="back">←</button>' : '';
+  const id = nextId();
+  const raw = data && typeof data === 'object'
+    ? genericStructured(data as Record<string, unknown>)
+    : `<pre>${esc(String(data))}</pre>`;
+  return `<div class="thin">${back}<span class="tdot"></span><span class="tsum">${esc(summarize(data))}</span>`
+    + `<button class="texp" data-toggle="${id}" data-more="⌄" data-less="⌃">⌄</button></div>`
+    + `<div id="${id}" hidden class="thin-raw">${raw}</div>`;
+}
+/** A terse one-liner for the thin affordance: the decision-relevant scalar fields, else
+ *  the field names. Never the whole payload — that lives behind the expand. */
+function summarize(data: unknown): string {
+  if (data == null) return 'ok';
+  if (typeof data !== 'object') return String(data).slice(0, 100);
+  const o = data as Record<string, unknown>;
+  const pick = ['ok', 'status', 'op', 'key', 'id', 'target', 'run', 'machine', 'triggered', 'bootstrapped', 'written', 'deleted', 'revoked', 'count', 'total'];
+  const parts: string[] = [];
+  for (const k of pick) if (k in o && o[k] != null && typeof o[k] !== 'object') parts.push(`${k} ${String(o[k]).slice(0, 40)}`);
+  if (parts.length) return parts.slice(0, 3).join(' · ');
+  const keys = Object.keys(o).filter((k) => k !== '_render' && k !== 'hint');
+  return keys.length ? keys.slice(0, 5).join(', ') : 'result';
 }
 
 // ── host channel via the official SDK ────────────────────────────────────────
@@ -530,14 +555,26 @@ function hostBridges(): string {
   const f = (ok: unknown): string => (ok ? '✓' : '✗');
   return `<div class="hint">host bridges · ctx ${f(c.updateModelContext)} · msg ${f(c.message)} · sampling ${f(c.sampling)}</div>`;
 }
-/** (ADR-0034 Inc 2′) fetch a cell-declared ui:// renderer over the host proxy + inject it. */
-function fetchRenderer(uri: string, slot: string): void {
+// ── ADR-0039: the FEDERATION consumer — run a cell-authored renderer ──────────
+// A cell serves a renderer SCRIPT that self-registers under its type on the shared
+// `window.__parcRender` map; the card fetches it once over the host `resources/read`
+// proxy (gateway provider hop → owning cell) and injects it as an inline <script>.
+// Safe here specifically because the WHOLE CARD already runs inside claude.ai's
+// sandboxed, opaque-origin iframe with no ambient parc.land session (ADR-0034) —
+// the card injecting into "its own" document still lands inside that sandbox. A
+// first-party, session-bearing surface (e.g. home) must NOT do this directly; it
+// builds its own child sandbox instead (`platform/ui/federated-renderer`'s
+// `mountSandboxedRenderer`, used by the field computer, ADR-0041).
+const baseRendererApi = { call: callServer, esc: (s: unknown) => esc(String(s ?? '')), md };
+/** Fetch + execute a cell-declared `ui://` renderer for a typed fact; degrade to the
+ *  hint render already in the slot on any failure (offline, CSP, cell down). */
+function fetchRenderer(uri: string, slot: string, type: string, value: unknown, key?: string): void {
   app.readServerResource({ uri }).then((r) => {
-    const c = (r as { contents?: Array<{ text?: string }> }).contents?.[0];
-    if (!c || typeof c.text !== 'string') return; // degrade to the hint render already shown
+    const src = (r as { contents?: Array<{ text?: string }> }).contents?.[0]?.text;
     const el = document.getElementById(slot);
-    if (el) el.innerHTML = c.text;
-  }).catch(() => { /* degrade */ });
+    if (!el) return;
+    void fetchAndRunRenderer(uri, type, el, value, { ...baseRendererApi, key }, async () => (typeof src === 'string' ? src : null));
+  }).catch(() => { /* degrade to the hint render already shown */ });
 }
 // Delegated interactivity: drill (read) / ratify (act) re-render the card IN PLACE —
 // progressive disclosure, no new model turn, all under the gateway's enforceScope.

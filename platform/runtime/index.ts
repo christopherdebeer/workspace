@@ -48,7 +48,22 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
-export { createObservedState, createMemoryStateStore, computeScore, extractTypeRules, recordContains, StatePreconditionError, isTimerLive } from './state';
+export { createObservedState, createMemoryStateStore, computeScore, extractTypeRules, deriveBackboneEdges, recordContains, StatePreconditionError, isTimerLive } from './state';
+// The DynamoDB-backed StateStore — surfaced in the barrel (ADR-0042 Inc 0) so a
+// cell's own SSR Lambda can run the SAME read pipeline the gateway does
+// (`createObservedState(createDynamoStateStore(table))`) against its IAM-scoped
+// partition, instead of hand-rolling raw `STATE#<owner>`/`KEY#`/`gsi-*` queries.
+// The workspace + vector-indexer services already import it by deep path; six
+// cells re-implemented it because it wasn't discoverable here.
+// ADR-0044 Inc 1: the v2 (aws-sdk) store is DELETED — the v3 store (shared
+// state-store-codec, lazy @aws-sdk/* requires) is the one DynamoDB StateStore.
+export { createDynamoStateStoreV3 as createDynamoStateStore } from './dynamo-state-store-v3';
+export { buildTypeVocabulary } from './type-vocabulary';
+// The canonical cell-SSR reader (ADR-0042 Inc 1): the observed-state read
+// pipeline bound to one cell's scope, so a cell reads its slice the way the
+// gateway does (salience, edges, membership) instead of hand-rolling raw DDB.
+export { createCellReader } from './cell-reader';
+export type { CellReader, CellReaderDefaults } from './cell-reader';
 export { layer } from './resolution';
 export { matchesSelector } from './selector';
 export type { Selector, Selectable } from './selector';

@@ -10,7 +10,7 @@
  * deployable cell) is. Surfaces stay apex-form (`/@owner/name…`); the consumer
  * localizes them per-origin via the kernel's `cellUrl` (home's `localize`).
  */
-import type { TypeDecl } from '../shared/vocab';
+import type { TypeDecl } from '@parc/ui';
 
 export const DEFAULT_TYPE_DECLS: Record<string, TypeDecl> = {
   cell: {
