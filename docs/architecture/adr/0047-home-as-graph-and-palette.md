@@ -98,13 +98,30 @@ reserved-namespace keys (`_…`) and `canvas-placement` facts out of the node ba
 fix for the REST (cells, machine-runs with off-band neighbourhoods) is the one-hop-expand
 follow-up below.
 
+## v3 (selection = emphasis + one-hop expand)
+
+Selection now works the territory, not just the panel:
+
+- **Neighbourhood emphasis**: the selected node rings accent; its connected nodes stay bright with
+  a light ring; edges touching the selection brighten (+0.5 opacity), thicken, and always show
+  their `rel` label; everything else recedes to 0.2 fill / 0.12× edge opacity — dimmed, never
+  hidden, so the wider territory stays legible behind the focus.
+- **One-hop expand** (the follow-up, landed): selecting a node pulls its off-band neighbourhood
+  into the LIVE sim — up to 8 "ghost" satellites (small, labeled, plumbing still filtered) seeded
+  around the anchor, then every projection edge whose two ends are now both visible is stitched
+  (not just edges to the selection — a pulled-in node connects to anything else on screen). Ghosts
+  are full citizens: selectable, expandable, draggable. Expansion runs once per key; the graph
+  grows as you walk it — the card's neighbour model, in place.
+- Structurally: the d3 selections became **re-joinable** (keyed data joins into persistent layer
+  groups; enter-only styling; one `paint()` pass owns all state-dependent attributes), which is
+  the same machinery the live-tail follow-up needs.
+
 ## Follow-ups (still open)
 
-- **One-hop expand from the context panel** (pull neighbours into the live sim as nodes — the
-  card's neighbour model, in place; chips currently navigate, not expand).
 - **Selected-node → palette command seeding** (e.g. selecting a machine offers `machine.step`; the
   context panel learns the canvas palette's `visible()` richness from declared handlers).
 - **Recents + empty-Enter capture** in the palette (the canvas overloaded-Enter idea: unmatched text
   becomes a `workspace.remember` capture).
-- **Graph refresh/live tail** (changes feed → incremental node/edge updates instead of load-once).
+- **Graph refresh/live tail** (changes feed → incremental node/edge updates instead of load-once;
+  the re-joinable structure from v3 is the substrate for this).
 - **Type legend.**

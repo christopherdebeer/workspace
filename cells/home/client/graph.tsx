@@ -148,100 +148,249 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         label: shortLabel(factTitle(e)),
         deg: deg.get(e.key) ?? 0,
       }));
-      const links = edges.map((e) => ({ source: e.from, target: e.to, rel: e.rel, derived: e.derived }));
+      // v3: nodes/links are MUTABLE — selection pulls a node's off-band
+      // neighbourhood into the live sim (ADR-0047's one-hop expand), so every
+      // selection is keyed and the selections re-join instead of binding once.
+      const links: any[] = edges.map((e) => ({ id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived }));
+      const nodeById = new Map<string, any>((nodes as any[]).map((n) => [n.id, n]));
+      const linkIds = new Set<string>(links.map((l) => l.id));
+      const expanded = new Set<string>();
 
       let W = el.clientWidth || window.innerWidth;
       let H = el.clientHeight || window.innerHeight;
+      let curK = 1;
       el.innerHTML = '';
       const svg = d3.select(el).append('svg').attr('width', '100%').attr('height', '100%').style('display', 'block').style('touch-action', 'none');
       const g = svg.append('g');
       const zoom = d3.zoom().scaleExtent([0.15, 4]).on('zoom', guard((ev: any) => {
         g.attr('transform', ev.transform);
-        // Secondary edge labels (membership/derived) fade in once zoomed close.
-        edgeLabel.attr('display', (d: any) => (d.rel === 'similarTo' ? 'none' : d.derived && ev.transform.k < 1.3 ? 'none' : null));
+        curK = ev.transform.k;
+        paintEdgeLabels();
       }));
       svg.call(zoom);
       svg.on('click', guard(() => api.current?.select(null)));
 
-      const link = g
-        .append('g')
-        .selectAll('line')
-        .data(links)
-        .join('line')
-        .attr('stroke', (d: any) => edgeStyle(d).stroke)
-        .attr('stroke-opacity', (d: any) => edgeStyle(d).opacity)
-        .attr('stroke-width', (d: any) => edgeStyle(d).width)
-        .attr('stroke-dasharray', (d: any) => edgeStyle(d).dash ?? null);
-
-      // v2: `rel` labels on edges (similarTo excluded — the constellation stays
-      // quiet). Authored labels always; derived/membership past zoom 1.3×.
-      const edgeLabel = g
-        .append('g')
-        .selectAll('text')
-        .data(links.filter((l: any) => l.rel !== 'similarTo'))
-        .join('text')
-        .text((d: any) => d.rel)
-        .attr('font-size', 7.5)
-        .attr('font-family', 'ui-monospace, monospace')
-        .attr('fill', '#bfb49a')
-        .attr('fill-opacity', 0.8)
-        .attr('text-anchor', 'middle')
-        .attr('pointer-events', 'none')
-        .attr('paint-order', 'stroke')
-        .attr('stroke', '#241f18')
-        .attr('stroke-width', 2.5)
-        .attr('display', (d: any) => (d.derived ? 'none' : null));
+      // Persistent layer groups; the selections below re-join into them.
+      const linkG = g.append('g');
+      const edgeLabelG = g.append('g');
+      const nodeG = g.append('g');
+      const labelG = g.append('g');
+      let link: any, edgeLabel: any, node: any, label: any;
 
       const r = (d: any): number => 4 + d.score * 13 + Math.min(6, Math.sqrt(d.deg) * 1.4);
-      const labeled = (d: any): boolean => d.score > 0.4 || d.deg > 4;
+      const labeled = (d: any): boolean => d.score > 0.4 || d.deg > 4 || d.ghost;
       // v2: labels participate in the sim — a labeled node's collision footprint
       // extends rightward over its text, approximated as a wider circle, so the
       // layout itself keeps labels from stacking.
       const collideR = (d: any): number => (labeled(d) ? r(d) + 6 + d.label.length * 2.4 : r(d) + 6);
+      const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
 
-      const node = g
-        .append('g')
-        .selectAll('circle')
-        .data(nodes)
-        .join('circle')
-        .attr('r', r)
-        .attr('fill', (d: any) => nodeColor(d.type))
-        .attr('fill-opacity', 0.85)
-        .attr('stroke', '#2e2a22')
-        .attr('stroke-width', 1)
-        .style('cursor', 'pointer');
-      node.append('title').text((d: any) => `${d.id}${d.type ? ` · ${d.type}` : ''}`);
-
-      const label = g
-        .append('g')
-        .selectAll('text')
-        .data(nodes.filter(labeled))
-        .join('text')
-        .text((d: any) => d.label)
-        .attr('font-size', 10)
-        .attr('font-family', 'ui-monospace, monospace')
-        .attr('fill', '#efe9dc')
-        .attr('fill-opacity', 0.8)
-        .attr('pointer-events', 'none')
-        .attr('paint-order', 'stroke')
-        .attr('stroke', '#241f18')
-        .attr('stroke-width', 3);
-
-      // ── selection + highlight (the shared imperative surface) ──
+      // ── selection + highlight state (shared by paint/select/expand) ──
       let selKey: string | null = null;
+      let nbrSet: Set<string> | null = null;
       let hiSet: Set<string> | null = null;
-      const paint = (): void => {
-        node
-          .attr('stroke', (n: any) => (n.id === selKey ? '#f5c453' : hiSet?.has(n.id) ? '#f5c453' : '#2e2a22'))
-          .attr('stroke-width', (n: any) => (n.id === selKey ? 3 : hiSet?.has(n.id) ? 2 : 1))
-          .attr('fill-opacity', (n: any) => (hiSet && !hiSet.has(n.id) && n.id !== selKey ? 0.25 : 0.85));
-        link.attr('stroke-opacity', (d: any) => {
-          const base = edgeStyle(d).opacity;
-          if (!hiSet) return base;
-          return hiSet.has(d.source.id) || hiSet.has(d.target.id) ? base : base * 0.25;
-        });
-        label.attr('fill-opacity', (n: any) => (hiSet && !hiSet.has(n.id) && n.id !== selKey ? 0.3 : 0.8));
+      const touchesSel = (d: any): boolean => !!selKey && (idOf(d.source) === selKey || idOf(d.target) === selKey);
+      const neighborsOf = (key: string): Set<string> => {
+        const out = new Set<string>();
+        for (const l of links) {
+          if (idOf(l.source) === key) out.add(idOf(l.target));
+          else if (idOf(l.target) === key) out.add(idOf(l.source));
+        }
+        return out;
       };
+
+      const onNodeClick = guard((ev: any, d: any) => {
+        ev.stopPropagation();
+        api.current?.select(d.id);
+      });
+      const onNodeDbl = guard((ev: any, d: any) => {
+        ev.stopPropagation();
+        openFact({ key: d.id } as ListEntry);
+      });
+      const dragBehavior = d3
+        .drag()
+        .on('start', guard((ev: any, d: any) => {
+          sim.alphaTarget(0.25).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        }))
+        .on('drag', guard((ev: any, d: any) => {
+          d.fx = ev.x;
+          d.fy = ev.y;
+        }))
+        .on('end', guard((ev: any, d: any) => {
+          sim.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        }));
+
+      /** (Re)bind data → DOM. Enter-only styling; paint() owns the dynamic bits. */
+      function rejoin(): void {
+        link = linkG
+          .selectAll('line')
+          .data(links, (d: any) => d.id)
+          .join((enter: any) =>
+            enter
+              .append('line')
+              .attr('stroke', (d: any) => edgeStyle(d).stroke)
+              .attr('stroke-opacity', (d: any) => edgeStyle(d).opacity)
+              .attr('stroke-width', (d: any) => edgeStyle(d).width)
+              .attr('stroke-dasharray', (d: any) => edgeStyle(d).dash ?? null),
+          );
+        // `rel` labels on edges (similarTo excluded — the constellation stays
+        // quiet). Authored labels always; derived/membership past zoom 1.3×.
+        edgeLabel = edgeLabelG
+          .selectAll('text')
+          .data(links.filter((l: any) => l.rel !== 'similarTo'), (d: any) => d.id)
+          .join((enter: any) =>
+            enter
+              .append('text')
+              .text((d: any) => d.rel)
+              .attr('font-size', 7.5)
+              .attr('font-family', 'ui-monospace, monospace')
+              .attr('fill', '#bfb49a')
+              .attr('fill-opacity', 0.8)
+              .attr('text-anchor', 'middle')
+              .attr('pointer-events', 'none')
+              .attr('paint-order', 'stroke')
+              .attr('stroke', '#241f18')
+              .attr('stroke-width', 2.5),
+          );
+        node = nodeG
+          .selectAll('circle')
+          .data(nodes, (d: any) => d.id)
+          .join((enter: any) => {
+            const c = enter
+              .append('circle')
+              .attr('r', r)
+              .attr('fill', (d: any) => nodeColor(d.type))
+              .attr('fill-opacity', 0.85)
+              .attr('stroke', '#2e2a22')
+              .attr('stroke-width', 1)
+              .style('cursor', 'pointer');
+            c.append('title').text((d: any) => `${d.id}${d.type ? ` · ${d.type}` : ''}`);
+            c.on('click', onNodeClick).on('dblclick', onNodeDbl).call(dragBehavior);
+            return c;
+          });
+        label = labelG
+          .selectAll('text')
+          .data(nodes.filter(labeled), (d: any) => d.id)
+          .join((enter: any) =>
+            enter
+              .append('text')
+              .text((d: any) => d.label)
+              .attr('font-size', 10)
+              .attr('font-family', 'ui-monospace, monospace')
+              .attr('fill', '#efe9dc')
+              .attr('fill-opacity', 0.8)
+              .attr('pointer-events', 'none')
+              .attr('paint-order', 'stroke')
+              .attr('stroke', '#241f18')
+              .attr('stroke-width', 3),
+          );
+      }
+
+      function paintEdgeLabels(): void {
+        edgeLabel
+          .attr('display', (d: any) => {
+            if (selKey) return touchesSel(d) ? null : 'none';
+            return d.derived && curK < 1.3 ? 'none' : null;
+          })
+          .attr('fill-opacity', (d: any) => (selKey && touchesSel(d) ? 0.95 : 0.8));
+      }
+
+      /** One styling pass over everything state-dependent. A selection
+       *  emphasises its whole neighbourhood: the selected node rings accent,
+       *  connected nodes stay bright with a light ring, touching edges thicken
+       *  and brighten (and always show their rel), everything else recedes —
+       *  dimmed, not hidden, so the territory stays legible. */
+      function paint(): void {
+        node
+          .attr('stroke', (n: any) =>
+            n.id === selKey ? '#f5c453' : selKey && nbrSet?.has(n.id) ? '#e8ddc2' : hiSet?.has(n.id) ? '#f5c453' : '#2e2a22')
+          .attr('stroke-width', (n: any) => (n.id === selKey ? 3 : selKey && nbrSet?.has(n.id) ? 1.6 : hiSet?.has(n.id) ? 2 : 1))
+          .attr('fill-opacity', (n: any) => {
+            if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.95 : 0.2;
+            if (hiSet) return hiSet.has(n.id) ? 0.85 : 0.25;
+            return n.ghost ? 0.7 : 0.85;
+          });
+        link
+          .attr('stroke-opacity', (d: any) => {
+            const base = edgeStyle(d).opacity;
+            if (selKey) return touchesSel(d) ? Math.min(0.95, base + 0.5) : base * 0.12;
+            if (!hiSet) return base;
+            return hiSet.has(idOf(d.source)) || hiSet.has(idOf(d.target)) ? base : base * 0.25;
+          })
+          .attr('stroke-width', (d: any) => edgeStyle(d).width + (touchesSel(d) ? 0.8 : 0));
+        label.attr('fill-opacity', (n: any) => {
+          if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.95 : 0.2;
+          if (hiSet) return hiSet.has(n.id) ? 0.8 : 0.3;
+          return 0.8;
+        });
+        paintEdgeLabels();
+      }
+
+      /** One-hop expand: pull the selected fact's off-band neighbours into the
+       *  live sim as small "ghost" satellites, then stitch EVERY projection
+       *  edge whose two ends are now both visible (not just edges to the
+       *  selection — a pulled-in node also connects to anything else on
+       *  screen). Once per key; plumbing stays filtered. */
+      async function expand(key: string): Promise<void> {
+        if (expanded.has(key) || !nodeById.has(key)) return;
+        expanded.add(key);
+        const res = await mcpCall('read', 'workspace.neighbors', { key });
+        if (disposed || !res.ok) return;
+        const v = res.value as { outbound?: Array<{ to?: string; rel: string; derived?: boolean }>; inbound?: Array<{ from?: string; rel: string; derived?: boolean }>; entries?: Record<string, ListEntry> } | null;
+        const anchor = nodeById.get(key);
+        const far: string[] = [];
+        for (const e of v?.outbound ?? []) if (e.to) far.push(e.to);
+        for (const e of v?.inbound ?? []) if (e.from) far.push(e.from);
+        let added = 0;
+        for (const [i, k] of far.entries()) {
+          if (added >= 8) break;
+          if (nodeById.has(k)) continue;
+          const entry = { ...(v?.entries?.[k] ?? {}), key: k } as ListEntry;
+          if (isPlumbing(entry)) continue;
+          const n = {
+            id: k,
+            type: entry._meta?.type ?? null,
+            score: Number(entry._meta?.score) || 0.05,
+            label: shortLabel(factTitle(entry)),
+            deg: 1,
+            ghost: true,
+            x: (anchor?.x ?? W / 2) + Math.cos(i * 2.399) * 90,
+            y: (anchor?.y ?? H / 2) + Math.sin(i * 2.399) * 90,
+          };
+          nodes.push(n as any);
+          nodeById.set(k, n);
+          added++;
+        }
+        // Stitch all now-satisfiable edges from the cached projection…
+        for (const e of rawEdges) {
+          const id = `${e.from}|${e.rel}|${e.to}`;
+          if (linkIds.has(id) || !nodeById.has(e.from) || !nodeById.has(e.to)) continue;
+          linkIds.add(id);
+          links.push({ id, source: e.from, target: e.to, rel: e.rel, derived: e.derived });
+        }
+        // …and the fresh ones the neighbours read returned.
+        const stitch = (from: string | undefined, to: string | undefined, rel: string, derived?: boolean): void => {
+          if (!from || !to || !nodeById.has(from) || !nodeById.has(to)) return;
+          const id = `${from}|${rel}|${to}`;
+          if (linkIds.has(id)) return;
+          linkIds.add(id);
+          links.push({ id, source: from, target: to, rel, derived });
+        };
+        for (const e of v?.outbound ?? []) stitch(key, e.to, e.rel, e.derived);
+        for (const e of v?.inbound ?? []) stitch(e.from, key, e.rel, e.derived);
+        rejoin();
+        sim.nodes(nodes);
+        sim.force('link').links(links);
+        if (selKey) nbrSet = neighborsOf(selKey);
+        paint();
+        sim.alpha(0.3).restart();
+        setTimeout(() => sim?.stop(), 4000);
+      }
+
       const panTo = (d: any): void => {
         const t = d3.zoomTransform(svg.node());
         svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(W / 2 - t.k * d.x, H / 2 - t.k * d.y).scale(t.k));
@@ -259,22 +408,15 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         select: (key: string | null, pan = false) => {
           lastExternal.current = key; // a tap-select's prop echo must not re-pan
           selKey = key;
+          nbrSet = key ? neighborsOf(key) : null;
           if (key) hiSet = null; // an explicit selection clears a result highlight
           paint();
           const d = key ? nodes.find((n: any) => n.id === key) : null;
           if (d && pan) panTo(d);
+          if (key) void expand(key).catch((err) => (window.reportError ?? console.error)(err));
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
       };
-
-      node.on('click', guard((ev: any, d: any) => {
-        ev.stopPropagation();
-        api.current?.select(d.id);
-      }));
-      node.on('dblclick', guard((ev: any, d: any) => {
-        ev.stopPropagation();
-        openFact({ key: d.id } as ListEntry);
-      }));
 
       // Console results (search / query / recall / neighbors) light up the graph
       // and the camera fits to them — the palette drives the territory.
@@ -285,6 +427,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         if (!keys.length) return;
         hiSet = new Set(keys);
         selKey = null;
+        nbrSet = null;
         paint();
         fitTo(hiSet);
       });
@@ -302,26 +445,9 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           node.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
           label.attr('x', (d: any) => d.x + r(d) + 3).attr('y', (d: any) => d.y + 3);
         });
+      rejoin();
+      paint();
       setTimeout(() => sim?.stop(), 9000);
-
-      node.call(
-        d3
-          .drag()
-          .on('start', guard((ev: any, d: any) => {
-            sim.alphaTarget(0.25).restart();
-            d.fx = d.x;
-            d.fy = d.y;
-          }))
-          .on('drag', guard((ev: any, d: any) => {
-            d.fx = ev.x;
-            d.fy = ev.y;
-          }))
-          .on('end', guard((ev: any, d: any) => {
-            sim.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
-          })),
-      );
 
       ro = new ResizeObserver(() => {
         const w = el.clientWidth, h = el.clientHeight;
