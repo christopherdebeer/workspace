@@ -49,7 +49,8 @@ import {
   type ChangesInput,
   type AttentionInput,
 } from './commands-read';
-import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput } from './commands-graph';
+import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput } from './commands-graph';
+import { type EdgeScopeInput } from './shape';
 import {
   createSearchCommands,
   type SearchInput,
@@ -117,9 +118,9 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
-  links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[] }>;
-  graph: CommandHandler<undefined, { edges: EdgeRecord[] }>;
-  members: CommandHandler<{ key: string }, MembersResult>;
+  links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[]; total: number }>;
+  graph: CommandHandler<EdgeScopeInput | undefined, { edges: EdgeRecord[]; total: number }>;
+  members: CommandHandler<MembersInput, MembersResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;

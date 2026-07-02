@@ -4,6 +4,7 @@
  * with the recall-overview builders.
  */
 import { requireUser, type Entry, type SalienceLens, type SalienceOptions } from '../../platform/runtime';
+import { shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
 import { applicableGrants, grantCovers, WHOLE_SLICE } from './grants';
 import {
   type DepsBuilder,
@@ -120,6 +121,11 @@ export interface RecallInput {
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
   explain?: boolean;
+  /** Entry tier for the FULL view (ADR-0048): `'card'` (default — values with
+   *  long strings truncated, structure summarised), `'refs'` (no values), or
+   *  `'full'` (whole values — the pre-ADR-0048 behavior). Keys named in
+   *  `expand` always come back full. The overview ignores this. */
+  shape?: ReadShape;
 }
 export interface PeekInput {
   key: string;
@@ -144,12 +150,20 @@ export interface QueryInput {
   contains?: string;
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
   explain?: boolean;
+  /** Entry tier (ADR-0048): `'refs'` (key + _meta essentials, no value),
+   *  `'card'` (values truncated to presentable previews), `'full'` (default —
+   *  whole values). Lists/graphs want card; only a body-renderer wants full. */
+  shape?: ReadShape;
 }
 
 export interface ChangesInput {
   /** Events after this seq; `'head'` returns no events, just the current head to tail from. */
   sinceSeq?: number | 'head';
   limit?: number;
+  /** The NEWEST n events (ascending) — the "recent activity" read. A bare
+   *  `changes()` defaults to `last: 200` (ADR-0048) instead of the whole
+   *  TTL-bounded trajectory; pass `sinceSeq` to tail forward instead. */
+  last?: number;
 }
 
 export interface AttentionInput {
@@ -222,7 +236,15 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // R1 (ADR-0029): inline affordances — include elided stubs' types so an
       // agent can act on a withheld fact's type after `expand`.
       const types = affordancesForTypes(typesOf(shaped.entries, ...(shaped.elided ?? []).map((s) => s.type)), decls);
-      return Object.keys(types).length ? { ...shaped, types } : shaped;
+      // ADR-0048: the full view defaults to CARD entries (the pre-shaping full
+      // view could exceed the response ceiling outright). `expand`ed keys stay
+      // full — that's the explicit "this one, whole" gesture; `shape:'full'`
+      // restores everything.
+      const tier = input?.shape ?? 'card';
+      let entries = shapeEntryMap(shaped.entries, tier);
+      for (const k of input?.expand ?? []) if (shaped.entries[k]) entries = { ...entries, [k]: shaped.entries[k] };
+      const result = { ...shaped, entries };
+      return Object.keys(types).length ? { ...result, types } : result;
     },
 
     async peek(input, ctx) {
@@ -271,14 +293,21 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       );
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
-      return Object.keys(types).length ? { ...result, types } : result;
+      const shaped = { ...result, entries: shapeEntryList(result.entries, input?.shape) };
+      return Object.keys(types).length ? { ...shaped, types } : shaped;
     },
 
     async changes(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
+      // ADR-0048: a bare call means "what happened lately?", not "replay
+      // everything" — newest 200, ascending. Tailing (`sinceSeq`) and explicit
+      // windows (`limit`/`last`) behave exactly as asked.
+      if (input?.sinceSeq === undefined && input?.limit === undefined && input?.last === undefined) {
+        return state.changes(scope, 0, undefined, 200);
+      }
       const sinceSeq = input?.sinceSeq === 'head' ? 'head' : (input?.sinceSeq ?? 0);
-      return state.changes(scope, sinceSeq, input?.limit);
+      return state.changes(scope, sinceSeq, input?.limit, input?.last);
     },
 
     async attention(input, ctx) {

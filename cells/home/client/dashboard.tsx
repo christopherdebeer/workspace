@@ -259,14 +259,15 @@ export interface DashboardData {
 const ACTIVITY_BUCKETS = 16;
 
 export async function loadDashboard(): Promise<DashboardData> {
-  const head = await mcpCall('read', 'workspace.changes', { sinceSeq: 'head' });
-  const seq = head.ok ? ((head.value as { seq?: number }).seq ?? 0) : 0;
+  // ADR-0048 shaped reads: the edge stat wants a COUNT ({limit:0} → `total`),
+  // and the activity chart wants the NEWEST window (`last` folds the old
+  // head-then-window two-step into one call).
   const [q, c, v, l, ch] = await Promise.all([
-    mcpCall('read', 'workspace.query', { limit: 1 }),
+    mcpCall('read', 'workspace.query', { limit: 1, shape: 'refs' }),
     mcpCall('read', 'cells.list'),
     mcpCall('read', 'workspace.views'),
-    mcpCall('read', 'workspace.links'),
-    mcpCall('read', 'workspace.changes', { sinceSeq: Math.max(0, seq - 1000), limit: 1000 }),
+    mcpCall('read', 'workspace.links', { limit: 0 }),
+    mcpCall('read', 'workspace.changes', { last: 1000 }),
   ]);
   // The dashboard already fetched the view list (for the stat count) — feed the
   // shared cache so the "All views" card + Add-section picker don't refetch.
@@ -296,7 +297,7 @@ export async function loadDashboard(): Promise<DashboardData> {
     facts: q.ok ? ((q.value as { total?: number }).total ?? 0) : 0,
     cells: c.ok ? (((c.value as { cells?: unknown[] }).cells ?? []).length) : 0,
     views: v.ok ? (((v.value as { views?: unknown[] }).views ?? []).length) : 0,
-    edges: l.ok ? (((l.value as { edges?: unknown[] }).edges ?? []).length) : 0,
+    edges: l.ok ? ((l.value as { total?: number; edges?: unknown[] }).total ?? ((l.value as { edges?: unknown[] }).edges ?? []).length) : 0,
     activity,
     activitySpanMs,
     recent: writes.slice(-8).reverse(),

@@ -36,7 +36,8 @@ function buildDash(d: Record<string, unknown>): DashboardData | undefined {
   const facts = num((d.window as { total?: number } | undefined)?.total);
   const cells = (d.cellsList as { cells?: unknown[] } | undefined)?.cells?.length;
   const views = (d.views as { views?: unknown[] } | undefined)?.views?.length;
-  const edges = (d.links as { edges?: unknown[] } | undefined)?.edges?.length;
+  // ADR-0048: the SSR links read is `{limit: 0}` — a count, not 1.4MB of edges.
+  const edges = (d.links as { total?: number; edges?: unknown[] } | undefined)?.total ?? (d.links as { edges?: unknown[] } | undefined)?.edges?.length;
   const events = ((d.changes as { events?: ChangeEvent[] } | undefined)?.events ?? []) as ChangeEvent[];
   if (facts === undefined && !events.length) return undefined; // nothing useful read
 

@@ -44,6 +44,14 @@ const LENS_SCHEMA = {
     'Salience lens (default salience): recent=freshness, connected=graph degree, durable=earned/cumulative, active=read/written now. Recomputes the score, so it shifts BOTH ranking and focus/peripheral/elided tiers.',
 } as const;
 
+/** ADR-0048: the uniform entry tier — dynamic response shaping, one vocabulary. */
+const SHAPE_SCHEMA = {
+  type: 'string',
+  enum: ['refs', 'card', 'full'],
+  description:
+    'Entry tier (ADR-0048): "refs" = key + _meta essentials (no value); "card" = value truncated to a presentable preview (titles/first lines survive, bodies don\'t; `_meta.shaped` marks it); "full" = whole values. Lists, chips, and graphs want card; only a body renderer needs full — `peek` always returns the whole fact.',
+} as const;
+
 /** Import-only provenance: preserve a migrated fact's timestamps + earned counts. */
 const IMPORT_SCHEMA = {
   type: 'object',
@@ -298,6 +306,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
         explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
+        shape: SHAPE_SCHEMA,
         limit: { type: 'number', description: 'Max entries to return' },
         cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
@@ -466,6 +475,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         key: { type: 'string', description: 'The fact key to look around' },
         dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'Direction (default both)' },
         rel: { type: 'string', description: 'Only edges of this type' },
+        shape: SHAPE_SCHEMA,
       },
       required: ['key'],
       additionalProperties: false,
@@ -482,17 +492,20 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'links',
-    description: 'Every edge in your slice (optionally filtered by a from/to key prefix) — boards and graph surfaces project their edges from this.',
+    description: 'Every edge in your slice — boards and graph surfaces project their edges from this. Scope it (ADR-0048): `keys` = only edges touching those facts, `rels` = only those rel types, `prefix` = from/to key prefix, `limit` caps the list (`{limit: 0}` = just the `total` count). Bare calls return everything — prefer scoping.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         prefix: { type: 'string', description: 'Only edges whose from or to starts with this prefix' },
+        keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end)' },
+        rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
+        limit: { type: 'number', description: 'Cap the returned edges; `total` still counts every match (0 = count only)' },
       },
       additionalProperties: false,
     },
-    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' } } },
   },
   {
     name: 'graph',
@@ -500,8 +513,16 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       "The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary).",
     scope: null,
     kind: 'read',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA } } },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end) — "the edges around these facts" instead of the whole projection (ADR-0048)' },
+        rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
+        limit: { type: 'number', description: 'Cap the returned edges; `total` still counts every match (0 = count only)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' } } },
   },
   {
     name: 'members',
@@ -511,7 +532,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     kind: 'read',
     inputSchema: {
       type: 'object',
-      properties: { key: { type: 'string', description: 'The collection fact key (a view, a doc, …)' } },
+      properties: { key: { type: 'string', description: 'The collection fact key (a view, a doc, …)' }, shape: SHAPE_SCHEMA },
       required: ['key'],
       additionalProperties: false,
     },
@@ -529,7 +550,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'changes',
     description:
-      'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. Pass sinceSeq:"head" to get just the head seq and start tailing in one call. The change feed.',
+      'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. Pass sinceSeq:"head" to get just the head seq and start tailing in one call. `last: n` returns the NEWEST n (ascending) — the "recent activity" read; a bare call defaults to `last: 200` (ADR-0048) instead of the whole trajectory.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -539,7 +560,8 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description: 'Return events with seq greater than this number (default 0), or "head" for no events + the current head seq',
           oneOf: [{ type: 'number' }, { type: 'string', enum: ['head'] }],
         },
-        limit: { type: 'number', description: 'Max events' },
+        limit: { type: 'number', description: 'Max events, paged FORWARD from sinceSeq (tailing)' },
+        last: { type: 'number', description: 'The NEWEST n events, ascending — recent activity (bare calls default to 200)' },
       },
       additionalProperties: false,
     },

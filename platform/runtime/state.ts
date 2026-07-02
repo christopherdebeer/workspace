@@ -1049,8 +1049,9 @@ export interface ObservedState {
    *  facts with an inbound membership edge (`inView`/`inDoc`) in the projection.
    *  Salience-ranked; ordered extensional membership (by decoration `seq`) is a follow-on. */
   members(scope: string, key: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<MembersResult>;
-  /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call. */
-  changes(scope: string, sinceSeq: number | 'head', limit?: number): Promise<ChangesResult>;
+  /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call.
+   *  `limit` pages FORWARD from sinceSeq; `last` keeps the NEWEST n instead (still ascending) — the "recent activity" window (ADR-0048). */
+  changes(scope: string, sinceSeq: number | 'head', limit?: number, last?: number): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
   attention(scope: string, opts?: AttentionOptions): Promise<AttentionResult>;
   /** Retire `key` by pointing it at successor `by` (or just marking it). */
@@ -1522,7 +1523,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return { key, membership: 'extensional', order: ordered ? 'seq' : 'salience', members };
     },
 
-    async changes(scope, sinceSeq, limit?): Promise<ChangesResult> {
+    async changes(scope, sinceSeq, limit?, last?): Promise<ChangesResult> {
       const head = await store.currentSeq(scope);
       // 'head' = "where do I start tailing from?" — answered without paying
       // for (or wading through) the scope's whole recent history.
@@ -1532,7 +1533,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const events = (await store.recentTrajectory(scope, 0))
         .filter((e) => e.seq > sinceSeq)
         .sort((a, b) => a.seq - b.seq);
-      const limited = limit !== undefined ? events.slice(0, Math.max(0, limit)) : events;
+      // `limit` pages FORWARD (tailing); `last` keeps the NEWEST n, still
+      // ascending — the "recent activity" window (ADR-0048).
+      const limited =
+        last !== undefined ? (last > 0 ? events.slice(-last) : []) : limit !== undefined ? events.slice(0, Math.max(0, limit)) : events;
       return { events: limited, seq: head };
     },
 

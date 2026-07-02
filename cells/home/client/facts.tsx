@@ -693,14 +693,12 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
     (async () => {
       try {
         await loadTypeDecls();
-        const [a, q, l] = await Promise.all([
+        const [a, q] = await Promise.all([
           mcpCall('read', 'workspace.attention', { limit: 5 }),
           mcpCall('read', 'workspace.query', { limit: 10 }),
-          mcpCall('read', 'workspace.links'),
         ]);
         if (!live) return;
         if (a.ok) setAtt(a.value as AttentionData);
-        if (l.ok) setEdges(edgeMap((l.value as { edges?: Edge[] }).edges ?? []));
         if (q.ok) {
           const v = q.value as { entries?: ListEntry[]; total?: number };
           setFacts(v.entries ?? []);
@@ -717,6 +715,20 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
+
+  // Edges only AROUND the visible window (ADR-0048 keys-scoped links) — replaces
+  // the old whole-slice `links {}` read; re-fetches when the window's facts
+  // change (lens re-rank, cold load) and covers the count-only SSR seed.
+  useEffect(() => {
+    if (!authed || !facts?.length) return;
+    let live = true;
+    void mcpCall('read', 'workspace.links', { keys: facts.map((f) => f.key) }).then((r) => {
+      if (live && r.ok) setEdges(edgeMap((r.value as { edges?: Edge[] }).edges ?? []));
+    });
+    return () => {
+      live = false;
+    };
+  }, [authed, facts]);
 
   if (!authed) return null;
 

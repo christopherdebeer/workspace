@@ -46,7 +46,9 @@ function ContextPanel({ factKey, onSelectKey, onClear }: { factKey: string; onSe
       const v = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
       if (v) setEntry({ key: factKey, value: v.value, _meta: v._meta });
     });
-    void mcpCall('read', 'workspace.neighbors', { key: factKey }).then((r) => {
+    // Chips need icons + titles, not bodies — card tier (ADR-0048); the content
+    // preview comes from the full `peek` above.
+    void mcpCall('read', 'workspace.neighbors', { key: factKey, shape: 'card' }).then((r) => {
       if (!live || !r.ok) return;
       const v = r.value as { outbound?: Array<{ to: string; rel: string }>; inbound?: Array<{ from: string; rel: string }>; entries?: Record<string, ListEntry> } | null;
       const seen = new Set<string>([factKey]);

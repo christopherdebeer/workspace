@@ -27,6 +27,7 @@ import {
   SIMILAR_WRITER,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
+import { shapeEntryList, type ReadShape } from './shape';
 import { applicableGrants, grantCovers } from './grants';
 import {
   type DepsBuilder,
@@ -66,6 +67,8 @@ export interface SearchInput {
   tag?: string;
   /** Max results (1–50, default 10). */
   limit?: number;
+  /** Entry tier (ADR-0048): refs/card/full. Default full; result lists want card. */
+  shape?: ReadShape;
 }
 export interface SearchHit {
   key: string;
@@ -199,7 +202,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       }
 
       const types = affordancesForTypes(typesOf(entries), await typeDeclsFor(ctx)); // R1 envelope
-      const result = { entries, count: entries.length, total: entries.length };
+      const result = { entries: shapeEntryList(entries, input.shape), count: entries.length, total: entries.length };
       return Object.keys(types).length ? { ...result, types } : result;
     },
 

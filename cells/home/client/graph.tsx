@@ -121,9 +121,11 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
     let onResult: ((ev: Event) => void) | null = null;
 
     (async () => {
-      const [nodesRes, edgesRes, d3] = await Promise.all([
-        mcpCall('read', 'workspace.query', { rankBy: 'salience', limit: 140 }),
-        mcpCall('read', 'workspace.graph', {}),
+      // ADR-0048 shaped reads: the graph needs titles + salience (card, not
+      // bodies) and only the edges AROUND its visible nodes (keys-scoped, not
+      // the whole multi-MB projection).
+      const [nodesRes, d3] = await Promise.all([
+        mcpCall('read', 'workspace.query', { rankBy: 'salience', limit: 140, shape: 'card' }),
         loadD3(),
       ]);
       if (disposed) return;
@@ -133,8 +135,10 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       }
       const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
       const entries = allEntries.filter((e) => !isPlumbing(e));
-      const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
       const byKey = new Map(entries.map((e) => [e.key, e]));
+      const edgesRes = await mcpCall('read', 'workspace.graph', { keys: entries.map((e) => e.key) });
+      if (disposed) return;
+      const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
       const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
       const deg = new Map<string, number>();
       for (const e of edges) {
@@ -338,13 +342,14 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       async function expand(key: string): Promise<void> {
         if (expanded.has(key) || !nodeById.has(key)) return;
         expanded.add(key);
-        const res = await mcpCall('read', 'workspace.neighbors', { key });
+        const res = await mcpCall('read', 'workspace.neighbors', { key, shape: 'card' });
         if (disposed || !res.ok) return;
         const v = res.value as { outbound?: Array<{ to?: string; rel: string; derived?: boolean }>; inbound?: Array<{ from?: string; rel: string; derived?: boolean }>; entries?: Record<string, ListEntry> } | null;
         const anchor = nodeById.get(key);
         const far: string[] = [];
         for (const e of v?.outbound ?? []) if (e.to) far.push(e.to);
         for (const e of v?.inbound ?? []) if (e.from) far.push(e.from);
+        const newKeys: string[] = [];
         let added = 0;
         for (const [i, k] of far.entries()) {
           if (added >= 8) break;
@@ -363,16 +368,9 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           };
           nodes.push(n as any);
           nodeById.set(k, n);
+          newKeys.push(k);
           added++;
         }
-        // Stitch all now-satisfiable edges from the cached projection…
-        for (const e of rawEdges) {
-          const id = `${e.from}|${e.rel}|${e.to}`;
-          if (linkIds.has(id) || !nodeById.has(e.from) || !nodeById.has(e.to)) continue;
-          linkIds.add(id);
-          links.push({ id, source: e.from, target: e.to, rel: e.rel, derived: e.derived });
-        }
-        // …and the fresh ones the neighbours read returned.
         const stitch = (from: string | undefined, to: string | undefined, rel: string, derived?: boolean): void => {
           if (!from || !to || !nodeById.has(from) || !nodeById.has(to)) return;
           const id = `${from}|${rel}|${to}`;
@@ -380,8 +378,18 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           linkIds.add(id);
           links.push({ id, source: from, target: to, rel, derived });
         };
+        // The neighbours read carries the anchor's own edges…
         for (const e of v?.outbound ?? []) stitch(key, e.to, e.rel, e.derived);
         for (const e of v?.inbound ?? []) stitch(e.from, key, e.rel, e.derived);
+        // …and one keys-scoped graph read (ADR-0048) stitches the satellites to
+        // EVERYTHING visible, not just the anchor.
+        if (newKeys.length) {
+          const around = await mcpCall('read', 'workspace.graph', { keys: newKeys });
+          if (disposed) return;
+          if (around.ok) {
+            for (const e of ((around.value as { edges?: GEdge[] })?.edges ?? []) as GEdge[]) stitch(e.from, e.to, e.rel, e.derived);
+          }
+        }
         rejoin();
         sim.nodes(nodes);
         sim.force('link').links(links);
