@@ -51,15 +51,18 @@ function ContextPanel({ factKey, onSelectKey, onClear }: { factKey: string; onSe
       const v = r.value as { outbound?: Array<{ to: string; rel: string }>; inbound?: Array<{ from: string; rel: string }>; entries?: Record<string, ListEntry> } | null;
       const seen = new Set<string>([factKey]);
       const out: NeighborRef[] = [];
+      // The `entries` map is keyed BY fact key — its values don't repeat it, so
+      // stamp the key on (typeIcon/factTitle resolve off entry.key).
+      const entryOf = (k: string): ListEntry => ({ ...(v?.entries?.[k] ?? {}), key: k }) as ListEntry;
       for (const e of v?.outbound ?? []) {
-        if (seen.has(e.to)) continue;
+        if (!e.to || seen.has(e.to)) continue;
         seen.add(e.to);
-        out.push({ key: e.to, rel: e.rel, entry: v?.entries?.[e.to] ?? ({ key: e.to } as ListEntry) });
+        out.push({ key: e.to, rel: e.rel, entry: entryOf(e.to) });
       }
       for (const e of v?.inbound ?? []) {
-        if (seen.has(e.from)) continue;
+        if (!e.from || seen.has(e.from)) continue;
         seen.add(e.from);
-        out.push({ key: e.from, rel: `← ${e.rel}`, entry: v?.entries?.[e.from] ?? ({ key: e.from } as ListEntry) });
+        out.push({ key: e.from, rel: `← ${e.rel}`, entry: entryOf(e.from) });
       }
       setNeighbors(out.slice(0, 12));
     });
