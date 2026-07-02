@@ -359,7 +359,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
 
     // whoami reflects the split: effective focus is empty, grant still carries it.
     const who = await callTool('reduced', 'whoami', {});
-    expect(who.parsed).toEqual({ user: 'carol', scopes: [], grant: ['platform:cells:create'] });
+    expect(who.parsed).toEqual({ user: 'carol', scopes: [], grant: ['platform:cells:create'], actor: 'human' });
   });
 
   it('refuses to cross the read/act boundary', async () => {
@@ -440,7 +440,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
   it('whoami returns the identity (built-in tool)', async () => {
     const res = await callTool('creator', 'whoami', {});
     // grant == scopes until a session narrows its effective focus (incremental auth).
-    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'] });
+    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'], actor: 'human' });
   });
 
   it('resolves identity from x-forwarded-authorization (edge preserves bearer past OAC)', async () => {
@@ -451,7 +451,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
       }),
     )) as FunctionUrlResponse;
     const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
-    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'] });
+    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'], actor: 'human' });
   });
 
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {

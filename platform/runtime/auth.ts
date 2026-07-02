@@ -14,9 +14,26 @@
  * on the HTTP path today.
  */
 
+/**
+ * Coarse embodiment class of the acting principal (ADR-0050 × ADR-0022): the
+ * person themselves, a mediated agent (an MCP client or cell acting
+ * on-behalf-of via a minted token principal), or the platform's own machinery.
+ * Salience weights attention by this, so an agent reading through your token
+ * no longer reads AS you. When ADR-0024 delegation chains land, any `act`
+ * chain stays `agent` regardless of depth.
+ */
+export type ActorClass = 'human' | 'agent' | 'platform';
+
 export interface Identity {
   /** Authenticated principal, e.g. a username. Undefined for anonymous calls. */
   user?: string;
+  /**
+   * The embodiment class behind this call, when the auth layer can tell —
+   * stamped from the validated token (a DCR `clientId` marks a connected
+   * client = `agent`; a first-party session = `human`). Absent ⇒ classify by
+   * principal name (`actorClassOf`).
+   */
+  actor?: ActorClass;
   /**
    * The session's **effective** scopes — what is enforced now. Defaults to the
    * token's full grant, but a session may narrow it (`auth.focusScope`) and widen

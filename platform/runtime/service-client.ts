@@ -7,6 +7,7 @@
  * events or queues for fan-out and long-running work.
  */
 import type { Lambda } from 'aws-sdk';
+import type { ActorClass } from './auth';
 
 /** Envelope recognised by `defineService` to route a direct invoke to a command. */
 export interface CommandEnvelope {
@@ -29,6 +30,9 @@ export interface CommandEnvelope {
   /** The caller's token id, so a session can mutate its own effective scope
    *  (`auth.focusScope`/`auth.requestScope`). */
   tokenId?: string;
+  /** The embodiment class behind the call (ADR-0022 mediation), propagated so a
+   *  downstream cell's attention accounting matches what the edge validated. */
+  actor?: ActorClass;
 }
 
 export interface ServiceClientOptions {
@@ -38,6 +42,7 @@ export interface ServiceClientOptions {
   scopes?: string[];
   grantScopes?: string[];
   tokenId?: string;
+  actor?: ActorClass;
 }
 
 export class ServiceInvokeError extends Error {
@@ -85,6 +90,7 @@ export function createServiceClient(options: ServiceClientOptions) {
           scopes: options.scopes,
           grantScopes: options.grantScopes,
           tokenId: options.tokenId,
+          actor: options.actor,
         };
         const result = await getClient()
           .invoke({

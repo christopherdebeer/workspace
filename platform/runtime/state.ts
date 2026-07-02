@@ -39,7 +39,7 @@
  * in-memory one ships for tests/local, a DynamoDB-backed one for production,
  * mirroring how the `auth` cell separates `AuthStore` from its backends).
  */
-import type { Identity } from './auth';
+import type { ActorClass, Identity } from './auth';
 import { resolveType, type Type } from './type-schema';
 import { layer } from './resolution';
 import { matchesSelector } from './selector';
@@ -246,15 +246,23 @@ export interface StateRecord {
  * (`@owner/cell` tokens), or a person. Salience weights these differently —
  * the 2026-07-02 audit found machinery churn indistinguishable from human
  * attention, which made salience a mirror of the system's own activity.
- * Known residual: an agent calling through MCP with the owner's token reads as
- * the owner (token-as-principal, ADR-0022/0024, will refine this).
+ * The class itself lives in `auth` (ADR-0022 mediation: the auth layer stamps
+ * `identity.actor` from the validated token — a DCR client token is an agent
+ * embodiment even though its subject is the user); this module classifies by
+ * PRINCIPAL NAME only as the fallback for un-stamped identities.
  */
-export type ActorClass = 'human' | 'agent' | 'platform';
+export type { ActorClass } from './auth';
 
 export function actorClassOf(principal: string | null | undefined): ActorClass {
   if (!principal || principal.startsWith('platform/')) return 'platform';
   if (principal.startsWith('@')) return 'agent';
   return 'human';
+}
+
+/** The embodiment behind an identity: the auth-stamped `actor` (mediation-aware,
+ *  ADR-0022) when present, else classified from the principal name. */
+export function actorOf(identity: Identity | undefined): ActorClass {
+  return identity?.actor ?? actorClassOf(identity?.user);
 }
 
 /** Compact per-class read/write counters (`hr` = human reads, `aw` = agent
@@ -1485,8 +1493,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         // Actor-classed touch counters (ADR-0050): a write folds its own touch
         // into the record it rewrites — no extra round trip, no trajectory scan
         // to reconstruct "lifetime" later.
-        touches: bumpTouches(prev?.touches, actorClassOf(writer), 'write'),
-        window: bumpWindow(prev?.window, actorClassOf(writer), 'write', bucketOf(nowMs)),
+        touches: bumpTouches(prev?.touches, actorOf(identity), 'write'),
+        window: bumpWindow(prev?.window, actorOf(identity), 'write', bucketOf(nowMs)),
       };
       await store.put(record, hasCas ? { expectRevision: prev?.revision ?? null } : undefined);
       // The trajectory write event carries the (possibly historical) updatedAt so
@@ -1504,7 +1512,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // serialize on the write path or manufacture trajectory the scorer must
       // scan. The entry is wrapped from the pre-touch record; the bump shows on
       // the next read (attention is about the future ranking, not this response).
-      await store.recordTouch(scope, key, actorClassOf(identity?.user), 'read', bucketOf(now.getTime()));
+      await store.recordTouch(scope, key, actorOf(identity), 'read', bucketOf(now.getTime()));
       return wrap(rec, now.getTime());
     },
 
@@ -1603,7 +1611,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // (for `changes`) and the touch counter (for `standing`, ADR-0050).
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'link', scope, key: from, at: edge.createdAt, seq });
-      await store.recordTouch(scope, from, actorClassOf(identity?.user), 'write', bucketOf(now.getTime()));
+      await store.recordTouch(scope, from, actorOf(identity), 'write', bucketOf(now.getTime()));
       // Endpoint hints: dangling edges stay allowed, but the writer should not
       // have to wait for a tending pass to learn it just made one.
       const resolves = async (key: string): Promise<boolean> => {
@@ -1807,8 +1815,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         writer: identity?.user ?? rec.writer,
         updatedAt: nowIso,
         seq,
-        touches: bumpTouches(rec.touches, actorClassOf(identity?.user ?? rec.writer), 'write'),
-        window: bumpWindow(rec.window, actorClassOf(identity?.user ?? rec.writer), 'write', bucketOf(now.getTime())),
+        touches: bumpTouches(rec.touches, identity ? actorOf(identity) : actorClassOf(rec.writer), 'write'),
+        window: bumpWindow(rec.window, identity ? actorOf(identity) : actorClassOf(rec.writer), 'write', bucketOf(now.getTime())),
       };
       await store.put(updated);
       await store.appendTrajectory({ op: 'supersede', scope, key, at: nowIso, seq });

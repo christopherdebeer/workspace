@@ -58,6 +58,7 @@ export {
   StatePreconditionError,
   isTimerLive,
   actorClassOf,
+  actorOf,
   touchKey,
   bumpTouches,
   bumpWindow,

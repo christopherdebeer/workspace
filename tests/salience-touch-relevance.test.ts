@@ -180,3 +180,76 @@ describe('relevance as the sixth signal (ADR-0051)', () => {
     __resetTypeDeclsCache();
   });
 });
+
+// ─── ADR-0022 × ADR-0050: mediation-aware attention ────────────────
+
+import { embeddableText as embedText, __setLambda } from '../platform/runtime';
+import { createCellLifecycleHandler } from '../services/workspace/handlers';
+
+describe('mediation (ADR-0022 fold): identity.actor overrides name-based classing', () => {
+  it('an agent embodiment of the user earns less standing than the user in person', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const inPerson: Identity = { user: 'alice', scopes: [] }; // no actor stamp → human by name
+    const viaClient: Identity = { user: 'alice', scopes: [], actor: 'agent' }; // MCP token (clientId)
+    await state.put({ scope: 'r', key: 'read-in-person', value: 1 }, { user: 'platform/x', scopes: [] });
+    await state.put({ scope: 'r', key: 'read-via-client', value: 1 }, { user: 'platform/x', scopes: [] });
+    for (let i = 0; i < 4; i++) await state.get('r', 'read-in-person', inPerson);
+    for (let i = 0; i < 4; i++) await state.get('r', 'read-via-client', viaClient);
+    const view = await state.read('r', { elision: 'none' });
+    expect(view.entries['read-via-client']._meta.standing).toBeGreaterThan(0); // mediated ≠ nothing
+    expect(view.entries['read-in-person']._meta.standing).toBeGreaterThan(view.entries['read-via-client']._meta.standing);
+  });
+});
+
+// ─── ADR-0052: capabilities are facts ───────────────────────────────
+
+describe('capability facts (ADR-0052)', () => {
+  afterEach(() => __setLambda(undefined));
+
+  it('_caps/ facts are embeddable; other _ namespaces stay skipped', () => {
+    expect(embedText('_caps/@a/blog.publish', { target: '@a/blog.publish', summary: 'Publish a post' })).toContain('Publish a post');
+    expect(embedText('_config/salience', { focusThreshold: 0.5 })).toBeNull();
+  });
+
+  it('cell.deployed projects tools as capability facts; redeploy retires stale; delete retires all', async () => {
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const handler = createCellLifecycleHandler(() => ({ state, grants }));
+    let advertised: Array<{ tool: string; description: string; kind: string }> = [
+      { tool: 'publish', description: 'Publish a blog post', kind: 'act' },
+      { tool: 'drafts', description: 'List draft posts', kind: 'read' },
+    ];
+    __setLambda({
+      invoke: () => ({ promise: async () => ({ Payload: JSON.stringify({ ok: true, result: { tools: advertised } }) }) }),
+    } as never);
+    const ctx = {
+      identity: null,
+      config: { tableName: 'unused', registry: { cells: 'cells-fn' } },
+      events: { emit: async () => {} },
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      correlationId: 'test',
+    } as unknown as ServiceContext;
+    const detail = { cellId: 'blog-1', owner: 'alice', name: 'blog', address: '@alice/blog', files: [], version: '1' };
+
+    await handler(detail, ctx, { source: 'cells', detailType: 'cell.deployed' });
+    const caps = await state.query('alice', { prefix: '_caps/' });
+    expect(caps.entries.map((e) => e.key).sort()).toEqual(['_caps/@alice/blog.drafts', '_caps/@alice/blog.publish']);
+    const pub = caps.entries.find((e) => e.key === '_caps/@alice/blog.publish')!;
+    expect(pub._meta.type).toBe('capability');
+    expect((pub.value as { target: string }).target).toBe('@alice/blog.publish');
+    expect((pub.value as { kind: string }).kind).toBe('act');
+
+    // Redeploy with one tool gone → the stale capability is superseded.
+    advertised = [{ tool: 'publish', description: 'Publish a blog post', kind: 'act' }];
+    await handler(detail, ctx, { source: 'cells', detailType: 'cell.deployed' });
+    const after = await state.query('alice', { prefix: '_caps/' });
+    expect(after.entries.map((e) => e.key)).toEqual(['_caps/@alice/blog.publish']);
+
+    // Delete → everything superseded.
+    await handler(detail, ctx, { source: 'cells', detailType: 'cell.delete.requested' });
+    const gone = await state.query('alice', { prefix: '_caps/' });
+    expect(gone.entries).toEqual([]);
+  });
+});

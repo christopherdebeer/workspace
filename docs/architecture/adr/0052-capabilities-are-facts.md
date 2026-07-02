@@ -1,7 +1,12 @@
 # ADR-0052 — Capabilities are facts: recall can surface what you can DO
 
-- **Status:** Proposed — completes ADR-0013's floor for the capability surface;
-  the semantic generalization of ADR-0049.
+- **Status:** Inc 1 shipped 2026-07-02 — the workspace's cell-lifecycle handler
+  projects each deployed cell's advertised tools into `_caps/<address>.<tool>`
+  capability facts (type `capability`, writer `platform/cells`; reconciled on
+  redeploy, superseded on delete); `embeddableText` carves `_caps/` out of the
+  `_`-namespace skip so the live indexer embeds them. Open: seed the workspace
+  core verbs the same way; derive `$catalog` from the facts; type-decl for
+  `capability` with a declared prior (today it rides `_config/salience`).
 - **Depends on:** ADR-0013 (fact floor), ADR-0049 (contextual capabilities),
   ADR-0050 (type priors), ADR-0051 (the intent lens), ADR-0044 L1 (declare once,
   project everywhere).

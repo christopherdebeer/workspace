@@ -4,8 +4,14 @@
   flat attrs + `recordTouch`) live in the store + scorer; reads no longer write the
   trajectory or allocate seq; `signalsFor` no longer scans the trajectory (degree
   only); centrality log-compressed (saturation 50); `typePriors` in
-  `_config/salience`. Open: stream-maintained degree, the `_index/overview` digest,
-  card projection at the store, `score0` GSI, counter backfill for pre-ADR facts.
+  `_config/salience`. Inc 1b (2026-07-02): actor classing is MEDIATION-AWARE —
+  the auth layer stamps `identity.actor` from the validated token (ADR-0022: a
+  DCR client token is an `agent` embodiment even when its subject is the user;
+  a first-party session is `human`), the class rides the service-to-service
+  envelope, and the scorer prefers the stamp over name-based fallback. Open:
+  stream-maintained degree, the `_index/overview` digest, card projection at
+  the store, `score0` GSI, counter backfill for pre-ADR facts; ADR-0024 chains
+  will keep any `act` chain classed `agent`.
   Amends ADR-0006 (the score stage) and repays the open cost question in
   `docs/substrate.md` ("trajectory-driven scoring is read/write-amplifying; bound it
   before it sits under every read").
