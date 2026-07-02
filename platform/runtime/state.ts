@@ -79,6 +79,9 @@ export interface EntryMeta {
   standing: number;
   /** Structural importance in [0,1] (saturating graph degree). */
   centrality: number;
+  /** Cosine similarity to the read's intent (`text`), present only on a read
+   *  that stated one (ADR-0051). */
+  relevance?: number;
   /** True when the value was withheld because the entry fell below the tier. */
   elided: boolean;
   /** Full salience breakdown, attached only when a read sets `explain` — the
@@ -91,11 +94,13 @@ export interface EntryMeta {
  *  blended by (resolved defaults ← config ← lens ← override), and its weighted
  *  contribution to the final score — so a tuner can see *why* a fact scored. */
 export interface ScoreExplain {
-  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
-  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
-  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number };
+  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
+  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
+  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
   /** Raw inbound+outbound graph degree feeding centrality (pre-saturation). */
   degree: number;
+  /** The type prior the blended score was multiplied by (ADR-0050). */
+  prior: number;
 }
 
 export interface Entry<V = unknown> {
@@ -217,6 +222,73 @@ export interface StateRecord {
    */
   seedReads?: number;
   seedWrites?: number;
+  /**
+   * Cumulative touch counters by actor class (ADR-0050) — the durable form of
+   * "lifetime reads+writes". Maintained on every touch (a write folds them into
+   * the rewritten record; a read is one counter increment via `recordTouch`), so
+   * `standing` no longer depends on scanning a TTL-bounded trajectory. Absent on
+   * facts written before ADR-0050 (they stand on their import seeds).
+   */
+  touches?: TouchCounters;
+  /**
+   * The current burst-window bucket (ADR-0050): touch counts within the bucket
+   * `b = floor(now / windowMs)`. Feeds `velocity`/`attention` without a
+   * trajectory scan; a stale bucket reads as zero (the burst has passed).
+   */
+  window?: TouchWindow;
+}
+
+// ── actor-classed touches (ADR-0050) ───────────────────────────────
+
+/**
+ * Who touched a fact, coarsely: the substrate's own machinery (`platform/*`
+ * principals — deploys, indexers, reactions), a cell/agent principal
+ * (`@owner/cell` tokens), or a person. Salience weights these differently —
+ * the 2026-07-02 audit found machinery churn indistinguishable from human
+ * attention, which made salience a mirror of the system's own activity.
+ * Known residual: an agent calling through MCP with the owner's token reads as
+ * the owner (token-as-principal, ADR-0022/0024, will refine this).
+ */
+export type ActorClass = 'human' | 'agent' | 'platform';
+
+export function actorClassOf(principal: string | null | undefined): ActorClass {
+  if (!principal || principal.startsWith('platform/')) return 'platform';
+  if (principal.startsWith('@')) return 'agent';
+  return 'human';
+}
+
+/** Compact per-class read/write counters (`hr` = human reads, `aw` = agent
+ *  writes, …) — compact because they live as flat item attributes so a read can
+ *  bump one with a single `ADD` update. */
+export interface TouchCounters {
+  hr?: number;
+  hw?: number;
+  ar?: number;
+  aw?: number;
+  pr?: number;
+  pw?: number;
+}
+
+/** A burst-window bucket: `TouchCounters` scoped to bucket ordinal `b`. */
+export interface TouchWindow extends TouchCounters {
+  b: number;
+}
+
+/** The counter key for an actor class + op (`human`+`read` → `hr`). */
+export function touchKey(actor: ActorClass, op: 'read' | 'write'): keyof TouchCounters {
+  return `${actor === 'human' ? 'h' : actor === 'agent' ? 'a' : 'p'}${op === 'read' ? 'r' : 'w'}` as keyof TouchCounters;
+}
+
+/** Pure counter bump (write paths fold this into the record they rewrite). */
+export function bumpTouches(t: TouchCounters | undefined, actor: ActorClass, op: 'read' | 'write'): TouchCounters {
+  const k = touchKey(actor, op);
+  return { ...(t ?? {}), [k]: ((t?.[k] as number | undefined) ?? 0) + 1 };
+}
+
+/** Bump the window bucket, resetting it when `bucket` has rolled over. */
+export function bumpWindow(w: TouchWindow | undefined, actor: ActorClass, op: 'read' | 'write', bucket: number): TouchWindow {
+  const base: TouchWindow = w && w.b === bucket ? w : { b: bucket };
+  return { ...bumpTouches(base, actor, op), b: bucket };
 }
 
 /** A typed, directed edge between two located keys within one scope. */
@@ -286,6 +358,14 @@ export interface StateStore {
   appendTrajectory(event: TrajectoryEvent): Promise<void>;
   /** Trajectory events for a scope at or after `sinceMs` (epoch ms). */
   recentTrajectory(scope: string, sinceMs: number): Promise<TrajectoryEvent[]>;
+  /**
+   * Record attention on one fact as counter increments (ADR-0050): the lifetime
+   * counter for `(actor, op)` plus the burst-window bucket (reset when `bucket`
+   * rolled over). One conditional update, no trajectory event, no seq — this is
+   * how a read stops paying (and stops serializing on) the write path. A miss
+   * (fact absent) is a silent no-op.
+   */
+  recordTouch(scope: string, key: string, actor: ActorClass, op: 'read' | 'write', bucket: number): Promise<void>;
 }
 
 // ── salience ───────────────────────────────────────────────────────
@@ -308,8 +388,10 @@ export interface SalienceOptions {
    *  touches, not 50 (a tending-audit calibration over the live corpus, which is
    *  read-light; 50 was too coarse to register accruing attention). */
   standingSaturation?: number;
-  /** Graph degree at which the `centrality` term saturates. Default 5 — at personal
-   *  scale, being linked at all is signal (1 edge → 0.2). */
+  /** Graph degree at which the `centrality` term saturates. Log-compressed
+   *  (ADR-0050) so the top is not pinned: default 50 keeps "linked at all" a real
+   *  signal (degree 1 → ~0.18) while a heavily-cited hub can still outrank board
+   *  plumbing (the old hard cap at 5 made everything on a board `centrality: 1`). */
   centralitySaturation?: number;
   /** Score-term weights (should sum to ≤1 so the score stays in [0,1] and the
    *  thresholds keep their meaning). Defaults: recency .45, velocity .10,
@@ -321,6 +403,21 @@ export interface SalienceOptions {
   attentionWeight?: number;
   standingWeight?: number;
   centralityWeight?: number;
+  /** Weight of the per-read `relevance` signal (ADR-0051) — cosine similarity to
+   *  a caller-supplied intent (`text`). Default 0: a read with no intent pays and
+   *  changes nothing. Callers passing `text` layer the intent preset instead. */
+  relevanceWeight?: number;
+  /** How much a touch by each actor class counts toward attention/velocity/
+   *  standing (ADR-0050). Defaults: human 1, agent 0.25, platform 0 — the
+   *  substrate's own machinery no longer manufactures salience by churning. */
+  humanTouchWeight?: number;
+  agentTouchWeight?: number;
+  platformTouchWeight?: number;
+  /** Per-type salience prior (ADR-0050): a multiplier on the blended score by
+   *  `_meta.type` (unset type → key `""`). Plumbing types (canvas-placement,
+   *  log, machine-run) declare < 1 so they stop competing with knowledge in a
+   *  goal-less read; relevance can still lift them when an intent matches. */
+  typePriors?: Record<string, number>;
   /** Score at/above which an entry is Focus (full value + meta). Default 0.5. */
   focusThreshold?: number;
   /** Score below which an entry is Elided (value withheld). Default 0.1. */
@@ -336,7 +433,7 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
     velocitySaturation: o?.velocitySaturation ?? 5,
     attentionSaturation: o?.attentionSaturation ?? 5,
     standingSaturation: o?.standingSaturation ?? 20,
-    centralitySaturation: o?.centralitySaturation ?? 5,
+    centralitySaturation: o?.centralitySaturation ?? 50,
     // Re-tuned against the warm imported corpus (2026-06-15): at sw .20 the
     // default elided ~95 earned (multi-read) knowledge entries once they aged;
     // sw .30 / rw .35 keeps all standing≥0.3 knowledge above elision while still
@@ -347,6 +444,11 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
     attentionWeight: o?.attentionWeight ?? 0.15,
     standingWeight: o?.standingWeight ?? 0.3,
     centralityWeight: o?.centralityWeight ?? 0.1,
+    relevanceWeight: o?.relevanceWeight ?? 0,
+    humanTouchWeight: o?.humanTouchWeight ?? 1,
+    agentTouchWeight: o?.agentTouchWeight ?? 0.25,
+    platformTouchWeight: o?.platformTouchWeight ?? 0,
+    typePriors: o?.typePriors ?? {},
     focusThreshold: o?.focusThreshold ?? 0.5,
     elideThreshold: o?.elideThreshold ?? 0.1,
   };
@@ -374,10 +476,16 @@ const SALIENCE_NUMERIC_KEYS = [
   'attentionWeight',
   'standingWeight',
   'centralityWeight',
+  'relevanceWeight',
+  'humanTouchWeight',
+  'agentTouchWeight',
+  'platformTouchWeight',
   'focusThreshold',
   'elideThreshold',
 ] as const satisfies ReadonlyArray<keyof SalienceOptions>;
 const SALIENCE_UNIT_KEYS = new Set<keyof SalienceOptions>(['focusThreshold', 'elideThreshold']);
+/** Cap on a configured type prior — a prior is a bias, not a bypass. */
+const TYPE_PRIOR_MAX = 2;
 
 /**
  * Extract a sanitized `Partial<SalienceOptions>` from a stored config fact's value
@@ -395,11 +503,20 @@ export function parseSalienceConfig(value: unknown): Partial<SalienceOptions> | 
       : value;
   if (!src || typeof src !== 'object') return null;
   const rec = src as Record<string, unknown>;
-  const out: Record<string, number> = {};
+  const out: Record<string, unknown> = {};
   for (const k of SALIENCE_NUMERIC_KEYS) {
     const v = rec[k];
     if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
     out[k] = SALIENCE_UNIT_KEYS.has(k) ? Math.min(v, 1) : v;
+  }
+  // Per-type priors (ADR-0050): a `{ type: multiplier }` map; only finite
+  // non-negative numbers survive, capped so a prior biases rather than bypasses.
+  if (rec.typePriors && typeof rec.typePriors === 'object') {
+    const priors: Record<string, number> = {};
+    for (const [t, v] of Object.entries(rec.typePriors as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) priors[t] = Math.min(v, TYPE_PRIOR_MAX);
+    }
+    if (Object.keys(priors).length) out.typePriors = priors;
   }
   return Object.keys(out).length ? (out as Partial<SalienceOptions>) : null;
 }
@@ -434,6 +551,22 @@ const LENS_PRESETS: Record<SalienceLens, Partial<SalienceOptions>> = {
   active: { recencyWeight: 0.3, velocityWeight: 0.25, attentionWeight: 0.25, standingWeight: 0.1, centralityWeight: 0.1 },
 };
 
+/**
+ * The intent lens (ADR-0051): the weight shift a read gets when the caller
+ * states what it is reading FOR (`text`). Relevance leads; the activity terms
+ * keep enough weight that, among equally-relevant facts, the attended ones
+ * still rise. Sums to 1 like the named lenses. Layered as a per-call override
+ * base — an explicit caller `salience` still wins on top.
+ */
+export const INTENT_PRESET: Partial<SalienceOptions> = {
+  recencyWeight: 0.2,
+  velocityWeight: 0.05,
+  attentionWeight: 0.1,
+  standingWeight: 0.15,
+  centralityWeight: 0.1,
+  relevanceWeight: 0.4,
+};
+
 /** Resolve the salience params for one call: instance defaults ← lens preset ←
  *  raw override. Returns the base unchanged when neither is set. A raw override
  *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights). */
@@ -463,6 +596,33 @@ export interface KeySignals {
 
 const EMPTY_SIGNALS: KeySignals = { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: 0 };
 
+/**
+ * A record's persisted touch counters → weighted activity signals (ADR-0050).
+ * Lifetime terms come from the cumulative counters (no trajectory scan — and no
+ * 24h TTL silently amputating "lifetime"); window terms from the current burst
+ * bucket (a stale bucket reads zero: the burst has passed). Each touch counts
+ * at its actor class's weight, so machinery churn stops manufacturing salience.
+ */
+export function touchSignals(
+  rec: Pick<StateRecord, 'touches' | 'window'>,
+  nowMs: number,
+  s: Pick<ResolvedSalience, 'windowMs' | 'humanTouchWeight' | 'agentTouchWeight' | 'platformTouchWeight'>,
+): Omit<KeySignals, 'degree'> {
+  const wh = s.humanTouchWeight;
+  const wa = s.agentTouchWeight;
+  const wp = s.platformTouchWeight;
+  const reads = (t?: TouchCounters): number => wh * (t?.hr ?? 0) + wa * (t?.ar ?? 0) + wp * (t?.pr ?? 0);
+  const writes = (t?: TouchCounters): number => wh * (t?.hw ?? 0) + wa * (t?.aw ?? 0) + wp * (t?.pw ?? 0);
+  const bucket = s.windowMs > 0 ? Math.floor(nowMs / s.windowMs) : 0;
+  const win = rec.window && rec.window.b === bucket ? rec.window : undefined;
+  return {
+    windowReads: reads(win),
+    windowWrites: writes(win),
+    lifetimeReads: reads(rec.touches),
+    lifetimeWrites: writes(rec.touches),
+  };
+}
+
 /** Per-key term breakdown, for `_meta` instrumentation (Q4: measure, don't assert). */
 export interface ScoreParts {
   score: number;
@@ -471,6 +631,10 @@ export interface ScoreParts {
   attention: number;
   standing: number;
   centrality: number;
+  /** Cosine similarity to the read's intent (`text`), 0 when none (ADR-0051). */
+  relevance: number;
+  /** The type prior the blend was multiplied by (ADR-0050); 1 when undeclared. */
+  prior: number;
 }
 
 /**
@@ -495,7 +659,7 @@ export function computeScore(
 
 /** `computeScore` with the term breakdown exposed (for `_meta` + tuning). */
 export function scoreParts(
-  args: { updatedAtMs: number; nowMs: number } & Partial<KeySignals>,
+  args: { updatedAtMs: number; nowMs: number; relevance?: number; prior?: number } & Partial<KeySignals>,
   s: ResolvedSalience,
 ): ScoreParts {
   const age = Math.max(0, args.nowMs - args.updatedAtMs);
@@ -506,15 +670,22 @@ export function scoreParts(
   // log1p compression: each additional touch matters less; saturates at the
   // configured lifetime total. lifetime 0 → 0, lifetime == standingSaturation → 1.
   const standing = s.standingSaturation > 0 ? Math.min(Math.log1p(lifetime) / Math.log1p(s.standingSaturation), 1) : 0;
-  const centrality = s.centralitySaturation > 0 ? Math.min((args.degree ?? 0) / s.centralitySaturation, 1) : 0;
+  // Log-compressed like standing (ADR-0050): degree 1 still registers (~0.18 at
+  // the default 50) but a hub keeps discriminating instead of pinning at 1.
+  const centrality =
+    s.centralitySaturation > 0 ? Math.min(Math.log1p(args.degree ?? 0) / Math.log1p(s.centralitySaturation), 1) : 0;
+  const relevance = clamp01(args.relevance ?? 0);
+  const prior = args.prior ?? 1;
   const score = clamp01(
-    s.recencyWeight * recency +
-      s.velocityWeight * velocity +
-      s.attentionWeight * attention +
-      s.standingWeight * standing +
-      s.centralityWeight * centrality,
+    prior *
+      (s.recencyWeight * recency +
+        s.velocityWeight * velocity +
+        s.attentionWeight * attention +
+        s.standingWeight * standing +
+        s.centralityWeight * centrality +
+        s.relevanceWeight * relevance),
   );
-  return { score, recency, velocity, attention, standing, centrality };
+  return { score, recency, velocity, attention, standing, centrality, relevance, prior };
 }
 
 /** Fold a scope's trajectory + edges into per-key salience signals in one pass. */
@@ -884,6 +1055,11 @@ export interface ReadOptions {
   /** Resolved per-type Reference rules (`cells.describeTypes` → resolveType): manager
    *  (managedBy), `ref` fields (embedded edges), keyPattern/keyEdges. Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
+  /** Per-key relevance to the read's intent (ADR-0051): cosine similarity from
+   *  the vector index for a caller-supplied `text`, keyed by fact key. Feeds the
+   *  `relevance` signal (weight via `relevanceWeight` / the intent preset); keys
+   *  absent from the map score relevance 0. Injected by the handler. */
+  relevance?: Record<string, number>;
 }
 
 export interface QueryOptions {
@@ -916,6 +1092,8 @@ export interface QueryOptions {
   /** Resolved per-type Reference rules (managedBy + embedded `ref` + key-encoded).
    *  Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
+  /** Per-key relevance to the query's intent (ADR-0051) — see `ReadOptions.relevance`. */
+  relevance?: Record<string, number>;
 }
 
 /** Does a record's key or value contain `needle` (case-insensitive)? Backs the
@@ -1068,10 +1246,11 @@ function assertEdgePart(label: string, v: string): void {
 export function createObservedState(store: StateStore, salience?: SalienceOptions): ObservedState {
   const s = resolveSalience(salience);
 
-  /** Build per-key salience signals for a whole scope (one trajectory + edge
-   *  pass). Lifetime (cumulative) terms need the full trajectory, so this reads
-   *  from seq 0 — the price of `standing`. Callers in bulk paths build it once
-   *  and share it across `wrap`s. */
+  /** Build per-key GRAPH signals (degree) for a whole scope in one edge pass.
+   *  Activity signals no longer come from here: lifetime + window terms live on
+   *  each record as actor-classed counters (ADR-0050 — `touchSignals`), so the
+   *  trajectory is never scanned to score a read. Callers in bulk paths build
+   *  this once and share it across `wrap`s. */
   async function signalsFor(
     scope: string,
     nowMs: number,
@@ -1079,14 +1258,13 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     records?: StateRecord[],
     typeRules?: Record<string, TypeRules>,
   ): Promise<Map<string, KeySignals>> {
-    const [events, edges, recs] = await Promise.all([
-      store.recentTrajectory(scope, 0),
+    const [edges, recs] = await Promise.all([
       store.listEdges(scope),
       records ? Promise.resolve(records) : store.list(scope),
     ]);
     // Centrality counts the derived backbone alongside authored edges, so a
     // typed-but-unlinked fact earns a structural floor instead of scoring zero.
-    return buildSignals(events, [...edges, ...deriveBackboneEdges(recs, typeRules)], nowMs, windowMs);
+    return buildSignals([], [...edges, ...deriveBackboneEdges(recs, typeRules)], nowMs, windowMs);
   }
 
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
@@ -1110,19 +1288,34 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
   /** Wrap a stored record into a read-facing entry with a computed score. Pass a
    *  precomputed `signals` map (bulk paths) to avoid a per-record scope scan, and
-   *  `sCall` to score under a per-read lens (defaults to the instance settings). */
-  async function wrap(rec: StateRecord, nowMs: number, signals?: Map<string, KeySignals>, sCall: ResolvedSalience = s, explain = false): Promise<Entry> {
+   *  `sCall` to score under a per-read lens (defaults to the instance settings).
+   *  `relevance` is the read's per-key intent map (ADR-0051), when it has one. */
+  async function wrap(
+    rec: StateRecord,
+    nowMs: number,
+    signals?: Map<string, KeySignals>,
+    sCall: ResolvedSalience = s,
+    explain = false,
+    relevance?: Record<string, number>,
+  ): Promise<Entry> {
     const sig = (signals ?? (await signalsFor(rec.scope, nowMs, sCall.windowMs))).get(rec.key) ?? EMPTY_SIGNALS;
-    // Import priors fold into the cumulative (standing) counts only — never the
-    // recent window — so a ported fact's earned importance shows without faking
-    // current activity.
+    // Activity terms come from the record's own actor-classed counters; import
+    // priors fold into the cumulative (standing) counts only — never the recent
+    // window — so a ported fact's earned importance shows without faking
+    // current activity. The window bucket is keyed by the INSTANCE windowMs so
+    // read and write agree on bucket boundaries regardless of per-call lenses.
+    const touch = touchSignals(rec, nowMs, { ...sCall, windowMs: s.windowMs });
+    const rel = relevance?.[rec.key];
     const parts = scoreParts(
       {
         updatedAtMs: Date.parse(rec.updatedAt),
         nowMs,
-        ...sig,
-        lifetimeReads: sig.lifetimeReads + (rec.seedReads ?? 0),
-        lifetimeWrites: sig.lifetimeWrites + (rec.seedWrites ?? 0),
+        ...touch,
+        degree: sig.degree,
+        lifetimeReads: touch.lifetimeReads + (rec.seedReads ?? 0),
+        lifetimeWrites: touch.lifetimeWrites + (rec.seedWrites ?? 0),
+        relevance: rel,
+        prior: sCall.typePriors[rec.type ?? ''] ?? 1,
       },
       sCall,
     );
@@ -1144,11 +1337,12 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         timer:
           rec.timerExpiresAt && rec.timerEffect ? { expiresAt: rec.timerExpiresAt, effect: rec.timerEffect } : null,
         score: round4(parts.score),
-        velocity: round4(windowMin > 0 ? sig.windowWrites / windowMin : 0),
+        velocity: round4(windowMin > 0 ? touch.windowWrites / windowMin : 0),
         standing: round4(parts.standing),
         centrality: round4(parts.centrality),
+        ...(rel !== undefined ? { relevance: round4(parts.relevance) } : {}),
         elided: false,
-        ...(explain ? { explain: explainScore(parts, sig, sCall) } : {}),
+        ...(explain ? { explain: explainScore(parts, { ...sig, ...touch }, sCall) } : {}),
       },
     };
   }
@@ -1162,6 +1356,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       attention: round4(parts.attention),
       standing: round4(parts.standing),
       centrality: round4(parts.centrality),
+      relevance: round4(parts.relevance),
     };
     const weights = {
       recency: sCall.recencyWeight,
@@ -1169,6 +1364,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       attention: sCall.attentionWeight,
       standing: sCall.standingWeight,
       centrality: sCall.centralityWeight,
+      relevance: sCall.relevanceWeight,
     };
     return {
       signals,
@@ -1179,10 +1375,16 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         attention: round4(parts.attention * weights.attention),
         standing: round4(parts.standing * weights.standing),
         centrality: round4(parts.centrality * weights.centrality),
+        relevance: round4(parts.relevance * weights.relevance),
       },
       degree: sig.degree ?? 0,
+      prior: parts.prior,
     };
   }
+
+  /** The burst-window bucket ordinal for `nowMs`, on the INSTANCE windowMs so
+   *  every writer and reader of a scope agrees on bucket boundaries. */
+  const bucketOf = (nowMs: number): number => (s.windowMs > 0 ? Math.floor(nowMs / s.windowMs) : 0);
 
   /** Pure salience shaping over an already-scored set (own + granted, merged). */
   function shapeEntries(entries: Record<string, Entry>, opts?: ReadOptions, sCall: ResolvedSalience = s): ReadResult {
@@ -1280,6 +1482,11 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
           ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
           : {}),
+        // Actor-classed touch counters (ADR-0050): a write folds its own touch
+        // into the record it rewrites — no extra round trip, no trajectory scan
+        // to reconstruct "lifetime" later.
+        touches: bumpTouches(prev?.touches, actorClassOf(writer), 'write'),
+        window: bumpWindow(prev?.window, actorClassOf(writer), 'write', bucketOf(nowMs)),
       };
       await store.put(record, hasCas ? { expectRevision: prev?.revision ?? null } : undefined);
       // The trajectory write event carries the (possibly historical) updatedAt so
@@ -1288,12 +1495,16 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return wrap(record, nowMs);
     },
 
-    async get(scope: string, key: string, _identity?: Identity): Promise<Entry | null> {
+    async get(scope: string, key: string, identity?: Identity): Promise<Entry | null> {
       const rec = await store.get(scope, key);
       const now = new Date();
       if (!rec || !isTimerLive(rec, now.getTime())) return null;
-      const seq = await store.nextSeq(scope);
-      await store.appendTrajectory({ op: 'read', scope, key, at: now.toISOString(), seq });
+      // Reading is attention — recorded as ONE actor-classed counter increment
+      // (ADR-0050), not a seq allocation + trajectory event: reads no longer
+      // serialize on the write path or manufacture trajectory the scorer must
+      // scan. The entry is wrapped from the pre-touch record; the bump shows on
+      // the next read (attention is about the future ranking, not this response).
+      await store.recordTouch(scope, key, actorClassOf(identity?.user), 'read', bucketOf(now.getTime()));
       return wrap(rec, now.getTime());
     },
 
@@ -1314,16 +1525,14 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
 
       // Score every live entry (no elision yet); shape in one pass below.
+      // (A scope-wide read is NOT per-fact attention — no touch, no trajectory:
+      // reads are free, per ADR-0050.)
       const scored: Record<string, Entry> = {};
       for (const rec of records) {
         if (rec.superseded && !opts?.includeSuperseded) continue;
         if (!isTimerLive(rec, nowMs)) continue;
-        scored[rec.key] = await wrap(rec, nowMs, signals, sCall, opts?.explain);
+        scored[rec.key] = await wrap(rec, nowMs, signals, sCall, opts?.explain, opts?.relevance);
       }
-
-      // Reading the scope is itself attention on every surfaced key.
-      const seq = await store.nextSeq(scope);
-      await store.appendTrajectory({ op: 'read', scope, key: null, at: new Date(nowMs).toISOString(), seq });
 
       return shapeEntries(scored, opts, sCall);
     },
@@ -1348,7 +1557,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (opts?.contains && !recordContains(rec, opts.contains)) return false;
         return true;
       });
-      const wrapped = await Promise.all(candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain)) })));
+      const wrapped = await Promise.all(
+        candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain, opts?.relevance)) })),
+      );
       const rankBy = opts?.rankBy ?? 'salience';
       wrapped.sort((a, b) =>
         rankBy === 'recency'
@@ -1388,9 +1599,11 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         writer: identity?.user ?? null,
       };
       await store.putEdge(edge);
-      // Linking is attention on the source fact.
+      // Linking is attention on the source fact — both the write-ledger event
+      // (for `changes`) and the touch counter (for `standing`, ADR-0050).
       const seq = await store.nextSeq(scope);
       await store.appendTrajectory({ op: 'link', scope, key: from, at: edge.createdAt, seq });
+      await store.recordTouch(scope, from, actorClassOf(identity?.user), 'write', bucketOf(now.getTime()));
       // Endpoint hints: dangling edges stay allowed, but the writer should not
       // have to wait for a tending pass to learn it just made one.
       const resolves = async (key: string): Promise<boolean> => {
@@ -1594,6 +1807,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         writer: identity?.user ?? rec.writer,
         updatedAt: nowIso,
         seq,
+        touches: bumpTouches(rec.touches, actorClassOf(identity?.user ?? rec.writer), 'write'),
+        window: bumpWindow(rec.window, actorClassOf(identity?.user ?? rec.writer), 'write', bucketOf(now.getTime())),
       };
       await store.put(updated);
       await store.appendTrajectory({ op: 'supersede', scope, key, at: nowIso, seq });
@@ -1678,6 +1893,12 @@ export function createMemoryStateStore(): StateStore {
     },
     async recentTrajectory(scope: string, sinceMs: number): Promise<TrajectoryEvent[]> {
       return trajectory.filter((e) => e.scope === scope && Date.parse(e.at) >= sinceMs);
+    },
+    async recordTouch(scope, key, actor, op, bucket): Promise<void> {
+      const r = records.get(k(scope, key));
+      if (!r) return; // a miss is a silent no-op, like the conditional update
+      r.touches = bumpTouches(r.touches, actor, op);
+      r.window = bumpWindow(r.window, actor, op, bucket);
     },
   };
 }

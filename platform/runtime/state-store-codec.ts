@@ -10,7 +10,7 @@
  *
  * No AWS import, no I/O — safe to bundle anywhere.
  */
-import type { StateRecord, EdgeRecord } from './state';
+import type { StateRecord, EdgeRecord, TouchCounters, TouchWindow } from './state';
 
 /** The substrate table's key grammar. `pk` repeats the scope so IAM
  *  `dynamodb:LeadingKeys` conditions cover base-table AND index reads. */
@@ -26,8 +26,48 @@ export const key = {
   trajSk: (at: string, seq: number): string => `${at}#${String(seq).padStart(12, '0')}`,
 } as const;
 
-/** How long trajectory events live (s) — comfortably beyond the salience window. */
+/** How long trajectory events live (s). The trajectory is a WRITE ledger for
+ *  `changes` (ADR-0050) — salience no longer scans it (lifetime terms live as
+ *  counters on the fact), so the TTL bounds only how far back `changes` reaches. */
 export const TRAJECTORY_TTL_SEC = 24 * 60 * 60;
+
+/** The actor-classed counter keys (ADR-0050), in one canonical order. */
+export const TOUCH_KEYS = ['hr', 'hw', 'ar', 'aw', 'pr', 'pw'] as const;
+
+/** Item attribute for a lifetime counter (`hr` → `t_hr`) / window counter (`w_hr`).
+ *  FLAT top-level attributes, because `recordTouch` bumps one with a single
+ *  DynamoDB `ADD` — which only works on top-level attributes. */
+export const touchAttr = (k: (typeof TOUCH_KEYS)[number]): string => `t_${k}`;
+export const windowAttr = (k: (typeof TOUCH_KEYS)[number]): string => `w_${k}`;
+/** Item attribute holding the window's bucket ordinal. */
+export const WINDOW_BUCKET_ATTR = 'w_b';
+
+/** A record's nested `touches`/`window` → the flat item attributes. */
+export function touchesToItem(rec: Pick<StateRecord, 'touches' | 'window'>): Item {
+  const out: Item = {};
+  for (const k of TOUCH_KEYS) {
+    const t = rec.touches?.[k];
+    if (t !== undefined) out[touchAttr(k)] = t;
+    const w = rec.window?.[k];
+    if (w !== undefined) out[windowAttr(k)] = w;
+  }
+  if (rec.window) out[WINDOW_BUCKET_ATTR] = rec.window.b;
+  return out;
+}
+
+/** The flat item attributes → nested `touches`/`window` (absent when unset). */
+export function itemToTouches(item: Item): Pick<StateRecord, 'touches' | 'window'> {
+  let touches: TouchCounters | undefined;
+  let window: TouchWindow | undefined;
+  for (const k of TOUCH_KEYS) {
+    const t = item[touchAttr(k)];
+    if (typeof t === 'number') (touches ??= {})[k] = t;
+    const w = item[windowAttr(k)];
+    if (typeof w === 'number') (window ??= { b: 0 })[k] = w;
+  }
+  if (item[WINDOW_BUCKET_ATTR] !== undefined) (window ??= { b: 0 }).b = Number(item[WINDOW_BUCKET_ATTR]);
+  return { ...(touches ? { touches } : {}), ...(window ? { window } : {}) };
+}
 
 type Item = Record<string, unknown>;
 const num = (v: unknown): number => Number(v);
@@ -55,6 +95,7 @@ export function itemToRecord(item: Item): StateRecord {
     timerEffect: (item.timerEffect as StateRecord['timerEffect']) ?? null,
     ...(item.seedReads !== undefined ? { seedReads: num(item.seedReads) } : {}),
     ...(item.seedWrites !== undefined ? { seedWrites: num(item.seedWrites) } : {}),
+    ...itemToTouches(item),
   };
 }
 

@@ -1,7 +1,12 @@
 # ADR-0051 — Relevance as the sixth signal: the intent lens, one read surface
 
-- **Status:** Proposed — amends ADR-0031 (and the L4 reading of it in ADR-0044) on
-  the strength of the 2026-07-02 audit; folds `search` into `query`.
+- **Status:** Inc 1 shipped 2026-07-02 — `relevance` is the sixth signal
+  (`relevanceWeight`, the `INTENT_PRESET`, `_meta.relevance`, `explain` row);
+  `text` live on `query` AND `recall` (per-grant index fold included); `search`
+  descriptor marked the deprecated alias. Open: retire `search` from the catalog
+  menu; embed-LRU; bounded candidate scoring once ADR-0050's digest lands.
+  Amends ADR-0031 (and the L4 reading of it in ADR-0044) on the strength of the
+  2026-07-02 audit; folds `search` into `query`.
 - **Depends on:** ADR-0050 (materialized signals — bounds the cost), ADR-0030 (the
   index is a candidate generator, never an authority), ADR-0006 (parameters as one
   Resolution), ADR-0048 (shape), ADR-0033 (progressive disclosure).

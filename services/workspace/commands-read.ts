@@ -3,11 +3,19 @@
  * attention/changes/tending — recall, peek, query, changes, attention, tend,
  * with the recall-overview builders.
  */
-import { requireUser, type Entry, type SalienceLens, type SalienceOptions } from '../../platform/runtime';
+import {
+  requireUser,
+  indexForScope,
+  INTENT_PRESET,
+  type Entry,
+  type SalienceLens,
+  type SalienceOptions,
+} from '../../platform/runtime';
 import { shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
 import { applicableGrants, grantCovers, WHOLE_SLICE } from './grants';
 import {
   type DepsBuilder,
+  type WorkspaceDeps,
   typeDeclsFor,
   typeRulesFor,
   affordancesForTypes,
@@ -17,6 +25,37 @@ import {
 } from './shared';
 import { runTend } from './event-handlers';
 import type { WorkspaceCommands } from './handlers';
+
+/** Candidate-set size for a stated intent (ADR-0051): the vector top-K IS the
+ *  bounded relevance pool; keys outside it score relevance 0. */
+const INTENT_TOP_K = 200;
+
+/**
+ * Per-key relevance to a stated intent (ADR-0051): embed the text once, take the
+ * scope's vector index top-K as `{ key: cosine }`. `undefined` when no semantic
+ * backend is configured — the read proceeds unweighted (the index is a candidate
+ * generator, never an authority; ADR-0030 Decision 1 unchanged).
+ */
+async function relevanceFor(
+  vectors: WorkspaceDeps['vectors'],
+  scope: string,
+  text: string,
+): Promise<Record<string, number> | undefined> {
+  if (!vectors) return undefined;
+  const [queryVector] = await vectors.embedder.embed([text]);
+  const matches = await vectors.store
+    .query(indexForScope(scope, vectors.embedder.dimension), queryVector, { topK: INTENT_TOP_K })
+    .catch(() => []);
+  const rel: Record<string, number> = {};
+  for (const m of matches) rel[m.key] = m.score;
+  return rel;
+}
+
+/** The effective per-call salience for a read that stated an intent: the intent
+ *  preset (relevance leads) under any explicit caller override. */
+function intentSalience(override?: Partial<SalienceOptions>): Partial<SalienceOptions> {
+  return { ...INTENT_PRESET, ...override };
+}
 
 /** Attach the inline `types` affordance map to a single returned fact (`peek`),
  *  leaving a `null` (absent) fact untouched (ADR-0029 R1). */
@@ -112,6 +151,11 @@ export interface RecallInput {
    * bare `recall()` gets the overview.
    */
   view?: 'overview' | 'full';
+  /** Orient relative to a goal (ADR-0051): free text, embedded and matched by
+   *  meaning. Relevance joins the salience blend (the intent preset leads with
+   *  it), so the focus band, counts, and elision are all conditioned on what you
+   *  are reading FOR. Without a semantic backend the read proceeds unweighted. */
+  text?: string;
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
@@ -136,6 +180,12 @@ export interface QueryInput {
   type?: string;
   tag?: string;
   prefix?: string;
+  /** Rank by meaning as well as structure (ADR-0051): free text, embedded and
+   *  matched semantically. Relevance joins the salience blend under the intent
+   *  preset — `query({text})` alone is semantic search that still respects
+   *  standing/attention; `query({type, text})` is the hybrid. Elision and
+   *  ranking are both intent-conditioned. */
+  text?: string;
   rankBy?: 'salience' | 'recency';
   /** Bias salience via a named lens (recent/connected/durable/active). */
   lens?: SalienceLens;
@@ -179,21 +229,30 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
   return {
     async recall(input, ctx) {
       const viewer = requireUser(ctx.identity);
-      const { state, grants } = build(ctx);
+      const { state, grants, vectors } = build(ctx);
       const includeSuperseded = input?.includeSuperseded;
 
       // Own slice, scored (under the per-call lens) but not yet shaped
       // (elision:'none' keeps values present so granted slices merge cleanly).
       const lens = input?.lens;
-      const salience = input?.salience;
       const explain = input?.explain;
+      // A stated intent (ADR-0051): relevance joins the blend (intent preset
+      // under any explicit override) and each slice contributes its own
+      // vector-index candidates, exactly like search's per-grant fold.
+      const text = typeof input?.text === 'string' ? input.text.trim() : '';
+      const salience = text ? intentSalience(input?.salience) : input?.salience;
       // The viewer's stored salience policy (`_config/salience`) governs the whole
       // assembled view — scoring (read) and tiering (shape) alike — so granted
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
       const typeRules = await typeRulesFor(ctx);
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
+      const relevance = text ? await relevanceFor(vectors, viewer, text) : undefined;
+      const own = await state.read(
+        viewer,
+        { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance },
+        ctx.identity,
+      );
       const merged: Record<string, Entry> = { ...own.entries };
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
@@ -202,7 +261,12 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       for (const g of await applicableGrants(grants, viewer)) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
+          const gRelevance = text ? await relevanceFor(vectors, g.owner, text) : undefined;
+          const slice = await state.read(
+            g.owner,
+            { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance: gRelevance },
+            ctx.identity,
+          );
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -230,7 +294,15 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       if (!askedFull) {
         const c = shaped._shaping.counts;
         const granted = Object.keys(merged).length - Object.keys(own.entries).length;
-        return buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+        if (text) {
+          overview.hints.unshift(
+            relevance
+              ? 'Goal-conditioned (ADR-0051): focus, counts, and elision are weighted by relevance to your `text`.'
+              : 'A `text` intent was given but no semantic backend is configured — results are unweighted by relevance.',
+          );
+        }
+        return overview;
       }
 
       // R1 (ADR-0029): inline affordances — include elided stubs' types so an
@@ -271,8 +343,14 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
 
     async query(input, ctx) {
       const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
+      const { state, vectors } = build(ctx);
       enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
+      // A stated intent (ADR-0051): `query({text})` alone is semantic search
+      // that still respects earned salience; with filters it's the hybrid
+      // neither query nor search could do. Relevance enters the one blend via
+      // the intent preset (an explicit `salience` override still wins).
+      const text = typeof input?.text === 'string' ? input.text.trim() : '';
+      const relevance = text ? await relevanceFor(vectors, scope, text) : undefined;
       const result = await state.query(
         scope,
         {
@@ -281,13 +359,14 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           prefix: input?.prefix,
           rankBy: input?.rankBy,
           lens: input?.lens,
-          salience: input?.salience,
+          salience: text ? intentSalience(input?.salience) : input?.salience,
           explain: input?.explain,
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
           contains: input?.contains,
           typeRules: await typeRulesFor(ctx),
+          relevance,
         },
         ctx.identity,
       );

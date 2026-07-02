@@ -1,6 +1,11 @@
 # ADR-0050 — Materialize the score stage: persisted signals, honest standing
 
-- **Status:** Proposed — root-caused 2026-07-02 (session: substrate vision/reality audit).
+- **Status:** Inc 1 shipped 2026-07-02 — actor-classed counters (`touches`/`window`
+  flat attrs + `recordTouch`) live in the store + scorer; reads no longer write the
+  trajectory or allocate seq; `signalsFor` no longer scans the trajectory (degree
+  only); centrality log-compressed (saturation 50); `typePriors` in
+  `_config/salience`. Open: stream-maintained degree, the `_index/overview` digest,
+  card projection at the store, `score0` GSI, counter backfill for pre-ADR facts.
   Amends ADR-0006 (the score stage) and repays the open cost question in
   `docs/substrate.md` ("trajectory-driven scoring is read/write-amplifying; bound it
   before it sits under every read").
