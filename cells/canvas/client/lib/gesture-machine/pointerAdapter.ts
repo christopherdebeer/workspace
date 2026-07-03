@@ -12,6 +12,14 @@ export function installPointerAdapter(
   const active = new Map<number, { x: number; y: number }>(); // pointerId → {x,y}
   const capturedTargets = new Map<number, Element>(); // pointerId → element that we called setPointerCapture on
 
+  /** `body.gesturing` while any pointer is down: CSS pauses board animations
+   *  and element-script loops park (main.ts gRaf), so a pan spends the frame
+   *  budget on tile re-rasterisation instead of competing 60fps widgets —
+   *  the stacked load that killed the tab on iOS. */
+  const syncGesturing = (): void => {
+    try { document.body.classList.toggle('gesturing', active.size > 0); } catch { /* non-DOM */ }
+  };
+
   let lastTap: { t: number; x: number; y: number } = { t: 0, x: 0, y: 0 };
   const TAP_MS = 300;
   const TAP_DIST = 10;
@@ -75,6 +83,7 @@ export function installPointerAdapter(
   const onPointerDown = (ev: PointerEvent): void => {
     ev.preventDefault();
     active.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    syncGesturing();
     const handleNode = (ev.target as Element)?.closest('.element-handle');
     const edgeLabelNode = (ev.target as Element)?.closest('text[data-id]');
     const elementNode = (ev.target as Element)?.closest('.canvas-element');
@@ -125,6 +134,7 @@ export function installPointerAdapter(
     ev.preventDefault();
     cancelLongPress();
     active.delete(ev.pointerId);
+    syncGesturing();
     // release capture on whichever node we grabbed (throws if the capture
     // never took or the node left the DOM — either way there's nothing to do)
     const capNode = capturedTargets.get(ev.pointerId) || rootEl;
@@ -177,6 +187,7 @@ export function installPointerAdapter(
     }
     capturedTargets.clear();
     active.clear();
+    syncGesturing();
     service.send({ type: 'POINTER_UP', xy: { x: 0, y: 0 }, active: {}, hitElement: false, elementId: null, handle: null, edgeLabel: false, edgeLine: false, edgeId: null, frameId: null, selected: selected(), view: getViewState(), ev: null });
   };
   const onVisibility = (): void => { if (document.visibilityState === 'hidden') resetPointers(); };

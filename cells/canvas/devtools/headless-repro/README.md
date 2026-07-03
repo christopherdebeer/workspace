@@ -41,3 +41,40 @@ at a binary to override (e.g. `CHROME=/opt/pw-browsers/chromium-1194/chrome-linu
 Expected (fixed) output: group-pinch scale stays ≤ `maxScaleFor(el)`
 (paint side ≤ 16,384px), the coincident-start pinch lands ~10× not ~480×, and
 the poisoned element renders at `scale: 1, width: 16384`.
+
+## Round 2: the navigate-mode PAN crash
+
+The crash the pinch clamps didn't cover: one-finger pans on the live board.
+Profiling the REAL `parcland` scene (127 elements, 346 edges — capture it with
+`read("@c15r/canvas.scene", {board:"parcland"})` into
+`public/parcland-scene.json`, then `node gen-pan.mjs`) found two stacked loads:
+
+1. **Per-pointermove main-thread saturation.** `updateCanvasTransform` ran its
+   DOM writes + a forced layout synchronously per pointermove (iOS fires up to
+   120/s): ~4 forced layouts and ~17 style recalcs per move, ~33ms each. The
+   worst single item: two CSS custom properties (`--translateX/--translateY`)
+   written per move that NOTHING consumes — each write recalcs style for the
+   whole subtree.
+2. **A permanent 60Hz load under the pan.** A legacy on-board minimap widget
+   runs a `requestAnimationFrame(drawMiniMap)` loop — a forced layout + a
+   full-board canvas redraw every frame, forever — and infinite CSS animations
+   (one animating `top`, a layout property) kept the board at 60 layouts +
+   300 style recalcs **per second while idle**. A pan re-rasterises tiles on
+   top of exactly that.
+
+Fixes: camera DOM writes rAF-coalesced (`applyCanvasTransformNow`), the unused
+CSS vars dropped, `--zoom` written only when scale changes, the edge layer
+culled with the elements (and `similarTo`/`relates` edges carry no `<text>`
+caption — the live board had 333 of them), the cull pass early-exits until the
+camera moves half a screen, element-script rAF loops are capped at ~30fps and
+parked (with all CSS animations) while `body.gesturing`.
+
+In-stroke A/B on the real board, one continuous 8s pan (`node stroke.mjs`):
+layout time −68%, style-recalc time −92%, script −59%, total main-thread task
+time −54% (≈50% → ≈23% duty cycle).
+
+Tools: `gen-pan.mjs` (build the pan page from the captured scene),
+`pan.mjs` (multi-stroke pan cost), `stroke.mjs` (single held stroke, the
+honest in-gesture profile), `idle.mjs` (the no-input floor), `prof.mjs`
+(sampling profile naming hot functions), `raf-census.mjs` (who registers rAF,
+per second).

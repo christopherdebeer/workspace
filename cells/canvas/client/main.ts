@@ -64,6 +64,14 @@ class CanvasController {
      *  browser's content-visibility heuristic — see updateCulling for why. */
     cullEnabled = false;
     _cullQueued = false;
+    _cullForce = false;
+    /** Camera of the last cull pass — pans shorter than half a screen reuse it. */
+    _lastCull: { vx: number; vy: number; W: number; H: number } | null = null;
+    /** Camera DOM writes are rAF-coalesced (see updateCanvasTransform). */
+    _xformQueued = false;
+    _lastZoomVar: number | null = null;
+    /** Last dispatched selection signature — pans must not re-announce it. */
+    _lastSelSig: string | null = null;
 
     constructor(canvasState: CanvasState) {
         updateCanvasController(this)
@@ -452,11 +460,16 @@ class CanvasController {
     updateGroupBox() {
         // Surface element/group selection to the consolidated cmd-context strip
         // (ADR-0016). This is the one chokepoint every selection path funnels
-        // through; the listener dedupes by id-set, so the hot calls (pan/render)
-        // are cheap.
+        // through. Dedupe HERE by id-set — this runs on every camera frame
+        // during a pan, and dispatching into the inspector's listener chain per
+        // frame was measurable main-thread cost on mobile.
         try {
             const ids = [...this.selectedElementIds];
-            window.dispatchEvent(new CustomEvent('parc:selection-changed', { detail: { ids } }));
+            const sig = ids.join(',');
+            if (sig !== this._lastSelSig) {
+                this._lastSelSig = sig;
+                window.dispatchEvent(new CustomEvent('parc:selection-changed', { detail: { ids } }));
+            }
         } catch { /* non-DOM env */ }
 
         if (this.selectedElementIds.size < 2) {
@@ -520,12 +533,23 @@ class CanvasController {
         }
     }
 
+    /**
+     * Camera → DOM, coalesced to one write per frame. During a pan iOS fires
+     * pointermove at up to 120Hz and this used to run its DOM writes + a forced
+     * layout SYNCHRONOUSLY per move — measured on the live parcland board at
+     * ~4 forced layouts and ~17 style recalcs PER MOVE (~33ms of main-thread
+     * work each). That saturation, sustained for a whole pan with animated
+     * elements re-rastering behind it, is the navigate-mode iOS tab-kill.
+     * viewState is the source of truth and is updated synchronously by the
+     * gesture math; only the DOM writes wait for the frame.
+     */
     updateCanvasTransform() {
         if ((this.canvas as any).controller !== this) return;
 
         // Circuit breaker: a non-finite camera (NaN/Infinity from any upstream
         // math fault) would put `scale(NaN)` on the compositor and every later
-        // screenToCanvas call on garbage. Reset to identity instead.
+        // screenToCanvas call on garbage. Reset to identity instead. Runs
+        // per-call (not per-frame) so garbage never lives in viewState.
         const { scale, translateX, translateY } = this.viewState;
         if (!isFiniteNum(scale) || scale <= 0 || !isFiniteNum(translateX) || !isFiniteNum(translateY)) {
             console.warn('[canvas] non-finite viewState — resetting camera', { scale, translateX, translateY });
@@ -534,17 +558,35 @@ class CanvasController {
             this.viewState.translateY = 0;
         }
 
-        this.container.style.transform = `translate(${this.viewState.translateX}px, ${this.viewState.translateY}px) scale(${this.viewState.scale})`;
-        this.container.style.setProperty('--translateX', String(this.viewState.translateX));
-        this.container.style.setProperty('--translateY', String(this.viewState.translateY));
-        this.container.style.setProperty('--zoom', String(this.viewState.scale));
-
-        // Get the canvas (visible) size
-        const canvasRect = this.canvas.getBoundingClientRect();
-        const W = canvasRect.width;
-        const H = canvasRect.height;
-
         this.crdt.updateView(this.viewState);
+
+        if (this._xformQueued) return;
+        this._xformQueued = true;
+        requestAnimationFrame(() => {
+            this._xformQueued = false;
+            this.applyCanvasTransformNow();
+        });
+    }
+
+    /** The actual DOM writes for the camera — one batch per frame. */
+    applyCanvasTransformNow() {
+        if ((this.canvas as any).controller !== this) return;
+
+        this.container.style.transform = `translate(${this.viewState.translateX}px, ${this.viewState.translateY}px) scale(${this.viewState.scale})`;
+        // --zoom is consumed by per-element CSS (padding/border calc), so
+        // writing it recalcs style for the whole subtree. A pan doesn't change
+        // it — only write when the scale actually moved. (--translateX/-Y were
+        // written here too but NOTHING consumes them: pure per-move subtree
+        // invalidation, now gone.)
+        if (this._lastZoomVar !== this.viewState.scale) {
+            this._lastZoomVar = this.viewState.scale;
+            this.container.style.setProperty('--zoom', String(this.viewState.scale));
+        }
+
+        // The canvas is viewport-sized; clientWidth avoids getBoundingClientRect's
+        // fractional rect (and reads once per frame, not per pointermove).
+        const W = this.canvas.clientWidth;
+        const H = this.canvas.clientHeight;
 
         // Compute the visible region in canvas coordinates:
         const visibleX = -this.viewState.translateX / this.viewState.scale;
@@ -561,7 +603,6 @@ class CanvasController {
         // the model the SSR-painted layer also uses. Guarded — it may not exist.
         const framesLayer = document.getElementById('frames-layer');
         if (framesLayer) framesLayer.style.transform = this.container.style.transform;
-        // console.log("[DEBUG] SVG viewBox updated to:", visibleX, visibleY, visibleWidth, visibleHeight);
 
         this.updateGroupBox()
         this.scheduleCulling();
@@ -569,11 +610,19 @@ class CanvasController {
 
     /** Coalesce culling to one pass per frame — updateCanvasTransform can fire
      *  many times per pan gesture, but the visible set only needs recomputing once
-     *  the transform settles for the frame. */
-    scheduleCulling() {
-        if (!this.cullEnabled || this._cullQueued) return;
+     *  the transform settles for the frame. `force` skips the moved-far-enough
+     *  early-exit (needed when the ELEMENTS changed rather than the camera). */
+    scheduleCulling(force = false) {
+        if (!this.cullEnabled) return;
+        this._cullForce = this._cullForce || force;
+        if (this._cullQueued) return;
         this._cullQueued = true;
-        requestAnimationFrame(() => { this._cullQueued = false; this.updateCulling(); });
+        requestAnimationFrame(() => {
+            this._cullQueued = false;
+            const f = this._cullForce;
+            this._cullForce = false;
+            this.updateCulling(f);
+        });
     }
 
     /** Transform-aware off-screen culling. The blanket `content-visibility:auto`
@@ -586,20 +635,29 @@ class CanvasController {
      *  (handles/badges paint freely, always rendered), off-screen ones get
      *  `content-visibility:hidden` (skipped, keeping the iOS compositing relief —
      *  and unlike display:none it preserves iframe/editor state). */
-    updateCulling() {
+    updateCulling(force = false) {
         if (!this.cullEnabled) return;
         const s = this.viewState.scale || 1;
         const W = this.canvas.clientWidth / s;
         const H = this.canvas.clientHeight / s;
         const vx = -this.viewState.translateX / s;
         const vy = -this.viewState.translateY / s;
+        // The slack below is a full screen per side, so the visible set only
+        // changes once the camera has moved ~half a screen — skip the whole
+        // O(elements+edges) pass until then. During a pan this makes the
+        // per-frame cull a couple of comparisons instead of ~500 style writes.
+        const last = this._lastCull;
+        if (!force && last && last.W === W && last.H === H
+            && Math.abs(vx - last.vx) < W / 2 && Math.abs(vy - last.vy) < H / 2) return;
+        this._lastCull = { vx, vy, W, H };
         // One screen of slack on every side, so small pans don't thrash elements
         // on/off at the edge (and it absorbs rotation's bbox growth).
         const minX = vx - W, minY = vy - H, maxX = vx + 2 * W, maxY = vy + 2 * H;
+        const visibleEl = new Set<string>();
         for (const el of this.canvasState.elements) {
             const node = this.elementNodesMap[el.id];
             if (!node) continue;
-            if (el.static) { node.style.contentVisibility = 'visible'; continue; } // screen-pinned: always on
+            if (el.static) { node.style.contentVisibility = 'visible'; visibleEl.add(el.id); continue; } // screen-pinned: always on
             const sc = el.scale || 1;
             const hw = ((el.width || 240) * sc) / 2, hh = ((el.height || 120) * sc) / 2;
             const off = (el.x + hw < minX) || (el.x - hw > maxX) || (el.y + hh < minY) || (el.y - hh > maxY);
@@ -610,6 +668,26 @@ class CanvasController {
                 node.style.contentVisibility = 'hidden';
             } else {
                 node.style.contentVisibility = 'visible';
+                visibleEl.add(el.id);
+            }
+        }
+        // Cull the edge layer by the same window: on a link-heavy board (the
+        // live one carries 346 edges → ~1000 SVG line/text nodes) the SVG was
+        // fully re-laid-out on every viewBox change even when almost none of
+        // it was on screen. An edge stays when EITHER endpoint is on screen
+        // (an edge-to-an-edge endpoint counts as visible — cheap and safe).
+        for (const edge of this.canvasState.edges) {
+            const line = this.edgeNodesMap[edge.id];
+            if (!line) continue;
+            const srcVis = visibleEl.has(edge.source) || !this.elementNodesMap[edge.source];
+            const tgtVis = visibleEl.has(edge.target) || !this.elementNodesMap[edge.target];
+            const disp = (srcVis || tgtVis) ? '' : 'none';
+            if (line.style.display !== disp) {
+                line.style.display = disp;
+                const hit = this.edgeHitNodesMap?.[edge.id];
+                if (hit) hit.style.display = disp;
+                const label = this.edgeLabelNodesMap?.[edge.id];
+                if (label) label.style.display = disp;
             }
         }
     }
@@ -668,7 +746,7 @@ class CanvasController {
         });
         this.updateGroupBox()
         this.requestEdgeUpdate();
-        this.scheduleCulling(); // new nodes need their on/off-screen state set
+        this.scheduleCulling(true); // element set/geometry changed — full re-cull
     }
 
     renderEdgesImmediately() {
@@ -706,9 +784,11 @@ class CanvasController {
 
         // Iterate over each edge in the canvas state.
         this.edgeHitNodesMap = this.edgeHitNodesMap || {};
+        let createdEdgeNodes = false;
         this.canvasState.edges.forEach(edge => {
             let line = this.edgeNodesMap[edge.id];
             if (!line) {
+                createdEdgeNodes = true;
                 // A wide TRANSPARENT hit line under the visible one, so edges are
                 // tappable (ADR-0016) — a 2px stroke is unhittable on touch. Both
                 // carry data-id; the inspector reads it. The hit line goes first
@@ -767,6 +847,7 @@ class CanvasController {
                 }
             });
         }
+        if (createdEdgeNodes) this.scheduleCulling(true); // new lines need their on/off-screen state
     }
 
     updateEdgePosition(edge: Edge, line: SVGLineElement) {
@@ -776,22 +857,21 @@ class CanvasController {
         const sourceEdge = sourceEl ? null : this.findEdgeElementById(edge.source);
         const targetEdge = targetEl ? null : this.findEdgeElementById(edge.target);
 
+        // An edge-to-edge endpoint anchors at the other edge's LABEL node; label
+        // nodes are now created lazily (caption-less edges have none), so the
+        // lookup must be null-safe. A not-yet-rendered anchor SKIPS this pass
+        // (the next edge render resolves it) — it must not delete the edge.
+        const anchorOf = (id: string): { x: number; y: number } | null => {
+            const t = this.edgeLabelNodesMap?.[id];
+            return t ? { x: parseFloat(t.getAttribute("x") || "0"), y: parseFloat(t.getAttribute("y") || "0") } : null;
+        };
         let sourcePoint, targetPoint;
         if ((sourceEl || sourceEdge) && (targetEl || targetEdge)) {
-            sourcePoint = this.computeIntersection(sourceEl || {
-                x: parseFloat(this.edgeLabelNodesMap[edge.source].getAttribute("x")),
-                y: parseFloat(this.edgeLabelNodesMap[edge.source].getAttribute("y"))
-            }, targetEl || {
-                x: parseFloat(this.edgeLabelNodesMap[edge.target].getAttribute("x")),
-                y: parseFloat(this.edgeLabelNodesMap[edge.target].getAttribute("y"))
-            });
-            targetPoint = this.computeIntersection(targetEl || {
-                x: parseFloat(this.edgeLabelNodesMap[edge.target].getAttribute("x")),
-                y: parseFloat(this.edgeLabelNodesMap[edge.target].getAttribute("y"))
-            }, sourceEl || {
-                x: parseFloat(this.edgeLabelNodesMap[edge.source].getAttribute("x")),
-                y: parseFloat(this.edgeLabelNodesMap[edge.source].getAttribute("y"))
-            });
+            const sAnchor = sourceEl || anchorOf(edge.source);
+            const tAnchor = targetEl || anchorOf(edge.target);
+            if (!sAnchor || !tAnchor) return; // anchor label not rendered yet — try next pass
+            sourcePoint = this.computeIntersection(sAnchor, tAnchor);
+            targetPoint = this.computeIntersection(tAnchor, sAnchor);
         }
 
         if (sourcePoint && targetPoint) {
@@ -810,31 +890,39 @@ class CanvasController {
             }
 
             // Edge caption (ADR-0016): show the display label if set, else fall
-            // back to the semantic relation — but never the generic 'relates' or a
-            // literal "Edge" placeholder, which is just noise on the canvas.
+            // back to the semantic relation — but never the generic 'relates',
+            // nor the inferred 'similarTo' (SSR draws those as a faint
+            // constellation, not captions; the live board carries hundreds and
+            // each caption is an SVG text the layer re-lays-out on every
+            // viewBox change). No caption → NO text node at all: empty <text>
+            // elements still cost layout, and a link-heavy board had one per edge.
             const lbl = typeof edge.label === 'string' ? edge.label.trim() : '';
             const rel = typeof edge.rel === 'string' ? edge.rel.trim() : '';
             const pick = lbl || rel;
-            const labelText = pick && pick !== 'relates' ? pick : '';
+            const labelText = pick && pick !== 'relates' && pick !== 'similarTo' ? pick : '';
             if (!this.edgeLabelNodesMap) this.edgeLabelNodesMap = {};
             let textEl = this.edgeLabelNodesMap[edge.id];
-            if (!textEl) {
-                textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-                textEl.setAttribute("text-anchor", "middle");
-                textEl.setAttribute("data-id", edge.id);
-                textEl.setAttribute("alignment-baseline", "middle");
-                textEl.setAttribute("fill", "#000");
-                textEl.style.fontSize = "12px";
-                if (this.selectedElementId === edge.id) textEl.style.fill = "red";
-                this.edgeLabelNodesMap[edge.id] = textEl;
-                this.edgesLayer.appendChild(textEl);
+            if (!labelText) {
+                if (textEl) { textEl.remove(); delete this.edgeLabelNodesMap[edge.id]; }
+            } else {
+                if (!textEl) {
+                    textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                    textEl.setAttribute("text-anchor", "middle");
+                    textEl.setAttribute("data-id", edge.id);
+                    textEl.setAttribute("alignment-baseline", "middle");
+                    textEl.setAttribute("fill", "#000");
+                    textEl.style.fontSize = "12px";
+                    if (this.selectedElementId === edge.id) textEl.style.fill = "red";
+                    this.edgeLabelNodesMap[edge.id] = textEl;
+                    this.edgesLayer.appendChild(textEl);
+                }
+                // Calculate midpoint of the line.
+                const midX = (sourcePoint.x + targetPoint.x) / 2;
+                const midY = (sourcePoint.y + targetPoint.y) / 2;
+                textEl.setAttribute("x", String(midX));
+                textEl.setAttribute("y", String(midY));
+                textEl.textContent = labelText;
             }
-            // Calculate midpoint of the line.
-            const midX = (sourcePoint.x + targetPoint.x) / 2;
-            const midY = (sourcePoint.y + targetPoint.y) / 2;
-            textEl.setAttribute("x", String(midX));
-            textEl.setAttribute("y", String(midY));
-            textEl.textContent = labelText;
 
         } else {
             this.canvasState.edges = this.canvasState.edges.filter(ed => ed.id !== edge.id);
@@ -955,13 +1043,39 @@ ${script.getAttribute('src')}`);
                     // so every re-mount leaks another immortal 60fps board-redraw
                     // on a detached node. Shadow rAF/timers with guarded versions
                     // that stop the moment the element is removed or re-rendered.
+                    //
+                    // The guards also THROTTLE and GATE (measured on the live
+                    // board): one such minimap loop alone held the idle board at
+                    // 60 forced layouts/sec — a permanent ~20% main-thread duty
+                    // cycle that, stacked under a pan's tile re-rasterisation,
+                    // is the navigate-mode iOS tab-kill profile. Element-script
+                    // animation loops are capped at ~30fps, and parked entirely
+                    // while their element is culled off-screen or a pan/pinch is
+                    // in progress (body.gesturing) — they resume by themselves.
                     const alive = (): boolean => (node as HTMLElement).isConnected;
-                    const gRaf = (cb: FrameRequestCallback): number =>
-                        requestAnimationFrame((t) => { if (alive()) cb(t); });
+                    const hostNode = (node as HTMLElement).closest?.('.canvas-element') as HTMLElement | null;
+                    const suspended = (): boolean =>
+                        (hostNode ? hostNode.style.contentVisibility === 'hidden' : false)
+                        || document.body.classList.contains('gesturing');
+                    const MIN_FRAME_MS = 33; // ~30fps cap for element-script loops
+                    const gRaf = (cb: FrameRequestCallback): number => {
+                        const tick = (t: number): void => {
+                            if (!alive()) return; // element gone — the loop ends here
+                            if (suspended()) { requestAnimationFrame(tick); return; } // parked, resumes later
+                            const last = (node as any)._rafLast ?? 0;
+                            if (t - last < MIN_FRAME_MS) { requestAnimationFrame(tick); return; }
+                            (node as any)._rafLast = t;
+                            cb(t);
+                        };
+                        return requestAnimationFrame(tick);
+                    };
                     const gTimeout = (cb: () => void, ms?: number): number =>
                         window.setTimeout(() => { if (alive()) cb(); }, ms);
                     const gInterval = (cb: () => void, ms?: number): number => {
-                        const id = window.setInterval(() => { if (alive()) cb(); else clearInterval(id); }, ms);
+                        const id = window.setInterval(() => {
+                            if (!alive()) { clearInterval(id); return; }
+                            if (!suspended()) cb(); // skip the beat mid-gesture / while culled
+                        }, ms);
                         return id as unknown as number;
                     };
                     const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval',
