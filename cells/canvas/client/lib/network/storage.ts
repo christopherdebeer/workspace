@@ -53,8 +53,22 @@ function resetBoardScope(): void {
   readonlyBoard = false;
 }
 
-/** fact key → JSON last written, so repeat saves only touch what changed. */
+/** Canonical JSON (recursively key-sorted) for change detection. Plain
+ *  JSON.stringify follows property INSERTION order, which differs across
+ *  sessions for the same logical value — two open tabs each saw the other's
+ *  placement as "changed", rewrote it, and ping-ponged revisions forever. */
+function stableStringify(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val && typeof val === 'object' && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val);
+}
+
+/** fact key → canonical JSON last written, so repeat saves only touch what changed. */
 const lastWritten = new Map<string, string>();
+/** key → when THIS session last flushed it — its change-feed event is an echo. */
+const recentlyFlushed = new Map<string, number>();
+const ECHO_WINDOW_MS = 45_000;
 const pending = new Map<string, { value: unknown; type?: string; tags?: string[] }>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let flushing = false;
@@ -125,7 +139,7 @@ function splitElement(el: Record<string, unknown>): { domain: Record<string, unk
 function queueFact(key: string, value: unknown, extra?: { type?: string; tags?: string[] }): void {
   if (readonlyBoard) return; // a non-interactive view never writes
   if (boardPriming) return; // board still loading — dedup maps not seeded yet
-  if (lastWritten.get(key) === JSON.stringify(value)) return;
+  if (lastWritten.get(key) === stableStringify(value)) return;
   pending.set(key, { value, ...extra });
   if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
 }
@@ -137,6 +151,7 @@ function saveState(state: 'saving' | 'saved' | 'failed'): void {
   try { window.dispatchEvent(new CustomEvent('parc:save-state', { detail: { state } })); } catch { /* non-DOM */ }
 }
 
+let flushFailures = 0;
 async function flush(): Promise<void> {
   if (flushing) {
     if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
@@ -158,18 +173,53 @@ async function flush(): Promise<void> {
         ...(p.type ? { type: p.type } : {}),
         ...(p.tags ? { tags: p.tags } : {}),
       });
-      lastWritten.set(key, JSON.stringify(p.value));
+      lastWritten.set(key, stableStringify(p.value));
+      recentlyFlushed.set(key, Date.now());
     }));
     results.forEach((r, i) => {
       if (r.status === 'rejected') {
         failed = true;
         console.warn('[substrate] write failed', batch[i][0], r.reason);
+        // Re-queue unless a NEWER value for the key is already pending —
+        // a throttled write (DynamoDB scaling) must retry, not vanish.
+        const [key, p] = batch[i];
+        if (!pending.has(key)) pending.set(key, p);
       }
     });
   } finally {
     flushing = false;
     saveState(failed ? 'failed' : 'saved');
+    if (failed) {
+      // Backoff: the observed failure mode IS throughput throttling — hammering
+      // the table again in 400ms would keep it hot. 2s → 4s → … capped at 30s.
+      flushFailures++;
+      const delay = Math.min(30_000, 2000 * 2 ** Math.min(flushFailures - 1, 4));
+      if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, delay);
+    } else {
+      flushFailures = 0;
+    }
   }
+}
+
+/** The EXACT payloads a save would write for this element — domain fact +
+ *  placement decoration. One implementation, used by the write path AND by
+ *  the loader to seed the dedup maps: seeding with the raw stored value
+ *  instead used to make every legacy fact (placement fields still inside its
+ *  value) look "changed" on every open — a full-board rewrite per load, which
+ *  is what ran the DynamoDB table into throughput throttling. */
+function elementPayloads(el: Record<string, unknown>): { domain: Record<string, unknown>; placement: Record<string, unknown> } {
+  // Chip-display dims are transient; persist the TRUE geometry.
+  const persisted: Record<string, unknown> = { ...el };
+  if ((el as any)._factCard) delete persisted.type; // presentation, not the fact's
+  // parcland's client-side history — the substrate's revision chain IS the
+  // history; persisting versions would double-store every prior value.
+  delete persisted.versions;
+  delete persisted.childCanvasState; // dead pre-refCanvasId nesting vestige
+  if (typeof (el as any)._origW === 'number') {
+    persisted.width = (el as any)._origW;
+    persisted.height = (el as any)._origH;
+  }
+  return splitElement(persisted);
 }
 
 /** Per-element write (the CrdtAdapter seam funnels here too). */
@@ -180,18 +230,7 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   if (el.type === 'edit-prompt') return;
   const key = factKeyOf(el);
   const canvasTag = `canvas:${canvasId}`;
-  // Chip-display dims are transient; persist the TRUE geometry.
-  const persisted: Record<string, unknown> = { ...el };
-  if ((el as any)._factCard) delete persisted.type; // presentation, not the fact's
-  // parcland's client-side history — the substrate's revision chain IS the
-  // history; persisting versions would double-store every prior value.
-  delete persisted.versions;
-  delete persisted.childCanvasState; // dead pre-refCanvasId nesting vestige
-  if (typeof el._origW === 'number') {
-    persisted.width = el._origW;
-    persisted.height = el._origH;
-  }
-  const { domain, placement } = splitElement(persisted);
+  const { domain, placement } = elementPayloads(el);
 
   // Semantic type/tags survive board edits: omit type when one is stored
   // (the substrate preserves omitted attributes); only brand-new facts get
@@ -575,12 +614,14 @@ function assembleBoardEdges(
 ): any[] {
   const edges: any[] = [];
   for (const e of decoEntries) {
-    lastWritten.set(e.key, JSON.stringify(e.value));
     const edge = e.value as Record<string, unknown> | null;
-    if (!edge || typeof edge.id !== 'string') continue;
+    if (!edge || typeof edge.id !== 'string') { lastWritten.set(e.key, stableStringify(e.value)); continue; }
     // Migration: a decoration authored before the rel/label split has only
     // `label` (which WAS the rel). Seed `rel` from it once.
     if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
+    // Seed AFTER the migration mutates the edge — seeding the pre-migration
+    // shape made every legacy edge rewrite itself once per load.
+    lastWritten.set(e.key, stableStringify(edge));
     edges.push(edge);
     if (edge.source && edge.target) {
       const rel = edgeRel(edge);
@@ -742,7 +783,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const sub = e.key.slice(prefix.length);
       if (sub.startsWith('edge:')) edgeEntries.push(e);
       else {
-        lastWritten.set(e.key, JSON.stringify(e.value));
+        lastWritten.set(e.key, stableStringify(e.value));
         placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
       }
     }
@@ -758,7 +799,6 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     const placed: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
     const unplaced: any[] = [];
     const elements = (els.entries ?? []).map((e) => {
-      lastWritten.set(e.key, JSON.stringify(e.value));
       factMeta.set(e.key, { type: e._meta?.type ?? null, tags: e._meta?.tags ?? [] });
       if (typeof e._meta?.score === 'number') salienceByKey.set(e.key, e._meta.score);
       const value = e.value as Record<string, unknown>;
@@ -770,6 +810,13 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       // hundreds) BEFORE it renders — at face value it's the iOS tab-kill.
       if (sanitizeElementGeometry(el)) console.warn('[canvas] healed out-of-bounds geometry', e.key);
       decorateFactCard(el, e._meta);
+      // Seed the dedup maps with what a save WOULD write for this element —
+      // not the raw stored value. A legacy fact still carrying x/width inside
+      // its value otherwise diffs forever (domain strips placement fields),
+      // so every open rewrote the whole board (the throttling storm).
+      const seed = elementPayloads(el);
+      lastWritten.set(e.key, stableStringify(seed.domain));
+      if (pl) lastWritten.set(`${prefix}${e.key}`, stableStringify(seed.placement));
       if (pl && typeof pl.x === 'number')
         placed.push({
           id: el.id,
@@ -950,7 +997,7 @@ async function fetchFact(key: string): Promise<{ key: string; value: any; _meta:
 
 function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
   if (!entry) return false;
-  const json = JSON.stringify(entry.value);
+  const json = stableStringify(entry.value);
   if (lastWritten.get(key) === json && !entry._meta?.superseded) return false; // self-echo
   const id = (entry.value && entry.value.id) || key.slice(3);
   if (entry._meta?.superseded) {
@@ -1000,7 +1047,7 @@ function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: an
 
 function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
   if (!entry || entry._meta?.superseded) return false;
-  const json = JSON.stringify(entry.value);
+  const json = stableStringify(entry.value);
   if (lastWritten.get(key) === json) return false; // self-echo
   const id = key.slice(key.lastIndexOf('/el:') + 4);
   if (cc.selectedElementIds?.has?.(id)) return false; // never fight a live drag
@@ -1213,7 +1260,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
     el.y = Math.round(anchor.y + r * Math.sin(a));
     el._synthesized = true;
     synthOrigin.set(el.id, { x: el.x, y: el.y });
-    lastWritten.set(k, JSON.stringify(entry.value));
+    lastWritten.set(k, stableStringify(entry.value));
     factMeta.set(k, { type: entry._meta?.type ?? null, tags: entry._meta?.tags ?? [] });
     if (typeof entry._meta?.score === 'number') salienceByKey.set(k, entry._meta.score);
     cc.canvasState.elements.push(el);
@@ -1310,6 +1357,12 @@ export function startLiveSync(cid: string): void {
     }
   } catch { /* no URL */ }
   liveSyncStarted = true;
+  // Adaptive cadence: 6s while the human is here, 30s once they've been idle
+  // a couple of minutes — an untouched board must not poll at edit speed.
+  let lastActivity = Date.now();
+  const bump = (): void => { lastActivity = Date.now(); };
+  window.addEventListener('pointerdown', bump, { passive: true });
+  window.addEventListener('keydown', bump, { passive: true });
   const tick = async (): Promise<void> => {
     const cc = (window as { CC?: any }).CC;
     // One poller per page, but boards change under it (drill navigation) —
@@ -1325,15 +1378,26 @@ export function startLiveSync(cid: string): void {
             { sinceSeq: liveCursor },
           );
           liveCursor = res.seq;
+          const now = Date.now();
+          for (const [k, t] of recentlyFlushed) if (now - t > ECHO_WINDOW_MS) recentlyFlushed.delete(k);
           const elKeys = new Set<string>();
           const placeKeys = new Set<string>();
           let edgesDirty = false;
           for (const ev of res.events ?? []) {
             if (ev.op === 'link' || ev.op === 'unlink') {
-              edgesDirty = true;
+              // Bare link ops carry no key, so they can't be scoped to this
+              // board — and with projection OFF they don't render either.
+              // Reacting to every agent's link activity across the whole
+              // workspace used to run a 2-request edge rebuild per tick.
+              if (SHOW_LINK_EDGES) edgesDirty = true;
               continue;
             }
+            // The feed logs reads too — a read is not a state change.
+            if (ev.op !== 'write' && ev.op !== 'supersede') continue;
             if (!ev.key) continue;
+            // Our own flushes echo straight back through the feed — skip
+            // them; the dedup maps already hold exactly what we wrote.
+            if (now - (recentlyFlushed.get(ev.key) ?? 0) < ECHO_WINDOW_MS) continue;
             if (ev.key.startsWith(`_canvas/${cid}/edge:`)) edgesDirty = true;
             else if (ev.key.startsWith(`_canvas/${cid}/el:`)) placeKeys.add(ev.key);
             else if (ev.key.startsWith('el:')) elKeys.add(ev.key);
@@ -1356,7 +1420,7 @@ export function startLiveSync(cid: string): void {
         }
       } catch { /* offline — retry next tick */ }
     }
-    setTimeout(() => void tick(), 6000);
+    setTimeout(() => void tick(), Date.now() - lastActivity < 120_000 ? 6000 : 30_000);
   };
   setTimeout(() => void tick(), 6000);
 }
