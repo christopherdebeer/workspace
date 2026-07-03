@@ -327,6 +327,19 @@ interface ViewRenderHint {
 
 let readonlyBoard = false;
 
+/* ── board composition flags ──────────────────────────────────────────────
+ * The board shows what a human AUTHORED: decorated edges and pinned
+ * placements. Substrate links (including inferred similarTo) stay in the
+ * graph — queryable, expandable via "Expand links" — but are NOT projected
+ * onto the canvas by default: at live scale (hundreds of links) they read
+ * as noise, not structure. Likewise unplaced facts park in the salience
+ * tray instead of a force-simulated field: positions on the board are
+ * explicit, not physics. Debug escapes: ?links=1 re-projects link edges,
+ * ?sim=1 restores the force field + warm episodes. */
+const boardFlags = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+const SHOW_LINK_EDGES = boardFlags.get('links') === '1';
+const FIELD_SIM = boardFlags.get('sim') === '1';
+
 /** Pin the camera once the controller exists (a *named* viewpoint, not device state).
  *  The `'fit'` case routes through the shared `fitRegion` resolver (ADR-0015) so SSR,
  *  the client, and embeds all frame a region identically. */
@@ -615,20 +628,26 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     els.entries = (els.entries ?? []).filter((e) => !e.key.startsWith('_'));
     const presentIds = new Set(els.entries.map((e) => e.key));
 
-    // Edges are PROJECTED from substrate links among this board's elements;
+    // Substrate links among this board's elements: by default they only seed
+    // the dedupe set (so drawing an edge that already exists as a link doesn't
+    // re-link) — they are NOT shown. With ?links=1 they project as bare edges;
     // decoration edges (style/label edits, edge-to-edge) merge by signature.
+    // NOTE the asymmetry when hidden: linkedEdges gets the signature but
+    // lastEdges must NOT — a lastEdges entry whose edge isn't in canvasState
+    // would make the next save sweep UNLINK every hidden link on the board.
     const decorated = new Set(edges.map((e) => `${e.source}|${edgeRel(e)}|${e.target}`));
     for (const l of links) {
       if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
       const source = idOfKey(l.from);
       const target = idOfKey(l.to);
       if (decorated.has(`${source}|${l.rel}|${target}`)) continue;
+      linkedEdges.add(`${source}|${l.rel}|${target}`);
+      if (!SHOW_LINK_EDGES) continue;
       const id = `lnk:${l.from}|${l.rel}|${l.to}`;
       // A bare reference: `rel` IS the type; `label` defaults to showing it (so
       // display is unchanged) until a human gives it a distinct annotation.
       edges.push({ id, source, target, rel: l.rel, label: l.rel });
       lastEdges.set(id, { source, target, rel: l.rel, decorated: false });
-      linkedEdges.add(`${source}|${l.rel}|${target}`);
     }
 
     // Edge hygiene: an edge whose endpoint is gone breaks the renderer (and
@@ -712,8 +731,12 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       linkedIds.add(e.source);
       linkedIds.add(e.target);
     }
-    const sims = unplaced.filter((el: any) => linkedIds.has(el.id)).sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)));
-    const loose = unplaced.filter((el: any) => !linkedIds.has(el.id));
+    // Explicit positioning by default: EVERY unplaced item parks in the
+    // salience tray. The force field (?sim=1) is a debug/spelunking view.
+    const sims = FIELD_SIM
+      ? unplaced.filter((el: any) => linkedIds.has(el.id)).sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)))
+      : [];
+    const loose = FIELD_SIM ? unplaced.filter((el: any) => !linkedIds.has(el.id)) : unplaced;
 
     if (sims.length) {
       const cx0 = placed.length ? placed.reduce((a, p) => a + p.x, 0) / placed.length : 800;
@@ -943,16 +966,19 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
     lastEdges.set(edge.id, { source: edge.source, target: edge.target, rel, decorated: true });
     linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
   }
+  // Same authored-only rule as the load path: hidden links seed the dedupe
+  // set but never lastEdges (a save sweep would unlink them — see load path).
   const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
   for (const l of links) {
     if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
     const s = idOfKey(l.from);
     const t = idOfKey(l.to);
     if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
+    linkedEdges.add(`${s}|${l.rel}|${t}`);
+    if (!SHOW_LINK_EDGES) continue;
     const id = `lnk:${l.from}|${l.rel}|${l.to}`;
     edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
     lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
-    linkedEdges.add(`${s}|${l.rel}|${t}`);
   }
   const elIds = new Set(cc.canvasState.elements.map((e: any) => e.id));
   let valid = edges;
@@ -984,6 +1010,9 @@ const lastPos = new Map<string, string>();
  * 700ms after the last movement the field cools and settles.
  */
 function warmField(): void {
+  // No physics on an explicitly-positioned board (?sim=1 restores it) — the
+  // field animation moved items the human never asked to move.
+  if (!FIELD_SIM) return;
   if (readonlyBoard || typeof window === 'undefined') return;
   warmUntil = performance.now() + 700;
   if (warmRaf) return; // loop already running
