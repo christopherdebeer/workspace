@@ -25,6 +25,7 @@ import {
 } from './subscriptions';
 import { GROUPS_NS, PUBLIC_NS } from './grants';
 import { type DepsBuilder } from './shared';
+import { TOOL_DESCRIPTORS } from './descriptors';
 
 /** A tending pass distilled into a written report — the audit fact. */
 export interface TendReport {
@@ -86,6 +87,43 @@ export async function runTend(
     dangling: report.dangling,
   });
   ctx.logger.info('workspace tended', { scope, via, stale: report.stale, unlinked: report.unlinked, dangling: report.dangling });
+
+  // ADR-0052: the workspace's own verbs are capability facts too — reconciled
+  // by the tend pass (the repair organ), so the fact floor covers tier-1 verbs
+  // without a deploy-time seam. Diff-only writes: an unchanged verb costs
+  // nothing (no revision churn, no re-embed). Best-effort, like suggestions.
+  try {
+    const capWriter: Identity = { user: 'platform/cells', scopes: [] };
+    const existing = await state.query(scope, { prefix: '_caps/workspace.' }, capWriter);
+    const summaries = new Map(existing.entries.map((e) => [e.key, (e.value as { summary?: string } | null)?.summary]));
+    const firstSentence = (text: string): string => (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text.slice(0, 240)).trim();
+    for (const d of TOOL_DESCRIPTORS) {
+      if (d.name === 'search') continue; // deprecated alias (ADR-0051) — not worth a fact
+      const key = `_caps/workspace.${d.name}`;
+      const summary = firstSentence(d.description);
+      if (summaries.get(key) === summary) continue;
+      await state.put(
+        {
+          scope,
+          key,
+          value: {
+            target: `workspace.${d.name}`,
+            name: `workspace.${d.name}`,
+            kind: d.kind,
+            summary,
+            cell: 'workspace',
+            schemaRef: `$catalog resolve: workspace.${d.name}`,
+          },
+          via: 'tend:capabilities',
+          type: 'capability',
+          tags: ['capability'],
+        },
+        capWriter,
+      );
+    }
+  } catch (err) {
+    ctx.logger.warn('workspace capability reconcile failed', { scope, error: (err as Error).message });
+  }
   return report;
 }
 

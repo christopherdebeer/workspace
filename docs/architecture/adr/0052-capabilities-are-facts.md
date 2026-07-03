@@ -4,9 +4,12 @@
   projects each deployed cell's advertised tools into `_caps/<address>.<tool>`
   capability facts (type `capability`, writer `platform/cells`; reconciled on
   redeploy, superseded on delete); `embeddableText` carves `_caps/` out of the
-  `_`-namespace skip so the live indexer embeds them. Open: seed the workspace
-  core verbs the same way; derive `$catalog` from the facts; type-decl for
-  `capability` with a declared prior (today it rides `_config/salience`).
+  `_`-namespace skip so the live indexer embeds them. Inc 1b (2026-07-03): the
+  workspace core verbs are seeded as `_caps/workspace.*` by the tend pass
+  (diff-only reconcile — the repair organ owns tier-1 verb facts; the
+  deprecated `search` alias is deliberately not projected). Open: derive
+  `$catalog` from the facts; type-decl for `capability` with a declared prior
+  (today it rides `_config/salience`).
 - **Depends on:** ADR-0013 (fact floor), ADR-0049 (contextual capabilities),
   ADR-0050 (type priors), ADR-0051 (the intent lens), ADR-0044 L1 (declare once,
   project everywhere).

@@ -57,6 +57,77 @@ function intentSalience(override?: Partial<SalienceOptions>): Partial<SalienceOp
   return { ...INTENT_PRESET, ...override };
 }
 
+// ─── the recall digest (ADR-0050 move 4) ────────────────────────────
+//
+// A bare recall — the hottest call an agent makes — is served from a CACHE
+// record when nothing in the scope changed since it was built. Realized as a
+// seq-validated write-behind rather than a stream consumer: the digest stores
+// the seq head it was computed at, and the read path compares it to the LIVE
+// head — exact by construction (any write advances seq and invalidates), no
+// new infrastructure, no eventual consistency. Written through the raw store
+// (no seq advance, no trajectory, no touch), because a cache is not a fact.
+
+/** Where a scope's recall digest lives. Excluded from recall's own content. */
+const DIGEST_KEY = '_index/overview';
+/** Recompute past this age even at the same seq — recency decay drifts band
+ *  membership slowly; an hour bounds the drift. */
+const DIGEST_MAX_AGE_MS = 60 * 60 * 1000;
+
+interface DigestValue {
+  seq: number;
+  at: string;
+  result: RecallOverview;
+}
+
+/** The cached overview when it is seq-exact and fresh, else `null` plus the
+ *  live head (captured BEFORE the recompute, so a write racing the recompute
+ *  can only make the stored digest conservatively stale, never wrongly fresh). */
+async function readDigest(
+  store: NonNullable<WorkspaceDeps['store']>,
+  scope: string,
+): Promise<{ cached: RecallOverview | null; head: number }> {
+  const [rec, head] = await Promise.all([store.get(scope, DIGEST_KEY), store.currentSeq(scope)]);
+  const v = rec?.value as DigestValue | undefined;
+  const fresh =
+    !!v && typeof v.seq === 'number' && !!v.result && v.seq === head && Date.now() - Date.parse(v.at) < DIGEST_MAX_AGE_MS;
+  return { cached: fresh ? v.result : null, head };
+}
+
+/** Persist the freshly-computed overview as the scope's digest — best-effort
+ *  (a cache write must never fail a read; an oversized digest just isn't cached). */
+async function writeDigest(
+  store: NonNullable<WorkspaceDeps['store']>,
+  scope: string,
+  head: number,
+  result: RecallOverview,
+): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    const prev = await store.get(scope, DIGEST_KEY);
+    await store.put({
+      scope,
+      key: DIGEST_KEY,
+      value: { seq: head, at: now, result } satisfies DigestValue,
+      revision: (prev?.revision ?? 0) + 1,
+      seq: head,
+      firstSeq: prev?.firstSeq ?? head,
+      writer: 'platform/digest',
+      via: 'recall:digest',
+      createdAt: prev?.createdAt ?? now,
+      updatedAt: now,
+      writers: ['platform/digest'],
+      superseded: false,
+      supersededBy: null,
+      type: null,
+      tags: [],
+      timerExpiresAt: null,
+      timerEffect: null,
+    });
+  } catch {
+    /* not cached this time — the next bare recall recomputes */
+  }
+}
+
 /** Attach the inline `types` affordance map to a single returned fact (`peek`),
  *  leaving a `null` (absent) fact untouched (ADR-0029 R1). */
 function withAffordance(entry: Entry | null, decls: Record<string, Record<string, unknown>>): Entry | (Entry & { types: Record<string, TypeAffordance> }) | null {
@@ -229,7 +300,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
   return {
     async recall(input, ctx) {
       const viewer = requireUser(ctx.identity);
-      const { state, grants, vectors } = build(ctx);
+      const { state, grants, vectors, store } = build(ctx);
       const includeSuperseded = input?.includeSuperseded;
 
       // Own slice, scored (under the per-call lens) but not yet shaped
@@ -241,6 +312,28 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // vector-index candidates, exactly like search's per-grant fold.
       const text = typeof input?.text === 'string' ? input.text.trim() : '';
       const salience = text ? intentSalience(input?.salience) : input?.salience;
+
+      // ADR-0033 discrimination, computed early so the digest fast path can gate on it.
+      const shapedAny = input as Record<string, unknown> | undefined;
+      const askedFull =
+        input?.view === 'full' ||
+        (input?.view !== 'overview' &&
+          !!shapedAny &&
+          ['elision', 'expand', 'lens', 'salience', 'explain', 'includeSuperseded'].some((k) => shapedAny[k] !== undefined));
+      // The digest fast path (ADR-0050 move 4): a BARE recall — no intent, no
+      // lens, no overrides — is answered from the seq-validated cache. Grants
+      // are checked LIVE so a new foreign grant always falls through to the
+      // full fold (grant writes don't advance the viewer's seq).
+      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience;
+      const grantList = await applicableGrants(grants, viewer);
+      const foreign = grantList.some((g) => g.owner !== viewer);
+      let digestHead: number | undefined;
+      if (bare && store && !foreign) {
+        const { cached, head } = await readDigest(store, viewer);
+        if (cached) return cached;
+        digestHead = head;
+      }
+
       // The viewer's stored salience policy (`_config/salience`) governs the whole
       // assembled view — scoring (read) and tiering (shape) alike — so granted
       // slices are scored under the viewer's policy, not each owner's. Precedence:
@@ -254,11 +347,12 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         ctx.identity,
       );
       const merged: Record<string, Entry> = { ...own.entries };
+      delete merged[DIGEST_KEY]; // the digest is a cache, not content
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
       // via a group they belong to (docs/scope-grants.md). A grant key is a
       // pattern: `*` = whole slice, trailing `*` = prefix.
-      for (const g of await applicableGrants(grants, viewer)) {
+      for (const g of grantList) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
           const gRelevance = text ? await relevanceFor(vectors, g.owner, text) : undefined;
@@ -284,16 +378,11 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // ADR-0033: progressive disclosure by default. A *bare* recall (the context-less
       // agent's first read) returns a broad, succinct overview — counts + top focus +
       // drill hints — not the whole view. Any shaping arg (or view:'full') opts into the
-      // full shaped view, so configured callers are unchanged.
-      const shapedAny = input as Record<string, unknown> | undefined;
-      const askedFull =
-        input?.view === 'full' ||
-        (input?.view !== 'overview' &&
-          !!shapedAny &&
-          ['elision', 'expand', 'lens', 'salience', 'explain', 'includeSuperseded'].some((k) => shapedAny[k] !== undefined));
+      // full shaped view, so configured callers are unchanged. (`askedFull`/`bare`
+      // were computed up top, before the digest fast path.)
       if (!askedFull) {
         const c = shaped._shaping.counts;
-        const granted = Object.keys(merged).length - Object.keys(own.entries).length;
+        const granted = Object.keys(merged).length - Object.keys(own.entries).length + (own.entries[DIGEST_KEY] ? 1 : 0);
         const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
         if (text) {
           overview.hints.unshift(
@@ -302,6 +391,10 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
               : 'A `text` intent was given but no semantic backend is configured — results are unweighted by relevance.',
           );
         }
+        // Write-behind (ADR-0050): the digest carries the seq head captured
+        // BEFORE the recompute, so a racing write leaves it conservatively
+        // stale (invalidated on the next read), never wrongly fresh.
+        if (bare && store && !foreign && digestHead !== undefined) await writeDigest(store, viewer, digestHead, overview);
         return overview;
       }
 

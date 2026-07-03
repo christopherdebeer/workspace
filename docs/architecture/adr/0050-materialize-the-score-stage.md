@@ -8,10 +8,17 @@
   the auth layer stamps `identity.actor` from the validated token (ADR-0022: a
   DCR client token is an `agent` embodiment even when its subject is the user;
   a first-party session is `human`), the class rides the service-to-service
-  envelope, and the scorer prefers the stamp over name-based fallback. Open:
-  stream-maintained degree, the `_index/overview` digest, card projection at
-  the store, `score0` GSI, counter backfill for pre-ADR facts; ADR-0024 chains
-  will keep any `act` chain classed `agent`.
+  envelope, and the scorer prefers the stamp over name-based fallback. Inc 1c
+  (2026-07-03): the `_index/overview` DIGEST is live — realized as a
+  seq-validated write-behind on the bare-recall path rather than a stream
+  consumer (exact by construction: any write advances seq and invalidates;
+  1h age bound covers recency drift; grants checked live; written through the
+  raw store so the cache is not a fact). Counter backfill is CLOSED as
+  won't-do: the only durable historical signal is `revision`, which is
+  machinery-polluted (a dragged placement has revision 145) — import seeds +
+  organic accrual are the honest path. Open: stream-maintained degree, card
+  projection at the store, `score0` GSI; ADR-0024 chains will keep any `act`
+  chain classed `agent`.
   Amends ADR-0006 (the score stage) and repays the open cost question in
   `docs/substrate.md` ("trajectory-driven scoring is read/write-amplifying; bound it
   before it sits under every read").

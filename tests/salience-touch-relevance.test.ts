@@ -253,3 +253,77 @@ describe('capability facts (ADR-0052)', () => {
     expect(gone.entries).toEqual([]);
   });
 });
+
+// ─── ADR-0050 move 4: the recall digest ─────────────────────────────
+
+import { runTend } from '../services/workspace/event-handlers';
+
+describe('recall digest (ADR-0050 — seq-validated write-behind)', () => {
+  it('a bare recall caches; the cache serves until a write invalidates it', async () => {
+    __resetTypeDeclsCache();
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const cmds = createWorkspaceCommands(() => ({ state, grants, store }));
+    const ctx = ctxFor('alice');
+    await cmds.remember({ key: 'k1', value: 'first' }, ctx);
+
+    const first = await cmds.recall(undefined, ctx);
+    if (!('overview' in first)) throw new Error('expected overview');
+    expect(first.overview.total).toBe(1);
+    const digest = await store.get('alice', '_index/overview');
+    expect(digest).not.toBeNull(); // write-behind landed
+    expect(digest!.writer).toBe('platform/digest');
+
+    // Served from cache: identical result, and the digest is NOT content
+    // (total stays 1 — the cache record never counts itself).
+    const second = await cmds.recall(undefined, ctx);
+    if (!('overview' in second)) throw new Error('expected overview');
+    expect(second).toEqual(first);
+
+    // A write advances seq → the digest is stale → recomputed with the new fact.
+    await cmds.remember({ key: 'k2', value: 'second' }, ctx);
+    const third = await cmds.recall(undefined, ctx);
+    if (!('overview' in third)) throw new Error('expected overview');
+    expect(third.overview.total).toBe(2);
+    expect(Object.keys(third.focus).sort()).toEqual(['k1', 'k2']);
+    __resetTypeDeclsCache();
+  });
+
+  it('shaped/goal-conditioned recalls bypass the digest', async () => {
+    __resetTypeDeclsCache();
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const cmds = createWorkspaceCommands(() => ({ state, grants, store }));
+    const ctx = ctxFor('alice');
+    await cmds.remember({ key: 'k1', value: 'v' }, ctx);
+    await cmds.recall(undefined, ctx); // primes the digest
+    const lensed = await cmds.recall({ view: 'overview', lens: 'durable' }, ctx);
+    if (!('overview' in lensed)) throw new Error('expected overview');
+    // A lensed read never serves (or overwrites) the bare digest; the full
+    // view is likewise untouched by caching.
+    const full = await cmds.recall({ view: 'full' }, ctx);
+    expect('entries' in full).toBe(true);
+    __resetTypeDeclsCache();
+  });
+});
+
+describe('workspace core verbs as capability facts (ADR-0052, tend-reconciled)', () => {
+  it('runTend seeds _caps/workspace.* once and is diff-only on the second pass', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const ctx = ctxFor(null);
+    await runTend(state, 'alice', ctx, 'test', { user: 'platform/tend', scopes: [] }, store);
+    const caps = await state.query('alice', { prefix: '_caps/workspace.' });
+    expect(caps.total).toBeGreaterThan(10);
+    const recallCap = caps.entries.find((e) => e.key === '_caps/workspace.recall')!;
+    expect(recallCap._meta.type).toBe('capability');
+    expect((recallCap.value as { kind: string }).kind).toBe('read');
+    expect(caps.entries.some((e) => e.key === '_caps/workspace.search')).toBe(false); // deprecated alias skipped
+    const revBefore = recallCap._meta.revision;
+    await runTend(state, 'alice', ctx, 'test', { user: 'platform/tend', scopes: [] }, store);
+    const again = await state.query('alice', { prefix: '_caps/workspace.recall' });
+    expect(again.entries[0]._meta.revision).toBe(revBefore); // unchanged → no rewrite
+  });
+});
