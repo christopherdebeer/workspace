@@ -9,6 +9,9 @@ each the right shape. What follows is where the seams show — first the
 interaction model (HCI), then the command palette specifically, then
 implementation hazards ranked.
 
+> **Resolution status**: §5 (end of document) logs what was fixed on this
+> branch (commits G1–G7, 2026-07-03) and what is deliberately deferred.
+
 ---
 
 ## 1 · HCI: the interaction model
@@ -335,3 +338,71 @@ swaps in a whole new controller + `loadInitialCanvas`.
 7. **Palette as the touch surface**: thumb-reachable open affordance,
    dynamic placeholder teaching the free-text behaviours, persisted recents
    (§2.1–2.2).
+
+## 5 · Resolution log (branch commits G1–G7, 2026-07-03)
+
+### Fixed — §3 implementation findings
+
+| # | Finding | Resolution |
+|---|---------|-----------|
+| 1 | Cross-board fact deletion on drill | `loadInitialCanvas` resets every per-board map on entry (pending kept); plus a `boardPriming` write gate while maps are unseeded |
+| 2 | `detach()` leaks adapter/FSM/palette | all torn down in `detach()`; pointer adapter detaches from every root; shortcuts uninstallable |
+| 3 | Live-sync stuck on first board's cid | tick re-keys every filter to the current board |
+| 4 | Duplicate clobbers original fact | duplicate/paste strip `_`-transients (incl. `_factKey`) |
+| 5 | Colliding `Date.now()` ids | one `uid()` (time+counter+random) everywhere |
+| 6 | O(V·E) per render frame | dead `findEdgesByElementId` scan deleted; pass-scoped id→element Map |
+| 7 | Draw pass deletes edges | missing endpoint hides for the pass, never mutates state |
+| 8 | Undo doesn't persist/reconcile | `_restoreSnapshot` saves + refreshes edges; delete/duplicate/paste snapshot; **bonus**: fixed the off-by-one that made the first undo a no-op |
+| 9 | warmField write storm | defused by sim-off default; remaining under `?sim=1` only |
+| 10 | Handles gated on dead CRDT shim | dangling `if`, peer-selection, `onUpdate`, presence wiring, and the shim all removed |
+| 11 | Helper actions drop deselect + diverge on selection | helpers delegate to `controller.selectElement` (replace; shift/meta adds) and emit `parc:canvas-deselect` |
+| 12 | Paste bypasses selection path | selects through the controller path |
+| 13 | navTo dead / salience keyed wrong | `dataset.elId` fix; salience keyed by `_factKey` |
+| 14 | Duplicated edge assembly | one `assembleBoardEdges()` for load + live-sync; live rebuild preserves session-local expand edges |
+| 15 | frameOverlay per-frame redraw | camera-only mutations ignored; 150 ms trailing throttle |
+| 16 | Flight recorder stacks per drill | once-per-page guard |
+| 17 | Resize rAF per pointermove | one measurement rAF in flight, last-wins |
+| 18 | Dead FSM scaffolding | unreachable states/actions removed; honest-model comment added |
+| 19 | Serial flush | concurrent `Promise.allSettled` + `parc:save-state` events |
+| 20 | fetchFact revision order | prefers the live revision |
+| 21 | img auto-generation on render | once per element per session |
+| 22 | Culled widgets keep timers | minimap/view tiles skip beats under `content-visibility:hidden` |
+| 23 | Modal resolver drop | prior resolver settled as cancelled on re-open (the Escape-handler accumulation claim was wrong — it installs once) |
+| 24 | openHistory popup crash / always-[] | command + helper removed |
+| 25 | O(E²) orphan sweep | live-id Set |
+| 26 | Unescaped innerHTML sinks | escaped at palette labels, context-menu header, tour bar |
+| 27 | Four camera-fit codepaths | zoomToFit + zoomToElement now use `fitRegion` (remaining: the relative `zoom()` helper, which is a different operation) |
+
+**Found while fixing** (not in the original list): every *hydrated* open used
+to persist a rewrite of the full board — the first render queued every
+element/placement before the background load seeded the dedup maps. The
+`boardPriming` gate closes this (G1).
+
+### Fixed — HCI / palette (§1–2)
+
+- One selection policy (§1.2): tap replaces, shift/meta adds, one
+  implementation in the controller.
+- Save-state indicator + delete undo toast + delete-in-history (§1.4).
+- Shortcuts: collisions resolved, dead "⌘N x" chords removed, guards
+  evaluated at dispatch, `needsInput` commands excluded, contenteditable
+  ignored (§2.2).
+- Persisted recents, command aliases, dynamic placeholder teaching the
+  free-text behaviours, ✕ no longer aborts an input flow (§2.1–2.2).
+- Menu hygiene: Save / History / Minimap retired (§2.2).
+
+### Deferred — needs a product decision or its own increment
+
+- **Modeless gestures** (§1.1): collapsing navigate/direct changes the core
+  touch contract (view-mode pan-from-anywhere would be lost); do it
+  deliberately, with the mode button's removal designed, not as a side fix.
+- **Group "More" shows first element's actions** (§2.3): a true group action
+  list is design work.
+- **Edge inspector peek/half detents** (§2.3).
+- **Snapshot cost** (§3.8's double serialization): structural-sharing or
+  delta snapshots are an increment of their own; budget-capped today.
+- **Thumb affordance for the palette on mobile** (§2.2): the sheet input is
+  bottom-anchored already; a dedicated FAB/swipe gesture deserves a design
+  pass rather than a bolt-on.
+- **`el:`-prefix/`_factKey` unification behind one typed accessor** (§3.13
+  root cause): the two worst symptoms are fixed; the full sweep across four
+  files is mechanical but broad — do it when touching those files next.
