@@ -34,8 +34,21 @@ const FLUSH_DELAY = 400;
  *  churn on each open (and, on a drill, writes under the wrong board).
  *  loadInitialCanvas seeds the dedup maps and then lifts the gate. */
 let boardPriming = false;
+/** Writes issued DURING priming (a user can add/edit while the background
+ *  load is still seeding) — buffered, then replayed through the dedupe once
+ *  the maps are seeded. Dropping them instead silently lost the membership
+ *  tag of anything added in the first seconds after open. */
+const primingBuffer = new Map<string, { value: unknown; type?: string; tags?: string[] }>();
 /** Hydrate boot calls this BEFORE constructing the controller. */
 export function beginBoardPriming(): void { boardPriming = true; }
+function endBoardPriming(): void {
+  boardPriming = false;
+  const buffered = [...primingBuffer];
+  primingBuffer.clear();
+  // Replay through queueFact: render-path echoes now match the seeded maps
+  // and no-op; genuine user writes differ and land.
+  for (const [key, p] of buffered) queueFact(key, p.value, { type: p.type, tags: p.tags });
+}
 
 /** One board per page lifetime is over (drill-in/up swap controllers):
  *  every per-board map must reset on load, or the save sweep treats the
@@ -50,6 +63,7 @@ function resetBoardScope(): void {
   synthOrigin.clear();
   lastPos.clear();
   salienceByKey.clear();
+  primingBuffer.clear(); // a drill mid-priming: the old board's echoes don't replay here
   readonlyBoard = false;
 }
 
@@ -155,8 +169,11 @@ function splitElement(el: Record<string, unknown>): { domain: Record<string, unk
 
 function queueFact(key: string, value: unknown, extra?: { type?: string; tags?: string[] }): void {
   if (readonlyBoard) return; // a non-interactive view never writes
-  if (boardPriming) return; // board still loading — dedup maps not seeded yet
-  if (lastWritten.get(key) === stableStringify(value)) return;
+  if (boardPriming) { primingBuffer.set(key, { value, ...extra }); return; } // replayed at endBoardPriming
+  // Value-dedupe must NOT swallow a write that carries tags: board membership
+  // IS a tag, and an unchanged value with a new tag is exactly what "add an
+  // existing fact to this board" produces.
+  if (lastWritten.get(key) === stableStringify(value) && !extra?.tags) return;
   pending.set(key, { value, ...extra });
   if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
 }
@@ -581,8 +598,11 @@ export async function addFactToCanvas(controller: any, key: string): Promise<voi
   const el: any = { width: 240, height: 120, rotation: 0, ...value, id: idOfKey(key), x: Math.round(pt.x), y: Math.round(pt.y) };
   el._factKey = key;
   // Pre-seed meta so the element-write path never stamps `canvas-element` over
-  // the fact's real type; decorate to the card/renderer it deserves.
-  factMeta.set(key, { type, tags: newTags });
+  // the fact's real type — but with the STORED tags, not the hoped-for ones:
+  // claiming canvas:<cid> before the write lands meant a lost membership write
+  // (throttle, priming) was never retried, and the fact vanished on reload.
+  // The render path re-queues the tag for as long as factMeta says it's missing.
+  factMeta.set(key, { type, tags });
   decorateFactCard(el, { type, tags: newTags });
   controller.canvasState.elements.push(el);
   controller.requestRender();
@@ -711,7 +731,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   if (embed && !isAuthed()) {
     document.body.classList.add('embed-unauthed');
     readonlyBoard = true;
-    boardPriming = false;
+    endBoardPriming();
     return defaultState;
   }
   // The board lives in the URL PATH (see lib/url.ts), and the kernel's OAuth
@@ -793,7 +813,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     if ((els.count ?? 0) === 0 && (deco.count ?? 0) === 0 && localCopy && !viewId) {
       const seeded = JSON.parse(localCopy);
       console.log('[substrate] seeding empty canvas from local copy');
-      boardPriming = false; // seeding IS the write — lift the gate first
+      endBoardPriming(); // seeding IS the write — lift the gate (replaying buffered user writes)
       saveCanvas(seeded);
       startSalience(cid);
       return seeded;
@@ -980,7 +1000,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
     });
     console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length, assembleMs: Math.round(nowMs() - tAsm) });
-    boardPriming = false; // dedup maps seeded — writes may flow
+    endBoardPriming(); // dedup maps seeded — writes flow, buffered user writes replay
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
     // Make the swallowed failure visible (it was a silent console.error before),
@@ -990,7 +1010,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     startSalience(cid);
     const fallback = localCopy ? JSON.parse(localCopy) : defaultState;
     console.warn(`[canvas] falling back to ${localCopy ? 'local cached copy' : 'EMPTY state'} after [${stage}] failure`);
-    boardPriming = false;
+    endBoardPriming();
     return fallback;
   }
 }
