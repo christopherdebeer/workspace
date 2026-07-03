@@ -119,7 +119,11 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               // /* ④ ONE-POINTER ON ENTITY  */
               { cond: 'onePointerSelectedDirect', target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
               // An edge / frame tap is on an entity, not blank — precede the lasso.
-              { cond: (_c, e) => !!(e.edgeId || e.frameId) && !e.hitElement, target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
+              // DIRECT mode only: in navigate mode this must fall through to
+              // pressPendingNavigate (which selects the edge on tap-UP but PANS
+              // on drag) — routing it here sent the drag to moveGroup, so a pan
+              // that happened to start on an edge's wide hit line went dead.
+              { cond: (_c, e, p) => !!(e.edgeId || e.frameId) && !e.hitElement && p.state.matches('mode.direct'), target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
 
               // /* ⑤ ONE-POINTER BLANK  */
               { cond: 'onePointerBlankDirect', target: 'lassoSelect', actions: ['hideContextMenu', 'capLasso'] },

@@ -73,6 +73,24 @@ In-stroke A/B on the real board, one continuous 8s pan (`node stroke.mjs`):
 layout time −68%, style-recalc time −92%, script −59%, total main-thread task
 time −54% (≈50% → ≈23% duty cycle).
 
+## Round 3: the ZOOM path + edge interaction
+
+The pan fixes above didn't cover a sustained zoom, which has its own per-frame
+costs: `--zoom` consumed by `calc()` padding/border re-lays-out every element
+on every frame the scale moves; the cull early-exit compared `W === last.W`,
+which never matches mid-zoom, so the full cull pass ran per frame; and
+`applyCanvasPinch → screenToCanvas` read `offsetLeft` per pointermove (a
+forced layout at 120Hz). Fixes: `--zoom` writes quantized to ~5% steps with a
+trailing exact settle, a containment-based cull window that holds under zoom,
+guarded cull style writes, and the canvas offset cached.
+
+Interaction fixes verified by `verify-edge-fixes.mjs` (needs `npm run build`
++ `npm run serve` first): inferred `similarTo` edges draw as the faint
+constellation (1px, translucent, no arrowhead, narrower hit band) instead of
+swamping the board; the edge inspector names both endpoints (tappable to
+focus); and a navigate-mode drag that starts on an edge's hit line pans the
+canvas instead of dying in `moveGroup`.
+
 Tools: `gen-pan.mjs` (build the pan page from the captured scene),
 `pan.mjs` (multi-stroke pan cost), `stroke.mjs` (single held stroke, the
 honest in-gesture profile), `idle.mjs` (the no-input floor), `prof.mjs`

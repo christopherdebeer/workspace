@@ -78,10 +78,52 @@ function field(label: string, input: string): string {
   return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${input}</label>`;
 }
 
+/** Human name for an edge endpoint (an element id, or another edge's id). */
+function endpointTitle(id: string): string {
+  const c = cc();
+  const el = c?.findElementById?.(id);
+  if (el) {
+    const t = el._factTitle
+      || (typeof el.content === 'string' && el.content.trim() ? el.content.trim().split('\n')[0] : '');
+    const s = String(t || el.id);
+    return s.length > 44 ? s.slice(0, 43) + '…' : s;
+  }
+  const e = c?.findEdgeElementById?.(id);
+  if (e) return `edge: ${relOf(e)}`;
+  return id;
+}
+
+/** What the edge links: source —rel→ target, each endpoint tappable to focus. */
+function endpointsRow(edge: any): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px';
+  const chip = (id: string): HTMLElement => {
+    const b = document.createElement('button');
+    b.textContent = endpointTitle(id);
+    b.title = id;
+    b.style.cssText = 'border:1px solid #d8d8ce;background:#f4f4ee;color:#333;border-radius:7px;padding:3px 9px;font:inherit;font-size:12px;cursor:pointer;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    b.addEventListener('click', () => {
+      const c = cc();
+      if (c?.findElementById?.(id)) c.recenterOnElement?.(id);
+    });
+    return b;
+  };
+  const arrow = document.createElement('span');
+  arrow.style.cssText = 'color:#8a8a82;font-size:11px;flex-shrink:0';
+  arrow.textContent = `—${relOf(edge)}→`;
+  row.appendChild(chip(edge.source));
+  row.appendChild(arrow);
+  row.appendChild(chip(edge.target));
+  return row;
+}
+
 function openInspector(edge: any): void {
   const body = document.createElement('div');
   body.style.cssText = 'display:grid;gap:9px';
   body.appendChild(inspectorHeader('Edge', clearSelection));
+  // WHAT this edge links — the first thing an inspector of a line should say.
+  // Tapping an endpoint pans the camera to it.
+  body.appendChild(endpointsRow(edge));
   const grid = document.createElement('div');
   grid.className = 'ctx-row';
   grid.innerHTML = `
