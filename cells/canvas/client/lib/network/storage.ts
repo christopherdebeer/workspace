@@ -130,30 +130,45 @@ function queueFact(key: string, value: unknown, extra?: { type?: string; tags?: 
   if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
 }
 
+/** Persistence status for the UI (see the palette's save dot): 'saving' when a
+ *  flush starts, then 'saved' or 'failed'. Failures used to be console-only —
+ *  invisible on mobile until a reload lost the work. */
+function saveState(state: 'saving' | 'saved' | 'failed'): void {
+  try { window.dispatchEvent(new CustomEvent('parc:save-state', { detail: { state } })); } catch { /* non-DOM */ }
+}
+
 async function flush(): Promise<void> {
   if (flushing) {
     if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
     return;
   }
   flushing = true;
+  saveState('saving');
+  let failed = false;
   try {
-    for (const [key, p] of [...pending]) {
-      pending.delete(key);
-      try {
-        await act('workspace.remember', {
-          key,
-          value: p.value,
-          via: 'canvas',
-          ...(p.type ? { type: p.type } : {}),
-          ...(p.tags ? { tags: p.tags } : {}),
-        });
-        lastWritten.set(key, JSON.stringify(p.value));
-      } catch (err) {
-        console.warn('[substrate] write failed', key, err);
+    // Concurrent writes — the serial loop held the queue for the SUM of
+    // round-trips (a 20-fact save on flaky mobile took tens of seconds).
+    const batch = [...pending];
+    pending.clear();
+    const results = await Promise.allSettled(batch.map(async ([key, p]) => {
+      await act('workspace.remember', {
+        key,
+        value: p.value,
+        via: 'canvas',
+        ...(p.type ? { type: p.type } : {}),
+        ...(p.tags ? { tags: p.tags } : {}),
+      });
+      lastWritten.set(key, JSON.stringify(p.value));
+    }));
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        failed = true;
+        console.warn('[substrate] write failed', batch[i][0], r.reason);
       }
-    }
+    });
   } finally {
     flushing = false;
+    saveState(failed ? 'failed' : 'saved');
   }
 }
 
@@ -533,6 +548,80 @@ function reportLoadFailure(stage: string, cid: string, err: unknown): void {
   if (typeof report === 'function') report(msg);
 }
 
+/** ONE edge assembly for the load path AND the live-sync rebuild — the two
+ *  inline copies drifted twice (decoration-retire behavior; the authored-only
+ *  gate had to be written in both). Decorations parse/migrate and register in
+ *  the write bookkeeping; substrate links seed the dedupe set (and project as
+ *  bare edges only under ?links=1); the fixpoint prune drops edges whose
+ *  endpoints (a present element, or a LABELED surviving edge) are gone, and
+ *  retires dropped decorations so they never return. */
+function assembleBoardEdges(
+  cid: string,
+  decoEntries: Array<{ key: string; value: any }>,
+  links: LinkEdge[],
+  presentKeys: Set<string>,
+  elIds: Set<string>,
+): any[] {
+  const edges: any[] = [];
+  for (const e of decoEntries) {
+    lastWritten.set(e.key, JSON.stringify(e.value));
+    const edge = e.value as Record<string, unknown> | null;
+    if (!edge || typeof edge.id !== 'string') continue;
+    // Migration: a decoration authored before the rel/label split has only
+    // `label` (which WAS the rel). Seed `rel` from it once.
+    if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
+    edges.push(edge);
+    if (edge.source && edge.target) {
+      const rel = edgeRel(edge);
+      lastEdges.set(edge.id, { source: edge.source as string, target: edge.target as string, rel, decorated: true });
+      linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
+    }
+  }
+  // Substrate links among present elements: dedupe-set always; projection
+  // only under ?links=1. Hidden links must NOT enter lastEdges — a lastEdges
+  // entry with no live edge makes the next save sweep UNLINK it.
+  const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
+  for (const l of links) {
+    if (!presentKeys.has(l.from) || !presentKeys.has(l.to)) continue;
+    const s = idOfKey(l.from);
+    const t = idOfKey(l.to);
+    if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
+    linkedEdges.add(`${s}|${l.rel}|${t}`);
+    if (!SHOW_LINK_EDGES) continue;
+    const id = `lnk:${l.from}|${l.rel}|${l.to}`;
+    edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
+    lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
+  }
+  // Edge hygiene to a fixpoint: an endpoint may be an element, or another
+  // edge — but only a LABELED edge renders an anchor node.
+  let valid: any[] = edges;
+  const dropped: any[] = [];
+  let pruned = true;
+  while (pruned) {
+    pruned = false;
+    const labeled = new Map(valid.map((e: any) => [e.id, !!(e.label && String(e.label).trim())]));
+    valid = valid.filter((e: any) => {
+      const ok = (x: unknown): boolean => typeof x === 'string' && (elIds.has(x) || labeled.get(x) === true);
+      const keep = ok(e.source) && ok(e.target);
+      if (!keep) {
+        dropped.push(e);
+        pruned = true;
+      }
+      return keep;
+    });
+  }
+  for (const e of dropped) {
+    lastEdges.delete(e.id);
+    if (!String(e.id).startsWith('lnk:')) {
+      const dk = `_canvas/${cid}/edge:${e.id}`;
+      lastWritten.delete(dk);
+      if (!readonlyBoard) act('workspace.supersede', { key: dk }).catch(() => undefined);
+    }
+  }
+  if (dropped.length) console.warn('[substrate] retired stale edges', dropped.map((e: any) => e.id));
+  return valid;
+}
+
 export async function loadInitialCanvas(defaultState: any, _paramToken?: string | null): Promise<any> {
   // Fresh board scope: whatever board this page was on before (hydrate boot,
   // drill navigation), its dedup/write bookkeeping must not leak into this one.
@@ -637,85 +726,22 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
     const prefix = `_canvas/${cid}/`;
     const placements = new Map<string, Record<string, unknown>>();
-    const edges: any[] = [];
+    const edgeEntries: Array<{ key: string; value: any }> = [];
     for (const e of deco.entries ?? []) {
-      lastWritten.set(e.key, JSON.stringify(e.value));
       const sub = e.key.slice(prefix.length);
-      if (sub.startsWith('edge:')) {
-        const edge = e.value as Record<string, unknown>;
-        // Migration: a decoration authored before the rel/label split has only
-        // `label` (which WAS the rel). Seed `rel` from it once, so it keeps its
-        // relation while a future label edit can diverge without rewriting it.
-        if (edge && edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
-        edges.push(edge);
-        if (edge && typeof edge.id === 'string' && edge.source && edge.target) {
-          const rel = edgeRel(edge);
-          lastEdges.set(edge.id, { source: edge.source as string, target: edge.target as string, rel, decorated: true });
-          linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
-        }
-      } else placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
+      if (sub.startsWith('edge:')) edgeEntries.push(e);
+      else {
+        lastWritten.set(e.key, JSON.stringify(e.value));
+        placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
+      }
     }
 
     // Reserved prefixes are the board's OWN data (placements, vocabulary,
     // type decls) — never board members, whatever the membership query says.
     els.entries = (els.entries ?? []).filter((e) => !e.key.startsWith('_'));
     const presentIds = new Set(els.entries.map((e) => e.key));
-
-    // Substrate links among this board's elements: by default they only seed
-    // the dedupe set (so drawing an edge that already exists as a link doesn't
-    // re-link) — they are NOT shown. With ?links=1 they project as bare edges;
-    // decoration edges (style/label edits, edge-to-edge) merge by signature.
-    // NOTE the asymmetry when hidden: linkedEdges gets the signature but
-    // lastEdges must NOT — a lastEdges entry whose edge isn't in canvasState
-    // would make the next save sweep UNLINK every hidden link on the board.
-    const decorated = new Set(edges.map((e) => `${e.source}|${edgeRel(e)}|${e.target}`));
-    for (const l of links) {
-      if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
-      const source = idOfKey(l.from);
-      const target = idOfKey(l.to);
-      if (decorated.has(`${source}|${l.rel}|${target}`)) continue;
-      linkedEdges.add(`${source}|${l.rel}|${target}`);
-      if (!SHOW_LINK_EDGES) continue;
-      const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-      // A bare reference: `rel` IS the type; `label` defaults to showing it (so
-      // display is unchanged) until a human gives it a distinct annotation.
-      edges.push({ id, source, target, rel: l.rel, label: l.rel });
-      lastEdges.set(id, { source, target, rel: l.rel, decorated: false });
-    }
-
-    // Edge hygiene: an edge whose endpoint is gone breaks the renderer (and
-    // lies about the graph). Keep edges whose endpoints are present elements
-    // or other surviving edges (edge-to-edge), to a fixpoint; self-heal stale
-    // decorations by retiring them so they never return.
-    const elIds = new Set([...presentIds].map((k) => (k.startsWith('el:') ? k.slice(3) : k)));
-    let validEdges: any[] = edges.filter((e: any) => e && typeof e.id === 'string');
-    const droppedEdges: any[] = [];
-    let pruned = true;
-    while (pruned) {
-      pruned = false;
-      // An endpoint may be an element, or another edge — but only a LABELED
-      // edge renders an anchor node; an unlabeled target crashes the renderer
-      // and means nothing visually.
-      const labeled = new Map(validEdges.map((e: any) => [e.id, !!(e.label && String(e.label).trim())]));
-      validEdges = validEdges.filter((e: any) => {
-        const ok = (x: unknown): boolean => typeof x === 'string' && (elIds.has(x) || labeled.get(x) === true);
-        const keep = ok(e.source) && ok(e.target);
-        if (!keep) {
-          droppedEdges.push(e);
-          pruned = true;
-        }
-        return keep;
-      });
-    }
-    for (const e of droppedEdges) {
-      lastEdges.delete(e.id);
-      if (!String(e.id).startsWith('lnk:')) {
-        const dk = `_canvas/${cid}/edge:${e.id}`;
-        lastWritten.delete(dk);
-        if (!readonlyBoard) act('workspace.supersede', { key: dk }).catch(() => undefined);
-      }
-    }
-    if (droppedEdges.length) console.warn('[substrate] retired stale edges', droppedEdges.map((e: any) => e.id));
+    const elIds = new Set([...presentIds].map(idOfKey));
+    const validEdges = assembleBoardEdges(cid, edgeEntries, links, presentIds, elIds);
 
     // Assemble elements; record stored meta + salience for the seams.
     const placed: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
@@ -904,7 +930,11 @@ async function fetchFact(key: string): Promise<{ key: string; value: any; _meta:
     includeSuperseded: true,
     limit: 5,
   });
-  return (res.entries ?? []).find((e) => e.key === key) ?? null;
+  // Revision order isn't asserted by the query: prefer the LIVE revision, and
+  // only report superseded when no live one exists (else live-sync could act
+  // on a stale copy — even deleting a live element).
+  const hits = (res.entries ?? []).filter((e) => e.key === key);
+  return hits.find((e) => !e._meta?.superseded) ?? hits[0] ?? null;
 }
 
 function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
@@ -982,7 +1012,7 @@ function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: 
 }
 
 async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
-  const presentIds = new Set(cc.canvasState.elements.map((e: any) => factKeyOf(e)));
+  const presentIds = new Set<string>(cc.canvasState.elements.map((e: any) => factKeyOf(e)));
   const deco = await read<{ entries: Array<{ key: string; value: any }> }>('workspace.query', { prefix: `_canvas/${cid}/edge:` });
   let links: LinkEdge[] = [];
   try {
@@ -990,45 +1020,23 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   } catch { /* links unavailable */ }
   lastEdges.clear();
   linkedEdges.clear();
-  const edges: any[] = [];
-  for (const e of deco.entries ?? []) {
-    const edge = e.value;
-    lastWritten.set(e.key, JSON.stringify(e.value));
-    if (!edge || typeof edge.id !== 'string') continue;
-    if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge); // migrate
-    edges.push(edge);
-    const rel = edgeRel(edge);
-    lastEdges.set(edge.id, { source: edge.source, target: edge.target, rel, decorated: true });
-    linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
+  const elIds = new Set<string>(cc.canvasState.elements.map((e: any) => e.id));
+  const rebuilt = assembleBoardEdges(cid, deco.entries ?? [], links, presentIds, elIds);
+  // Session-local edges (expandFact's neighbourhood projection) aren't
+  // substrate decorations — a remote link event must not silently drop them.
+  // Only when projection is OFF: under ?links=1 the rebuild already carries
+  // every live link, and preserving extras would defeat remote unlinks.
+  const rebuiltIds = new Set(rebuilt.map((e: any) => e.id));
+  for (const e of SHOW_LINK_EDGES ? [] : (cc.canvasState.edges ?? [])) {
+    if (String(e.id).startsWith('lnk:') && !rebuiltIds.has(e.id)) {
+      const ok = (x: unknown): boolean => typeof x === 'string' && elIds.has(x);
+      if (ok(e.source) && ok(e.target)) {
+        rebuilt.push(e);
+        lastEdges.set(e.id, { source: e.source, target: e.target, rel: edgeRel(e), decorated: false });
+      }
+    }
   }
-  // Same authored-only rule as the load path: hidden links seed the dedupe
-  // set but never lastEdges (a save sweep would unlink them — see load path).
-  const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
-  for (const l of links) {
-    if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
-    const s = idOfKey(l.from);
-    const t = idOfKey(l.to);
-    if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
-    linkedEdges.add(`${s}|${l.rel}|${t}`);
-    if (!SHOW_LINK_EDGES) continue;
-    const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-    edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
-    lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
-  }
-  const elIds = new Set(cc.canvasState.elements.map((e: any) => e.id));
-  let valid = edges;
-  let pruned = true;
-  while (pruned) {
-    pruned = false;
-    const labeled = new Map(valid.map((e: any) => [e.id, !!(e.label && String(e.label).trim())]));
-    valid = valid.filter((e: any) => {
-      const ok = (x: unknown): boolean => typeof x === 'string' && (elIds.has(x) || labeled.get(x) === true);
-      const keep = ok(e.source) && ok(e.target);
-      if (!keep) pruned = true;
-      return keep;
-    });
-  }
-  cc.canvasState.edges = valid;
+  cc.canvasState.edges = rebuilt;
 }
 
 let warmUntil = 0;
