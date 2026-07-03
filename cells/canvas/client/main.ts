@@ -840,7 +840,11 @@ class CanvasController {
             : isFaint(edge) ? "rgba(150,140,120,.28)"
             : (edge.style?.color || "#ccc");
 
-        // Iterate over each edge in the canvas state.
+        // Endpoint lookups go through a per-PASS map — two linear
+        // findElementById scans per edge was O(E·V) per pass (346×127 on the
+        // live board, every drag frame). Pass-scoped so it can't go stale
+        // under the gesture paths, which keep the linear lookup.
+        const elementsById = new Map(this.canvasState.elements.map(el => [el.id, el]));
         this.edgeHitNodesMap = this.edgeHitNodesMap || {};
         let createdEdgeNodes = false;
         this.canvasState.edges.forEach(edge => {
@@ -887,23 +891,23 @@ class CanvasController {
                 if (edge.style?.dash) line.setAttribute("stroke-dasharray", String(edge.style.dash)); else line.removeAttribute("stroke-dasharray");
             }
 
-            this.updateEdgePosition(edge, line)
+            this.updateEdgePosition(edge, line, elementsById)
         });
 
-        // Remove any orphaned SVG lines.
+        // Remove any orphaned SVG lines/labels (live-id Set: the find-per-id
+        // sweep was O(edges²)).
+        const liveEdgeIds = new Set(this.canvasState.edges.map(e => e.id));
         Object.keys(this.edgeNodesMap).forEach(edgeId => {
-            if (!this.canvasState.edges.find(e => e.id === edgeId)) {
+            if (!liveEdgeIds.has(edgeId)) {
                 this.edgeNodesMap[edgeId].remove();
                 delete this.edgeNodesMap[edgeId];
                 this.edgeHitNodesMap?.[edgeId]?.remove();
                 if (this.edgeHitNodesMap) delete this.edgeHitNodesMap[edgeId];
             }
         });
-        // Remove orphaned labels.
         if (this.edgeLabelNodesMap) {
             Object.keys(this.edgeLabelNodesMap).forEach(edgeId => {
-                if (!this.canvasState.edges.find(e => e.id === edgeId)) {
-                    console.log(`[DEBUG] Deleting orphaned edge label`, edgeId, this.edgeLabelNodesMap[edgeId])
+                if (!liveEdgeIds.has(edgeId)) {
                     this.edgeLabelNodesMap[edgeId].remove();
                     delete this.edgeLabelNodesMap[edgeId];
                 }
@@ -912,10 +916,12 @@ class CanvasController {
         if (createdEdgeNodes) this.scheduleCulling(true); // new lines need their on/off-screen state
     }
 
-    updateEdgePosition(edge: Edge, line: SVGLineElement) {
+    updateEdgePosition(edge: Edge, line: SVGLineElement, elementsById?: Map<string, CanvasElement>) {
         if (!line) return;
-        const sourceEl = this.findElementById(edge.source);
-        const targetEl = this.findElementById(edge.target);
+        const lookup = (id: string): CanvasElement | undefined =>
+            elementsById ? elementsById.get(id) : this.findElementById(id);
+        const sourceEl = lookup(edge.source);
+        const targetEl = lookup(edge.target);
         const sourceEdge = sourceEl ? null : this.findEdgeElementById(edge.source);
         const targetEdge = targetEl ? null : this.findEdgeElementById(edge.target);
 
@@ -987,8 +993,23 @@ class CanvasController {
             }
 
         } else {
-            this.canvasState.edges = this.canvasState.edges.filter(ed => ed.id !== edge.id);
-            line.remove();
+            // An endpoint is (possibly transiently) missing — element still
+            // mounting, or a remote merge in flight. HIDE the edge, never
+            // delete it from state: a draw pass mutating the model turned
+            // every transient miss into a permanently dropped edge. Load/sync
+            // hygiene owns real removals; the next pass re-shows it.
+            line.setAttribute('visibility', 'hidden');
+            const hit = this.edgeHitNodesMap?.[edge.id];
+            if (hit) hit.setAttribute('visibility', 'hidden');
+            const label = this.edgeLabelNodesMap?.[edge.id];
+            if (label) label.setAttribute('visibility', 'hidden');
+            return;
+        }
+        // Endpoints resolved — clear any transient-miss hiding.
+        if (line.getAttribute('visibility') === 'hidden') {
+            line.removeAttribute('visibility');
+            this.edgeHitNodesMap?.[edge.id]?.removeAttribute('visibility');
+            this.edgeLabelNodesMap?.[edge.id]?.removeAttribute('visibility');
         }
     }
 
@@ -1539,7 +1560,6 @@ ${script.getAttribute('src')}`);
             node.style.zIndex = String(zIndex);
             node.style.transform = `rotate(${rotation}deg) translate(calc(0px - var(--padding)), calc(0px - var(--padding)))`;
         }
-        const edges = this.findEdgesByElementId(el.id) || [];
         this.requestEdgeUpdate();
     }
     // ------------------------------------------------------------------
