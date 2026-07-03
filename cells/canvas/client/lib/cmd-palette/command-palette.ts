@@ -470,11 +470,13 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   render();
 
   // Install keyboard shortcuts
-  installKeyboardShortcuts(controller);
+  const uninstallShortcuts = installKeyboardShortcuts(controller);
 
   // Return cleanup function
   return () => {
+    uninstallShortcuts();
     window.removeEventListener('keydown', globalKeydownHandler);
+    clearTimeout(factTimer);
     root.remove();
   };
 }

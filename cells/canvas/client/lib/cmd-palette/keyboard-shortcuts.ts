@@ -6,28 +6,37 @@ interface MenuItem {
   shortcut?: string;
   action?: (controller: any, input?: any) => void | Promise<void> | any;
   children?: MenuItem[];
+  needsInput?: string;
+  visible?: (controller: any) => boolean;
+  enabled?: (controller: any) => boolean;
 }
 
 /**
- * Maps keyboard shortcuts to their corresponding actions
+ * Maps keyboard shortcuts to their menu items (guards evaluated at dispatch).
+ * needsInput commands are excluded — firing them without their input argument
+ * ran the action with `undefined`. Collisions are loud: last-registered-wins
+ * silently hid that ⌘V/⌘E/⌘G each meant two different commands.
  * @param controller - The canvas controller
- * @returns A map of shortcut strings to action functions
  */
-function buildShortcutMap(controller: any): Map<string, (controller: any, input?: any) => void | Promise<void> | any> {
-  const shortcutMap = new Map<string, (controller: any, input?: any) => void | Promise<void> | any>();
+function buildShortcutMap(controller: any): Map<string, MenuItem> {
+  const shortcutMap = new Map<string, MenuItem>();
 
   function walkItems(items: MenuItem[]): void {
     items.forEach((item: MenuItem) => {
-      if (item.shortcut && item.action) {
-        shortcutMap.set(item.shortcut, item.action);
+      if (item.shortcut && item.action && !item.needsInput) {
+        if (shortcutMap.has(item.shortcut)) {
+          console.warn('[shortcuts] collision — keeping first registration:', item.shortcut);
+        } else {
+          shortcutMap.set(item.shortcut, item);
+        }
       }
-      
+
       if (item.children) {
         walkItems(item.children);
       }
     });
   }
-  
+
   walkItems(buildRootItems(controller));
   return shortcutMap;
 }
@@ -62,28 +71,37 @@ function normalizeKeyboardEvent(e: KeyboardEvent): string {
 }
 
 /**
- * Installs keyboard shortcuts for the application
+ * Installs keyboard shortcuts for the application. Returns an uninstaller —
+ * a drill swaps controllers, and a leaked listener means every shortcut fires
+ * once per drill, against detached controllers.
  * @param controller - The canvas controller
  */
-export function installKeyboardShortcuts(controller: any): void {
+export function installKeyboardShortcuts(controller: any): () => void {
   const shortcutMap = buildShortcutMap(controller);
-  
-  window.addEventListener('keydown', (e: KeyboardEvent) => {
-    // Don't trigger shortcuts when typing in input fields
+
+  const onKeydown = (e: KeyboardEvent): void => {
+    // Don't trigger shortcuts while typing (inputs, textareas, CodeMirror's
+    // contenteditable surface).
     const target = e.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
       return;
     }
-    
+
     const shortcut = normalizeKeyboardEvent(e);
-    const action = shortcutMap.get(shortcut);
-    
-    if (action) {
-      e.preventDefault();
-      action(controller);
-    }
-  });
-  
+    const entry = shortcutMap.get(shortcut);
+    if (!entry) return;
+    // Guards are live state — evaluate at DISPATCH, not at map build:
+    // a shortcut must not fire a command its menu entry would hide/disable.
+    try {
+      if (entry.visible && !entry.visible(controller)) return;
+      if (entry.enabled && !entry.enabled(controller)) return;
+    } catch { return; }
+    e.preventDefault();
+    entry.action!(controller);
+  };
+  window.addEventListener('keydown', onKeydown);
+
   // Log available shortcuts for debugging
   console.log('Registered keyboard shortcuts:', [...shortcutMap.keys()]);
+  return () => window.removeEventListener('keydown', onKeydown);
 }

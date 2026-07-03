@@ -5,7 +5,7 @@ import { createGestureHelpers } from './lib/gesture-machine/gesture-helpers.ts';
 import { buildContextMenu } from './lib/context-menu';
 import { installCommandPalette } from './lib/cmd-palette/command-palette.ts';
 import { generateContent, regenerateImage } from './lib/network/generation.ts';
-import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/network/storage.ts';
+import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly, beginBoardPriming } from './lib/network/storage.ts';
 import { showModal, closeModal } from './lib/modal.ts';
 import { enterFull, exitFull } from './lib/network/inspectorPanel.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
@@ -246,6 +246,14 @@ class CanvasController {
     }
 
     detach() {
+        // Tear down BEHAVIOR, not just DOM: without these, every drill left the
+        // old pointer adapter + FSM alive (two machines per event, the detached
+        // one still mutating state and writing under the wrong board) and
+        // stacked a second command palette + shortcut listeners.
+        try { this.uninstallAdapter?.(); } catch { /* already gone */ }
+        try { this.uninstallCommandPalette?.(); } catch { /* already gone */ }
+        try { this.fsmService?.stop?.(); } catch { /* already stopped */ }
+        clearTimeout(this._zoomVarTimer);
 
         // Remove context menu event listener
         if (this.contextMenuPointerDownHandler) {
@@ -1706,6 +1714,11 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
 
         registerSubstrateTypes(); // built-in element renderers (text/markdown/html/img/…)
         clearSsrPaint();
+        // The controller's first render funnels every element through the write
+        // queue; with the dedup maps still unseeded that used to persist a full
+        // board rewrite on EVERY hydrated open. Gate writes until the background
+        // load below seeds the maps and lifts it.
+        beginBoardPriming();
         const cc = new CanvasController({ canvasId, elements: h.elements, edges: [], versionHistory: [] } as any);
         // Prefer the framed REGION over the server's pre-baked camera: the SSR cam
         // was fit to a fixed 1200×800, so re-fitting the bbox to the real device

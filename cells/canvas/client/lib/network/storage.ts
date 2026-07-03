@@ -28,6 +28,31 @@ let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 const DEBOUNCE_SAVE_DELAY = 800;
 const FLUSH_DELAY = 400;
 
+/** While a board load is priming (hydrate boot, drill navigation), the render
+ *  path must not persist: at that moment `lastWritten` is empty, so the very
+ *  first render would queue a write for EVERY element — a full-board revision
+ *  churn on each open (and, on a drill, writes under the wrong board).
+ *  loadInitialCanvas seeds the dedup maps and then lifts the gate. */
+let boardPriming = false;
+/** Hydrate boot calls this BEFORE constructing the controller. */
+export function beginBoardPriming(): void { boardPriming = true; }
+
+/** One board per page lifetime is over (drill-in/up swap controllers):
+ *  every per-board map must reset on load, or the save sweep treats the
+ *  PREVIOUS board's keys as "mine, removed" and supersedes its facts —
+ *  cross-board data loss. `pending` is deliberately kept: in-flight writes
+ *  from the previous board still belong to it and must land. */
+function resetBoardScope(): void {
+  lastWritten.clear();
+  factMeta.clear();
+  lastEdges.clear();
+  linkedEdges.clear();
+  synthOrigin.clear();
+  lastPos.clear();
+  salienceByKey.clear();
+  readonlyBoard = false;
+}
+
 /** fact key → JSON last written, so repeat saves only touch what changed. */
 const lastWritten = new Map<string, string>();
 const pending = new Map<string, { value: unknown; type?: string; tags?: string[] }>();
@@ -99,6 +124,7 @@ function splitElement(el: Record<string, unknown>): { domain: Record<string, unk
 
 function queueFact(key: string, value: unknown, extra?: { type?: string; tags?: string[] }): void {
   if (readonlyBoard) return; // a non-interactive view never writes
+  if (boardPriming) return; // board still loading — dedup maps not seeded yet
   if (lastWritten.get(key) === JSON.stringify(value)) return;
   pending.set(key, { value, ...extra });
   if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
@@ -245,6 +271,7 @@ export function saveCanvas(canvasState: any): void {
 }
 
 async function _saveCanvas(canvasState: any): Promise<void> {
+  if (boardPriming) return; // never diff against unseeded maps
   saveCanvasLocalOnly(canvasState);
   const cid = canvasState.canvasId;
   const live = new Set<string>();
@@ -507,6 +534,10 @@ function reportLoadFailure(stage: string, cid: string, err: unknown): void {
 }
 
 export async function loadInitialCanvas(defaultState: any, _paramToken?: string | null): Promise<any> {
+  // Fresh board scope: whatever board this page was on before (hydrate boot,
+  // drill navigation), its dedup/write bookkeeping must not leak into this one.
+  boardPriming = true;
+  resetBoardScope();
   const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
   const viewId = params.get('view');
   const embed = params.get('embed') === '1';
@@ -516,6 +547,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   if (embed && !isAuthed()) {
     document.body.classList.add('embed-unauthed');
     readonlyBoard = true;
+    boardPriming = false;
     return defaultState;
   }
   // The board lives in the URL PATH (see lib/url.ts), and the kernel's OAuth
@@ -597,6 +629,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     if ((els.count ?? 0) === 0 && (deco.count ?? 0) === 0 && localCopy && !viewId) {
       const seeded = JSON.parse(localCopy);
       console.log('[substrate] seeding empty canvas from local copy');
+      boardPriming = false; // seeding IS the write — lift the gate first
       saveCanvas(seeded);
       startSalience(cid);
       return seeded;
@@ -840,6 +873,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
     });
     console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length, assembleMs: Math.round(nowMs() - tAsm) });
+    boardPriming = false; // dedup maps seeded — writes may flow
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
     // Make the swallowed failure visible (it was a silent console.error before),
@@ -849,6 +883,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     startSalience(cid);
     const fallback = localCopy ? JSON.parse(localCopy) : defaultState;
     console.warn(`[canvas] falling back to ${localCopy ? 'local cached copy' : 'EMPTY state'} after [${stage}] failure`);
+    boardPriming = false;
     return fallback;
   }
 }
@@ -1187,8 +1222,10 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
  * event, no banner), the NEXT boot surfaces the final record, so a crash
  * that leaves no trace still tells us what was growing.
  */
+let flightStarted = false;
 function startFlightRecorder(): void {
-  if (typeof window === 'undefined') return;
+  if (flightStarted || typeof window === 'undefined') return;
+  flightStarted = true; // one recorder per page — drills must not stack them
   const KEY = 'parc.canvas.flight';
   try {
     const prev = localStorage.getItem(KEY);
@@ -1255,7 +1292,10 @@ export function startLiveSync(cid: string): void {
   liveSyncStarted = true;
   const tick = async (): Promise<void> => {
     const cc = (window as { CC?: any }).CC;
-    if (cc && !document.hidden) {
+    // One poller per page, but boards change under it (drill navigation) —
+    // key every filter to the CURRENT board, not the closed-over first one.
+    const cid = cc?.canvasState?.canvasId ?? '';
+    if (cc && cid && !document.hidden) {
       try {
         if (liveCursor === 0) {
           liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 0, limit: 0 })).seq;
