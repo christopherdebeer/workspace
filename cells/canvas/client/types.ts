@@ -109,7 +109,14 @@ export interface FactSuggestion {
   searchText: string;
 }
 
-export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion;
+/** The "More from workspace…" paging row at the end of fact results. */
+export interface MoreSuggestion {
+  kind: 'more';
+  label: string;
+  searchText: string;
+}
+
+export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion | MoreSuggestion;
 
 export interface MenuItem {
   label: string | ((controller: CanvasController, config?: any) => string);

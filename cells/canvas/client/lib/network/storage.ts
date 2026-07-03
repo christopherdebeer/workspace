@@ -453,36 +453,47 @@ export async function focusFrame(frameId: string, elements: any[]): Promise<bool
 /* ── substrate search → add to board (item = fact × renderer × placement) ──── */
 
 export interface FactHit { key: string; title: string; icon: string; type: string | null }
+export interface FactSearchPage { hits: FactHit[]; nextCursor: string | null; total: number }
 
 // The board's own machinery + ephemera — never offer these as "add to canvas".
-const RESERVED_FACT = /^(_canvas\/|_views\/|_actions\/|_subscriptions\/|_groups\/|bkpk:|tending\/|machine-run\/|run\/)/;
+const RESERVED_FACT = /^(_canvas\/|_views\/|_actions\/|_subscriptions\/|_groups\/|bkpk:|tending\/|machine-run\/|run\/|_caps\/)/;
+// A cell's managed SUB-facts (machine rails, run claims, …): searching for
+// "tending machine" must surface machine/tending, not drown it under nine of
+// its own rails and run-claims — which is exactly what happened.
+const INTERNAL_FACT = /\/(run|rail|claim)\//;
 
-/** Search the slice for facts NOT already on this board, for the command palette
- *  (substring `contains` scan, salience-ranked). Excludes reserved/system keys
- *  and items already present. */
-export async function searchFacts(q: string, controller: any, limit = 8): Promise<FactHit[]> {
-  const query = q.trim();
-  if (query.length < 2) return [];
+/** Search the slice for facts NOT already on this board, for the command
+ *  palette. SEMANTIC + salience ranking (`query({text})`, ADR-0051 — not the
+ *  old substring scan), with a `type:<name>` token for structural filtering
+ *  ("type:machine tending") and a cursor so the palette can page. */
+export async function searchFacts(q: string, controller: any, limit = 8, cursor?: string | null): Promise<FactSearchPage> {
+  let query = q.trim();
+  let type: string | undefined;
+  query = query.replace(/\btype:([A-Za-z0-9_-]+)/g, (_m, t: string) => { type = t; return ''; }).trim();
+  if (!type && query.length < 2) return { hits: [], nextCursor: null, total: 0 };
   const onBoard = new Set<string>(
     (controller?.canvasState?.elements ?? []).map((el: any) => el._factKey ?? `el:${el.id}`),
   );
-  let entries: QueryEntry[] = [];
+  const input: Record<string, unknown> = { limit: limit + 12, shape: 'card' };
+  if (type) input.type = type;
+  if (query) input.text = query; // semantic, salience-blended ranking
+  if (cursor) input.cursor = cursor;
+  let r: { entries?: QueryEntry[]; nextCursor?: string; total?: number; types?: Record<string, { icon?: string; present?: { icon?: string } }> };
   try {
-    const r = await read<{ entries?: QueryEntry[] }>('workspace.query', { contains: query, limit: limit + 16 });
-    entries = r.entries ?? [];
-  } catch (e) { console.warn('[canvas] fact search failed', e); return []; }
+    r = await read('workspace.query', input);
+  } catch (e) { console.warn('[canvas] fact search failed', e); return { hits: [], nextCursor: null, total: 0 }; }
   const hits: FactHit[] = [];
-  for (const e of entries) {
+  for (const e of r.entries ?? []) {
     const key = e.key;
-    if (!key || onBoard.has(key) || RESERVED_FACT.test(key) || key.startsWith('_canvas/')) continue;
-    const type = e._meta?.type ?? null;
-    const td = factTypeDecls[type ?? ''];
+    if (!key || onBoard.has(key) || RESERVED_FACT.test(key) || INTERNAL_FACT.test(key) || key.startsWith('_canvas/')) continue;
+    const t = e._meta?.type ?? null;
+    const td = r.types?.[t ?? ''] ?? factTypeDecls[t ?? ''];
     let title = key;
     try { title = titleOf({ key, value: e.value, _meta: e._meta }) || key; } catch { /* fall back to key */ }
-    hits.push({ key, title, type, icon: td?.present?.icon ?? td?.icon ?? '•' });
+    hits.push({ key, title, type: t, icon: td?.present?.icon ?? td?.icon ?? '•' });
     if (hits.length >= limit) break;
   }
-  return hits;
+  return { hits, nextCursor: r.nextCursor ?? null, total: r.total ?? hits.length };
 }
 
 /** Add an existing substrate fact to THIS board: membership tag (clobber-safe —

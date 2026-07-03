@@ -142,12 +142,15 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     <div class="cmd-footer">
       <span class="presence"></span>
       <div class="desktop">
-        <span class="cmd-tip"><kbd>↑</kbd><kbd>↓</kbd> to navigate</span>
-        <span class="cmd-tip"><kbd>Enter</kbd> to select</span>
-        <span class="cmd-tip"><kbd>Esc</kbd> to dismiss</span>
+        <span class="cmd-tip"><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span class="cmd-tip"><kbd>Enter</kbd> select</span>
+        <span class="cmd-tip"><kbd>?</kbd> search workspace</span>
+        <span class="cmd-tip"><kbd>&gt;</kbd> commands only</span>
+        <span class="cmd-tip">type:name filters</span>
       </div>
       <div class="mobile">
-        
+        <span class="cmd-tip"><kbd>?</kbd> workspace</span>
+        <span class="cmd-tip">type:machine</span>
       </div>
     </div>
     `;
@@ -199,11 +202,25 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     $list.innerHTML = '';
     $recentLabel.style.display = showingRecent ? 'block' : 'none';
 
+    let prevKind: string | null = null;
     (mode === 'browse' ? filtered : []).forEach((it, i) => {
+      // Scope headers: say WHERE each hit lives (a command, an element already
+      // on this board, or a workspace fact the selection would ADD).
+      if (!showingRecent && it.kind !== 'more' && it.kind !== prevKind) {
+        prevKind = it.kind;
+        const h = document.createElement('li');
+        h.textContent = it.kind === 'command' ? 'Commands' : it.kind === 'element' ? 'On this board' : 'Workspace — select to add';
+        h.style.cssText = 'list-style:none;padding:7px 10px 2px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#a8a89e;pointer-events:none';
+        $list.appendChild(h);
+      }
       const li = document.createElement('li');
       li.className = 'suggestion' + (i === sel ? ' active' : '');
 
-      if (it.kind === 'command') {
+      if (it.kind === 'more') {
+        li.innerHTML = `
+          <span class="s-icon"><i class="fa-solid fa-ellipsis"></i></span>
+          <div class="cmd-content"><span class="crumb last-crumb" style="color:#2f6f4f">${esc(it.label)}</span></div>`;
+      } else if (it.kind === 'command') {
         let iconHtml = '';
         if (it.icon) {
           iconHtml = `<span class="s-icon"><i class="fa-solid ${it.icon}"></i></span>`;
@@ -331,6 +348,10 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   /* ── run ── */
   function run(item: SuggestionItem | undefined): void {
     if (!item) return;
+    if (item.kind === 'more') {
+      loadMoreFacts(); // page in the next batch; keep the query + list
+      return;
+    }
     if (item.kind === 'command') {
       // Add to recent commands
       addToRecent(item);
@@ -394,33 +415,74 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     }
   });
   
-  // Debounced substrate search: facts NOT on this board, appended below the
-  // command/element matches with an "Add to board" affordance. Async, so it
-  // lands a beat after the synchronous matches and only if the query still holds.
+  /* ── scoped search ──────────────────────────────────────────────────────
+   * Plain text searches EVERYTHING (commands + this board + workspace).
+   * `>` prefixes a commands/board-only query; `?` searches the WORKSPACE only
+   * (semantic, salience-ranked — `type:machine` filters by declared type).
+   * The footer advertises the prefixes; sections label each scope in the
+   * results, so it's always clear WHERE a hit lives. */
+  type Scope = 'all' | 'local' | 'facts';
+  const parseScope = (raw: string): { scope: Scope; q: string } =>
+    raw.startsWith('>') ? { scope: 'local', q: raw.slice(1).trim() }
+    : raw.startsWith('?') ? { scope: 'facts', q: raw.slice(1).trim() }
+    : { scope: 'all', q: raw };
+  let lastScope: Scope = 'all';
+  let factCursor: string | null = null;
+  let factTotal = 0;
+  let lastFactQuery = '';
+
+  const moreRow = (): SuggestionItem =>
+    ({ kind: 'more', label: `More from workspace… (${factTotal} match${factTotal === 1 ? '' : 'es'} total)`, searchText: '' });
+
+  const applyFactHits = (page: { hits: { key: string; title: string; icon: string; type: string | null }[]; nextCursor: string | null; total: number }, append: boolean): void => {
+    const base = filtered.filter((i) => i.kind !== 'more' && (append || i.kind !== 'fact'));
+    const have = new Set(base.filter((i) => i.kind === 'fact').map((i) => (i as FactSuggestion).key));
+    const add: FactSuggestion[] = page.hits
+      .filter((h) => !have.has(h.key))
+      .map((h) => ({ kind: 'fact', key: h.key, label: h.title, icon: h.icon, type: h.type ?? 'fact', searchText: '' }));
+    factCursor = page.nextCursor;
+    factTotal = page.total;
+    filtered = [...base, ...add];
+    if (factCursor && page.hits.length) filtered.push(moreRow());
+    render();
+  };
+
+  // Debounced substrate search: facts NOT on this board, in their own
+  // "Workspace" section with an "Add to board" affordance. Async, so it lands
+  // a beat after the synchronous matches and only if the query still holds.
   let factTimer: ReturnType<typeof setTimeout> | undefined;
-  const scheduleFactSearch = (q: string): void => {
+  const scheduleFactSearch = (q: string, scope: Scope): void => {
     clearTimeout(factTimer);
-    if (q.length < 2) return;
+    if (scope === 'local') return;
+    if (q.length < 2 && !/\btype:/.test(q)) return;
+    lastFactQuery = q;
+    factCursor = null;
     factTimer = setTimeout(() => {
-      void searchFacts(q, controller, 6).then((hits) => {
-        if ($input.value.trim() !== q) return; // stale — the query moved on
-        const have = new Set(filtered.filter((f) => f.kind === 'fact').map((f) => (f as FactSuggestion).key));
-        const add: FactSuggestion[] = hits
-          .filter((h) => !have.has(h.key))
-          .map((h) => ({ kind: 'fact', key: h.key, label: h.title, icon: h.icon, type: h.type ?? 'fact', searchText: '' }));
-        if (add.length) { filtered = [...filtered, ...add]; render(); }
+      void searchFacts(q, controller, scope === 'facts' ? 12 : 6).then((page) => {
+        if (parseScope($input.value.trim()).q !== q) return; // stale — the query moved on
+        applyFactHits(page, false);
       });
     }, 250);
   };
 
+  const loadMoreFacts = (): void => {
+    if (!factCursor) return;
+    void searchFacts(lastFactQuery, controller, 12, factCursor).then((page) => {
+      if (parseScope($input.value.trim()).q !== lastFactQuery) return;
+      applyFactHits(page, true);
+    });
+  };
+
   $input.addEventListener('input', (e: Event) => {
     const target = e.target as HTMLInputElement;
-    const q = target.value.trim();
-    root.classList.toggle('empty', q === '');
-    filtered = computeFiltered(q);
+    const raw = target.value.trim();
+    const { scope, q } = parseScope(raw);
+    lastScope = scope;
+    root.classList.toggle('empty', raw === '');
+    filtered = scope === 'facts' ? [] : computeFiltered(q);
     sel = -1;
     render();
-    scheduleFactSearch(q);
+    scheduleFactSearch(q, scope);
   });
 
   $input.addEventListener('blur', () => {
@@ -458,6 +520,11 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
 
       if (sel >= 0) {
         run(filtered[sel]);
+      }
+      else if (val && lastScope !== 'all') {
+        // A scoped query's Enter takes the top hit — free-text side effects
+        // (AI edit / create note) belong to the unscoped scratchpad only.
+        if (filtered.length) run(filtered[0]);
       }
       else if (val) {
         const selId = controller.selectedElementId;
