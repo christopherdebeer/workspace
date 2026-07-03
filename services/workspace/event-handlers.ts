@@ -24,22 +24,32 @@ import {
   type SubscriptionDefinition,
 } from './subscriptions';
 import { GROUPS_NS, PUBLIC_NS } from './grants';
-import { type DepsBuilder } from './shared';
+import { type DepsBuilder, typeRulesFor } from './shared';
 import { TOOL_DESCRIPTORS } from './descriptors';
 
 /** A tending pass distilled into a written report — the audit fact. */
 export interface TendReport {
   at: string;
   scope: string;
+  /** UNCAPPED totals — real counts, so consecutive audits show trend. */
   stale: number;
   unlinked: number;
   dangling: number;
+  /** Old facts recognised as settled (earned standing / authored structure) and
+   *  deliberately not flagged — age alone is not rot. */
+  settled: number;
   /** Ratification candidates: inferred `similarTo` pairs no authored edge connects (ADR-0032). */
   suggestions: number;
   staleSample: Array<{ key: string; updatedAt: string; type: string | null }>;
   unlinkedSample: string[];
   danglingSample: Array<{ from: string; rel: string; to: string; reason: string }>;
   suggestionsSample: Array<{ from: string; to: string }>;
+  /** The prior audit's `at`, when one existed — the delta's baseline. */
+  previousAt?: string | null;
+  /** Count movement since the prior audit. A zero delta over a non-zero backlog
+   *  is CHRONIC debt — the signal an Assess node needs to stop calling a frozen
+   *  backlog "healthy". */
+  delta?: { stale: number; unlinked: number; dangling: number; suggestions: number } | null;
 }
 
 /**
@@ -54,23 +64,38 @@ export async function runTend(
   ctx: ServiceContext,
   via: string,
   writer: { user?: string; scopes: string[] },
-  store?: Pick<StateStore, 'listEdges'>,
+  store?: Pick<StateStore, 'listEdges' | 'get'>,
 ): Promise<TendReport> {
-  const att = await state.attention(scope, {});
+  const att = await state.attention(scope, { typeRules: await typeRulesFor(ctx) });
   // ADR-0032: surface ratification candidates as part of standing health — the
   // inferred `similarTo` pairs a person/grant might want to promote to a typed edge.
   const candidates = store ? suggestionCandidates(await store.listEdges(scope)) : [];
+  // The prior audit is the trend baseline; read it store-side so the comparison
+  // itself doesn't register as attention on the fact.
+  const prevRec = store?.get ? await store.get(scope, 'tending/latest') : null;
+  const prev = prevRec && !prevRec.superseded ? (prevRec.value as Partial<TendReport>) : null;
   const report: TendReport = {
     at: new Date().toISOString(),
     scope,
-    stale: att.stale.length,
-    unlinked: att.unlinked.length,
-    dangling: att.dangling.length,
+    stale: att.staleTotal,
+    unlinked: att.unlinkedTotal,
+    dangling: att.danglingTotal,
+    settled: att.settled,
     suggestions: candidates.length,
     staleSample: att.stale.slice(0, 5),
     unlinkedSample: att.unlinked.slice(0, 5),
     danglingSample: att.dangling.slice(0, 3),
     suggestionsSample: candidates.slice(0, 5).map((c) => ({ from: c.from, to: c.to })),
+    previousAt: typeof prev?.at === 'string' ? prev.at : null,
+    delta:
+      prev && typeof prev.stale === 'number'
+        ? {
+            stale: att.staleTotal - prev.stale,
+            unlinked: att.unlinkedTotal - (prev.unlinked ?? 0),
+            dangling: att.danglingTotal - (prev.dangling ?? 0),
+            suggestions: candidates.length - (prev.suggestions ?? 0),
+          }
+        : null,
   };
   const entry = await state.put(
     { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },

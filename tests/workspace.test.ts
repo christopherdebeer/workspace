@@ -456,16 +456,21 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
   it('attention ignores `_` system namespaces unless includeSystem', async () => {
     await cmds.remember({ key: '_canvas/board/el:1', value: { x: 0 } }, alice());
     await cmds.link({ from: '_canvas/board/el:1', rel: 'derived-from', to: '_canvas/board/el:gone' }, alice());
+    // A lonely system fact: no links, no history — stale/unlinked when system is surfaced.
+    await cmds.remember({ key: '_canvas/board/el:lonely', value: { x: 1 } }, alice());
 
     // staleMs -1: staleness is strictly age > threshold, and a fact written in
     // this same millisecond has age 0 — 0 would race the clock on fast runners.
     const att = await cmds.attention({ staleMs: -1 }, alice());
-    expect(att.stale.map((s) => s.key)).not.toContain('_canvas/board/el:1');
-    expect(att.unlinked).not.toContain('_canvas/board/el:1');
+    expect(att.stale.map((s) => s.key)).not.toContain('_canvas/board/el:lonely');
+    expect(att.unlinked).not.toContain('_canvas/board/el:lonely');
     expect(att.dangling.some((d) => d.from.startsWith('_canvas/'))).toBe(false);
 
     const withSystem = await cmds.attention({ staleMs: -1, includeSystem: true }, alice());
-    expect(withSystem.stale.map((s) => s.key)).toContain('_canvas/board/el:1');
+    expect(withSystem.stale.map((s) => s.key)).toContain('_canvas/board/el:lonely');
+    // el:1 is authored-linked → settled, not stale — but its edge to a missing
+    // endpoint still dangles.
+    expect(withSystem.stale.map((s) => s.key)).not.toContain('_canvas/board/el:1');
     expect(withSystem.dangling.some((d) => d.to === '_canvas/board/el:gone' && d.reason.includes('missing'))).toBe(true);
   });
 

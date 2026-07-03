@@ -485,7 +485,12 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
     async attention(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
-      return state.attention(scope, { staleMs: input?.staleMs, limit: input?.limit, includeSystem: input?.includeSystem });
+      return state.attention(scope, {
+        staleMs: input?.staleMs,
+        limit: input?.limit,
+        includeSystem: input?.includeSystem,
+        typeRules: await typeRulesFor(ctx),
+      });
     },
 
     async tend(_input, ctx) {
