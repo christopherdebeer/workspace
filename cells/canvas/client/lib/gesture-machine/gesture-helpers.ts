@@ -5,6 +5,7 @@
  */
 import { saveCanvas } from '../network/storage.ts';
 import { generateContent } from '../network/generation.ts';
+import { clampElementScale, pinchFactor, maxScaleFor, MIN_EL_SCALE } from '../geometry.ts';
 import type { CanvasController } from '../../types.ts';
 
 // XState context and event types
@@ -188,8 +189,8 @@ export function createGestureHelpers(controller: CanvasController) {
     const dy = (ev.xy.y - ctx.draft.origin!.y) / dpi();
     // Calculate a scale factor based on the distance moved
     const scaleFactor = 1 + (dx + dy) * sensitivity;
-    // Apply the scale factor to the initial scale
-    el.scale = Math.max(ctx.draft.startScale! * scaleFactor, 0.2);
+    // Apply the scale factor to the initial scale, inside the paint-safe bounds
+    el.scale = clampElementScale(ctx.draft.startScale! * scaleFactor, el, ctx.draft.startScale!);
     controller.updateElementNode(
       controller.elementNodesMap[el.id],
       el,
@@ -235,23 +236,25 @@ export function createGestureHelpers(controller: CanvasController) {
 
     /* ---------------- group resize (single-handle drag) ---------------- */
   function applyGroupResize(ctx: GestureContext, ev: GestureEvent) {
-    const { resize } = ctx.draft;               if (!resize) return;
+    const { resize, startPositions } = ctx.draft;  if (!resize) return;
     const dpi  = () => controller.viewState.scale || 1;
     const dx   = (ev.xy.x - resize.startX) / dpi();
     const dy   = (ev.xy.y - resize.startY) / dpi();
 
-    /* proportional factors per axis */
-    const sx = (resize.startW + dx) / resize.startW;
-    const sy = (resize.startH + dy) / resize.startH;
+    /* proportional factors per axis — relative to the GESTURE-START box.
+       (The old code multiplied el.scale by the factor on EVERY pointermove,
+       compounding it exponentially through a single drag.) A degenerate
+       start box (startW/H ≈ 0) would make the ratio itself explode. */
+    const sx = (Math.max(resize.startW, 1) + dx) / Math.max(resize.startW, 1);
+    const sy = (Math.max(resize.startH, 1) + dy) / Math.max(resize.startH, 1);
 
     controller.selectedElementIds.forEach(id => {
       const el    = controller.findElementById(id);
-      if (!el) return;
-      const offX  = (el.x - resize.cx!) * sx;
-      const offY  = (el.y - resize.cy!) * sy;
-      el.x        = resize.cx! + offX;
-      el.y        = resize.cy! + offY;
-      el.scale    = (el.scale || 1) * Math.max(sx, sy);   // uniform
+      const start = startPositions?.get(id);
+      if (!el || !start) return;
+      el.x     = resize.cx! + (start.x - resize.cx!) * sx;
+      el.y     = resize.cy! + (start.y - resize.cy!) * sy;
+      el.scale = clampElementScale((start.scale || 1) * Math.max(sx, sy), el, start.scale || 1);
     });
     controller.requestRender();
   }
@@ -285,9 +288,19 @@ export function createGestureHelpers(controller: CanvasController) {
     const pts = Object.values(ev.active || {});
     if (pts.length !== 2) return;
 
-    /* scale & rotate factors relative to start */
+    /* scale & rotate factors relative to start. pinchFactor floors the start
+       distance: fingers landing (nearly) together otherwise make the ratio
+       explode — the reproduced iOS compositor tab-kill. One factor for the
+       whole group, capped so no member leaves its paint-safe scale range. */
     const newDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-    const scale = newDist / ctx.draft.startDist;
+    let scale = pinchFactor(newDist, ctx.draft.startDist);
+    controller.selectedElementIds.forEach(id => {
+      const el = controller.findElementById(id);
+      const start = ctx.draft.startPositions?.get(id);
+      if (!el || !start) return;
+      const s0 = start.scale || 1;
+      scale = Math.min(Math.max(scale, MIN_EL_SCALE / s0), maxScaleFor(el) / s0);
+    });
 
     const a1 = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
     const dAng = a1 - ctx.draft.startAngle;          // radians
@@ -297,6 +310,7 @@ export function createGestureHelpers(controller: CanvasController) {
     controller.selectedElementIds.forEach(id => {
       const el = controller.findElementById(id);
       const start = ctx.draft.startPositions.get(id);
+      if (!el || !start) return;
 
       /* rotate + scale the centre point */
       const ox = start.offsetX * scale;
@@ -306,7 +320,7 @@ export function createGestureHelpers(controller: CanvasController) {
 
       el.x = cx + rotX;
       el.y = cy + rotY;
-      el.scale = start.scale * scale;    // ➋  propagate group-wide factor
+      el.scale = clampElementScale(start.scale * scale, el, start.scale);  // ➋  group-wide factor, bounded
       /* keep *internal* scale intact, only update global rotation */
       el.rotation = start.rotation + dAng * 180 / Math.PI;
     });
@@ -381,15 +395,16 @@ export function createGestureHelpers(controller: CanvasController) {
     if (pts.length !== 2) return;
     const [p1, p2] = pts;
     const newDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const factor = newDist / ctx.draft.startDist!;
+    const rawFactor = pinchFactor(newDist, ctx.draft.startDist);
 
     const el = controller.findElementById(ctx.draft.id!);
     if (!el) return;
 
-    /* scale & move */
-    // Update scale instead of width/height
-    el.scale = ctx.draft.startScale! * factor;
-    // Position still needs to be adjusted
+    /* scale & move — bounded, and the position uses the EFFECTIVE factor so
+       the element doesn't fly away once the scale clamp engages */
+    const s0 = ctx.draft.startScale! || 1;
+    el.scale = clampElementScale(s0 * rawFactor, el, s0);
+    const factor = el.scale / s0;
     el.x = ctx.draft.center!.x + (ctx.draft.startCx! - ctx.draft.center!.x) * factor;
     el.y = ctx.draft.center!.y + (ctx.draft.startCy! - ctx.draft.center!.y) * factor;
 

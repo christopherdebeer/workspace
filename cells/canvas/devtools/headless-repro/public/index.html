@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>canvas harness</title>
+  <style>
+    html, body { touch-action: none; user-select: none; overflow: hidden; }
+    #drillUp, #context-menu, .modal { display: none; }
+    #mode { position: fixed; z-index: 2; top: 0; left: 0; }
+  </style>
+  <script>
+    // Local stand-ins for CDN libs (marked, CodeMirror) so the harness is hermetic.
+    window.marked = { parse: (s) => '<p>' + String(s).replace(/</g, '&lt;') + '</p>' };
+    window.CodeMirror = function () { return { getValue: () => '', setValue: () => {}, on: () => {} }; };
+  </script>
+</head>
+<body>
+  <button id="drillUp">↑ Drill Up</button>
+  <div id="canvas" mode="navigate">
+    <svg id="edges-layer"></svg>
+    <div id="canvas-container"></div>
+    <div id="context-menu"></div>
+  </div>
+  <div id="static-container"></div>
+  <button id="mode">mode</button>
+
+  <script id="canvas-hydrate" type="application/json">
+  {"canvasId":"canvas-002","cam":{"scale":1,"translateX":0,"translateY":0},"elements":[
+    {"id":"el1","x":195,"y":300,"width":240,"height":120,"rotation":0,"scale":1,"type":"markdown","content":"# One\nelement one"},
+    {"id":"el2","x":195,"y":520,"width":240,"height":120,"rotation":0,"scale":1,"type":"markdown","content":"# Two\nelement two"},
+    {"id":"el3","x":195,"y":740,"width":240,"height":120,"rotation":0,"scale":1,"type":"markdown","content":"# Three\nelement three"},
+    {"id":"poisoned","x":195,"y":960,"width":10000000,"height":120,"rotation":0,"scale":481,"type":"markdown","content":"poisoned fact"}
+  ]}
+  </script>
+  <script type="module" src="/app.js"></script>
+  <link rel="stylesheet" href="/app.css">
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "canvas-headless-repro",
+  "private": true,
+  "type": "module",
+  "description": "Headless-Chrome gesture harness for the canvas cell (mobile-Safari crash repro)",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "drive": "node drive.mjs",
+    "poison": "node poison.mjs"
+  },
+  "devDependencies": {
+    "d3-force": "3.0.0",
+    "esbuild": "^0.25.5",
+    "playwright-core": "^1.50.0",
+    "xstate": "4.38.3"
+  }
+}

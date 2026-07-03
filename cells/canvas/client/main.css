@@ -73,6 +73,16 @@ body {
     cursor: pointer;
 }
 
+/* While a pan/pinch is in flight the compositor is re-rasterising tiles —
+   board content animating underneath forces whole-layer repaints per frame on
+   top of that, which on iOS is the tab-kill combination. Freeze CSS animations
+   for the gesture (element-script rAF loops park via the same flag in
+   executeScriptElements); everything resumes on pointer-up. */
+body.gesturing #canvas-container *,
+body.gesturing #static-container * {
+    animation-play-state: paused !important;
+}
+
 .canvas-element {
     --scale: 1;
     --blend-mode: normal;

@@ -137,6 +137,9 @@ export function registerSubstrateTypes(): void {
       const draw = (): void => {
         const cc = (window as { CC?: any }).CC;
         if (!cc || !host.isConnected) return;
+        // Mid-gesture the compositor is busy with the pan — skip this beat
+        // (the interval brings the next one 800ms later).
+        if (document.body.classList.contains('gesturing')) return;
         const w = (cv.width = host.clientWidth || 200);
         const h = (cv.height = host.clientHeight || 140);
         const g = cv.getContext('2d');
