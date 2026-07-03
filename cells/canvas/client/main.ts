@@ -342,20 +342,33 @@ class CanvasController {
     _stepHistory(fromStack, toStack, direction) {
         if (fromStack.length === 0) return;
         const cur = this._snapshot();     // current → opposite stack
+        // Snapshots are pushed AFTER each mutation, so the stack top usually
+        // EQUALS the current state — restoring it made the first undo a
+        // visible no-op ("undo needs two presses"). Skip past the echo.
+        let top = fromStack.pop();
+        try {
+            if (fromStack.length &&
+                JSON.stringify(top.data.canvasState) === JSON.stringify(cur.data.canvasState)) {
+                top = fromStack.pop();
+            }
+        } catch { /* compare is best-effort */ }
         toStack.push(cur);
-        const { data } = fromStack.pop(); // restore previous
-        this._restoreSnapshot(data);
+        this._restoreSnapshot(top.data);
     }
 
     _restoreSnapshot({ canvasState, viewState }) {
-        
+
         this.canvasState = structuredClone(canvasState);
         //this.viewState   = structuredClone(viewState);
 
         // clear selection, keep mode
         this.selectedElementIds.clear();
+        this.updateGroupBox();
         this.requestRender();
-        //this.updateCanvasTransform();
+        this.requestEdgeUpdate(); // the undone change may have moved endpoints
+        // Undo IS an edit: without persisting, a reload resurrected the undone
+        // change (the substrate still held the newer state).
+        saveCanvas(this.canvasState);
     }
 
 
