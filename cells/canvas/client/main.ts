@@ -82,33 +82,11 @@ class CanvasController {
     constructor(canvasState: CanvasState) {
         updateCanvasController(this)
         this.canvasState = canvasState;
+        // The CrdtAdapter is the substrate write seam (updateElement/updateEdge
+        // funnel into the debounced fact writer) — the Yjs-era update/presence
+        // surface is gone; remote merge is the change-feed poller (startLiveSync).
         this.crdt = new CrdtAdapter(canvasState.canvasId);
 
-        this.crdt.onUpdate( (ev) => {
-            const remote = !ev.transaction.local;
-            if (remote) {
-                console.log(`[CRDT] Update from ${remote ? 'Remote' : 'Local'}`, ev )
-                // const els = this.crdt.elements.toJSON();
-                // const edges = this.crdt.edges.toJSON();
-                // console.log(`[CRDT] remote updates`, els, edges)
-                // this.canvasState.elements = Object.values(els);
-                // this.canvasState.edges = Object.values(edges);
-
-                if (ev.currentTarget === this.crdt.elements) {
-                    const keys = Array.from(ev.keysChanged);
-                    console.log(`[CRDT] Remote element(s) update`, keys)
-                    // keys.forEach( id => {
-                    //     const el = this.findElementById(id)
-                    //     const yel = this.crdt.elements.get(id)
-                    //     Object.keys(el).forEach( k => {
-                    //         el[k] = yel[k]
-                    //     })
-                    // })
-                }
-                // this.requestRender();
-            }
-        })
-        
         if (!this.canvasState.edges) {
             this.canvasState.edges = [];
         }
@@ -1048,18 +1026,8 @@ class CanvasController {
         if (isSelected) {
             node.classList.add("selected");
         }
-        const peerSelected = Array.from((this.crdt as any).provider?.awareness?.getStates?.()?.values?.() || [])
-            .filter( (p: any) => p.client?.clientId !== (this.crdt as any).provider?.awareness?.clientID)
-            .flatMap( (p: any) => p.client?.selection || [])
-        
-        if (peerSelected.indexOf(el.id) >= 0) {
-            node.classList.add("peer-selected");
-        } else {
-            node.classList.remove("peer-selected");
-        }
-        if ((this.crdt as any).provider?.awareness?.getStates?.())
-        //this.setElementContent(node, el);
-
+        // (The Yjs peer-selection styling and its dangling `if` — which was
+        // accidentally the handles' guard — are gone with the CRDT shim.)
         if (!skipHandles) {
             // Remove old handles (if any)
             const oldHandles = Array.from(node.querySelectorAll('.element-handle'));

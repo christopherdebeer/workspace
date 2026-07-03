@@ -123,12 +123,12 @@ export interface MenuItem {
   enabled?: (controller: CanvasController) => boolean;
 }
 
-// CRDT types
+// The substrate write seam (kept under its historical CRDT name).
 export interface CrdtAdapter {
-  onUpdate(callback: (event: any) => void): void;
-  onPresenceChange(callback: (awareness: any[]) => void): void;
-  elements: any;
-  edges: any;
+  updateElement(id: string, data: any): void;
+  updateEdge(id: string, data: any): void;
+  updateView(data: any): void;
+  updateSelection(data: Set<string>): void;
 }
 
 // Controller interface (partial - covers what's used in the files we're migrating)

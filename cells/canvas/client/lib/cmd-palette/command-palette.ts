@@ -148,7 +148,6 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   const $list = root.querySelector('.suggestions') as HTMLUListElement;
   const $clear = root.querySelector('#cmd-clear') as HTMLButtonElement;
   const $recentLabel = root.querySelector('.recent-commands-label') as HTMLDivElement;
-  const $presence = root.querySelector('.cmd-footer .presence') as HTMLSpanElement;
 
   /* ── state ── */
   let filtered: SuggestionItem[] = [];
@@ -156,12 +155,6 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   let mode: PaletteMode = 'browse';           // 'browse' | 'awaiting' | 'pending'
   let pending: CommandItem | null = null;            // command awaiting free-text
   let showingRecent = false;     // whether we're showing recent commands
-
-
-  controller.crdt.onPresenceChange((awareness: any[]) => {
-    controller.requestRender();
-    $presence.innerHTML = `${awareness.map(p => `<span class="client">${p.client.clientId}</span>`).join('')}<span class="total">${awareness.length} peers</span>`;
-  });
 
   /* ── render ── */
   const render = (): void => {
