@@ -124,6 +124,11 @@ function identityFromValidated(validated: ValidatedToken): Identity {
     scopes: effective,
     grantScopes: grant,
     ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
+    // Mediation (ADR-0022 × ADR-0050): a DCR-minted client token is a distinct
+    // embodiment acting on-behalf-of — its attention weighs as `agent`, even
+    // though its subject is the user. A first-party session (no clientId — the
+    // browser/passkey path, incl. cookie silent-refresh) is the human.
+    actor: validated.clientId ? 'agent' : 'human',
   };
 }
 
@@ -237,6 +242,7 @@ export function defineService(definition: ServiceDefinition) {
       scopes: opts.identity.scopes.length ? opts.identity.scopes : undefined,
       grantScopes: opts.identity.grantScopes?.length ? opts.identity.grantScopes : undefined,
       tokenId: opts.identity.tokenId,
+      actor: opts.identity.actor,
     });
     return {
       logger,
@@ -297,6 +303,7 @@ export function defineService(definition: ServiceDefinition) {
           scopes: event.scopes ?? [],
           ...(event.grantScopes ? { grantScopes: event.grantScopes } : {}),
           ...(event.tokenId ? { tokenId: event.tokenId } : {}),
+          ...(event.actor ? { actor: event.actor } : {}),
         },
       });
       try {

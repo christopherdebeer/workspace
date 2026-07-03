@@ -25,6 +25,7 @@ import {
 } from './subscriptions';
 import { GROUPS_NS, PUBLIC_NS } from './grants';
 import { type DepsBuilder } from './shared';
+import { TOOL_DESCRIPTORS } from './descriptors';
 
 /** A tending pass distilled into a written report — the audit fact. */
 export interface TendReport {
@@ -86,6 +87,43 @@ export async function runTend(
     dangling: report.dangling,
   });
   ctx.logger.info('workspace tended', { scope, via, stale: report.stale, unlinked: report.unlinked, dangling: report.dangling });
+
+  // ADR-0052: the workspace's own verbs are capability facts too — reconciled
+  // by the tend pass (the repair organ), so the fact floor covers tier-1 verbs
+  // without a deploy-time seam. Diff-only writes: an unchanged verb costs
+  // nothing (no revision churn, no re-embed). Best-effort, like suggestions.
+  try {
+    const capWriter: Identity = { user: 'platform/cells', scopes: [] };
+    const existing = await state.query(scope, { prefix: '_caps/workspace.' }, capWriter);
+    const summaries = new Map(existing.entries.map((e) => [e.key, (e.value as { summary?: string } | null)?.summary]));
+    const firstSentence = (text: string): string => (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text.slice(0, 240)).trim();
+    for (const d of TOOL_DESCRIPTORS) {
+      if (d.name === 'search') continue; // deprecated alias (ADR-0051) — not worth a fact
+      const key = `_caps/workspace.${d.name}`;
+      const summary = firstSentence(d.description);
+      if (summaries.get(key) === summary) continue;
+      await state.put(
+        {
+          scope,
+          key,
+          value: {
+            target: `workspace.${d.name}`,
+            name: `workspace.${d.name}`,
+            kind: d.kind,
+            summary,
+            cell: 'workspace',
+            schemaRef: `$catalog resolve: workspace.${d.name}`,
+          },
+          via: 'tend:capabilities',
+          type: 'capability',
+          tags: ['capability'],
+        },
+        capWriter,
+      );
+    }
+  } catch (err) {
+    ctx.logger.warn('workspace capability reconcile failed', { scope, error: (err as Error).message });
+  }
   return report;
 }
 
@@ -521,7 +559,103 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
       );
       await ctx.events.emit('workspace.fact.written', { scope: owner, key: manifestKey, revision: m._meta.revision });
     }
+
+    // ADR-0052: capabilities are facts. On deploy, project each tool the cell
+    // advertises into a `_caps/@owner/name.tool` capability fact — embeddable
+    // (so goal-conditioned recall can surface "what can I DO about X"), typed,
+    // regenerable (superseded on undeploy/delete, rewritten each deploy). The
+    // tool list comes from `cells.describeCellTools` for THIS cell, invoked as
+    // the owner (the event is first-party; the owner sees all their own tools).
+    // Best-effort: a discovery failure must not poison the lifecycle event.
+    if (meta.detailType === 'cell.deployed' || meta.detailType === 'cell.delete.requested') {
+      try {
+        await projectCapabilityFacts(ctx, state, {
+          cellId,
+          owner,
+          address: base.address,
+          deleted: meta.detailType === 'cell.delete.requested',
+        });
+      } catch (err) {
+        ctx.logger.warn('capability projection failed (cell fact already written)', { cellId, error: (err as Error).message });
+      }
+    }
   };
+}
+
+/** The value shape of a `capability` fact (ADR-0052). */
+interface CapabilityFact {
+  /** The dotted invoke address (`@owner/name.tool`) — what you pass to act/read. */
+  target: string;
+  /** Duplicates `target` so the embedder's text fields pick the address up. */
+  name: string;
+  kind: 'read' | 'act';
+  /** One-line summary (the tool's description) — the embeddable meaning. */
+  summary: string;
+  cell: string;
+  /** Where the full input schema lives — resolve the target via `$catalog`. */
+  schemaRef: string;
+}
+
+/**
+ * Reconcile a cell's `_caps/*` capability facts to its advertised tools
+ * (ADR-0052): write one fact per tool, supersede the stale ones (a removed
+ * tool, or every tool on delete). Keys are `_caps/<address>.<tool>` — system
+ * namespace (excluded from tending) but explicitly embeddable (`vectors.ts`
+ * carves `_caps/` out), so relevance can match a goal to a tool.
+ */
+async function projectCapabilityFacts(
+  ctx: ServiceContext,
+  state: ObservedState,
+  cell: { cellId: string; owner: string; address: string; deleted: boolean },
+): Promise<void> {
+  const writer: Identity = { user: 'platform/cells', scopes: [] };
+  const addr = cell.address.replace(/^\//, ''); // `@owner/name`
+  const prefix = `_caps/${addr}.`;
+
+  // The cell's advertised tools (empty on delete — everything supersedes).
+  let tools: Array<{ tool: string; description: string; kind: 'read' | 'act' }> = [];
+  if (!cell.deleted) {
+    // Invoke as the OWNER: `describeCellTools` filters visibility per caller,
+    // and the owner sees all of their own cell's tools. The event is
+    // first-party (source pinned to the cells service), so this is not a
+    // caller-supplied identity.
+    const asOwner = createServiceClient({ registry: ctx.config.registry, correlationId: ctx.correlationId, user: cell.owner });
+    const res = await asOwner('cells').command<{ tools?: Array<{ tool?: string; description?: string; kind?: string }> }>(
+      'describeCellTools',
+      { cellId: cell.cellId },
+    );
+    tools = (res?.tools ?? [])
+      .filter((t): t is { tool: string; description?: string; kind?: string } => typeof t.tool === 'string' && !!t.tool)
+      .map((t) => ({ tool: t.tool, description: t.description ?? `${addr} · ${t.tool}`, kind: t.kind === 'read' ? 'read' : 'act' as const }));
+  }
+
+  const existing = await state.query(cell.owner, { prefix }, writer);
+  const wanted = new Set(tools.map((t) => `${prefix}${t.tool}`));
+
+  for (const t of tools) {
+    const key = `${prefix}${t.tool}`;
+    const value: CapabilityFact = {
+      target: `${addr}.${t.tool}`,
+      name: `${addr}.${t.tool}`,
+      kind: t.kind,
+      summary: t.description,
+      cell: addr,
+      schemaRef: `$catalog resolve: ${addr}.${t.tool}`,
+    };
+    const e = await state.put(
+      { scope: cell.owner, key, value, via: 'cells:capability', type: 'capability', tags: ['capability'] },
+      writer,
+    );
+    await ctx.events.emit('workspace.fact.written', { scope: cell.owner, key, revision: e._meta.revision });
+  }
+  for (const stale of existing.entries) {
+    if (!wanted.has(stale.key)) await state.supersede(cell.owner, stale.key, null, writer);
+  }
+  ctx.logger.info('capabilities projected (ADR-0052)', {
+    cell: addr,
+    written: tools.length,
+    retired: existing.entries.filter((e) => !wanted.has(e.key)).length,
+  });
 }
 
 /**

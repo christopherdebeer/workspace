@@ -82,10 +82,12 @@ const TEXT_FIELDS = ['title', 'name', 'text', 'content', 'summary', 'description
 const MAX_EMBED_CHARS = 8000;
 
 /** The text to embed for a fact, or `null` when there's nothing worth embedding.
- *  Skips `_`-prefixed plumbing facts (ADR-0030 Decision 4); prefers a `file`'s inline
- *  `content`, then well-known textual fields, then a bounded JSON fallback. */
+ *  Skips `_`-prefixed plumbing facts (ADR-0030 Decision 4) — EXCEPT `_caps/`
+ *  capability facts (ADR-0052), which exist precisely to be found by meaning
+ *  (goal-conditioned recall matching an intent to a tool). Prefers a `file`'s
+ *  inline `content`, then well-known textual fields, then a bounded JSON fallback. */
 export function embeddableText(key: string, value: unknown): string | null {
-  if (key.startsWith('_')) return null;
+  if (key.startsWith('_') && !key.startsWith('_caps/')) return null;
   let text: string | null = null;
   if (typeof value === 'string') {
     text = value;

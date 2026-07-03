@@ -3,11 +3,19 @@
  * attention/changes/tending — recall, peek, query, changes, attention, tend,
  * with the recall-overview builders.
  */
-import { requireUser, type Entry, type SalienceLens, type SalienceOptions } from '../../platform/runtime';
+import {
+  requireUser,
+  indexForScope,
+  INTENT_PRESET,
+  type Entry,
+  type SalienceLens,
+  type SalienceOptions,
+} from '../../platform/runtime';
 import { shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
 import { applicableGrants, grantCovers, WHOLE_SLICE } from './grants';
 import {
   type DepsBuilder,
+  type WorkspaceDeps,
   typeDeclsFor,
   typeRulesFor,
   affordancesForTypes,
@@ -17,6 +25,108 @@ import {
 } from './shared';
 import { runTend } from './event-handlers';
 import type { WorkspaceCommands } from './handlers';
+
+/** Candidate-set size for a stated intent (ADR-0051): the vector top-K IS the
+ *  bounded relevance pool; keys outside it score relevance 0. */
+const INTENT_TOP_K = 200;
+
+/**
+ * Per-key relevance to a stated intent (ADR-0051): embed the text once, take the
+ * scope's vector index top-K as `{ key: cosine }`. `undefined` when no semantic
+ * backend is configured — the read proceeds unweighted (the index is a candidate
+ * generator, never an authority; ADR-0030 Decision 1 unchanged).
+ */
+async function relevanceFor(
+  vectors: WorkspaceDeps['vectors'],
+  scope: string,
+  text: string,
+): Promise<Record<string, number> | undefined> {
+  if (!vectors) return undefined;
+  const [queryVector] = await vectors.embedder.embed([text]);
+  const matches = await vectors.store
+    .query(indexForScope(scope, vectors.embedder.dimension), queryVector, { topK: INTENT_TOP_K })
+    .catch(() => []);
+  const rel: Record<string, number> = {};
+  for (const m of matches) rel[m.key] = m.score;
+  return rel;
+}
+
+/** The effective per-call salience for a read that stated an intent: the intent
+ *  preset (relevance leads) under any explicit caller override. */
+function intentSalience(override?: Partial<SalienceOptions>): Partial<SalienceOptions> {
+  return { ...INTENT_PRESET, ...override };
+}
+
+// ─── the recall digest (ADR-0050 move 4) ────────────────────────────
+//
+// A bare recall — the hottest call an agent makes — is served from a CACHE
+// record when nothing in the scope changed since it was built. Realized as a
+// seq-validated write-behind rather than a stream consumer: the digest stores
+// the seq head it was computed at, and the read path compares it to the LIVE
+// head — exact by construction (any write advances seq and invalidates), no
+// new infrastructure, no eventual consistency. Written through the raw store
+// (no seq advance, no trajectory, no touch), because a cache is not a fact.
+
+/** Where a scope's recall digest lives. Excluded from recall's own content. */
+const DIGEST_KEY = '_index/overview';
+/** Recompute past this age even at the same seq — recency decay drifts band
+ *  membership slowly; an hour bounds the drift. */
+const DIGEST_MAX_AGE_MS = 60 * 60 * 1000;
+
+interface DigestValue {
+  seq: number;
+  at: string;
+  result: RecallOverview;
+}
+
+/** The cached overview when it is seq-exact and fresh, else `null` plus the
+ *  live head (captured BEFORE the recompute, so a write racing the recompute
+ *  can only make the stored digest conservatively stale, never wrongly fresh). */
+async function readDigest(
+  store: NonNullable<WorkspaceDeps['store']>,
+  scope: string,
+): Promise<{ cached: RecallOverview | null; head: number }> {
+  const [rec, head] = await Promise.all([store.get(scope, DIGEST_KEY), store.currentSeq(scope)]);
+  const v = rec?.value as DigestValue | undefined;
+  const fresh =
+    !!v && typeof v.seq === 'number' && !!v.result && v.seq === head && Date.now() - Date.parse(v.at) < DIGEST_MAX_AGE_MS;
+  return { cached: fresh ? v.result : null, head };
+}
+
+/** Persist the freshly-computed overview as the scope's digest — best-effort
+ *  (a cache write must never fail a read; an oversized digest just isn't cached). */
+async function writeDigest(
+  store: NonNullable<WorkspaceDeps['store']>,
+  scope: string,
+  head: number,
+  result: RecallOverview,
+): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    const prev = await store.get(scope, DIGEST_KEY);
+    await store.put({
+      scope,
+      key: DIGEST_KEY,
+      value: { seq: head, at: now, result } satisfies DigestValue,
+      revision: (prev?.revision ?? 0) + 1,
+      seq: head,
+      firstSeq: prev?.firstSeq ?? head,
+      writer: 'platform/digest',
+      via: 'recall:digest',
+      createdAt: prev?.createdAt ?? now,
+      updatedAt: now,
+      writers: ['platform/digest'],
+      superseded: false,
+      supersededBy: null,
+      type: null,
+      tags: [],
+      timerExpiresAt: null,
+      timerEffect: null,
+    });
+  } catch {
+    /* not cached this time — the next bare recall recomputes */
+  }
+}
 
 /** Attach the inline `types` affordance map to a single returned fact (`peek`),
  *  leaving a `null` (absent) fact untouched (ADR-0029 R1). */
@@ -112,6 +222,11 @@ export interface RecallInput {
    * bare `recall()` gets the overview.
    */
   view?: 'overview' | 'full';
+  /** Orient relative to a goal (ADR-0051): free text, embedded and matched by
+   *  meaning. Relevance joins the salience blend (the intent preset leads with
+   *  it), so the focus band, counts, and elision are all conditioned on what you
+   *  are reading FOR. Without a semantic backend the read proceeds unweighted. */
+  text?: string;
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
@@ -136,6 +251,12 @@ export interface QueryInput {
   type?: string;
   tag?: string;
   prefix?: string;
+  /** Rank by meaning as well as structure (ADR-0051): free text, embedded and
+   *  matched semantically. Relevance joins the salience blend under the intent
+   *  preset — `query({text})` alone is semantic search that still respects
+   *  standing/attention; `query({type, text})` is the hybrid. Elision and
+   *  ranking are both intent-conditioned. */
+  text?: string;
   rankBy?: 'salience' | 'recency';
   /** Bias salience via a named lens (recent/connected/durable/active). */
   lens?: SalienceLens;
@@ -179,30 +300,67 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
   return {
     async recall(input, ctx) {
       const viewer = requireUser(ctx.identity);
-      const { state, grants } = build(ctx);
+      const { state, grants, vectors, store } = build(ctx);
       const includeSuperseded = input?.includeSuperseded;
 
       // Own slice, scored (under the per-call lens) but not yet shaped
       // (elision:'none' keeps values present so granted slices merge cleanly).
       const lens = input?.lens;
-      const salience = input?.salience;
       const explain = input?.explain;
+      // A stated intent (ADR-0051): relevance joins the blend (intent preset
+      // under any explicit override) and each slice contributes its own
+      // vector-index candidates, exactly like search's per-grant fold.
+      const text = typeof input?.text === 'string' ? input.text.trim() : '';
+      const salience = text ? intentSalience(input?.salience) : input?.salience;
+
+      // ADR-0033 discrimination, computed early so the digest fast path can gate on it.
+      const shapedAny = input as Record<string, unknown> | undefined;
+      const askedFull =
+        input?.view === 'full' ||
+        (input?.view !== 'overview' &&
+          !!shapedAny &&
+          ['elision', 'expand', 'lens', 'salience', 'explain', 'includeSuperseded'].some((k) => shapedAny[k] !== undefined));
+      // The digest fast path (ADR-0050 move 4): a BARE recall — no intent, no
+      // lens, no overrides — is answered from the seq-validated cache. Grants
+      // are checked LIVE so a new foreign grant always falls through to the
+      // full fold (grant writes don't advance the viewer's seq).
+      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience;
+      const grantList = await applicableGrants(grants, viewer);
+      const foreign = grantList.some((g) => g.owner !== viewer);
+      let digestHead: number | undefined;
+      if (bare && store && !foreign) {
+        const { cached, head } = await readDigest(store, viewer);
+        if (cached) return cached;
+        digestHead = head;
+      }
+
       // The viewer's stored salience policy (`_config/salience`) governs the whole
       // assembled view — scoring (read) and tiering (shape) alike — so granted
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
       const typeRules = await typeRulesFor(ctx);
-      const own = await state.read(viewer, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
+      const relevance = text ? await relevanceFor(vectors, viewer, text) : undefined;
+      const own = await state.read(
+        viewer,
+        { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance },
+        ctx.identity,
+      );
       const merged: Record<string, Entry> = { ...own.entries };
+      delete merged[DIGEST_KEY]; // the digest is a cache, not content
 
       // Fold in the subsets granted to this viewer — directly, via `public`, or
       // via a group they belong to (docs/scope-grants.md). A grant key is a
       // pattern: `*` = whole slice, trailing `*` = prefix.
-      for (const g of await applicableGrants(grants, viewer)) {
+      for (const g of grantList) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const slice = await state.read(g.owner, { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules }, ctx.identity);
+          const gRelevance = text ? await relevanceFor(vectors, g.owner, text) : undefined;
+          const slice = await state.read(
+            g.owner,
+            { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance: gRelevance },
+            ctx.identity,
+          );
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
           for (const [k, e] of Object.entries(slice.entries)) {
             if (k.startsWith(prefix)) merged[`${g.owner}/${k}`] = e;
@@ -220,17 +378,24 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // ADR-0033: progressive disclosure by default. A *bare* recall (the context-less
       // agent's first read) returns a broad, succinct overview — counts + top focus +
       // drill hints — not the whole view. Any shaping arg (or view:'full') opts into the
-      // full shaped view, so configured callers are unchanged.
-      const shapedAny = input as Record<string, unknown> | undefined;
-      const askedFull =
-        input?.view === 'full' ||
-        (input?.view !== 'overview' &&
-          !!shapedAny &&
-          ['elision', 'expand', 'lens', 'salience', 'explain', 'includeSuperseded'].some((k) => shapedAny[k] !== undefined));
+      // full shaped view, so configured callers are unchanged. (`askedFull`/`bare`
+      // were computed up top, before the digest fast path.)
       if (!askedFull) {
         const c = shaped._shaping.counts;
-        const granted = Object.keys(merged).length - Object.keys(own.entries).length;
-        return buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+        const granted = Object.keys(merged).length - Object.keys(own.entries).length + (own.entries[DIGEST_KEY] ? 1 : 0);
+        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+        if (text) {
+          overview.hints.unshift(
+            relevance
+              ? 'Goal-conditioned (ADR-0051): focus, counts, and elision are weighted by relevance to your `text`.'
+              : 'A `text` intent was given but no semantic backend is configured — results are unweighted by relevance.',
+          );
+        }
+        // Write-behind (ADR-0050): the digest carries the seq head captured
+        // BEFORE the recompute, so a racing write leaves it conservatively
+        // stale (invalidated on the next read), never wrongly fresh.
+        if (bare && store && !foreign && digestHead !== undefined) await writeDigest(store, viewer, digestHead, overview);
+        return overview;
       }
 
       // R1 (ADR-0029): inline affordances — include elided stubs' types so an
@@ -271,8 +436,14 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
 
     async query(input, ctx) {
       const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
+      const { state, vectors } = build(ctx);
       enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
+      // A stated intent (ADR-0051): `query({text})` alone is semantic search
+      // that still respects earned salience; with filters it's the hybrid
+      // neither query nor search could do. Relevance enters the one blend via
+      // the intent preset (an explicit `salience` override still wins).
+      const text = typeof input?.text === 'string' ? input.text.trim() : '';
+      const relevance = text ? await relevanceFor(vectors, scope, text) : undefined;
       const result = await state.query(
         scope,
         {
@@ -281,13 +452,14 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           prefix: input?.prefix,
           rankBy: input?.rankBy,
           lens: input?.lens,
-          salience: input?.salience,
+          salience: text ? intentSalience(input?.salience) : input?.salience,
           explain: input?.explain,
           limit: input?.limit,
           cursor: input?.cursor,
           includeSuperseded: input?.includeSuperseded,
           contains: input?.contains,
           typeRules: await typeRulesFor(ctx),
+          relevance,
         },
         ctx.identity,
       );

@@ -89,8 +89,13 @@ describe('Fact: the monotonic floor (ADR-0013)', () => {
     // reader B — Salience scores the fact from the SAME trajectory (recency > 0)
     const view = await s.read('r', { elision: 'none' });
     expect(view.entries['k']._meta.score).toBeGreaterThan(0);
-    // a read is itself a trajectory event — the shared log captures what both readers consume
+    // ADR-0050: a read is a counter touch, NOT a trajectory event — the ledger
+    // stays writes-only, and attention accrues on the fact itself instead.
+    const before = (await s.get('r', 'k', alice))!._meta.standing;
+    await s.get('r', 'k', alice);
+    const after = (await s.get('r', 'k', alice))!._meta.standing;
+    expect(after).toBeGreaterThan(before);
     const afterRead = await s.changes('r', head);
-    expect(afterRead.events.some((ev) => ev.op === 'read')).toBe(true);
+    expect(afterRead.events.some((ev) => ev.op === 'read')).toBe(false);
   });
 });

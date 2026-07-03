@@ -48,7 +48,24 @@ export type {
   ServiceHttpResponse,
 } from './types';
 export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manifest';
-export { createObservedState, createMemoryStateStore, computeScore, extractTypeRules, deriveBackboneEdges, recordContains, StatePreconditionError, isTimerLive } from './state';
+export {
+  createObservedState,
+  createMemoryStateStore,
+  computeScore,
+  extractTypeRules,
+  deriveBackboneEdges,
+  recordContains,
+  StatePreconditionError,
+  isTimerLive,
+  actorClassOf,
+  actorOf,
+  touchKey,
+  bumpTouches,
+  bumpWindow,
+  touchSignals,
+  INTENT_PRESET,
+  SALIENCE_CONFIG_KEY,
+} from './state';
 // The DynamoDB-backed StateStore — surfaced in the barrel (ADR-0042 Inc 0) so a
 // cell's own SSR Lambda can run the SAME read pipeline the gateway does
 // (`createObservedState(createDynamoStateStore(table))`) against its IAM-scoped
@@ -126,4 +143,7 @@ export type {
   RefRule,
   KeyEdgeRule,
   AnnotatedEdge,
+  ActorClass,
+  TouchCounters,
+  TouchWindow,
 } from './state';

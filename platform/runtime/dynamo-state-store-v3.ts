@@ -16,13 +16,26 @@
  */
 import {
   StatePreconditionError,
+  touchKey,
+  type ActorClass,
   type StateStore,
   type StateRecord,
   type EdgeRecord,
   type TrajectoryEvent,
   type PutGuard,
 } from './state';
-import { key as K, itemToRecord, itemToEdge, stripUndefined, TRAJECTORY_TTL_SEC } from './state-store-codec';
+import {
+  key as K,
+  itemToRecord,
+  itemToEdge,
+  stripUndefined,
+  touchesToItem,
+  touchAttr,
+  windowAttr,
+  TOUCH_KEYS,
+  WINDOW_BUCKET_ATTR,
+  TRAJECTORY_TTL_SEC,
+} from './state-store-codec';
 
 /** The slice of the v3 DocumentClient this store uses — enough to stay typed
  *  without depending on `@aws-sdk/*` types at monorepo build (cells provide the
@@ -96,7 +109,10 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
     },
 
     async put(record: StateRecord, guard?: PutGuard): Promise<void> {
-      const item: Item = { pk: K.statePk(record.scope), sk: K.factSk(record.key), ...record };
+      // touches/window persist as FLAT attributes (t_hr…/w_hr…/w_b) so
+      // `recordTouch` can bump one with a single ADD — never as nested maps.
+      const { touches: _touches, window: _window, ...fields } = record;
+      const item: Item = { pk: K.statePk(record.scope), sk: K.factSk(record.key), ...fields, ...touchesToItem(record) };
       if (record.type) {
         item.gsi2pk = K.typePk(record.scope, record.type);
         item.gsi2sk = record.updatedAt;
@@ -217,6 +233,43 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
         ExpressionAttributeValues: { ':pk': K.trajPk(scope), ':since': since },
       });
       return items.map((i) => ({ op: i.op as TrajectoryEvent['op'], scope: i.scope as string, key: (i.key as string | null) ?? null, at: i.at as string, seq: Number(i.seq) }));
+    },
+
+    async recordTouch(scope: string, key: string, actor: ActorClass, op: 'read' | 'write', bucket: number): Promise<void> {
+      const k = touchKey(actor, op);
+      const Key = { pk: K.statePk(scope), sk: K.factSk(key) };
+      const isCheckFailure = (err: unknown): boolean => (err as { name?: string }).name === 'ConditionalCheckFailedException';
+      try {
+        // Fast path: the window bucket is current (or was never set) → one ADD
+        // bumps the lifetime counter and the in-bucket counter together.
+        await doc.send(
+          new lib.UpdateCommand({
+            TableName: tableName,
+            Key,
+            UpdateExpression: `ADD ${touchAttr(k)} :one, ${windowAttr(k)} :one SET ${WINDOW_BUCKET_ATTR} = :bucket`,
+            ConditionExpression: `attribute_exists(pk) AND (attribute_not_exists(${WINDOW_BUCKET_ATTR}) OR ${WINDOW_BUCKET_ATTR} = :bucket)`,
+            ExpressionAttributeValues: { ':one': 1, ':bucket': bucket },
+          }),
+        );
+      } catch (err) {
+        if (!isCheckFailure(err)) throw err;
+        // The bucket rolled over (or the fact is absent). Reset the window to
+        // this bucket with only this touch, still bumping the lifetime counter.
+        const zeroes = TOUCH_KEYS.map((tk) => `${windowAttr(tk)} = ${tk === k ? ':one' : ':zero'}`).join(', ');
+        try {
+          await doc.send(
+            new lib.UpdateCommand({
+              TableName: tableName,
+              Key,
+              UpdateExpression: `ADD ${touchAttr(k)} :one SET ${WINDOW_BUCKET_ATTR} = :bucket, ${zeroes}`,
+              ConditionExpression: 'attribute_exists(pk)',
+              ExpressionAttributeValues: { ':one': 1, ':zero': 0, ':bucket': bucket },
+            }),
+          );
+        } catch (err2) {
+          if (!isCheckFailure(err2)) throw err2; // fact absent → attention on nothing is a no-op
+        }
+      }
     },
   };
 }

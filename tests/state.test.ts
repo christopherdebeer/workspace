@@ -130,6 +130,7 @@ describe('observed state: salience scoring', () => {
       attentionWeight: 0.1,
       standingWeight: 0.2,
       centralityWeight: 0.1,
+      relevanceWeight: 0,
       focusThreshold: 0.5,
       elideThreshold: 0.1,
     };
@@ -187,8 +188,9 @@ describe('observed state: salience scoring', () => {
     });
     // hub (out:2) and iso (in:2) both have degree 2; leaf has degree 2 as well here,
     // so assert the override took effect: scores are pure-centrality, not recency.
-    expect(central.entries.hub._meta.score).toBeCloseTo(2 / 5, 5); // degree 2 / centralitySaturation 5
-    expect(central.entries.hub._meta.centrality).toBeCloseTo(2 / 5, 5);
+    // log-compressed centrality (ADR-0050): log1p(degree) / log1p(saturation 50)
+    expect(central.entries.hub._meta.score).toBeCloseTo(Math.log1p(2) / Math.log1p(50), 3); // _meta rounds to 4dp
+    expect(central.entries.hub._meta.centrality).toBeCloseTo(Math.log1p(2) / Math.log1p(50), 3);
     // The default read (recency-led) scores the same fresh facts much higher.
     const def = await state.read('r', { elision: 'none' });
     expect(def.entries.hub._meta.score).toBeGreaterThan(central.entries.hub._meta.score);
@@ -210,6 +212,7 @@ describe('observed state: salience scoring', () => {
       attentionWeight: 0.1,
       standingWeight: 0.2,
       centralityWeight: 0.1,
+      relevanceWeight: 0,
       focusThreshold: 0.5,
       elideThreshold: 0.1,
     };
@@ -488,9 +491,9 @@ describe('derived structural backbone', () => {
     await state.put({ scope: 'r', key: 'kb/1', value: { text: 'hi' }, type: 'note' }, alice);
 
     const res = await state.read('r', { elision: 'none' });
-    // weighted degree: one structural `instanceOf` edge (strength 0.2) / centralitySaturation 5
-    // = 0.04 — a floor above zero, but discounted vs an authored link (ADR-0009).
-    expect(res.entries['kb/1']._meta.centrality).toBeCloseTo(0.2 / 5, 5);
+    // weighted degree: one structural `instanceOf` edge (strength 0.2), log-compressed
+    // (ADR-0050) — a floor above zero, but discounted vs an authored link (ADR-0009).
+    expect(res.entries['kb/1']._meta.centrality).toBeCloseTo(Math.log1p(0.2) / Math.log1p(50), 3); // _meta rounds to 4dp
     // the type anchor is a hub: its instance points at it, so it too clears zero.
     expect(res.entries['_types/note']._meta.centrality).toBeGreaterThan(0);
   });
@@ -675,7 +678,7 @@ describe('salience: explain breakdown (ADR-0006)', () => {
     const res = await state.read('r', { elision: 'none', explain: true });
     const ex = res.entries['k']._meta.explain;
     expect(ex).toBeDefined();
-    expect(Object.keys(ex!.signals).sort()).toEqual(['attention', 'centrality', 'recency', 'standing', 'velocity']);
+    expect(Object.keys(ex!.signals).sort()).toEqual(['attention', 'centrality', 'recency', 'relevance', 'standing', 'velocity']);
     // contribution = signal × weight, term by term
     for (const term of ['recency', 'velocity', 'attention', 'standing', 'centrality'] as const) {
       expect(ex!.contribution[term]).toBeCloseTo(ex!.signals[term] * ex!.weights[term], 4);

@@ -227,13 +227,14 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'recall',
     description:
-      'Orient in your workspace. BY DEFAULT (bare call) returns a broad, succinct OVERVIEW — total + granted counts, salience bands, top types & key-prefixes, and the top ~12 focus facts in full — plus `hints` on how to drill (query/search/peek/neighbors). This is progressive disclosure: skim here, then narrow. For the WHOLE shaped view pass `view:"full"` (or any shaping arg): focus/peripheral facts in full, low-salience collapsed to `{key,type,score}` stubs under `elided` (re-read with `expand:[keys]` or `peek`). For a targeted subset prefer `query`. Granted facts appear under `<owner>/<key>`. Tune shaping by writing a `_config/salience` fact; precedence is defaults ← that config ← `lens` ← per-call `salience`.',
+      'Orient in your workspace. BY DEFAULT (bare call) returns a broad, succinct OVERVIEW — total + granted counts, salience bands, top types & key-prefixes, and the top ~12 focus facts in full — plus `hints` on how to drill (query/search/peek/neighbors). Pass `text` to orient RELATIVE TO A GOAL (ADR-0051): relevance to your text joins the salience blend, so the focus band and counts answer "what matters about THIS?" instead of "what matters lately?". This is progressive disclosure: skim here, then narrow. For the WHOLE shaped view pass `view:"full"` (or any shaping arg): focus/peripheral facts in full, low-salience collapsed to `{key,type,score}` stubs under `elided` (re-read with `expand:[keys]` or `peek`). For a targeted subset prefer `query`. Granted facts appear under `<owner>/<key>`. Tune shaping by writing a `_config/salience` fact; precedence is defaults ← that config ← `lens` ← per-call `salience`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         view: { type: 'string', enum: ['overview', 'full'], description: "'overview' (default for a bare call) = succinct orientation + drill hints; 'full' = the whole salience-shaped view" },
+        text: { type: 'string', description: 'Orient relative to a goal: free text, matched by MEANING. Relevance becomes the leading salience signal for this read (focus, counts, and elision all condition on it). Keeps the overview default — recall({text}) is "what do I have, and what can I do, about X?"' },
         elision: { type: 'string', enum: ['auto', 'none'], description: "(implies view:full) 'auto' collapses low-salience entries to stubs; 'none' returns every entry in full (heavy on a large slice)" },
         expand: { type: 'array', items: { type: 'string' }, description: 'Keys to force into focus' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
@@ -291,7 +292,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'query',
     description:
-      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Use this instead of recall when you want a targeted subset.',
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Pass `text` to rank by MEANING as well (ADR-0051): `query({text})` alone is semantic search that still respects earned salience; `query({type, text})` is the structural+semantic hybrid. Use this instead of recall when you want a targeted subset.',
     scope: null,
     scopeFamily: 'read:type:*',
     kind: 'read',
@@ -301,6 +302,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         type: { type: 'string', description: 'Only facts of this type' },
         tag: { type: 'string', description: 'Only facts carrying this tag' },
         prefix: { type: 'string', description: 'Only keys with this prefix' },
+        text: { type: 'string', description: 'Rank by meaning: free text, embedded and matched semantically. Relevance leads the salience blend for this call (intent preset; an explicit `salience` override still wins). Prefer this over `search` — same candidates, but salience-aware ranking and full query filters' },
         contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },
         rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
         lens: LENS_SCHEMA,
@@ -327,7 +329,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'search',
     description:
-      'Semantic search: find facts by MEANING, not exact words. Embeds your text and ranks facts (and file content) by similarity across your slice + everything shared with you, then re-reads each hit authoritatively (so a result is always live + permitted). Complements `query` (structured type/tag/prefix filter) and `query.contains` (exact substring) — use `search` for "facts about X" when you do not know the exact wording. Restrict with `type`/`tag`. Returns the same `{entries, types}` shape as query. If the deployment has no vector backend, returns empty with a `hint`.',
+      'DEPRECATED alias (ADR-0051) — prefer `query({ text })`, which matches the same candidates by meaning but ranks salience-aware and composes with type/tag/prefix filters. This older surface ranks by raw cosine only (salience-blind): embeds your text, ranks by similarity across your slice + everything shared with you, then re-reads each hit authoritatively. If the deployment has no vector backend, returns empty with a `hint`.',
     scope: null,
     scopeFamily: 'read:type:*',
     kind: 'read',
