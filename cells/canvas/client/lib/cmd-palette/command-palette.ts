@@ -4,7 +4,13 @@ import { buildRootItems } from './menu-items.ts';
 import { editElementWithPrompt } from '../network/generation.ts';
 import { searchFacts, addFactToCanvas } from '../network/storage.ts';
 import { installKeyboardShortcuts } from './keyboard-shortcuts.ts';
+import { fitRegion } from '../../../shared/frame.ts';
 import type { CanvasController, CommandItem, ElementSuggestion, FactSuggestion, SuggestionItem, MenuItem } from '../../types.ts';
+
+/** User/agent content flows into the suggestion list (element snippets, fact
+ *  titles) — escape it before innerHTML. */
+const esc = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // Import CSS
 import './command-palette.css';
@@ -44,7 +50,9 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
           shortcut: it.shortcut || null,
           category: currentCategory,
           icon: it.icon || null,
+          // aliases buy synonym reach ("remove" finds Delete) for free.
           searchText: nextPath.join(' ').toLowerCase() + ' ' + (currentCategory || '').toLowerCase()
+            + (it.aliases ? ' ' + String(it.aliases).toLowerCase() : '')
         });
       });
     }
@@ -53,21 +61,22 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   }
   const commandPool = (): CommandItem[] => flattenCommands();
   
-  // Store recent commands
-  const recentCommands: CommandItem[] = [];
+  // Recent commands persist across reloads (they're the empty-state content —
+  // a page-lifetime array made every fresh open start blank).
+  const RECENTS_KEY = 'parc.canvas.recents';
+  let recentKeys: string[] = [];
+  try { recentKeys = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch { /* fresh */ }
+  /** Resolve stored keys against the LIVE pool (guards apply, stale keys drop). */
+  const recentItems = (): CommandItem[] => {
+    const pool = commandPool();
+    return recentKeys
+      .map((k) => pool.find((c) => c.path.join(' ') === k))
+      .filter(Boolean) as CommandItem[];
+  };
   const addToRecent = (cmd: CommandItem): void => {
-    // Remove if already exists
-    const index = recentCommands.findIndex(c =>
-      c.path.join(' ') === cmd.path.join(' '));
-    if (index > -1) recentCommands.splice(index, 1);
-
-    // Add to beginning
-    recentCommands.unshift(cmd);
-
-    // Keep only the specified number of recent commands
-    if (recentCommands.length > cfg.recentCommandsCount) {
-      recentCommands.pop();
-    }
+    const key = cmd.path.join(' ');
+    recentKeys = [key, ...recentKeys.filter((k) => k !== key)].slice(0, cfg.recentCommandsCount);
+    try { localStorage.setItem(RECENTS_KEY, JSON.stringify(recentKeys)); } catch { /* storage full */ }
   };
 
   /* ── element suggestions ── */
@@ -148,6 +157,35 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   const $list = root.querySelector('.suggestions') as HTMLUListElement;
   const $clear = root.querySelector('#cmd-clear') as HTMLButtonElement;
   const $recentLabel = root.querySelector('.recent-commands-label') as HTMLDivElement;
+  const $save = root.querySelector('.cmd-footer .presence') as HTMLSpanElement;
+
+  /* ── save-state dot: persistence used to fail silently (console-only) ── */
+  let saveFade: ReturnType<typeof setTimeout> | undefined;
+  const onSaveState = (ev: Event): void => {
+    const state = (ev as CustomEvent<{ state: string }>).detail?.state;
+    clearTimeout(saveFade);
+    if (state === 'saving') { $save.textContent = 'saving…'; $save.style.color = '#8a8a82'; }
+    else if (state === 'failed') { $save.textContent = '⚠ save failed — changes may be lost'; $save.style.color = '#b3261e'; }
+    else { $save.textContent = 'saved'; $save.style.color = '#2f6f4f'; saveFade = setTimeout(() => { $save.textContent = ''; }, 1600); }
+  };
+  window.addEventListener('parc:save-state', onSaveState);
+
+  /* ── dynamic placeholder: teach the free-text behaviours in place —
+   *    Enter with a selection AI-edits it; with none it creates a note. ── */
+  const onSelForPlaceholder = (ev: Event): void => {
+    if (mode !== 'browse') return;
+    const ids = (ev as CustomEvent<{ ids: string[] }>).detail?.ids ?? [];
+    if (ids.length === 1) {
+      const el = controller.findElementById(ids[0]);
+      const raw = typeof el?.content === 'string' ? el.content.trim().split('\n')[0] : '';
+      const title = raw.length > 24 ? raw.slice(0, 23) + '…' : raw;
+      $input.placeholder = title ? `Ask AI to edit “${title}” — or type a command…` : 'Ask AI to edit the selection — or type a command…';
+    } else {
+      $input.placeholder = '› Type a command — or text to create a note…';
+    }
+  };
+  window.addEventListener('parc:selection-changed', onSelForPlaceholder);
+  $input.placeholder = '› Type a command — or text to create a note…';
 
   /* ── state ── */
   let filtered: SuggestionItem[] = [];
@@ -188,7 +226,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
         
         const pathHtml = it.path.map((p, idx) => {
           const isLast = idx === it.path.length - 1;
-          return `<span class="crumb${isLast ? ' last-crumb' : ''}">${p}</span>`;
+          return `<span class="crumb${isLast ? ' last-crumb' : ''}">${esc(p)}</span>`;
         }).join('');
         
         li.innerHTML = `
@@ -203,12 +241,12 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       } else if (it.kind === 'fact') {
         // A substrate fact not yet on the board — the icon is a kernel glyph
         // (emoji / •) or a fontawesome class; the + marks "bring it in".
-        const icon = it.icon.startsWith('fa-') ? `<i class="fa-solid ${it.icon}"></i>` : it.icon;
+        const icon = it.icon.startsWith('fa-') ? `<i class="fa-solid ${it.icon}"></i>` : esc(it.icon);
         li.innerHTML = `
           <span class="s-icon">${icon}</span>
           <div class="cmd-content">
-            <span class="crumb last-crumb">${it.label}</span>
-            <span class="cmd-category">add · ${it.type}</span>
+            <span class="crumb last-crumb">${esc(it.label)}</span>
+            <span class="cmd-category">add · ${esc(it.type)}</span>
           </div>
           <span class="cmd-shortcut"><kbd>+</kbd></span>
         `;
@@ -216,8 +254,8 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
         li.innerHTML = `
           <span class="s-icon"><i class="fa-solid ${it.icon}"></i></span>
           <div class="cmd-content">
-            <span class="crumb last-crumb">${it.label}</span>
-            <span class="cmd-category">${it.type}</span>
+            <span class="crumb last-crumb">${esc(it.label)}</span>
+            <span class="cmd-category">${esc(it.type)}</span>
           </div>
         `;
       }
@@ -230,8 +268,9 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   const computeFiltered = (q: string): SuggestionItem[] => {
     if (!q) {
       // Show recent commands when no query
-      showingRecent = recentCommands.length > 0;
-      return showingRecent ? recentCommands : [];
+      const rec = recentItems();
+      showingRecent = rec.length > 0;
+      return rec;
     }
 
     showingRecent = false;
@@ -278,7 +317,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     mode = 'browse'; pending = null;
     root.classList.remove('awaiting');
     root.classList.remove('pending');
-    $input.placeholder = '› Type a command…';
+    $input.placeholder = '› Type a command — or text to create a note…';
     reset();
   };
 
@@ -315,20 +354,24 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   const reset = (): void => {
     $input.value = '';
     sel = -1;
-    filtered = showingRecent ? recentCommands : [];
+    filtered = recentItems();
+    showingRecent = filtered.length > 0;
     root.classList.add('empty');
     render();
   };
 
-  /* ── zoom helper ── */
+  /* ── zoom helper — through the one shared camera resolver ── */
   const zoomToElement = (ctrl: CanvasController, id: string): void => {
     const el = ctrl.findElementById(id); if (!el) return;
-    const box = ctrl.canvas.getBoundingClientRect();
-    const m = 60;
-    const w = el.width * (el.scale || 1) + m;
-    const h = el.height * (el.scale || 1) + m;
-    ctrl.viewState.scale = Math.min(box.width / w, box.height / h, ctrl.MAX_SCALE);
-    ctrl.recenterOnElement(id); ctrl.updateCanvasTransform(); ctrl.saveLocalViewState?.();
+    const s = el.scale || 1;
+    const hw = (el.width * s) / 2, hh = (el.height * s) / 2;
+    const cam = fitRegion(
+      { minX: el.x - hw, minY: el.y - hh, maxX: el.x + hw, maxY: el.y + hh },
+      ctrl.canvas.clientWidth, ctrl.canvas.clientHeight, 0.15, ctrl.MAX_SCALE);
+    ctrl.viewState.scale = cam.scale;
+    ctrl.viewState.translateX = cam.tx;
+    ctrl.viewState.translateY = cam.ty;
+    ctrl.updateCanvasTransform(); ctrl.saveLocalViewState?.();
   };
 
   /* ── events ── */
@@ -345,8 +388,8 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     
     // Show recent commands when focused with empty input
     if (!$input.value.trim()) {
-      filtered = recentCommands.length > 0 ? recentCommands : [];
-      showingRecent = recentCommands.length > 0;
+      filtered = recentItems();
+      showingRecent = filtered.length > 0;
       render();
     }
   });
@@ -437,7 +480,9 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     }
   });
 
-  $clear.onclick = quitInput;
+  // ✕ clears the QUERY; only in an awaiting flow does it cancel the flow —
+  // clearing text used to abort a pending input command as a side effect.
+  $clear.onclick = () => { mode === 'awaiting' ? quitInput() : reset(); };
 
   // Global keyboard shortcut to open command palette
   const globalKeydownHandler = (e: KeyboardEvent): void => {
@@ -447,19 +492,17 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       $input.select();
 
       // Show recent commands when opened
-      if (recentCommands.length > 0) {
-        filtered = recentCommands;
-        showingRecent = true;
-        render();
-      }
+      filtered = recentItems();
+      showingRecent = filtered.length > 0;
+      render();
     }
   };
 
   window.addEventListener('keydown', globalKeydownHandler);
 
   // Initialize with recent commands if available
-  filtered = recentCommands.length > 0 ? recentCommands : [];
-  showingRecent = recentCommands.length > 0;
+  filtered = recentItems();
+  showingRecent = filtered.length > 0;
   render();
 
   // Install keyboard shortcuts
@@ -469,7 +512,10 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   return () => {
     uninstallShortcuts();
     window.removeEventListener('keydown', globalKeydownHandler);
+    window.removeEventListener('parc:save-state', onSaveState);
+    window.removeEventListener('parc:selection-changed', onSelForPlaceholder);
     clearTimeout(factTimer);
+    clearTimeout(saveFade);
     root.remove();
   };
 }

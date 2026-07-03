@@ -27,6 +27,10 @@ let hostEl: HTMLElement | null = null;         // when set, the editor lives ins
 
 export function showModal(el: CanvasElement, opts: { generateContent?: (seed: string) => Promise<string> | string; host?: HTMLElement } = {}): Promise<{ status: string; el: CanvasElement | null }> {
   if (!el) throw new Error('showModal: element required');
+  // A re-open before the previous close resolved would strand the prior
+  // awaiter forever — settle it as cancelled first.
+  resolver?.({ status: 'cancelled', el: null });
+  resolver = null;
   generateFn = opts.generateContent ?? null;
   hostEl = opts.host ?? null;
 

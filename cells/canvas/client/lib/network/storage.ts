@@ -1027,7 +1027,8 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   // Only when projection is OFF: under ?links=1 the rebuild already carries
   // every live link, and preserving extras would defeat remote unlinks.
   const rebuiltIds = new Set(rebuilt.map((e: any) => e.id));
-  for (const e of SHOW_LINK_EDGES ? [] : (cc.canvasState.edges ?? [])) {
+  const sessionEdges: any[] = SHOW_LINK_EDGES ? [] : (cc.canvasState.edges ?? []);
+  for (const e of sessionEdges) {
     if (String(e.id).startsWith('lnk:') && !rebuiltIds.has(e.id)) {
       const ok = (x: unknown): boolean => typeof x === 'string' && elIds.has(x);
       if (ok(e.source) && ok(e.target)) {

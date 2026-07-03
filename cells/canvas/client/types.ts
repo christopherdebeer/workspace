@@ -116,6 +116,8 @@ export interface MenuItem {
   icon?: string;
   category?: string;
   shortcut?: string;
+  /** Space-separated synonyms folded into palette search ("remove erase"). */
+  aliases?: string;
   children?: MenuItem[];
   action?: (controller: any, input?: any) => void | Promise<void> | any;
   needsInput?: string;
@@ -162,7 +164,7 @@ export interface CanvasController {
   toggleStatic(element: CanvasElement): void;
   openEditModal(element: CanvasElement): void;
   createEditElement(event: Event, element: CanvasElement, property: string): void;
-  selectElement(id: string): void;
+  selectElement(id: string, additive?: boolean): void;
   clearSelection(): void;
   handleDrillIn(element: CanvasElement): void;
   findElementById(id: string): CanvasElement | undefined;

@@ -117,9 +117,10 @@ async function renderTourBar(frameId: string): Promise<void> {
       document.body.appendChild(bar);
     }
   }
+  const escHtml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const btn = (txt: string, target: string | null): string =>
-    `<button class="ft-nav" data-frame="${target ?? ''}" ${target ? '' : 'disabled'}>${txt}</button>`;
-  bar.innerHTML = `${btn('‹ Prev', prev)}<span class="ft-label">${label}</span>${btn('Next ›', next)}<button class="ft-exit" data-exit="1" title="Exit tour">✕</button>`;
+    `<button class="ft-nav" data-frame="${escHtml(target ?? '')}" ${target ? '' : 'disabled'}>${txt}</button>`;
+  bar.innerHTML = `${btn('‹ Prev', prev)}<span class="ft-label">${escHtml(label)}</span>${btn('Next ›', next)}<button class="ft-exit" data-exit="1" title="Exit tour">✕</button>`;
   bar.querySelectorAll('button[data-frame]').forEach((b) => {
     const t = (b as HTMLElement).dataset.frame;
     if (t) b.addEventListener('click', () => void goToFrame(t));

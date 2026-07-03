@@ -1327,7 +1327,12 @@ ${script.getAttribute('src')}`);
                 console.warn("Image failed to load", err);
             };
 
-            if (!el.src && !i.src) {
+            // Auto-generate a src-less img ONCE per element per session — a
+            // render loop retrying a failing generation was an unbounded
+            // stream of model jobs nobody asked for.
+            const attempted: Set<string> = ((window as any).__imgGenAttempted ??= new Set());
+            if (!el.src && !i.src && !attempted.has(el.id)) {
+                attempted.add(el.id);
                 regenerateImage(el).then(() => {
                     saveCanvasLocalOnly(this.canvasState);
                     this.requestRender();

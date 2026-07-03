@@ -4,6 +4,7 @@
 import { saveCanvas } from '../network/storage.ts';
 import { generateContent } from '../network/generation.ts';
 import { uid } from '../uid.ts';
+import { fitRegion } from '../../../shared/frame.ts';
 import type { CanvasElement } from '../../types';
 
 /* internal clipboard — page-lifetime only */
@@ -204,36 +205,28 @@ export function zoom(c: any, factor: number): void {
 }
 
 export function zoomToFit(c: any): void {
-  /* fit all elements' bounding box into the visible canvas */
+  /* fit all elements' bounding box into the visible canvas — through the ONE
+     shared camera resolver (ADR-0015) instead of a fourth local fit. */
   if (!c.canvasState.elements.length) return;
-  const xs: number[] = [], ys: number[] = [], xe: number[] = [], ye: number[] = [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   c.canvasState.elements.forEach((el: CanvasElement) => {
     const s = el.scale || 1;
-    xs.push(el.x - el.width * s / 2);
-    ys.push(el.y - el.height * s / 2);
-    xe.push(el.x + el.width * s / 2);
-    ye.push(el.y + el.height * s / 2);
+    minX = Math.min(minX, el.x - el.width * s / 2);
+    minY = Math.min(minY, el.y - el.height * s / 2);
+    maxX = Math.max(maxX, el.x + el.width * s / 2);
+    maxY = Math.max(maxY, el.y + el.height * s / 2);
   });
-  const bb = {
-    x1: Math.min(...xs), y1: Math.min(...ys),
-    x2: Math.max(...xe), y2: Math.max(...ye)
-  };
-  const W = c.canvas.clientWidth, H = c.canvas.clientHeight;
-  const scaleX = W / (bb.x2 - bb.x1), scaleY = H / (bb.y2 - bb.y1);
-  c.viewState.scale = Math.min(scaleX, scaleY) * 0.85;          // 15 % margin
-  c.viewState.translateX = -bb.x1 * c.viewState.scale + (W - (bb.x2 - bb.x1) * c.viewState.scale) / 2;
-  c.viewState.translateY = -bb.y1 * c.viewState.scale + (H - (bb.y2 - bb.y1) * c.viewState.scale) / 2;
+  const cam = fitRegion({ minX, minY, maxX, maxY }, c.canvas.clientWidth, c.canvas.clientHeight, 0.08, c.MAX_SCALE);
+  c.viewState.scale = cam.scale;
+  c.viewState.translateX = cam.tx;
+  c.viewState.translateY = cam.ty;
   c.updateCanvasTransform();
   c.saveLocalViewState?.();
 }
 
-/* ─── version history & export stubs (minimal yet useful) ─────────────────── */
-
-export function openHistory(c: any): void {
-  const js = JSON.stringify(c.canvasState.versionHistory ?? [], null, 2);
-  const w = window.open('', '_blank');
-  w!.document.write(`<pre>${js.replace(/</g, '&lt;')}</pre>`);
-}
+/* ─── export (openHistory is gone: it showed versionHistory, which the
+ *      persister strips — always [] — and window.open crashes when iOS
+ *      blocks the popup) ─────────────────────────────────────────────────── */
 
 export function exportJSON(c: any): void {
   const data = JSON.stringify(c.canvasState, null, 2);

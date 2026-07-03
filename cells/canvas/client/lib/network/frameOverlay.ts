@@ -33,7 +33,6 @@ interface FrameFact { key: string; value?: FrameValue }
 
 let frames: FrameFact[] = [];
 let installed = false;
-let rafPending = false;
 // Until the client has actually fetched this board's frames, the SSR-painted
 // #frames-layer is the source of truth — a redraw with the still-empty `frames`
 // would wipe it (the flash: SSR frames vanish, then reappear after the query).
@@ -81,11 +80,17 @@ export async function refreshFrameOverlay(): Promise<void> {
   drawFrameOverlay();
 }
 
+let drawTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleDraw(): void {
   // Don't let an element-move redraw wipe the SSR frames before we've loaded ours.
-  if (!framesFetched || rafPending) return;
-  rafPending = true;
-  requestAnimationFrame(() => { rafPending = false; drawFrameOverlay(); });
+  if (!framesFetched || drawTimer) return;
+  // Trailing throttle, not per-frame: the mutation observer fires on every
+  // element-style write, and a full placedOf() + innerHTML SVG reparse at
+  // 60Hz during a drag was a per-frame O(V) cost the culling can't see.
+  drawTimer = setTimeout(() => {
+    drawTimer = undefined;
+    requestAnimationFrame(drawFrameOverlay);
+  }, 150);
 }
 
 /* ── editor ──────────────────────────────────────────────────────────────── */
@@ -186,7 +191,13 @@ export function installFrameOverlay(): void {
   void refreshFrameOverlay();
   const container = document.getElementById('canvas-container');
   if (container) {
-    new MutationObserver(scheduleDraw).observe(container, {
+    new MutationObserver((muts) => {
+      // The container's OWN style mutation is the camera transform — the
+      // frames layer rides the same transform (applyCanvasTransformNow), so a
+      // camera-only batch needs no geometry redraw. Only element changes do.
+      if (muts.every((m) => m.target === container && m.type === 'attributes')) return;
+      scheduleDraw();
+    }).observe(container, {
       attributes: true, attributeFilter: ['style'], childList: true, subtree: true,
     });
   }

@@ -50,7 +50,12 @@ function buildElementActions(el: CanvasElement, controller: CanvasController, do
     const icon = (anyEl._factIcon as string) ?? '';
     const title = (anyEl._factTitle as string) ?? (typeof el.content === 'string' ? el.content.split('\n')[0].slice(0, 48) : el.id);
     const key = (anyEl._factKey as string) ?? `el:${el.id}`;
-    head.innerHTML = `<strong>${icon ? icon + ' ' : ''}${title}</strong><code>${key}</code>`;
+    // Title/key are fact content (often agent-authored) — never innerHTML.
+    const strong = document.createElement('strong');
+    strong.textContent = `${icon ? icon + ' ' : ''}${title}`;
+    const code = document.createElement('code');
+    code.textContent = key;
+    head.append(strong, code);
     if (anyEl._factHref) {
       const a = document.createElement('a');
       a.href = String(anyEl._factHref);

@@ -90,7 +90,11 @@ export function registerSubstrateTypes(): void {
       host.dataset.viewId = String(el.content || '');
       sizeToElement(el, host);
       void hydrate(host);
-      if (!inertEmbed()) (host as any)._timer = setInterval(() => void hydrate(host), REFRESH_MS);
+      if (!inertEmbed()) (host as any)._timer = setInterval(() => {
+        // No refetch while culled off-screen — the timer outlives the paint.
+        if ((host.closest('.canvas-element') as HTMLElement | null)?.style.contentVisibility === 'hidden') return;
+        void hydrate(host);
+      }, REFRESH_MS);
       return host;
     },
     update(el: any, dom: HTMLElement) {
@@ -138,8 +142,10 @@ export function registerSubstrateTypes(): void {
         const cc = (window as { CC?: any }).CC;
         if (!cc || !host.isConnected) return;
         // Mid-gesture the compositor is busy with the pan — skip this beat
-        // (the interval brings the next one 800ms later).
+        // (the interval brings the next one 800ms later). Same while culled
+        // off-screen: content-visibility skips the PAINT, not our timer.
         if (document.body.classList.contains('gesturing')) return;
+        if ((host.closest('.canvas-element') as HTMLElement | null)?.style.contentVisibility === 'hidden') return;
         const w = (cv.width = host.clientWidth || 200);
         const h = (cv.height = host.clientHeight || 140);
         const g = cv.getContext('2d');

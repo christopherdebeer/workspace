@@ -139,7 +139,13 @@ export function createGestureHelpers(controller: CanvasController) {
       true
     );
     // --- keep model dimensions in sync with flowed DOM height --------------
-    requestAnimationFrame(() => {          // run after the browser paints
+    // One measurement per frame, last-move-wins: scheduling an unconditional
+    // rAF per pointermove stacked a forced layout (clientHeight) per move and
+    // raced the synchronous height write above.
+    const n = node as HTMLElement & { _measureRaf?: number };
+    if (n._measureRaf) cancelAnimationFrame(n._measureRaf);
+    n._measureRaf = requestAnimationFrame(() => {   // run after the browser paints
+      n._measureRaf = 0;
       const contentBox = node.querySelector('.content') || node;
       if (!contentBox) return;
       el.height = contentBox.clientHeight / (el.scale || 1);

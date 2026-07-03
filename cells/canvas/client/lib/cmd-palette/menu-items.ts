@@ -4,7 +4,7 @@ import {
   copySelection, pasteClipboard, clipboardHasContent,
   generateNew, inlineEdit, reorder,
   groupSelection, ungroupSelection, canUngroup,
-  zoom, zoomToFit, openHistory, exportJSON
+  zoom, zoomToFit, exportJSON
 } from './menu-item-helpers.ts';
 import { autoLayout } from '../layout/auto-layout.ts';
 import { align } from '../layout/align.ts';
@@ -40,12 +40,15 @@ function buildTypeItems(controller) {
 export function buildRootItems(controller) {
 
   return [
-    /* ── Mode toggle ─────────────────────────────────────────────────────── */
+    /* ── Mode toggle ──────────────────────────────────────────────────────
+     * No shortcuts here: ⌘E/⌘V/⌘T collided with Inline Edit / Paste / the
+     * browser's new-tab (last-registered silently won). Esc already toggles
+     * modes, and the toolbar button is one tap. */
     {
       label: 'Mode', icon: 'fa-arrows-alt', category: 'Navigation', children: [
-        { label: 'Edit', icon: 'fa-pen-to-square', shortcut: '⌘E', action: c => c.switchMode('direct') },
-        { label: 'View', icon: 'fa-eye', shortcut: '⌘V', action: c => c.switchMode('navigate') },
-        { label: 'Toggle', icon: 'fa-toggle-on', shortcut: '⌘T', action: c => c.switchMode() },
+        { label: 'Edit', icon: 'fa-pen-to-square', aliases: 'editing direct', action: c => c.switchMode('direct') },
+        { label: 'View', icon: 'fa-eye', aliases: 'viewing navigate pan', action: c => c.switchMode('navigate') },
+        { label: 'Toggle', icon: 'fa-toggle-on', action: c => c.switchMode() },
       ]
     },
 
@@ -54,29 +57,19 @@ export function buildRootItems(controller) {
     { label: 'Redo', icon: 'fa-rotate-right', category: 'Edit', shortcut: '⌘⇧Z', action: c => c.redo() },
 
     /* ── Add … ───────────────────────────────────────────────────────────── */
+    /* "⌘N x" chord shortcuts were display fiction — the dispatcher can't
+     * produce two-key sequences, so they advertised keys that never worked. */
     {
       label: 'Add', icon: 'fa-plus-circle', category: 'Create', children: [
-        { label: 'Text', icon: 'fa-font', category: 'Create', shortcut: '⌘N T', needsInput: "Text", action: (c, text) => addEl(c, 'text', text) },
-        { label: 'Markdown', icon: 'fa-brands fa-markdown', category: 'Create', shortcut: '⌘N M', needsInput: "Content", action: (c, text) => addEl(c, 'markdown', text) },
-        { label: 'Image', icon: 'fa-image', category: 'Create', shortcut: '⌘N I', needsInput: "Prompt", action: (c, text) => addEl(c, 'img', text) },
-        { label: 'Canvas', icon: 'fa-object-group', category: 'Create', shortcut: '⌘N C', action: c => addEl(c, 'canvas-container') },
-        {
-          label: 'Minimap', icon: 'fa-map', category: 'Create',
-          action: c => {
-            const id = c.createNewElement(
-              c.screenToCanvas(window.innerWidth * 0.75, window.innerHeight * 0.7).x,
-              c.screenToCanvas(window.innerWidth * 0.75, window.innerHeight * 0.7).y,
-              'minimap', ' ', false, {});
-            const el = c.findElementById(id);
-            if (el) { el.width = 220; el.height = 150; }
-            c.requestRender();
-          },
-        },
+        { label: 'Text', icon: 'fa-font', category: 'Create', aliases: 'new note', needsInput: "Text", action: (c, text) => addEl(c, 'text', text) },
+        { label: 'Markdown', icon: 'fa-brands fa-markdown', category: 'Create', aliases: 'new note md', needsInput: "Content", action: (c, text) => addEl(c, 'markdown', text) },
+        { label: 'Image', icon: 'fa-image', category: 'Create', aliases: 'new picture', needsInput: "Prompt", action: (c, text) => addEl(c, 'img', text) },
+        { label: 'Canvas', icon: 'fa-object-group', category: 'Create', aliases: 'new board nested', action: c => addEl(c, 'canvas-container') },
         {
           label: 'Generate',
           icon: 'fa-wand-magic-sparkles',
           category: 'AI',
-          shortcut: '⌘N A',
+          aliases: 'ai create',
           needsInput: 'Prompt',
           action: async (c, text) => {
             const { innerWidth: W, innerHeight: H } = window;
@@ -102,10 +95,10 @@ export function buildRootItems(controller) {
       children: [
         {
           label: 'Duplicate', icon: 'fa-copy', category: 'Edit',
-          shortcut: '⌘D',
-          action: c => c.selectedElementIds.forEach(id => duplicateEl(c, id))
+          shortcut: '⌘D', aliases: 'copy clone',
+          action: c => [...c.selectedElementIds].forEach(id => duplicateEl(c, id))
         },
-        { label: 'Delete', icon: 'fa-trash', category: 'Edit', shortcut: '⌫', action: c => deleteSelection(c) },
+        { label: 'Delete', icon: 'fa-trash', category: 'Edit', shortcut: '⌫', aliases: 'remove erase', action: c => deleteSelection(c) },
         {
           label: 'Image from selection', icon: 'fa-image', category: 'AI',
           visible: c => c.selectedElementIds.size === 1,
@@ -126,7 +119,7 @@ export function buildRootItems(controller) {
           },
         },
         {
-          label: 'Un-pin', icon: 'fa-thumbtack', category: 'Edit',
+          label: 'Un-pin', icon: 'fa-thumbtack', category: 'Edit', aliases: 'unpin release tray',
           visible: c => c.selectedElementIds.size > 0,
           action: c => unpinElements(c, [...c.selectedElementIds]),
         },
@@ -145,10 +138,11 @@ export function buildRootItems(controller) {
           action: c => pasteClipboard(c)
         },
         {
-          label: 'Generate New', icon: 'fa-arrow-rotate-right', category: 'AI',
-          shortcut: '⌘G',
+          // No ⌘G — that's Group's (the collision was resolved silently by
+          // registration order before).
+          label: 'Generate New', icon: 'fa-arrow-rotate-right', category: 'AI', aliases: 'ai regenerate rewrite',
           enabled: c => (c.selectedElementIds.size === 1 &&
-            c.findElementById([...c.selectedElementIds][0]).type !== 'img'),
+            c.findElementById([...c.selectedElementIds][0])?.type !== 'img'),
           action: c => generateNew(c)
         },
         { label: 'Inline Edit', icon: 'fa-i-cursor', category: 'Edit', shortcut: '⌘E', action: c => inlineEdit(c) },
@@ -203,16 +197,18 @@ export function buildRootItems(controller) {
         { label: 'Zoom In', icon: 'fa-search-plus', category: 'Navigation', shortcut: '⌘+', action: c => zoom(c, 1.25) },
         { label: 'Zoom Out', icon: 'fa-search-minus', category: 'Navigation', shortcut: '⌘-', action: c => zoom(c, 0.8) },
         { label: 'Reset Zoom', icon: 'fa-compress', category: 'Navigation', shortcut: '⌘0', action: c => zoom(c, 1 / c.viewState.scale) },
-        { label: 'Zoom to Fit', icon: 'fa-expand', category: 'Navigation', shortcut: '⌘1', action: c => zoomToFit(c) }
+        { label: 'Zoom to Fit', icon: 'fa-expand', category: 'Navigation', shortcut: '⌘1', aliases: 'fit all overview', action: c => zoomToFit(c) }
       ]
     },
 
-    /* ── Canvas ──────────────────────────────────────────────────────────── */
+    /* ── Canvas ──────────────────────────────────────────────────────────
+     * "Save" is gone: saves are automatic — offering the command implied
+     * they weren't (the save dot in the sheet footer is the honest signal).
+     * "History" showed versionHistory, which the persister strips — always
+     * an empty list. */
     {
       label: 'Canvas', icon: 'fa-database', category: 'File', children: [
-        { label: 'Save', icon: 'fa-save', category: 'File', shortcut: '⌘S', action: c => saveCanvas(c.canvasState) },
-        { label: 'History', icon: 'fa-clock', category: 'File', shortcut: '⌘H', action: c => openHistory(c) },
-        { label: 'Export JSON', icon: 'fa-file-export', category: 'File', shortcut: '⌘⇧E', action: c => exportJSON(c) }
+        { label: 'Export JSON', icon: 'fa-file-export', category: 'File', shortcut: '⌘⇧E', aliases: 'download backup', action: c => exportJSON(c) }
       ]
     },
   ];
