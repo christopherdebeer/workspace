@@ -421,10 +421,12 @@ export interface SalienceOptions {
   humanTouchWeight?: number;
   agentTouchWeight?: number;
   platformTouchWeight?: number;
-  /** Per-type salience prior (ADR-0050): a multiplier on the blended score by
-   *  `_meta.type` (unset type → key `""`). Plumbing types (canvas-placement,
-   *  log, machine-run) declare < 1 so they stop competing with knowledge in a
-   *  goal-less read; relevance can still lift them when an intent matches. */
+  /** Per-type salience prior (ADR-0050): a multiplier on the AMBIENT part of
+   *  the blend (recency/velocity/attention/standing/centrality) by `_meta.type`.
+   *  Plumbing types (canvas-placement, log, machine-run) declare < 1 so they
+   *  stop competing with knowledge in a goal-less read. The `relevance` term is
+   *  NOT scaled — a stated intent lifts a demoted type at full strength
+   *  (ADR-0052: capability facts stay quiet until a goal names them). */
   typePriors?: Record<string, number>;
   /** Score at/above which an entry is Focus (full value + meta). Default 0.5. */
   focusThreshold?: number;
@@ -684,14 +686,18 @@ export function scoreParts(
     s.centralitySaturation > 0 ? Math.min(Math.log1p(args.degree ?? 0) / Math.log1p(s.centralitySaturation), 1) : 0;
   const relevance = clamp01(args.relevance ?? 0);
   const prior = args.prior ?? 1;
+  // The type prior scales the AMBIENT terms only — "plumbing when you have no
+  // intent" is a statement about the intent-free part of the blend. Relevance
+  // rides unprioered, so a matching goal genuinely lifts a demoted type
+  // (ADR-0052: a capability fact stays quiet until an intent names it).
   const score = clamp01(
     prior *
       (s.recencyWeight * recency +
         s.velocityWeight * velocity +
         s.attentionWeight * attention +
         s.standingWeight * standing +
-        s.centralityWeight * centrality +
-        s.relevanceWeight * relevance),
+        s.centralityWeight * centrality) +
+      s.relevanceWeight * relevance,
   );
   return { score, recency, velocity, attention, standing, centrality, relevance, prior };
 }
