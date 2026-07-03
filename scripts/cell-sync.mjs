@@ -72,10 +72,16 @@ async function call(verb, target, input) {
   return value;
 }
 
-function* walk(dir) {
+/** Repo-side entries that are not cell source: dot-files (the cells service
+ *  rejects them as path segments anyway), dependency trees, and each cell's
+ *  devtools/ (local harnesses — e.g. canvas's headless-repro). */
+const SKIP = new Set(['node_modules', 'devtools']);
+
+function* walk(dir, top = true) {
   for (const name of readdirSync(dir)) {
+    if (name.startsWith('.') || (top && SKIP.has(name)) || name === 'node_modules') continue;
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) yield* walk(p);
+    if (statSync(p).isDirectory()) yield* walk(p, false);
     else yield p;
   }
 }
