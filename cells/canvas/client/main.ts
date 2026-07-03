@@ -17,6 +17,7 @@ import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import { canvasPath, boardFromPath } from './lib/url.ts';
 import { sanitizeElementGeometry, isFiniteNum } from './lib/geometry.ts';
+import { uid } from './lib/uid.ts';
 import { fitRegion, type BBox } from '../shared/frame.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -1176,7 +1177,7 @@ ${script.getAttribute('src')}`);
     }
 
     createNewElement(x: number, y: number, type = 'markdown', content = '', isCanvasContainer = false, data: any = {}) {
-        const newId = "el-" + Date.now();
+        const newId = uid("el");
         const defaultMap = {
             text: "New text element",
             img: "Realistic tree on white background",
@@ -1209,7 +1210,7 @@ ${script.getAttribute('src')}`);
     createNewEdge(sourceId: string, targetId: string, label: string, data: any = {}, style: any = {}) {
         // Create a new edge object.
         const newEdge: Edge = {
-            id: "edge-" + Date.now(),
+            id: uid("edge"),
             source: sourceId,
             target: targetId,
             label: label,

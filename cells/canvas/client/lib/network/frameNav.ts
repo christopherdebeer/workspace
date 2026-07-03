@@ -144,7 +144,7 @@ async function installNavTo(): Promise<void> {
     'click',
     (ev) => {
       const node = (ev.target as HTMLElement)?.closest?.('.canvas-element') as HTMLElement | null;
-      const id = node?.dataset?.id;
+      const id = node?.dataset?.elId; // elements carry elId — dataset.id left every hotspot dead
       const target = id && map.get(id);
       if (target) { ev.preventDefault(); ev.stopPropagation(); void goToFrame(target); }
     },

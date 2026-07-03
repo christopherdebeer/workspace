@@ -14,6 +14,7 @@
  * ------------------------------------------------------------------------- */
 import { act } from './substrate.ts';
 import { saveCanvas } from './storage.ts';
+import { uid } from '../uid.ts';
 import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
 
 const cc = (): any => (window as { CC?: any }).CC;
@@ -45,7 +46,7 @@ function promoteIfBare(c: any, edge: any): void {
     c[m]?.[edge.id]?.remove?.();
     if (c[m]) delete c[m][edge.id];
   }
-  edge.id = `edge-${Date.now().toString(36)}`;
+  edge.id = uid('edge');
 }
 
 function applyEdit(edge: any, patch: { rel?: string; label?: string; style?: Record<string, string> }): void {

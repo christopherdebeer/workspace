@@ -24,8 +24,11 @@ function apply(): void {
   const cc = (window as { CC?: any }).CC;
   if (!cc?.canvasState?.elements) return;
   const els = cc.canvasState.elements;
+  // A fact's salience is keyed by its REAL key (_factKey) — imported facts
+  // aren't `el:<id>`, and looking them up that way left them badge-less.
+  const keyOf = (el: any): string => (typeof el._factKey === 'string' ? el._factKey : `el:${el.id}`);
   let max = 0;
-  for (const el of els) max = Math.max(max, salienceByKey.get(`el:${el.id}`) ?? 0);
+  for (const el of els) max = Math.max(max, salienceByKey.get(keyOf(el)) ?? 0);
   const threshold = max * TOP_FRACTION;
   let dirty = false;
   for (const el of els) {
@@ -44,7 +47,7 @@ function apply(): void {
       delete node.dataset.chip;
       dirty = true;
     }
-    const score = salienceByKey.get(`el:${el.id}`) ?? 0;
+    const score = salienceByKey.get(keyOf(el)) ?? 0;
     if (max > MIN_MAX && score > 0 && score >= threshold) node.dataset.salience = 'high';
     else delete node.dataset.salience;
   }

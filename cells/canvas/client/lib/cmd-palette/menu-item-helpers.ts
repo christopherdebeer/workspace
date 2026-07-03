@@ -3,6 +3,7 @@
  * ──────────────────────────────────────────────────────────────────────────── */
 import { saveCanvas } from '../network/storage.ts';
 import { generateContent } from '../network/generation.ts';
+import { uid } from '../uid.ts';
 import type { CanvasElement } from '../../types';
 
 /* internal clipboard — page-lifetime only */
@@ -25,11 +26,18 @@ export function addEl(c: any, type: string, content = ''): void {
 export function duplicateEl(c: any, id: string): void {
   const el = c.findElementById(id);
   if (!el) return;
-  const dup: CanvasElement = { ...el, id: 'el-' + Date.now(), x: el.x + 20, y: el.y + 20 };
+  const dup: CanvasElement = { ...el, id: uid('el'), x: el.x + 20, y: el.y + 20 };
+  // The copy is a NEW fact. Client transients — above all `_factKey` — must
+  // not ride along: factKeyOf(dup) would resolve to the ORIGINAL's substrate
+  // key, and the duplicate's writes would silently overwrite the source fact.
+  for (const k of Object.keys(dup)) {
+    if (k.startsWith('_')) delete (dup as Record<string, unknown>)[k];
+  }
   c.canvasState.elements.push(dup);
   c.selectElement(dup.id);
   c.requestRender();
   saveCanvas(c.canvasState);
+  c._pushHistorySnapshot?.('duplicate');
 }
 
 export function deleteSelection(c: any): void {
@@ -63,17 +71,24 @@ export function clipboardHasContent(): boolean {
 export async function pasteClipboard(c: any): Promise<void> {
   if (!clipboardHasContent()) return;
   /* offset new items a bit */
-  const now = Date.now();
-  const pastedEls: CanvasElement[] = _clip.elements!.map((el: CanvasElement, i: number) => ({
-    ...el,
-    id: 'el-' + (now + i),
-    x: el.x + 30,
-    y: el.y + 30
-  }));
+  const pastedEls: CanvasElement[] = _clip.elements!.map((el: CanvasElement) => {
+    const nu: CanvasElement = { ...el, id: uid('el'), x: el.x + 30, y: el.y + 30 };
+    // New facts, not aliases of the copied ones (see duplicateEl).
+    for (const k of Object.keys(nu)) {
+      if (k.startsWith('_')) delete (nu as Record<string, unknown>)[k];
+    }
+    return nu;
+  });
   c.canvasState.elements.push(...pastedEls);
-  c.selectedElementIds = new Set(pastedEls.map((e: CanvasElement) => e.id));
+  // Select through the controller's path, not a raw Set assignment — the
+  // group box, CRDT selection and the sheet all hang off it.
+  c.selectedElementIds.clear();
+  pastedEls.forEach((e: CanvasElement) => c.selectedElementIds.add(e.id));
+  c.crdt?.updateSelection?.(c.selectedElementIds);
+  c.updateGroupBox?.();
   c.requestRender();
   saveCanvas(c.canvasState);
+  c._pushHistorySnapshot?.('paste');
 }
 
 /* ─── AI regenerate (non-image elements only) ─────────────────────────────── */
