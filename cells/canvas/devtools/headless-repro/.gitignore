@@ -4,4 +4,9 @@ public/app.css
 public/app.css.map
 public/pan.html
 public/parcland-scene.json
+public/live-app.js
+public/pan-live.html
+public/kernel-stub.js
+public/xstate-local.js
+public/d3-force-local.js
 package-lock.json
