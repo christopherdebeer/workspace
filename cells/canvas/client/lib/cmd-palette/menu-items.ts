@@ -64,7 +64,21 @@ export function buildRootItems(controller) {
         { label: 'Text', icon: 'fa-font', category: 'Create', aliases: 'new note', needsInput: "Text", action: (c, text) => addEl(c, 'text', text) },
         { label: 'Markdown', icon: 'fa-brands fa-markdown', category: 'Create', aliases: 'new note md', needsInput: "Content", action: (c, text) => addEl(c, 'markdown', text) },
         { label: 'Image', icon: 'fa-image', category: 'Create', aliases: 'new picture', needsInput: "Prompt", action: (c, text) => addEl(c, 'img', text) },
-        { label: 'Canvas', icon: 'fa-object-group', category: 'Create', aliases: 'new board nested', action: c => addEl(c, 'canvas-container') },
+        {
+          label: 'Nested canvas', icon: 'fa-object-group', category: 'Create', aliases: 'new board nested sub',
+          needsInput: 'Board name',
+          action: (c, name) => {
+            // A nested canvas is born LINKED to its child board — the old flow
+            // created a bare canvas-container that nothing could render or open.
+            const slug = String(name || 'board').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'board';
+            const child = `${c.canvasState.canvasId}-${slug}`;
+            const pt = c.screenToCanvas(window.innerWidth / 2, window.innerHeight / 2);
+            const id = c.createNewElement(pt.x, pt.y, 'canvas-container', name || slug, false, { refCanvasId: child });
+            const el = c.findElementById(id);
+            if (el) { el.width = 340; el.height = 240; }
+            c.requestRender();
+          }
+        },
         {
           label: 'Generate',
           icon: 'fa-wand-magic-sparkles',

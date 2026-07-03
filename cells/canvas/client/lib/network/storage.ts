@@ -82,18 +82,32 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 /** Read-time salience per fact key, for the presentation channel. */
 export const salienceByKey = new Map<string, number>();
 
+/** The declared type vocabulary, for palette `type:` autocomplete. */
+export function knownTypes(): Array<{ name: string; icon: string }> {
+  return Object.entries(factTypeDecls)
+    .map(([name, td]) => ({ name, icon: td?.present?.icon ?? td?.icon ?? '•' }))
+    .sort((a, b) => (a.name < b.name ? -1 : 1));
+}
+
 /** The type vocabulary (`$types`), loaded once per board (kernel-cached). Carries
  *  the gateway-resolved Present facet (ADR-0012) — `present.icon` is the canonical
  *  type glyph, served from the type declaration, so a new type ships its icon as
  *  data (no canvas recompile). The legacy flat `icon` is the fallback. */
 let factTypeDecls: Record<string, { icon?: string; present?: { icon?: string } }> = {};
 
+/** Board-native types the legacy renderer handles without a registry view. */
+const LEGACY_TYPES = new Set(['text', 'markdown', 'html', 'img', 'edit-prompt', 'canvas-container']);
+
 /** A fact with no renderable type becomes a 'fact' CARD — presentation only
  *  (_fact* transients + a type the persister strips), value untouched.
  *  Title/href come from the kernel: _types declarations first, conventions
  *  as fallback — a new type's routing is one fact, no deploys. */
 function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[] } | undefined): void {
-  if (el.type) return;
+  // A VALUE-borne `type` (e.g. machine facts carry type:"machine" as a domain
+  // field) only routes when something can actually draw it — a board-native
+  // type or a registered view. Bailing on any truthy el.type sent such facts
+  // to the unknown-type fallback, which renders NOTHING: invisible elements.
+  if (el.type && (LEGACY_TYPES.has(el.type) || elementRegistry.viewFor(el.type))) return;
   const metaType = meta?.type ?? null;
   // A fact whose _meta.type has a registered renderer routes to that renderer
   // (the renderer ladder), instead of collapsing to the floor 'fact' card. The
@@ -101,6 +115,9 @@ function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[]
   // bridge every imported fact floors. Renderers register at board boot
   // (loadRendererFacts) before any element is decorated, so viewFor() is ready.
   if (metaType && elementRegistry.viewFor(metaType)) { el.type = metaType; return; }
+  // Remember a value-borne type so the persister can KEEP it in the fact —
+  // the _factCard type-strip below is for the presentation type only.
+  if (el.type) el._valueType = el.type;
   el.type = 'fact';
   el._factCard = true;
   const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
@@ -210,7 +227,13 @@ async function flush(): Promise<void> {
 function elementPayloads(el: Record<string, unknown>): { domain: Record<string, unknown>; placement: Record<string, unknown> } {
   // Chip-display dims are transient; persist the TRUE geometry.
   const persisted: Record<string, unknown> = { ...el };
-  if ((el as any)._factCard) delete persisted.type; // presentation, not the fact's
+  if ((el as any)._factCard) {
+    // The card's `type:'fact'` is presentation. If the VALUE had its own type
+    // field (machine facts do), restore it — deleting outright would strip a
+    // domain field from the fact on the next save.
+    if ((el as any)._valueType) persisted.type = (el as any)._valueType;
+    else delete persisted.type;
+  }
   // parcland's client-side history — the substrate's revision chain IS the
   // history; persisting versions would double-store every prior value.
   delete persisted.versions;

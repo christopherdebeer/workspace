@@ -2,7 +2,7 @@
 
 import { buildRootItems } from './menu-items.ts';
 import { editElementWithPrompt } from '../network/generation.ts';
-import { searchFacts, addFactToCanvas } from '../network/storage.ts';
+import { searchFacts, addFactToCanvas, knownTypes } from '../network/storage.ts';
 import { installKeyboardShortcuts } from './keyboard-shortcuts.ts';
 import { fitRegion } from '../../../shared/frame.ts';
 import type { CanvasController, CommandItem, ElementSuggestion, FactSuggestion, SuggestionItem, MenuItem } from '../../types.ts';
@@ -144,13 +144,12 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       <div class="desktop">
         <span class="cmd-tip"><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
         <span class="cmd-tip"><kbd>Enter</kbd> select</span>
-        <span class="cmd-tip"><kbd>?</kbd> search workspace</span>
-        <span class="cmd-tip"><kbd>&gt;</kbd> commands only</span>
-        <span class="cmd-tip">type:name filters</span>
+        <button class="cmd-tip cmd-scope" type="button" title="Tap to switch search scope"></button>
+        <button class="cmd-tip cmd-typechip" type="button" title="Filter by fact type">type:…</button>
       </div>
       <div class="mobile">
-        <span class="cmd-tip"><kbd>?</kbd> workspace</span>
-        <span class="cmd-tip">type:machine</span>
+        <button class="cmd-tip cmd-scope" type="button" title="Tap to switch search scope"></button>
+        <button class="cmd-tip cmd-typechip" type="button" title="Filter by fact type">type:…</button>
       </div>
     </div>
     `;
@@ -190,6 +189,38 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   window.addEventListener('parc:selection-changed', onSelForPlaceholder);
   $input.placeholder = '› Type a command — or text to create a note…';
 
+  /* ── tappable scope + type chips (mobile has no `?`/`>` muscle memory) ── */
+  const SCOPE_LABEL: Record<string, string> = {
+    all: '🔍 everywhere', facts: '🔍 workspace (?)', local: '🔍 commands (>)',
+  };
+  const SCOPE_PREFIX: Record<string, string> = { all: '', facts: '?', local: '>' };
+  const $scopeChips = [...root.querySelectorAll('.cmd-scope')] as HTMLButtonElement[];
+  const $typeChips = [...root.querySelectorAll('.cmd-typechip')] as HTMLButtonElement[];
+  for (const b of [...$scopeChips, ...$typeChips]) {
+    b.style.cssText = 'border:0;background:transparent;font:inherit;color:inherit;cursor:pointer;padding:0';
+  }
+  const reflectScope = (scope: string): void => {
+    $scopeChips.forEach((b) => { b.textContent = SCOPE_LABEL[scope] ?? SCOPE_LABEL.all; });
+  };
+  reflectScope('all');
+  const setQueryText = (text: string): void => {
+    $input.value = text;
+    $input.dispatchEvent(new Event('input', { bubbles: true }));
+    $input.focus();
+  };
+  $scopeChips.forEach((b) => b.addEventListener('click', () => {
+    // Cycle everywhere → workspace → commands → everywhere, keeping the query.
+    const cur = parseScope($input.value.trim());
+    const order: Array<'all' | 'facts' | 'local'> = ['all', 'facts', 'local'];
+    const next = order[(order.indexOf(cur.scope) + 1) % order.length];
+    setQueryText(SCOPE_PREFIX[next] + cur.q);
+  }));
+  $typeChips.forEach((b) => b.addEventListener('click', () => {
+    const raw = $input.value;
+    if (/\btype:[A-Za-z0-9_-]*$/.test(raw.trim())) return; // already composing one
+    setQueryText((raw ? raw.replace(/\s+$/, '') + ' ' : '') + 'type:');
+  }));
+
   /* ── state ── */
   let filtered: SuggestionItem[] = [];
   let sel = -1;
@@ -209,7 +240,10 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       if (!showingRecent && it.kind !== 'more' && it.kind !== prevKind) {
         prevKind = it.kind;
         const h = document.createElement('li');
-        h.textContent = it.kind === 'command' ? 'Commands' : it.kind === 'element' ? 'On this board' : 'Workspace — select to add';
+        h.textContent = it.kind === 'command' ? 'Commands'
+          : it.kind === 'element' ? 'On this board'
+          : it.kind === 'typetoken' ? 'Filter by type'
+          : 'Workspace — select to add';
         h.style.cssText = 'list-style:none;padding:7px 10px 2px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#a8a89e;pointer-events:none';
         $list.appendChild(h);
       }
@@ -220,6 +254,13 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
         li.innerHTML = `
           <span class="s-icon"><i class="fa-solid fa-ellipsis"></i></span>
           <div class="cmd-content"><span class="crumb last-crumb" style="color:#2f6f4f">${esc(it.label)}</span></div>`;
+      } else if (it.kind === 'typetoken') {
+        li.innerHTML = `
+          <span class="s-icon">${it.icon.startsWith('fa-') ? `<i class="fa-solid ${it.icon}"></i>` : esc(it.icon)}</span>
+          <div class="cmd-content">
+            <span class="crumb last-crumb">type:${esc(it.name)}</span>
+          </div>
+          <span class="cmd-shortcut"><kbd>Tab</kbd></span>`;
       } else if (it.kind === 'command') {
         let iconHtml = '';
         if (it.icon) {
@@ -352,6 +393,11 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       loadMoreFacts(); // page in the next batch; keep the query + list
       return;
     }
+    if (item.kind === 'typetoken') {
+      // Complete the token in place and run the filtered search.
+      setQueryText($input.value.replace(/type:[A-Za-z0-9_-]*\s*$/, `type:${item.name} `));
+      return;
+    }
     if (item.kind === 'command') {
       // Add to recent commands
       addToRecent(item);
@@ -478,7 +524,22 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     const raw = target.value.trim();
     const { scope, q } = parseScope(raw);
     lastScope = scope;
+    reflectScope(scope);
     root.classList.toggle('empty', raw === '');
+    // Composing a `type:` token? Offer completions from the live vocabulary
+    // instead of guessing type names blind.
+    const tok = /(?:^|\s)type:([A-Za-z0-9_-]*)$/.exec(q);
+    if (tok && scope !== 'local') {
+      const partial = tok[1].toLowerCase();
+      filtered = knownTypes()
+        .filter((t) => t.name.toLowerCase().startsWith(partial))
+        .slice(0, 12)
+        .map((t) => ({ kind: 'typetoken' as const, name: t.name, icon: t.icon, label: t.name, searchText: '' }));
+      sel = filtered.length ? 0 : -1;
+      render();
+      if (tok[1]) scheduleFactSearch(q, scope); // a partial can already be a full type
+      return;
+    }
     filtered = scope === 'facts' ? [] : computeFiltered(q);
     sel = -1;
     render();

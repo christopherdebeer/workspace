@@ -116,7 +116,16 @@ export interface MoreSuggestion {
   searchText: string;
 }
 
-export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion | MoreSuggestion;
+/** A `type:` token completion — selecting it completes the filter in place. */
+export interface TypeSuggestion {
+  kind: 'typetoken';
+  name: string;
+  icon: string;
+  label: string;
+  searchText: string;
+}
+
+export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion | MoreSuggestion | TypeSuggestion;
 
 export interface MenuItem {
   label: string | ((controller: CanvasController, config?: any) => string);

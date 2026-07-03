@@ -202,6 +202,26 @@ export function registerSubstrateTypes(): void {
     },
   });
 
+  // A nested canvas: refCanvasId names the child board, rendered as a live
+  // SSR embed (a picture — pointer-events off so board gestures still work)
+  // with an explicit open affordance. Before this view existed the type fell
+  // to the legacy renderer, which knows nothing of it: an INVISIBLE element.
+  elementRegistry.register('canvas-container', {
+    mount(el: any) {
+      const host = document.createElement('div');
+      host.className = 'content canvas-nest';
+      host.style.cssText = 'position:relative;overflow:hidden;border:1px solid #d8d8ce;border-radius:8px;background:#fbfbf8';
+      sizeToElement(el, host);
+      renderNest(el, host);
+      return host;
+    },
+    update(el: any, dom: HTMLElement) {
+      if (!dom) return;
+      sizeToElement(el, dom);
+      if (dom.dataset.ref !== String(el.refCanvasId ?? '')) renderNest(el, dom);
+    },
+  });
+
   elementRegistry.register('surface', {
     mount(el: any) {
       const host = document.createElement('div');
@@ -258,6 +278,37 @@ export async function loadRendererFacts(): Promise<void> {
   } catch (err) {
     console.warn('[renderers] unavailable', err);
   }
+}
+
+function renderNest(el: any, host: HTMLElement): void {
+  host.dataset.ref = String(el.refCanvasId ?? '');
+  host.innerHTML = '';
+  const label = document.createElement('div');
+  label.style.cssText = 'position:absolute;top:4px;left:8px;z-index:2;font-size:11px;font-weight:600;color:#3a3a36;background:rgba(251,251,248,.85);border-radius:6px;padding:1px 6px';
+  label.textContent = `🗺 ${el.content || el.refCanvasId || 'nested canvas'}`;
+  host.appendChild(label);
+  if (!el.refCanvasId) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;color:#8a8a82;font-size:12px';
+    msg.textContent = 'no board linked yet';
+    host.appendChild(msg);
+    return;
+  }
+  const frame = document.createElement('iframe');
+  // ?embed=1 is the zero-JS SSR picture — no recursive live boards.
+  frame.src = `/@c15r/canvas/${encodeURIComponent(String(el.refCanvasId))}?embed=1&_d=1`;
+  frame.loading = 'lazy';
+  frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none';
+  host.appendChild(frame);
+  const open = document.createElement('button');
+  open.textContent = '⤢ open';
+  open.style.cssText = 'position:absolute;bottom:6px;right:6px;z-index:2;border:1px solid #2f6f4f;background:#2f6f4f;color:#fff;border-radius:7px;padding:3px 10px;font:12px/1.2 inherit;cursor:pointer';
+  open.onpointerdown = (e) => e.stopPropagation();
+  open.onclick = (e) => {
+    e.stopPropagation();
+    (window as { CC?: any }).CC?.handleDrillIn?.(el);
+  };
+  host.appendChild(open);
 }
 
 function renderFactCard(el: any, host: HTMLElement): void {

@@ -1015,7 +1015,13 @@ class CanvasController {
         this.crdt.updateElement(el.id, el)
         const view = this.elementRegistry.viewFor(el.type);
         if (view && typeof view.update === 'function') {
-            view.update(el, node.firstChild, this);   // firstChild is view root
+            try {
+                view.update(el, node.firstChild, this);   // firstChild is view root
+            } catch (err: any) {
+                // A throwing update must not abort the render pass for every
+                // element after this one.
+                this._showElementError(node, `renderer ${el.type}: ${err?.message ?? 'failed'}`);
+            }
         } else {
             this.setElementContent(node, el);         // legacy fallback
         }
@@ -1562,10 +1568,20 @@ ${script.getAttribute('src')}`);
         node.dataset.elId = el.id;
         node.dataset.type = el.type;
 
-        /* Let the view create its inside DOM */
+        /* Let the view create its inside DOM. A view that THROWS must not
+         * leave an invisible element (or abort the whole render pass — the
+         * forEach above it renders every element): badge it and fall back
+         * to the fact card so there is always something to see and tap. */
         if (view) {
-            const inner = view.mount(el, this);
-            inner && node.appendChild(inner);
+            try {
+                const inner = view.mount(el, this);
+                inner && node.appendChild(inner);
+            } catch (err: any) {
+                console.warn('[canvas] view mount failed — fact-card fallback', { type: el.type, id: el.id, error: err?.message });
+                const fb = this.elementRegistry.viewFor('fact')?.mount?.(el, this);
+                if (fb) node.appendChild(fb);
+                this._showElementError(node, `renderer ${el.type}: ${err?.message ?? 'failed'}`);
+            }
         } else {
             /* fallback – keep old hard-wired rendering for legacy types */
             this.setElementContent(node, el);
