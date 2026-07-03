@@ -761,7 +761,9 @@ function tierFor(score: number, s: ResolvedSalience): Tier {
 // edges rather than materialising (and having to maintain) real ones. They lift
 // weak-but-typed facts off the floor and make the graph navigable
 // (`neighbors("_types/doc")` → every doc; a type → its cell), while the authored
-// graph — what `links`, `changes`, and `attention.unlinked` report — stays clean.
+// graph — what `links` and `changes` report — stays clean. (`attention.unlinked`
+// counts placement/evidence derivations as connectivity, but never the pure
+// backbone: an `instanceOf` must not mask an unwoven fact.)
 
 export const TYPES_PREFIX = '_types/';
 export const RENDERERS_PREFIX = '_renderers/';
@@ -1195,15 +1197,35 @@ export interface AttentionOptions {
    * Default false: tending is about knowledge health, not surface plumbing.
    */
   includeSystem?: boolean;
+  /** Reference rules for the derived projection, so placement/evidence edges
+   *  (a `ref` field, an `onBoard`/`inDoc` decoration) count as connectivity. */
+  typeRules?: Record<string, TypeRules>;
+  /** `standing` at or above which an old fact is *settled* (earned its idleness)
+   *  rather than stale. Default 0.25. */
+  settledStanding?: number;
 }
 
 export interface AttentionResult {
-  /** Live facts not written for `staleMs` (oldest first). */
+  /** Old facts that have NOT earned their idleness (no authored structure, low
+   *  standing) — the actionable rot, oldest first, capped at `limit`. */
   stale: Array<{ key: string; updatedAt: string; type: string | null }>;
-  /** Live facts with no edges in either direction. */
+  /** Facts with no asserted or placed connectivity — no authored edge (inferred
+   *  `similarTo` doesn't count), no embedded-ref edge, no membership placement
+   *  (`onBoard`/`inDoc`). The pure type backbone (`instanceOf`/`managedBy`/
+   *  `rendersWith`) and query-derived `inView` never mask the weave signal.
+   *  Capped at `limit`. */
   unlinked: string[];
-  /** Edges whose endpoints are missing or retired without a successor. */
+  /** Edges whose endpoints are missing or retired without a successor. Capped at `limit`. */
   dangling: Array<{ from: string; rel: string; to: string; reason: string }>;
+  /** Uncapped totals — the capped arrays above are samples; these are the real
+   *  counts, so an observer (or a machine's Assess node) can see trend, not a
+   *  saturated constant. */
+  staleTotal: number;
+  unlinkedTotal: number;
+  danglingTotal: number;
+  /** Old facts recognised as settled (authored structure or earned standing) and
+   *  deliberately NOT flagged stale — age alone is not rot. */
+  settled: number;
 }
 
 export interface SupersedeOptions {
@@ -1770,6 +1792,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     async attention(scope, opts?): Promise<AttentionResult> {
       const staleMs = opts?.staleMs ?? 14 * 24 * 60 * 60 * 1000;
       const limit = opts?.limit ?? 25;
+      const settledStanding = opts?.settledStanding ?? 0.25;
       const nowMs = Date.now();
       // Tending is about knowledge health; `_` namespaces are surface plumbing
       // (canvas elements, declared vocabulary) and would drown the signal.
@@ -1777,35 +1800,74 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const includeSystem = opts?.includeSystem ?? false;
       const [records, edges] = await Promise.all([store.list(scope), store.listEdges(scope)]);
       const byKey = new Map(records.map((r) => [r.key, r]));
-      const linked = new Set<string>();
+      // Derivation needs the WHOLE live slice — `_types/*` decls and `_canvas/*`
+      // decorations are `_`-prefixed but produce the placement/evidence edges;
+      // only the *reporting* below filters system keys.
+      const liveAll = records.filter((r) => !r.superseded && isTimerLive(r, nowMs));
+      const live = liveAll.filter((r) => includeSystem || !isSystem(r.key));
+      // Connectivity for the weave signal: asserted structure only. Authored
+      // edges count unless machine-inferred (`similarTo` is a *suggestion*, not
+      // an assertion); derived edges count when they express placement or
+      // evidence — an embedded `ref` field (0.6) or a decoration-placed
+      // membership like `onBoard`/`inDoc` (0.4). The pure type backbone
+      // (`instanceOf`/`managedBy`/`rendersWith`, 0.2) and the query-derived
+      // `inView` are ambient — counting them would mask genuinely-unwoven facts.
+      const authoredAsserted = new Set<string>();
       for (const e of edges) {
+        if (e.rel === 'similarTo') continue;
+        authoredAsserted.add(e.from);
+        authoredAsserted.add(e.to);
+      }
+      const linked = new Set<string>(authoredAsserted);
+      for (const e of deriveBackboneEdges(liveAll, opts?.typeRules)) {
+        if ((e.strength ?? 0) < MEMBERSHIP_STRENGTH || e.rel === BACKBONE_RELS.inView) continue;
         linked.add(e.from);
         linked.add(e.to);
       }
-      const live = records.filter(
-        (r) => !r.superseded && isTimerLive(r, nowMs) && (includeSystem || !isSystem(r.key)),
-      );
-      const stale = live
+      // Settled vs stale: age alone is not rot. An old fact with authored
+      // structure, or with earned standing (lifetime reads/writes incl. import
+      // priors), has earned its idleness — recall already elides it gracefully.
+      const sCall = baseSalience(await loadSalienceConfig(scope));
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
+      const isSettled = (r: StateRecord): boolean => {
+        if (authoredAsserted.has(r.key)) return true;
+        const sig = signals.get(r.key) ?? EMPTY_SIGNALS;
+        const lifetime = sig.lifetimeReads + (r.seedReads ?? 0) + sig.lifetimeWrites + (r.seedWrites ?? 0);
+        const standing =
+          sCall.standingSaturation > 0 ? Math.min(Math.log1p(lifetime) / Math.log1p(sCall.standingSaturation), 1) : 0;
+        return standing >= settledStanding;
+      };
+      const old = live
         .filter((r) => nowMs - Date.parse(r.updatedAt) > staleMs)
-        .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
-        .slice(0, limit)
-        .map((r) => ({ key: r.key, updatedAt: r.updatedAt, type: r.type }));
-      const unlinked = live
-        .filter((r) => !linked.has(r.key))
-        .map((r) => r.key)
-        .slice(0, limit);
+        .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+      const rotting = old.filter((r) => !isSettled(r));
+      const stale = rotting.slice(0, limit).map((r) => ({ key: r.key, updatedAt: r.updatedAt, type: r.type }));
+      const unlinkedAll = live.filter((r) => !linked.has(r.key)).map((r) => r.key);
+      const unlinked = unlinkedAll.slice(0, limit);
       const dangling: AttentionResult['dangling'] = [];
+      let danglingTotal = 0;
       for (const e of edges) {
-        if (dangling.length >= limit) break;
         if (!includeSystem && (isSystem(e.from) || isSystem(e.to))) continue;
         for (const [end, k] of [['from', e.from], ['to', e.to]] as const) {
           const rec = byKey.get(k);
-          if (!rec) dangling.push({ from: e.from, rel: e.rel, to: e.to, reason: `${end} "${k}" missing` });
-          else if (rec.superseded && !rec.supersededBy)
-            dangling.push({ from: e.from, rel: e.rel, to: e.to, reason: `${end} "${k}" retired without successor` });
+          let reason: string | null = null;
+          if (!rec) reason = `${end} "${k}" missing`;
+          else if (rec.superseded && !rec.supersededBy) reason = `${end} "${k}" retired without successor`;
+          if (reason) {
+            danglingTotal++;
+            if (dangling.length < limit) dangling.push({ from: e.from, rel: e.rel, to: e.to, reason });
+          }
         }
       }
-      return { stale, unlinked, dangling };
+      return {
+        stale,
+        unlinked,
+        dangling,
+        staleTotal: rotting.length,
+        unlinkedTotal: unlinkedAll.length,
+        danglingTotal,
+        settled: old.length - rotting.length,
+      };
     },
 
     async supersede(scope, key, by, identity?: Identity, opts?: SupersedeOptions): Promise<Entry | null> {

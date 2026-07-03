@@ -514,15 +514,74 @@ describe('derived structural backbone', () => {
     expect(back.inbound.some((x) => x.from === 'kb/1' && x.derived)).toBe(true);
   });
 
-  it('attention.unlinked stays authored-only — the backbone does not mask the weave signal', async () => {
+  it('attention.unlinked: the type backbone does not mask the weave signal', async () => {
     const store = createMemoryStateStore();
     const state = createObservedState(store);
     await state.put({ scope: 'r', key: '_types/note', value: {}, type: 'type-decl' }, alice);
     await state.put({ scope: 'r', key: 'kb/1', value: { text: 'hi' }, type: 'note' }, alice);
 
-    // kb/1 has a derived edge to its type but no *authored* edge → still flagged.
+    // kb/1 has a derived edge to its type but no *asserted* connectivity → still flagged.
     const att = await state.attention('r', { includeSystem: false });
     expect(att.unlinked).toContain('kb/1');
+    expect(att.unlinkedTotal).toBeGreaterThanOrEqual(1);
+  });
+
+  it('attention.unlinked: placement and evidence derivations DO count as connectivity', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    // A type with an embedded `ref` field (evidence): model → its source reading.
+    await state.put(
+      { scope: 'r', key: '_types/model', value: { fields: [{ name: 'source', type: 'ref', rel: 'from' }] }, type: 'type-decl' },
+      alice,
+    );
+    await state.put({ scope: 'r', key: 'reading/src', value: { title: 'lattice' }, type: 'reading' }, alice);
+    await state.put({ scope: 'r', key: 'model/one', value: { source: 'reading/src' }, type: 'model' }, alice);
+    // A key-encoded placement (membership): a canvas decoration places el:a on a board.
+    await state.put(
+      {
+        scope: 'r',
+        key: '_types/canvas-placement',
+        value: { keyPattern: '_canvas/{board}/{el}', keyEdges: [{ from: '{el}', rel: 'onBoard', to: 'canvas:{board}' }] },
+        type: 'type-decl',
+      },
+      alice,
+    );
+    await state.put({ scope: 'r', key: 'canvas:b1', value: { board: 'b1' }, type: 'canvas' }, alice);
+    await state.put({ scope: 'r', key: 'el:a', value: { content: 'box' }, type: 'canvas-element' }, alice);
+    await state.put({ scope: 'r', key: '_canvas/b1/el:a', value: { x: 0 }, type: 'canvas-placement' }, alice);
+    // An inferred kinship edge is a *suggestion*, not asserted structure.
+    await state.put({ scope: 'r', key: 'kb/only-similar', value: { text: 'drifting' }, type: 'note' }, alice);
+    await state.link('r', 'kb/only-similar', 'similarTo', 'reading/src', 0.3, { user: 'platform/vectors', scopes: [] });
+
+    const att = await state.attention('r', { includeSystem: false });
+    expect(att.unlinked).not.toContain('model/one'); // ref-derived evidence edge
+    expect(att.unlinked).not.toContain('el:a'); // decoration-placed membership
+    expect(att.unlinked).toContain('kb/only-similar'); // similarTo alone never masks
+  });
+
+  it('attention.stale: settled knowledge (authored structure or earned standing) is not rot', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const oldIso = new Date(Date.now() - 60 * 24 * 3600_000).toISOString();
+    // Old + authored edge → settled.
+    await state.put({ scope: 'r', key: 'kb/settled-linked', value: 'v', import: { createdAt: oldIso, updatedAt: oldIso } }, alice);
+    await state.put({ scope: 'r', key: 'kb/anchor', value: 'v' }, alice);
+    await state.link('r', 'kb/settled-linked', 'refines', 'kb/anchor', null, alice);
+    // Old + deep lifetime history (import priors) → settled by standing.
+    await state.put(
+      { scope: 'r', key: 'kb/settled-earned', value: 'v', import: { createdAt: oldIso, updatedAt: oldIso, seedReads: 40, seedWrites: 10 } },
+      alice,
+    );
+    // Old + no structure, no history → genuinely stale.
+    await state.put({ scope: 'r', key: 'kb/rotting', value: 'v', import: { createdAt: oldIso, updatedAt: oldIso } }, alice);
+
+    const att = await state.attention('r', { includeSystem: false });
+    const staleKeys = att.stale.map((s) => s.key);
+    expect(staleKeys).toContain('kb/rotting');
+    expect(staleKeys).not.toContain('kb/settled-linked');
+    expect(staleKeys).not.toContain('kb/settled-earned');
+    expect(att.settled).toBeGreaterThanOrEqual(2);
+    expect(att.staleTotal).toBe(att.stale.length); // uncapped total matches under the limit
   });
 
   // ── ADR-0003: declared Reference rules ──────────────────────────

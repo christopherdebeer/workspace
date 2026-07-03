@@ -578,7 +578,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'attention',
     description:
-      'What needs tending, as a derived read: stale facts, unlinked facts, and dangling edges. `_`-prefixed system namespaces (canvas elements, declared vocabulary) are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
+      'What needs tending, as a derived read: stale facts (old AND unearned — settled knowledge with authored structure or standing is counted separately, not flagged), unlinked facts (no authored edge, embedded-ref edge, or placement membership — inferred `similarTo` and the pure type backbone never count), and dangling edges. Arrays are capped at `limit`; the `*Total` fields are the real counts. `_`-prefixed system namespaces are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -587,6 +587,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         staleMs: { type: 'number', description: 'Staleness threshold in ms (default 14 days)' },
         limit: { type: 'number', description: 'Max items per category (default 25)' },
         includeSystem: { type: 'boolean', description: 'Also surface `_`-prefixed system namespaces (default false)' },
+        settledStanding: { type: 'number', description: 'Standing at/above which an old fact is settled, not stale (default 0.25)' },
       },
       additionalProperties: false,
     },
@@ -596,6 +597,10 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         stale: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, updatedAt: { type: 'string' }, type: { type: ['string', 'null'] } } } },
         unlinked: { type: 'array', items: { type: 'string' } },
         dangling: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, rel: { type: 'string' }, to: { type: 'string' }, reason: { type: 'string' } } } },
+        staleTotal: { type: 'number', description: 'Uncapped count of stale (old + unearned) facts' },
+        unlinkedTotal: { type: 'number', description: 'Uncapped count of unlinked facts' },
+        danglingTotal: { type: 'number', description: 'Uncapped count of dangling edge endpoints' },
+        settled: { type: 'number', description: 'Old facts recognised as settled and not flagged' },
       },
     },
   },
@@ -733,7 +738,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'tend',
     description:
-      'Run a tending pass now: attention() distilled into a `tending/latest` audit fact (stale / unlinked / dangling, with samples) — the just-in-time cron made manual. A daily schedule writes the same report.',
+      'Run a tending pass now: attention() distilled into a `tending/latest` audit fact (uncapped stale / unlinked / dangling / settled counts, samples, and a `delta` vs the prior audit — a zero delta over a non-zero backlog is chronic debt) — the just-in-time cron made manual. A daily schedule writes the same report.',
     scope: 'workspace:admin',
     kind: 'act',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
