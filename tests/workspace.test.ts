@@ -494,6 +494,36 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(next.events.map((e) => `${e.op}:${e.key}`)).toEqual(['write:tail-probe']);
   });
 
+  it('changes scope slices the feed server-side; link events carry endpoints (ADR-0055)', async () => {
+    const head = (await cmds.changes({ sinceSeq: 'head' }, alice())).seq;
+    await cmds.remember({ key: 'sc:el-1', value: { x: 1 } }, alice());
+    await cmds.remember({ key: 'sc-noise', value: 'outside the slice' }, alice());
+    await cmds.link({ from: 'sc-noise', rel: 'annotates', to: 'sc:el-1' }, alice());
+    await cmds.supersede({ key: 'sc:el-1' }, alice());
+
+    // prefixes: only slice events ship; the link matches on its `to` endpoint —
+    // an edge INTO the slice is the slice's business even when `from` is not.
+    const sliced = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['sc:'] } }, alice());
+    expect(sliced.events.map((e) => `${e.op}:${e.key}`)).toEqual(['write:sc:el-1', 'link:sc-noise', 'supersede:sc:el-1']);
+    const link = sliced.events.find((e) => e.op === 'link');
+    expect(link?.rel).toBe('annotates');
+    expect(link?.to).toBe('sc:el-1');
+
+    // ops whitelist drops the link without touching the writes.
+    const writes = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['sc:'], ops: ['write', 'supersede'] } }, alice());
+    expect(writes.events.map((e) => e.op)).toEqual(['write', 'supersede']);
+
+    // A fully-filtered page is empty while the head seq still advances —
+    // clients must read that as progress, not silence.
+    const none = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['no-such-prefix/'] } }, alice());
+    expect(none.events).toEqual([]);
+    expect(none.seq).toBeGreaterThan(head);
+
+    // Filtering precedes windowing: `last: 1` is the newest RELEVANT event.
+    const lastOne = await cmds.changes({ last: 1, scope: { prefixes: ['sc:'] } }, alice());
+    expect(lastOne.events.map((e) => `${e.op}:${e.key}`)).toEqual(['supersede:sc:el-1']);
+  });
+
   it('query pages with limit + cursor and reports the overall total', async () => {
     await cmds.remember({ key: 'page-a', value: 1, type: 'paged' }, alice());
     await cmds.remember({ key: 'page-b', value: 2, type: 'paged' }, alice());

@@ -218,6 +218,8 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
             op: event.op,
             scope: event.scope,
             key: event.key,
+            rel: event.rel,
+            to: event.to,
             at: event.at,
             seq: event.seq,
             ttl: Math.floor(Date.parse(event.at) / 1000) + TRAJECTORY_TTL_SEC,
@@ -232,7 +234,15 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
         KeyConditionExpression: 'pk = :pk AND sk >= :since',
         ExpressionAttributeValues: { ':pk': K.trajPk(scope), ':since': since },
       });
-      return items.map((i) => ({ op: i.op as TrajectoryEvent['op'], scope: i.scope as string, key: (i.key as string | null) ?? null, at: i.at as string, seq: Number(i.seq) }));
+      return items.map((i) => ({
+        op: i.op as TrajectoryEvent['op'],
+        scope: i.scope as string,
+        key: (i.key as string | null) ?? null,
+        ...(i.rel !== undefined ? { rel: i.rel as string } : {}),
+        ...(i.to !== undefined ? { to: i.to as string } : {}),
+        at: i.at as string,
+        seq: Number(i.seq),
+      }));
     },
 
     async recordTouch(scope: string, key: string, actor: ActorClass, op: 'read' | 'write', bucket: number): Promise<void> {

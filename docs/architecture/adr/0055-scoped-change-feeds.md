@@ -1,6 +1,9 @@
 # ADR-0055 — Scoped change feeds: a surface pays for its slice, not the workspace
 
-- **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
+- **Status:** Inc 1 shipped 2026-07-04 — `changes` accepts `scope {prefixes, ops}`
+  filtered server-side BEFORE windowing (`last: n` = newest n *relevant*; head
+  `seq` stays global), and link/unlink events carry `rel`/`to` endpoints
+  (prefix matches `key` OR `to`, so edges INTO a slice count). Inc 2–4 open.
 - **Depends on:** ADR-0053 (the projection consumes this), ADR-0048 (shaped
   reads), ADR-0050 (seq/trajectory discipline).
 

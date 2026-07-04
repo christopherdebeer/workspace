@@ -552,7 +552,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'changes',
     description:
-      'Tail your slice’s trajectory: events (write/read/supersede/link) after `sinceSeq`, plus the current head seq to resume from. Pass sinceSeq:"head" to get just the head seq and start tailing in one call. `last: n` returns the NEWEST n (ascending) — the "recent activity" read; a bare call defaults to `last: 200` (ADR-0048) instead of the whole trajectory.',
+      'Tail your slice’s trajectory: events (write/read/supersede/link/unlink) after `sinceSeq`, plus the current head seq to resume from. Pass sinceSeq:"head" to get just the head seq and start tailing in one call. `last: n` returns the NEWEST n (ascending) — the "recent activity" read; a bare call defaults to `last: 200` (ADR-0048) instead of the whole trajectory. `scope` (ADR-0055) filters server-side by key prefixes and/or ops, so a surface pays only for its slice; link/unlink events carry `rel`/`to` endpoints and match a prefix on either end.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -564,13 +564,35 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         limit: { type: 'number', description: 'Max events, paged FORWARD from sinceSeq (tailing)' },
         last: { type: 'number', description: 'The NEWEST n events, ascending — recent activity (bare calls default to 200)' },
+        scope: {
+          type: 'object',
+          description: 'Server-side slice (ADR-0055): only matching events ship; filtering precedes limit/last windowing and the head seq stays global (an empty page with an advanced seq is progress)',
+          properties: {
+            prefixes: { type: 'array', items: { type: 'string' }, description: 'Key prefixes, e.g. ["el:", "_canvas/parcland/"]; link/unlink match on key (from) OR to' },
+            ops: { type: 'array', items: { type: 'string', enum: ['read', 'write', 'supersede', 'link', 'unlink'] }, description: 'Only these ops, e.g. ["write","supersede"]' },
+          },
+          additionalProperties: false,
+        },
       },
       additionalProperties: false,
     },
     resultSchema: {
       type: 'object',
       properties: {
-        events: { type: 'array', items: { type: 'object', properties: { op: { type: 'string' }, key: { type: ['string', 'null'] }, at: { type: 'string' }, seq: { type: 'number' } } } },
+        events: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              op: { type: 'string' },
+              key: { type: ['string', 'null'] },
+              rel: { type: 'string', description: 'link/unlink only: the edge relation' },
+              to: { type: 'string', description: 'link/unlink only: the edge target (key is the source)' },
+              at: { type: 'string' },
+              seq: { type: 'number' },
+            },
+          },
+        },
         seq: { type: 'number', description: 'Current head — resume from here' },
       },
     },

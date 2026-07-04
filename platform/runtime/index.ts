@@ -134,6 +134,7 @@ export type {
   MembersResult,
   MemberEntry,
   ChangesResult,
+  ChangesScope,
   AttentionOptions,
   AttentionResult,
   SupersedeOptions,

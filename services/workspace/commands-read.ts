@@ -7,6 +7,7 @@ import {
   requireUser,
   indexForScope,
   INTENT_PRESET,
+  type ChangesScope,
   type Entry,
   type SalienceLens,
   type SalienceOptions,
@@ -285,6 +286,10 @@ export interface ChangesInput {
    *  `changes()` defaults to `last: 200` (ADR-0048) instead of the whole
    *  TTL-bounded trajectory; pass `sinceSeq` to tail forward instead. */
   last?: number;
+  /** ADR-0055: slice the feed server-side — key `prefixes` (link/unlink also
+   *  match on `to`, so edges INTO the slice count) and/or an `ops` whitelist.
+   *  Filtering happens BEFORE windowing; the head `seq` stays global. */
+  scope?: ChangesScope;
 }
 
 export interface AttentionInput {
@@ -476,10 +481,10 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // everything" — newest 200, ascending. Tailing (`sinceSeq`) and explicit
       // windows (`limit`/`last`) behave exactly as asked.
       if (input?.sinceSeq === undefined && input?.limit === undefined && input?.last === undefined) {
-        return state.changes(scope, 0, undefined, 200);
+        return state.changes(scope, 0, undefined, 200, input?.scope);
       }
       const sinceSeq = input?.sinceSeq === 'head' ? 'head' : (input?.sinceSeq ?? 0);
-      return state.changes(scope, sinceSeq, input?.limit, input?.last);
+      return state.changes(scope, sinceSeq, input?.limit, input?.last, input?.scope);
     },
 
     async attention(input, ctx) {
