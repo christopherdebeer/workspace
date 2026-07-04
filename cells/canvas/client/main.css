@@ -397,10 +397,10 @@ body.gesturing #static-container * {
 }
 
 .modal-content {
-    background-color: #fefefe;
+    background-color: var(--pc-panel);
     margin: 5% auto;
     padding: 1em;
-    border: 1px solid #888;
+    border: 1px solid var(--pc-border);
     width: 80%;
     max-width: 600px;
     box-sizing: border-box;
@@ -443,14 +443,16 @@ body.gesturing #static-container * {
     flex: 1;
     padding: 0.5em;
     cursor: pointer;
-    background: #eee;
+    background: var(--pc-bg);
+    color: var(--pc-dim);
     border: none;
     font-size: 1em;
 }
 
 .modal-tabs button.active {
-    background: #fff;
-    border-bottom: 2px solid #00aaff;
+    background: var(--pc-panel);
+    color: var(--pc-ink);
+    border-bottom: 2px solid var(--pc-accent);
 }
 
 .modal-editor {
@@ -477,9 +479,36 @@ body.gesturing #static-container * {
     text-align: right;
 }
 
+.modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
 .modal-buttons button {
     padding: 0.5em 1em;
-    margin-left: 0.5em;
+    margin: 0;
+    cursor: pointer;
+    border: 1px solid var(--pc-border);
+    background: var(--pc-panel);
+    color: var(--pc-ink);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+}
+
+#modal-save {
+    border-color: var(--pc-accent);
+    background: var(--pc-accent);
+    color: #fff;
+}
+
+.versions-nav button {
+    border: 1px solid var(--pc-border);
+    background: var(--pc-panel);
+    color: var(--pc-dim);
+    border-radius: 7px;
     cursor: pointer;
 }
 

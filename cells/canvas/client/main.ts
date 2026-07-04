@@ -355,8 +355,8 @@ class CanvasController {
         this.selectionBox.id = 'lasso-box';
         Object.assign(this.selectionBox.style, {
             position: 'absolute',
-            border: '1px dashed #00aaff',
-            background: 'rgba(0,170,255,0.05)',
+            border: '1px dashed #2e5e43',
+            background: 'rgba(46,94,67,0.06)',
             left: `${startX}px`,
             top: `${startY}px`,
             width: '0px',
@@ -1057,14 +1057,16 @@ class CanvasController {
             badge.className = 'el-err';
             Object.assign(badge.style, {
                 position: 'absolute',
-                top: 0,
+                top: 'calc(-0.4rem / var(--zoom, 1))',
                 left: 0,
-                maxWidth: '160px',
-                padding: '.2em .4em',
+                maxWidth: '180px',
+                padding: '.25em .55em',
                 fontSize: 'calc(.6rem / var(--scale))',
-                background: 'crimson',
-                color: '#fff',
-                fontFamily: 'monospace',
+                background: '#b5523c',
+                color: '#fdf6d8',
+                fontFamily: '-apple-system, system-ui, sans-serif',
+                borderRadius: '6px',
+                boxShadow: '0 1px 4px rgba(51,46,35,.25)',
                 zIndex: 9999,
                 pointerEvents: 'none',
                 whiteSpace: 'pre-wrap'

@@ -155,8 +155,8 @@ function hydrateUiFor(el: CanvasElement): void {
   // CodeMirror measured a hidden / zero-height container — re-measure now that
   // the modal is visible and sized, else the editor paints empty. Refresh twice
   // (rAF + a short timeout) because in-sheet layout settles a frame late.
-  requestAnimationFrame(() => { cmContent?.refresh(); cmSrc?.refresh(); });
-  setTimeout(() => { cmContent?.refresh(); cmSrc?.refresh(); }, 80);
+  requestAnimationFrame(() => { cmContent?.refresh?.(); cmSrc?.refresh?.(); });
+  setTimeout(() => { cmContent?.refresh?.(); cmSrc?.refresh?.(); }, 80);
 }
 
 function loadVersion(idx: number): void {
@@ -183,7 +183,7 @@ function switchTab(tab: 'content' | 'src', silent = false): void {
   $tabSrc!.classList.toggle('active', tab === 'src');
   $contentEditorHost!.style.display = tab === 'content' ? 'block' : 'none';
   $srcEditorHost!.style.display = tab === 'src' ? 'block' : 'none';
-  if (!silent) getActiveCM().refresh();
+  if (!silent) getActiveCM().refresh?.();
 }
 
 function getActiveCM(): any { return activeTab === 'content' ? cmContent : cmSrc; }

@@ -192,6 +192,11 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   color: #8a8a82;
 }
 .cm2 .cm-field select { font-size: 0.85rem; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--pc-border, #ddd2b8); }
+/* A bare color input stretches into a giant black bar in the field row. */
+.cm2 .cm-field input[type="color"] {
+  width: 52px; height: 28px; padding: 2px; flex: 0 0 auto;
+  border: 1px solid var(--pc-border, #ddd2b8); border-radius: 6px; background: var(--pc-panel, #fdf9ef);
+}
 
 .canvas-element .minimap-tile { background: var(--pc-panel, #fdf9ef); border: 1px solid var(--pc-border, #ddd2b8); border-radius: 10px; overflow: hidden; box-sizing: border-box; }
 .minimap-tile canvas { width: 100%; height: 100%; display: block; }
