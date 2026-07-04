@@ -641,14 +641,19 @@ interface CellProps {
   onMove: (dir: -1 | 1) => void;
   onAddAfter: () => void;
   fenceCtx?: FenceCtx;
+  /** Selection summons the floating menu (ADR-0063 gem 8). */
+  selected?: boolean;
+  onSelect?: () => void;
 }
 type FenceCtx = {
   onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>;
   placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void>;
 };
-function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx }: CellProps): React.JSX.Element {
+function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx, selected, onSelect }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => { if (!selected) setMenuOpen(false); }, [selected]);
   const md = content;
   const ctxRef = useRef(fenceCtx); ctxRef.current = fenceCtx;
 
@@ -689,8 +694,18 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
   // source's output band: dashed edge + a "⤷ output of" line that scrolls
   // to the producing cell when it's in this doc.
   const outSrc = cellKey.startsWith('out:') && cellKey.lastIndexOf(':') > 4 ? cellKey.slice(4, cellKey.lastIndexOf(':')) : null;
+  const stop = (fn: () => void) => (e: React.MouseEvent): void => { e.stopPropagation(); fn(); };
   return (
-    <article className={`block${fold ? ' is-folded' : ''}${outSrc ? ' block-output' : ''}`} data-key={cellKey} id={cellKey}>
+    <article
+      className={`block${fold ? ' is-folded' : ''}${outSrc ? ' block-output' : ''}${selected ? ' selected' : ''}`}
+      data-key={cellKey}
+      id={cellKey}
+      onClick={editable && onSelect ? (e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest('a, button, textarea, input, select, iframe, .block-menu')) return;
+        onSelect();
+      } : undefined}
+    >
       {outSrc ? (
         <div className="block-out-prov">
           ⤷ output of{' '}
@@ -700,13 +715,25 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
           }}>{outSrc}</a>
         </div>
       ) : null}
-      {editable ? (
-        <div className="block-tools">
-          <button className="tool" onClick={onFold}>{fold ? '▸' : '▾'}</button>
-          <button className="tool" onClick={() => setEditing(md)}>✎</button>
-          <button className="tool" onClick={() => onMove(-1)}>↑</button>
-          <button className="tool" onClick={() => onMove(1)}>↓</button>
-          <button className="tool" title="add a cell after" onClick={onAddAfter}>＋</button>
+      {/* The floating menu (ADR-0063, dotlit's gem): an absolute pointer-
+          transparent overlay whose round-button cluster is sticky at mid-
+          viewport — the verbs ride your scroll within the selected block. */}
+      {editable && selected ? (
+        <div className="block-menu">
+          <div className="bm-items">
+            {menuOpen ? (
+              <>
+                <button title="edit" onClick={stop(() => setEditing(md))}>✎</button>
+                <button title={fold ? 'unfold' : 'fold'} onClick={stop(onFold)}>{fold ? '▸' : '▾'}</button>
+                <button title="move up" onClick={stop(() => onMove(-1))}>↑</button>
+                <button title="move down" onClick={stop(() => onMove(1))}>↓</button>
+                <button title="add a cell after" onClick={stop(onAddAfter)}>＋</button>
+                <button title="close" onClick={stop(() => setMenuOpen(false))}>✕</button>
+              </>
+            ) : (
+              <button className="bm-primary" title="cell menu" onClick={stop(() => setMenuOpen(true))}>☰</button>
+            )}
+          </div>
         </div>
       ) : null}
       {fold ? (
@@ -728,6 +755,8 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   const [missing, setMissing] = useState(false);
   const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
   const [backlinks, setBacklinks] = useState<LinkRef[]>([]);
+  // One selected block at a time; tapping it again deselects (dotlit's model).
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await loadDoc(docId, projection);
@@ -833,6 +862,8 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
             }}
             onAddAfter={async () => { const k = mintCell(); const seq = seqBetween(c.seq, nextSeq(i)); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seq, false); setCells((cs) => [...cs, { key: k, content: '_new cell_', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq)); }}
             fenceCtx={fenceCtx}
+            selected={selectedKey === c.key}
+            onSelect={() => setSelectedKey((k) => (k === c.key ? null : c.key))}
           />
         ))}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}

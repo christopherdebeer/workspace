@@ -175,3 +175,10 @@ pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:bl
 .embed-transclude{border-left:2px solid var(--accent);padding-left:.9rem;margin:.6rem 0}
 .waiting .wikilink-stub{text-decoration:none}
 .appears-in{font-size:.78rem;color:var(--faint);margin:.3rem 0 .6rem}
+/* ADR-0063: the floating block menu (dotlit's gem, verbatim anatomy) */
+.block{position:relative}
+.block.selected{outline:1.5px solid var(--line);outline-offset:4px;border-radius:6px}
+.block-menu{position:absolute;top:.2rem;bottom:.2rem;left:0;right:0;display:flex;align-items:flex-end;pointer-events:none;z-index:40}
+.bm-items{position:sticky;bottom:45%;display:flex;justify-content:flex-end;width:100%;gap:.35rem;padding-right:.1rem;pointer-events:none}
+.block-menu button{pointer-events:all;width:2.15em;height:2.15em;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--ink,#1c1c1a);font-size:.9rem;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 5px rgba(51,46,35,.18);cursor:pointer;padding:0}
+.block-menu button.bm-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
