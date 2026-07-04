@@ -7,7 +7,18 @@
   camera)). Handed to renderer mount/update as a new trailing arg and to
   content scripts as `ctx` — `controller` stays in scope one increment.
   Harness asserts the contract (5 ctx checks in verify-edge-fixes.mjs).
-  Inc 2 (fixtures) and Inc 3 (script facts + provenance gate) open.
+  **Inc 2 shipped same day**: `verify-renderers.mjs` mounts every
+  `_renderers/*` fact against its fixtures headless (facts fetched node-side,
+  browser stays on 127.0.0.1); `contract {api, needs}` + `fixtures` written
+  into the self-contained renderer facts (badge rev2, upcase rev2, machine
+  rev7 — machine's second fixture is network-flagged, mermaid CDN). Fixture
+  `reads` answer the renderer's substrate queries — which immediately caught
+  the machine renderer hanging on the `window.__parcRead` bridge, the exact
+  drift this ADR retires. The @c15r/viewers re-exports (mermaid/json/csv/
+  repl/style) are static remote imports: classified NETWORK, verified only
+  with `--network` on an open network; their fixtures belong to the viewers
+  cell (manager-side assertion is Inc 3's bootstrap check).
+  Inc 3 (script facts + provenance gate + bridge removal) open.
   Originally proposed 2026-07-04, **revised same day per owner feedback**:
   content scripts are NOT retired — the custom minimap is the proof that
   script-level malleability is a feature of the medium ("meta interface
