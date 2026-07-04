@@ -19,6 +19,7 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
+import { outbox } from './lib/outbox.ts';
 import { mountSandboxedRenderer, SANDBOX_HOST_HTML, bodyText, fieldsToHtml } from '@parc/ui';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
@@ -109,9 +110,10 @@ async function saveCell(docId: string, key: string, content: string): Promise<vo
   // ADR-0059: the declared vocabulary wins — prose is `doc-block` (types.json;
   // 'cell' was the code drifting, and collides with deployable cells). Fence
   // `#tags` reconcile into the fact's tags on every save: the fence line is
-  // the declaration, the substrate indexes what the text declares.
+  // the declaration, the substrate indexes what the text declares. The write
+  // rides the kernel outbox (Inc 2) — dedupe, retry, echo window for live-sync.
   const tags = [`doc:${docId}`, ...fenceTagsOf(content)];
-  await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'doc-block', tags });
+  outbox.stage(key, { content }, { type: 'doc-block', tags });
   await syncCellLinks(key, content);
 }
 /** Reconcile a cell's [[wiki-links]] into substrate edges (rel `related`): link
@@ -129,10 +131,10 @@ async function syncCellLinks(cellKey: string, content: string): Promise<void> {
   } catch { /* links are best-effort, never block the save */ }
 }
 async function writeOrder(docId: string, key: string, seq: number, fold: boolean): Promise<void> {
-  await act('workspace.remember', { key: `_doc/${docId}/${key}`, value: { seq, fold }, via: 'lit', type: 'doc-order', tags: [`doc:${docId}`] });
+  outbox.stage(`_doc/${docId}/${key}`, { seq, fold }, { type: 'doc-order', tags: [`doc:${docId}`] });
 }
 async function saveDocMeta(docId: string, meta: DocValue): Promise<void> {
-  await act('workspace.remember', { key: `doc:${docId}`, value: meta, via: 'lit', type: 'doc', tags: ['doc'] });
+  outbox.stage(`doc:${docId}`, meta as unknown as Record<string, unknown>, { type: 'doc', tags: ['doc'] });
 }
 /** Save an edited cell, splitting only if the edit introduced structure (a
  *  heading or a code fence): the first part keeps the fact's key (links/seq),
@@ -154,6 +156,44 @@ async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | 
   }
   return out;
 }
+/** ADR-0059 Inc 3 (a scoped-feed consumer, ADR-0055): tail ONLY this doc's
+ *  slice — its order decorations, its doc fact, and its current member keys
+ *  (exact keys are valid prefixes) — state-changing ops only. An idle doc's
+ *  tick is an empty page; our own flushes are echo-skipped via the outbox.
+ *  Remote changes (an agent appending cells, a run landing) trigger a reload. */
+function startDocLiveSync(docId: string, keysOf: () => string[], onRemote: () => void): () => void {
+  let stopped = false;
+  let cursor = 0;
+  let lastActivity = Date.now();
+  const bump = (): void => { lastActivity = Date.now(); };
+  window.addEventListener('pointerdown', bump, { passive: true });
+  window.addEventListener('keydown', bump, { passive: true });
+  const tick = async (): Promise<void> => {
+    if (stopped) return;
+    if (!document.hidden && isAuthed()) {
+      try {
+        if (cursor === 0) {
+          cursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 'head' })).seq;
+        } else {
+          const res = await read<{ events: Array<{ op: string; key: string | null }>; seq: number }>('workspace.changes', {
+            sinceSeq: cursor,
+            scope: { prefixes: [`_doc/${docId}/`, `doc:${docId}`, ...keysOf()], ops: ['write', 'supersede'] },
+          });
+          cursor = res.seq;
+          if ((res.events ?? []).some((ev) => ev.key && !outbox.wroteRecently(ev.key))) onRemote();
+        }
+      } catch { /* offline — retry next tick */ }
+    }
+    if (!stopped) setTimeout(() => void tick(), Date.now() - lastActivity < 120_000 ? 8_000 : 40_000);
+  };
+  setTimeout(() => void tick(), 8_000);
+  return () => {
+    stopped = true;
+    window.removeEventListener('pointerdown', bump);
+    window.removeEventListener('keydown', bump);
+  };
+}
+
 /** The renderer ladder: a fact whose type declares a viewer renders through
  *  @c15r/viewers instead of as markdown (el:demo-json reads as a TREE here). */
 function viewerFor(meta: Meta | undefined, value: any): string | null {
@@ -550,6 +590,11 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
     cacheSet(`doc:${docId}`, { kind: 'doc', owner: cellOwner(), isOwner: true, id: docId, title: res.meta.title || docId, summary: res.meta.summary, blocks: res.cells.map((c) => ({ key: c.key, md: c.content, fold: c.fold })) });
   }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
+  // Live sync (ADR-0059 Inc 3): remote writes to this doc's slice reload it.
+  useEffect(() => {
+    if (!editable) return;
+    return startDocLiveSync(docId, () => cellsRef.current.map((c) => c.key), () => void load());
+  }, [docId, editable, load]);
 
   // Live mirror of cells so the output callbacks can place a new cell without a
   // re-fetch (read-after-write lag was making outputs appear only on reload).
@@ -997,3 +1042,15 @@ const ssrVm = readInitialVm();
 const initialVm = ssrVm ?? cachedVmForLocation();
 if (appRoot.dataset.ssr === '1' && ssrVm) hydrateRoot(appRoot, <App initialVm={ssrVm} />);
 else { appRoot.textContent = ''; createRoot(appRoot).render(<App initialVm={initialVm} />); }
+
+// The save dot (ADR-0059 Inc 2): the outbox's honest state, bottom-right.
+// saving = amber, failed = terracotta (stays until a flush succeeds), saved
+// fades out. Same vocabulary as the canvas's parc:save-state indicator.
+window.addEventListener('lit:save-state', (e) => {
+  const state = (e as CustomEvent<{ state: string }>).detail?.state ?? '';
+  let dot = document.getElementById('lit-save-dot');
+  if (!dot) { dot = document.createElement('div'); dot.id = 'lit-save-dot'; document.body.appendChild(dot); }
+  dot.dataset.state = state;
+  dot.textContent = state === 'saving' ? 'saving…' : state === 'failed' ? 'retrying…' : 'saved';
+  if (state === 'saved') { const d = dot; setTimeout(() => { if (d.dataset.state === 'saved') d.dataset.state = ''; }, 1500); }
+});

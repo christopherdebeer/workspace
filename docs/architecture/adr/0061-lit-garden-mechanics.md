@@ -42,6 +42,21 @@ reference the substrate can hold.**
    written by syncCellLinks carry the member key in `to` — so backlinks
    land on **first mention**, closing dotlit's TODO with a link, not a
    heuristic.
+1b. **Red links are entities waiting to exist** (owner's framing; dotlit's
+   wiki-links.lit wished for exactly this: "add non-existing links, but
+   indicate their state"). A wiki edge to a nonexistent key is a DANGLING
+   edge — which `workspace.attention` already surfaces. So the mechanics
+   come almost free:
+   - render: a `[[target]]` whose key resolves to nothing gets `.wikilink-
+     stub` styling (dotted terracotta) — checked from the doc's own member/
+     neighbor data, no extra query storm;
+   - tap a stub → create the doc seeded with a title + a backlink to where
+     it was wanted (the mention IS the first content);
+   - the doc list gains a **"waiting to exist"** section: dangling `related`
+     edges grouped by target, ranked by inbound-mention count — the
+     want-list emerges from the writing, and the tending loop already
+     counts it as attention. Nothing is written until creation: latency is
+     represented BY the dangling edge, not by stub facts.
 2. **Transclusion is membership, not copy** — the `< src` half of the
    grammar (parsed since 0059) finally acts:
    - `< cell:x` / `< out:y` / any fact key → the fence renders THAT fact's

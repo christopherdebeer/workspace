@@ -185,6 +185,10 @@ img{max-width:100%}a{color:var(--accent)}
 .dir-warn{border-left-color:#c78a1d;background:#fdf7ea}.dir-error{border-left-color:#b5523c;background:#fbf0ed}.dir-info{border-left-color:#3b6ea5;background:#eef3f9}.dir-success,.dir-note{border-left-color:var(--accent);background:#eef5f0}.dir-box{border-left-color:var(--line)}
 pre.fence-output{background:#fbfbf6;border-style:dashed;position:relative;margin-top:-.35rem}
 pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:block;font:600 .68rem ui-monospace,Menlo,monospace;color:var(--faint);letter-spacing:.04em;margin-bottom:.35rem}
+#lit-save-dot{position:fixed;right:.8rem;bottom:.8rem;z-index:60;font:600 .7rem ui-monospace,Menlo,monospace;padding:.2rem .55rem;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--faint);opacity:0;transition:opacity .2s;pointer-events:none}
+#lit-save-dot[data-state="saving"]{opacity:1;color:#8a6d1a;border-color:#e3d3a1}
+#lit-save-dot[data-state="failed"]{opacity:1;color:#b5523c;border-color:#e0b4a8}
+#lit-save-dot[data-state="saved"]{opacity:1;color:var(--accent)}
 .embed-agent{border:1px solid var(--line);border-radius:10px;padding:.7rem .8rem;margin:.6rem 0;background:#fff}.agent-head{font-size:.8rem;color:var(--faint);margin-bottom:.4rem}.agent-prompt{background:#f4f4ee;margin:0 0 .5rem;white-space:pre-wrap}.agent-out{margin-top:.5rem}.agent-out:empty{display:none}.vw-attrib{font-size:.72rem;color:var(--faint);margin-top:.5rem}`;
 
 /** Inject the SSR'd tree + its serialized state into the shell. `data-ssr` flags a
