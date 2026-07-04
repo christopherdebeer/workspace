@@ -18,7 +18,7 @@ import { ensureAuth, accessToken, isAuthed } from './auth.ts';
 import { startSalience } from './salience.ts';
 import { registerSubstrateTypes, loadRendererFacts } from '../elements/substrateTypes.ts';
 import { elementRegistry } from '../elements/elementRegistry.ts';
-import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
+import { loadTypes, titleOf, hrefOf, createOutbox, stableStringify } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
 import { sanitizeElementGeometry } from '../geometry.ts';
@@ -26,66 +26,42 @@ import { regionBBox, fitRegion, type Region, type Placed, type BBox } from '../.
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 const DEBOUNCE_SAVE_DELAY = 800;
-const FLUSH_DELAY = 400;
 
-/** While a board load is priming (hydrate boot, drill navigation), the render
- *  path must not persist: at that moment `lastWritten` is empty, so the very
- *  first render would queue a write for EVERY element — a full-board revision
- *  churn on each open (and, on a drill, writes under the wrong board).
- *  loadInitialCanvas seeds the dedup maps and then lifts the gate. */
-let boardPriming = false;
-/** Writes issued DURING priming (a user can add/edit while the background
- *  load is still seeding) — buffered, then replayed through the dedupe once
- *  the maps are seeded. Dropping them instead silently lost the membership
- *  tag of anything added in the first seconds after open. */
-const primingBuffer = new Map<string, { value: unknown; type?: string; tags?: string[] }>();
-/** Hydrate boot calls this BEFORE constructing the controller. */
-export function beginBoardPriming(): void { boardPriming = true; }
-function endBoardPriming(): void {
-  boardPriming = false;
-  const buffered = [...primingBuffer];
-  primingBuffer.clear();
-  // Replay through queueFact: render-path echoes now match the seeded maps
-  // and no-op; genuine user writes differ and land.
-  for (const [key, p] of buffered) queueFact(key, p.value, { type: p.type, tags: p.tags });
-}
+/* ── ADR-0053 Inc 1: the write half lives in the kernel's Outbox ──────────
+ * Canonical-JSON dedupe, debounced concurrent flush, retry with backoff,
+ * echo windows, and the priming buffer were all hand-rolled here in
+ * module-level maps — and every seam was one of this cycle's data bugs.
+ * The kernel now owns those semantics; this file keeps only what is
+ * CANVAS-shaped: what to write (payload splits), when (save sweeps), and
+ * the board-scope bookkeeping (edges, meta, placements). */
+const outbox = createOutbox(act as (t: string, i: Record<string, unknown>) => Promise<unknown>, {
+  via: 'canvas',
+  onState: (state) => {
+    try { window.dispatchEvent(new CustomEvent('parc:save-state', { detail: { state } })); } catch { /* non-DOM */ }
+  },
+});
+
+/** Hydrate boot calls this BEFORE constructing the controller: the first
+ *  render funnels every element through the write queue before the dedupe is
+ *  seeded — priming buffers those writes and REPLAYS them once seeds exist. */
+export function beginBoardPriming(): void { outbox.beginPriming(); }
+function endBoardPriming(): void { outbox.endPriming(); }
 
 /** One board per page lifetime is over (drill-in/up swap controllers):
  *  every per-board map must reset on load, or the save sweep treats the
  *  PREVIOUS board's keys as "mine, removed" and supersedes its facts —
- *  cross-board data loss. `pending` is deliberately kept: in-flight writes
- *  from the previous board still belong to it and must land. */
+ *  cross-board data loss. The outbox keeps its pending writes: in-flight
+ *  edits still belong to their keys. */
 function resetBoardScope(): void {
-  lastWritten.clear();
+  outbox.reset();
   factMeta.clear();
   lastEdges.clear();
   linkedEdges.clear();
   synthOrigin.clear();
   lastPos.clear();
   salienceByKey.clear();
-  primingBuffer.clear(); // a drill mid-priming: the old board's echoes don't replay here
   readonlyBoard = false;
 }
-
-/** Canonical JSON (recursively key-sorted) for change detection. Plain
- *  JSON.stringify follows property INSERTION order, which differs across
- *  sessions for the same logical value — two open tabs each saw the other's
- *  placement as "changed", rewrote it, and ping-ponged revisions forever. */
-function stableStringify(v: unknown): string {
-  return JSON.stringify(v, (_k, val) =>
-    val && typeof val === 'object' && !Array.isArray(val)
-      ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : val);
-}
-
-/** fact key → canonical JSON last written, so repeat saves only touch what changed. */
-const lastWritten = new Map<string, string>();
-/** key → when THIS session last flushed it — its change-feed event is an echo. */
-const recentlyFlushed = new Map<string, number>();
-const ECHO_WINDOW_MS = 45_000;
-const pending = new Map<string, { value: unknown; type?: string; tags?: string[] }>();
-let flushTimer: ReturnType<typeof setTimeout> | undefined;
-let flushing = false;
 
 /** Stored substrate meta per fact key — preserves semantic type/tags on rewrite. */
 const factMeta = new Map<string, { type: string | null; tags: string[] }>();
@@ -177,70 +153,7 @@ function splitElement(el: Record<string, unknown>): { domain: Record<string, unk
 
 function queueFact(key: string, value: unknown, extra?: { type?: string; tags?: string[] }): void {
   if (readonlyBoard) return; // a non-interactive view never writes
-  if (boardPriming) { primingBuffer.set(key, { value, ...extra }); return; } // replayed at endBoardPriming
-  // Value-dedupe must NOT swallow a write that carries tags: board membership
-  // IS a tag, and an unchanged value with a new tag is exactly what "add an
-  // existing fact to this board" produces.
-  if (lastWritten.get(key) === stableStringify(value) && !extra?.tags) return;
-  pending.set(key, { value, ...extra });
-  if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
-}
-
-/** Persistence status for the UI (see the palette's save dot): 'saving' when a
- *  flush starts, then 'saved' or 'failed'. Failures used to be console-only —
- *  invisible on mobile until a reload lost the work. */
-function saveState(state: 'saving' | 'saved' | 'failed'): void {
-  try { window.dispatchEvent(new CustomEvent('parc:save-state', { detail: { state } })); } catch { /* non-DOM */ }
-}
-
-let flushFailures = 0;
-async function flush(): Promise<void> {
-  if (flushing) {
-    if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
-    return;
-  }
-  flushing = true;
-  saveState('saving');
-  let failed = false;
-  try {
-    // Concurrent writes — the serial loop held the queue for the SUM of
-    // round-trips (a 20-fact save on flaky mobile took tens of seconds).
-    const batch = [...pending];
-    pending.clear();
-    const results = await Promise.allSettled(batch.map(async ([key, p]) => {
-      await act('workspace.remember', {
-        key,
-        value: p.value,
-        via: 'canvas',
-        ...(p.type ? { type: p.type } : {}),
-        ...(p.tags ? { tags: p.tags } : {}),
-      });
-      lastWritten.set(key, stableStringify(p.value));
-      recentlyFlushed.set(key, Date.now());
-    }));
-    results.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        failed = true;
-        console.warn('[substrate] write failed', batch[i][0], r.reason);
-        // Re-queue unless a NEWER value for the key is already pending —
-        // a throttled write (DynamoDB scaling) must retry, not vanish.
-        const [key, p] = batch[i];
-        if (!pending.has(key)) pending.set(key, p);
-      }
-    });
-  } finally {
-    flushing = false;
-    saveState(failed ? 'failed' : 'saved');
-    if (failed) {
-      // Backoff: the observed failure mode IS throughput throttling — hammering
-      // the table again in 400ms would keep it hot. 2s → 4s → … capped at 30s.
-      flushFailures++;
-      const delay = Math.min(30_000, 2000 * 2 ** Math.min(flushFailures - 1, 4));
-      if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, delay);
-    } else {
-      flushFailures = 0;
-    }
-  }
+  outbox.stage(key, value, extra); // dedupe/priming/retry/echo: kernel semantics (ADR-0053)
 }
 
 /** The EXACT payloads a save would write for this element — domain fact +
@@ -373,7 +286,7 @@ export function saveCanvas(canvasState: any): void {
 }
 
 async function _saveCanvas(canvasState: any): Promise<void> {
-  if (boardPriming) return; // never diff against unseeded maps
+  if (outbox.priming()) return; // never diff against unseeded maps
   saveCanvasLocalOnly(canvasState);
   const cid = canvasState.canvasId;
   const live = new Set<string>();
@@ -398,16 +311,16 @@ async function _saveCanvas(canvasState: any): Promise<void> {
     );
     if (e.decorated) {
       const dk = `_canvas/${cid}/edge:${id}`;
-      lastWritten.delete(dk);
+      outbox.forget(dk);
       act('workspace.supersede', { key: dk }).catch(() => undefined);
     }
   }
   // Retire facts/placements that disappeared — supersede, never delete.
-  for (const key of [...lastWritten.keys()]) {
+  for (const key of [...outbox.keys()]) {
     if (key.includes('/edge:')) continue; // handled above
     const mine = key.startsWith(`_canvas/${cid}/`) || key.startsWith('el:');
     if (!mine || live.has(key)) continue;
-    lastWritten.delete(key);
+    outbox.forget(key);
     factMeta.delete(key);
     act('workspace.supersede', { key }).catch((err) => console.warn('[substrate] supersede failed', key, err));
   }
@@ -668,13 +581,13 @@ function assembleBoardEdges(
   const edges: any[] = [];
   for (const e of decoEntries) {
     const edge = e.value as Record<string, unknown> | null;
-    if (!edge || typeof edge.id !== 'string') { lastWritten.set(e.key, stableStringify(e.value)); continue; }
+    if (!edge || typeof edge.id !== 'string') { outbox.seed(e.key, e.value); continue; }
     // Migration: a decoration authored before the rel/label split has only
     // `label` (which WAS the rel). Seed `rel` from it once.
     if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
     // Seed AFTER the migration mutates the edge — seeding the pre-migration
     // shape made every legacy edge rewrite itself once per load.
-    lastWritten.set(e.key, stableStringify(edge));
+    outbox.seed(e.key, edge);
     edges.push(edge);
     if (edge.source && edge.target) {
       const rel = edgeRel(edge);
@@ -719,7 +632,7 @@ function assembleBoardEdges(
     lastEdges.delete(e.id);
     if (!String(e.id).startsWith('lnk:')) {
       const dk = `_canvas/${cid}/edge:${e.id}`;
-      lastWritten.delete(dk);
+      outbox.forget(dk);
       if (!readonlyBoard) act('workspace.supersede', { key: dk }).catch(() => undefined);
     }
   }
@@ -730,7 +643,7 @@ function assembleBoardEdges(
 export async function loadInitialCanvas(defaultState: any, _paramToken?: string | null): Promise<any> {
   // Fresh board scope: whatever board this page was on before (hydrate boot,
   // drill navigation), its dedup/write bookkeeping must not leak into this one.
-  boardPriming = true;
+  outbox.beginPriming();
   resetBoardScope();
   const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
   const viewId = params.get('view');
@@ -838,7 +751,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const sub = e.key.slice(prefix.length);
       if (sub.startsWith('edge:')) edgeEntries.push(e);
       else {
-        lastWritten.set(e.key, stableStringify(e.value));
+        outbox.seed(e.key, e.value);
         placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
       }
     }
@@ -870,8 +783,8 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       // its value otherwise diffs forever (domain strips placement fields),
       // so every open rewrote the whole board (the throttling storm).
       const seed = elementPayloads(el);
-      lastWritten.set(e.key, stableStringify(seed.domain));
-      if (pl) lastWritten.set(`${prefix}${e.key}`, stableStringify(seed.placement));
+      outbox.seed(e.key, seed.domain);
+      if (pl) outbox.seed(`${prefix}${e.key}`, seed.placement);
       if (pl && typeof pl.x === 'number')
         placed.push({
           id: el.id,
@@ -1030,7 +943,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 /* ------------------------------------------------------------------ */
 /*  Live sync — the open board tails the change feed                   */
 /*  (canvas horizon A: remote facts/placements/links merge in-place;   */
-/*   self-echoes dedup against lastWritten; reads go through `query`   */
+/*   self-echoes dedup against the outbox seeds; reads go via `query`   */
 /*   so syncing never inflates salience.)                              */
 /* ------------------------------------------------------------------ */
 
@@ -1053,16 +966,16 @@ async function fetchFact(key: string): Promise<{ key: string; value: any; _meta:
 function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
   if (!entry) return false;
   const json = stableStringify(entry.value);
-  if (lastWritten.get(key) === json && !entry._meta?.superseded) return false; // self-echo
+  if (outbox.seededJson(key) === json && !entry._meta?.superseded) return false; // self-echo
   const id = (entry.value && entry.value.id) || key.slice(3);
   if (entry._meta?.superseded) {
     if (!cc.canvasState.elements.some((e: any) => e.id === id)) return false;
     cc.canvasState.elements = cc.canvasState.elements.filter((e: any) => e.id !== id);
-    lastWritten.delete(key);
+    outbox.forget(key);
     factMeta.delete(key);
     return true;
   }
-  lastWritten.set(key, json);
+  outbox.seed(key, entry.value);
   factMeta.set(key, { type: entry._meta?.type ?? null, tags: entry._meta?.tags ?? [] });
   if (typeof entry._meta?.score === 'number') salienceByKey.set(key, entry._meta.score);
   const el = cc.canvasState.elements.find((e: any) => e.id === id);
@@ -1103,12 +1016,12 @@ function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: an
 function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
   if (!entry || entry._meta?.superseded) return false;
   const json = stableStringify(entry.value);
-  if (lastWritten.get(key) === json) return false; // self-echo
+  if (outbox.seededJson(key) === json) return false; // self-echo
   const id = key.slice(key.lastIndexOf('/el:') + 4);
   if (cc.selectedElementIds?.has?.(id)) return false; // never fight a live drag
   const el = cc.canvasState.elements.find((e: any) => e.id === id);
   if (!el) return false;
-  lastWritten.set(key, json);
+  outbox.seed(key, entry.value);
   const pl = { ...(entry.value as Record<string, unknown>) };
   // While elided, true geometry lives in _origW/_origH — update those, not the chip box.
   if (el._origW !== undefined) {
@@ -1261,7 +1174,7 @@ export function unpinElements(cc: any, ids: string[]): void {
     const el = cc.canvasState.elements.find((e: any) => e.id === id);
     if (!el) continue;
     const placementKey = `_canvas/${cid}/${factKeyOf(el)}`;
-    lastWritten.delete(placementKey);
+    outbox.forget(placementKey);
     act('workspace.supersede', { key: placementKey }).catch((err) =>
       console.warn('[substrate] unpin supersede failed', placementKey, err),
     );
@@ -1315,7 +1228,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
     el.y = Math.round(anchor.y + r * Math.sin(a));
     el._synthesized = true;
     synthOrigin.set(el.id, { x: el.x, y: el.y });
-    lastWritten.set(k, stableStringify(entry.value));
+    outbox.seed(k, entry.value);
     factMeta.set(k, { type: entry._meta?.type ?? null, tags: entry._meta?.tags ?? [] });
     if (typeof entry._meta?.score === 'number') salienceByKey.set(k, entry._meta.score);
     cc.canvasState.elements.push(el);
@@ -1386,7 +1299,7 @@ function startFlightRecorder(): void {
           (m: number, e: any) => Math.max(m, Math.max(e.width || 0, e.height || 0) * (e.scale || 1)), 0)),
         warm: warmRaf !== 0,
         // Every module-level map — any monotonic climber here is a real leak.
-        maps: { lw: lastWritten.size, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size, pend: pending.size },
+        maps: { lw: [...outbox.keys()].length, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size },
         heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : undefined,
         clean,
       }));
@@ -1433,8 +1346,6 @@ export function startLiveSync(cid: string): void {
             { sinceSeq: liveCursor },
           );
           liveCursor = res.seq;
-          const now = Date.now();
-          for (const [k, t] of recentlyFlushed) if (now - t > ECHO_WINDOW_MS) recentlyFlushed.delete(k);
           const elKeys = new Set<string>();
           const placeKeys = new Set<string>();
           let edgesDirty = false;
@@ -1451,8 +1362,8 @@ export function startLiveSync(cid: string): void {
             if (ev.op !== 'write' && ev.op !== 'supersede') continue;
             if (!ev.key) continue;
             // Our own flushes echo straight back through the feed — skip
-            // them; the dedup maps already hold exactly what we wrote.
-            if (now - (recentlyFlushed.get(ev.key) ?? 0) < ECHO_WINDOW_MS) continue;
+            // them; the outbox seeds already hold exactly what we wrote.
+            if (outbox.wroteRecently(ev.key)) continue;
             if (ev.key.startsWith(`_canvas/${cid}/edge:`)) edgesDirty = true;
             else if (ev.key.startsWith(`_canvas/${cid}/el:`)) placeKeys.add(ev.key);
             else if (ev.key.startsWith('el:')) elKeys.add(ev.key);
