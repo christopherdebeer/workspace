@@ -148,3 +148,14 @@ header .summary { margin: 0.3rem 0 0; color: var(--faint); }
 .agent-out { margin-top: 0.5rem; }
 .agent-out:empty { display: none; }
 .vw-attrib { font-size: 0.72rem; color: var(--faint); margin-top: 0.5rem; }
+
+/* ── ADR-0059: output cells + admonitions (mirror of CRITICAL_CSS — that
+   inline block is what actually ships; keep both in step) ─────────────── */
+.md-fence[class*=dir-]{border-radius:8px;border:1px solid var(--line);border-left-width:4px;padding:.55rem .9rem}
+.dir-warn{border-left-color:#c78a1d;background:#fdf7ea}
+.dir-error{border-left-color:#b5523c;background:#fbf0ed}
+.dir-info{border-left-color:#3b6ea5;background:#eef3f9}
+.dir-success,.dir-note{border-left-color:var(--accent);background:#eef5f0}
+.dir-box{border-left-color:var(--line)}
+pre.fence-output{background:#fbfbf6;border-style:dashed;position:relative;margin-top:-.35rem}
+pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:block;font:600 .68rem ui-monospace,Menlo,monospace;color:var(--faint);letter-spacing:.04em;margin-bottom:.35rem}

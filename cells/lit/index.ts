@@ -181,6 +181,10 @@ img{max-width:100%}a{color:var(--accent)}
 .wikilink{border-bottom:1px dotted var(--accent);text-decoration:none}.backlinks{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line)}.backlinks+.backlinks{margin-top:1.4rem}.backlinks h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:0 0 .5rem}.backlinks ul{list-style:none;padding:0;margin:0;display:grid;gap:.3rem}.backlinks .rel{color:var(--faint);font-size:.78rem}
 .fact-meta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem;word-break:break-all}.block-body dl.f{margin:0;display:grid;gap:.35rem}.block-body dl.f div{display:flex;gap:.5rem}.block-body dl.f dt{color:var(--faint);font-size:.8rem;min-width:7rem}.block-body dl.f dd{margin:0}
 .md-fence{border-left:2px solid var(--line);padding-left:.9rem;margin:.6rem 0}
+.md-fence[class*=dir-]{border-radius:8px;border:1px solid var(--line);border-left-width:4px;padding:.55rem .9rem}
+.dir-warn{border-left-color:#c78a1d;background:#fdf7ea}.dir-error{border-left-color:#b5523c;background:#fbf0ed}.dir-info{border-left-color:#3b6ea5;background:#eef3f9}.dir-success,.dir-note{border-left-color:var(--accent);background:#eef5f0}.dir-box{border-left-color:var(--line)}
+pre.fence-output{background:#fbfbf6;border-style:dashed;position:relative;margin-top:-.35rem}
+pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:block;font:600 .68rem ui-monospace,Menlo,monospace;color:var(--faint);letter-spacing:.04em;margin-bottom:.35rem}
 .embed-agent{border:1px solid var(--line);border-radius:10px;padding:.7rem .8rem;margin:.6rem 0;background:#fff}.agent-head{font-size:.8rem;color:var(--faint);margin-bottom:.4rem}.agent-prompt{background:#f4f4ee;margin:0 0 .5rem;white-space:pre-wrap}.agent-out{margin-top:.5rem}.agent-out:empty{display:none}.vw-attrib{font-size:.72rem;color:var(--faint);margin-top:.5rem}`;
 
 /** Inject the SSR'd tree + its serialized state into the shell. `data-ssr` flags a

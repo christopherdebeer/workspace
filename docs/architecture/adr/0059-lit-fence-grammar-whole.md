@@ -1,6 +1,13 @@
 # ADR-0059 — The lit fence grammar, whole: declaration with a round-trip
 
-- **Status:** Proposed 2026-07-04 (implementing — buffer holds 0060/0061).
+- **Status:** Inc 1 shipped 2026-07-04 (lit v1783206702586, SSR live-verified
+  on doc:sn-demo) — full grammar + serializer in `cells/lit/fence.ts` (pure,
+  10 pinned tests incl. dotlit's own parser.lit example); output cells render
+  as labelled bands and never re-execute; `md !warn`-family admonitions;
+  `#tag` reconciliation + `doc-block` type fix in saveCell. One deliberate
+  deviation, documented in fence.ts: dotlit's serializer wasn't a fixpoint
+  (`< txt source.jsx` re-parsed wrong); ours is — sources detected by shape.
+  Inc 2 (outbox) and Inc 3 (scoped live-sync) open.
 - **Depends on:** ADR-0053 (outbox — lit adopts it here), ADR-0055 (scoped
   feeds — lit's live sync arrives here), ADR-0054 (members read). Levels up
   `@c15r/lit` against the verified dotlit source (`parser/codeblocks.js`,

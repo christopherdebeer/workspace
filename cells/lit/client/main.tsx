@@ -22,6 +22,7 @@ import { read, act } from './lib/substrate.ts';
 import { mountSandboxedRenderer, SANDBOX_HOST_HTML, bodyText, fieldsToHtml } from '@parc/ui';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
+  parseFenceMeta, fenceTagsOf, type FenceMeta,
   type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem, type TypeItem,
 } from '../shared';
 
@@ -105,7 +106,12 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   return { meta, cells, backlinks };
 }
 async function saveCell(docId: string, key: string, content: string): Promise<void> {
-  await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'cell', tags: [`doc:${docId}`] });
+  // ADR-0059: the declared vocabulary wins — prose is `doc-block` (types.json;
+  // 'cell' was the code drifting, and collides with deployable cells). Fence
+  // `#tags` reconcile into the fact's tags on every save: the fence line is
+  // the declaration, the substrate indexes what the text declares.
+  const tags = [`doc:${docId}`, ...fenceTagsOf(content)];
+  await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'doc-block', tags });
   await syncCellLinks(key, content);
 }
 /** Reconcile a cell's [[wiki-links]] into substrate edges (rel `related`): link
@@ -204,29 +210,21 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   if (text !== undefined) n.textContent = text;
   return n;
 }
-interface Fence { lang: string; arg: string; file?: string; directives: Set<string>; attrs: Record<string, string>; tags: string[]; in?: string; out?: string }
-/** Parse a dotlit-style fence info-string: `lang [file|uri] !dir attr=val #tag < in > out`.
- *  `arg` resolves the bare file/uri token, else the fence body — so both
- *  `view open-claims` (id in the info-string) and the legacy `view\nopen-claims`
- *  (id in the body) work. The metadata (viewer=, repl=, !dir, #tag, in/out) is
+interface Fence extends Omit<FenceMeta, 'directives'> {
+  /** Set view over the meta's directive list, for ergonomic `.has()` checks. */
+  directives: Set<string>;
+  /** The bare file/uri token, else the fence body — so both `view open-claims`
+   *  (id in the info-string) and the legacy `view\nopen-claims` (id in the
+   *  body) work. */
+  arg: string;
+}
+/** The FULL dotlit grammar (ADR-0059) via the shared module — leading `>`
+ *  output cells, recursive `< source` / `> output` metas, filename/uri,
+ *  escaped spaces, unknowns; `fenceToString` round-trips. The metadata is
  *  what turns a fence into a declaration — the seam to plugins/viewers/actions. */
 function parseFence(info: string, body: string): Fence {
-  const toks = info.trim().split(/\s+/).filter(Boolean);
-  const lang = toks.shift() ?? '';
-  const directives = new Set<string>();
-  const attrs: Record<string, string> = {};
-  const tags: string[] = [];
-  let file: string | undefined, inp: string | undefined, out: string | undefined;
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i];
-    if (t === '<') inp = toks[++i];
-    else if (t === '>') out = toks[++i];
-    else if (t.startsWith('!')) directives.add(t.slice(1));
-    else if (t.startsWith('#')) tags.push(t.slice(1));
-    else if (t.includes('=')) attrs[t.slice(0, t.indexOf('='))] = t.slice(t.indexOf('=') + 1);
-    else if (file === undefined) file = t;
-  }
-  return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
+  const m = parseFenceMeta(info);
+  return { ...m, directives: new Set(m.directives), arg: m.file ?? body };
 }
 
 /** Resolve a `ui://` renderer script over the authenticated `/mcp`
@@ -310,6 +308,10 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
     //   repl=server|run, !server → force the server organ
     // Reuses the @c15r/viewers `repl` view (the one canvas mounts) — one
     // validated implementation, not a copy. Anonymous readers just see the code.
+    // An OUTPUT cell (`>lang …`) is something a run PRODUCED — it renders
+    // (viewers above catch `>json`/`>csv`…) but must never re-execute, even
+    // when its meta names a repl (provenance attrs ride the output fence).
+    if (fence.isOutput) continue;
     if (['run', 'js', 'repl'].includes(lang) || fence.attrs.repl) {
       if (!isAuthed()) continue;
       const factKey = (pre.closest('[data-key]') as HTMLElement | null)?.dataset.key;
