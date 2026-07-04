@@ -365,6 +365,11 @@ interface TypeDecl {
   /** The gateway-resolved Present facet (ADR-0012): `{icon,label,render}` — the
    *  legacy `{icon,titlePath}` normalised once, server-side. `label` is a path. */
   present?: { icon?: string; label?: string; render?: unknown };
+  /** ADR-0049 capability handlers as served by `$types` — `open` carries the
+   *  type's canonical route (e.g. machine: path "/m/${id}"). */
+  handlers?: { open?: Array<{ path?: string; href?: string }> };
+  /** The managing cell ("@owner/name") — open `path`s are routed on it. */
+  manager?: string;
 }
 
 let typeDecls: Record<string, TypeDecl> | null = null;
@@ -427,12 +432,21 @@ export function titleOf(e: FactEntry): string {
 
 export function hrefOf(e: FactEntry): string | null {
   const decl = typeDecls?.[e._meta?.type ?? ''];
-  if (decl?.href) {
-    const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
-    return decl.href
-      .replace(/\$\{key\}/g, encodeURIComponent(e.key))
-      .replace(/\$\{id\}/g, encodeURIComponent(id))
-      .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
+  const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
+  const fill = (tpl: string): string => tpl
+    .replace(/\$\{key\}/g, encodeURIComponent(e.key))
+    .replace(/\$\{id\}/g, encodeURIComponent(id))
+    .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
+  if (decl?.href) return fill(decl.href);
+  // A type's declared `open` handler (ADR-0049, served in $types) is its
+  // canonical route — it was IGNORED here, so typed facts with real routes
+  // (machines: /m/${id} on @c15r/machine) fell through to the convention
+  // fallbacks, most degenerately "the board it's tagged onto".
+  const open = decl?.handlers?.open?.find((h) => h && (h.href || h.path));
+  if (open) {
+    if (open.href) return fill(open.href);
+    const m = /^@([^/]+)\/(.+)$/.exec(decl?.manager ?? '');
+    if (m && open.path) return cellUrl(m[1], m[2], fill(open.path));
   }
   // Convention fallbacks (the pre-_types routing). Origin-aware via cellUrl.
   const t = e._meta?.type ?? null;

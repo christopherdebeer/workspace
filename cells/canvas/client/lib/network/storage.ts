@@ -136,7 +136,15 @@ function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[]
   el._factCard = true;
   const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
   el._factTitle = titleOf(entry);
-  el._factHref = hrefOf(entry);
+  // The kernel's convention fallback routes a canvas-tagged fact to its
+  // board — but membership IS that tag, so for anything ON this board the
+  // href was a self-link that just reloaded in place (long-press showed
+  // ?canvas=<this board>). No link beats a dead link; real routes (a
+  // type's open handler, docs in lit, OTHER boards) pass through.
+  const href = hrefOf(entry);
+  const self = !!href && !!currentBoardId
+    && (href.includes(`canvas=${encodeURIComponent(currentBoardId)}`) || href.includes(`canvas=${currentBoardId}`));
+  el._factHref = self ? undefined : href;
   const td = factTypeDecls[metaType ?? ''];
   el._factIcon = td?.present?.icon ?? td?.icon ?? '•';
   el._factMeta = [metaType ?? 'fact', entry.key].join(' · ');
@@ -447,6 +455,8 @@ interface ViewRenderHint {
 }
 
 let readonlyBoard = false;
+/** The board currently loaded — used to suppress self-link "open" hrefs. */
+let currentBoardId = '';
 
 /* ── board composition flags ──────────────────────────────────────────────
  * The board shows what a human AUTHORED: decorated edges and pinned
@@ -753,6 +763,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   // View-backed board: membership from the view's query; placements from its
   // board; camera from its declaration (shareable, pinned truth).
   let cid = defaultState.canvasId;
+  currentBoardId = cid;
   let membership: Record<string, unknown> = { tag: `canvas:${cid}` };
   let viewport: ViewRenderHint['viewport'] | null = null;
   if (viewId) {
@@ -764,6 +775,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const def = entry?.value;
       if (def?.query) membership = def.query;
       cid = def?.render?.board ?? (viewId.startsWith('canvas:') ? viewId.slice('canvas:'.length) : cid);
+      currentBoardId = cid;
       viewport = def?.render?.viewport ?? 'fit';
       if (def?.render?.interactive === false || embed) readonlyBoard = true;
     } catch (err) {
