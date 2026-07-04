@@ -190,22 +190,21 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   // their meta edges live only in the session, never in the substrate.
   if (el.type === 'edit-prompt') return;
   const key = factKeyOf(el);
-  const canvasTag = `canvas:${canvasId}`;
   const { domain, placement } = elementPayloads(el);
 
-  // Semantic type/tags survive board edits: omit type when one is stored
-  // (the substrate preserves omitted attributes); only brand-new facts get
-  // stamped canvas-element. Tags only written when the canvas tag is missing.
+  // Semantic type survives board edits: omit type when one is stored (the
+  // substrate preserves omitted attributes); only brand-new facts get
+  // stamped canvas-element. ADR-0054: membership is the PLACEMENT, never a
+  // tag on the member fact — placing/viewing must not mutate the specimen.
+  // Legacy canvas:* tags are still READ for membership (the load union) but
+  // are never written again.
   const known = factMeta.get(key);
-  const extra: { type?: string; tags?: string[] } = {};
+  const extra: { type?: string } = {};
   if (!known || !known.type) extra.type = 'canvas-element';
-  if (!known || !known.tags.includes(canvasTag)) {
-    extra.tags = Array.from(new Set([...(known?.tags ?? []), canvasTag]));
-  }
   queueFact(key, domain, extra);
   factMeta.set(key, {
     type: known?.type ?? 'canvas-element',
-    tags: extra.tags ?? known?.tags ?? [canvasTag],
+    tags: known?.tags ?? [],
   });
 
   // Synthesized positions are the board's proposal, not the human's pin —
@@ -516,24 +515,20 @@ export async function addFactToCanvas(controller: any, key: string): Promise<voi
     tags = entry?._meta?.tags ?? [];
   } catch (e) { console.warn('[canvas] addFact peek failed', key, e); return; }
 
-  const newTags = Array.from(new Set([...tags, `canvas:${cid}`]));
   const pt = controller.screenToCanvas(window.innerWidth / 2, window.innerHeight / 2);
   const el: any = { width: 240, height: 120, rotation: 0, ...value, id: idOfKey(key), x: Math.round(pt.x), y: Math.round(pt.y) };
   el._factKey = key;
   // Pre-seed meta so the element-write path never stamps `canvas-element` over
-  // the fact's real type — but with the STORED tags, not the hoped-for ones:
-  // claiming canvas:<cid> before the write lands meant a lost membership write
-  // (throttle, priming) was never retried, and the fact vanished on reload.
-  // The render path re-queues the tag for as long as factMeta says it's missing.
+  // the fact's real type.
   factMeta.set(key, { type, tags });
-  decorateFactCard(el, { type, tags: newTags });
+  decorateFactCard(el, { type, tags });
   controller.canvasState.elements.push(el);
   controller.requestRender();
 
-  // Persist: membership (clean value + preserved type + the canvas tag) and a
-  // pinned placement at the viewport centre. queueFact dedupes on value, so the
-  // value isn't rewritten — only the tag/placement land.
-  queueFact(key, value, { ...(type ? { type } : {}), tags: newTags });
+  // ADR-0054: the PLACEMENT is the membership record — board-space, board-
+  // owned, durable through the same outbox as everything else. The member
+  // fact itself is untouched: placing a fact on a board must not mutate it
+  // (no revision churn, no tag writes, no write-permission requirement).
   queueFact(`_canvas/${cid}/${key}`, { x: el.x, y: el.y, width: el.width, height: el.height }, { type: 'canvas-placement' });
   ensureBoardFact(cid);
   console.info('[canvas] added fact to board', { key, cid, type });
@@ -759,6 +754,27 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     // Reserved prefixes are the board's OWN data (placements, vocabulary,
     // type decls) — never board members, whatever the membership query says.
     els.entries = (els.entries ?? []).filter((e) => !e.key.startsWith('_'));
+
+    // ADR-0054 Inc 1: membership = placements ∪ tags. The placement fact is
+    // the membership record (board-space, board-owned); the add path no
+    // longer tags the member fact. A placement whose fact the tag query
+    // didn't return is a placement-only member — fetch it. Legacy tag-only
+    // members (e.g. tray items that were never pinned) keep riding the tag
+    // query until retired (ADR-0054 Inc 3).
+    {
+      const tagged = new Set(els.entries.map((e) => e.key));
+      const placementOnly = [...placements.keys()].filter((k) => !k.startsWith('edge:') && !tagged.has(k));
+      if (placementOnly.length) {
+        const fetched = await Promise.allSettled(placementOnly.slice(0, 80).map(async (k) => {
+          const r = await read<{ entries: QueryEntry[] }>('workspace.query', { prefix: k, limit: 3 });
+          return (r.entries ?? []).find((x) => x.key === k) ?? null;
+        }));
+        for (const f of fetched) {
+          if (f.status === 'fulfilled' && f.value) els.entries.push(f.value);
+        }
+        console.info('[canvas] placement-only members joined', { placements: placementOnly.length });
+      }
+    }
     const presentIds = new Set(els.entries.map((e) => e.key));
     const elIds = new Set([...presentIds].map(idOfKey));
     const validEdges = assembleBoardEdges(cid, edgeEntries, links, presentIds, elIds);

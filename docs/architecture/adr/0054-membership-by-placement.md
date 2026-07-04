@@ -1,6 +1,12 @@
 # ADR-0054 — Board membership by placement: viewing a fact must not mutate it
 
-- **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
+- **Status:** Inc 1 shipped 2026-07-04 — load unions placements ∪ tags
+  (placement-only members fetched individually, capped 80, pending a batched
+  by-keys read); add-to-board writes the placement ONLY; `queueElementWrite`
+  never writes tags. Nuance vs the proposal: NO self-heal placement minting —
+  tray items (members that were never pinned) deliberately keep riding the
+  legacy tag union, because a minted placement would pin them; they migrate
+  the moment a human places them. Inc 2–3 open.
 - **Depends on:** ADR-0046 (board membership as projected edge), ADR-0053 (the
   outbox carries the writes). Amends the membership half of the canvas design
   (`docs/canvas-substrate-design.md`).
