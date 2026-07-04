@@ -1063,7 +1063,40 @@ function FactPage({ routeKey, seed }: { routeKey: string; seed?: Extract<ViewMod
 
   if (missing) return <ListEditor.MissingDoc docId={routeKey} />;
   if (!vm) return <p className="boot">loading {routeKey}…</p>;
-  return <div ref={ref}><FactView vm={vm} /></div>;
+  // ADR-0061 §5: every fact is a seed document. "appears in" lists the docs
+  // holding this fact (the derived inDoc projection rides neighbors); the
+  // annotate verb assembles a doc AROUND the fact — membership only, the
+  // fact itself untouched.
+  const appearsIn = vm.links.filter((l) => l.rel === 'inDoc' && l.key.startsWith('doc:'));
+  const annotate = async (): Promise<void> => {
+    const title = prompt('Title for the new document around this fact?', vm.title);
+    if (!title) return;
+    const id = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `d${Date.now().toString(36)}`;
+    await saveDocMeta(id, { title, summary: `assembled around ${routeKey}` });
+    await writeOrder(id, routeKey, 1, false); // the fact IS the first member
+    const k = mintCell();
+    await saveCell(id, k, '_notes…_');
+    await writeOrder(id, k, 2, false);
+    await outbox.flushNow();
+    location.href = factRoute(`doc:${id}`);
+  };
+  return (
+    <div ref={ref}>
+      {appearsIn.length ? (
+        <div className="appears-in">
+          appears in {appearsIn.map((d, i) => (
+            <span key={d.key}>{i > 0 ? ' · ' : ''}<a href={`${factRoute(d.key)}#${encodeURIComponent(routeKey)}`}>{d.label}</a></span>
+          ))}
+        </div>
+      ) : null}
+      <FactView vm={vm} />
+      {isAuthed() ? (
+        <div className="doc-controls">
+          <button className="pill" onClick={() => void annotate()}>✎ start a doc around this fact</button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /* ── type collections (a `[[type:project|Projects]]` wiki-link target) ──── */

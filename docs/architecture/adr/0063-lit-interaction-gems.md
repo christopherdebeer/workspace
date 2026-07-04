@@ -31,6 +31,21 @@
    an editable stub; `?template=&title=&body=` seed new documents. Nothing
    is a dead end — every absence is a create surface.
 7. **View Source** — the whole document as raw text, one toggle away.
+8. **The floating cell menu** (owner's favorite — researched at source:
+   `CellMenu.jsx` + `client/styles/cellmenu.styl`). Anatomy, exactly:
+   - the selected cell gets an absolute overlay spanning its full height,
+     `pointer-events: none` — it never blocks reading or scrolling;
+   - the button cluster inside is `position: sticky; bottom: 50%`,
+     right-aligned — so on a tall cell the buttons FLOAT AT MID-VIEWPORT,
+     riding your scroll position *within* the cell. Not a corner-fixed
+     Material FAB (which ignores context) and not a cell-corner toolbar
+     (which scrolls away) — the verbs stay under your thumb exactly while
+     the thing they act on fills your screen;
+   - collapsed to ONE round ☰ button (2em circles, ink-on-paper inversion);
+     tap fans it into the row: Execute (only when `repl=`/js — contextual),
+     Edit ⇄ Cancel/Save, Close. Progressive disclosure in four buttons;
+   - selection summons it: tap a cell → its menu exists; nothing floats
+     over unselected content. The `executing` state tints the cell border.
 
 ## Decision (substrate translations — each gem lands as reference semantics)
 
@@ -67,9 +82,20 @@
 7. **View Source**: doc → joined cell markdown, read-only + copy button
    (the export half of "bulk paste splits" which already exists).
 
+8b. **Translation: the floating block menu replaces lit's hover tools.**
+   lit's current `.block-tools` require hover (absent on touch) and pin to
+   the block's top (scrolls away on long blocks). Adopt the dotlit anatomy
+   wholesale: tap a block → selected; an absolute, pointer-transparent
+   overlay spans it; a sticky mid-viewport cluster of round buttons floats
+   at its right edge — ☰ fanning into ▶ run (executable fences only),
+   ✎ edit, ↑ ↓ move, ＋ add-after (→ new / existing / from-search), 🗑; in
+   edit mode: save / cancel. White-board palette: paper circles, ink
+   glyphs, pine accent on the primary verb.
+
 ## Increments
 
-1. Fence chip row (render + fold/tag/source/output verbs) + error badges
+1. **The floating block menu** (the owner-flagged gem, promoted to Inc 1)
+   + fence chip row (render + fold/tag/source/output verbs) + error badges
    with scroll-to.
 2. `[[` autocomplete popover + macros; 404-create + `?template=` seeding.
 3. Cell clipboard (cut/copy/paste-after as decoration ops); View Source;
