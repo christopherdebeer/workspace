@@ -1,97 +1,115 @@
-# ADR-0056 — The renderer contract: one sanctioned executable path, tested
+# ADR-0056 — Executable surfaces: renderers AND content scripts, substrate-native
 
-- **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
+- **Status:** Proposed 2026-07-04, **revised same day per owner feedback**:
+  content scripts are NOT retired — the custom minimap is the proof that
+  script-level malleability is a feature of the medium ("meta interface
+  malleability"). Both executable paths stay; what changes is that they
+  become substrate-native and speak ONE substrate SDK instead of reaching
+  into canvas controller internals.
 - **Depends on:** ADR-0012 (Present facet), ADR-0039/0041/0043 (federated
-  render), ADR-0049 (capability handlers). Amends the renderer ladder in
+  render), ADR-0049 (capability handlers), ADR-0055 (scoped feeds — the SDK's
+  change subscription). Amends the renderer ladder in
   `docs/canvas-substrate-design.md`.
 
-## Context (grounded — two doors, one unguarded)
+## Context (grounded — two doors, neither with a contract)
 
-The renderer ladder (fact → typed renderer → declared `ui://`) is the
-substrate's answer to "apps": types carry their presentation as data. Two
-execution paths exist today, and both bit us this cycle:
+Two ways user/agent code runs on a board today, and both bit us this cycle:
 
 1. **Renderer facts** (`_renderers/<type>`, source string → dynamic module).
    No contract, no version pin, no test: the machine renderer silently
    drifted from the machine's real data shape (read `el.nodes`/`el.arrows`
    that live machines don't carry) and produced INVISIBLE elements for weeks.
-   Nothing could have caught it — there is no harness a renderer runs in
-   before it ships, and no error surface when mount returns an empty host.
+   There is no harness a renderer runs in before it ships, and no error
+   surface when mount returns an empty host.
 2. **Content scripts** (`executeScriptElements`): `new Function` over element
-   *content* — any `html` element's `<script>` body runs with `controller`
-   in scope. The board renders agent-authored and imported facts; this is an
-   XSS-shaped door held open by legacy (the pre-substrate whiteboard's
-   widgets). The crash work already had to cage it (rAF throttling, gesture
-   parking) — evidence it's a liability even when benign.
+   *content* — an `html` element's `<script>` body runs with the raw
+   `controller` in scope. This is the malleability path — the custom minimap
+   was BUILT this way, on the board, without a deploy — and that power is
+   explicitly kept. But its current form couples every script to canvas
+   internals (`controller`, `window.CC`, `window.__parcRead` bridges): the
+   crash work had to cage it (rAF throttling, gesture parking), and any
+   controller refactor silently breaks every script ever written.
 
-The canvas side gained a floor this cycle (mount/update behind try/catch →
-fact-card fallback + error badge). This ADR makes the ladder trustworthy end
-to end.
+The failure in both cases is the same: code runs against an accidental,
+unversioned surface. The fix is not to remove either door — it is to give
+both doors the same, deliberate one.
 
 ## Decision
 
-**One executable path.** Renderer facts (and cell-served `ui://` modules) are
-the only sanctioned code the board runs. Content scripts are retired:
+**Two sanctioned executable paths — renderer facts (type-level presentation)
+and content scripts (element-level malleability) — sharing ONE substrate
+SDK.** Nothing else is in scope for board code: the window bridges and raw
+`controller` exposure are deprecated and then removed.
 
-- `executeScriptElements` goes behind a per-board opt-in
-  (`_canvas/<cid>/settings` fact: `{legacyScripts: true}`), default OFF.
-  Boards that still need a legacy widget flip the fact; everything else
-  stops executing content. After a deprecation window it is removed.
-- The `html` type keeps rendering markup — sanitized: `<script>` stripped,
-  inline handlers (`on*=`) and `javascript:` URLs neutralized at render.
-
-**The contract.** A renderer fact's `value` gains structure (all optional →
-back-compatible):
+**The SDK (`ctx`)** — what `ui://` cell modules already live like, scoped
+down to a capability object and handed to both paths:
 
 ```ts
-{
-  type: 'machine',
-  source: '…export const view = { mount, update, unmount? }…',
-  contract: {
-    api: 1,                       // bumped on breaking view-API changes
-    needs: ['el.title', 'rails'], // declared reads — documentation + audit
+ctx = {
+  // substrate half — the same verbs a cell gets
+  read, act, query,                    // grant-checked, as the gateway would
+  changes(scope),                      // scoped feed subscription (ADR-0055)
+  uid, titleOf, hrefOf, types,         // kernel vocabulary helpers
+  // surface half — the board as a CONTRACT, not a controller
+  board: {
+    id, elements(), selection(),       // read the scene
+    camera: { get, set, fit },         // the minimap's actual needs
+    place, update, remove,             // mutate via the outbox (ADR-0053)
+    on(event, fn),                     // select/camera/change — no polling
   },
-  fixtures: [                     // renderable samples: the TEST
-    { name: 'tending', el: { title: '…', entry: 'Audit' } },
-  ],
+  api: 1,                              // versioned; bumped on breaks
 }
 ```
 
-- **View API v1 (codified, not invented):** `mount(el, ctx) → HTMLElement`,
-  `update(el, dom, ctx)`, optional `unmount(dom)`. `ctx` is a *capability
-  object* — `{ read, act, uid }` — replacing today's `window.__parcRead`
-  globals. Renderers must not reach for `window.CC`.
-- **The fixture harness:** the canvas devtools gain `verify-renderers.mjs`:
-  for every `_renderers/*` fact, mount each fixture headless and assert the
-  host paints non-empty (the machine-renderer failure mode becomes a CI-red).
-  The cell that OWNS a renderer (`manager`) runs the same check at bootstrap
-  before overwriting the fact — a drifted renderer fails to assert, not to
-  render.
-- **Never invisible** (already shipped, contract-ratified): a view that
-  throws or mounts empty falls back to the fact card + error badge.
-- **Version pin:** the canvas records `api` at registration and refuses a
-  renderer whose `api` it doesn't speak, falling back to the card — a kernel
-  or cell can then evolve the view API without silent breakage.
+- **Renderer facts** get `ctx` as `mount(el, ctx)` / `update(el, dom, ctx)` /
+  optional `unmount(dom)` — the view API codified, not invented.
+- **Content scripts become substrate-native**: a script is a fact
+  (`script:<board>/<id>`, or an element attribute pointing at one) run with
+  the same `ctx`. Inline `<script>` in `html` content keeps working through
+  the migration — it is rebound to receive `ctx` instead of `controller` —
+  and the canvas offers "extract to script fact" so a working inline hack
+  can graduate to a named, linkable, agent-visible fact. The minimap is the
+  migration's acceptance test: rewritten on `ctx.board`, it must lose no
+  capability.
+- **Provenance gate, not a kill switch**: scripts authored by the slice owner
+  run as today. Scripts arriving from OTHER writers (imported/agent-authored
+  facts) prompt once per writer per board ("Run scripts from X?") — the
+  decision recorded in `_canvas/<cid>/settings`. Rendering markup is never
+  gated; only execution is.
+- **The fixture harness:** renderer facts gain optional `contract.api` +
+  `fixtures` (renderable samples); `verify-renderers.mjs` mounts each fixture
+  headless and asserts the host paints non-empty — the machine-renderer
+  failure mode becomes CI-red. The cell that OWNS a renderer (`manager`) runs
+  the same assertion at bootstrap before overwriting the fact.
+- **Never invisible** (already shipped, contract-ratified): a view or script
+  that throws falls back to the fact card + error badge.
+- **Version pin:** the canvas records `api` at registration and refuses code
+  whose `api` it doesn't speak (card fallback) — the SDK can evolve without
+  silent breakage.
 
 ## Increments
 
-1. Sanitize `html` rendering; gate `executeScriptElements` behind the board
-   settings fact (default off); ship `ctx` into view mount/update alongside
-   the window bridges (bridges deprecated, kept one increment).
+1. Build `ctx` (substrate half from the kernel, `board` half in the canvas);
+   hand it to renderer mount/update alongside the window bridges (bridges
+   deprecated, kept one increment). Rebind inline scripts to `ctx`.
 2. `verify-renderers.mjs` fixture harness + fixtures for the live renderers
-   (machine, mermaid, json, csv, badge, upcase, repl, style).
-3. Remove the window bridges and `executeScriptElements`; machine cell's
-   bootstrap runs fixture assertion before reasserting `_renderers/machine`.
+   (machine, mermaid, json, csv, badge, upcase, repl, style); rewrite the
+   minimap on `ctx.board` as the migration proof.
+3. Script facts (`script:<board>/<id>`) + "extract to script fact"; the
+   provenance gate for foreign-writer scripts; remove the window bridges.
 
 ## Costs & open questions
 
-- Sanitizing `html` may break boards that relied on benign scripts (the old
-  minimap). The settings-fact escape covers them; the flight recorder tells
-  us if any board flips it.
-- Fixtures live inside renderer facts → bigger facts. Acceptable: they are
-  the renderer's spec, and card-shaped reads never fetch renderer source
-  anyway.
-- Open: should `ctx.read` be scope-limited (e.g. prefix-scoped to the
-  fact's own subtree, `machine/<id>/*`)? Leaning yes — it makes `needs`
-  enforceable rather than documentary — but that wants ADR-0055's scoping
-  vocabulary, so it lands there or in a follow-up.
+- The `board` contract is new API to design well — the minimap, the style
+  script, and the repl are the three live consumers to shape it against.
+  Kept deliberately small; anything they don't need waits.
+- Provenance gating adds a prompt. Owner-authored scripts (the common case)
+  never see it; the flight recorder tells us how often anyone else does.
+- Open: does `ctx` live in the kernel (shared with every cell surface) or
+  the canvas (board-specific)? Leaning: substrate half in the kernel —
+  it IS the cell SDK — with `board` composed in by the canvas. That makes
+  "content scripts" a general cell affordance, not a canvas special.
+- Open: should `ctx.read` be scope-limited (prefix-scoped to the fact's own
+  subtree)? With ADR-0055's scope vocabulary now shipped, `needs` could be
+  enforced rather than documentary — follow-up once real scripts show their
+  read patterns.
