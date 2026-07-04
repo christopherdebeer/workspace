@@ -1,9 +1,17 @@
 # ADR-0055 — Scoped change feeds: a surface pays for its slice, not the workspace
 
-- **Status:** Inc 1 shipped 2026-07-04 — `changes` accepts `scope {prefixes, ops}`
-  filtered server-side BEFORE windowing (`last: n` = newest n *relevant*; head
-  `seq` stays global), and link/unlink events carry `rel`/`to` endpoints
-  (prefix matches `key` OR `to`, so edges INTO a slice count). Inc 2–4 open.
+- **Status:** Inc 1–3 shipped 2026-07-04, live-verified against prod.
+  Inc 1: `changes` accepts `scope {prefixes, ops}` filtered server-side BEFORE
+  windowing (`last: n` = newest n *relevant*; head `seq` stays global);
+  link/unlink events carry `rel`/`to` (prefix matches `key` OR `to`, so edges
+  INTO a slice count). Inc 2: `include:'entries'` inlines the current
+  card-shaped entry per written key via a TOUCH-FREE batched read
+  (`ObservedState.getMany` — a projection must not inflate salience).
+  Inc 3: canvas live-sync passes its slice; idle ticks are empty pages.
+  Nuance: the canvas still fetches FULL facts for changed `el:*` keys —
+  card-shaped inline entries truncate long values, and applying a truncated
+  body would corrupt content; `include:'entries'` serves card consumers
+  (lists, feeds), not body-appliers. Inc 4 (tag scopes / push) open.
 - **Depends on:** ADR-0053 (the projection consumes this), ADR-0048 (shaped
   reads), ADR-0050 (seq/trajectory discipline).
 

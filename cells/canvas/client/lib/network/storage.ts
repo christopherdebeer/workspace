@@ -1355,11 +1355,21 @@ export function startLiveSync(cid: string): void {
     if (cc && cid && !document.hidden) {
       try {
         if (liveCursor === 0) {
-          liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 0, limit: 0 })).seq;
+          liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 'head' })).seq;
         } else {
-          const res = await read<{ events: Array<{ op: string; key: string | null }>; seq: number }>(
+          const res = await read<{ events: Array<{ op: string; key: string | null; rel?: string; to?: string }>; seq: number }>(
             'workspace.changes',
-            { sinceSeq: liveCursor },
+            {
+              sinceSeq: liveCursor,
+              // ADR-0055 Inc 3: the server ships only this board's slice —
+              // element facts + board-space keys, state-changing ops only —
+              // instead of the whole workspace firehose filtered client-side.
+              // An idle board's tick is now an empty page (seq still advances).
+              scope: {
+                prefixes: ['el:', `_canvas/${cid}/`],
+                ops: SHOW_LINK_EDGES ? ['write', 'supersede', 'link', 'unlink'] : ['write', 'supersede'],
+              },
+            },
           );
           liveCursor = res.seq;
           const elKeys = new Set<string>();
@@ -1367,14 +1377,13 @@ export function startLiveSync(cid: string): void {
           let edgesDirty = false;
           for (const ev of res.events ?? []) {
             if (ev.op === 'link' || ev.op === 'unlink') {
-              // Bare link ops carry no key, so they can't be scoped to this
-              // board — and with projection OFF they don't render either.
-              // Reacting to every agent's link activity across the whole
-              // workspace used to run a 2-request edge rebuild per tick.
+              // Link events now carry endpoints and arrive pre-scoped to this
+              // slice (key OR `to` matches) — with projection on, that means
+              // our edge set may be stale; with it off they don't render.
               if (SHOW_LINK_EDGES) edgesDirty = true;
               continue;
             }
-            // The feed logs reads too — a read is not a state change.
+            // Belt-and-braces vs an older gateway: reads are not state changes.
             if (ev.op !== 'write' && ev.op !== 'supersede') continue;
             if (!ev.key) continue;
             // Our own flushes echo straight back through the feed — skip
