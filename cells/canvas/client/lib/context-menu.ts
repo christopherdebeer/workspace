@@ -9,6 +9,7 @@
  */
 import { saveCanvas, unpinElements } from './network/storage.ts';
 import { deleteSelection, duplicateEl, inlineEdit, reorder } from './cmd-palette/menu-item-helpers.ts';
+import { plainSnippet } from './text.ts';
 import type { CanvasElement, CanvasController } from '../types.ts';
 
 function row(label: string, icon: string, onTap: (ev: Event) => void, danger = false): HTMLElement {
@@ -48,7 +49,7 @@ function buildElementActions(el: CanvasElement, controller: CanvasController, do
   } else {
     const anyEl = el as unknown as Record<string, unknown>;
     const icon = (anyEl._factIcon as string) ?? '';
-    const title = (anyEl._factTitle as string) ?? (typeof el.content === 'string' ? el.content.split('\n')[0].slice(0, 48) : el.id);
+    const title = (anyEl._factTitle as string) ?? (plainSnippet(el.content, 48) || el.id);
     const key = (anyEl._factKey as string) ?? `el:${el.id}`;
     // Title/key are fact content (often agent-authored) — never innerHTML.
     const strong = document.createElement('strong');

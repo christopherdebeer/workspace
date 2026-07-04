@@ -5,6 +5,7 @@ import { editElementWithPrompt } from '../network/generation.ts';
 import { searchFacts, addFactToCanvas, knownTypes } from '../network/storage.ts';
 import { installKeyboardShortcuts } from './keyboard-shortcuts.ts';
 import { fitRegion } from '../../../shared/frame.ts';
+import { plainSnippet } from '../text.ts';
 import type { CanvasController, CommandItem, ElementSuggestion, FactSuggestion, SuggestionItem, MenuItem } from '../../types.ts';
 
 /** User/agent content flows into the suggestion list (element snippets, fact
@@ -85,8 +86,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       t === 'html' ? 'fa-code' : 'fa-font';
 
   const buildElementPool = (): ElementSuggestion[] => controller.canvasState.elements.map(el => {
-    const raw = (el.content ?? '').replace(/\s+/g, ' ').trim();
-    const txt = raw.length > 40 ? raw.slice(0, 40) + '…' : raw || '(empty)';
+    const txt = (el as any)._factTitle ?? (plainSnippet(el.content, 41) || '(empty)');
     return {
       kind: 'element' as const,
       id: el.id,
@@ -179,8 +179,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     const ids = (ev as CustomEvent<{ ids: string[] }>).detail?.ids ?? [];
     if (ids.length === 1) {
       const el = controller.findElementById(ids[0]);
-      const raw = typeof el?.content === 'string' ? el.content.trim().split('\n')[0] : '';
-      const title = raw.length > 24 ? raw.slice(0, 23) + '…' : raw;
+      const title = (el as any)?._factTitle ?? plainSnippet(el?.content, 24);
       $input.placeholder = title ? `Ask AI to edit “${title}” — or type a command…` : 'Ask AI to edit the selection — or type a command…';
     } else {
       $input.placeholder = '› Type a command — or text to create a note…';

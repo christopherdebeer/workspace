@@ -16,6 +16,7 @@ import { act } from './substrate.ts';
 import { saveCanvas } from './storage.ts';
 import { uid } from '../uid.ts';
 import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
+import { plainSnippet } from '../text.ts';
 
 const cc = (): any => (window as { CC?: any }).CC;
 const elId = (k: string): string => (k.startsWith('el:') ? k.slice(3) : k);
@@ -84,10 +85,7 @@ function endpointTitle(id: string): string {
   const c = cc();
   const el = c?.findElementById?.(id);
   if (el) {
-    const t = el._factTitle
-      || (typeof el.content === 'string' && el.content.trim() ? el.content.trim().split('\n')[0] : '');
-    const s = String(t || el.id);
-    return s.length > 44 ? s.slice(0, 43) + '…' : s;
+    return String(el._factTitle || plainSnippet(el.content, 44) || el.id);
   }
   const e = c?.findEdgeElementById?.(id);
   if (e) return `edge: ${relOf(e)}`;

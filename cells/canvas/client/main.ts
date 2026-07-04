@@ -800,7 +800,7 @@ class CanvasController {
         // Arrowheads inherit the edge's colour. SVG2 `context-stroke` is unreliable
         // on older iOS Safari, so mint one marker per distinct colour on demand.
         const arrowMarker = (color: string): string => {
-            const c = color || "#b9ad91";
+            const c = color || "#c6c2b8";
             const id = "arrowhead-" + c.replace(/[^a-zA-Z0-9]/g, "") || "arrowhead-def";
             if (!defs!.querySelector("#" + id)) {
                 const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
@@ -829,7 +829,7 @@ class CanvasController {
         const edgeColor = (edge: Edge): string =>
             this.selectedEdgeIds?.has(edge.id) ? "#2e5e43"
             : isFaint(edge) ? "rgba(150,140,120,.28)"
-            : (edge.style?.color || "#b9ad91");
+            : (edge.style?.color || "#c6c2b8");
 
         // Endpoint lookups go through a per-PASS map — two linear
         // findElementById scans per edge was O(E·V) per pass (346×127 on the

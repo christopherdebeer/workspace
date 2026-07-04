@@ -104,8 +104,8 @@ async function main() {
     return null;
   });
   check('edge tap opened the inspector', !!inspector);
-  check('inspector names the SOURCE endpoint', !!inspector && inspector.includes('# One'), inspector?.slice(0, 120));
-  check('inspector names the TARGET endpoint', !!inspector && inspector.includes('# Two'));
+  check('inspector names the SOURCE endpoint (plain text, no md/html)', !!inspector && inspector.includes('One element one') && !inspector.includes('# One'), inspector?.slice(0, 120));
+  check('inspector names the TARGET endpoint', !!inspector && inspector.includes('Two element two'));
   check('inspector names the relation', !!inspector && inspector.includes('similarTo'));
   const selected = await page.evaluate(() => [...(window.CC.selectedEdgeIds ?? [])]);
   check('edge is selected', selected.length === 1 && selected[0].startsWith('lnk:'));

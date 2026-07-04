@@ -58,17 +58,19 @@
 .cmd-context input[type="color"] { height: 32px; width: 56px; padding: 2px; }
 
 /* Frame tour — docked as a strip at the top of the palette (the one bottom
-   surface) instead of a floating pill. Tertiary: low-emphasis, lets the board
-   stay the focus. */
+   surface). TERTIARY: compact and dim, and it yields entirely while an
+   inspector owns the context slot — the frame editor was duplicating the
+   same label one panel below the tour bar in a double-height stack. */
 .cmd-frame-tour {
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--pc-border-soft, #ece4cf);
-  font: 12px/1.2 -apple-system, system-ui, sans-serif;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--pc-border-soft, #efede8);
+  font: 11px/1.2 -apple-system, system-ui, sans-serif;
   color: var(--pc-dim, #85795f);
 }
+#cmd-palette.inspecting .cmd-frame-tour { display: none; }
 .cmd-frame-tour .ft-label {
   flex: 1;
   text-align: center;
@@ -78,11 +80,11 @@
   color: #6a6a64;
 }
 .cmd-frame-tour .ft-nav {
-  border: 1px solid var(--pc-border, #ddd2b8);
-  background: var(--pc-panel, #fdf9ef);
-  color: var(--pc-ink, #332e23);
+  border: 1px solid var(--pc-border, #e3e0d7);
+  background: var(--pc-panel, #fff);
+  color: var(--pc-dim, #85795f);
   border-radius: 999px;
-  padding: 4px 10px;
+  padding: 3px 9px;
   font: inherit;
   cursor: pointer;
 }
@@ -135,7 +137,11 @@
 .pending .cmd-icon i:not(.fa-spinner) { display: none; }
 .pending .cmd-icon .fa-spinner { display: inline-flex; }
 
-#cmd-palette input {
+/* Scoped to the SEARCH line only — as `#cmd-palette input` this id-strength
+   rule bled into every inspector field (frame label, edge rel/width…):
+   borderless, 16px, transparent. The stacked panels looked unfinished
+   because their inputs were being unstyled by the palette. */
+#cmd-palette .cmd-wrapper input {
   flex: 1;
   border: none;
   outline: none;
@@ -234,7 +240,7 @@
 }
 
 .cmd-shortcut kbd {
-  background: var(--pc-bg, #f3edde);
+  background: var(--pc-wash, #f6f5f1);
   border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 3px;
   padding: 1px 5px;
@@ -243,7 +249,7 @@
 }
 
 .cmd-input kbd {
-  background: var(--pc-bg, #f3edde);
+  background: var(--pc-wash, #f6f5f1);
   border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 3px;
   padding: 1px 5px;
@@ -253,7 +259,7 @@
 
 /* Footer */
 .cmd-footer {
-  padding: 8px 15px;
+  padding: 5px 12px;
   border-top: 1px solid var(--pc-border-soft, #ece4cf);
   display: flex;
   gap: 1em;
@@ -281,7 +287,7 @@
 }
 
 .cmd-tip kbd {
-  background: var(--pc-bg, #f3edde);
+  background: var(--pc-wash, #f6f5f1);
   border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 3px;
   padding: 1px 5px;
@@ -336,4 +342,10 @@
 
 .cmd-footer .presence .total {
   margin-left: 0.2em;
+}
+.cmd-context input[type="checkbox"] {
+  accent-color: var(--pc-accent, #2e5e43);
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
 }

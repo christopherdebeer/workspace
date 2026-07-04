@@ -16,10 +16,13 @@ body {
     /* park tokens (docs/park-design-language.md) — one palette for every
        piece of chrome, so the board reads as one surface when it all
        stacks up: sheet + handles + toasts + tour + inspectors. */
-    --pc-bg: #f3edde;        /* day paper */
-    --pc-panel: #fdf9ef;     /* signage cards */
-    --pc-border: #ddd2b8;    /* card edges */
-    --pc-border-soft: #ece4cf;
+    /* The board is WHITE — color is spent on state (pine = action/selected,
+       terracotta = danger/fixed, gold = salience), never on ambience. */
+    --pc-bg: #ffffff;
+    --pc-panel: #ffffff;
+    --pc-wash: #f6f5f1;      /* chips, kbd, hover washes */
+    --pc-border: #e3e0d7;
+    --pc-border-soft: #efede8;
     --pc-ink: #332e23;
     --pc-dim: #85795f;
     --pc-accent: #2e5e43;    /* pine */
@@ -639,10 +642,11 @@ body.gesturing #static-container * {
 .pc-btn-ghost,
 .pc-btn-danger {
     border-radius: 8px;
-    padding: 7px 14px;
+    padding: 6px 12px;
     font: inherit;
     font-size: 13px;
     cursor: pointer;
+    white-space: nowrap;
 }
 .pc-btn {
     border: 1px solid var(--pc-accent);
@@ -665,7 +669,7 @@ body.gesturing #static-container * {
 }
 .pc-chip {
     border: 1px solid var(--pc-border);
-    background: var(--pc-bg);
+    background: var(--pc-wash);
     color: var(--pc-ink);
     border-radius: 7px;
     padding: 3px 9px;

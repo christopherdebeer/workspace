@@ -16,6 +16,7 @@
  *  ownership ('selection') keeps edge/frame editors from being stomped.
  * ------------------------------------------------------------------------- */
 import { showInspector, clearInspector, inspectorOwner } from './inspectorPanel.ts';
+import { plainSnippet } from '../text.ts';
 import { buildElementActions } from '../context-menu.ts';
 import { duplicateEl, deleteSelection, inlineEdit, groupSelection } from '../cmd-palette/menu-item-helpers.ts';
 import { createFrame } from './frameNav.ts';
@@ -30,7 +31,7 @@ let currentIds: string[] = [];
 function identity(el: any): { icon: string; title: string } {
   const icon = (el?._factIcon as string) ?? '';
   const title = (el?._factTitle as string)
-    ?? (typeof el?.content === 'string' && el.content.trim() ? el.content.split('\n')[0].slice(0, 40) : (el?.type ?? 'element'));
+    ?? (plainSnippet(el?.content, 40) || (el?.type ?? 'element'));
   return { icon, title };
 }
 
