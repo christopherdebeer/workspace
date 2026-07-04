@@ -233,7 +233,40 @@ export const style = {
 
 /* ── repl: editor + run + output (outputs-as-facts gateway) ─────── */
 
-interface ReplEl { id: string; content?: string; lang?: string; server?: boolean; width?: number; height?: number; scale?: number; _factKey?: string; onOutput?: (key: string, content: string) => void }
+interface ReplEl {
+  id: string; content?: string; lang?: string; server?: boolean; width?: number; height?: number; scale?: number; _factKey?: string;
+  onOutput?: (key: string, content: string) => void;
+  /** ADR-0060: a fence-DECLARED output target (`> lang [key]`) — a completed
+   *  run persists its result as a fact automatically (success or error; the
+   *  error text IS the output, tagged). By default a new run SUPERSEDES the
+   *  previous output fact for this source; `keep` opts into accretion. */
+  autoPersist?: { key?: string; lang?: string; keep?: boolean };
+}
+
+/** Persist a run result as an output fact + provenance link (ADR-0060: the
+ *  document accretes references, never bodies). Returns the fact key. */
+async function persistOutput(el: ReplEl, content: string, opts: { error?: boolean }): Promise<string | null> {
+  const act = (window as any).__parcAct;
+  const read = (window as any).__parcRead;
+  if (!act) return null;
+  const src = el._factKey ?? `el:${el.id}`;
+  const key = el.autoPersist?.key ?? `out:${src}:${Date.now().toString(36)}`;
+  const value: Record<string, unknown> = { content, producedBy: src, ...(el.autoPersist?.lang ? { lang: el.autoPersist.lang } : {}) };
+  await act('workspace.remember', { key, value, via: 'repl', type: 'output', ...(opts.error ? { tags: ['error'] } : {}) });
+  await act('workspace.link', { from: key, rel: 'produced-by', to: src }).catch(() => {});
+  // Supersede the previous output for this source (history stays walkable)
+  // unless the fence said `!keep`. Only for minted keys — an explicit target
+  // key is one fact by construction.
+  if (!el.autoPersist?.keep && !el.autoPersist?.key && read) {
+    try {
+      const prev = await read('workspace.query', { prefix: `out:${src}:`, rankBy: 'recency', limit: 2, shape: 'refs' });
+      const old = (prev?.entries ?? []).find((e: { key: string }) => e.key !== key);
+      if (old) await act('workspace.supersede', { key: old.key, by: key });
+    } catch { /* accretion beats a failed prune */ }
+  }
+  el.onOutput?.(key, content);
+  return key;
+}
 
 function renderRepl(host: HTMLElement, el: ReplEl, controller?: any): void {
   injectCss();
@@ -271,6 +304,15 @@ function renderRepl(host: HTMLElement, el: ReplEl, controller?: any): void {
     if (r.emitted?.length) { const e = document.createElement('div'); e.className = 'repl-emit'; e.textContent = '↳ emitted: ' + r.emitted.join(', '); out.appendChild(e); }
     if (r.error) { const p = document.createElement('pre'); p.className = 'vw-err'; p.textContent = r.error; out.appendChild(p); }
     else { const p = document.createElement('pre'); p.className = 'repl-result'; p.textContent = r.result === undefined ? '(no return value)' : typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2); out.appendChild(p); saveBtn.style.display = ''; }
+    // A declared output target persists every completed run — success or
+    // failure (the error text IS the output, tagged 'error') — ADR-0060.
+    if (el.autoPersist && (r.error !== undefined || r.result !== undefined)) {
+      const content = r.error ?? (typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2));
+      void persistOutput(el, content, { error: r.error !== undefined }).then((k) => {
+        if (!k) return;
+        const chip = document.createElement('div'); chip.className = 'repl-emit'; chip.textContent = `⤓ ${k}`; out.appendChild(chip);
+      });
+    }
   };
 
   runBtn.onclick = async () => {
@@ -299,13 +341,9 @@ function renderRepl(host: HTMLElement, el: ReplEl, controller?: any): void {
   };
 
   saveBtn.onclick = async () => {
-    const act = (window as any).__parcAct;
-    if (!act) return;
-    const key = `out:${el._factKey ?? el.id}:${Date.now().toString(36)}`;
     const content = typeof lastResult === 'string' ? lastResult : JSON.stringify(lastResult, null, 2);
-    await act('workspace.remember', { key, value: { content, producedBy: el._factKey ?? `el:${el.id}` }, via: 'repl', type: 'output' });
-    await act('workspace.link', { from: key, rel: 'produced-by', to: el._factKey ?? `el:${el.id}` }).catch(() => {});
-    el.onOutput?.(key, content); // host hook: e.g. lit places this fact as a doc cell
+    const key = await persistOutput(el, content, { error: false });
+    if (!key) return;
     saveBtn.textContent = '✓ saved ' + key;
     setTimeout(() => { saveBtn.textContent = '⤓ output→fact'; }, 2500);
   };

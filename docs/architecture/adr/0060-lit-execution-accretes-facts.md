@@ -1,6 +1,12 @@
 # ADR-0060 — lit execution accretes facts: outputs with provenance, never inline
 
-- **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
+- **Status:** Inc 1 shipped 2026-07-04 (viewers v1783207497234, lit
+  v1783207606823; SSR live-verified on doc:sn-demo) — fence-declared `> out`
+  targets auto-persist every completed run (error text included, tagged
+  'error'; previous output superseded unless `!keep`; explicit `> lang key`
+  writes THAT fact); `out:<src>:<ts>` members render as attached output
+  bands with linked provenance on BOTH halves (parity contract held).
+  Inc 2 (`_repls` ladder) and Inc 3 (gated exec=onload) open.
 - **Depends on:** ADR-0059 (the grammar carries the declarations), ADR-0053
   (writes ride the outbox), `docs/declarative-actions-vs-code-cells.md` (the
   execution gradient: reef → organ). Verified against dotlit

@@ -365,7 +365,16 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
             lang: 'js',
             server,
             _factKey: factKey,
-            // "⤓ output→fact" → place that output fact as a cell in this doc.
+            // ADR-0060: a fence-declared `> lang [key]` output target persists
+            // every completed run as a fact (superseding the previous output
+            // unless `!keep`); an explicit key (contains :/), writes THAT fact.
+            autoPersist: fence.output ? {
+              key: fence.output.file && /[:/]/.test(fence.output.file) ? fence.output.file : undefined,
+              lang: fence.output.lang || undefined,
+              keep: fence.directives.has('keep'),
+            } : undefined,
+            // "⤓ output→fact" (or the declared target) → place the output
+            // fact as a cell in this doc, right after its source.
             onOutput: factKey ? (key: string, content: string) => { void ctx?.placeOutput?.(factKey, key, content); } : undefined,
           });
           box.replaceWith(node);
@@ -552,8 +561,22 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
   }
 
   const title = (md.match(/^#+\s*(.+)$/m) || [])[1] ?? md.split('\n').find((l) => l.trim()) ?? cellKey;
+  // ADR-0060: an `out:<src>:<ts>` member is an ATTACHED output — its key
+  // encodes provenance (kin to the placement key rule). Render it as the
+  // source's output band: dashed edge + a "⤷ output of" line that scrolls
+  // to the producing cell when it's in this doc.
+  const outSrc = cellKey.startsWith('out:') && cellKey.lastIndexOf(':') > 4 ? cellKey.slice(4, cellKey.lastIndexOf(':')) : null;
   return (
-    <article className={`block${fold ? ' is-folded' : ''}`} data-key={cellKey}>
+    <article className={`block${fold ? ' is-folded' : ''}${outSrc ? ' block-output' : ''}`} data-key={cellKey}>
+      {outSrc ? (
+        <div className="block-out-prov">
+          ⤷ output of{' '}
+          <a href={factRoute(outSrc)} onClick={(e) => {
+            const el = document.querySelector(`[data-key="${(window as any).CSS?.escape?.(outSrc) ?? outSrc}"]`);
+            if (el) { e.preventDefault(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+          }}>{outSrc}</a>
+        </div>
+      ) : null}
       {editable ? (
         <div className="block-tools">
           <button className="tool" onClick={onFold}>{fold ? '▸' : '▾'}</button>

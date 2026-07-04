@@ -76,6 +76,28 @@ reference the substrate can hold.**
 4. **TOC is derived**: a `## Table of Contents` heading (or ` ```>toc `)
    renders the member headings as anchor links at render time. Never
    persisted — the membership already IS the structure.
+5. **Every fact is a seed document** (owner aside 2026-07-04: "viewing a
+   fact in lit should still allow editing and adding cells around it —
+   assembling a doc around a starting fact"). The `/r/<key>` fact page
+   stops being read-only for the owner:
+   - **"appears in"**: docs that hold this fact as a member (inbound
+     `inDoc` projection) list at the top — if context exists, one tap
+     opens the fact *in place* there.
+   - **"＋ note above / below"**: the first annotation ASSEMBLES — mint
+     `doc:<prompted-slug>` with the fact placed at seq 1 and the new cell
+     adjacent, then navigate into the DocEditor. No conversion, no copy:
+     the fact is unchanged, the doc is arrangement around it (membership
+     is the only new data — the same move as placing on a board).
+   - **lit-native editing where the shape allows**: a fact whose value is
+     a string or carries `{content}` edits through the same cell textarea
+     (outbox write patches `content` only, preserving sibling fields,
+     type, tags). Foreign-managed types keep "opens in its managing cell"
+     as the PRIMARY affordance with "edit as text" available beneath it —
+     the substrate is the owner's; lit just says what it can't round-trip.
+   Open (exploration per the aside): when several docs contain the fact,
+   which is the "primary" context — most-recently-edited, highest
+   standing, or an explicit `primaryDoc` link? Start with recency and
+   watch.
 
 ## Increments
 

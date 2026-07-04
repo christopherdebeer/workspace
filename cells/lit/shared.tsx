@@ -174,8 +174,16 @@ export function seqBetween(a: number | null, b: number | null): number {
  *  (dangerouslySetInnerHTML over the shared renderer), then enhances fences in
  *  place via an effect — so server HTML and client first render match exactly. */
 export function Block({ data }: { data: BlockData }): React.JSX.Element {
+  // ADR-0060: an `out:<src>:<ts>` member is an ATTACHED output — its key
+  // encodes provenance. Rendered identically on both halves (parity contract);
+  // the client's editor view adds scroll-to-source on top.
+  const k = data.key;
+  const outSrc = k.startsWith('out:') && k.lastIndexOf(':') > 4 ? k.slice(4, k.lastIndexOf(':')) : null;
   return (
-    <article className="block" data-key={data.key}>
+    <article className={`block${outSrc ? ' block-output' : ''}`} data-key={data.key}>
+      {outSrc ? (
+        <div className="block-out-prov">⤷ output of <a href={factRoute(outSrc)}>{outSrc}</a></div>
+      ) : null}
       <div className="block-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(data.md) }} />
     </article>
   );
