@@ -127,10 +127,19 @@ export function createGestureHelpers(controller: CanvasController) {
   function applyResizeElement(ctx: GestureContext, ev: GestureEvent) {
     const el = controller.findElementById(ev.elementId!);
     if (!el || el.static) return;
-    const dx = (ev.xy.x - ctx.draft.resize!.startX) / dpi();
-    const dy = (ev.xy.y - ctx.draft.resize!.startY) / dpi();
-    el.width = Math.max(20, ctx.draft.resize!.startW + dx);
-    el.height = Math.max(20, ctx.draft.resize!.startH + dy);
+    const r = ctx.draft.resize!;
+    const s = el.scale || 1;
+    const dx = (ev.xy.x - r.startX) / dpi();
+    const dy = (ev.xy.y - r.startY) / dpi();
+    el.width = Math.max(20, r.startW + dx / s);
+    el.height = Math.max(20, r.startH + dy / s);
+    // Anchor the TOP-LEFT corner: x,y are the element CENTRE, so a bare
+    // width/height change grew the box symmetrically around the middle —
+    // "it moves while I resize". Shift the centre by half the growth.
+    const cx = (r as { startCx?: number }).startCx;
+    const cy = (r as { startCy?: number }).startCy;
+    if (typeof cx === 'number') el.x = cx + (s * (el.width - r.startW)) / 2;
+    if (typeof cy === 'number') el.y = cy + (s * (el.height - r.startH)) / 2;
     const node = controller.elementNodesMap[el.id];
     controller.updateElementNode(
       node,
@@ -139,16 +148,23 @@ export function createGestureHelpers(controller: CanvasController) {
       true
     );
     // --- keep model dimensions in sync with flowed DOM height --------------
-    // One measurement per frame, last-move-wins: scheduling an unconditional
-    // rAF per pointermove stacked a forced layout (clientHeight) per move and
-    // raced the synchronous height write above.
+    // LEGACY flowed types only (text/markdown/html): their content reflows and
+    // the box should hug it. Registry views (mermaid, machine, view tiles…)
+    // size themselves FROM el.height — measuring them back collapsed the box
+    // to the content's own height (sub-pixel for an empty svg): the shrinking
+    // mermaid node. One measurement per frame, last-move-wins.
+    if (!['text', 'markdown', 'html'].includes(String(el.type))) return;
     const n = node as HTMLElement & { _measureRaf?: number };
     if (n._measureRaf) cancelAnimationFrame(n._measureRaf);
     n._measureRaf = requestAnimationFrame(() => {   // run after the browser paints
       n._measureRaf = 0;
       const contentBox = node.querySelector('.content') || node;
       if (!contentBox) return;
-      el.height = contentBox.clientHeight / (el.scale || 1);
+      const measured = contentBox.clientHeight / (el.scale || 1);
+      if (measured >= 20) {
+        el.height = measured;
+        if (typeof cy === 'number') el.y = cy + ((el.scale || 1) * (el.height - r.startH)) / 2;
+      }
     });
   }
 

@@ -431,7 +431,12 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               startX: e.xy.x,
               startY: e.xy.y,
               startW: el.width,
-              startH: el.height
+              startH: el.height,
+              // Elements are positioned by CENTER — the start centre lets the
+              // resize keep the top-left corner anchored instead of growing
+              // symmetrically around the middle (the "moves while resizing").
+              startCx: el.x,
+              startCy: el.y
             },
             id: e.elementId
           };

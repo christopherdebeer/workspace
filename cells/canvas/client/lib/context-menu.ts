@@ -109,21 +109,28 @@ function buildElementActions(el: CanvasElement, controller: CanvasController, do
     summary.textContent = 'Appearance';
     details.appendChild(summary);
 
-    // Type: a labeled select over the native types only — never offered for
-    // fact cards (their type is the substrate's, not the board's).
+    // Type: the FULL render vocabulary — board-native types plus every
+    // registered renderer (mermaid, machine, view, surface, …), not the
+    // legacy four. Never offered for fact cards (their type is the
+    // substrate's, not the board's).
     const isFactCard = !!(el as unknown as Record<string, unknown>)._factCard;
     if (!isFactCard) {
       const typeWrap = document.createElement('label');
       typeWrap.className = 'cm-field';
       typeWrap.textContent = 'Type';
       const typeSel = document.createElement('select');
-      for (const t of ['text', 'markdown', 'html', 'img']) {
+      const base = ['text', 'markdown', 'html', 'img'];
+      const registered: string[] = ((controller as any).elementRegistry?.listTypes?.() ?? [])
+        .filter((t: string) => !base.includes(t) && t !== 'fact' && t !== 'edit-prompt');
+      const types = [...base, ...registered.sort()];
+      if (!types.includes(el.type)) types.unshift(el.type); // current type always listed
+      for (const t of types) {
         const o = document.createElement('option');
         o.value = t;
         o.textContent = t;
         typeSel.appendChild(o);
       }
-      typeSel.value = ['text', 'markdown', 'html', 'img'].includes(el.type) ? el.type : 'markdown';
+      typeSel.value = el.type;
       typeSel.onchange = () => {
         el.type = typeSel.value;
         controller.updateElementNode(controller.elementNodesMap[el.id], el, el.id === controller.selectedElementId);

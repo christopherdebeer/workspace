@@ -59,9 +59,12 @@ export function sanitizeElementGeometry(el: Record<string, any>): boolean {
   let healed = false;
   const fix = (k: string, v: number): void => { el[k] = v; healed = true; };
 
-  if (!isFiniteNum(el.width) || el.width <= 0) fix('width', 240);
+  // A collapsed side (a runaway content-height sync once persisted sub-pixel
+  // heights) is as unusable as an exploded one: the element becomes an
+  // uninteractable sliver at any zoom. Heal absurdly-small back to defaults.
+  if (!isFiniteNum(el.width) || el.width < 8) fix('width', 240);
   else if (el.width > MAX_PAINT_SIDE) fix('width', MAX_PAINT_SIDE);
-  if (!isFiniteNum(el.height) || el.height <= 0) fix('height', 120);
+  if (!isFiniteNum(el.height) || el.height < 8) fix('height', 120);
   else if (el.height > MAX_PAINT_SIDE) fix('height', MAX_PAINT_SIDE);
 
   if (el.scale !== undefined) {
