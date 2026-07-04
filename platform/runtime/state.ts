@@ -1253,6 +1253,12 @@ export interface SupersedeOptions {
 export interface ObservedState {
   put(input: WriteInput, identity?: Identity): Promise<Entry>;
   get(scope: string, key: string, identity?: Identity): Promise<Entry | null>;
+  /** Batched, TOUCH-FREE entry read (ADR-0055 `include:'entries'`): a change-feed
+   *  page inlining its post-write facts is a projection, not attention — no read
+   *  touch is recorded (ADR-0050: rendering must not inflate salience). Superseded
+   *  entries return wrapped (the `_meta.superseded` marker IS the tombstone);
+   *  absent/expired keys map to null. */
+  getMany(scope: string, keys: string[]): Promise<Record<string, Entry | null>>;
   read(scope: string, opts?: ReadOptions, identity?: Identity): Promise<ReadResult>;
   /**
    * Apply salience tiering + elision to an already-scored set of entries. Lets a
@@ -1561,6 +1567,22 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // the next read (attention is about the future ranking, not this response).
       await store.recordTouch(scope, key, actorOf(identity), 'read', bucketOf(now.getTime()));
       return wrap(rec, now.getTime());
+    },
+
+    async getMany(scope: string, keys: string[]): Promise<Record<string, Entry | null>> {
+      if (!keys.length) return {};
+      const nowMs = Date.now();
+      // One signals pass for the whole batch — wrap would otherwise rescan the
+      // scope per key. Touch-free by design (see the interface note).
+      const signals = await signalsFor(scope, nowMs, s.windowMs);
+      const out: Record<string, Entry | null> = {};
+      await Promise.all(
+        keys.map(async (key) => {
+          const rec = await store.get(scope, key);
+          out[key] = rec && isTimerLive(rec, nowMs) ? await wrap(rec, nowMs, signals) : null;
+        }),
+      );
+      return out;
     },
 
     shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {

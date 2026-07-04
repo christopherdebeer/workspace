@@ -7,12 +7,13 @@ import {
   requireUser,
   indexForScope,
   INTENT_PRESET,
+  type ChangesResult,
   type ChangesScope,
   type Entry,
   type SalienceLens,
   type SalienceOptions,
 } from '../../platform/runtime';
-import { shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
+import { shapeEntry, shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
 import { applicableGrants, grantCovers, WHOLE_SLICE } from './grants';
 import {
   type DepsBuilder,
@@ -290,6 +291,18 @@ export interface ChangesInput {
    *  match on `to`, so edges INTO the slice count) and/or an `ops` whitelist.
    *  Filtering happens BEFORE windowing; the head `seq` stays global. */
   scope?: ChangesScope;
+  /** ADR-0055 Inc 2: `'entries'` inlines the CURRENT entry (card-shaped) for
+   *  each written/superseded key on the page — one response instead of a
+   *  follow-up fetch per event. Touch-free: inlining is a projection read and
+   *  never inflates salience. Absent/expired keys map to null. */
+  include?: 'events' | 'entries';
+}
+
+/** `changes` result: the feed page, plus inline entries when `include:'entries'`. */
+export interface ChangesWithEntries extends ChangesResult {
+  /** Current card-shaped entry per written key; `_meta.superseded` is the
+   *  tombstone marker, null = gone (expired or never visible). */
+  entries?: Record<string, Entry | null>;
 }
 
 export interface AttentionInput {
@@ -480,11 +493,24 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // ADR-0048: a bare call means "what happened lately?", not "replay
       // everything" — newest 200, ascending. Tailing (`sinceSeq`) and explicit
       // windows (`limit`/`last`) behave exactly as asked.
-      if (input?.sinceSeq === undefined && input?.limit === undefined && input?.last === undefined) {
-        return state.changes(scope, 0, undefined, 200, input?.scope);
-      }
+      const bare = input?.sinceSeq === undefined && input?.limit === undefined && input?.last === undefined;
       const sinceSeq = input?.sinceSeq === 'head' ? 'head' : (input?.sinceSeq ?? 0);
-      return state.changes(scope, sinceSeq, input?.limit, input?.last, input?.scope);
+      const result = bare
+        ? await state.changes(scope, 0, undefined, 200, input?.scope)
+        : await state.changes(scope, sinceSeq, input?.limit, input?.last, input?.scope);
+      if (input?.include !== 'entries') return result;
+      // ADR-0055 Inc 2: inline the CURRENT entry for each written key on the
+      // page — card-shaped, touch-free (a projection read must not inflate
+      // salience), one batched read instead of a client fetch per event.
+      const keys = [...new Set(result.events.filter((e) => (e.op === 'write' || e.op === 'supersede') && e.key !== null).map((e) => e.key as string))];
+      if (!keys.length) return { ...result, entries: {} };
+      const fetched = await state.getMany(scope, keys);
+      const entries: Record<string, Entry | null> = {};
+      for (const k of keys) {
+        const e = fetched[k];
+        entries[k] = e ? shapeEntry(e, 'card') : null;
+      }
+      return { ...result, entries };
     },
 
     async attention(input, ctx) {

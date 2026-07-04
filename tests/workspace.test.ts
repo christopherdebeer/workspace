@@ -524,6 +524,28 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(lastOne.events.map((e) => `${e.op}:${e.key}`)).toEqual(['supersede:sc:el-1']);
   });
 
+  it('changes include:"entries" inlines current card entries, touch-free (ADR-0055 Inc 2)', async () => {
+    const head = (await cmds.changes({ sinceSeq: 'head' }, alice())).seq;
+    await cmds.remember({ key: 'inc2:a', value: { note: 'live fact' } }, alice());
+    await cmds.remember({ key: 'inc2:b', value: 'will be retired' }, alice());
+    await cmds.supersede({ key: 'inc2:b' }, alice());
+    const touchesBefore = (await store.get('alice', 'inc2:a'))?.touches;
+
+    const page = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['inc2:'] }, include: 'entries' }, alice());
+    // One entry per distinct written key, current state, card tier.
+    expect(Object.keys(page.entries ?? {}).sort()).toEqual(['inc2:a', 'inc2:b']);
+    expect(page.entries?.['inc2:a']?._meta.shaped).toBe('card');
+    expect(page.entries?.['inc2:b']?._meta.superseded).toBeTruthy(); // the tombstone marker
+
+    // Touch-free: inlining is a projection read, not attention (ADR-0050) —
+    // the fact's read counters must not move because a feed page shipped it.
+    expect((await store.get('alice', 'inc2:a'))?.touches).toEqual(touchesBefore);
+
+    // Without include, the page shape is unchanged (no entries field).
+    const plain = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['inc2:'] } }, alice());
+    expect('entries' in plain).toBe(false);
+  });
+
   it('query pages with limit + cursor and reports the overall total', async () => {
     await cmds.remember({ key: 'page-a', value: 1, type: 'paged' }, alice());
     await cmds.remember({ key: 'page-b', value: 2, type: 'paged' }, alice());

@@ -27,7 +27,6 @@ import {
   type QueryResult,
   type NeighborsResult,
   type MembersResult,
-  type ChangesResult,
   type AttentionResult,
   type EdgeRecord,
   type LinkResult,
@@ -47,6 +46,7 @@ import {
   type PeekInput,
   type QueryInput,
   type ChangesInput,
+  type ChangesWithEntries,
   type AttentionInput,
 } from './commands-read';
 import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput } from './commands-graph';
@@ -121,7 +121,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[]; total: number }>;
   graph: CommandHandler<EdgeScopeInput | undefined, { edges: EdgeRecord[]; total: number }>;
   members: CommandHandler<MembersInput, MembersResult>;
-  changes: CommandHandler<ChangesInput | undefined, ChangesResult>;
+  changes: CommandHandler<ChangesInput | undefined, ChangesWithEntries>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
   actions: CommandHandler<undefined, { actions: ActionDefinition[] }>;

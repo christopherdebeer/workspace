@@ -573,6 +573,12 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           },
           additionalProperties: false,
         },
+        include: {
+          type: 'string',
+          enum: ['events', 'entries'],
+          description:
+            '"entries" inlines the CURRENT card-shaped entry per written/superseded key on the page (touch-free — never inflates salience), replacing a follow-up fetch per event; null = gone, _meta.superseded = tombstone',
+        },
       },
       additionalProperties: false,
     },
@@ -594,6 +600,10 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           },
         },
         seq: { type: 'number', description: 'Current head — resume from here' },
+        entries: {
+          type: 'object',
+          description: 'Only with include:"entries": key → current card-shaped entry (null = gone; _meta.superseded = tombstone)',
+        },
       },
     },
   },
