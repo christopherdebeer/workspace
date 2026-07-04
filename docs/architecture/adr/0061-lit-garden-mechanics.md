@@ -1,6 +1,16 @@
 # ADR-0061 — lit garden mechanics: fragments, transclusion, search cells, TOC
 
-- **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
+- **Status:** Inc 1–2 substantially shipped 2026-07-04 (lit v1783208878380
+  + cell-ui regenerated and CDK-deployed; SSR live-verified on doc:sn-demo):
+  fragment wiki-links split in the ONE shared resolver (platform/ui) with
+  key-shaped fragments as edge targets (first-mention backlinks); block
+  anchors + soft heading resolution; red-link stubs with tap-to-create and
+  the "waiting to exist" list (dangling related edges); `>toc` and `>search`
+  cells; `< factKey` transclusion-by-reference with source chip (md-fences
+  carrying a source stay declarations); fact-as-seed §5 first cut ("appears
+  in" + "start a doc around this fact"). Open: insert-existing picker in the
+  ＋ fan, `< uri` click-to-load windows, search-hit "add to doc" verb,
+  primary-context heuristic.
 - **Depends on:** ADR-0059 (grammar), ADR-0060 (outputs-as-facts), ADR-0040
   (wiki), ADR-0055 (scoped feeds). Sources: dotlit `parser/links.js`
   (verified), `renderer/transcludeCode.js` (verified), the dotlit TODOs that
