@@ -18,6 +18,7 @@ import { CrdtAdapter } from './lib/network/crdt.ts';
 import { canvasPath, boardFromPath } from './lib/url.ts';
 import { sanitizeElementGeometry, isFiniteNum } from './lib/geometry.ts';
 import { uid } from './lib/uid.ts';
+import { createBoardCtx, type BoardCtxInternal } from './lib/sdk.ts';
 import { fitRegion, type BBox } from '../shared/frame.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -78,6 +79,8 @@ class CanvasController {
     _canvasOffset: { left: number; top: number } | null = null;
     /** Last dispatched selection signature — pans must not re-announce it. */
     _lastSelSig: string | null = null;
+    /** The board SDK handed to renderers and content scripts (ADR-0056). */
+    ctx: BoardCtxInternal;
 
     constructor(canvasState: CanvasState) {
         updateCanvasController(this)
@@ -110,6 +113,10 @@ class CanvasController {
         this.elementRegistry = elementRegistry;
         this.elementNodesMap = {};
         this.edgeNodesMap = {};
+        // ADR-0056 Inc 1: the one sanctioned surface for board code (renderer
+        // facts + content scripts). Handed alongside the controller for one
+        // increment; the raw-controller/window bridges are deprecated.
+        this.ctx = createBoardCtx(this) as BoardCtxInternal;
 
         this.canvas = document.getElementById("canvas");
         this.container = document.getElementById("canvas-container");
@@ -405,6 +412,7 @@ class CanvasController {
         this.crdt.updateSelection(this.selectedElementIds);
         this.updateGroupBox()
         this.requestRender();
+        this.ctx?._emit('select', [...this.selectedElementIds]);
     }
 
     clearSelection() {
@@ -413,6 +421,7 @@ class CanvasController {
             this.crdt.updateSelection(this.selectedElementIds);
             this.updateGroupBox()
             this.requestRender();
+            this.ctx?._emit('select', []);
         }
     }
 
@@ -568,6 +577,7 @@ class CanvasController {
         }
 
         this.crdt.updateView(this.viewState);
+        this.ctx?._emit('camera', { x: this.viewState.translateX, y: this.viewState.translateY, scale: this.viewState.scale });
 
         if (this._xformQueued) return;
         this._xformQueued = true;
@@ -1016,7 +1026,7 @@ class CanvasController {
         const view = this.elementRegistry.viewFor(el.type);
         if (view && typeof view.update === 'function') {
             try {
-                view.update(el, node.firstChild, this);   // firstChild is view root
+                view.update(el, node.firstChild, this, this.ctx);   // firstChild is view root; ctx = ADR-0056 SDK
             } catch (err: any) {
                 // A throwing update must not abort the render pass for every
                 // element after this one.
@@ -1150,9 +1160,12 @@ ${script.getAttribute('src')}`);
                         }, ms);
                         return id as unknown as number;
                     };
-                    const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval',
+                    // `ctx` (ADR-0056) is the sanctioned surface going forward;
+                    // `controller` stays in scope one increment so existing
+                    // scripts (the minimap) keep working while they migrate.
+                    const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval', 'ctx',
                         scriptElement.textContent || '');
-                    fn(el, this, node, gRaf, gTimeout, gInterval);
+                    fn(el, this, node, gRaf, gTimeout, gInterval, this.ctx);
                 } catch (err: any) {
                     // Non-fatal: badge the element + log WHICH element, no global banner.
                     console.warn('[canvas] element script error', { element: elKey, error: err.message });
@@ -1576,11 +1589,11 @@ ${script.getAttribute('src')}`);
          * to the fact card so there is always something to see and tap. */
         if (view) {
             try {
-                const inner = view.mount(el, this);
+                const inner = view.mount(el, this, this.ctx); // ctx = ADR-0056 SDK; controller kept one increment
                 inner && node.appendChild(inner);
             } catch (err: any) {
                 console.warn('[canvas] view mount failed — fact-card fallback', { type: el.type, id: el.id, error: err?.message });
-                const fb = this.elementRegistry.viewFor('fact')?.mount?.(el, this);
+                const fb = this.elementRegistry.viewFor('fact')?.mount?.(el, this, this.ctx);
                 if (fb) node.appendChild(fb);
                 this._showElementError(node, `renderer ${el.type}: ${err?.message ?? 'failed'}`);
             }

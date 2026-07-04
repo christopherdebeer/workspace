@@ -130,6 +130,32 @@ async function main() {
   check('pinch zoom moved the scale', zoom.scale > 1.2 && zoom.scale <= 10, `scale=${zoom.scale}`);
   check('--zoom settled to the exact scale', parseFloat(zoom.zoomVar) === zoom.scale, `var=${zoom.zoomVar}`);
 
+  // -- 5: the board ctx SDK (ADR-0056 Inc 1) — contract smoke test ------------
+  const ctx = await page.evaluate(() => {
+    const c = window.CC.ctx;
+    if (!c) return null;
+    const before = c.board.camera.get();
+    let camEvents = 0;
+    const off = c.board.on('camera', () => { camEvents++; });
+    c.board.camera.set({ x: before.x + 10 });
+    const after = c.board.camera.get();
+    off();
+    c.board.camera.set({ x: before.x }); // restore (listener now detached)
+    return {
+      api: c.api,
+      verbs: ['read', 'act', 'uid', 'titleOf', 'hrefOf', 'types', 'changes'].every((k) => typeof c[k] === 'function' || k === 'read' || k === 'act'),
+      elements: c.board.elements().length,
+      copies: c.board.elements()[0] !== window.CC.canvasState.elements[0],
+      camMoved: after.x === before.x + 10,
+      camEvents,
+    };
+  });
+  check('ctx present with api 1', !!ctx && ctx.api === 1);
+  check('ctx substrate verbs present', !!ctx && ctx.verbs);
+  check('ctx.board.elements() returns copies', !!ctx && ctx.elements >= 3 && ctx.copies);
+  check('ctx.board.camera set/get round-trips', !!ctx && ctx.camMoved);
+  check('ctx.board.on(camera) fired and unsubscribed', !!ctx && ctx.camEvents >= 1);
+
   await browser.close();
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nall checks passed');
   process.exit(failures ? 1 : 0);

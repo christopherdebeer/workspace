@@ -1,6 +1,14 @@
 # ADR-0056 — Executable surfaces: renderers AND content scripts, substrate-native
 
-- **Status:** Proposed 2026-07-04, **revised same day per owner feedback**:
+- **Status:** Inc 1 shipped 2026-07-04 (canvas v1783205081155) — `ctx` exists
+  (`client/lib/sdk.ts`, api 1): substrate half (read/act/uid/titleOf/hrefOf/
+  types/scoped-changes) + `board` half (id, elements-as-copies, selection,
+  camera get/set/fit, place/update/remove through the outbox, on(select|
+  camera)). Handed to renderer mount/update as a new trailing arg and to
+  content scripts as `ctx` — `controller` stays in scope one increment.
+  Harness asserts the contract (5 ctx checks in verify-edge-fixes.mjs).
+  Inc 2 (fixtures) and Inc 3 (script facts + provenance gate) open.
+  Originally proposed 2026-07-04, **revised same day per owner feedback**:
   content scripts are NOT retired — the custom minimap is the proof that
   script-level malleability is a feature of the medium ("meta interface
   malleability"). Both executable paths stay; what changes is that they

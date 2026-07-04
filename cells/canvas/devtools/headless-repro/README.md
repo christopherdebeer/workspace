@@ -38,6 +38,24 @@ npm run poison              # a fact persisted with scale 481 / width 1e7 render
 `drive.mjs`/`poison.mjs` use the Playwright-managed Chromium; point `CHROME`
 at a binary to override (e.g. `CHROME=/opt/pw-browsers/chromium-1194/chrome-linux/chrome`).
 
+### Live mode (real substrate, no stub)
+
+The scripts above run against `kernel-stub.js` — deterministic, offline, safe.
+`live.mjs` is the other half: it injects a real token where the kernel looks
+for one (`localStorage parc.session.tokens`) and opens the DEPLOYED cell, so
+dispatch → gateway → DynamoDB → live-sync are all real:
+
+```sh
+node live.mjs parcland --shot live.png       # token from /tmp/parc-token.json
+PARC_TOKEN=<access-token> node live.mjs myboard
+```
+
+What passes depends on the token's scope (a bare `read` token loads the board
+but `workspace.changes` needs `read:workspace` — the denial is itself visible
+here). Caveat: sandboxed environments whose egress proxy resets browser TLS
+(e.g. some remote agent containers) can't run this; API-level validation via
+`curl`/MCP still can.
+
 Expected (fixed) output: group-pinch scale stays ≤ `maxScaleFor(el)`
 (paint side ≤ 16,384px), the coincident-start pinch lands ~10× not ~480×, and
 the poisoned element renders at `scale: 1, width: 16384`.

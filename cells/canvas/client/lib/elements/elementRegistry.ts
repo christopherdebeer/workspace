@@ -5,9 +5,13 @@
 
 import type { CanvasElement } from '../../types';
 
+/* View API v1 (ADR-0056): `ctx` is the sanctioned surface — the substrate
+ * verbs + the board contract. `controller` is the legacy reach-in, still
+ * passed for one increment so existing renderers keep working; new views
+ * should take (el, _controller, ctx) and use only ctx. */
 interface ElementView {
-  mount: (el: CanvasElement, controller: any) => HTMLElement;
-  update?: (el: CanvasElement, dom: HTMLElement, controller: any) => void;
+  mount: (el: CanvasElement, controller: any, ctx?: any) => HTMLElement;
+  update?: (el: CanvasElement, dom: HTMLElement, controller: any, ctx?: any) => void;
   unmount?: (dom: HTMLElement) => void;
 }
 
