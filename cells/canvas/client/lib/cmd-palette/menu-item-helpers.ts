@@ -64,16 +64,15 @@ function undoToast(c: any, message: string): void {
   if (typeof document === 'undefined') return;
   document.getElementById('undo-toast')?.remove();
   const t = document.createElement('div');
-  t.id = 'undo-toast';
-  t.setAttribute('style',
-    'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));z-index:9600;' +
-    'display:flex;gap:12px;align-items:center;background:rgba(28,28,26,.94);color:#fbfbf8;' +
-    'font:13px/1.2 -apple-system,system-ui,sans-serif;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.3)');
+  t.id = 'undo-toast'; // styled in main.css (dusk housing, gold action)
+  // Stack ABOVE the bottom sheet, whatever its current height — a fixed
+  // offset used to drop the toast INSIDE the suggestion list.
+  const sheetH = document.getElementById('cmd-palette')?.getBoundingClientRect().height ?? 84;
+  t.style.bottom = `calc(${Math.round(sheetH) + 12}px + env(safe-area-inset-bottom))`;
   const msg = document.createElement('span');
   msg.textContent = message;
   const undo = document.createElement('button');
   undo.textContent = 'Undo';
-  undo.setAttribute('style', 'border:0;background:transparent;color:#8fd0a9;font:600 13px/1 inherit;cursor:pointer;padding:2px 4px');
   undo.addEventListener('click', () => { c.undo?.(); t.remove(); });
   t.appendChild(msg);
   t.appendChild(undo);

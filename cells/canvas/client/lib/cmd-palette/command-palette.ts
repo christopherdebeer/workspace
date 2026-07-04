@@ -166,9 +166,9 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   const onSaveState = (ev: Event): void => {
     const state = (ev as CustomEvent<{ state: string }>).detail?.state;
     clearTimeout(saveFade);
-    if (state === 'saving') { $save.textContent = 'saving…'; $save.style.color = '#8a8a82'; }
+    if (state === 'saving') { $save.textContent = 'saving…'; $save.style.color = '#85795f'; }
     else if (state === 'failed') { $save.textContent = '⚠ save failed — changes may be lost'; $save.style.color = '#b3261e'; }
-    else { $save.textContent = 'saved'; $save.style.color = '#2f6f4f'; saveFade = setTimeout(() => { $save.textContent = ''; }, 1600); }
+    else { $save.textContent = 'saved'; $save.style.color = '#2e5e43'; saveFade = setTimeout(() => { $save.textContent = ''; }, 1600); }
   };
   window.addEventListener('parc:save-state', onSaveState);
 
@@ -253,7 +253,7 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       if (it.kind === 'more') {
         li.innerHTML = `
           <span class="s-icon"><i class="fa-solid fa-ellipsis"></i></span>
-          <div class="cmd-content"><span class="crumb last-crumb" style="color:#2f6f4f">${esc(it.label)}</span></div>`;
+          <div class="cmd-content"><span class="crumb last-crumb" style="color:#2e5e43">${esc(it.label)}</span></div>`;
       } else if (it.kind === 'typetoken') {
         li.innerHTML = `
           <span class="s-icon">${it.icon.startsWith('fa-') ? `<i class="fa-solid ${it.icon}"></i>` : esc(it.icon)}</span>

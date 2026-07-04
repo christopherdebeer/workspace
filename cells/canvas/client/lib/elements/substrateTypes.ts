@@ -170,7 +170,7 @@ export function registerSubstrateTypes(): void {
         const vs = cc.viewState;
         const vx = (-vs.translateX / vs.scale) * k + ox;
         const vy = (-vs.translateY / vs.scale) * k + oy;
-        g.strokeStyle = '#2f6f4f';
+        g.strokeStyle = '#2e5e43';
         g.lineWidth = 1.5;
         g.strokeRect(vx, vy, (window.innerWidth / vs.scale) * k, (window.innerHeight / vs.scale) * k);
       };
@@ -210,7 +210,7 @@ export function registerSubstrateTypes(): void {
     mount(el: any) {
       const host = document.createElement('div');
       host.className = 'content canvas-nest';
-      host.style.cssText = 'position:relative;overflow:hidden;border:1px solid #d8d8ce;border-radius:8px;background:#fbfbf8';
+      host.style.cssText = 'position:relative;overflow:hidden;border:1px solid var(--pc-border,#ddd2b8);border-radius:10px;background:var(--pc-panel,#fdf9ef)';
       sizeToElement(el, host);
       renderNest(el, host);
       return host;
@@ -284,12 +284,12 @@ function renderNest(el: any, host: HTMLElement): void {
   host.dataset.ref = String(el.refCanvasId ?? '');
   host.innerHTML = '';
   const label = document.createElement('div');
-  label.style.cssText = 'position:absolute;top:4px;left:8px;z-index:2;font-size:11px;font-weight:600;color:#3a3a36;background:rgba(251,251,248,.85);border-radius:6px;padding:1px 6px';
+  label.style.cssText = 'position:absolute;top:4px;left:8px;z-index:2;font-size:11px;font-weight:600;color:var(--pc-ink,#332e23);background:rgba(253,249,239,.88);border-radius:6px;padding:1px 6px';
   label.textContent = `🗺 ${el.content || el.refCanvasId || 'nested canvas'}`;
   host.appendChild(label);
   if (!el.refCanvasId) {
     const msg = document.createElement('div');
-    msg.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;color:#8a8a82;font-size:12px';
+    msg.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;color:#85795f;font-size:12px';
     msg.textContent = 'no board linked yet';
     host.appendChild(msg);
     return;
@@ -302,7 +302,8 @@ function renderNest(el: any, host: HTMLElement): void {
   host.appendChild(frame);
   const open = document.createElement('button');
   open.textContent = '⤢ open';
-  open.style.cssText = 'position:absolute;bottom:6px;right:6px;z-index:2;border:1px solid #2f6f4f;background:#2f6f4f;color:#fff;border-radius:7px;padding:3px 10px;font:12px/1.2 inherit;cursor:pointer';
+  open.className = 'pc-btn';
+  open.style.cssText = 'position:absolute;bottom:6px;right:6px;z-index:2;padding:3px 10px;font-size:12px';
   open.onpointerdown = (e) => e.stopPropagation();
   open.onclick = (e) => {
     e.stopPropagation();

@@ -800,7 +800,7 @@ class CanvasController {
         // Arrowheads inherit the edge's colour. SVG2 `context-stroke` is unreliable
         // on older iOS Safari, so mint one marker per distinct colour on demand.
         const arrowMarker = (color: string): string => {
-            const c = color || "#ccc";
+            const c = color || "#b9ad91";
             const id = "arrowhead-" + c.replace(/[^a-zA-Z0-9]/g, "") || "arrowhead-def";
             if (!defs!.querySelector("#" + id)) {
                 const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
@@ -827,9 +827,9 @@ class CanvasController {
             (typeof edge.rel === 'string' ? edge.rel.trim() : typeof edge.label === 'string' ? edge.label.trim() : '') === 'similarTo'
             && !edge.style?.color;
         const edgeColor = (edge: Edge): string =>
-            this.selectedEdgeIds?.has(edge.id) ? "#2f6f4f"
+            this.selectedEdgeIds?.has(edge.id) ? "#2e5e43"
             : isFaint(edge) ? "rgba(150,140,120,.28)"
-            : (edge.style?.color || "#ccc");
+            : (edge.style?.color || "#b9ad91");
 
         // Endpoint lookups go through a per-PASS map — two linear
         // findElementById scans per edge was O(E·V) per pass (346×127 on the
@@ -969,7 +969,7 @@ class CanvasController {
                     textEl.setAttribute("text-anchor", "middle");
                     textEl.setAttribute("data-id", edge.id);
                     textEl.setAttribute("alignment-baseline", "middle");
-                    textEl.setAttribute("fill", "#000");
+                    textEl.setAttribute("fill", "#332e23");
                     textEl.style.fontSize = "12px";
                     if (this.selectedElementId === edge.id) textEl.style.fill = "red";
                     this.edgeLabelNodesMap[edge.id] = textEl;
@@ -1670,7 +1670,7 @@ ${script.getAttribute('src')}`);
         hdr.innerHTML = '<strong style="font-family:Georgia,serif;flex:1">Edit</strong>';
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '✕ Close';
-        closeBtn.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+        closeBtn.style.cssText = 'border:0;background:transparent;color:#85795f;font:inherit;cursor:pointer;padding:4px 6px';
         closeBtn.addEventListener('click', () => closeModal());
         hdr.appendChild(closeBtn);
         host.appendChild(hdr);

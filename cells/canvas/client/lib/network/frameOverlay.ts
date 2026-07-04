@@ -96,7 +96,7 @@ function scheduleDraw(): void {
 /* ── editor ──────────────────────────────────────────────────────────────── */
 
 function field(label: string, inner: string): string {
-  return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${inner}</label>`;
+  return `<label><span style="color:#85795f;font-size:11px">${label}</span>${inner}</label>`;
 }
 
 async function saveFrame(f: FrameFact, patch: Partial<FrameValue>): Promise<void> {
@@ -133,7 +133,7 @@ export function openFrameEditor(f: FrameFact): void {
   meta.style.cssText = 'color:#a8a89e;font-size:11px;white-space:nowrap';
   const done = document.createElement('button');
   done.textContent = 'Done';
-  done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+  done.style.cssText = 'border:0;background:transparent;color:#85795f;font:inherit;cursor:pointer;padding:4px 6px';
   done.addEventListener('click', () => clearInspector());
   head.append(title, meta, done);
   body.appendChild(head);
@@ -156,7 +156,8 @@ export function openFrameEditor(f: FrameFact): void {
   reframe.textContent = selCount ? `Set region to selection (${selCount})` : 'Set region to selection';
   reframe.disabled = !selCount;
   reframe.title = selCount ? '' : 'Select elements first, then re-open this frame';
-  reframe.style.cssText = `border:1px solid #2f6f4f;background:${selCount ? '#2f6f4f' : 'transparent'};color:${selCount ? '#fff' : '#2f6f4f'};border-radius:7px;padding:7px 12px;font:inherit;cursor:${selCount ? 'pointer' : 'default'};opacity:${selCount ? 1 : 0.45}`;
+  reframe.className = 'pc-btn';
+  if (!selCount) reframe.classList.replace('pc-btn', 'pc-btn-ghost');
   reframe.addEventListener('click', () => {
     const sel = [...(cc()?.selectedElementIds ?? [])].map((id: string) => `el:${id}`);
     if (!sel.length) { console.warn('[canvas] re-frame: nothing selected'); return; }
@@ -164,7 +165,7 @@ export function openFrameEditor(f: FrameFact): void {
   });
   const del = document.createElement('button');
   del.textContent = 'Delete';
-  del.style.cssText = 'border:1px solid #e6d6d6;background:#fff;color:#7a1f1f;border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer';
+  del.className = 'pc-btn-danger';
   del.addEventListener('click', () => {
     act('workspace.supersede', { key: f.key }).catch(() => undefined);
     frames = frames.filter((x) => x.key !== f.key);

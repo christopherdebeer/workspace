@@ -76,7 +76,7 @@ function deleteEdge(edge: any): void {
 }
 
 function field(label: string, input: string): string {
-  return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${input}</label>`;
+  return `<label><span style="color:#85795f;font-size:11px">${label}</span>${input}</label>`;
 }
 
 /** Human name for an edge endpoint (an element id, or another edge's id). */
@@ -102,7 +102,7 @@ function endpointsRow(edge: any): HTMLElement {
     const b = document.createElement('button');
     b.textContent = endpointTitle(id);
     b.title = id;
-    b.style.cssText = 'border:1px solid #d8d8ce;background:#f4f4ee;color:#333;border-radius:7px;padding:3px 9px;font:inherit;font-size:12px;cursor:pointer;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    b.className = 'pc-chip';
     b.addEventListener('click', () => {
       const c = cc();
       if (c?.findElementById?.(id)) c.recenterOnElement?.(id);
@@ -110,7 +110,7 @@ function endpointsRow(edge: any): HTMLElement {
     return b;
   };
   const arrow = document.createElement('span');
-  arrow.style.cssText = 'color:#8a8a82;font-size:11px;flex-shrink:0';
+  arrow.style.cssText = 'color:#85795f;font-size:11px;flex-shrink:0';
   arrow.textContent = `—${relOf(edge)}→`;
   row.appendChild(chip(edge.source));
   row.appendChild(arrow);
@@ -133,7 +133,7 @@ function openInspector(edge: any): void {
     ${field('Colour', `<input data-f="color" type="color" value="${edge.style?.color || '#cccccc'}"/>`)}
     ${field('Width', `<input data-f="thickness" type="number" min="1" max="12" value="${parseFloat(edge.style?.thickness) || 2}"/>`)}
     ${field('Dash', `<select data-f="dash"><option value="">solid</option><option value="6,4" ${edge.style?.dash === '6,4' ? 'selected' : ''}>dashed</option><option value="2,4" ${edge.style?.dash === '2,4' ? 'selected' : ''}>dotted</option></select>`)}
-    <div style="display:flex;align-items:flex-end"><button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button></div>`;
+    <div style="display:flex;align-items:flex-end"><button data-act="delete" class="pc-btn-danger">Delete</button></div>`;
   body.appendChild(grid);
 
   const get = (f: string): string => (grid.querySelector(`[data-f="${f}"]`) as HTMLInputElement | null)?.value ?? '';
