@@ -17,6 +17,11 @@
 export interface WikiTarget {
   key: string;
   label: string;
+  /** `[[target#fragment]]` (ADR-0061): a member-fact key or free heading text
+   *  within the target. A key-shaped fragment IS fact-grain addressing —
+   *  edge-sync links to it directly, so backlinks land on first mention.
+   *  `[[#fragment]]` alone keeps `key: ''` — the current document. */
+  fragment?: string;
 }
 
 /** The one slug rule: a bare wiki word becomes `doc:<slug>`. */
@@ -35,17 +40,27 @@ const looksLikeKey = (s: string): boolean => !/\s/.test(s) && (s.includes(':') |
 export function resolveWikiTarget(raw: string): WikiTarget {
   const [t, l] = raw.split('|');
   const target = (t ?? '').trim();
-  const key = looksLikeKey(target) ? target : `doc:${wikiSlug(target)}`;
-  return { key, label: (l ?? target).trim() || target };
+  // Fragment first (ADR-0061): `#` never appears in substrate keys, so the
+  // first `#` splits target from fragment. `[[#frag]]` = the current doc.
+  const hash = target.indexOf('#');
+  const base = (hash >= 0 ? target.slice(0, hash) : target).trim();
+  const fragment = hash >= 0 ? target.slice(hash + 1).trim() : undefined;
+  const key = !base ? '' : looksLikeKey(base) ? base : `doc:${wikiSlug(base)}`;
+  return { key, label: (l ?? target).trim() || target, ...(fragment ? { fragment } : {}) };
 }
 
 /** Every distinct fact key a markdown body wiki-links to — the edge-sync input
- *  (lit reconciles these into `related` edges on save). */
+ *  (lit reconciles these into `related` edges on save). A key-shaped fragment
+ *  addresses the member fact itself (first-mention backlinks, ADR-0061). */
 export function extractWikiTargets(md: string): string[] {
   const out = new Set<string>();
   const re = /\[\[([^\]]+)\]\]/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(md))) out.add(resolveWikiTarget(m[1]).key);
+  while ((m = re.exec(md))) {
+    const t = resolveWikiTarget(m[1]);
+    const key = t.fragment && looksLikeKey(t.fragment) ? t.fragment : t.key;
+    if (key) out.add(key);
+  }
   return [...out];
 }
 

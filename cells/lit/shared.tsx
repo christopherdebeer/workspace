@@ -91,8 +91,10 @@ marked.use({
       const outCls = meta.isOutput ? ' fence-output' : '';
       // A markdown fence names the markdown renderer: render its body as markdown
       // (nested), so ```md / ```markdown (and dotlit's `>md !warn` admonition
-      // form) is respected on both SSR and client.
-      if (lang === 'md' || lang === 'markdown') {
+      // form) is respected on both SSR and client. A fence with a `< source`
+      // is a TRANSCLUSION (ADR-0061) — it must stay a pre[data-fence] so the
+      // client can resolve the reference; its body is a placeholder, not content.
+      if ((lang === 'md' || lang === 'markdown') && !meta.source) {
         const dirs = meta.directives.filter((d) => ADMONITIONS.includes(d)).map((d) => ` dir-${d}`).join('');
         return `<div class="md-fence${dirs}${outCls}">${marked.parse(code as string, { async: false }) as string}</div>\n`;
       }
@@ -130,7 +132,14 @@ export const factRoute = (key: string): string => `/r/${encodeKeyPath(key)}`;
 // client share the marked instance, so both render identically.
 export { extractWikiTargets, resolveWikiTarget } from '@parc/ui';
 marked.use({
-  extensions: [wikiLinkExtension(({ key, label }) => `<a class="wikilink" href="${escAttr(factRoute(key))}">${escHtml(label)}</a>`)],
+  extensions: [wikiLinkExtension(({ key, label, fragment }) => {
+    // Fragments (ADR-0061): a member key or heading text within the target.
+    // Key '' = the current document ([[#frag]]) — a bare hash anchor. The
+    // client soft-resolves free-text fragments against member headings.
+    const frag = fragment ? `#${encodeURIComponent(fragment)}` : '';
+    const href = key ? `${factRoute(key)}${frag}` : frag || '#';
+    return `<a class="wikilink" data-wiki-key="${escAttr(key)}" href="${escAttr(href)}">${escHtml(label)}</a>`;
+  })],
 } as Parameters<typeof marked.use>[0]);
 
 export function renderMarkdown(md: string): string {
@@ -180,7 +189,7 @@ export function Block({ data }: { data: BlockData }): React.JSX.Element {
   const k = data.key;
   const outSrc = k.startsWith('out:') && k.lastIndexOf(':') > 4 ? k.slice(4, k.lastIndexOf(':')) : null;
   return (
-    <article className={`block${outSrc ? ' block-output' : ''}`} data-key={data.key}>
+    <article className={`block${outSrc ? ' block-output' : ''}`} data-key={data.key} id={data.key}>
       {outSrc ? (
         <div className="block-out-prov">⤷ output of <a href={factRoute(outSrc)}>{outSrc}</a></div>
       ) : null}

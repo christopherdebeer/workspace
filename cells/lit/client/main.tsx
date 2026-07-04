@@ -48,6 +48,48 @@ async function fetchFact(key: string): Promise<Entry | null> {
   const res = await read<{ entries: Entry[] }>('workspace.query', { prefix: key, limit: 8 });
   return (res.entries ?? []).find((e) => e.key === key) ?? null;
 }
+
+/* ── red links: entities waiting to exist (ADR-0061 §1b) ─────────────────
+ * A wiki edge to a nonexistent key is a dangling edge — visible to attention,
+ * and here to the reader: stub styling + tap-to-create. Existence checks are
+ * cached per session; a network failure counts as existing (no false stubs). */
+const factExistsCache = new Map<string, Promise<boolean>>();
+function factExists(key: string): Promise<boolean> {
+  let p = factExistsCache.get(key);
+  if (!p) { p = fetchFact(key).then((f) => !!f).catch(() => true); factExistsCache.set(key, p); }
+  return p;
+}
+/** Mint a doc for a red link — seeded with its title and a provenance line
+ *  naming where it was wanted (the mention IS the first content). */
+async function createDocFromKey(key: string, title: string, wantedBy?: string): Promise<void> {
+  const slug = key.slice(4);
+  await saveDocMeta(slug, { title });
+  const k = mintCell();
+  await saveCell(slug, k, `# ${title}\n${wantedBy ? `\n_wanted by [[${wantedBy}]]_\n` : ''}`);
+  await writeOrder(slug, k, 1, false);
+  await outbox.flushNow(); // navigation follows — the debounce must not eat the mint
+  factExistsCache.delete(key);
+  location.href = factRoute(key);
+}
+async function markRedLinks(root: HTMLElement): Promise<void> {
+  if (!isAuthed()) return;
+  const anchors = [...root.querySelectorAll('a.wikilink[data-wiki-key]')] as HTMLAnchorElement[];
+  await Promise.all(anchors.slice(0, 30).map(async (a) => {
+    const key = a.dataset.wikiKey || '';
+    if (!key || a.classList.contains('wikilink-stub')) return;
+    if (await factExists(key)) return;
+    a.classList.add('wikilink-stub');
+    a.title = 'waiting to exist — tap to create';
+    if (!key.startsWith('doc:')) return; // non-doc keys: the stub styling alone
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const title = (a.textContent || key.slice(4)).trim();
+      if (!confirm(`Create "${title}"?`)) return;
+      const here = location.pathname.startsWith('/r/') ? decodeURIComponent(location.pathname.slice(3)) : '';
+      void createDocFromKey(key, title, here || undefined);
+    });
+  }));
+}
 function contentOf(value: any): string {
   if (typeof value === 'string') return value;
   if (value && typeof value.content === 'string') return value.content;
@@ -291,12 +333,93 @@ async function mcpResourceRead(uri: string): Promise<string | null> {
 async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void> }): Promise<void> {
   // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
   // — not just the first-word lang — drives routing.
+  void markRedLinks(root); // ADR-0061 §1b — stubs style in as checks resolve
   for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
     const body = (pre.querySelector('code')?.textContent || '').trim();
     const fence = parseFence(pre.dataset.fence || '', body);
     const lang = fence.lang;
     if (!lang) continue;
     const arg = fence.arg;
+    // 0. derived cells (ADR-0061): `>toc` renders the doc's own structure,
+    // `>search` is a live query — the query IS the content, results are
+    // ephemeral render. Both replace the fence like other embeds.
+    if (fence.isOutput && lang === 'toc') {
+      const nav = el('nav', 'toc');
+      nav.appendChild(el('div', 'vw-attrib', 'contents'));
+      const seen = new Set<HTMLElement>();
+      for (const h of Array.from(document.querySelectorAll('.block-body h1, .block-body h2, .block-body h3')) as HTMLElement[]) {
+        if (seen.has(h) || nav.contains(h)) continue;
+        seen.add(h);
+        const blockKey = (h.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+        if (!blockKey) continue;
+        const a = document.createElement('a');
+        a.href = `#${blockKey}`;
+        a.className = `toc-${h.tagName.toLowerCase()}`;
+        a.textContent = (h.textContent || '').trim();
+        a.onclick = (e) => { e.preventDefault(); h.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+        nav.appendChild(a);
+      }
+      pre.replaceWith(nav);
+      continue;
+    }
+    if (fence.isOutput && lang === 'search') {
+      const terms = [fence.file, ...fence.unknowns].filter(Boolean).join(' ') || body;
+      const box = el('div', 'embed-search');
+      box.appendChild(el('div', 'vw-attrib', `🔍 ${terms}${fence.attrs.type ? ` type:${fence.attrs.type}` : ''}${fence.attrs.tag ? ` tag:${fence.attrs.tag}` : ''}`));
+      pre.replaceWith(box);
+      if (!isAuthed()) continue;
+      const q: Record<string, unknown> = { limit: Number(fence.attrs.limit) || 8 };
+      if (terms) q.text = terms;
+      if (fence.attrs.type) q.type = fence.attrs.type;
+      if (fence.attrs.tag) q.tag = fence.attrs.tag;
+      read<{ entries: Entry[]; total?: number }>('workspace.query', q)
+        .then((r) => {
+          for (const e of r.entries ?? []) {
+            const row = el('div', 'search-hit');
+            const a = document.createElement('a');
+            a.href = factRoute(e.key);
+            const v = e.value as Record<string, unknown> | undefined;
+            a.textContent = (typeof v?.title === 'string' && v.title) || e.key;
+            row.appendChild(a);
+            if (e._meta?.type) row.appendChild(el('span', 'search-type', ` ${e._meta.type}`));
+            box.appendChild(row);
+          }
+          if (r.total !== undefined) box.appendChild(el('div', 'vw-attrib', `${r.total} total`));
+        })
+        .catch((err) => box.appendChild(el('div', 'vw-attrib', `search failed: ${(err as Error).message}`)));
+      continue;
+    }
+    // 0c. transclusion by reference (ADR-0061): `< factKey` renders THAT
+    // fact's content in place — no copy exists to drift (dotlit's defining
+    // bug class, structurally gone); editing routes to the source. Remote
+    // uris stay windows (click-to-load, not persisted) — a later increment.
+    const srcRef = fence.source?.filename;
+    if (srcRef && /[:/]/.test(srcRef) && !/^https?:|^\/\//.test(srcRef)) {
+      if (!isAuthed()) continue; // readers see the fence as-is
+      const box = el('div', 'embed-transclude');
+      pre.replaceWith(box);
+      fetchFact(srcRef)
+        .then((f) => {
+          if (!f) {
+            const a = document.createElement('a');
+            a.className = 'wikilink wikilink-stub'; a.href = factRoute(srcRef); a.textContent = srcRef;
+            box.appendChild(el('span', 'vw-attrib', '⟨ source missing: ')); box.appendChild(a);
+            return;
+          }
+          const bodyDiv = el('div', 'transclude-body');
+          bodyDiv.innerHTML = renderMarkdown(contentOf(f.value));
+          box.appendChild(bodyDiv);
+          const chip = el('div', 'vw-attrib');
+          const a = document.createElement('a');
+          a.href = factRoute(srcRef);
+          a.textContent = `↳ ${srcRef} · rev ${(f._meta as { revision?: number } | undefined)?.revision ?? '?'}`;
+          chip.appendChild(a);
+          box.appendChild(chip);
+          void enhanceFences(bodyDiv); // nested viewers render; outputs don't place (no ctx)
+        })
+        .catch((err) => { box.textContent = `transclude failed: ${(err as Error).message}`; });
+      continue;
+    }
     // 0a. plugin declaration: `js !plugin type=viewer of=foo` — the block's body
     // IS the viewer source. The owner registers it as a `_renderers/foo` fact
     // (available everywhere, canvas included); checked before the executable
@@ -567,7 +690,7 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
   // to the producing cell when it's in this doc.
   const outSrc = cellKey.startsWith('out:') && cellKey.lastIndexOf(':') > 4 ? cellKey.slice(4, cellKey.lastIndexOf(':')) : null;
   return (
-    <article className={`block${fold ? ' is-folded' : ''}${outSrc ? ' block-output' : ''}`} data-key={cellKey}>
+    <article className={`block${fold ? ' is-folded' : ''}${outSrc ? ' block-output' : ''}`} data-key={cellKey} id={cellKey}>
       {outSrc ? (
         <div className="block-out-prov">
           ⤷ output of{' '}
@@ -618,6 +741,21 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
     if (!editable) return;
     return startDocLiveSync(docId, () => cellsRef.current.map((c) => c.key), () => void load());
   }, [docId, editable, load]);
+  // Fragment navigation (ADR-0061): `#<memberKey>` scrolls to the block;
+  // free-text fragments soft-resolve against member headings — no index.
+  useEffect(() => {
+    const frag = decodeURIComponent((location.hash || '').slice(1));
+    if (!frag || !cells.length) return;
+    const t = setTimeout(() => {
+      let target: HTMLElement | null = document.getElementById(frag);
+      if (!target) {
+        const hs = Array.from(document.querySelectorAll('.block-body h1, .block-body h2, .block-body h3')) as HTMLElement[];
+        target = hs.find((h) => (h.textContent || '').trim().toLowerCase().includes(frag.toLowerCase())) ?? null;
+      }
+      target?.scrollIntoView({ block: 'start' });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [cells.length]);
 
   // Live mirror of cells so the output callbacks can place a new cell without a
   // re-fetch (read-after-write lag was making outputs appear only on reload).
@@ -724,6 +862,11 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
   // figure simply appears a moment after first paint, same pattern as everything
   // else here (fast SSR shell, richer live data once hydrated).
   const [docs, setDocs] = useState<ListItem[] | null>(seed ?? null);
+  // ADR-0061 §1b: entities waiting to exist — dangling `related` edges (wiki
+  // links whose target was never written), grouped by target, most-wanted
+  // first. The want-list emerges from the writing; nothing is minted until
+  // the owner says so.
+  const [waiting, setWaiting] = useState<Array<{ key: string; count: number }>>([]);
   useEffect(() => {
     void (async () => {
       const res = await read<{ entries: Entry[] }>('workspace.query', { type: 'doc', limit: 100 });
@@ -736,8 +879,19 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
         });
       setDocs(list);
       cacheSet('$docs', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list });
+      if (editable) {
+        try {
+          const att = await read<{ dangling: Array<{ to: string; rel?: string }> }>('workspace.attention', { limit: 100 });
+          const counts = new Map<string, number>();
+          for (const d of att.dangling ?? []) {
+            if (d.rel && d.rel !== 'related') continue;
+            counts.set(d.to, (counts.get(d.to) ?? 0) + 1);
+          }
+          setWaiting([...counts.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count).slice(0, 12));
+        } catch { /* attention is a garnish here */ }
+      }
     })();
-  }, []);
+  }, [editable]);
 
   const today = new Date().toISOString().split('T')[0];
   return (
@@ -751,6 +905,24 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
       <main className="doc-list">
         {docs === null ? <p className="boot">loading documents…</p> : docs.length === 0 ? <p className="boot">no documents yet</p> : docs.map((d) => <DocRow d={d} key={d.id} />)}
       </main>
+      {waiting.length ? (
+        <section className="backlinks waiting">
+          <h3>waiting to exist</h3>
+          <ul>
+            {waiting.map((w) => (
+              <li key={w.key}>
+                <a className="wikilink wikilink-stub" href={factRoute(w.key)} onClick={(e) => {
+                  if (!w.key.startsWith('doc:')) return;
+                  e.preventDefault();
+                  const title = w.key.slice(4).replace(/-/g, ' ');
+                  if (confirm(`Create "${title}"?`)) void createDocFromKey(w.key, title);
+                }}>{w.key}</a>
+                <span className="rel"> wanted {w.count}×</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {editable ? (
         <button className="btn add-block" onClick={async () => {
           const title = prompt('Title?'); if (!title) return;
@@ -759,6 +931,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
           const k = mintCell();
           await saveCell(id, k, `# ${title}\n\nStart writing…`);
           await writeOrder(id, k, 1, false);
+          await outbox.flushNow(); // navigating next — the debounce must not eat the mint
           location.href = factRoute(`doc:${id}`);
         }}>+ new document</button>
       ) : null}
