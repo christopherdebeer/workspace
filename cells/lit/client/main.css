@@ -195,3 +195,7 @@ pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:bl
 .fchip.fc-lang{color:var(--ink,#1c1c1a)}
 .fchip.fc-error{border-left-color:#b5523c!important;color:#b5523c}
 .fchip.fc-link{cursor:pointer;text-decoration:underline dotted}
+/* ADR-0063 gem 2: [[ autocomplete popover under the editor textarea */
+.wta{position:relative}
+.wta textarea{width:100%;box-sizing:border-box}
+.wta-pop{position:absolute;left:0;right:0;top:100%;z-index:50;margin-top:.2rem;display:grid;gap:.2rem;padding:.4rem;border:1px solid var(--line);border-radius:8px;background:#fff;box-shadow:0 4px 16px rgba(51,46,35,.14);max-height:15rem;overflow:auto}

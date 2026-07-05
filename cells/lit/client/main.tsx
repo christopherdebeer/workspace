@@ -198,6 +198,70 @@ async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | 
   }
   return out;
 }
+/** ADR-0063 gem 2: `[[` autocomplete — dotlit's Editor.jsx affordance on a
+ *  plain textarea (mobile-first, no CodeMirror). Typing `[[` opens a popover
+ *  under the textarea listing docs + facts matching what follows; picking
+ *  one completes `[[key|title]]`. Macros: `toc` → a `>toc` fence, and the
+ *  lineage glyph. Caret-anchored positioning is deliberately skipped — the
+ *  popover rides below the field, which is where thumbs already are. */
+function WikiTextarea({ value, onChange }: { value: string; onChange: (v: string) => void }): React.JSX.Element {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [comp, setComp] = useState<{ start: number; q: string } | null>(null);
+  const [opts, setOpts] = useState<Array<{ key: string; title: string; type?: string | null }>>([]);
+  const detect = (v: string, caret: number): void => {
+    const before = v.slice(0, caret);
+    const m = /\[\[([^\]\n]*)$/.exec(before);
+    setComp(m ? { start: caret - m[1].length, q: m[1] } : null);
+  };
+  useEffect(() => {
+    if (!comp) { setOpts([]); return; }
+    const t = setTimeout(() => {
+      const q: Record<string, unknown> = comp.q.trim() ? { text: comp.q.trim(), limit: 6, shape: 'card' } : { type: 'doc', limit: 6, shape: 'card' };
+      void read<{ entries: Entry[] }>('workspace.query', q)
+        .then((r) => setOpts((r.entries ?? []).map((e) => ({
+          key: e.key,
+          title: (typeof (e.value as Record<string, unknown>)?.title === 'string' && (e.value as { title: string }).title) || deriveId(e.key),
+          type: e._meta?.type,
+        }))))
+        .catch(() => setOpts([]));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [comp?.q, comp?.start]);
+  const apply = (text: string): void => {
+    if (!comp) return;
+    const ta = taRef.current;
+    const caret = ta ? ta.selectionStart : value.length;
+    const next = value.slice(0, comp.start) + text + value.slice(caret);
+    onChange(next);
+    setComp(null);
+    requestAnimationFrame(() => { if (ta) { ta.focus(); const p = comp.start + text.length; ta.setSelectionRange(p, p); } });
+  };
+  return (
+    <div className="wta">
+      <textarea
+        ref={taRef}
+        value={value}
+        rows={Math.min(28, Math.max(3, value.split('\n').length + 1))}
+        spellCheck={false}
+        onChange={(e) => { onChange(e.target.value); detect(e.target.value, e.target.selectionStart); }}
+        onKeyUp={(e) => detect((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart)}
+        onKeyDown={(e) => { if (e.key === 'Escape') setComp(null); }}
+      />
+      {comp ? (
+        <div className="wta-pop">
+          {opts.map((o) => (
+            <button key={o.key} className="picker-hit" onClick={() => apply(`${o.key}|${o.title}]]`)}>
+              <span className="picker-title">{o.title}</span>
+              <span className="picker-meta">{o.type ?? ''} · {o.key}</span>
+            </button>
+          ))}
+          {!opts.length ? <div className="picker-meta">{comp.q.trim() ? 'no matches — closing ]] makes a red link' : 'type to search…'}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** ADR-0063 gem 1: a fence's declaration rendered as a chip row above the
  *  code — dotlit's CodeMeta, on the grammar we round-trip. Chips only when
  *  the meta says more than a bare lang; `!hidemeta` opts out. Hash-hue rides
@@ -733,12 +797,7 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
     return (
       <article className="block" data-key={cellKey}>
         <div className="editor">
-          <textarea
-            value={editing}
-            rows={Math.min(28, Math.max(3, editing.split('\n').length + 1))}
-            spellCheck={false}
-            onChange={(e) => setEditing(e.target.value)}
-          />
+          <WikiTextarea value={editing} onChange={setEditing} />
           <div className="editor-bar">
             <button className="btn primary" onClick={() => { onEdit(editing); setEditing(null); }}>save</button>
             <button className="btn" onClick={() => setEditing(null)}>cancel</button>

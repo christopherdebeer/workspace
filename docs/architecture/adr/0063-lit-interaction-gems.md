@@ -102,7 +102,10 @@
 1. **The floating block menu** (the owner-flagged gem, promoted to Inc 1)
    + fence chip row (render + fold/tag/source/output verbs) + error badges
    with scroll-to.
-2. `[[` autocomplete popover + macros; 404-create + `?template=` seeding.
+2. `[[` autocomplete popover **(shipped 2026-07-05, lit v1783245797810 —
+   plain-textarea debounced doc+fact search; picks `[[key|title]]`, empty
+   query lists recent docs, unmatched closes as a red link)**; macros +
+   404-create + `?template=` seeding still open.
 3. Cell clipboard (cut/copy/paste-after as decoration ops); View Source;
    save-dot tooltip truth.
 
