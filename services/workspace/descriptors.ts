@@ -1119,4 +1119,30 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: { denied: { type: 'boolean' }, resource: { type: 'string' }, grantee: { type: 'string' } },
     },
   },
+  {
+    name: 'athena',
+    description:
+      'Run a read-only SQL query over the substrate analytics lake (docs/substrate-analytics.md) and return rows. The `substrate_<env>.facts` table is the whole substrate’s change history as columns (scope/key/type/tags/revision/writer/…) plus the fact body as `value_json` (use json_extract). ADMIN ONLY (platform:*): it reads across every scope, so it is gated until the lake is partitioned per-slice. Read-only — WITH/SELECT/SHOW/DESCRIBE/EXPLAIN, single statement.',
+    scope: 'platform:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'A single read-only statement (WITH/SELECT/SHOW/DESCRIBE/EXPLAIN). Constrain `dt` to prune scan cost.' },
+        maxRows: { type: 'number', description: 'Row cap 1–1000 (default 100)' },
+      },
+      required: ['sql'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        columns: { type: 'array', items: { type: 'string' } },
+        rows: { type: 'array', items: { type: 'object' } },
+        rowCount: { type: 'number' },
+        scannedBytes: { type: 'number' },
+        queryExecutionId: { type: 'string' },
+      },
+    },
+  },
 ];

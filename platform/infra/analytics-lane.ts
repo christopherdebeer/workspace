@@ -42,10 +42,16 @@ export class SubstrateAnalyticsLane extends Construct {
   readonly database: glue.CfnDatabase;
   /** Athena workgroup pinned to the results bucket. */
   readonly workgroup: athena.CfnWorkGroup;
+  /** Glue database name (`substrate_<env>`) — the query target. */
+  readonly databaseName: string;
+  /** Athena workgroup name (`substrate-<env>`). */
+  readonly workgroupName: string;
 
   constructor(scope: Construct, id: string, props: SubstrateAnalyticsLaneProps) {
     super(scope, id);
     const { envName, account } = props;
+    this.databaseName = `substrate_${envName}`;
+    this.workgroupName = `substrate-${envName}`;
 
     // ---- Buckets ----------------------------------------------------------
     // The lake is truth-at-rest: retain it across stack deletion (like the EC2
@@ -208,5 +214,41 @@ export class SubstrateAnalyticsLane extends Construct {
       resources: [this.deliveryStreamArn],
     }));
     fn.addEnvironment('FIREHOSE_STREAM', this.deliveryStreamName);
+  }
+
+  /**
+   * Grant a Lambda permission to run Athena queries over the substrate lake, and
+   * inject `ATHENA_WORKGROUP` + `ATHENA_DATABASE`. Athena needs: the workgroup;
+   * Glue catalog metadata (database/table/partitions); read on the lake data; and
+   * read/write on the results bucket (where it stages output). The workgroup
+   * enforces the output location, so the caller never passes one.
+   *
+   * NOTE: this is a broad, cross-slice read surface (the whole lake) — gate the
+   * *tool* that uses it on an admin scope until per-slice lake partitioning lands.
+   */
+  grantQuery(fn: lambda.Function): void {
+    const stack = cdk.Stack.of(this);
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'athena:StartQueryExecution',
+        'athena:GetQueryExecution',
+        'athena:GetQueryResults',
+        'athena:StopQueryExecution',
+        'athena:GetWorkGroup',
+      ],
+      resources: [stack.formatArn({ service: 'athena', resource: 'workgroup', resourceName: this.workgroupName })],
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['glue:GetDatabase', 'glue:GetTable', 'glue:GetTables', 'glue:GetPartition', 'glue:GetPartitions'],
+      resources: [
+        stack.formatArn({ service: 'glue', resource: 'catalog' }),
+        stack.formatArn({ service: 'glue', resource: 'database', resourceName: this.databaseName }),
+        stack.formatArn({ service: 'glue', resource: 'table', resourceName: `${this.databaseName}/*` }),
+      ],
+    }));
+    this.lakeBucket.grantRead(fn);
+    this.resultsBucket.grantReadWrite(fn);
+    fn.addEnvironment('ATHENA_WORKGROUP', this.workgroupName);
+    fn.addEnvironment('ATHENA_DATABASE', this.databaseName);
   }
 }

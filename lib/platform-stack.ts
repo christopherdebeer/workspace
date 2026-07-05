@@ -139,7 +139,7 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'pruneSimilar', 'suggestions', 'ratify', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'pruneSimilar', 'suggestions', 'ratify', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
       // The hot write path: each put recomputes salience, so ingest is CPU-bound.
@@ -228,6 +228,8 @@ export class PlatformStack extends cdk.Stack {
       bundling: { externalModules: [] }, // bundle the SDK (not in the Node 20 image)
     });
     analytics.grantPutRecords(archiver);
+    // The admin-gated `workspace.athena` SQL surface reads the lake via Athena.
+    analytics.grantQuery(workspace.fn);
     archiver.addEventSource(
       new DynamoEventSource(substrate.table, {
         startingPosition: lambda.StartingPosition.LATEST, // archive from now forward
