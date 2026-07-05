@@ -644,16 +644,33 @@ interface CellProps {
   /** Selection summons the floating menu (ADR-0063 gem 8). */
   selected?: boolean;
   onSelect?: () => void;
+  /** Place an EXISTING fact after this cell — membership only, no copy
+   *  (ADR-0061 "insert existing", the same-fact-second-surface verb). */
+  onInsertExisting?: (factKey: string) => void | Promise<void>;
 }
 type FenceCtx = {
   onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>;
   placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void>;
 };
-function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx, selected, onSelect }: CellProps): React.JSX.Element {
+function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx, selected, onSelect, onInsertExisting }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  useEffect(() => { if (!selected) setMenuOpen(false); }, [selected]);
+  const [picker, setPicker] = useState(false);
+  const [pq, setPq] = useState('');
+  const [hits, setHits] = useState<Entry[]>([]);
+  useEffect(() => { if (!selected) { setMenuOpen(false); setPicker(false); } }, [selected]);
+  // Debounced live search for the insert-existing picker (semantic when the
+  // backend has vectors — the same query the palette rides).
+  useEffect(() => {
+    if (!picker || !pq.trim()) { setHits([]); return; }
+    const t = setTimeout(() => {
+      void read<{ entries: Entry[] }>('workspace.query', { text: pq.trim(), limit: 6, shape: 'card' })
+        .then((r) => setHits(r.entries ?? []))
+        .catch(() => setHits([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [picker, pq]);
   const md = content;
   const ctxRef = useRef(fenceCtx); ctxRef.current = fenceCtx;
 
@@ -728,6 +745,7 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
                 <button title="move up" onClick={stop(() => onMove(-1))}>↑</button>
                 <button title="move down" onClick={stop(() => onMove(1))}>↓</button>
                 <button title="add a cell after" onClick={stop(onAddAfter)}>＋</button>
+                <button title="insert an existing fact after" onClick={stop(() => setPicker((p) => !p))}>⧉</button>
                 <button title="close" onClick={stop(() => setMenuOpen(false))}>✕</button>
               </>
             ) : (
@@ -741,6 +759,24 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
       ) : (
         <div className="block-body" ref={bodyRef} dangerouslySetInnerHTML={{ __html: renderMarkdown(md) }} />
       )}
+      {picker ? (
+        <div className="insert-picker" onClick={(e) => e.stopPropagation()}>
+          <input
+            autoFocus
+            placeholder="search facts to insert here…"
+            value={pq}
+            onChange={(e) => setPq(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setPicker(false); setPq(''); } }}
+          />
+          {hits.map((h) => (
+            <button key={h.key} className="picker-hit" onClick={() => { setPicker(false); setPq(''); void onInsertExisting?.(h.key); }}>
+              <span className="picker-title">{(typeof (h.value as Record<string, unknown>)?.title === 'string' && (h.value as { title: string }).title) || h.key}</span>
+              <span className="picker-meta">{h._meta?.type ?? ''} · {h.key}</span>
+            </button>
+          ))}
+          {pq.trim() && !hits.length ? <div className="picker-meta">no matches</div> : null}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -864,6 +900,14 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
             fenceCtx={fenceCtx}
             selected={selectedKey === c.key}
             onSelect={() => setSelectedKey((k) => (k === c.key ? null : c.key))}
+            // Membership only: one decoration write places the SAME fact here
+            // (the design's headline capability finally has its verb).
+            onInsertExisting={async (factKey) => {
+              const seq = seqBetween(c.seq, nextSeq(i));
+              await writeOrder(docId, factKey, seq, false);
+              const f = await fetchFact(factKey);
+              setCells((cs) => [...cs.filter((x) => x.key !== factKey), { key: factKey, content: contentOf(f?.value ?? {}), fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq));
+            }}
           />
         ))}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}
