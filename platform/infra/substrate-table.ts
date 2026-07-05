@@ -49,6 +49,10 @@ export class SubstrateTable extends Construct {
       removalPolicy: props?.retain ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
       timeToLiveAttribute: 'ttl',
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      // Continuous backups (restore to any second in the last 35 days) — the
+      // DR half of the durability story the analytics lane complements. The
+      // lane gives a permanent, queryable archive; PITR gives one-click restore.
+      pointInTimeRecovery: true,
     });
     cdk.Tags.of(this.table).add('platform:service', 'substrate');
 

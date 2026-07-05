@@ -17,4 +17,6 @@ export { TableFactory } from './table-factory';
 export type { PlatformTableProps } from './table-factory';
 export { SubstrateTable } from './substrate-table';
 export type { SubstrateTableProps } from './substrate-table';
+export { SubstrateAnalyticsLane } from './analytics-lane';
+export type { SubstrateAnalyticsLaneProps } from './analytics-lane';
 export type { ServiceManifest, ServiceRegistry } from '../manifest';
