@@ -282,7 +282,7 @@ const TOOLS = [
   {
     name: 'trigger_run',
     description:
-      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger). Writes machine/<machine>/trigger/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on.',
+      'Fire a run of a machine by name — the canonical "scheduled routine / API trigger" entry (mirrors Claude Code Routines\' API trigger). Writes machine/<machine>/trigger/<run>; the machine\'s standing internal-trigger subscription starts the run at its entry node, injecting `text` as run context. Auto-generates `run` if omitted. The machine must have been define_machine\'d with projection on. `mode:"driven"` (ADR-0065) starts the run PARKED: the reactive step/decide/work subscriptions skip it, so a capable external driver (e.g. a scheduled Claude routine) advances it via the `step` tool and resolves each decision itself — no model is spawned. Omit (or "reactive") for the autonomous, models-backed path. Same machine, either mode.',
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -290,6 +290,7 @@ const TOOLS = [
         machine: { type: 'string', description: 'Machine slug (the <name> in machine/<name>)' },
         run: { type: 'string', description: 'Optional run id (auto-generated if omitted)' },
         text: { type: 'string', description: 'Trigger-context body (like a Routine `text` payload) — stored on the run for the entry agent' },
+        mode: { type: 'string', enum: ['reactive', 'driven'], description: 'ADR-0065 drive mode. "driven" = park for an external stepper (capable-agent driven); default/absent = reactive (auto-driven by the step + model-delivery subscriptions).' },
       },
       required: ['machine'],
     },
@@ -522,7 +523,7 @@ export const handler = async (event) => {
     const run = a.run || `${new Date().toISOString().replace(/[:.]/g, '-')}`;
     await emit({
       key: mkey.trigger(a.machine, run),
-      value: { at: new Date().toISOString(), ...(a.text ? { text: a.text } : {}) },
+      value: { at: new Date().toISOString(), ...(a.text ? { text: a.text } : {}), ...(a.mode ? { mode: a.mode } : {}) },
       type: 'machine-trigger',
       tags: ['machine', `machine:${a.machine}`, 'trigger'],
       via: 'machine.trigger_run',
@@ -603,7 +604,7 @@ export const handler = async (event) => {
         id: `machine.${seg(a.name)}.itrigger`,
         match: { keyPrefix: `${mkey.machine(a.name)}/trigger/` },
         invoke: `machine.${seg(a.name)}.start`,
-        params: { run: '${keySuffix}', text: '${value.text}' },
+        params: { run: '${keySuffix}', text: '${value.text}', mode: '${value.mode}' }, // ADR-0065: carry mode trigger→run
       };
       await emitSubscription(itrig, a.name);
       subscriptions.push(itrig.id);

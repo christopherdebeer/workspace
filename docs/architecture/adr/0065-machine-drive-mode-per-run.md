@@ -1,6 +1,8 @@
 # ADR-0065 — Drive mode is a property of the RUN, not the machine
 
-- **Status:** Proposed 2026-07-05 (design — needs a `@c15r/machine` cell change).
+- **Status:** Accepted 2026-07-05. **Inc 1 shipped + validated live** (machine
+  cell `machine-cbc8de2c v1783268978380`; `machine/tending` patched to driven-
+  capable). Inc 2+ (tending v2 sub-machines) open.
 - **Depends on:** ADR-0018 (stateless stepper), the DyGram machine model
   (`@c15r/machine.define_machine`/`trigger_run`/`step`), and the WorkspaceRun
   migration investigation (`docs/protocols/val-town-originals/`).
@@ -126,6 +128,38 @@ Test plan (non-spendy): define a scratch machine, `trigger_run {mode:"driven"}`
 → assert the run parks (no auto-advance, no model spawn) and `step` returns the
 yield; `trigger_run {mode:"reactive"}` → assert it self-drives (one model spawn
 — the only spendy assertion, run once). Then redefine `machine/tending`.
+
+**Validation (2026-07-05, live — all four assertions passed).**
+- Scratch machine `adr65-scratch` (`Start =>Decide ->Done`), `trigger_run
+  {mode:"driven"}` → run seeded `mode:"driven"`, parked at `Start` (rev 1, no
+  model spawn) across a 12s settle; `step` returned the `agent` yield; a driver
+  advance (preserving `mode:"driven"`) then let `step` walk `Decide ->Done` to
+  `done`. Reactive back-compat: `trigger_run` with no mode → run `mode:null`,
+  the `decide-Start` sub **fired** (`via:"Start!!error"`, models cell invoked)
+  — proving `value.mode != "driven"` returns *true* for absent/null, so the
+  reactive path is intact. (It only errored at the LLM call: both Anthropic
+  **and** OpenAI credits are exhausted — so today only the driven, zero-spend
+  path can execute at all.)
+- `machine/tending` itself, `trigger_run {mode:"driven"}` → seeded
+  `mode:"driven"`, parked at entry `Audit`; `step` walked `Audit ->Assess` and
+  yielded the `Assess` decision with both `Clear`/`Tend` choices and their
+  `when` criteria — **no `decide-Assess` model spawn**. Exactly the path the
+  scheduled Claude routine consumes.
+
+**Surgical patch, not a redefine (deviation from Inc 2's opener).** `machine/
+tending` carries hand-tuned `decide-Assess` / `work-Tend` **subscription
+prompts** from the 2026-07-03 driven session (chronic-debt-aware decider; Tend
+work-agent that weaves ≤5 links + dispatches `machine/weave`). Those live in the
+subscription *facts*, not derivable from the rails — so a full `define_machine`
+would regenerate and **clobber** them. Instead, five facts were patched in place
+to thread `mode` and add the guard, preserving every prompt verbatim:
+`_actions/machine.tending.start` (+`mode` param, +`mode:"${params.mode}"` on the
+run write), `_subscriptions/machine.tending.itrigger` (+`mode:"${value.mode}"`),
+and the three auto-drive subs `step` / `decide-Assess` / `work-Tend`
+(+`&& value.mode != "driven"`; `step`'s existing `running||done` OR wrapped in
+parens so the guard binds the whole predicate). The graph already uses `agent`
+(`=>`) decision rails at `Assess`, which is the dual-mode-correct kind — reactive
+spawns a model, driven parks — so no rail-mode change was needed either.
 
 2. Define `machine/tending` v2 with mode-neutral decision nodes (Observe →
    Assess → Dispatch/Tend → Audit; dry-run validated 2026-07-05, 7 nodes/10
