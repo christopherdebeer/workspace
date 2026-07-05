@@ -19,9 +19,11 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
+import { outbox } from './lib/outbox.ts';
 import { mountSandboxedRenderer, SANDBOX_HOST_HTML, bodyText, fieldsToHtml } from '@parc/ui';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
+  parseFenceMeta, fenceTagsOf, type FenceMeta,
   type ViewModel, type BlockData, type DocValue, type LinkRef, type ListItem, type TypeItem,
 } from '../shared';
 
@@ -45,6 +47,48 @@ let typeDecls: Record<string, { viewer?: string }> = {};
 async function fetchFact(key: string): Promise<Entry | null> {
   const res = await read<{ entries: Entry[] }>('workspace.query', { prefix: key, limit: 8 });
   return (res.entries ?? []).find((e) => e.key === key) ?? null;
+}
+
+/* ── red links: entities waiting to exist (ADR-0061 §1b) ─────────────────
+ * A wiki edge to a nonexistent key is a dangling edge — visible to attention,
+ * and here to the reader: stub styling + tap-to-create. Existence checks are
+ * cached per session; a network failure counts as existing (no false stubs). */
+const factExistsCache = new Map<string, Promise<boolean>>();
+function factExists(key: string): Promise<boolean> {
+  let p = factExistsCache.get(key);
+  if (!p) { p = fetchFact(key).then((f) => !!f).catch(() => true); factExistsCache.set(key, p); }
+  return p;
+}
+/** Mint a doc for a red link — seeded with its title and a provenance line
+ *  naming where it was wanted (the mention IS the first content). */
+async function createDocFromKey(key: string, title: string, wantedBy?: string): Promise<void> {
+  const slug = key.slice(4);
+  await saveDocMeta(slug, { title });
+  const k = mintCell();
+  await saveCell(slug, k, `# ${title}\n${wantedBy ? `\n_wanted by [[${wantedBy}]]_\n` : ''}`);
+  await writeOrder(slug, k, 1, false);
+  await outbox.flushNow(); // navigation follows — the debounce must not eat the mint
+  factExistsCache.delete(key);
+  location.href = factRoute(key);
+}
+async function markRedLinks(root: HTMLElement): Promise<void> {
+  if (!isAuthed()) return;
+  const anchors = [...root.querySelectorAll('a.wikilink[data-wiki-key]')] as HTMLAnchorElement[];
+  await Promise.all(anchors.slice(0, 30).map(async (a) => {
+    const key = a.dataset.wikiKey || '';
+    if (!key || a.classList.contains('wikilink-stub')) return;
+    if (await factExists(key)) return;
+    a.classList.add('wikilink-stub');
+    a.title = 'waiting to exist — tap to create';
+    if (!key.startsWith('doc:')) return; // non-doc keys: the stub styling alone
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const title = (a.textContent || key.slice(4)).trim();
+      if (!confirm(`Create "${title}"?`)) return;
+      const here = location.pathname.startsWith('/r/') ? decodeURIComponent(location.pathname.slice(3)) : '';
+      void createDocFromKey(key, title, here || undefined);
+    });
+  }));
 }
 function contentOf(value: any): string {
   if (typeof value === 'string') return value;
@@ -105,7 +149,13 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   return { meta, cells, backlinks };
 }
 async function saveCell(docId: string, key: string, content: string): Promise<void> {
-  await act('workspace.remember', { key, value: { content }, via: 'lit', type: 'cell', tags: [`doc:${docId}`] });
+  // ADR-0059: the declared vocabulary wins — prose is `doc-block` (types.json;
+  // 'cell' was the code drifting, and collides with deployable cells). Fence
+  // `#tags` reconcile into the fact's tags on every save: the fence line is
+  // the declaration, the substrate indexes what the text declares. The write
+  // rides the kernel outbox (Inc 2) — dedupe, retry, echo window for live-sync.
+  const tags = [`doc:${docId}`, ...fenceTagsOf(content)];
+  outbox.stage(key, { content }, { type: 'doc-block', tags });
   await syncCellLinks(key, content);
 }
 /** Reconcile a cell's [[wiki-links]] into substrate edges (rel `related`): link
@@ -123,10 +173,10 @@ async function syncCellLinks(cellKey: string, content: string): Promise<void> {
   } catch { /* links are best-effort, never block the save */ }
 }
 async function writeOrder(docId: string, key: string, seq: number, fold: boolean): Promise<void> {
-  await act('workspace.remember', { key: `_doc/${docId}/${key}`, value: { seq, fold }, via: 'lit', type: 'doc-order', tags: [`doc:${docId}`] });
+  outbox.stage(`_doc/${docId}/${key}`, { seq, fold }, { type: 'doc-order', tags: [`doc:${docId}`] });
 }
 async function saveDocMeta(docId: string, meta: DocValue): Promise<void> {
-  await act('workspace.remember', { key: `doc:${docId}`, value: meta, via: 'lit', type: 'doc', tags: ['doc'] });
+  outbox.stage(`doc:${docId}`, meta as unknown as Record<string, unknown>, { type: 'doc', tags: ['doc'] });
 }
 /** Save an edited cell, splitting only if the edit introduced structure (a
  *  heading or a code fence): the first part keeps the fact's key (links/seq),
@@ -148,6 +198,151 @@ async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | 
   }
   return out;
 }
+/** ADR-0063 gem 2: `[[` autocomplete — dotlit's Editor.jsx affordance on a
+ *  plain textarea (mobile-first, no CodeMirror). Typing `[[` opens a popover
+ *  under the textarea listing docs + facts matching what follows; picking
+ *  one completes `[[key|title]]`. Macros: `toc` → a `>toc` fence, and the
+ *  lineage glyph. Caret-anchored positioning is deliberately skipped — the
+ *  popover rides below the field, which is where thumbs already are. */
+function WikiTextarea({ value, onChange }: { value: string; onChange: (v: string) => void }): React.JSX.Element {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [comp, setComp] = useState<{ start: number; q: string } | null>(null);
+  const [opts, setOpts] = useState<Array<{ key: string; title: string; type?: string | null }>>([]);
+  const detect = (v: string, caret: number): void => {
+    const before = v.slice(0, caret);
+    const m = /\[\[([^\]\n]*)$/.exec(before);
+    setComp(m ? { start: caret - m[1].length, q: m[1] } : null);
+  };
+  useEffect(() => {
+    if (!comp) { setOpts([]); return; }
+    const t = setTimeout(() => {
+      const q: Record<string, unknown> = comp.q.trim() ? { text: comp.q.trim(), limit: 6, shape: 'card' } : { type: 'doc', limit: 6, shape: 'card' };
+      void read<{ entries: Entry[] }>('workspace.query', q)
+        .then((r) => setOpts((r.entries ?? []).map((e) => ({
+          key: e.key,
+          title: (typeof (e.value as Record<string, unknown>)?.title === 'string' && (e.value as { title: string }).title) || deriveId(e.key),
+          type: e._meta?.type,
+        }))))
+        .catch(() => setOpts([]));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [comp?.q, comp?.start]);
+  const apply = (text: string): void => {
+    if (!comp) return;
+    const ta = taRef.current;
+    const caret = ta ? ta.selectionStart : value.length;
+    const next = value.slice(0, comp.start) + text + value.slice(caret);
+    onChange(next);
+    setComp(null);
+    requestAnimationFrame(() => { if (ta) { ta.focus(); const p = comp.start + text.length; ta.setSelectionRange(p, p); } });
+  };
+  return (
+    <div className="wta">
+      <textarea
+        ref={taRef}
+        value={value}
+        rows={Math.min(28, Math.max(3, value.split('\n').length + 1))}
+        spellCheck={false}
+        onChange={(e) => { onChange(e.target.value); detect(e.target.value, e.target.selectionStart); }}
+        onKeyUp={(e) => detect((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart)}
+        onKeyDown={(e) => { if (e.key === 'Escape') setComp(null); }}
+      />
+      {comp ? (
+        <div className="wta-pop">
+          {opts.map((o) => (
+            <button key={o.key} className="picker-hit" onClick={() => apply(`${o.key}|${o.title}]]`)}>
+              <span className="picker-title">{o.title}</span>
+              <span className="picker-meta">{o.type ?? ''} · {o.key}</span>
+            </button>
+          ))}
+          {!opts.length ? <div className="picker-meta">{comp.q.trim() ? 'no matches — closing ]] makes a red link' : 'type to search…'}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** ADR-0063 gem 1: a fence's declaration rendered as a chip row above the
+ *  code — dotlit's CodeMeta, on the grammar we round-trip. Chips only when
+ *  the meta says more than a bare lang; `!hidemeta` opts out. Hash-hue rides
+ *  a thin left border only (white-board restraint), never a background. */
+function addFenceChips(root: HTMLElement): void {
+  for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
+    if (pre.dataset.chipped) continue;
+    const m = parseFenceMeta(pre.dataset.fence || '');
+    const noisy = new Set(['attached', 'updated']);
+    const attrs = Object.entries(m.attrs).filter(([k, v]) => !noisy.has(k) && v !== 'true');
+    const hasMeta = m.isOutput || m.directives.length > 0 || m.tags.length > 0 || attrs.length > 0 || !!m.source || !!m.output || !!m.file;
+    if (!hasMeta || m.directives.includes('hidemeta')) continue;
+    pre.dataset.chipped = '1';
+    const row = el('div', 'fence-chips');
+    const hue = (s: string): number => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return h; };
+    const chip = (cls: string, text: string, colored = true): HTMLElement => {
+      const c = el('span', `fchip ${cls}`, text);
+      if (colored) c.style.borderLeftColor = `hsl(${hue(text)} 45% 55%)`;
+      row.appendChild(c);
+      return c;
+    };
+    if (m.isOutput) chip('fc-out', '⤷ output', false);
+    chip('fc-lang', m.lang || 'txt', false);
+    if (m.file) chip('fc-file', m.file);
+    for (const d of m.directives) chip(`fc-dir${d === 'error' ? ' fc-error' : ''}`, `!${d}`);
+    for (const [k, v] of attrs) chip('fc-attr', `${k}=${v}`);
+    for (const t of m.tags) chip('fc-tag', `#${t}`);
+    if (m.fromSource) {
+      const c = chip('fc-src', `< ${m.fromSource}`);
+      if (/[:/]/.test(m.fromSource) && !/^https?:|^\/\//.test(m.fromSource)) {
+        c.classList.add('fc-link');
+        c.onclick = () => { location.href = factRoute(m.fromSource!); };
+      }
+    }
+    if (m.output) chip('fc-target', `> ${[m.output.lang, m.output.file].filter(Boolean).join(' ')}`);
+    if (m.attrs.updated && Number(m.attrs.updated)) {
+      const mins = Math.max(0, Math.round((Date.now() - Number(m.attrs.updated)) / 60000));
+      chip('fc-time', mins < 60 ? `updated ${mins}m ago` : mins < 60 * 48 ? `updated ${Math.round(mins / 60)}h ago` : `updated ${Math.round(mins / 1440)}d ago`, false);
+    }
+    pre.parentElement?.insertBefore(row, pre);
+  }
+}
+
+/** ADR-0059 Inc 3 (a scoped-feed consumer, ADR-0055): tail ONLY this doc's
+ *  slice — its order decorations, its doc fact, and its current member keys
+ *  (exact keys are valid prefixes) — state-changing ops only. An idle doc's
+ *  tick is an empty page; our own flushes are echo-skipped via the outbox.
+ *  Remote changes (an agent appending cells, a run landing) trigger a reload. */
+function startDocLiveSync(docId: string, keysOf: () => string[], onRemote: () => void): () => void {
+  let stopped = false;
+  let cursor = 0;
+  let lastActivity = Date.now();
+  const bump = (): void => { lastActivity = Date.now(); };
+  window.addEventListener('pointerdown', bump, { passive: true });
+  window.addEventListener('keydown', bump, { passive: true });
+  const tick = async (): Promise<void> => {
+    if (stopped) return;
+    if (!document.hidden && isAuthed()) {
+      try {
+        if (cursor === 0) {
+          cursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 'head' })).seq;
+        } else {
+          const res = await read<{ events: Array<{ op: string; key: string | null }>; seq: number }>('workspace.changes', {
+            sinceSeq: cursor,
+            scope: { prefixes: [`_doc/${docId}/`, `doc:${docId}`, ...keysOf()], ops: ['write', 'supersede'] },
+          });
+          cursor = res.seq;
+          if ((res.events ?? []).some((ev) => ev.key && !outbox.wroteRecently(ev.key))) onRemote();
+        }
+      } catch { /* offline — retry next tick */ }
+    }
+    if (!stopped) setTimeout(() => void tick(), Date.now() - lastActivity < 120_000 ? 8_000 : 40_000);
+  };
+  setTimeout(() => void tick(), 8_000);
+  return () => {
+    stopped = true;
+    window.removeEventListener('pointerdown', bump);
+    window.removeEventListener('keydown', bump);
+  };
+}
+
 /** The renderer ladder: a fact whose type declares a viewer renders through
  *  @c15r/viewers instead of as markdown (el:demo-json reads as a TREE here). */
 function viewerFor(meta: Meta | undefined, value: any): string | null {
@@ -204,29 +399,21 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   if (text !== undefined) n.textContent = text;
   return n;
 }
-interface Fence { lang: string; arg: string; file?: string; directives: Set<string>; attrs: Record<string, string>; tags: string[]; in?: string; out?: string }
-/** Parse a dotlit-style fence info-string: `lang [file|uri] !dir attr=val #tag < in > out`.
- *  `arg` resolves the bare file/uri token, else the fence body — so both
- *  `view open-claims` (id in the info-string) and the legacy `view\nopen-claims`
- *  (id in the body) work. The metadata (viewer=, repl=, !dir, #tag, in/out) is
+interface Fence extends Omit<FenceMeta, 'directives'> {
+  /** Set view over the meta's directive list, for ergonomic `.has()` checks. */
+  directives: Set<string>;
+  /** The bare file/uri token, else the fence body — so both `view open-claims`
+   *  (id in the info-string) and the legacy `view\nopen-claims` (id in the
+   *  body) work. */
+  arg: string;
+}
+/** The FULL dotlit grammar (ADR-0059) via the shared module — leading `>`
+ *  output cells, recursive `< source` / `> output` metas, filename/uri,
+ *  escaped spaces, unknowns; `fenceToString` round-trips. The metadata is
  *  what turns a fence into a declaration — the seam to plugins/viewers/actions. */
 function parseFence(info: string, body: string): Fence {
-  const toks = info.trim().split(/\s+/).filter(Boolean);
-  const lang = toks.shift() ?? '';
-  const directives = new Set<string>();
-  const attrs: Record<string, string> = {};
-  const tags: string[] = [];
-  let file: string | undefined, inp: string | undefined, out: string | undefined;
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i];
-    if (t === '<') inp = toks[++i];
-    else if (t === '>') out = toks[++i];
-    else if (t.startsWith('!')) directives.add(t.slice(1));
-    else if (t.startsWith('#')) tags.push(t.slice(1));
-    else if (t.includes('=')) attrs[t.slice(0, t.indexOf('='))] = t.slice(t.indexOf('=') + 1);
-    else if (file === undefined) file = t;
-  }
-  return { lang, arg: file ?? body, file, directives, attrs, tags, in: inp, out };
+  const m = parseFenceMeta(info);
+  return { ...m, directives: new Set(m.directives), arg: m.file ?? body };
 }
 
 /** Resolve a `ui://` renderer script over the authenticated `/mcp`
@@ -253,12 +440,94 @@ async function mcpResourceRead(uri: string): Promise<string | null> {
 async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>; placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void> }): Promise<void> {
   // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
   // — not just the first-word lang — drives routing.
+  void markRedLinks(root); // ADR-0061 §1b — stubs style in as checks resolve
+  addFenceChips(root); // ADR-0063 gem 1 — the declaration rendered as chips
   for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
     const body = (pre.querySelector('code')?.textContent || '').trim();
     const fence = parseFence(pre.dataset.fence || '', body);
     const lang = fence.lang;
     if (!lang) continue;
     const arg = fence.arg;
+    // 0. derived cells (ADR-0061): `>toc` renders the doc's own structure,
+    // `>search` is a live query — the query IS the content, results are
+    // ephemeral render. Both replace the fence like other embeds.
+    if (fence.isOutput && lang === 'toc') {
+      const nav = el('nav', 'toc');
+      nav.appendChild(el('div', 'vw-attrib', 'contents'));
+      const seen = new Set<HTMLElement>();
+      for (const h of Array.from(document.querySelectorAll('.block-body h1, .block-body h2, .block-body h3')) as HTMLElement[]) {
+        if (seen.has(h) || nav.contains(h)) continue;
+        seen.add(h);
+        const blockKey = (h.closest('[data-key]') as HTMLElement | null)?.dataset.key;
+        if (!blockKey) continue;
+        const a = document.createElement('a');
+        a.href = `#${blockKey}`;
+        a.className = `toc-${h.tagName.toLowerCase()}`;
+        a.textContent = (h.textContent || '').trim();
+        a.onclick = (e) => { e.preventDefault(); h.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+        nav.appendChild(a);
+      }
+      pre.replaceWith(nav);
+      continue;
+    }
+    if (fence.isOutput && lang === 'search') {
+      const terms = [fence.file, ...fence.unknowns].filter(Boolean).join(' ') || body;
+      const box = el('div', 'embed-search');
+      box.appendChild(el('div', 'vw-attrib', `🔍 ${terms}${fence.attrs.type ? ` type:${fence.attrs.type}` : ''}${fence.attrs.tag ? ` tag:${fence.attrs.tag}` : ''}`));
+      pre.replaceWith(box);
+      if (!isAuthed()) continue;
+      const q: Record<string, unknown> = { limit: Number(fence.attrs.limit) || 8 };
+      if (terms) q.text = terms;
+      if (fence.attrs.type) q.type = fence.attrs.type;
+      if (fence.attrs.tag) q.tag = fence.attrs.tag;
+      read<{ entries: Entry[]; total?: number }>('workspace.query', q)
+        .then((r) => {
+          for (const e of r.entries ?? []) {
+            const row = el('div', 'search-hit');
+            const a = document.createElement('a');
+            a.href = factRoute(e.key);
+            const v = e.value as Record<string, unknown> | undefined;
+            a.textContent = (typeof v?.title === 'string' && v.title) || e.key;
+            row.appendChild(a);
+            if (e._meta?.type) row.appendChild(el('span', 'search-type', ` ${e._meta.type}`));
+            box.appendChild(row);
+          }
+          if (r.total !== undefined) box.appendChild(el('div', 'vw-attrib', `${r.total} total`));
+        })
+        .catch((err) => box.appendChild(el('div', 'vw-attrib', `search failed: ${(err as Error).message}`)));
+      continue;
+    }
+    // 0c. transclusion by reference (ADR-0061): `< factKey` renders THAT
+    // fact's content in place — no copy exists to drift (dotlit's defining
+    // bug class, structurally gone); editing routes to the source. Remote
+    // uris stay windows (click-to-load, not persisted) — a later increment.
+    const srcRef = fence.source?.filename;
+    if (srcRef && /[:/]/.test(srcRef) && !/^https?:|^\/\//.test(srcRef)) {
+      if (!isAuthed()) continue; // readers see the fence as-is
+      const box = el('div', 'embed-transclude');
+      pre.replaceWith(box);
+      fetchFact(srcRef)
+        .then((f) => {
+          if (!f) {
+            const a = document.createElement('a');
+            a.className = 'wikilink wikilink-stub'; a.href = factRoute(srcRef); a.textContent = srcRef;
+            box.appendChild(el('span', 'vw-attrib', '⟨ source missing: ')); box.appendChild(a);
+            return;
+          }
+          const bodyDiv = el('div', 'transclude-body');
+          bodyDiv.innerHTML = renderMarkdown(contentOf(f.value));
+          box.appendChild(bodyDiv);
+          const chip = el('div', 'vw-attrib');
+          const a = document.createElement('a');
+          a.href = factRoute(srcRef);
+          a.textContent = `↳ ${srcRef} · rev ${(f._meta as { revision?: number } | undefined)?.revision ?? '?'}`;
+          chip.appendChild(a);
+          box.appendChild(chip);
+          void enhanceFences(bodyDiv); // nested viewers render; outputs don't place (no ctx)
+        })
+        .catch((err) => { box.textContent = `transclude failed: ${(err as Error).message}`; });
+      continue;
+    }
     // 0a. plugin declaration: `js !plugin type=viewer of=foo` — the block's body
     // IS the viewer source. The owner registers it as a `_renderers/foo` fact
     // (available everywhere, canvas included); checked before the executable
@@ -310,6 +579,10 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
     //   repl=server|run, !server → force the server organ
     // Reuses the @c15r/viewers `repl` view (the one canvas mounts) — one
     // validated implementation, not a copy. Anonymous readers just see the code.
+    // An OUTPUT cell (`>lang …`) is something a run PRODUCED — it renders
+    // (viewers above catch `>json`/`>csv`…) but must never re-execute, even
+    // when its meta names a repl (provenance attrs ride the output fence).
+    if (fence.isOutput) continue;
     if (['run', 'js', 'repl'].includes(lang) || fence.attrs.repl) {
       if (!isAuthed()) continue;
       const factKey = (pre.closest('[data-key]') as HTMLElement | null)?.dataset.key;
@@ -323,7 +596,16 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
             lang: 'js',
             server,
             _factKey: factKey,
-            // "⤓ output→fact" → place that output fact as a cell in this doc.
+            // ADR-0060: a fence-declared `> lang [key]` output target persists
+            // every completed run as a fact (superseding the previous output
+            // unless `!keep`); an explicit key (contains :/), writes THAT fact.
+            autoPersist: fence.output ? {
+              key: fence.output.file && /[:/]/.test(fence.output.file) ? fence.output.file : undefined,
+              lang: fence.output.lang || undefined,
+              keep: fence.directives.has('keep'),
+            } : undefined,
+            // "⤓ output→fact" (or the declared target) → place the output
+            // fact as a cell in this doc, right after its source.
             onOutput: factKey ? (key: string, content: string) => { void ctx?.placeOutput?.(factKey, key, content); } : undefined,
           });
           box.replaceWith(node);
@@ -467,14 +749,36 @@ interface CellProps {
   onMove: (dir: -1 | 1) => void;
   onAddAfter: () => void;
   fenceCtx?: FenceCtx;
+  /** Selection summons the floating menu (ADR-0063 gem 8). */
+  selected?: boolean;
+  onSelect?: () => void;
+  /** Place an EXISTING fact after this cell — membership only, no copy
+   *  (ADR-0061 "insert existing", the same-fact-second-surface verb). */
+  onInsertExisting?: (factKey: string) => void | Promise<void>;
 }
 type FenceCtx = {
   onAgentOutput?: (srcKey: string, text: string, factKey?: string) => void | Promise<void>;
   placeOutput?: (srcKey: string, cellKey: string, content?: string) => void | Promise<void>;
 };
-function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx }: CellProps): React.JSX.Element {
+function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, onAddAfter, fenceCtx, selected, onSelect, onInsertExisting }: CellProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [picker, setPicker] = useState(false);
+  const [pq, setPq] = useState('');
+  const [hits, setHits] = useState<Entry[]>([]);
+  useEffect(() => { if (!selected) { setMenuOpen(false); setPicker(false); } }, [selected]);
+  // Debounced live search for the insert-existing picker (semantic when the
+  // backend has vectors — the same query the palette rides).
+  useEffect(() => {
+    if (!picker || !pq.trim()) { setHits([]); return; }
+    const t = setTimeout(() => {
+      void read<{ entries: Entry[] }>('workspace.query', { text: pq.trim(), limit: 6, shape: 'card' })
+        .then((r) => setHits(r.entries ?? []))
+        .catch(() => setHits([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [picker, pq]);
   const md = content;
   const ctxRef = useRef(fenceCtx); ctxRef.current = fenceCtx;
 
@@ -493,12 +797,7 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
     return (
       <article className="block" data-key={cellKey}>
         <div className="editor">
-          <textarea
-            value={editing}
-            rows={Math.min(28, Math.max(3, editing.split('\n').length + 1))}
-            spellCheck={false}
-            onChange={(e) => setEditing(e.target.value)}
-          />
+          <WikiTextarea value={editing} onChange={setEditing} />
           <div className="editor-bar">
             <button className="btn primary" onClick={() => { onEdit(editing); setEditing(null); }}>save</button>
             <button className="btn" onClick={() => setEditing(null)}>cancel</button>
@@ -510,15 +809,52 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
   }
 
   const title = (md.match(/^#+\s*(.+)$/m) || [])[1] ?? md.split('\n').find((l) => l.trim()) ?? cellKey;
+  // ADR-0060: an `out:<src>:<ts>` member is an ATTACHED output — its key
+  // encodes provenance (kin to the placement key rule). Render it as the
+  // source's output band: dashed edge + a "⤷ output of" line that scrolls
+  // to the producing cell when it's in this doc.
+  const outSrc = cellKey.startsWith('out:') && cellKey.lastIndexOf(':') > 4 ? cellKey.slice(4, cellKey.lastIndexOf(':')) : null;
+  const stop = (fn: () => void) => (e: React.MouseEvent): void => { e.stopPropagation(); fn(); };
   return (
-    <article className={`block${fold ? ' is-folded' : ''}`} data-key={cellKey}>
-      {editable ? (
-        <div className="block-tools">
-          <button className="tool" onClick={onFold}>{fold ? '▸' : '▾'}</button>
-          <button className="tool" onClick={() => setEditing(md)}>✎</button>
-          <button className="tool" onClick={() => onMove(-1)}>↑</button>
-          <button className="tool" onClick={() => onMove(1)}>↓</button>
-          <button className="tool" title="add a cell after" onClick={onAddAfter}>＋</button>
+    <article
+      className={`block${fold ? ' is-folded' : ''}${outSrc ? ' block-output' : ''}${selected ? ' selected' : ''}`}
+      data-key={cellKey}
+      id={cellKey}
+      onClick={editable && onSelect ? (e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest('a, button, textarea, input, select, iframe, .block-menu')) return;
+        onSelect();
+      } : undefined}
+    >
+      {outSrc ? (
+        <div className="block-out-prov">
+          ⤷ output of{' '}
+          <a href={factRoute(outSrc)} onClick={(e) => {
+            const el = document.querySelector(`[data-key="${(window as any).CSS?.escape?.(outSrc) ?? outSrc}"]`);
+            if (el) { e.preventDefault(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+          }}>{outSrc}</a>
+        </div>
+      ) : null}
+      {/* The floating menu (ADR-0063, dotlit's gem): an absolute pointer-
+          transparent overlay whose round-button cluster is sticky at mid-
+          viewport — the verbs ride your scroll within the selected block. */}
+      {editable && selected ? (
+        <div className="block-menu">
+          <div className="bm-items">
+            {menuOpen ? (
+              <>
+                <button title="edit" onClick={stop(() => setEditing(md))}>✎</button>
+                <button title={fold ? 'unfold' : 'fold'} onClick={stop(onFold)}>{fold ? '▸' : '▾'}</button>
+                <button title="move up" onClick={stop(() => onMove(-1))}>↑</button>
+                <button title="move down" onClick={stop(() => onMove(1))}>↓</button>
+                <button title="add a cell after" onClick={stop(onAddAfter)}>＋</button>
+                <button title="insert an existing fact after" onClick={stop(() => setPicker((p) => !p))}>⧉</button>
+                <button title="close" onClick={stop(() => setMenuOpen(false))}>✕</button>
+              </>
+            ) : (
+              <button className="bm-primary" title="cell menu" onClick={stop(() => setMenuOpen(true))}>☰</button>
+            )}
+          </div>
         </div>
       ) : null}
       {fold ? (
@@ -526,6 +862,24 @@ function CellView({ cellKey, content, fold, editable, onEdit, onFold, onMove, on
       ) : (
         <div className="block-body" ref={bodyRef} dangerouslySetInnerHTML={{ __html: renderMarkdown(md) }} />
       )}
+      {picker ? (
+        <div className="insert-picker" onClick={(e) => e.stopPropagation()}>
+          <input
+            autoFocus
+            placeholder="search facts to insert here…"
+            value={pq}
+            onChange={(e) => setPq(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setPicker(false); setPq(''); } }}
+          />
+          {hits.map((h) => (
+            <button key={h.key} className="picker-hit" onClick={() => { setPicker(false); setPq(''); void onInsertExisting?.(h.key); }}>
+              <span className="picker-title">{(typeof (h.value as Record<string, unknown>)?.title === 'string' && (h.value as { title: string }).title) || h.key}</span>
+              <span className="picker-meta">{h._meta?.type ?? ''} · {h.key}</span>
+            </button>
+          ))}
+          {pq.trim() && !hits.length ? <div className="picker-meta">no matches</div> : null}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -540,6 +894,8 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
   const [missing, setMissing] = useState(false);
   const [projection, setProjection] = useState<'narrative' | 'salience'>('narrative');
   const [backlinks, setBacklinks] = useState<LinkRef[]>([]);
+  // One selected block at a time; tapping it again deselects (dotlit's model).
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await loadDoc(docId, projection);
@@ -548,6 +904,26 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
     cacheSet(`doc:${docId}`, { kind: 'doc', owner: cellOwner(), isOwner: true, id: docId, title: res.meta.title || docId, summary: res.meta.summary, blocks: res.cells.map((c) => ({ key: c.key, md: c.content, fold: c.fold })) });
   }, [docId, projection]);
   useEffect(() => { void load(); }, [load]);
+  // Live sync (ADR-0059 Inc 3): remote writes to this doc's slice reload it.
+  useEffect(() => {
+    if (!editable) return;
+    return startDocLiveSync(docId, () => cellsRef.current.map((c) => c.key), () => void load());
+  }, [docId, editable, load]);
+  // Fragment navigation (ADR-0061): `#<memberKey>` scrolls to the block;
+  // free-text fragments soft-resolve against member headings — no index.
+  useEffect(() => {
+    const frag = decodeURIComponent((location.hash || '').slice(1));
+    if (!frag || !cells.length) return;
+    const t = setTimeout(() => {
+      let target: HTMLElement | null = document.getElementById(frag);
+      if (!target) {
+        const hs = Array.from(document.querySelectorAll('.block-body h1, .block-body h2, .block-body h3')) as HTMLElement[];
+        target = hs.find((h) => (h.textContent || '').trim().toLowerCase().includes(frag.toLowerCase())) ?? null;
+      }
+      target?.scrollIntoView({ block: 'start' });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [cells.length]);
 
   // Live mirror of cells so the output callbacks can place a new cell without a
   // re-fetch (read-after-write lag was making outputs appear only on reload).
@@ -625,6 +1001,16 @@ function DocEditor({ docId, editable, seed }: { docId: string; editable: boolean
             }}
             onAddAfter={async () => { const k = mintCell(); const seq = seqBetween(c.seq, nextSeq(i)); await saveCell(docId, k, '_new cell_'); await writeOrder(docId, k, seq, false); setCells((cs) => [...cs, { key: k, content: '_new cell_', fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq)); }}
             fenceCtx={fenceCtx}
+            selected={selectedKey === c.key}
+            onSelect={() => setSelectedKey((k) => (k === c.key ? null : c.key))}
+            // Membership only: one decoration write places the SAME fact here
+            // (the design's headline capability finally has its verb).
+            onInsertExisting={async (factKey) => {
+              const seq = seqBetween(c.seq, nextSeq(i));
+              await writeOrder(docId, factKey, seq, false);
+              const f = await fetchFact(factKey);
+              setCells((cs) => [...cs.filter((x) => x.key !== factKey), { key: factKey, content: contentOf(f?.value ?? {}), fold: false, seq, score: 0 }].sort((a, b) => a.seq - b.seq));
+            }}
           />
         ))}
         {editable ? <a className="add-block btn" href={cellUrl(cellOwner(), 'input')}>+ capture</a> : null}
@@ -654,6 +1040,11 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
   // figure simply appears a moment after first paint, same pattern as everything
   // else here (fast SSR shell, richer live data once hydrated).
   const [docs, setDocs] = useState<ListItem[] | null>(seed ?? null);
+  // ADR-0061 §1b: entities waiting to exist — dangling `related` edges (wiki
+  // links whose target was never written), grouped by target, most-wanted
+  // first. The want-list emerges from the writing; nothing is minted until
+  // the owner says so.
+  const [waiting, setWaiting] = useState<Array<{ key: string; count: number }>>([]);
   useEffect(() => {
     void (async () => {
       const res = await read<{ entries: Entry[] }>('workspace.query', { type: 'doc', limit: 100 });
@@ -666,8 +1057,19 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
         });
       setDocs(list);
       cacheSet('$docs', { kind: 'list', owner: cellOwner(), isOwner: true, docs: list });
+      if (editable) {
+        try {
+          const att = await read<{ dangling: Array<{ to: string; rel?: string }> }>('workspace.attention', { limit: 100 });
+          const counts = new Map<string, number>();
+          for (const d of att.dangling ?? []) {
+            if (d.rel && d.rel !== 'related') continue;
+            counts.set(d.to, (counts.get(d.to) ?? 0) + 1);
+          }
+          setWaiting([...counts.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count).slice(0, 12));
+        } catch { /* attention is a garnish here */ }
+      }
     })();
-  }, []);
+  }, [editable]);
 
   const today = new Date().toISOString().split('T')[0];
   return (
@@ -681,6 +1083,24 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
       <main className="doc-list">
         {docs === null ? <p className="boot">loading documents…</p> : docs.length === 0 ? <p className="boot">no documents yet</p> : docs.map((d) => <DocRow d={d} key={d.id} />)}
       </main>
+      {waiting.length ? (
+        <section className="backlinks waiting">
+          <h3>waiting to exist</h3>
+          <ul>
+            {waiting.map((w) => (
+              <li key={w.key}>
+                <a className="wikilink wikilink-stub" href={factRoute(w.key)} onClick={(e) => {
+                  if (!w.key.startsWith('doc:')) return;
+                  e.preventDefault();
+                  const title = w.key.slice(4).replace(/-/g, ' ');
+                  if (confirm(`Create "${title}"?`)) void createDocFromKey(w.key, title);
+                }}>{w.key}</a>
+                <span className="rel"> wanted {w.count}×</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {editable ? (
         <button className="btn add-block" onClick={async () => {
           const title = prompt('Title?'); if (!title) return;
@@ -689,6 +1109,7 @@ function ListEditor({ editable, seed }: { editable: boolean; seed?: ListItem[] }
           const k = mintCell();
           await saveCell(id, k, `# ${title}\n\nStart writing…`);
           await writeOrder(id, k, 1, false);
+          await outbox.flushNow(); // navigating next — the debounce must not eat the mint
           location.href = factRoute(`doc:${id}`);
         }}>+ new document</button>
       ) : null}
@@ -820,7 +1241,40 @@ function FactPage({ routeKey, seed }: { routeKey: string; seed?: Extract<ViewMod
 
   if (missing) return <ListEditor.MissingDoc docId={routeKey} />;
   if (!vm) return <p className="boot">loading {routeKey}…</p>;
-  return <div ref={ref}><FactView vm={vm} /></div>;
+  // ADR-0061 §5: every fact is a seed document. "appears in" lists the docs
+  // holding this fact (the derived inDoc projection rides neighbors); the
+  // annotate verb assembles a doc AROUND the fact — membership only, the
+  // fact itself untouched.
+  const appearsIn = vm.links.filter((l) => l.rel === 'inDoc' && l.key.startsWith('doc:'));
+  const annotate = async (): Promise<void> => {
+    const title = prompt('Title for the new document around this fact?', vm.title);
+    if (!title) return;
+    const id = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `d${Date.now().toString(36)}`;
+    await saveDocMeta(id, { title, summary: `assembled around ${routeKey}` });
+    await writeOrder(id, routeKey, 1, false); // the fact IS the first member
+    const k = mintCell();
+    await saveCell(id, k, '_notes…_');
+    await writeOrder(id, k, 2, false);
+    await outbox.flushNow();
+    location.href = factRoute(`doc:${id}`);
+  };
+  return (
+    <div ref={ref}>
+      {appearsIn.length ? (
+        <div className="appears-in">
+          appears in {appearsIn.map((d, i) => (
+            <span key={d.key}>{i > 0 ? ' · ' : ''}<a href={`${factRoute(d.key)}#${encodeURIComponent(routeKey)}`}>{d.label}</a></span>
+          ))}
+        </div>
+      ) : null}
+      <FactView vm={vm} />
+      {isAuthed() ? (
+        <div className="doc-controls">
+          <button className="pill" onClick={() => void annotate()}>✎ start a doc around this fact</button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /* ── type collections (a `[[type:project|Projects]]` wiki-link target) ──── */
@@ -995,3 +1449,15 @@ const ssrVm = readInitialVm();
 const initialVm = ssrVm ?? cachedVmForLocation();
 if (appRoot.dataset.ssr === '1' && ssrVm) hydrateRoot(appRoot, <App initialVm={ssrVm} />);
 else { appRoot.textContent = ''; createRoot(appRoot).render(<App initialVm={initialVm} />); }
+
+// The save dot (ADR-0059 Inc 2): the outbox's honest state, bottom-right.
+// saving = amber, failed = terracotta (stays until a flush succeeds), saved
+// fades out. Same vocabulary as the canvas's parc:save-state indicator.
+window.addEventListener('lit:save-state', (e) => {
+  const state = (e as CustomEvent<{ state: string }>).detail?.state ?? '';
+  let dot = document.getElementById('lit-save-dot');
+  if (!dot) { dot = document.createElement('div'); dot.id = 'lit-save-dot'; document.body.appendChild(dot); }
+  dot.dataset.state = state;
+  dot.textContent = state === 'saving' ? 'saving…' : state === 'failed' ? 'retrying…' : 'saved';
+  if (state === 'saved') { const d = dot; setTimeout(() => { if (d.dataset.state === 'saved') d.dataset.state = ''; }, 1500); }
+});

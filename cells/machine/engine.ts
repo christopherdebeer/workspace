@@ -264,8 +264,12 @@ export function projectActions(name, nodes, rails, entry) {
       params: {
         run: { type: 'string', required: true, description: `Run id → ${mkey.run(name, '<run>')}` },
         text: { type: 'string', required: false, description: 'Trigger context body — visible to the entry agent' },
+        mode: { type: 'string', required: false, description: 'Drive mode (ADR-0065): "driven" parks decision nodes for an external stepper (a capable agent); default/absent = reactive (the step + model-delivery subs auto-drive).' },
       },
-      writes: [{ key: runKey, value: { machine: name, node: entryNode, status: 'running', startedAt: '${now}', text: '${params.text}' }, type: 'machine-run', tags, ifAbsent: true }],
+      // ADR-0065: `mode` rides the run fact. `driven` makes the reactive subs
+      // (step / decide / work) skip this run so a capable external driver
+      // advances it via the `step` tool; absent/"" = reactive (auto-driven).
+      writes: [{ key: runKey, value: { machine: name, node: entryNode, status: 'running', startedAt: '${now}', text: '${params.text}', mode: '${params.mode}' }, type: 'machine-run', tags, ifAbsent: true }],
     });
   }
 
@@ -335,7 +339,7 @@ export function projectSubscriptions(name, rails, owner, context) {
       `2) ADVANCE the run — write "${runKeyTpl}" back UNCHANGED except: "node":"<the chosen branch>", "status":"running", "via":${JSON.stringify(`${from}=>decision`)}, and APPEND {"node":"<the chosen branch>","via":${JSON.stringify(`${from}=>decision`)}} to its existing \`trace\` array (keep all prior trace entries). type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]. The stepper settles terminality from there.`;
     subs.push({
       id: `machine.${m}.decide-${seg(from)}`,
-      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(from)} && value.status == "running"` },
+      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(from)} && value.status == "running" && value.mode != "driven"` },
       deliver: `@${owner}/models.agent`,
       params: {
         prompt,
@@ -356,7 +360,7 @@ export function projectSubscriptions(name, rails, owner, context) {
     const prompt = (r.prompt ? `${r.prompt}\n\n` : `Do the work for node "${r.from}" of machine "${name}", run \${keySuffix}.\n\n`) + advance;
     subs.push({
       id: `machine.${m}.work-${seg(r.from)}`,
-      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(r.from)} && value.status == "running"` },
+      match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(r.from)} && value.status == "running" && value.mode != "driven"` },
       deliver: `@${owner}/models.agent`,
       params: {
         prompt,
@@ -473,7 +477,9 @@ export function spawnChildrenWrites(run, machine, spec, at) {
 export function projectStepSubscription(name, owner) {
   return {
     id: `machine.${seg(name)}.step`,
-    match: { keyPrefix: `machine/${seg(name)}/run/`, cel: `value.status == "running" || value.status == "done" || value.status == "failed"` },
+    // ADR-0065: `driven` runs are NOT auto-stepped — a capable external driver
+    // walks them via the `step` tool. Reactive runs (no/other mode) auto-drive.
+    match: { keyPrefix: `machine/${seg(name)}/run/`, cel: `(value.status == "running" || value.status == "done" || value.status == "failed") && value.mode != "driven"` },
     deliver: `@${owner}/machine.step`,
     params: { run: '${keySuffix}', machine: name },
   };

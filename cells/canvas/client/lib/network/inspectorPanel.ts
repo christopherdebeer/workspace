@@ -34,7 +34,7 @@ function fallback(): HTMLElement {
   if (!f) {
     f = document.createElement('div');
     f.id = 'inspector-fallback';
-    f.setAttribute('style', 'position:fixed;bottom:0;left:0;right:0;z-index:9500;background:#fbfbf8;border-top:1px solid #e4e4dc;box-shadow:0 -3px 16px rgba(0,0,0,.12);padding:12px 14px calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;border-radius:14px 14px 0 0;display:none');
+    f.setAttribute('style', 'position:fixed;bottom:0;left:0;right:0;z-index:9500;background:var(--pc-panel,#fdf9ef);border-top:1px solid var(--pc-border,#ddd2b8);box-shadow:0 -3px 16px rgba(51,46,35,.14);padding:12px 14px calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;border-radius:14px 14px 0 0;display:none');
     document.body.appendChild(f);
   }
   return f;
@@ -98,7 +98,7 @@ export function inspectorHeader(title: string, onClose: () => void): HTMLElement
   head.innerHTML = `<strong style="font-family:Georgia,serif">${title}</strong>`;
   const done = document.createElement('button');
   done.textContent = 'Deselect';
-  done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+  done.style.cssText = 'border:0;background:transparent;color:#85795f;font:inherit;cursor:pointer;padding:4px 6px';
   // Call with NO args — passing the click Event straight to a handler like
   // clearInspector(ownerName?) made the event the owner-guard, so it never fired.
   done.addEventListener('click', () => onClose());

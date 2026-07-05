@@ -16,6 +16,7 @@
  *  ownership ('selection') keeps edge/frame editors from being stomped.
  * ------------------------------------------------------------------------- */
 import { showInspector, clearInspector, inspectorOwner } from './inspectorPanel.ts';
+import { plainSnippet } from '../text.ts';
 import { buildElementActions } from '../context-menu.ts';
 import { duplicateEl, deleteSelection, inlineEdit, groupSelection } from '../cmd-palette/menu-item-helpers.ts';
 import { createFrame } from './frameNav.ts';
@@ -30,7 +31,7 @@ let currentIds: string[] = [];
 function identity(el: any): { icon: string; title: string } {
   const icon = (el?._factIcon as string) ?? '';
   const title = (el?._factTitle as string)
-    ?? (typeof el?.content === 'string' && el.content.trim() ? el.content.split('\n')[0].slice(0, 40) : (el?.type ?? 'element'));
+    ?? (plainSnippet(el?.content, 40) || (el?.type ?? 'element'));
   return { icon, title };
 }
 
@@ -43,7 +44,7 @@ function headerBar(title: string, onDeselect: () => void, onBack?: () => void): 
     const back = document.createElement('button');
     back.innerHTML = '‹';
     back.title = 'Back';
-    back.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:600 18px/1 inherit;cursor:pointer;padding:0 4px';
+    back.style.cssText = 'border:0;background:transparent;color:#85795f;font:600 18px/1 inherit;cursor:pointer;padding:0 4px';
     back.addEventListener('click', onBack);
     bar.appendChild(back);
   }
@@ -53,7 +54,7 @@ function headerBar(title: string, onDeselect: () => void, onBack?: () => void): 
   bar.appendChild(t);
   const x = document.createElement('button');
   x.textContent = 'Deselect';
-  x.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+  x.style.cssText = 'border:0;background:transparent;color:#85795f;font:inherit;cursor:pointer;padding:4px 6px';
   x.addEventListener('click', onDeselect);
   bar.appendChild(x);
   return bar;
@@ -62,7 +63,7 @@ function headerBar(title: string, onDeselect: () => void, onBack?: () => void): 
 function primaryBtn(label: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
-  b.style.cssText = 'border:1px solid #2f6f4f;background:#2f6f4f;color:#fff;border-radius:7px;padding:7px 14px;font:inherit;cursor:pointer';
+  b.className = 'pc-btn';
   b.addEventListener('click', onClick);
   return b;
 }
@@ -73,7 +74,7 @@ function primaryBtn(label: string, onClick: () => void): HTMLButtonElement {
 function ghostBtn(label: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
-  b.style.cssText = 'border:1px solid #e0e0d8;background:#fff;color:#3a3a36;border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer';
+  b.className = 'pc-btn-ghost';
   b.addEventListener('click', onClick);
   return b;
 }

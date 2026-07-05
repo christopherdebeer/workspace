@@ -18,7 +18,7 @@ import { ensureAuth, accessToken, isAuthed } from './auth.ts';
 import { startSalience } from './salience.ts';
 import { registerSubstrateTypes, loadRendererFacts } from '../elements/substrateTypes.ts';
 import { elementRegistry } from '../elements/elementRegistry.ts';
-import { loadTypes, titleOf, hrefOf } from 'https://parc.land/@c15r/kernel/app.js';
+import { loadTypes, titleOf, hrefOf, createOutbox, stableStringify } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
 import { sanitizeElementGeometry } from '../geometry.ts';
@@ -26,13 +26,42 @@ import { regionBBox, fitRegion, type Region, type Placed, type BBox } from '../.
 
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 const DEBOUNCE_SAVE_DELAY = 800;
-const FLUSH_DELAY = 400;
 
-/** fact key → JSON last written, so repeat saves only touch what changed. */
-const lastWritten = new Map<string, string>();
-const pending = new Map<string, { value: unknown; type?: string; tags?: string[] }>();
-let flushTimer: ReturnType<typeof setTimeout> | undefined;
-let flushing = false;
+/* ── ADR-0053 Inc 1: the write half lives in the kernel's Outbox ──────────
+ * Canonical-JSON dedupe, debounced concurrent flush, retry with backoff,
+ * echo windows, and the priming buffer were all hand-rolled here in
+ * module-level maps — and every seam was one of this cycle's data bugs.
+ * The kernel now owns those semantics; this file keeps only what is
+ * CANVAS-shaped: what to write (payload splits), when (save sweeps), and
+ * the board-scope bookkeeping (edges, meta, placements). */
+const outbox = createOutbox(act as (t: string, i: Record<string, unknown>) => Promise<unknown>, {
+  via: 'canvas',
+  onState: (state) => {
+    try { window.dispatchEvent(new CustomEvent('parc:save-state', { detail: { state } })); } catch { /* non-DOM */ }
+  },
+});
+
+/** Hydrate boot calls this BEFORE constructing the controller: the first
+ *  render funnels every element through the write queue before the dedupe is
+ *  seeded — priming buffers those writes and REPLAYS them once seeds exist. */
+export function beginBoardPriming(): void { outbox.beginPriming(); }
+function endBoardPriming(): void { outbox.endPriming(); }
+
+/** One board per page lifetime is over (drill-in/up swap controllers):
+ *  every per-board map must reset on load, or the save sweep treats the
+ *  PREVIOUS board's keys as "mine, removed" and supersedes its facts —
+ *  cross-board data loss. The outbox keeps its pending writes: in-flight
+ *  edits still belong to their keys. */
+function resetBoardScope(): void {
+  outbox.reset();
+  factMeta.clear();
+  lastEdges.clear();
+  linkedEdges.clear();
+  synthOrigin.clear();
+  lastPos.clear();
+  salienceByKey.clear();
+  readonlyBoard = false;
+}
 
 /** Stored substrate meta per fact key — preserves semantic type/tags on rewrite. */
 const factMeta = new Map<string, { type: string | null; tags: string[] }>();
@@ -43,18 +72,32 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 /** Read-time salience per fact key, for the presentation channel. */
 export const salienceByKey = new Map<string, number>();
 
+/** The declared type vocabulary, for palette `type:` autocomplete. */
+export function knownTypes(): Array<{ name: string; icon: string }> {
+  return Object.entries(factTypeDecls)
+    .map(([name, td]) => ({ name, icon: td?.present?.icon ?? td?.icon ?? '•' }))
+    .sort((a, b) => (a.name < b.name ? -1 : 1));
+}
+
 /** The type vocabulary (`$types`), loaded once per board (kernel-cached). Carries
  *  the gateway-resolved Present facet (ADR-0012) — `present.icon` is the canonical
  *  type glyph, served from the type declaration, so a new type ships its icon as
  *  data (no canvas recompile). The legacy flat `icon` is the fallback. */
 let factTypeDecls: Record<string, { icon?: string; present?: { icon?: string } }> = {};
 
+/** Board-native types the legacy renderer handles without a registry view. */
+const LEGACY_TYPES = new Set(['text', 'markdown', 'html', 'img', 'edit-prompt', 'canvas-container']);
+
 /** A fact with no renderable type becomes a 'fact' CARD — presentation only
  *  (_fact* transients + a type the persister strips), value untouched.
  *  Title/href come from the kernel: _types declarations first, conventions
  *  as fallback — a new type's routing is one fact, no deploys. */
 function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[] } | undefined): void {
-  if (el.type) return;
+  // A VALUE-borne `type` (e.g. machine facts carry type:"machine" as a domain
+  // field) only routes when something can actually draw it — a board-native
+  // type or a registered view. Bailing on any truthy el.type sent such facts
+  // to the unknown-type fallback, which renders NOTHING: invisible elements.
+  if (el.type && (LEGACY_TYPES.has(el.type) || elementRegistry.viewFor(el.type))) return;
   const metaType = meta?.type ?? null;
   // A fact whose _meta.type has a registered renderer routes to that renderer
   // (the renderer ladder), instead of collapsing to the floor 'fact' card. The
@@ -62,11 +105,22 @@ function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[]
   // bridge every imported fact floors. Renderers register at board boot
   // (loadRendererFacts) before any element is decorated, so viewFor() is ready.
   if (metaType && elementRegistry.viewFor(metaType)) { el.type = metaType; return; }
+  // Remember a value-borne type so the persister can KEEP it in the fact —
+  // the _factCard type-strip below is for the presentation type only.
+  if (el.type) el._valueType = el.type;
   el.type = 'fact';
   el._factCard = true;
   const entry = { key: String(el._factKey ?? el.id), value: el, _meta: { type: metaType, tags: meta?.tags ?? [] } };
   el._factTitle = titleOf(entry);
-  el._factHref = hrefOf(entry);
+  // The kernel's convention fallback routes a canvas-tagged fact to its
+  // board — but membership IS that tag, so for anything ON this board the
+  // href was a self-link that just reloaded in place (long-press showed
+  // ?canvas=<this board>). No link beats a dead link; real routes (a
+  // type's open handler, docs in lit, OTHER boards) pass through.
+  const href = hrefOf(entry);
+  const self = !!href && !!currentBoardId
+    && (href.includes(`canvas=${encodeURIComponent(currentBoardId)}`) || href.includes(`canvas=${currentBoardId}`));
+  el._factHref = self ? undefined : href;
   const td = factTypeDecls[metaType ?? ''];
   el._factIcon = td?.present?.icon ?? td?.icon ?? '•';
   el._factMeta = [metaType ?? 'fact', entry.key].join(' · ');
@@ -99,36 +153,34 @@ function splitElement(el: Record<string, unknown>): { domain: Record<string, unk
 
 function queueFact(key: string, value: unknown, extra?: { type?: string; tags?: string[] }): void {
   if (readonlyBoard) return; // a non-interactive view never writes
-  if (lastWritten.get(key) === JSON.stringify(value)) return;
-  pending.set(key, { value, ...extra });
-  if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
+  outbox.stage(key, value, extra); // dedupe/priming/retry/echo: kernel semantics (ADR-0053)
 }
 
-async function flush(): Promise<void> {
-  if (flushing) {
-    if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = undefined; void flush(); }, FLUSH_DELAY);
-    return;
+/** The EXACT payloads a save would write for this element — domain fact +
+ *  placement decoration. One implementation, used by the write path AND by
+ *  the loader to seed the dedup maps: seeding with the raw stored value
+ *  instead used to make every legacy fact (placement fields still inside its
+ *  value) look "changed" on every open — a full-board rewrite per load, which
+ *  is what ran the DynamoDB table into throughput throttling. */
+function elementPayloads(el: Record<string, unknown>): { domain: Record<string, unknown>; placement: Record<string, unknown> } {
+  // Chip-display dims are transient; persist the TRUE geometry.
+  const persisted: Record<string, unknown> = { ...el };
+  if ((el as any)._factCard) {
+    // The card's `type:'fact'` is presentation. If the VALUE had its own type
+    // field (machine facts do), restore it — deleting outright would strip a
+    // domain field from the fact on the next save.
+    if ((el as any)._valueType) persisted.type = (el as any)._valueType;
+    else delete persisted.type;
   }
-  flushing = true;
-  try {
-    for (const [key, p] of [...pending]) {
-      pending.delete(key);
-      try {
-        await act('workspace.remember', {
-          key,
-          value: p.value,
-          via: 'canvas',
-          ...(p.type ? { type: p.type } : {}),
-          ...(p.tags ? { tags: p.tags } : {}),
-        });
-        lastWritten.set(key, JSON.stringify(p.value));
-      } catch (err) {
-        console.warn('[substrate] write failed', key, err);
-      }
-    }
-  } finally {
-    flushing = false;
+  // parcland's client-side history — the substrate's revision chain IS the
+  // history; persisting versions would double-store every prior value.
+  delete persisted.versions;
+  delete persisted.childCanvasState; // dead pre-refCanvasId nesting vestige
+  if (typeof (el as any)._origW === 'number') {
+    persisted.width = (el as any)._origW;
+    persisted.height = (el as any)._origH;
   }
+  return splitElement(persisted);
 }
 
 /** Per-element write (the CrdtAdapter seam funnels here too). */
@@ -138,33 +190,21 @@ export function queueElementWrite(canvasId: string, el: Record<string, unknown>)
   // their meta edges live only in the session, never in the substrate.
   if (el.type === 'edit-prompt') return;
   const key = factKeyOf(el);
-  const canvasTag = `canvas:${canvasId}`;
-  // Chip-display dims are transient; persist the TRUE geometry.
-  const persisted: Record<string, unknown> = { ...el };
-  if ((el as any)._factCard) delete persisted.type; // presentation, not the fact's
-  // parcland's client-side history — the substrate's revision chain IS the
-  // history; persisting versions would double-store every prior value.
-  delete persisted.versions;
-  delete persisted.childCanvasState; // dead pre-refCanvasId nesting vestige
-  if (typeof el._origW === 'number') {
-    persisted.width = el._origW;
-    persisted.height = el._origH;
-  }
-  const { domain, placement } = splitElement(persisted);
+  const { domain, placement } = elementPayloads(el);
 
-  // Semantic type/tags survive board edits: omit type when one is stored
-  // (the substrate preserves omitted attributes); only brand-new facts get
-  // stamped canvas-element. Tags only written when the canvas tag is missing.
+  // Semantic type survives board edits: omit type when one is stored (the
+  // substrate preserves omitted attributes); only brand-new facts get
+  // stamped canvas-element. ADR-0054: membership is the PLACEMENT, never a
+  // tag on the member fact — placing/viewing must not mutate the specimen.
+  // Legacy canvas:* tags are still READ for membership (the load union) but
+  // are never written again.
   const known = factMeta.get(key);
-  const extra: { type?: string; tags?: string[] } = {};
+  const extra: { type?: string } = {};
   if (!known || !known.type) extra.type = 'canvas-element';
-  if (!known || !known.tags.includes(canvasTag)) {
-    extra.tags = Array.from(new Set([...(known?.tags ?? []), canvasTag]));
-  }
   queueFact(key, domain, extra);
   factMeta.set(key, {
     type: known?.type ?? 'canvas-element',
-    tags: extra.tags ?? known?.tags ?? [canvasTag],
+    tags: known?.tags ?? [],
   });
 
   // Synthesized positions are the board's proposal, not the human's pin —
@@ -245,6 +285,7 @@ export function saveCanvas(canvasState: any): void {
 }
 
 async function _saveCanvas(canvasState: any): Promise<void> {
+  if (outbox.priming()) return; // never diff against unseeded maps
   saveCanvasLocalOnly(canvasState);
   const cid = canvasState.canvasId;
   const live = new Set<string>();
@@ -269,16 +310,16 @@ async function _saveCanvas(canvasState: any): Promise<void> {
     );
     if (e.decorated) {
       const dk = `_canvas/${cid}/edge:${id}`;
-      lastWritten.delete(dk);
+      outbox.forget(dk);
       act('workspace.supersede', { key: dk }).catch(() => undefined);
     }
   }
   // Retire facts/placements that disappeared — supersede, never delete.
-  for (const key of [...lastWritten.keys()]) {
+  for (const key of [...outbox.keys()]) {
     if (key.includes('/edge:')) continue; // handled above
     const mine = key.startsWith(`_canvas/${cid}/`) || key.startsWith('el:');
     if (!mine || live.has(key)) continue;
-    lastWritten.delete(key);
+    outbox.forget(key);
     factMeta.delete(key);
     act('workspace.supersede', { key }).catch((err) => console.warn('[substrate] supersede failed', key, err));
   }
@@ -326,6 +367,21 @@ interface ViewRenderHint {
 }
 
 let readonlyBoard = false;
+/** The board currently loaded — used to suppress self-link "open" hrefs. */
+let currentBoardId = '';
+
+/* ── board composition flags ──────────────────────────────────────────────
+ * The board shows what a human AUTHORED: decorated edges and pinned
+ * placements. Substrate links (including inferred similarTo) stay in the
+ * graph — queryable, expandable via "Expand links" — but are NOT projected
+ * onto the canvas by default: at live scale (hundreds of links) they read
+ * as noise, not structure. Likewise unplaced facts park in the salience
+ * tray instead of a force-simulated field: positions on the board are
+ * explicit, not physics. Debug escapes: ?links=1 re-projects link edges,
+ * ?sim=1 restores the force field + warm episodes. */
+const boardFlags = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+const SHOW_LINK_EDGES = boardFlags.get('links') === '1';
+const FIELD_SIM = boardFlags.get('sim') === '1';
 
 /** Pin the camera once the controller exists (a *named* viewpoint, not device state).
  *  The `'fit'` case routes through the shared `fitRegion` resolver (ADR-0015) so SSR,
@@ -398,36 +454,47 @@ export async function focusFrame(frameId: string, elements: any[]): Promise<bool
 /* ── substrate search → add to board (item = fact × renderer × placement) ──── */
 
 export interface FactHit { key: string; title: string; icon: string; type: string | null }
+export interface FactSearchPage { hits: FactHit[]; nextCursor: string | null; total: number }
 
 // The board's own machinery + ephemera — never offer these as "add to canvas".
-const RESERVED_FACT = /^(_canvas\/|_views\/|_actions\/|_subscriptions\/|_groups\/|bkpk:|tending\/|machine-run\/|run\/)/;
+const RESERVED_FACT = /^(_canvas\/|_views\/|_actions\/|_subscriptions\/|_groups\/|bkpk:|tending\/|machine-run\/|run\/|_caps\/)/;
+// A cell's managed SUB-facts (machine rails, run claims, …): searching for
+// "tending machine" must surface machine/tending, not drown it under nine of
+// its own rails and run-claims — which is exactly what happened.
+const INTERNAL_FACT = /\/(run|rail|claim)\//;
 
-/** Search the slice for facts NOT already on this board, for the command palette
- *  (substring `contains` scan, salience-ranked). Excludes reserved/system keys
- *  and items already present. */
-export async function searchFacts(q: string, controller: any, limit = 8): Promise<FactHit[]> {
-  const query = q.trim();
-  if (query.length < 2) return [];
+/** Search the slice for facts NOT already on this board, for the command
+ *  palette. SEMANTIC + salience ranking (`query({text})`, ADR-0051 — not the
+ *  old substring scan), with a `type:<name>` token for structural filtering
+ *  ("type:machine tending") and a cursor so the palette can page. */
+export async function searchFacts(q: string, controller: any, limit = 8, cursor?: string | null): Promise<FactSearchPage> {
+  let query = q.trim();
+  let type: string | undefined;
+  query = query.replace(/\btype:([A-Za-z0-9_-]+)/g, (_m, t: string) => { type = t; return ''; }).trim();
+  if (!type && query.length < 2) return { hits: [], nextCursor: null, total: 0 };
   const onBoard = new Set<string>(
     (controller?.canvasState?.elements ?? []).map((el: any) => el._factKey ?? `el:${el.id}`),
   );
-  let entries: QueryEntry[] = [];
+  const input: Record<string, unknown> = { limit: limit + 12, shape: 'card' };
+  if (type) input.type = type;
+  if (query) input.text = query; // semantic, salience-blended ranking
+  if (cursor) input.cursor = cursor;
+  let r: { entries?: QueryEntry[]; nextCursor?: string; total?: number; types?: Record<string, { icon?: string; present?: { icon?: string } }> };
   try {
-    const r = await read<{ entries?: QueryEntry[] }>('workspace.query', { contains: query, limit: limit + 16 });
-    entries = r.entries ?? [];
-  } catch (e) { console.warn('[canvas] fact search failed', e); return []; }
+    r = await read('workspace.query', input);
+  } catch (e) { console.warn('[canvas] fact search failed', e); return { hits: [], nextCursor: null, total: 0 }; }
   const hits: FactHit[] = [];
-  for (const e of entries) {
+  for (const e of r.entries ?? []) {
     const key = e.key;
-    if (!key || onBoard.has(key) || RESERVED_FACT.test(key) || key.startsWith('_canvas/')) continue;
-    const type = e._meta?.type ?? null;
-    const td = factTypeDecls[type ?? ''];
+    if (!key || onBoard.has(key) || RESERVED_FACT.test(key) || INTERNAL_FACT.test(key) || key.startsWith('_canvas/')) continue;
+    const t = e._meta?.type ?? null;
+    const td = r.types?.[t ?? ''] ?? factTypeDecls[t ?? ''];
     let title = key;
     try { title = titleOf({ key, value: e.value, _meta: e._meta }) || key; } catch { /* fall back to key */ }
-    hits.push({ key, title, type, icon: td?.present?.icon ?? td?.icon ?? '•' });
+    hits.push({ key, title, type: t, icon: td?.present?.icon ?? td?.icon ?? '•' });
     if (hits.length >= limit) break;
   }
-  return hits;
+  return { hits, nextCursor: r.nextCursor ?? null, total: r.total ?? hits.length };
 }
 
 /** Add an existing substrate fact to THIS board: membership tag (clobber-safe —
@@ -448,21 +515,20 @@ export async function addFactToCanvas(controller: any, key: string): Promise<voi
     tags = entry?._meta?.tags ?? [];
   } catch (e) { console.warn('[canvas] addFact peek failed', key, e); return; }
 
-  const newTags = Array.from(new Set([...tags, `canvas:${cid}`]));
   const pt = controller.screenToCanvas(window.innerWidth / 2, window.innerHeight / 2);
   const el: any = { width: 240, height: 120, rotation: 0, ...value, id: idOfKey(key), x: Math.round(pt.x), y: Math.round(pt.y) };
   el._factKey = key;
   // Pre-seed meta so the element-write path never stamps `canvas-element` over
-  // the fact's real type; decorate to the card/renderer it deserves.
-  factMeta.set(key, { type, tags: newTags });
-  decorateFactCard(el, { type, tags: newTags });
+  // the fact's real type.
+  factMeta.set(key, { type, tags });
+  decorateFactCard(el, { type, tags });
   controller.canvasState.elements.push(el);
   controller.requestRender();
 
-  // Persist: membership (clean value + preserved type + the canvas tag) and a
-  // pinned placement at the viewport centre. queueFact dedupes on value, so the
-  // value isn't rewritten — only the tag/placement land.
-  queueFact(key, value, { ...(type ? { type } : {}), tags: newTags });
+  // ADR-0054: the PLACEMENT is the membership record — board-space, board-
+  // owned, durable through the same outbox as everything else. The member
+  // fact itself is untouched: placing a fact on a board must not mutate it
+  // (no revision churn, no tag writes, no write-permission requirement).
   queueFact(`_canvas/${cid}/${key}`, { x: el.x, y: el.y, width: el.width, height: el.height }, { type: 'canvas-placement' });
   ensureBoardFact(cid);
   console.info('[canvas] added fact to board', { key, cid, type });
@@ -493,7 +559,87 @@ function reportLoadFailure(stage: string, cid: string, err: unknown): void {
   if (typeof report === 'function') report(msg);
 }
 
+/** ONE edge assembly for the load path AND the live-sync rebuild — the two
+ *  inline copies drifted twice (decoration-retire behavior; the authored-only
+ *  gate had to be written in both). Decorations parse/migrate and register in
+ *  the write bookkeeping; substrate links seed the dedupe set (and project as
+ *  bare edges only under ?links=1); the fixpoint prune drops edges whose
+ *  endpoints (a present element, or a LABELED surviving edge) are gone, and
+ *  retires dropped decorations so they never return. */
+function assembleBoardEdges(
+  cid: string,
+  decoEntries: Array<{ key: string; value: any }>,
+  links: LinkEdge[],
+  presentKeys: Set<string>,
+  elIds: Set<string>,
+): any[] {
+  const edges: any[] = [];
+  for (const e of decoEntries) {
+    const edge = e.value as Record<string, unknown> | null;
+    if (!edge || typeof edge.id !== 'string') { outbox.seed(e.key, e.value); continue; }
+    // Migration: a decoration authored before the rel/label split has only
+    // `label` (which WAS the rel). Seed `rel` from it once.
+    if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
+    // Seed AFTER the migration mutates the edge — seeding the pre-migration
+    // shape made every legacy edge rewrite itself once per load.
+    outbox.seed(e.key, edge);
+    edges.push(edge);
+    if (edge.source && edge.target) {
+      const rel = edgeRel(edge);
+      lastEdges.set(edge.id, { source: edge.source as string, target: edge.target as string, rel, decorated: true });
+      linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
+    }
+  }
+  // Substrate links among present elements: dedupe-set always; projection
+  // only under ?links=1. Hidden links must NOT enter lastEdges — a lastEdges
+  // entry with no live edge makes the next save sweep UNLINK it.
+  const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
+  for (const l of links) {
+    if (!presentKeys.has(l.from) || !presentKeys.has(l.to)) continue;
+    const s = idOfKey(l.from);
+    const t = idOfKey(l.to);
+    if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
+    linkedEdges.add(`${s}|${l.rel}|${t}`);
+    if (!SHOW_LINK_EDGES) continue;
+    const id = `lnk:${l.from}|${l.rel}|${l.to}`;
+    edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
+    lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
+  }
+  // Edge hygiene to a fixpoint: an endpoint may be an element, or another
+  // edge — but only a LABELED edge renders an anchor node.
+  let valid: any[] = edges;
+  const dropped: any[] = [];
+  let pruned = true;
+  while (pruned) {
+    pruned = false;
+    const labeled = new Map(valid.map((e: any) => [e.id, !!(e.label && String(e.label).trim())]));
+    valid = valid.filter((e: any) => {
+      const ok = (x: unknown): boolean => typeof x === 'string' && (elIds.has(x) || labeled.get(x) === true);
+      const keep = ok(e.source) && ok(e.target);
+      if (!keep) {
+        dropped.push(e);
+        pruned = true;
+      }
+      return keep;
+    });
+  }
+  for (const e of dropped) {
+    lastEdges.delete(e.id);
+    if (!String(e.id).startsWith('lnk:')) {
+      const dk = `_canvas/${cid}/edge:${e.id}`;
+      outbox.forget(dk);
+      if (!readonlyBoard) act('workspace.supersede', { key: dk }).catch(() => undefined);
+    }
+  }
+  if (dropped.length) console.warn('[substrate] retired stale edges', dropped.map((e: any) => e.id));
+  return valid;
+}
+
 export async function loadInitialCanvas(defaultState: any, _paramToken?: string | null): Promise<any> {
+  // Fresh board scope: whatever board this page was on before (hydrate boot,
+  // drill navigation), its dedup/write bookkeeping must not leak into this one.
+  outbox.beginPriming();
+  resetBoardScope();
   const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
   const viewId = params.get('view');
   const embed = params.get('embed') === '1';
@@ -503,6 +649,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   if (embed && !isAuthed()) {
     document.body.classList.add('embed-unauthed');
     readonlyBoard = true;
+    endBoardPriming();
     return defaultState;
   }
   // The board lives in the URL PATH (see lib/url.ts), and the kernel's OAuth
@@ -524,6 +671,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
   // View-backed board: membership from the view's query; placements from its
   // board; camera from its declaration (shareable, pinned truth).
   let cid = defaultState.canvasId;
+  currentBoardId = cid;
   let membership: Record<string, unknown> = { tag: `canvas:${cid}` };
   let viewport: ViewRenderHint['viewport'] | null = null;
   if (viewId) {
@@ -535,6 +683,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       const def = entry?.value;
       if (def?.query) membership = def.query;
       cid = def?.render?.board ?? (viewId.startsWith('canvas:') ? viewId.slice('canvas:'.length) : cid);
+      currentBoardId = cid;
       viewport = def?.render?.viewport ?? 'fit';
       if (def?.render?.interactive === false || embed) readonlyBoard = true;
     } catch (err) {
@@ -584,6 +733,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     if ((els.count ?? 0) === 0 && (deco.count ?? 0) === 0 && localCopy && !viewId) {
       const seeded = JSON.parse(localCopy);
       console.log('[substrate] seeding empty canvas from local copy');
+      endBoardPriming(); // seeding IS the write — lift the gate (replaying buffered user writes)
       saveCanvas(seeded);
       startSalience(cid);
       return seeded;
@@ -591,85 +741,48 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 
     const prefix = `_canvas/${cid}/`;
     const placements = new Map<string, Record<string, unknown>>();
-    const edges: any[] = [];
+    const edgeEntries: Array<{ key: string; value: any }> = [];
     for (const e of deco.entries ?? []) {
-      lastWritten.set(e.key, JSON.stringify(e.value));
       const sub = e.key.slice(prefix.length);
-      if (sub.startsWith('edge:')) {
-        const edge = e.value as Record<string, unknown>;
-        // Migration: a decoration authored before the rel/label split has only
-        // `label` (which WAS the rel). Seed `rel` from it once, so it keeps its
-        // relation while a future label edit can diverge without rewriting it.
-        if (edge && edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge);
-        edges.push(edge);
-        if (edge && typeof edge.id === 'string' && edge.source && edge.target) {
-          const rel = edgeRel(edge);
-          lastEdges.set(edge.id, { source: edge.source as string, target: edge.target as string, rel, decorated: true });
-          linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
-        }
-      } else placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
+      if (sub.startsWith('edge:')) edgeEntries.push(e);
+      else {
+        outbox.seed(e.key, e.value);
+        placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
+      }
     }
 
     // Reserved prefixes are the board's OWN data (placements, vocabulary,
     // type decls) — never board members, whatever the membership query says.
     els.entries = (els.entries ?? []).filter((e) => !e.key.startsWith('_'));
-    const presentIds = new Set(els.entries.map((e) => e.key));
 
-    // Edges are PROJECTED from substrate links among this board's elements;
-    // decoration edges (style/label edits, edge-to-edge) merge by signature.
-    const decorated = new Set(edges.map((e) => `${e.source}|${edgeRel(e)}|${e.target}`));
-    for (const l of links) {
-      if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
-      const source = idOfKey(l.from);
-      const target = idOfKey(l.to);
-      if (decorated.has(`${source}|${l.rel}|${target}`)) continue;
-      const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-      // A bare reference: `rel` IS the type; `label` defaults to showing it (so
-      // display is unchanged) until a human gives it a distinct annotation.
-      edges.push({ id, source, target, rel: l.rel, label: l.rel });
-      lastEdges.set(id, { source, target, rel: l.rel, decorated: false });
-      linkedEdges.add(`${source}|${l.rel}|${target}`);
-    }
-
-    // Edge hygiene: an edge whose endpoint is gone breaks the renderer (and
-    // lies about the graph). Keep edges whose endpoints are present elements
-    // or other surviving edges (edge-to-edge), to a fixpoint; self-heal stale
-    // decorations by retiring them so they never return.
-    const elIds = new Set([...presentIds].map((k) => (k.startsWith('el:') ? k.slice(3) : k)));
-    let validEdges: any[] = edges.filter((e: any) => e && typeof e.id === 'string');
-    const droppedEdges: any[] = [];
-    let pruned = true;
-    while (pruned) {
-      pruned = false;
-      // An endpoint may be an element, or another edge — but only a LABELED
-      // edge renders an anchor node; an unlabeled target crashes the renderer
-      // and means nothing visually.
-      const labeled = new Map(validEdges.map((e: any) => [e.id, !!(e.label && String(e.label).trim())]));
-      validEdges = validEdges.filter((e: any) => {
-        const ok = (x: unknown): boolean => typeof x === 'string' && (elIds.has(x) || labeled.get(x) === true);
-        const keep = ok(e.source) && ok(e.target);
-        if (!keep) {
-          droppedEdges.push(e);
-          pruned = true;
+    // ADR-0054 Inc 1: membership = placements ∪ tags. The placement fact is
+    // the membership record (board-space, board-owned); the add path no
+    // longer tags the member fact. A placement whose fact the tag query
+    // didn't return is a placement-only member — fetch it. Legacy tag-only
+    // members (e.g. tray items that were never pinned) keep riding the tag
+    // query until retired (ADR-0054 Inc 3).
+    {
+      const tagged = new Set(els.entries.map((e) => e.key));
+      const placementOnly = [...placements.keys()].filter((k) => !k.startsWith('edge:') && !tagged.has(k));
+      if (placementOnly.length) {
+        const fetched = await Promise.allSettled(placementOnly.slice(0, 80).map(async (k) => {
+          const r = await read<{ entries: QueryEntry[] }>('workspace.query', { prefix: k, limit: 3 });
+          return (r.entries ?? []).find((x) => x.key === k) ?? null;
+        }));
+        for (const f of fetched) {
+          if (f.status === 'fulfilled' && f.value) els.entries.push(f.value);
         }
-        return keep;
-      });
-    }
-    for (const e of droppedEdges) {
-      lastEdges.delete(e.id);
-      if (!String(e.id).startsWith('lnk:')) {
-        const dk = `_canvas/${cid}/edge:${e.id}`;
-        lastWritten.delete(dk);
-        if (!readonlyBoard) act('workspace.supersede', { key: dk }).catch(() => undefined);
+        console.info('[canvas] placement-only members joined', { placements: placementOnly.length });
       }
     }
-    if (droppedEdges.length) console.warn('[substrate] retired stale edges', droppedEdges.map((e: any) => e.id));
+    const presentIds = new Set(els.entries.map((e) => e.key));
+    const elIds = new Set([...presentIds].map(idOfKey));
+    const validEdges = assembleBoardEdges(cid, edgeEntries, links, presentIds, elIds);
 
     // Assemble elements; record stored meta + salience for the seams.
     const placed: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
     const unplaced: any[] = [];
     const elements = (els.entries ?? []).map((e) => {
-      lastWritten.set(e.key, JSON.stringify(e.value));
       factMeta.set(e.key, { type: e._meta?.type ?? null, tags: e._meta?.tags ?? [] });
       if (typeof e._meta?.score === 'number') salienceByKey.set(e.key, e._meta.score);
       const value = e.value as Record<string, unknown>;
@@ -681,6 +794,13 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       // hundreds) BEFORE it renders — at face value it's the iOS tab-kill.
       if (sanitizeElementGeometry(el)) console.warn('[canvas] healed out-of-bounds geometry', e.key);
       decorateFactCard(el, e._meta);
+      // Seed the dedup maps with what a save WOULD write for this element —
+      // not the raw stored value. A legacy fact still carrying x/width inside
+      // its value otherwise diffs forever (domain strips placement fields),
+      // so every open rewrote the whole board (the throttling storm).
+      const seed = elementPayloads(el);
+      outbox.seed(e.key, seed.domain);
+      if (pl) outbox.seed(`${prefix}${e.key}`, seed.placement);
       if (pl && typeof pl.x === 'number')
         placed.push({
           id: el.id,
@@ -712,8 +832,12 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       linkedIds.add(e.source);
       linkedIds.add(e.target);
     }
-    const sims = unplaced.filter((el: any) => linkedIds.has(el.id)).sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)));
-    const loose = unplaced.filter((el: any) => !linkedIds.has(el.id));
+    // Explicit positioning by default: EVERY unplaced item parks in the
+    // salience tray. The force field (?sim=1) is a debug/spelunking view.
+    const sims = FIELD_SIM
+      ? unplaced.filter((el: any) => linkedIds.has(el.id)).sort((a: any, b: any) => String(a._factKey ?? a.id).localeCompare(String(b._factKey ?? b.id)))
+      : [];
+    const loose = FIELD_SIM ? unplaced.filter((el: any) => !linkedIds.has(el.id)) : unplaced;
 
     if (sims.length) {
       const cx0 = placed.length ? placed.reduce((a, p) => a + p.x, 0) / placed.length : 800;
@@ -817,6 +941,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       if (cc && !readonlyBoard && d?.key) void expandFact(cc, d.key, d.id);
     });
     console.info('[canvas] assembled', { canvasId: cid, elements: elements.length, placed: placed.length, synthesized: elements.length - placed.length, edges: validEdges.length, assembleMs: Math.round(nowMs() - tAsm) });
+    endBoardPriming(); // dedup maps seeded — writes flow, buffered user writes replay
     return { ...defaultState, canvasId: cid, elements, edges: validEdges };
   } catch (err) {
     // Make the swallowed failure visible (it was a silent console.error before),
@@ -826,6 +951,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     startSalience(cid);
     const fallback = localCopy ? JSON.parse(localCopy) : defaultState;
     console.warn(`[canvas] falling back to ${localCopy ? 'local cached copy' : 'EMPTY state'} after [${stage}] failure`);
+    endBoardPriming();
     return fallback;
   }
 }
@@ -833,7 +959,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 /* ------------------------------------------------------------------ */
 /*  Live sync — the open board tails the change feed                   */
 /*  (canvas horizon A: remote facts/placements/links merge in-place;   */
-/*   self-echoes dedup against lastWritten; reads go through `query`   */
+/*   self-echoes dedup against the outbox seeds; reads go via `query`   */
 /*   so syncing never inflates salience.)                              */
 /* ------------------------------------------------------------------ */
 
@@ -846,22 +972,26 @@ async function fetchFact(key: string): Promise<{ key: string; value: any; _meta:
     includeSuperseded: true,
     limit: 5,
   });
-  return (res.entries ?? []).find((e) => e.key === key) ?? null;
+  // Revision order isn't asserted by the query: prefer the LIVE revision, and
+  // only report superseded when no live one exists (else live-sync could act
+  // on a stale copy — even deleting a live element).
+  const hits = (res.entries ?? []).filter((e) => e.key === key);
+  return hits.find((e) => !e._meta?.superseded) ?? hits[0] ?? null;
 }
 
 function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
   if (!entry) return false;
-  const json = JSON.stringify(entry.value);
-  if (lastWritten.get(key) === json && !entry._meta?.superseded) return false; // self-echo
+  const json = stableStringify(entry.value);
+  if (outbox.seededJson(key) === json && !entry._meta?.superseded) return false; // self-echo
   const id = (entry.value && entry.value.id) || key.slice(3);
   if (entry._meta?.superseded) {
     if (!cc.canvasState.elements.some((e: any) => e.id === id)) return false;
     cc.canvasState.elements = cc.canvasState.elements.filter((e: any) => e.id !== id);
-    lastWritten.delete(key);
+    outbox.forget(key);
     factMeta.delete(key);
     return true;
   }
-  lastWritten.set(key, json);
+  outbox.seed(key, entry.value);
   factMeta.set(key, { type: entry._meta?.type ?? null, tags: entry._meta?.tags ?? [] });
   if (typeof entry._meta?.score === 'number') salienceByKey.set(key, entry._meta.score);
   const el = cc.canvasState.elements.find((e: any) => e.id === id);
@@ -901,13 +1031,13 @@ function applyRemoteElement(cc: any, key: string, entry: { value: any; _meta: an
 
 function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: any } | null): boolean {
   if (!entry || entry._meta?.superseded) return false;
-  const json = JSON.stringify(entry.value);
-  if (lastWritten.get(key) === json) return false; // self-echo
+  const json = stableStringify(entry.value);
+  if (outbox.seededJson(key) === json) return false; // self-echo
   const id = key.slice(key.lastIndexOf('/el:') + 4);
   if (cc.selectedElementIds?.has?.(id)) return false; // never fight a live drag
   const el = cc.canvasState.elements.find((e: any) => e.id === id);
   if (!el) return false;
-  lastWritten.set(key, json);
+  outbox.seed(key, entry.value);
   const pl = { ...(entry.value as Record<string, unknown>) };
   // While elided, true geometry lives in _origW/_origH — update those, not the chip box.
   if (el._origW !== undefined) {
@@ -924,7 +1054,7 @@ function applyRemotePlacement(cc: any, key: string, entry: { value: any; _meta: 
 }
 
 async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
-  const presentIds = new Set(cc.canvasState.elements.map((e: any) => factKeyOf(e)));
+  const presentIds = new Set<string>(cc.canvasState.elements.map((e: any) => factKeyOf(e)));
   const deco = await read<{ entries: Array<{ key: string; value: any }> }>('workspace.query', { prefix: `_canvas/${cid}/edge:` });
   let links: LinkEdge[] = [];
   try {
@@ -932,42 +1062,24 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   } catch { /* links unavailable */ }
   lastEdges.clear();
   linkedEdges.clear();
-  const edges: any[] = [];
-  for (const e of deco.entries ?? []) {
-    const edge = e.value;
-    lastWritten.set(e.key, JSON.stringify(e.value));
-    if (!edge || typeof edge.id !== 'string') continue;
-    if (edge.rel == null && typeof edge.label === 'string') edge.rel = edgeRel(edge); // migrate
-    edges.push(edge);
-    const rel = edgeRel(edge);
-    lastEdges.set(edge.id, { source: edge.source, target: edge.target, rel, decorated: true });
-    linkedEdges.add(`${edge.source}|${rel}|${edge.target}`);
+  const elIds = new Set<string>(cc.canvasState.elements.map((e: any) => e.id));
+  const rebuilt = assembleBoardEdges(cid, deco.entries ?? [], links, presentIds, elIds);
+  // Session-local edges (expandFact's neighbourhood projection) aren't
+  // substrate decorations — a remote link event must not silently drop them.
+  // Only when projection is OFF: under ?links=1 the rebuild already carries
+  // every live link, and preserving extras would defeat remote unlinks.
+  const rebuiltIds = new Set(rebuilt.map((e: any) => e.id));
+  const sessionEdges: any[] = SHOW_LINK_EDGES ? [] : (cc.canvasState.edges ?? []);
+  for (const e of sessionEdges) {
+    if (String(e.id).startsWith('lnk:') && !rebuiltIds.has(e.id)) {
+      const ok = (x: unknown): boolean => typeof x === 'string' && elIds.has(x);
+      if (ok(e.source) && ok(e.target)) {
+        rebuilt.push(e);
+        lastEdges.set(e.id, { source: e.source, target: e.target, rel: edgeRel(e), decorated: false });
+      }
+    }
   }
-  const decorated = new Set(edges.map((e: any) => `${e.source}|${edgeRel(e)}|${e.target}`));
-  for (const l of links) {
-    if (!presentIds.has(l.from) || !presentIds.has(l.to)) continue;
-    const s = idOfKey(l.from);
-    const t = idOfKey(l.to);
-    if (decorated.has(`${s}|${l.rel}|${t}`)) continue;
-    const id = `lnk:${l.from}|${l.rel}|${l.to}`;
-    edges.push({ id, source: s, target: t, rel: l.rel, label: l.rel });
-    lastEdges.set(id, { source: s, target: t, rel: l.rel, decorated: false });
-    linkedEdges.add(`${s}|${l.rel}|${t}`);
-  }
-  const elIds = new Set(cc.canvasState.elements.map((e: any) => e.id));
-  let valid = edges;
-  let pruned = true;
-  while (pruned) {
-    pruned = false;
-    const labeled = new Map(valid.map((e: any) => [e.id, !!(e.label && String(e.label).trim())]));
-    valid = valid.filter((e: any) => {
-      const ok = (x: unknown): boolean => typeof x === 'string' && (elIds.has(x) || labeled.get(x) === true);
-      const keep = ok(e.source) && ok(e.target);
-      if (!keep) pruned = true;
-      return keep;
-    });
-  }
-  cc.canvasState.edges = valid;
+  cc.canvasState.edges = rebuilt;
 }
 
 let warmUntil = 0;
@@ -984,6 +1096,9 @@ const lastPos = new Map<string, string>();
  * 700ms after the last movement the field cools and settles.
  */
 function warmField(): void {
+  // No physics on an explicitly-positioned board (?sim=1 restores it) — the
+  // field animation moved items the human never asked to move.
+  if (!FIELD_SIM) return;
   if (readonlyBoard || typeof window === 'undefined') return;
   warmUntil = performance.now() + 700;
   if (warmRaf) return; // loop already running
@@ -1075,7 +1190,7 @@ export function unpinElements(cc: any, ids: string[]): void {
     const el = cc.canvasState.elements.find((e: any) => e.id === id);
     if (!el) continue;
     const placementKey = `_canvas/${cid}/${factKeyOf(el)}`;
-    lastWritten.delete(placementKey);
+    outbox.forget(placementKey);
     act('workspace.supersede', { key: placementKey }).catch((err) =>
       console.warn('[substrate] unpin supersede failed', placementKey, err),
     );
@@ -1129,7 +1244,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
     el.y = Math.round(anchor.y + r * Math.sin(a));
     el._synthesized = true;
     synthOrigin.set(el.id, { x: el.x, y: el.y });
-    lastWritten.set(k, JSON.stringify(entry.value));
+    outbox.seed(k, entry.value);
     factMeta.set(k, { type: entry._meta?.type ?? null, tags: entry._meta?.tags ?? [] });
     if (typeof entry._meta?.score === 'number') salienceByKey.set(k, entry._meta.score);
     cc.canvasState.elements.push(el);
@@ -1158,8 +1273,10 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
  * event, no banner), the NEXT boot surfaces the final record, so a crash
  * that leaves no trace still tells us what was growing.
  */
+let flightStarted = false;
 function startFlightRecorder(): void {
-  if (typeof window === 'undefined') return;
+  if (flightStarted || typeof window === 'undefined') return;
+  flightStarted = true; // one recorder per page — drills must not stack them
   const KEY = 'parc.canvas.flight';
   try {
     const prev = localStorage.getItem(KEY);
@@ -1198,7 +1315,7 @@ function startFlightRecorder(): void {
           (m: number, e: any) => Math.max(m, Math.max(e.width || 0, e.height || 0) * (e.scale || 1)), 0)),
         warm: warmRaf !== 0,
         // Every module-level map — any monotonic climber here is a real leak.
-        maps: { lw: lastWritten.size, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size, pend: pending.size },
+        maps: { lw: [...outbox.keys()].length, place: lastPos.size, synth: synthOrigin.size, fmeta: factMeta.size, sal: salienceByKey.size, edge: lastEdges.size, linked: linkedEdges.size },
         heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : undefined,
         clean,
       }));
@@ -1224,16 +1341,35 @@ export function startLiveSync(cid: string): void {
     }
   } catch { /* no URL */ }
   liveSyncStarted = true;
+  // Adaptive cadence: 6s while the human is here, 30s once they've been idle
+  // a couple of minutes — an untouched board must not poll at edit speed.
+  let lastActivity = Date.now();
+  const bump = (): void => { lastActivity = Date.now(); };
+  window.addEventListener('pointerdown', bump, { passive: true });
+  window.addEventListener('keydown', bump, { passive: true });
   const tick = async (): Promise<void> => {
     const cc = (window as { CC?: any }).CC;
-    if (cc && !document.hidden) {
+    // One poller per page, but boards change under it (drill navigation) —
+    // key every filter to the CURRENT board, not the closed-over first one.
+    const cid = cc?.canvasState?.canvasId ?? '';
+    if (cc && cid && !document.hidden) {
       try {
         if (liveCursor === 0) {
-          liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 0, limit: 0 })).seq;
+          liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 'head' })).seq;
         } else {
-          const res = await read<{ events: Array<{ op: string; key: string | null }>; seq: number }>(
+          const res = await read<{ events: Array<{ op: string; key: string | null; rel?: string; to?: string }>; seq: number }>(
             'workspace.changes',
-            { sinceSeq: liveCursor },
+            {
+              sinceSeq: liveCursor,
+              // ADR-0055 Inc 3: the server ships only this board's slice —
+              // element facts + board-space keys, state-changing ops only —
+              // instead of the whole workspace firehose filtered client-side.
+              // An idle board's tick is now an empty page (seq still advances).
+              scope: {
+                prefixes: ['el:', `_canvas/${cid}/`],
+                ops: SHOW_LINK_EDGES ? ['write', 'supersede', 'link', 'unlink'] : ['write', 'supersede'],
+              },
+            },
           );
           liveCursor = res.seq;
           const elKeys = new Set<string>();
@@ -1241,10 +1377,18 @@ export function startLiveSync(cid: string): void {
           let edgesDirty = false;
           for (const ev of res.events ?? []) {
             if (ev.op === 'link' || ev.op === 'unlink') {
-              edgesDirty = true;
+              // Link events now carry endpoints and arrive pre-scoped to this
+              // slice (key OR `to` matches) — with projection on, that means
+              // our edge set may be stale; with it off they don't render.
+              if (SHOW_LINK_EDGES) edgesDirty = true;
               continue;
             }
+            // Belt-and-braces vs an older gateway: reads are not state changes.
+            if (ev.op !== 'write' && ev.op !== 'supersede') continue;
             if (!ev.key) continue;
+            // Our own flushes echo straight back through the feed — skip
+            // them; the outbox seeds already hold exactly what we wrote.
+            if (outbox.wroteRecently(ev.key)) continue;
             if (ev.key.startsWith(`_canvas/${cid}/edge:`)) edgesDirty = true;
             else if (ev.key.startsWith(`_canvas/${cid}/el:`)) placeKeys.add(ev.key);
             else if (ev.key.startsWith('el:')) elKeys.add(ev.key);
@@ -1267,7 +1411,7 @@ export function startLiveSync(cid: string): void {
         }
       } catch { /* offline — retry next tick */ }
     }
-    setTimeout(() => void tick(), 6000);
+    setTimeout(() => void tick(), Date.now() - lastActivity < 120_000 ? 6000 : 30_000);
   };
   setTimeout(() => void tick(), 6000);
 }

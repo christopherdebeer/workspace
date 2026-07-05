@@ -323,6 +323,23 @@ export interface TrajectoryEvent {
   key: string | null;
   at: string;
   seq: number;
+  /**
+   * Edge endpoints, present on `link`/`unlink` events (ADR-0055): `key` is the
+   * edge's `from`. With endpoints on the event, a scoped consumer can judge
+   * relevance directly instead of refetching the whole link set.
+   */
+  rel?: string;
+  to?: string;
+}
+
+/**
+ * Server-side slice of the change feed (ADR-0055): a surface pays for its
+ * slice, not the workspace. `prefixes` match the event key — and, for
+ * link/unlink, the `to` endpoint too, so edges INTO the slice are in scope.
+ */
+export interface ChangesScope {
+  prefixes?: string[];
+  ops?: TrajectoryEvent['op'][];
 }
 
 /**
@@ -1236,6 +1253,12 @@ export interface SupersedeOptions {
 export interface ObservedState {
   put(input: WriteInput, identity?: Identity): Promise<Entry>;
   get(scope: string, key: string, identity?: Identity): Promise<Entry | null>;
+  /** Batched, TOUCH-FREE entry read (ADR-0055 `include:'entries'`): a change-feed
+   *  page inlining its post-write facts is a projection, not attention — no read
+   *  touch is recorded (ADR-0050: rendering must not inflate salience). Superseded
+   *  entries return wrapped (the `_meta.superseded` marker IS the tombstone);
+   *  absent/expired keys map to null. */
+  getMany(scope: string, keys: string[]): Promise<Record<string, Entry | null>>;
   read(scope: string, opts?: ReadOptions, identity?: Identity): Promise<ReadResult>;
   /**
    * Apply salience tiering + elision to an already-scored set of entries. Lets a
@@ -1264,8 +1287,10 @@ export interface ObservedState {
    *  Salience-ranked; ordered extensional membership (by decoration `seq`) is a follow-on. */
   members(scope: string, key: string, opts?: { typeRules?: Record<string, TypeRules> }): Promise<MembersResult>;
   /** Tail the trajectory from a sequence number — the change feed. `'head'` returns just the current seq (no events), so tailing starts in one call.
-   *  `limit` pages FORWARD from sinceSeq; `last` keeps the NEWEST n instead (still ascending) — the "recent activity" window (ADR-0048). */
-  changes(scope: string, sinceSeq: number | 'head', limit?: number, last?: number): Promise<ChangesResult>;
+   *  `limit` pages FORWARD from sinceSeq; `last` keeps the NEWEST n instead (still ascending) — the "recent activity" window (ADR-0048).
+   *  `filter` (ADR-0055) drops out-of-scope events server-side BEFORE windowing, so `last: n` means "the newest n RELEVANT events";
+   *  the returned head `seq` stays global, so an empty filtered page + advanced seq is progress, not silence. */
+  changes(scope: string, sinceSeq: number | 'head', limit?: number, last?: number, filter?: ChangesScope): Promise<ChangesResult>;
   /** Derived maintenance view — the just-in-time cron, as a read. */
   attention(scope: string, opts?: AttentionOptions): Promise<AttentionResult>;
   /** Retire `key` by pointing it at successor `by` (or just marking it). */
@@ -1544,6 +1569,22 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return wrap(rec, now.getTime());
     },
 
+    async getMany(scope: string, keys: string[]): Promise<Record<string, Entry | null>> {
+      if (!keys.length) return {};
+      const nowMs = Date.now();
+      // One signals pass for the whole batch — wrap would otherwise rescan the
+      // scope per key. Touch-free by design (see the interface note).
+      const signals = await signalsFor(scope, nowMs, s.windowMs);
+      const out: Record<string, Entry | null> = {};
+      await Promise.all(
+        keys.map(async (key) => {
+          const rec = await store.get(scope, key);
+          out[key] = rec && isTimerLive(rec, nowMs) ? await wrap(rec, nowMs, signals) : null;
+        }),
+      );
+      return out;
+    },
+
     shape(entries: Record<string, Entry>, opts?: ReadOptions): ReadResult {
       // Re-tiers an already-scored set, so a lens here only adjusts thresholds
       // (it can't recompute scores without the scope's signals). Being scopeless,
@@ -1638,7 +1679,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Linking is attention on the source fact — both the write-ledger event
       // (for `changes`) and the touch counter (for `standing`, ADR-0050).
       const seq = await store.nextSeq(scope);
-      await store.appendTrajectory({ op: 'link', scope, key: from, at: edge.createdAt, seq });
+      await store.appendTrajectory({ op: 'link', scope, key: from, rel, to, at: edge.createdAt, seq });
       await store.recordTouch(scope, from, actorOf(identity), 'write', bucketOf(now.getTime()));
       // Endpoint hints: dangling edges stay allowed, but the writer should not
       // have to wait for a tending pass to learn it just made one.
@@ -1656,7 +1697,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       assertEdgePart('to', to);
       await store.deleteEdge(scope, from, rel, to);
       const seq = await store.nextSeq(scope);
-      await store.appendTrajectory({ op: 'unlink', scope, key: from, at: new Date().toISOString(), seq });
+      await store.appendTrajectory({ op: 'unlink', scope, key: from, rel, to, at: new Date().toISOString(), seq });
       return { ok: true };
     },
 
@@ -1772,15 +1813,25 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       return { key, membership: 'extensional', order: ordered ? 'seq' : 'salience', members };
     },
 
-    async changes(scope, sinceSeq, limit?, last?): Promise<ChangesResult> {
+    async changes(scope, sinceSeq, limit?, last?, filter?): Promise<ChangesResult> {
       const head = await store.currentSeq(scope);
       // 'head' = "where do I start tailing from?" — answered without paying
       // for (or wading through) the scope's whole recent history.
       if (sinceSeq === 'head') return { events: [], seq: head };
+      // ADR-0055: scope the feed server-side, BEFORE windowing — `last: n`
+      // means "the newest n relevant events". A key prefix matches the event
+      // key, or (link/unlink) the `to` endpoint — edges INTO the slice count.
+      const inScope = (e: TrajectoryEvent): boolean => {
+        if (filter?.ops?.length && !filter.ops.includes(e.op)) return false;
+        if (filter?.prefixes?.length) {
+          return filter.prefixes.some((p) => (e.key !== null && e.key.startsWith(p)) || (e.to !== undefined && e.to.startsWith(p)));
+        }
+        return true;
+      };
       // The trajectory is TTL-bounded, so the partition stays small; seq rises
       // with time, so time-ordered events are seq-ordered too.
       const events = (await store.recentTrajectory(scope, 0))
-        .filter((e) => e.seq > sinceSeq)
+        .filter((e) => e.seq > sinceSeq && inScope(e))
         .sort((a, b) => a.seq - b.seq);
       // `limit` pages FORWARD (tailing); `last` keeps the NEWEST n, still
       // ascending — the "recent activity" window (ADR-0048).

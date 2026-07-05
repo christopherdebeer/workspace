@@ -9,6 +9,7 @@
  */
 import { saveCanvas, unpinElements } from './network/storage.ts';
 import { deleteSelection, duplicateEl, inlineEdit, reorder } from './cmd-palette/menu-item-helpers.ts';
+import { plainSnippet } from './text.ts';
 import type { CanvasElement, CanvasController } from '../types.ts';
 
 function row(label: string, icon: string, onTap: (ev: Event) => void, danger = false): HTMLElement {
@@ -48,9 +49,14 @@ function buildElementActions(el: CanvasElement, controller: CanvasController, do
   } else {
     const anyEl = el as unknown as Record<string, unknown>;
     const icon = (anyEl._factIcon as string) ?? '';
-    const title = (anyEl._factTitle as string) ?? (typeof el.content === 'string' ? el.content.split('\n')[0].slice(0, 48) : el.id);
+    const title = (anyEl._factTitle as string) ?? (plainSnippet(el.content, 48) || el.id);
     const key = (anyEl._factKey as string) ?? `el:${el.id}`;
-    head.innerHTML = `<strong>${icon ? icon + ' ' : ''}${title}</strong><code>${key}</code>`;
+    // Title/key are fact content (often agent-authored) — never innerHTML.
+    const strong = document.createElement('strong');
+    strong.textContent = `${icon ? icon + ' ' : ''}${title}`;
+    const code = document.createElement('code');
+    code.textContent = key;
+    head.append(strong, code);
     if (anyEl._factHref) {
       const a = document.createElement('a');
       a.href = String(anyEl._factHref);
@@ -104,21 +110,28 @@ function buildElementActions(el: CanvasElement, controller: CanvasController, do
     summary.textContent = 'Appearance';
     details.appendChild(summary);
 
-    // Type: a labeled select over the native types only — never offered for
-    // fact cards (their type is the substrate's, not the board's).
+    // Type: the FULL render vocabulary — board-native types plus every
+    // registered renderer (mermaid, machine, view, surface, …), not the
+    // legacy four. Never offered for fact cards (their type is the
+    // substrate's, not the board's).
     const isFactCard = !!(el as unknown as Record<string, unknown>)._factCard;
     if (!isFactCard) {
       const typeWrap = document.createElement('label');
       typeWrap.className = 'cm-field';
       typeWrap.textContent = 'Type';
       const typeSel = document.createElement('select');
-      for (const t of ['text', 'markdown', 'html', 'img']) {
+      const base = ['text', 'markdown', 'html', 'img'];
+      const registered: string[] = ((controller as any).elementRegistry?.listTypes?.() ?? [])
+        .filter((t: string) => !base.includes(t) && t !== 'fact' && t !== 'edit-prompt');
+      const types = [...base, ...registered.sort()];
+      if (!types.includes(el.type)) types.unshift(el.type); // current type always listed
+      for (const t of types) {
         const o = document.createElement('option');
         o.value = t;
         o.textContent = t;
         typeSel.appendChild(o);
       }
-      typeSel.value = ['text', 'markdown', 'html', 'img'].includes(el.type) ? el.type : 'markdown';
+      typeSel.value = el.type;
       typeSel.onchange = () => {
         el.type = typeSel.value;
         controller.updateElementNode(controller.elementNodesMap[el.id], el, el.id === controller.selectedElementId);

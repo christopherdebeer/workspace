@@ -148,3 +148,54 @@ header .summary { margin: 0.3rem 0 0; color: var(--faint); }
 .agent-out { margin-top: 0.5rem; }
 .agent-out:empty { display: none; }
 .vw-attrib { font-size: 0.72rem; color: var(--faint); margin-top: 0.5rem; }
+
+/* ── ADR-0059: output cells + admonitions (mirror of CRITICAL_CSS — that
+   inline block is what actually ships; keep both in step) ─────────────── */
+.md-fence[class*=dir-]{border-radius:8px;border:1px solid var(--line);border-left-width:4px;padding:.55rem .9rem}
+.dir-warn{border-left-color:#c78a1d;background:#fdf7ea}
+.dir-error{border-left-color:#b5523c;background:#fbf0ed}
+.dir-info{border-left-color:#3b6ea5;background:#eef3f9}
+.dir-success,.dir-note{border-left-color:var(--accent);background:#eef5f0}
+.dir-box{border-left-color:var(--line)}
+pre.fence-output{background:#fbfbf6;border-style:dashed;position:relative;margin-top:-.35rem}
+pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:block;font:600 .68rem ui-monospace,Menlo,monospace;color:var(--faint);letter-spacing:.04em;margin-bottom:.35rem}
+#lit-save-dot{position:fixed;right:.8rem;bottom:.8rem;z-index:60;font:600 .7rem ui-monospace,Menlo,monospace;padding:.2rem .55rem;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--faint);opacity:0;transition:opacity .2s;pointer-events:none}
+#lit-save-dot[data-state="saving"]{opacity:1;color:#8a6d1a;border-color:#e3d3a1}
+#lit-save-dot[data-state="failed"]{opacity:1;color:#b5523c;border-color:#e0b4a8}
+#lit-save-dot[data-state="saved"]{opacity:1;color:var(--accent)}
+.block-output{border-left:2px dashed var(--line);padding-left:.8rem;margin-top:-.3rem}
+.block-out-prov{font:600 .68rem ui-monospace,Menlo,monospace;color:var(--faint);letter-spacing:.04em}
+.block-out-prov a{color:var(--faint)}
+/* ADR-0061 garden mechanics */
+.wikilink-stub{border-bottom-style:dashed;border-bottom-color:#b5523c;color:#8a4a3a}
+.toc{display:grid;gap:.15rem;margin:.6rem 0;padding:.5rem .8rem;border:1px solid var(--line);border-radius:8px}
+.toc a{text-decoration:none}.toc-h2{padding-left:.9rem}.toc-h3{padding-left:1.8rem}
+.embed-search{border:1px solid var(--line);border-radius:8px;padding:.5rem .8rem;margin:.6rem 0;display:grid;gap:.25rem}
+.search-hit a{text-decoration:none}.search-type{color:var(--faint);font-size:.78rem}
+.embed-transclude{border-left:2px solid var(--accent);padding-left:.9rem;margin:.6rem 0}
+.waiting .wikilink-stub{text-decoration:none}
+.appears-in{font-size:.78rem;color:var(--faint);margin:.3rem 0 .6rem}
+/* ADR-0063: the floating block menu (dotlit's gem, verbatim anatomy) */
+.block{position:relative}
+.block.selected{outline:1.5px solid var(--line);outline-offset:4px;border-radius:6px}
+.block-menu{position:absolute;top:.2rem;bottom:.2rem;left:0;right:0;display:flex;align-items:flex-end;pointer-events:none;z-index:40}
+.bm-items{position:sticky;bottom:45%;display:flex;justify-content:flex-end;width:100%;gap:.35rem;padding-right:.1rem;pointer-events:none}
+.block-menu button{pointer-events:all;width:2.15em;height:2.15em;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--ink,#1c1c1a);font-size:.9rem;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 5px rgba(51,46,35,.18);cursor:pointer;padding:0}
+.block-menu button.bm-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.insert-picker{display:grid;gap:.3rem;margin:.4rem 0;padding:.55rem;border:1px solid var(--line);border-radius:8px;background:#fff}
+.insert-picker input{border:1px solid var(--line);border-radius:6px;padding:.45rem .6rem;font:inherit;width:100%;box-sizing:border-box}
+.picker-hit{display:grid;gap:.05rem;text-align:left;border:0;background:none;padding:.35rem .3rem;border-radius:6px;cursor:pointer;font:inherit}
+.picker-hit:hover{background:var(--paper,#fbfbf8)}
+.picker-title{font-weight:600;font-size:.9rem}
+.picker-meta{color:var(--faint);font-size:.72rem;font-family:ui-monospace,Menlo,monospace}
+/* ADR-0063: fence chips — the declaration visible, white-board restraint */
+.fence-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin:.5rem 0 0;font:600 .68rem ui-monospace,Menlo,monospace}
+.fence-chips+pre{margin-top:.25rem}
+.fchip{border:1px solid var(--line);border-left-width:3px;border-radius:5px;padding:.08rem .4rem;color:var(--faint);background:#fff}
+.fchip.fc-lang{color:var(--ink,#1c1c1a)}
+.fchip.fc-error{border-left-color:#b5523c!important;color:#b5523c}
+.fchip.fc-link{cursor:pointer;text-decoration:underline dotted}
+/* ADR-0063 gem 2: [[ autocomplete popover under the editor textarea */
+.wta{position:relative}
+.wta textarea{width:100%;box-sizing:border-box}
+.wta-pop{position:absolute;left:0;right:0;top:100%;z-index:50;margin-top:.2rem;display:grid;gap:.2rem;padding:.4rem;border:1px solid var(--line);border-radius:8px;background:#fff;box-shadow:0 4px 16px rgba(51,46,35,.14);max-height:15rem;overflow:auto}

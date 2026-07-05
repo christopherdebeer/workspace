@@ -124,28 +124,22 @@ export function createGestureHelpers(controller: CanvasController) {
     controller.updateCanvasTransform();
   }
 
-  function applyMoveElement(ctx: GestureContext, ev: GestureEvent) {
-    const el = controller.findElementById(ev.elementId);
-    if (!el || el.static) return;
-    const dx = (ev.xy.x - ctx.draft.origin.x) / dpi();
-    const dy = (ev.xy.y - ctx.draft.origin.y) / dpi();
-    el.x = ctx.draft.startPos.x + dx;
-    el.y = ctx.draft.startPos.y + dy;
-    controller.updateElementNode(
-      controller.elementNodesMap[el.id],
-      el,
-      controller.isElementSelected(el.id),
-      true
-    );
-  }
-
   function applyResizeElement(ctx: GestureContext, ev: GestureEvent) {
     const el = controller.findElementById(ev.elementId!);
     if (!el || el.static) return;
-    const dx = (ev.xy.x - ctx.draft.resize!.startX) / dpi();
-    const dy = (ev.xy.y - ctx.draft.resize!.startY) / dpi();
-    el.width = Math.max(20, ctx.draft.resize!.startW + dx);
-    el.height = Math.max(20, ctx.draft.resize!.startH + dy);
+    const r = ctx.draft.resize!;
+    const s = el.scale || 1;
+    const dx = (ev.xy.x - r.startX) / dpi();
+    const dy = (ev.xy.y - r.startY) / dpi();
+    el.width = Math.max(20, r.startW + dx / s);
+    el.height = Math.max(20, r.startH + dy / s);
+    // Anchor the TOP-LEFT corner: x,y are the element CENTRE, so a bare
+    // width/height change grew the box symmetrically around the middle —
+    // "it moves while I resize". Shift the centre by half the growth.
+    const cx = (r as { startCx?: number }).startCx;
+    const cy = (r as { startCy?: number }).startCy;
+    if (typeof cx === 'number') el.x = cx + (s * (el.width - r.startW)) / 2;
+    if (typeof cy === 'number') el.y = cy + (s * (el.height - r.startH)) / 2;
     const node = controller.elementNodesMap[el.id];
     controller.updateElementNode(
       node,
@@ -154,10 +148,23 @@ export function createGestureHelpers(controller: CanvasController) {
       true
     );
     // --- keep model dimensions in sync with flowed DOM height --------------
-    requestAnimationFrame(() => {          // run after the browser paints
+    // LEGACY flowed types only (text/markdown/html): their content reflows and
+    // the box should hug it. Registry views (mermaid, machine, view tiles…)
+    // size themselves FROM el.height — measuring them back collapsed the box
+    // to the content's own height (sub-pixel for an empty svg): the shrinking
+    // mermaid node. One measurement per frame, last-move-wins.
+    if (!['text', 'markdown', 'html'].includes(String(el.type))) return;
+    const n = node as HTMLElement & { _measureRaf?: number };
+    if (n._measureRaf) cancelAnimationFrame(n._measureRaf);
+    n._measureRaf = requestAnimationFrame(() => {   // run after the browser paints
+      n._measureRaf = 0;
       const contentBox = node.querySelector('.content') || node;
       if (!contentBox) return;
-      el.height = contentBox.clientHeight / (el.scale || 1);
+      const measured = contentBox.clientHeight / (el.scale || 1);
+      if (measured >= 20) {
+        el.height = measured;
+        if (typeof cy === 'number') el.y = cy + ((el.scale || 1) * (el.height - r.startH)) / 2;
+      }
     });
   }
 
@@ -232,56 +239,6 @@ export function createGestureHelpers(controller: CanvasController) {
     });
     controller.updateGroupBox();
     controller.requestEdgeUpdate();
-  }
-
-    /* ---------------- group resize (single-handle drag) ---------------- */
-  function applyGroupResize(ctx: GestureContext, ev: GestureEvent) {
-    const { resize, startPositions } = ctx.draft;  if (!resize) return;
-    const dpi  = () => controller.viewState.scale || 1;
-    const dx   = (ev.xy.x - resize.startX) / dpi();
-    const dy   = (ev.xy.y - resize.startY) / dpi();
-
-    /* proportional factors per axis — relative to the GESTURE-START box.
-       (The old code multiplied el.scale by the factor on EVERY pointermove,
-       compounding it exponentially through a single drag.) A degenerate
-       start box (startW/H ≈ 0) would make the ratio itself explode. */
-    const sx = (Math.max(resize.startW, 1) + dx) / Math.max(resize.startW, 1);
-    const sy = (Math.max(resize.startH, 1) + dy) / Math.max(resize.startH, 1);
-
-    controller.selectedElementIds.forEach(id => {
-      const el    = controller.findElementById(id);
-      const start = startPositions?.get(id);
-      if (!el || !start) return;
-      el.x     = resize.cx! + (start.x - resize.cx!) * sx;
-      el.y     = resize.cy! + (start.y - resize.cy!) * sy;
-      el.scale = clampElementScale((start.scale || 1) * Math.max(sx, sy), el, start.scale || 1);
-    });
-    controller.requestRender();
-  }
-
-  /* --------------- group scale (diagonal ↕ handle) ------------------- */
-  const applyGroupScale = applyGroupResize;   /* identical behaviour   */
-
-  /* ---------------- group rotate (ring handle) ----------------------- */
-  function applyGroupRotate(ctx: GestureContext, ev: GestureEvent) {
-    const { rotate } = ctx.draft;              if (!rotate) return;
-    const a1 = Math.atan2(ev.xy.y - rotate.center.y,
-                          ev.xy.x - rotate.center.x);
-    const startAng = (rotate as any).startAng || 0;
-    const dA = a1 - startAng;           // radians
-
-    controller.selectedElementIds.forEach(id => {
-      const el = controller.findElementById(id);
-      if (!el) return;
-      const dx = el.x - rotate.center.x;
-      const dy = el.y - rotate.center.y;
-      const rx =  dx * Math.cos(dA) - dy * Math.sin(dA);
-      const ry =  dx * Math.sin(dA) + dy * Math.cos(dA);
-      el.x      = rotate.center.x + rx;
-      el.y      = rotate.center.y + ry;
-      el.rotation = (el.rotation || 0) + dA*180/Math.PI;
-    });
-    controller.requestRender();
   }
 
   function applyGroupPinch(ctx: GestureContext, ev: GestureEvent) {
@@ -359,62 +316,30 @@ export function createGestureHelpers(controller: CanvasController) {
     }
   }
 
+  /** ONE selection policy: tap replaces, a modifier key adds (HCI review
+   *  §1.2 — the FSM path used to hardcode additive-toggle while the palette
+   *  replaced, so the same tap meant different things by input path). The
+   *  controller's selectElement is the single implementation — group
+   *  expansion, group box, CRDT selection and the sheet all hang off it. */
   function selectElement(_ctx: GestureContext, ev: GestureEvent) {
     if (!ev.elementId) return;
-
-    const isTouch = ev.ev.pointerType === 'touch';
-    const inSet = controller.selectedElementIds.has(ev.elementId);
-    const additive = true; // isTouch && controller.selectedElementIds.size > 0;
-    console.log("[debug multiselect]", { isTouch, inSet, additive, el: ev.elementId, sel: controller.selectedElementIds });
-
-    /* ── toggle or single-select ─────────────────── */
-    if (additive) {
-      if (inSet) controller.selectedElementIds.delete(ev.elementId);
-      else controller.selectedElementIds.add(ev.elementId);
-    } else {
-      controller.selectedElementIds.clear();
-      controller.selectedElementIds.add(ev.elementId);
-    }
-
-    (controller.crdt as any).updateSelection?.(controller.selectedElementIds)
-
-    controller.requestRender();
+    const raw = ev.ev as (PointerEvent | undefined);
+    const additive = !!(raw && (raw.shiftKey || raw.metaKey || raw.ctrlKey));
+    controller.selectElement(ev.elementId, additive);
+    // Selecting an element dismisses any open edge/frame inspector. The FSM's
+    // inline action did this via emitDeselect, but withConfig replaces it
+    // with THIS helper — so the dismissal must live here too.
+    try { window.dispatchEvent(new CustomEvent('parc:canvas-deselect')); } catch { /* non-DOM */ }
   }
 
   function clearSelection() {
     controller.clearSelection();
+    try { window.dispatchEvent(new CustomEvent('parc:canvas-deselect')); } catch { /* non-DOM */ }
   }
 
   function spawnNewElementAtTap(_ctx: GestureContext, evt: GestureEvent) {
     const { x, y } = controller.screenToCanvas(evt.xy.x, evt.xy.y);
     controller.createNewElement(x, y, 'markdown', '');
-  }
-
-  function applyPinchElement(ctx: GestureContext, ev: GestureEvent) {
-    const pts = Object.values(ev.active || {});
-    if (pts.length !== 2) return;
-    const [p1, p2] = pts;
-    const newDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const rawFactor = pinchFactor(newDist, ctx.draft.startDist);
-
-    const el = controller.findElementById(ctx.draft.id!);
-    if (!el) return;
-
-    /* scale & move — bounded, and the position uses the EFFECTIVE factor so
-       the element doesn't fly away once the scale clamp engages */
-    const s0 = ctx.draft.startScale! || 1;
-    el.scale = clampElementScale(s0 * rawFactor, el, s0);
-    const factor = el.scale / s0;
-    el.x = ctx.draft.center!.x + (ctx.draft.startCx! - ctx.draft.center!.x) * factor;
-    el.y = ctx.draft.center!.y + (ctx.draft.startCy! - ctx.draft.center!.y) * factor;
-
-    /* rotation */
-    const a0 = ctx.draft.startAngle!;
-    const a1 = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-    const startRotation = ctx.draft.rotate?.startRotation ?? 0;
-    el.rotation = startRotation + ((a1 - a0) * 180 / Math.PI);
-
-    controller.updateElementNode(controller.elementNodesMap[el.id], el, true);
   }
 
   function startTempLine(ctx: GestureContext, ev: GestureEvent) {
@@ -556,14 +481,10 @@ export function createGestureHelpers(controller: CanvasController) {
     persistViewState,
 
     /* single element */
-    applyMoveElement,
     applyResizeElement,
     applyRotateElement,
     applyScaleElement,
     applyReorderElement,
-
-    /* pinch */
-    applyPinchElement,
 
     /* edges */
     startTempLine,
@@ -574,9 +495,6 @@ export function createGestureHelpers(controller: CanvasController) {
     /* groups */
     applyGroupMove,
     applyGroupPinch,
-    applyGroupResize,
-    applyGroupScale,
-    applyGroupRotate,
 
     /* selection */
     selectElement,

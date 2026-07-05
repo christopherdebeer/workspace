@@ -109,13 +109,31 @@ export interface FactSuggestion {
   searchText: string;
 }
 
-export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion;
+/** The "More from workspace…" paging row at the end of fact results. */
+export interface MoreSuggestion {
+  kind: 'more';
+  label: string;
+  searchText: string;
+}
+
+/** A `type:` token completion — selecting it completes the filter in place. */
+export interface TypeSuggestion {
+  kind: 'typetoken';
+  name: string;
+  icon: string;
+  label: string;
+  searchText: string;
+}
+
+export type SuggestionItem = CommandItem | ElementSuggestion | FactSuggestion | MoreSuggestion | TypeSuggestion;
 
 export interface MenuItem {
   label: string | ((controller: CanvasController, config?: any) => string);
   icon?: string;
   category?: string;
   shortcut?: string;
+  /** Space-separated synonyms folded into palette search ("remove erase"). */
+  aliases?: string;
   children?: MenuItem[];
   action?: (controller: any, input?: any) => void | Promise<void> | any;
   needsInput?: string;
@@ -123,12 +141,12 @@ export interface MenuItem {
   enabled?: (controller: CanvasController) => boolean;
 }
 
-// CRDT types
+// The substrate write seam (kept under its historical CRDT name).
 export interface CrdtAdapter {
-  onUpdate(callback: (event: any) => void): void;
-  onPresenceChange(callback: (awareness: any[]) => void): void;
-  elements: any;
-  edges: any;
+  updateElement(id: string, data: any): void;
+  updateEdge(id: string, data: any): void;
+  updateView(data: any): void;
+  updateSelection(data: Set<string>): void;
 }
 
 // Controller interface (partial - covers what's used in the files we're migrating)
@@ -162,7 +180,7 @@ export interface CanvasController {
   toggleStatic(element: CanvasElement): void;
   openEditModal(element: CanvasElement): void;
   createEditElement(event: Event, element: CanvasElement, property: string): void;
-  selectElement(id: string): void;
+  selectElement(id: string, additive?: boolean): void;
   clearSelection(): void;
   handleDrillIn(element: CanvasElement): void;
   findElementById(id: string): CanvasElement | undefined;

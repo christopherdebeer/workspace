@@ -38,6 +38,24 @@ npm run poison              # a fact persisted with scale 481 / width 1e7 render
 `drive.mjs`/`poison.mjs` use the Playwright-managed Chromium; point `CHROME`
 at a binary to override (e.g. `CHROME=/opt/pw-browsers/chromium-1194/chrome-linux/chrome`).
 
+### Live mode (real substrate, no stub)
+
+The scripts above run against `kernel-stub.js` — deterministic, offline, safe.
+`live.mjs` is the other half: it injects a real token where the kernel looks
+for one (`localStorage parc.session.tokens`) and opens the DEPLOYED cell, so
+dispatch → gateway → DynamoDB → live-sync are all real:
+
+```sh
+node live.mjs parcland --shot live.png       # token from /tmp/parc-token.json
+PARC_TOKEN=<access-token> node live.mjs myboard
+```
+
+What passes depends on the token's scope (a bare `read` token loads the board
+but `workspace.changes` needs `read:workspace` — the denial is itself visible
+here). Caveat: sandboxed environments whose egress proxy resets browser TLS
+(e.g. some remote agent containers) can't run this; API-level validation via
+`curl`/MCP still can.
+
 Expected (fixed) output: group-pinch scale stays ≤ `maxScaleFor(el)`
 (paint side ≤ 16,384px), the coincident-start pinch lands ~10× not ~480×, and
 the poisoned element renders at `scale: 1, width: 16384`.
@@ -72,6 +90,24 @@ parked (with all CSS animations) while `body.gesturing`.
 In-stroke A/B on the real board, one continuous 8s pan (`node stroke.mjs`):
 layout time −68%, style-recalc time −92%, script −59%, total main-thread task
 time −54% (≈50% → ≈23% duty cycle).
+
+## Round 3: the ZOOM path + edge interaction
+
+The pan fixes above didn't cover a sustained zoom, which has its own per-frame
+costs: `--zoom` consumed by `calc()` padding/border re-lays-out every element
+on every frame the scale moves; the cull early-exit compared `W === last.W`,
+which never matches mid-zoom, so the full cull pass ran per frame; and
+`applyCanvasPinch → screenToCanvas` read `offsetLeft` per pointermove (a
+forced layout at 120Hz). Fixes: `--zoom` writes quantized to ~5% steps with a
+trailing exact settle, a containment-based cull window that holds under zoom,
+guarded cull style writes, and the canvas offset cached.
+
+Interaction fixes verified by `verify-edge-fixes.mjs` (needs `npm run build`
++ `npm run serve` first): inferred `similarTo` edges draw as the faint
+constellation (1px, translucent, no arrowhead, narrower hit band) instead of
+swamping the board; the edge inspector names both endpoints (tappable to
+focus); and a navigate-mode drag that starts on an edge's hit line pans the
+canvas instead of dying in `moveGroup`.
 
 Tools: `gen-pan.mjs` (build the pan page from the captured scene),
 `pan.mjs` (multi-stroke pan cost), `stroke.mjs` (single held stroke, the

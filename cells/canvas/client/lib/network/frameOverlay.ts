@@ -33,7 +33,6 @@ interface FrameFact { key: string; value?: FrameValue }
 
 let frames: FrameFact[] = [];
 let installed = false;
-let rafPending = false;
 // Until the client has actually fetched this board's frames, the SSR-painted
 // #frames-layer is the source of truth — a redraw with the still-empty `frames`
 // would wipe it (the flash: SSR frames vanish, then reappear after the query).
@@ -81,17 +80,23 @@ export async function refreshFrameOverlay(): Promise<void> {
   drawFrameOverlay();
 }
 
+let drawTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleDraw(): void {
   // Don't let an element-move redraw wipe the SSR frames before we've loaded ours.
-  if (!framesFetched || rafPending) return;
-  rafPending = true;
-  requestAnimationFrame(() => { rafPending = false; drawFrameOverlay(); });
+  if (!framesFetched || drawTimer) return;
+  // Trailing throttle, not per-frame: the mutation observer fires on every
+  // element-style write, and a full placedOf() + innerHTML SVG reparse at
+  // 60Hz during a drag was a per-frame O(V) cost the culling can't see.
+  drawTimer = setTimeout(() => {
+    drawTimer = undefined;
+    requestAnimationFrame(drawFrameOverlay);
+  }, 150);
 }
 
 /* ── editor ──────────────────────────────────────────────────────────────── */
 
 function field(label: string, inner: string): string {
-  return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${inner}</label>`;
+  return `<label><span style="color:#85795f;font-size:11px">${label}</span>${inner}</label>`;
 }
 
 async function saveFrame(f: FrameFact, patch: Partial<FrameValue>): Promise<void> {
@@ -128,7 +133,7 @@ export function openFrameEditor(f: FrameFact): void {
   meta.style.cssText = 'color:#a8a89e;font-size:11px;white-space:nowrap';
   const done = document.createElement('button');
   done.textContent = 'Done';
-  done.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+  done.style.cssText = 'border:0;background:transparent;color:#85795f;font:inherit;cursor:pointer;padding:4px 6px';
   done.addEventListener('click', () => clearInspector());
   head.append(title, meta, done);
   body.appendChild(head);
@@ -151,7 +156,8 @@ export function openFrameEditor(f: FrameFact): void {
   reframe.textContent = selCount ? `Set region to selection (${selCount})` : 'Set region to selection';
   reframe.disabled = !selCount;
   reframe.title = selCount ? '' : 'Select elements first, then re-open this frame';
-  reframe.style.cssText = `border:1px solid #2f6f4f;background:${selCount ? '#2f6f4f' : 'transparent'};color:${selCount ? '#fff' : '#2f6f4f'};border-radius:7px;padding:7px 12px;font:inherit;cursor:${selCount ? 'pointer' : 'default'};opacity:${selCount ? 1 : 0.45}`;
+  reframe.className = 'pc-btn';
+  if (!selCount) reframe.classList.replace('pc-btn', 'pc-btn-ghost');
   reframe.addEventListener('click', () => {
     const sel = [...(cc()?.selectedElementIds ?? [])].map((id: string) => `el:${id}`);
     if (!sel.length) { console.warn('[canvas] re-frame: nothing selected'); return; }
@@ -159,7 +165,7 @@ export function openFrameEditor(f: FrameFact): void {
   });
   const del = document.createElement('button');
   del.textContent = 'Delete';
-  del.style.cssText = 'border:1px solid #e6d6d6;background:#fff;color:#7a1f1f;border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer';
+  del.className = 'pc-btn-danger';
   del.addEventListener('click', () => {
     act('workspace.supersede', { key: f.key }).catch(() => undefined);
     frames = frames.filter((x) => x.key !== f.key);
@@ -186,7 +192,13 @@ export function installFrameOverlay(): void {
   void refreshFrameOverlay();
   const container = document.getElementById('canvas-container');
   if (container) {
-    new MutationObserver(scheduleDraw).observe(container, {
+    new MutationObserver((muts) => {
+      // The container's OWN style mutation is the camera transform — the
+      // frames layer rides the same transform (applyCanvasTransformNow), so a
+      // camera-only batch needs no geometry redraw. Only element changes do.
+      if (muts.every((m) => m.target === container && m.type === 'attributes')) return;
+      scheduleDraw();
+    }).observe(container, {
       attributes: true, attributeFilter: ['style'], childList: true, subtree: true,
     });
   }

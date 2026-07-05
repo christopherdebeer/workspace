@@ -6,13 +6,13 @@
   left: 50%;
   transform: translateX(-50%);
   width: 600px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  background: var(--pc-panel, #fdf9ef);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(51, 46, 35, 0.16);
   z-index: 1000;
   overflow: hidden;
   transition: all 0.2s ease;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--pc-border, #ddd2b8);
 }
 
 #cmd-palette.focused {
@@ -22,7 +22,7 @@
 /* Header */
 .cmd-header {
   padding: 8px 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--pc-border-soft, #ece4cf);
   display: none;
 }
 
@@ -30,39 +30,47 @@
    input, so there is one bottom surface instead of competing sheets. */
 .cmd-context {
   padding: 10px 14px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--pc-border-soft, #ece4cf);
   font: 13px/1.3 -apple-system, system-ui, sans-serif;
-  color: #1c1c1a;
+  color: var(--pc-ink, #332e23);
   display: grid;
   gap: 9px;
   max-height: 50vh;
   overflow-y: auto;
 }
-.cmd-context label { display: grid; gap: 3px; }
-.cmd-context .ctx-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.cmd-context label { display: grid; gap: 3px; min-width: 0; }
+/* minmax(0,1fr): inputs' intrinsic width otherwise forces the grid past the
+   sheet edge on narrow screens (the clipped "Deselect"). */
+.cmd-context .ctx-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.cmd-context .ctx-row > * { min-width: 0; }
 .cmd-context input,
 .cmd-context select {
   font: inherit;
   padding: 6px 8px;
-  border: 1px solid #e4e4dc;
+  border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 7px;
   background: #fff;
-  color: #1c1c1a;
+  color: var(--pc-ink, #332e23);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
-.cmd-context input[type="color"] { height: 32px; padding: 2px; }
+.cmd-context input[type="color"] { height: 32px; width: 56px; padding: 2px; }
 
 /* Frame tour — docked as a strip at the top of the palette (the one bottom
-   surface) instead of a floating pill. Tertiary: low-emphasis, lets the board
-   stay the focus. */
+   surface). TERTIARY: compact and dim, and it yields entirely while an
+   inspector owns the context slot — the frame editor was duplicating the
+   same label one panel below the tour bar in a double-height stack. */
 .cmd-frame-tour {
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 6px 10px;
-  border-bottom: 1px solid #f0f0f0;
-  font: 12px/1.2 -apple-system, system-ui, sans-serif;
-  color: #8a8a82;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--pc-border-soft, #efede8);
+  font: 11px/1.2 -apple-system, system-ui, sans-serif;
+  color: var(--pc-dim, #85795f);
 }
+#cmd-palette.inspecting .cmd-frame-tour { display: none; }
 .cmd-frame-tour .ft-label {
   flex: 1;
   text-align: center;
@@ -72,11 +80,11 @@
   color: #6a6a64;
 }
 .cmd-frame-tour .ft-nav {
-  border: 1px solid #e0e0d8;
-  background: #fff;
-  color: #3a3a36;
+  border: 1px solid var(--pc-border, #e3e0d7);
+  background: var(--pc-panel, #fff);
+  color: var(--pc-dim, #85795f);
   border-radius: 999px;
-  padding: 4px 10px;
+  padding: 3px 9px;
   font: inherit;
   cursor: pointer;
 }
@@ -113,7 +121,7 @@
   display: flex;
   align-items: center;
   padding: 10px 15px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--pc-border-soft, #ece4cf);
 }
 
 .cmd-icon {
@@ -129,7 +137,11 @@
 .pending .cmd-icon i:not(.fa-spinner) { display: none; }
 .pending .cmd-icon .fa-spinner { display: inline-flex; }
 
-#cmd-palette input {
+/* Scoped to the SEARCH line only — as `#cmd-palette input` this id-strength
+   rule bled into every inspector field (frame label, edge rel/width…):
+   borderless, 16px, transparent. The stacked panels looked unfinished
+   because their inputs were being unstyled by the palette. */
+#cmd-palette .cmd-wrapper input {
   flex: 1;
   border: none;
   outline: none;
@@ -156,9 +168,10 @@
   color: #333;
 }
 
-/* Suggestions list */
+/* Suggestions list — capped so the sheet can never eat the board; the
+   list scrolls inside itself. */
 .suggestions {
-  max-height: 350px;
+  max-height: min(320px, 38vh);
   overflow-y: auto;
   margin: 0;
   padding: 0;
@@ -178,11 +191,11 @@
 }
 
 .suggestion:hover {
-  background: #f5f5f5;
+  background: #f2ecdc;
 }
 
 .suggestion.active {
-  background: #f0f7ff;
+  background: rgba(46, 94, 67, 0.10);
 }
 
 .s-icon {
@@ -227,8 +240,8 @@
 }
 
 .cmd-shortcut kbd {
-  background: #f5f5f5;
-  border: 1px solid #ddd;
+  background: var(--pc-wash, #f6f5f1);
+  border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 3px;
   padding: 1px 5px;
   font-size: 12px;
@@ -236,8 +249,8 @@
 }
 
 .cmd-input kbd {
-  background: #f5f5f5;
-  border: 1px solid #ddd;
+  background: var(--pc-wash, #f6f5f1);
+  border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 3px;
   padding: 1px 5px;
   font-size: 12px;
@@ -246,8 +259,8 @@
 
 /* Footer */
 .cmd-footer {
-  padding: 8px 15px;
-  border-top: 1px solid #f0f0f0;
+  padding: 5px 12px;
+  border-top: 1px solid var(--pc-border-soft, #ece4cf);
   display: flex;
   gap: 1em;
   justify-content: space-between;
@@ -274,8 +287,8 @@
 }
 
 .cmd-tip kbd {
-  background: #f5f5f5;
-  border: 1px solid #ddd;
+  background: var(--pc-wash, #f6f5f1);
+  border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 3px;
   padding: 1px 5px;
   font-size: 11px;
@@ -284,7 +297,7 @@
 
 /* Awaiting input mode */
 #cmd-palette.awaiting .cmd-wrapper {
-  background-color: #fff8e1;
+  background-color: var(--pc-cream, #fdf6d8);
 }
 
 /* Responsive adjustments */
@@ -292,6 +305,11 @@
   #cmd-palette {
     width: 100vw;
     bottom: 0;
+    border-radius: 14px 14px 0 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
   }
   #cmd-palette .cmd-footer .mobile {
     display: flex;
@@ -324,4 +342,10 @@
 
 .cmd-footer .presence .total {
   margin-left: 0.2em;
+}
+.cmd-context input[type="checkbox"] {
+  accent-color: var(--pc-accent, #2e5e43);
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
 }

@@ -365,6 +365,11 @@ interface TypeDecl {
   /** The gateway-resolved Present facet (ADR-0012): `{icon,label,render}` — the
    *  legacy `{icon,titlePath}` normalised once, server-side. `label` is a path. */
   present?: { icon?: string; label?: string; render?: unknown };
+  /** ADR-0049 capability handlers as served by `$types` — `open` carries the
+   *  type's canonical route (e.g. machine: path "/m/${id}"). */
+  handlers?: { open?: Array<{ path?: string; href?: string }> };
+  /** The managing cell ("@owner/name") — open `path`s are routed on it. */
+  manager?: string;
 }
 
 let typeDecls: Record<string, TypeDecl> | null = null;
@@ -427,12 +432,21 @@ export function titleOf(e: FactEntry): string {
 
 export function hrefOf(e: FactEntry): string | null {
   const decl = typeDecls?.[e._meta?.type ?? ''];
-  if (decl?.href) {
-    const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
-    return decl.href
-      .replace(/\$\{key\}/g, encodeURIComponent(e.key))
-      .replace(/\$\{id\}/g, encodeURIComponent(id))
-      .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
+  const id = e.key.includes(':') ? e.key.slice(e.key.indexOf(':') + 1) : e.key.includes('/') ? e.key.slice(e.key.indexOf('/') + 1) : e.key;
+  const fill = (tpl: string): string => tpl
+    .replace(/\$\{key\}/g, encodeURIComponent(e.key))
+    .replace(/\$\{id\}/g, encodeURIComponent(id))
+    .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
+  if (decl?.href) return fill(decl.href);
+  // A type's declared `open` handler (ADR-0049, served in $types) is its
+  // canonical route — it was IGNORED here, so typed facts with real routes
+  // (machines: /m/${id} on @c15r/machine) fell through to the convention
+  // fallbacks, most degenerately "the board it's tagged onto".
+  const open = decl?.handlers?.open?.find((h) => h && (h.href || h.path));
+  if (open) {
+    if (open.href) return fill(open.href);
+    const m = /^@([^/]+)\/(.+)$/.exec(decl?.manager ?? '');
+    if (m && open.path) return cellUrl(m[1], m[2], fill(open.path));
   }
   // Convention fallbacks (the pre-_types routing). Origin-aware via cellUrl.
   const t = e._meta?.type ?? null;
@@ -451,6 +465,157 @@ export function hrefOf(e: FactEntry): string | null {
   const boardTag = tags.find((x) => x.startsWith('canvas:'));
   if (boardTag) return cellUrl(owner, 'canvas', `?canvas=${encodeURIComponent(boardTag.slice(7))}`);
   return null;
+}
+
+/* ── ADR-0053: the sync seam, Inc 1 — the Outbox ─────────────────────────
+ * Every tier-2 surface that writes facts needs the same machinery: canonical
+ * change detection, a debounced batch flush, retry with backoff, an echo
+ * window for change-feed self-suppression, and a priming buffer for writes
+ * issued mid-load. The canvas hand-rolled all of it in module-level maps and
+ * every seam was a data bug (cross-board supersede, the boot write storm,
+ * two-tab revision ping-pong, lost membership tags — see the ADR). These
+ * semantics are that battle-tested behavior, lifted verbatim. */
+
+/** Canonical JSON (recursively key-sorted). Insertion-ordered JSON serializes
+ *  the same logical value differently across sessions — two open tabs each saw
+ *  the other's facts as "changed" and rewrote them forever. */
+export function stableStringify(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val && typeof val === 'object' && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val);
+}
+
+export interface OutboxExtra { type?: string; tags?: string[] }
+export interface Outbox {
+  /** Queue a write. Deduped against the seed in canonical form — EXCEPT when
+   *  it carries tags: a tag-only change over an unchanged value is exactly
+   *  what "add an existing fact to a board" produces and must not be eaten. */
+  stage(key: string, value: unknown, extra?: OutboxExtra): void;
+  /** Record "this exact value is already persisted" (canonical form). Seed
+   *  with what a save WOULD write — seeding raw stored values makes every
+   *  legacy fact look changed on every load (the boot write storm). */
+  seed(key: string, value: unknown): void;
+  seededJson(key: string): string | undefined;
+  /** Was this key flushed by THIS outbox within the echo window? (Change-feed
+   *  events for it are our own echo — skip the refetch.) */
+  wroteRecently(key: string, windowMs?: number): boolean;
+  forget(key: string): void;
+  keys(): IterableIterator<string>;
+  /** Buffer writes during a load window, then REPLAY them through the dedupe
+   *  once seeds exist — render echoes no-op, user writes land. (Dropping them
+   *  instead silently lost additions made in the first seconds after open.) */
+  beginPriming(): void;
+  endPriming(): void;
+  priming(): boolean;
+  /** Scope switch (e.g. drill navigation): clear seeds/echoes — stale seeds
+   *  make the next diff supersede the PREVIOUS scope's facts. Pending writes
+   *  are kept: in-flight edits still belong to their keys. */
+  reset(): void;
+  flushNow(): Promise<void>;
+}
+
+export function createOutbox(
+  actFn: (target: string, input: Record<string, unknown>) => Promise<unknown>,
+  opts: {
+    via?: string;
+    flushDelayMs?: number;
+    echoWindowMs?: number;
+    onState?: (s: 'saving' | 'saved' | 'failed') => void;
+  } = {},
+): Outbox {
+  const via = opts.via ?? 'kernel-outbox';
+  const FLUSH_MS = opts.flushDelayMs ?? 400;
+  const ECHO_MS = opts.echoWindowMs ?? 45_000;
+  const seeded = new Map<string, string>();
+  const pending = new Map<string, { value: unknown } & OutboxExtra>();
+  const flushedAt = new Map<string, number>();
+  const primingBuffer = new Map<string, { value: unknown } & OutboxExtra>();
+  let priming = false;
+  let flushing = false;
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const schedule = (ms: number): void => {
+    if (timer) return;
+    timer = setTimeout(() => { timer = undefined; void flushNow(); }, ms);
+  };
+
+  function stage(key: string, value: unknown, extra?: OutboxExtra): void {
+    if (priming) { primingBuffer.set(key, { value, ...extra }); return; }
+    if (seeded.get(key) === stableStringify(value) && !extra?.tags) return;
+    pending.set(key, { value, ...extra });
+    schedule(FLUSH_MS);
+  }
+
+  async function flushNow(): Promise<void> {
+    if (flushing) { schedule(FLUSH_MS); return; }
+    if (!pending.size) return;
+    flushing = true;
+    opts.onState?.('saving');
+    let failed = false;
+    try {
+      // Concurrent — a serial loop holds the queue for the SUM of round-trips.
+      const batch = [...pending];
+      pending.clear();
+      const results = await Promise.allSettled(batch.map(async ([key, p]) => {
+        await actFn('workspace.remember', {
+          key,
+          value: p.value,
+          via,
+          ...(p.type ? { type: p.type } : {}),
+          ...(p.tags ? { tags: p.tags } : {}),
+        });
+        seeded.set(key, stableStringify(p.value));
+        flushedAt.set(key, Date.now());
+      }));
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          failed = true;
+          console.warn('[outbox] write failed', batch[i][0], r.reason);
+          // Re-queue unless a NEWER value is already pending — a throttled
+          // write (DynamoDB scaling) must retry, not vanish.
+          if (!pending.has(batch[i][0])) pending.set(batch[i][0], batch[i][1]);
+        }
+      });
+      // Prune stale echo records so the map doesn't grow with session length.
+      const cut = Date.now() - 2 * ECHO_MS;
+      for (const [k, t] of flushedAt) if (t < cut) flushedAt.delete(k);
+    } finally {
+      flushing = false;
+      opts.onState?.(failed ? 'failed' : 'saved');
+      if (failed) {
+        failures++;
+        schedule(Math.min(30_000, 2000 * 2 ** Math.min(failures - 1, 4)));
+      } else {
+        failures = 0;
+      }
+    }
+  }
+
+  return {
+    stage,
+    flushNow,
+    seed: (key, value) => { seeded.set(key, stableStringify(value)); },
+    seededJson: (key) => seeded.get(key),
+    wroteRecently: (key, windowMs = ECHO_MS) => Date.now() - (flushedAt.get(key) ?? 0) < windowMs,
+    forget: (key) => { seeded.delete(key); },
+    keys: () => seeded.keys(),
+    beginPriming: () => { priming = true; },
+    endPriming: () => {
+      priming = false;
+      const buffered = [...primingBuffer];
+      primingBuffer.clear();
+      for (const [key, p] of buffered) stage(key, p.value, p);
+    },
+    priming: () => priming,
+    reset: () => {
+      seeded.clear();
+      flushedAt.clear();
+      primingBuffer.clear();
+      priming = false;
+    },
+  };
 }
 
 /* ── theme tokens (one palette for userland) ────────────────────── */

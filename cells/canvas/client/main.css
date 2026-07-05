@@ -6,21 +6,36 @@ body {
     height: 100%;
     user-select: none;
     touch-action: none;
-    font-family: sans-serif;
-    background-color: white;
+    font-family: -apple-system, system-ui, sans-serif;
+    background-color: var(--pc-bg);
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    --highlight: #00aaff;
+    /* park tokens (docs/park-design-language.md) — one palette for every
+       piece of chrome, so the board reads as one surface when it all
+       stacks up: sheet + handles + toasts + tour + inspectors. */
+    /* The board is WHITE — color is spent on state (pine = action/selected,
+       terracotta = danger/fixed, gold = salience), never on ambience. */
+    --pc-bg: #ffffff;
+    --pc-panel: #ffffff;
+    --pc-wash: #f6f5f1;      /* chips, kbd, hover washes */
+    --pc-border: #e3e0d7;
+    --pc-border-soft: #efede8;
+    --pc-ink: #332e23;
+    --pc-dim: #85795f;
+    --pc-accent: #2e5e43;    /* pine */
+    --pc-danger: #b5523c;    /* terracotta */
+    --pc-cream: #fdf6d8;
+    --highlight: #2e5e43;
 }
 
 #canvas {
     position: relative;
     width: 100%;
     height: 100%;
-    background: white;
+    background: var(--pc-bg);
     cursor: grab;
     user-select: none;
     touch-action: none;
@@ -55,22 +70,38 @@ body {
     display: none;
     position: fixed;
     z-index: 3;
-    top: 1em;
-    left: 1em;
-    padding: 0.6em 1em;
-    font-size: 1em;
+    top: calc(52px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    padding: 6px 14px;
+    font: 600 12px/1.4 -apple-system, system-ui, sans-serif;
+    color: var(--pc-ink);
+    background: var(--pc-panel);
+    border: 1px solid var(--pc-border);
+    border-radius: 999px;
+    box-shadow: 0 1px 4px rgba(51, 46, 35, 0.12);
     cursor: pointer;
 }
 
+/* The mode pill — the one piece of state every gesture depends on, so it
+   must be LEGIBLE: pine-filled while editing, quiet paper while viewing. */
 #mode {
     position: fixed;
-    z-index: 2;
-    top: 0;
-    left: 0;
-    border: 0 none;
-    padding: 0.3em;
-    opacity: 0.5;
+    z-index: 3;
+    top: calc(10px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    padding: 6px 14px;
+    font: 600 12px/1.4 -apple-system, system-ui, sans-serif;
+    color: var(--pc-dim);
+    background: var(--pc-panel);
+    border: 1px solid var(--pc-border);
+    border-radius: 999px;
+    box-shadow: 0 1px 4px rgba(51, 46, 35, 0.12);
     cursor: pointer;
+}
+body:has(#canvas[mode="direct"]) #mode {
+    color: #fff;
+    background: var(--pc-accent);
+    border-color: var(--pc-accent);
 }
 
 /* While a pan/pinch is in flight the compositor is re-rasterising tiles —
@@ -141,8 +172,10 @@ body.gesturing #static-container * {
 
 .canvas-element[type="text"]>.content,
 .canvas-element[type="markdown"]>.content {
-    line-height: 1.2;
-    font-family: monospace;
+    line-height: 1.35;
+    color: var(--pc-ink);
+    /* sans body — mono is reserved for keys/targets (park rule) */
+    font-family: -apple-system, system-ui, sans-serif;
     margin: 0;
     height: auto;
     overflow: visible;
@@ -154,10 +187,10 @@ body.gesturing #static-container * {
 
 .canvas-element[type="edit-prompt"]>.content {
     z-index: 999;
-    border-color: grey;
+    border-color: var(--pc-border);
     box-sizing: border-box;
     overflow: auto;
-    background-color: white;
+    background-color: var(--pc-panel);
 }
 
 #canvas .canvas-element[type="img"]>.content {
@@ -206,16 +239,17 @@ body.gesturing #static-container * {
     border-radius: 50%;
     width: 1em;
     height: 1em;
-    box-sizing: border-box;
+    box-sizing: content-box;
     display: flex;
-    color: white;
+    color: var(--pc-ink);
     align-items: center;
     justify-content: center;
     mix-blend-mode: normal;
-
     font-size: 1em;
-    box-sizing: content-box;
     padding: 0.4em;
+    background: var(--pc-panel);
+    border: 1px solid var(--pc-border);
+    box-shadow: 0 1px 3px rgba(51, 46, 35, 0.18);
 }
 
 .resize-handle {
@@ -224,8 +258,7 @@ body.gesturing #static-container * {
 }
 
 .resize-handle i {
-    background: #00aaff;
-    cursor: nesw-resize;
+    cursor: nwse-resize;
 }
 
 .scale-handle {
@@ -234,7 +267,6 @@ body.gesturing #static-container * {
 }
 
 .scale-handle i {
-    background: #4ad36a;
     cursor: nwse-resize;
 }
 
@@ -245,7 +277,6 @@ body.gesturing #static-container * {
 }
 
 .rotate-handle i {
-    background: #ffa500;
     cursor: alias;
 }
 
@@ -255,7 +286,6 @@ body.gesturing #static-container * {
 }
 
 .reorder-handle i {
-    background: #e17c7c;
     cursor: row-resize;
 }
 
@@ -265,8 +295,6 @@ body.gesturing #static-container * {
 }
 
 .type-handle i {
-    background: transparent;
-    color: #ff4444;
     cursor: text;
 }
 
@@ -277,7 +305,9 @@ body.gesturing #static-container * {
 }
 
 .edge-handle i {
-    background: #555;
+    background: var(--pc-accent);
+    border-color: var(--pc-accent);
+    color: #fff;
     cursor: crosshair;
 }
 
@@ -288,7 +318,9 @@ body.gesturing #static-container * {
 }
 
 .create-handle i {
-    background: #555;
+    background: var(--pc-accent);
+    border-color: var(--pc-accent);
+    color: #fff;
     cursor: crosshair;
 }
 
@@ -368,10 +400,10 @@ body.gesturing #static-container * {
 }
 
 .modal-content {
-    background-color: #fefefe;
+    background-color: var(--pc-panel);
     margin: 5% auto;
     padding: 1em;
-    border: 1px solid #888;
+    border: 1px solid var(--pc-border);
     width: 80%;
     max-width: 600px;
     box-sizing: border-box;
@@ -414,14 +446,16 @@ body.gesturing #static-container * {
     flex: 1;
     padding: 0.5em;
     cursor: pointer;
-    background: #eee;
+    background: var(--pc-bg);
+    color: var(--pc-dim);
     border: none;
     font-size: 1em;
 }
 
 .modal-tabs button.active {
-    background: #fff;
-    border-bottom: 2px solid #00aaff;
+    background: var(--pc-panel);
+    color: var(--pc-ink);
+    border-bottom: 2px solid var(--pc-accent);
 }
 
 .modal-editor {
@@ -448,9 +482,36 @@ body.gesturing #static-container * {
     text-align: right;
 }
 
+.modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
 .modal-buttons button {
     padding: 0.5em 1em;
-    margin-left: 0.5em;
+    margin: 0;
+    cursor: pointer;
+    border: 1px solid var(--pc-border);
+    background: var(--pc-panel);
+    color: var(--pc-ink);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+}
+
+#modal-save {
+    border-color: var(--pc-accent);
+    background: var(--pc-accent);
+    color: #fff;
+}
+
+.versions-nav button {
+    border: 1px solid var(--pc-border);
+    background: var(--pc-panel);
+    color: var(--pc-dim);
+    border-radius: 7px;
     cursor: pointer;
 }
 
@@ -552,7 +613,7 @@ body.gesturing #static-container * {
     inset: 0;
     border: 1px solid var(--highlight);
     border-width: calc(1px / var(--zoom));
-    background: rgba(0, 170, 255, .05);
+    background: rgba(46, 94, 67, 0.05);
 }
 
 /* handles recycle existing classes so FSM logic stays unchanged */
@@ -574,4 +635,73 @@ body.gesturing #static-container * {
 #group-box .scale-handle {
     top: -1.5em;
     right: -1.5em;
+}
+
+/* ─── shared control vocabulary (used by the sheet, inspectors, tiles) ─── */
+.pc-btn,
+.pc-btn-ghost,
+.pc-btn-danger {
+    border-radius: 8px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.pc-btn {
+    border: 1px solid var(--pc-accent);
+    background: var(--pc-accent);
+    color: #fff;
+}
+.pc-btn-ghost {
+    border: 1px solid var(--pc-border);
+    background: var(--pc-panel);
+    color: var(--pc-ink);
+}
+.pc-btn-danger {
+    border: 1px solid var(--pc-danger);
+    background: transparent;
+    color: var(--pc-danger);
+}
+.pc-btn[disabled], .pc-btn-ghost[disabled], .pc-btn-danger[disabled] {
+    opacity: 0.45;
+    cursor: default;
+}
+.pc-chip {
+    border: 1px solid var(--pc-border);
+    background: var(--pc-wash);
+    color: var(--pc-ink);
+    border-radius: 7px;
+    padding: 3px 9px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    max-width: 46%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The undo toast: dusk housing, gold action — the machine speaking briefly. */
+#undo-toast {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9600;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    background: rgba(13, 43, 51, 0.95);
+    color: #fdf6d8;
+    font: 13px/1.2 -apple-system, system-ui, sans-serif;
+    padding: 9px 13px;
+    border-radius: 10px;
+    box-shadow: 0 3px 14px rgba(8, 29, 36, 0.4);
+}
+#undo-toast button {
+    border: 0;
+    background: transparent;
+    color: #e8b04b;
+    font: 600 13px/1 inherit;
+    cursor: pointer;
+    padding: 2px 4px;
 }

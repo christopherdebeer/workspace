@@ -209,12 +209,15 @@ export function installPointerAdapter(
   window.addEventListener('keydown', onKeydown, { passive: true });
   window.addEventListener('keyup', onKeyup, { passive: true });
 
-  /* teardown helper */
+  /* teardown helper — detach from EVERY root we attached to (the static
+     container listeners used to leak past a drill). */
   return () => {
-    rootEl.removeEventListener('pointerdown', onPointerDown);
-    rootEl.removeEventListener('pointermove', onPointerMove);
-    rootEl.removeEventListener('pointerup', finishPointer);
-    rootEl.removeEventListener('pointercancel', finishPointer);
+    for (const r of roots) {
+      r.removeEventListener('pointerdown', onPointerDown);
+      r.removeEventListener('pointermove', onPointerMove);
+      r.removeEventListener('pointerup', finishPointer);
+      r.removeEventListener('pointercancel', finishPointer);
+    }
     rootEl.removeEventListener('wheel', onWheel);
     window.removeEventListener('keydown', onKeydown);
     window.removeEventListener('keyup', onKeyup);

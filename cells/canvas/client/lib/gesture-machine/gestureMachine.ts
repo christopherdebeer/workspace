@@ -119,7 +119,11 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               // /* ④ ONE-POINTER ON ENTITY  */
               { cond: 'onePointerSelectedDirect', target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
               // An edge / frame tap is on an entity, not blank — precede the lasso.
-              { cond: (_c, e) => !!(e.edgeId || e.frameId) && !e.hitElement, target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
+              // DIRECT mode only: in navigate mode this must fall through to
+              // pressPendingNavigate (which selects the edge on tap-UP but PANS
+              // on drag) — routing it here sent the drag to moveGroup, so a pan
+              // that happened to start on an edge's wide hit line went dead.
+              { cond: (_c, e, p) => !!(e.edgeId || e.frameId) && !e.hitElement && p.state.matches('mode.direct'), target: 'pressPendingDirect', actions: ['hideContextMenu', 'capPress'] },
 
               // /* ⑤ ONE-POINTER BLANK  */
               { cond: 'onePointerBlankDirect', target: 'lassoSelect', actions: ['hideContextMenu', 'capLasso'] },
@@ -238,42 +242,11 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
             POINTER_UP: { target: 'idle', actions: 'commitElementMutation' }
           }
         },
-                resizeGroup : {
-          entry : 'log',
-          on : {
-            POINTER_MOVE : { actions:'applyGroupResize' },
-            POINTER_UP   : { target:'idle', actions:'commitElementMutation' }
-          }
-        },
-        scaleGroup  : {
-          entry : 'log',
-          on : {
-            POINTER_MOVE : { actions:'applyGroupScale' },
-            POINTER_UP   : { target:'idle', actions:'commitElementMutation' }
-          }
-        },
-        rotateGroup : {
-          entry : 'log',
-          on : {
-            POINTER_MOVE : { actions:'applyGroupRotate' },
-            POINTER_UP   : { target:'idle', actions:'commitElementMutation' }
-          }
-        },
-        moveElement: {
-          entry: 'log',
-          on: {
-            POINTER_MOVE: { actions: 'applyMoveElement' },
-            POINTER_DOWN: {
-              cond: 'twoPointersElementDirect',
-              target: 'pinchElement',
-              actions: 'capPinchElement'
-            },
-            POINTER_UP: {
-              target: 'idle',
-              actions: 'commitElementMutation'
-            }
-          }
-        },
+        /* NOTE the honest gesture model: a single-element drag/pinch runs
+         * through the GROUP path (pressPendingDirect → moveGroup → pinchGroup)
+         * with a one-member selection. The old moveElement/pinchElement and
+         * resizeGroup/scaleGroup/rotateGroup states were unreachable (their
+         * entry transitions were commented out) and hid that fact. */
         resizeElement: {
           entry: 'log',
           on: {
@@ -306,13 +279,6 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
           entry: 'log',
           on: {
             POINTER_UP: { target: 'idle' }
-          }
-        },
-        pinchElement: {
-          entry: 'log',
-          on: {
-            POINTER_MOVE: { actions: 'applyPinchElement' },
-            POINTER_UP: { target: 'idle', actions: 'commitElementMutation' }
           }
         },
         createEdge: {
@@ -358,10 +324,6 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
 
       twoPointersGroupDirect: (_c, e, p) => Object.keys(e.active || {}).length === 2 && groupSelected(e) && p.state.matches('mode.direct'),
       twoPointersElementDirect: (_c, e, p) => Object.keys(e.active || {}).length === 2 && e.hitElement && !groupSelected(e) && p.state.matches('mode.direct'),
-
-      handleResizeGroup : (_c,e,p) => e.handle === 'resize' && p.state.context.controller.selectedElementIds.size > 1,
-      handleScaleGroup  : (_c,e,p) => e.handle === 'scale'  && p.state.context.controller.selectedElementIds.size > 1,
-      handleRotateGroup : (_c,e,p) => e.handle === 'rotate' && p.state.context.controller.selectedElementIds.size > 1,
 
       handleResize: (_c, e) => e.handle === 'resize',
       handleScale: (_c, e) => e.handle === 'scale',
@@ -443,20 +405,6 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
       }),
 
       capLasso: assign({ draft: (_c, e) => ({ start: e.xy }) }),
-      capMove: assign({
-        draft: (c, e) => {
-          const el = c.controller.findElementById(e.elementId);
-          if (!el) {
-            console.error("capMove: Element not found!", e.elementId);
-            return { origin: e.xy, id: e.elementId, startPos: { x: NaN, y: NaN } };
-          }
-          return {
-            origin: e.xy,
-            id: e.elementId,
-            startPos: { x: el.x, y: el.y }
-          };
-        }
-      }),
 
       capGroupMove: assign({
         draft: (_c, e, { state }) => {
@@ -474,45 +422,6 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
           return { origin: e.xy, startPositions: start };
         }
       }),
-             capGroupResize : assign({
-         draft : (_c,e,{state}) => {
-           const c   = state.context.controller;
-           const box = c.getGroupBBox();
-           // Per-element start geometry, so the resize applies ONE factor
-           // relative to gesture start instead of compounding per move.
-           const start = new Map();
-           [...c.selectedElementIds].forEach((id: string) => {
-             const el = c.findElementById(id);
-             if (el) start.set(id, { x: el.x, y: el.y, scale: el.scale || 1 });
-           });
-           return {
-             startPositions : start,
-             resize : {
-               startX : e.xy.x,
-               startY : e.xy.y,
-               startW : box.x2 - box.x1,
-               startH : box.y2 - box.y1,
-               cx     : box.cx,
-               cy     : box.cy
-             }
-           };
-         }
-       }),
-       capGroupScale : (_=>_.draft),      /* same data – reuse */
-       capGroupRotate: assign({
-         draft : (_c,e,{state}) => {
-           const c   = state.context.controller;
-           const box = c.getGroupBBox();
-           return {
-             rotate : {
-               startScreen : e.xy,
-               center      : { x:box.cx, y:box.cy },
-               startAng    : Math.atan2(e.xy.y-box.cy, e.xy.x-box.cx)
-             }
-           };
-         }
-       }),
-
       capResize: assign({
         draft: (c, e) => {
           const el = c.controller.findElementById(e.elementId);
@@ -522,7 +431,12 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
               startX: e.xy.x,
               startY: e.xy.y,
               startW: el.width,
-              startH: el.height
+              startH: el.height,
+              // Elements are positioned by CENTER — the start centre lets the
+              // resize keep the top-left corner anchored instead of growing
+              // symmetrically around the middle (the "moves while resizing").
+              startCx: el.x,
+              startCy: el.y
             },
             id: e.elementId
           };
@@ -581,23 +495,6 @@ export const gestureMachine = createMachine<GestureContext, GestureEvent>({
           };
         }
       }),
-      capPinchElement: assign({
-        draft: (c, e) => {
-          const el = c.controller.findElementById(e.elementId);
-          const pts = Object.values(e.active || {});
-          return {
-            id: e.elementId,
-            center: { x: el.x, y: el.y },
-            startCx: el.x, startCy: el.y,
-            startW: el.width, startH: el.height,
-            startScale: el.scale || 1,
-            startRotation: el.rotation || 0,
-            startDist: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y),
-            startAngle: Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x)
-          };
-        }
-      }),
-
       updateMode: (c, _e, meta) => {
         console.log("[FSM] action updateMode",);
         c.controller.mode = meta.state.matches('mode.direct') ? 'direct' : 'navigate';

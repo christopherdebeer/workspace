@@ -494,6 +494,58 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(next.events.map((e) => `${e.op}:${e.key}`)).toEqual(['write:tail-probe']);
   });
 
+  it('changes scope slices the feed server-side; link events carry endpoints (ADR-0055)', async () => {
+    const head = (await cmds.changes({ sinceSeq: 'head' }, alice())).seq;
+    await cmds.remember({ key: 'sc:el-1', value: { x: 1 } }, alice());
+    await cmds.remember({ key: 'sc-noise', value: 'outside the slice' }, alice());
+    await cmds.link({ from: 'sc-noise', rel: 'annotates', to: 'sc:el-1' }, alice());
+    await cmds.supersede({ key: 'sc:el-1' }, alice());
+
+    // prefixes: only slice events ship; the link matches on its `to` endpoint —
+    // an edge INTO the slice is the slice's business even when `from` is not.
+    const sliced = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['sc:'] } }, alice());
+    expect(sliced.events.map((e) => `${e.op}:${e.key}`)).toEqual(['write:sc:el-1', 'link:sc-noise', 'supersede:sc:el-1']);
+    const link = sliced.events.find((e) => e.op === 'link');
+    expect(link?.rel).toBe('annotates');
+    expect(link?.to).toBe('sc:el-1');
+
+    // ops whitelist drops the link without touching the writes.
+    const writes = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['sc:'], ops: ['write', 'supersede'] } }, alice());
+    expect(writes.events.map((e) => e.op)).toEqual(['write', 'supersede']);
+
+    // A fully-filtered page is empty while the head seq still advances —
+    // clients must read that as progress, not silence.
+    const none = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['no-such-prefix/'] } }, alice());
+    expect(none.events).toEqual([]);
+    expect(none.seq).toBeGreaterThan(head);
+
+    // Filtering precedes windowing: `last: 1` is the newest RELEVANT event.
+    const lastOne = await cmds.changes({ last: 1, scope: { prefixes: ['sc:'] } }, alice());
+    expect(lastOne.events.map((e) => `${e.op}:${e.key}`)).toEqual(['supersede:sc:el-1']);
+  });
+
+  it('changes include:"entries" inlines current card entries, touch-free (ADR-0055 Inc 2)', async () => {
+    const head = (await cmds.changes({ sinceSeq: 'head' }, alice())).seq;
+    await cmds.remember({ key: 'inc2:a', value: { note: 'live fact' } }, alice());
+    await cmds.remember({ key: 'inc2:b', value: 'will be retired' }, alice());
+    await cmds.supersede({ key: 'inc2:b' }, alice());
+    const touchesBefore = (await store.get('alice', 'inc2:a'))?.touches;
+
+    const page = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['inc2:'] }, include: 'entries' }, alice());
+    // One entry per distinct written key, current state, card tier.
+    expect(Object.keys(page.entries ?? {}).sort()).toEqual(['inc2:a', 'inc2:b']);
+    expect(page.entries?.['inc2:a']?._meta.shaped).toBe('card');
+    expect(page.entries?.['inc2:b']?._meta.superseded).toBeTruthy(); // the tombstone marker
+
+    // Touch-free: inlining is a projection read, not attention (ADR-0050) —
+    // the fact's read counters must not move because a feed page shipped it.
+    expect((await store.get('alice', 'inc2:a'))?.touches).toEqual(touchesBefore);
+
+    // Without include, the page shape is unchanged (no entries field).
+    const plain = await cmds.changes({ sinceSeq: head, scope: { prefixes: ['inc2:'] } }, alice());
+    expect('entries' in plain).toBe(false);
+  });
+
   it('query pages with limit + cursor and reports the overall total', async () => {
     await cmds.remember({ key: 'page-a', value: 1, type: 'paged' }, alice());
     await cmds.remember({ key: 'page-b', value: 2, type: 'paged' }, alice());

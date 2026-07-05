@@ -3,6 +3,8 @@
  * ──────────────────────────────────────────────────────────────────────────── */
 import { saveCanvas } from '../network/storage.ts';
 import { generateContent } from '../network/generation.ts';
+import { uid } from '../uid.ts';
+import { fitRegion } from '../../../shared/frame.ts';
 import type { CanvasElement } from '../../types';
 
 /* internal clipboard — page-lifetime only */
@@ -25,15 +27,23 @@ export function addEl(c: any, type: string, content = ''): void {
 export function duplicateEl(c: any, id: string): void {
   const el = c.findElementById(id);
   if (!el) return;
-  const dup: CanvasElement = { ...el, id: 'el-' + Date.now(), x: el.x + 20, y: el.y + 20 };
+  const dup: CanvasElement = { ...el, id: uid('el'), x: el.x + 20, y: el.y + 20 };
+  // The copy is a NEW fact. Client transients — above all `_factKey` — must
+  // not ride along: factKeyOf(dup) would resolve to the ORIGINAL's substrate
+  // key, and the duplicate's writes would silently overwrite the source fact.
+  for (const k of Object.keys(dup)) {
+    if (k.startsWith('_')) delete (dup as Record<string, unknown>)[k];
+  }
   c.canvasState.elements.push(dup);
   c.selectElement(dup.id);
   c.requestRender();
   saveCanvas(c.canvasState);
+  c._pushHistorySnapshot?.('duplicate');
 }
 
 export function deleteSelection(c: any): void {
   if (!c.selectedElementIds.size) return;
+  const count = c.selectedElementIds.size;
   const keep = (el: CanvasElement | { id: string }): boolean => !c.selectedElementIds.has(el.id);
   /* drop elements */
   c.canvasState.elements = c.canvasState.elements.filter(keep);
@@ -43,6 +53,31 @@ export function deleteSelection(c: any): void {
   c.clearSelection();
   c.requestRender();
   saveCanvas(c.canvasState);
+  // Delete is the one action users most need to take back — snapshot it
+  // (it was the only mutation with NO undo path) and offer undo in place.
+  c._pushHistorySnapshot?.('delete');
+  undoToast(c, count === 1 ? 'Deleted 1 item' : `Deleted ${count} items`);
+}
+
+/** A transient bottom toast with an Undo affordance — touch users have no ⌘Z. */
+function undoToast(c: any, message: string): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById('undo-toast')?.remove();
+  const t = document.createElement('div');
+  t.id = 'undo-toast'; // styled in main.css (dusk housing, gold action)
+  // Stack ABOVE the bottom sheet, whatever its current height — a fixed
+  // offset used to drop the toast INSIDE the suggestion list.
+  const sheetH = document.getElementById('cmd-palette')?.getBoundingClientRect().height ?? 84;
+  t.style.bottom = `calc(${Math.round(sheetH) + 12}px + env(safe-area-inset-bottom))`;
+  const msg = document.createElement('span');
+  msg.textContent = message;
+  const undo = document.createElement('button');
+  undo.textContent = 'Undo';
+  undo.addEventListener('click', () => { c.undo?.(); t.remove(); });
+  t.appendChild(msg);
+  t.appendChild(undo);
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
 }
 
 /* ─── clipboard helpers ──────────────────────────────────────────────────── */
@@ -63,17 +98,24 @@ export function clipboardHasContent(): boolean {
 export async function pasteClipboard(c: any): Promise<void> {
   if (!clipboardHasContent()) return;
   /* offset new items a bit */
-  const now = Date.now();
-  const pastedEls: CanvasElement[] = _clip.elements!.map((el: CanvasElement, i: number) => ({
-    ...el,
-    id: 'el-' + (now + i),
-    x: el.x + 30,
-    y: el.y + 30
-  }));
+  const pastedEls: CanvasElement[] = _clip.elements!.map((el: CanvasElement) => {
+    const nu: CanvasElement = { ...el, id: uid('el'), x: el.x + 30, y: el.y + 30 };
+    // New facts, not aliases of the copied ones (see duplicateEl).
+    for (const k of Object.keys(nu)) {
+      if (k.startsWith('_')) delete (nu as Record<string, unknown>)[k];
+    }
+    return nu;
+  });
   c.canvasState.elements.push(...pastedEls);
-  c.selectedElementIds = new Set(pastedEls.map((e: CanvasElement) => e.id));
+  // Select through the controller's path, not a raw Set assignment — the
+  // group box, CRDT selection and the sheet all hang off it.
+  c.selectedElementIds.clear();
+  pastedEls.forEach((e: CanvasElement) => c.selectedElementIds.add(e.id));
+  c.crdt?.updateSelection?.(c.selectedElementIds);
+  c.updateGroupBox?.();
   c.requestRender();
   saveCanvas(c.canvasState);
+  c._pushHistorySnapshot?.('paste');
 }
 
 /* ─── AI regenerate (non-image elements only) ─────────────────────────────── */
@@ -162,36 +204,28 @@ export function zoom(c: any, factor: number): void {
 }
 
 export function zoomToFit(c: any): void {
-  /* fit all elements' bounding box into the visible canvas */
+  /* fit all elements' bounding box into the visible canvas — through the ONE
+     shared camera resolver (ADR-0015) instead of a fourth local fit. */
   if (!c.canvasState.elements.length) return;
-  const xs: number[] = [], ys: number[] = [], xe: number[] = [], ye: number[] = [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   c.canvasState.elements.forEach((el: CanvasElement) => {
     const s = el.scale || 1;
-    xs.push(el.x - el.width * s / 2);
-    ys.push(el.y - el.height * s / 2);
-    xe.push(el.x + el.width * s / 2);
-    ye.push(el.y + el.height * s / 2);
+    minX = Math.min(minX, el.x - el.width * s / 2);
+    minY = Math.min(minY, el.y - el.height * s / 2);
+    maxX = Math.max(maxX, el.x + el.width * s / 2);
+    maxY = Math.max(maxY, el.y + el.height * s / 2);
   });
-  const bb = {
-    x1: Math.min(...xs), y1: Math.min(...ys),
-    x2: Math.max(...xe), y2: Math.max(...ye)
-  };
-  const W = c.canvas.clientWidth, H = c.canvas.clientHeight;
-  const scaleX = W / (bb.x2 - bb.x1), scaleY = H / (bb.y2 - bb.y1);
-  c.viewState.scale = Math.min(scaleX, scaleY) * 0.85;          // 15 % margin
-  c.viewState.translateX = -bb.x1 * c.viewState.scale + (W - (bb.x2 - bb.x1) * c.viewState.scale) / 2;
-  c.viewState.translateY = -bb.y1 * c.viewState.scale + (H - (bb.y2 - bb.y1) * c.viewState.scale) / 2;
+  const cam = fitRegion({ minX, minY, maxX, maxY }, c.canvas.clientWidth, c.canvas.clientHeight, 0.08, c.MAX_SCALE);
+  c.viewState.scale = cam.scale;
+  c.viewState.translateX = cam.tx;
+  c.viewState.translateY = cam.ty;
   c.updateCanvasTransform();
   c.saveLocalViewState?.();
 }
 
-/* ─── version history & export stubs (minimal yet useful) ─────────────────── */
-
-export function openHistory(c: any): void {
-  const js = JSON.stringify(c.canvasState.versionHistory ?? [], null, 2);
-  const w = window.open('', '_blank');
-  w!.document.write(`<pre>${js.replace(/</g, '&lt;')}</pre>`);
-}
+/* ─── export (openHistory is gone: it showed versionHistory, which the
+ *      persister strips — always [] — and window.open crashes when iOS
+ *      blocks the popup) ─────────────────────────────────────────────────── */
 
 export function exportJSON(c: any): void {
   const data = JSON.stringify(c.canvasState, null, 2);

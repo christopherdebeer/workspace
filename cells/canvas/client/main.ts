@@ -5,7 +5,7 @@ import { createGestureHelpers } from './lib/gesture-machine/gesture-helpers.ts';
 import { buildContextMenu } from './lib/context-menu';
 import { installCommandPalette } from './lib/cmd-palette/command-palette.ts';
 import { generateContent, regenerateImage } from './lib/network/generation.ts';
-import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly } from './lib/network/storage.ts';
+import { loadInitialCanvas, saveCanvas, saveCanvasLocalOnly, beginBoardPriming } from './lib/network/storage.ts';
 import { showModal, closeModal } from './lib/modal.ts';
 import { enterFull, exitFull } from './lib/network/inspectorPanel.ts';
 import { elementRegistry } from './lib/elements/elementRegistry.ts';
@@ -17,6 +17,8 @@ import { installSelectionInspector } from './lib/network/selectionInspector.ts';
 import { CrdtAdapter } from './lib/network/crdt.ts';
 import { canvasPath, boardFromPath } from './lib/url.ts';
 import { sanitizeElementGeometry, isFiniteNum } from './lib/geometry.ts';
+import { uid } from './lib/uid.ts';
+import { createBoardCtx, type BoardCtxInternal } from './lib/sdk.ts';
 import { fitRegion, type BBox } from '../shared/frame.ts';
 import type { CanvasState, CanvasElement, ViewState, Edge } from './types.ts';
 
@@ -65,44 +67,29 @@ class CanvasController {
     cullEnabled = false;
     _cullQueued = false;
     _cullForce = false;
-    /** Camera of the last cull pass — pans shorter than half a screen reuse it. */
-    _lastCull: { vx: number; vy: number; W: number; H: number } | null = null;
+    /** Window (canvas-space) of the last cull pass — a camera still safely
+     *  inside it (pan OR zoom) reuses the pass. W/H are the viewport extent at
+     *  cull time; the margin test is in those units. */
+    _lastCull: { minX: number; minY: number; maxX: number; maxY: number; W: number; H: number } | null = null;
     /** Camera DOM writes are rAF-coalesced (see updateCanvasTransform). */
     _xformQueued = false;
     _lastZoomVar: number | null = null;
+    _zoomVarTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Canvas offset, cached — reading offsetLeft per pinch-move forces layout. */
+    _canvasOffset: { left: number; top: number } | null = null;
     /** Last dispatched selection signature — pans must not re-announce it. */
     _lastSelSig: string | null = null;
+    /** The board SDK handed to renderers and content scripts (ADR-0056). */
+    ctx: BoardCtxInternal;
 
     constructor(canvasState: CanvasState) {
         updateCanvasController(this)
         this.canvasState = canvasState;
+        // The CrdtAdapter is the substrate write seam (updateElement/updateEdge
+        // funnel into the debounced fact writer) — the Yjs-era update/presence
+        // surface is gone; remote merge is the change-feed poller (startLiveSync).
         this.crdt = new CrdtAdapter(canvasState.canvasId);
 
-        this.crdt.onUpdate( (ev) => {
-            const remote = !ev.transaction.local;
-            if (remote) {
-                console.log(`[CRDT] Update from ${remote ? 'Remote' : 'Local'}`, ev )
-                // const els = this.crdt.elements.toJSON();
-                // const edges = this.crdt.edges.toJSON();
-                // console.log(`[CRDT] remote updates`, els, edges)
-                // this.canvasState.elements = Object.values(els);
-                // this.canvasState.edges = Object.values(edges);
-
-                if (ev.currentTarget === this.crdt.elements) {
-                    const keys = Array.from(ev.keysChanged);
-                    console.log(`[CRDT] Remote element(s) update`, keys)
-                    // keys.forEach( id => {
-                    //     const el = this.findElementById(id)
-                    //     const yel = this.crdt.elements.get(id)
-                    //     Object.keys(el).forEach( k => {
-                    //         el[k] = yel[k]
-                    //     })
-                    // })
-                }
-                // this.requestRender();
-            }
-        })
-        
         if (!this.canvasState.edges) {
             this.canvasState.edges = [];
         }
@@ -126,6 +113,10 @@ class CanvasController {
         this.elementRegistry = elementRegistry;
         this.elementNodesMap = {};
         this.edgeNodesMap = {};
+        // ADR-0056 Inc 1: the one sanctioned surface for board code (renderer
+        // facts + content scripts). Handed alongside the controller for one
+        // increment; the raw-controller/window bridges are deprecated.
+        this.ctx = createBoardCtx(this) as BoardCtxInternal;
 
         this.canvas = document.getElementById("canvas");
         this.container = document.getElementById("canvas-container");
@@ -241,6 +232,14 @@ class CanvasController {
     }
 
     detach() {
+        // Tear down BEHAVIOR, not just DOM: without these, every drill left the
+        // old pointer adapter + FSM alive (two machines per event, the detached
+        // one still mutating state and writing under the wrong board) and
+        // stacked a second command palette + shortcut listeners.
+        try { this.uninstallAdapter?.(); } catch { /* already gone */ }
+        try { this.uninstallCommandPalette?.(); } catch { /* already gone */ }
+        try { this.fsmService?.stop?.(); } catch { /* already stopped */ }
+        clearTimeout(this._zoomVarTimer);
 
         // Remove context menu event listener
         if (this.contextMenuPointerDownHandler) {
@@ -291,6 +290,10 @@ class CanvasController {
 
         // Add drill up button click handler
         this.drillUpBtn.onclick = this.handleDrillUp.bind(this);
+
+        // The cached canvas offset (screenToCanvas) survives until the viewport
+        // itself moves under us.
+        window.addEventListener('resize', () => { this._canvasOffset = null; });
     }
 
     undo() { this._stepHistory(this._undo, this._redo, 'undo'); }
@@ -324,20 +327,33 @@ class CanvasController {
     _stepHistory(fromStack, toStack, direction) {
         if (fromStack.length === 0) return;
         const cur = this._snapshot();     // current → opposite stack
+        // Snapshots are pushed AFTER each mutation, so the stack top usually
+        // EQUALS the current state — restoring it made the first undo a
+        // visible no-op ("undo needs two presses"). Skip past the echo.
+        let top = fromStack.pop();
+        try {
+            if (fromStack.length &&
+                JSON.stringify(top.data.canvasState) === JSON.stringify(cur.data.canvasState)) {
+                top = fromStack.pop();
+            }
+        } catch { /* compare is best-effort */ }
         toStack.push(cur);
-        const { data } = fromStack.pop(); // restore previous
-        this._restoreSnapshot(data);
+        this._restoreSnapshot(top.data);
     }
 
     _restoreSnapshot({ canvasState, viewState }) {
-        
+
         this.canvasState = structuredClone(canvasState);
         //this.viewState   = structuredClone(viewState);
 
         // clear selection, keep mode
         this.selectedElementIds.clear();
+        this.updateGroupBox();
         this.requestRender();
-        //this.updateCanvasTransform();
+        this.requestEdgeUpdate(); // the undone change may have moved endpoints
+        // Undo IS an edit: without persisting, a reload resurrected the undone
+        // change (the substrate still held the newer state).
+        saveCanvas(this.canvasState);
     }
 
 
@@ -346,8 +362,8 @@ class CanvasController {
         this.selectionBox.id = 'lasso-box';
         Object.assign(this.selectionBox.style, {
             position: 'absolute',
-            border: '1px dashed #00aaff',
-            background: 'rgba(0,170,255,0.05)',
+            border: '1px dashed #2e5e43',
+            background: 'rgba(46,94,67,0.06)',
             left: `${startX}px`,
             top: `${startY}px`,
             width: '0px',
@@ -396,6 +412,7 @@ class CanvasController {
         this.crdt.updateSelection(this.selectedElementIds);
         this.updateGroupBox()
         this.requestRender();
+        this.ctx?._emit('select', [...this.selectedElementIds]);
     }
 
     clearSelection() {
@@ -404,6 +421,7 @@ class CanvasController {
             this.crdt.updateSelection(this.selectedElementIds);
             this.updateGroupBox()
             this.requestRender();
+            this.ctx?._emit('select', []);
         }
     }
 
@@ -559,6 +577,7 @@ class CanvasController {
         }
 
         this.crdt.updateView(this.viewState);
+        this.ctx?._emit('camera', { x: this.viewState.translateX, y: this.viewState.translateY, scale: this.viewState.scale });
 
         if (this._xformQueued) return;
         this._xformQueued = true;
@@ -574,13 +593,30 @@ class CanvasController {
 
         this.container.style.transform = `translate(${this.viewState.translateX}px, ${this.viewState.translateY}px) scale(${this.viewState.scale})`;
         // --zoom is consumed by per-element CSS (padding/border calc), so
-        // writing it recalcs style for the whole subtree. A pan doesn't change
-        // it — only write when the scale actually moved. (--translateX/-Y were
-        // written here too but NOTHING consumes them: pure per-move subtree
-        // invalidation, now gone.)
+        // writing it recalcs style AND re-lays-out the whole subtree. A pan
+        // doesn't change it — only write when the scale actually moved.
+        // (--translateX/-Y were written here too but NOTHING consumes them:
+        // pure per-move subtree invalidation, now gone.)
+        // During a CONTINUOUS zoom every frame moves the scale, which made this
+        // a full-board layout per frame — the zoom-path analogue of the pan
+        // tab-kill. Quantize mid-zoom writes to ~5% steps (a 0.4px padding
+        // drift, invisible) and settle to the exact value once the zoom rests.
         if (this._lastZoomVar !== this.viewState.scale) {
-            this._lastZoomVar = this.viewState.scale;
-            this.container.style.setProperty('--zoom', String(this.viewState.scale));
+            const s = this.viewState.scale;
+            const prev = this._lastZoomVar;
+            if (prev !== null && Math.abs(s - prev) / prev < 0.05) {
+                clearTimeout(this._zoomVarTimer);
+                this._zoomVarTimer = setTimeout(() => {
+                    if ((this.canvas as any).controller !== this) return;
+                    if (this._lastZoomVar !== this.viewState.scale) {
+                        this._lastZoomVar = this.viewState.scale;
+                        this.container.style.setProperty('--zoom', String(this.viewState.scale));
+                    }
+                }, 120);
+            } else {
+                this._lastZoomVar = s;
+                this.container.style.setProperty('--zoom', String(s));
+            }
         }
 
         // The canvas is viewport-sized; clientWidth avoids getBoundingClientRect's
@@ -643,31 +679,44 @@ class CanvasController {
         const vx = -this.viewState.translateX / s;
         const vy = -this.viewState.translateY / s;
         // The slack below is a full screen per side, so the visible set only
-        // changes once the camera has moved ~half a screen — skip the whole
-        // O(elements+edges) pass until then. During a pan this makes the
-        // per-frame cull a couple of comparisons instead of ~500 style writes.
+        // changes once the camera nears the edge of the last pass's window —
+        // skip the whole O(elements+edges) pass until then. The test is
+        // CONTAINMENT (visible rect safely inside the window), not camera
+        // deltas, so it also holds during a ZOOM: the old `W === last.W`
+        // equality never matched while the scale moved, which ran the full
+        // pass — hundreds of style writes — on every frame of a pinch/wheel
+        // zoom. Zooming IN shrinks the rect (always contained); zooming OUT
+        // grows it and reculls exactly when the window no longer covers it.
         const last = this._lastCull;
-        if (!force && last && last.W === W && last.H === H
-            && Math.abs(vx - last.vx) < W / 2 && Math.abs(vy - last.vy) < H / 2) return;
-        this._lastCull = { vx, vy, W, H };
+        if (!force && last
+            && vx - last.minX >= last.W / 2 && last.maxX - (vx + W) >= last.W / 2
+            && vy - last.minY >= last.H / 2 && last.maxY - (vy + H) >= last.H / 2) return;
         // One screen of slack on every side, so small pans don't thrash elements
         // on/off at the edge (and it absorbs rotation's bbox growth).
         const minX = vx - W, minY = vy - H, maxX = vx + 2 * W, maxY = vy + 2 * H;
+        this._lastCull = { minX, minY, maxX, maxY, W, H };
         const visibleEl = new Set<string>();
+        // Style writes are guarded — re-setting the same contentVisibility on
+        // ~all elements each pass is not free on a big board.
+        const setCV = (node: HTMLElement, v: string): void => {
+            if (node.style.contentVisibility !== v) node.style.contentVisibility = v;
+        };
         for (const el of this.canvasState.elements) {
             const node = this.elementNodesMap[el.id];
             if (!node) continue;
-            if (el.static) { node.style.contentVisibility = 'visible'; visibleEl.add(el.id); continue; } // screen-pinned: always on
+            if (el.static) { setCV(node, 'visible'); visibleEl.add(el.id); continue; } // screen-pinned: always on
             const sc = el.scale || 1;
             const hw = ((el.width || 240) * sc) / 2, hh = ((el.height || 120) * sc) / 2;
             const off = (el.x + hw < minX) || (el.x - hw > maxX) || (el.y + hh < minY) || (el.y - hh > maxY);
             if (off) {
                 // contain-intrinsic-size lets the skipped box keep its footprint
                 // (left/top still anchor it) instead of collapsing to zero.
-                node.style.containIntrinsicSize = `${Math.round((el.width || 240) * sc)}px ${Math.round((el.height || 120) * sc)}px`;
-                node.style.contentVisibility = 'hidden';
+                if (node.style.contentVisibility !== 'hidden') {
+                    node.style.containIntrinsicSize = `${Math.round((el.width || 240) * sc)}px ${Math.round((el.height || 120) * sc)}px`;
+                    node.style.contentVisibility = 'hidden';
+                }
             } else {
-                node.style.contentVisibility = 'visible';
+                setCV(node, 'visible');
                 visibleEl.add(el.id);
             }
         }
@@ -761,7 +810,7 @@ class CanvasController {
         // Arrowheads inherit the edge's colour. SVG2 `context-stroke` is unreliable
         // on older iOS Safari, so mint one marker per distinct colour on demand.
         const arrowMarker = (color: string): string => {
-            const c = color || "#ccc";
+            const c = color || "#c6c2b8";
             const id = "arrowhead-" + c.replace(/[^a-zA-Z0-9]/g, "") || "arrowhead-def";
             if (!defs!.querySelector("#" + id)) {
                 const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
@@ -779,10 +828,24 @@ class CanvasController {
             }
             return id;
         };
+        // Inferred similarity links are BACKGROUND, not foreground (mirrors the
+        // SSR thumbnail): the live board carries hundreds of `similarTo` edges,
+        // and drawn at full strength they swamp the authored structure. An edge
+        // the user has decorated (explicit colour) has been claimed — it renders
+        // at full strength whatever its rel.
+        const isFaint = (edge: Edge): boolean =>
+            (typeof edge.rel === 'string' ? edge.rel.trim() : typeof edge.label === 'string' ? edge.label.trim() : '') === 'similarTo'
+            && !edge.style?.color;
         const edgeColor = (edge: Edge): string =>
-            this.selectedEdgeIds?.has(edge.id) ? "#2f6f4f" : (edge.style?.color || "#ccc");
+            this.selectedEdgeIds?.has(edge.id) ? "#2e5e43"
+            : isFaint(edge) ? "rgba(150,140,120,.28)"
+            : (edge.style?.color || "#c6c2b8");
 
-        // Iterate over each edge in the canvas state.
+        // Endpoint lookups go through a per-PASS map — two linear
+        // findElementById scans per edge was O(E·V) per pass (346×127 on the
+        // live board, every drag frame). Pass-scoped so it can't go stale
+        // under the gesture paths, which keep the linear lookup.
+        const elementsById = new Map(this.canvasState.elements.map(el => [el.id, el]));
         this.edgeHitNodesMap = this.edgeHitNodesMap || {};
         let createdEdgeNodes = false;
         this.canvasState.edges.forEach(edge => {
@@ -792,10 +855,11 @@ class CanvasController {
                 // A wide TRANSPARENT hit line under the visible one, so edges are
                 // tappable (ADR-0016) — a 2px stroke is unhittable on touch. Both
                 // carry data-id; the inspector reads it. The hit line goes first
-                // (below), the visible line on top.
+                // (below), the visible line on top. Faint constellation edges get
+                // a narrower band so they don't blanket the space between nodes.
                 const hit = document.createElementNS("http://www.w3.org/2000/svg", "line");
                 hit.setAttribute("stroke", "transparent");
-                hit.setAttribute("stroke-width", "16");
+                hit.setAttribute("stroke-width", isFaint(edge) ? "10" : "16");
                 hit.setAttribute("data-id", edge.id);
                 hit.setAttribute("class", "edge-hit");
                 // #edges-layer is pointer-events:none (only its <text> opts back in),
@@ -807,41 +871,44 @@ class CanvasController {
                 this.edgesLayer.appendChild(hit);
 
                 line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                line.setAttribute("stroke", edgeColor(edge));
-                line.setAttribute("stroke-width", edge.style?.thickness || "2");
-                line.setAttribute("marker-end", `url(#${arrowMarker(edgeColor(edge))})`);
                 line.setAttribute("data-id", edge.id);
                 line.setAttribute("class", "edge-line");
                 line.setAttribute("pointer-events", "none"); // the wide hit line below is the target
                 this.edgeNodesMap[edge.id] = line;
                 this.edgesLayer.appendChild(line);
-            } else {
-                // Reflect live style edits (color/width) from the inspector — keep
-                // the arrowhead colour in sync with the stroke.
+            }
+            {
+                // Style every pass (creation falls through here too) so live
+                // edits and selection reflect immediately.
+                const selected = this.selectedEdgeIds?.has(edge.id);
+                const faint = isFaint(edge);
                 const color = edgeColor(edge);
                 line.setAttribute("stroke", color);
-                line.setAttribute("stroke-width", this.selectedEdgeIds?.has(edge.id) ? "3.5" : (edge.style?.thickness || "2"));
-                line.setAttribute("marker-end", `url(#${arrowMarker(color)})`);
+                line.setAttribute("stroke-width", selected ? "3.5" : faint ? "1" : (edge.style?.thickness || "2"));
+                // No arrowhead on the constellation: hundreds of markers are pure
+                // paint cost and read as foreground clutter.
+                if (faint && !selected) line.removeAttribute("marker-end");
+                else line.setAttribute("marker-end", `url(#${arrowMarker(color)})`);
                 if (edge.style?.dash) line.setAttribute("stroke-dasharray", String(edge.style.dash)); else line.removeAttribute("stroke-dasharray");
             }
 
-            this.updateEdgePosition(edge, line)
+            this.updateEdgePosition(edge, line, elementsById)
         });
 
-        // Remove any orphaned SVG lines.
+        // Remove any orphaned SVG lines/labels (live-id Set: the find-per-id
+        // sweep was O(edges²)).
+        const liveEdgeIds = new Set(this.canvasState.edges.map(e => e.id));
         Object.keys(this.edgeNodesMap).forEach(edgeId => {
-            if (!this.canvasState.edges.find(e => e.id === edgeId)) {
+            if (!liveEdgeIds.has(edgeId)) {
                 this.edgeNodesMap[edgeId].remove();
                 delete this.edgeNodesMap[edgeId];
                 this.edgeHitNodesMap?.[edgeId]?.remove();
                 if (this.edgeHitNodesMap) delete this.edgeHitNodesMap[edgeId];
             }
         });
-        // Remove orphaned labels.
         if (this.edgeLabelNodesMap) {
             Object.keys(this.edgeLabelNodesMap).forEach(edgeId => {
-                if (!this.canvasState.edges.find(e => e.id === edgeId)) {
-                    console.log(`[DEBUG] Deleting orphaned edge label`, edgeId, this.edgeLabelNodesMap[edgeId])
+                if (!liveEdgeIds.has(edgeId)) {
                     this.edgeLabelNodesMap[edgeId].remove();
                     delete this.edgeLabelNodesMap[edgeId];
                 }
@@ -850,10 +917,12 @@ class CanvasController {
         if (createdEdgeNodes) this.scheduleCulling(true); // new lines need their on/off-screen state
     }
 
-    updateEdgePosition(edge: Edge, line: SVGLineElement) {
+    updateEdgePosition(edge: Edge, line: SVGLineElement, elementsById?: Map<string, CanvasElement>) {
         if (!line) return;
-        const sourceEl = this.findElementById(edge.source);
-        const targetEl = this.findElementById(edge.target);
+        const lookup = (id: string): CanvasElement | undefined =>
+            elementsById ? elementsById.get(id) : this.findElementById(id);
+        const sourceEl = lookup(edge.source);
+        const targetEl = lookup(edge.target);
         const sourceEdge = sourceEl ? null : this.findEdgeElementById(edge.source);
         const targetEdge = targetEl ? null : this.findEdgeElementById(edge.target);
 
@@ -910,7 +979,7 @@ class CanvasController {
                     textEl.setAttribute("text-anchor", "middle");
                     textEl.setAttribute("data-id", edge.id);
                     textEl.setAttribute("alignment-baseline", "middle");
-                    textEl.setAttribute("fill", "#000");
+                    textEl.setAttribute("fill", "#332e23");
                     textEl.style.fontSize = "12px";
                     if (this.selectedElementId === edge.id) textEl.style.fill = "red";
                     this.edgeLabelNodesMap[edge.id] = textEl;
@@ -925,8 +994,23 @@ class CanvasController {
             }
 
         } else {
-            this.canvasState.edges = this.canvasState.edges.filter(ed => ed.id !== edge.id);
-            line.remove();
+            // An endpoint is (possibly transiently) missing — element still
+            // mounting, or a remote merge in flight. HIDE the edge, never
+            // delete it from state: a draw pass mutating the model turned
+            // every transient miss into a permanently dropped edge. Load/sync
+            // hygiene owns real removals; the next pass re-shows it.
+            line.setAttribute('visibility', 'hidden');
+            const hit = this.edgeHitNodesMap?.[edge.id];
+            if (hit) hit.setAttribute('visibility', 'hidden');
+            const label = this.edgeLabelNodesMap?.[edge.id];
+            if (label) label.setAttribute('visibility', 'hidden');
+            return;
+        }
+        // Endpoints resolved — clear any transient-miss hiding.
+        if (line.getAttribute('visibility') === 'hidden') {
+            line.removeAttribute('visibility');
+            this.edgeHitNodesMap?.[edge.id]?.removeAttribute('visibility');
+            this.edgeLabelNodesMap?.[edge.id]?.removeAttribute('visibility');
         }
     }
 
@@ -941,7 +1025,13 @@ class CanvasController {
         this.crdt.updateElement(el.id, el)
         const view = this.elementRegistry.viewFor(el.type);
         if (view && typeof view.update === 'function') {
-            view.update(el, node.firstChild, this);   // firstChild is view root
+            try {
+                view.update(el, node.firstChild, this, this.ctx);   // firstChild is view root; ctx = ADR-0056 SDK
+            } catch (err: any) {
+                // A throwing update must not abort the render pass for every
+                // element after this one.
+                this._showElementError(node, `renderer ${el.type}: ${err?.message ?? 'failed'}`);
+            }
         } else {
             this.setElementContent(node, el);         // legacy fallback
         }
@@ -952,18 +1042,8 @@ class CanvasController {
         if (isSelected) {
             node.classList.add("selected");
         }
-        const peerSelected = Array.from((this.crdt as any).provider?.awareness?.getStates?.()?.values?.() || [])
-            .filter( (p: any) => p.client?.clientId !== (this.crdt as any).provider?.awareness?.clientID)
-            .flatMap( (p: any) => p.client?.selection || [])
-        
-        if (peerSelected.indexOf(el.id) >= 0) {
-            node.classList.add("peer-selected");
-        } else {
-            node.classList.remove("peer-selected");
-        }
-        if ((this.crdt as any).provider?.awareness?.getStates?.())
-        //this.setElementContent(node, el);
-
+        // (The Yjs peer-selection styling and its dangling `if` — which was
+        // accidentally the handles' guard — are gone with the CRDT shim.)
         if (!skipHandles) {
             // Remove old handles (if any)
             const oldHandles = Array.from(node.querySelectorAll('.element-handle'));
@@ -987,14 +1067,16 @@ class CanvasController {
             badge.className = 'el-err';
             Object.assign(badge.style, {
                 position: 'absolute',
-                top: 0,
+                top: 'calc(-0.4rem / var(--zoom, 1))',
                 left: 0,
-                maxWidth: '160px',
-                padding: '.2em .4em',
+                maxWidth: '180px',
+                padding: '.25em .55em',
                 fontSize: 'calc(.6rem / var(--scale))',
-                background: 'crimson',
-                color: '#fff',
-                fontFamily: 'monospace',
+                background: '#b5523c',
+                color: '#fdf6d8',
+                fontFamily: '-apple-system, system-ui, sans-serif',
+                borderRadius: '6px',
+                boxShadow: '0 1px 4px rgba(51,46,35,.25)',
                 zIndex: 9999,
                 pointerEvents: 'none',
                 whiteSpace: 'pre-wrap'
@@ -1078,9 +1160,12 @@ ${script.getAttribute('src')}`);
                         }, ms);
                         return id as unknown as number;
                     };
-                    const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval',
+                    // `ctx` (ADR-0056) is the sanctioned surface going forward;
+                    // `controller` stays in scope one increment so existing
+                    // scripts (the minimap) keep working while they migrate.
+                    const fn = new Function('element', 'controller', 'node', 'requestAnimationFrame', 'setTimeout', 'setInterval', 'ctx',
                         scriptElement.textContent || '');
-                    fn(el, this, node, gRaf, gTimeout, gInterval);
+                    fn(el, this, node, gRaf, gTimeout, gInterval, this.ctx);
                 } catch (err: any) {
                     // Non-fatal: badge the element + log WHICH element, no global banner.
                     console.warn('[canvas] element script error', { element: elKey, error: err.message });
@@ -1115,7 +1200,7 @@ ${script.getAttribute('src')}`);
     }
 
     createNewElement(x: number, y: number, type = 'markdown', content = '', isCanvasContainer = false, data: any = {}) {
-        const newId = "el-" + Date.now();
+        const newId = uid("el");
         const defaultMap = {
             text: "New text element",
             img: "Realistic tree on white background",
@@ -1148,7 +1233,7 @@ ${script.getAttribute('src')}`);
     createNewEdge(sourceId: string, targetId: string, label: string, data: any = {}, style: any = {}) {
         // Create a new edge object.
         const newEdge: Edge = {
-            id: "edge-" + Date.now(),
+            id: uid("edge"),
             source: sourceId,
             target: targetId,
             label: label,
@@ -1205,8 +1290,13 @@ ${script.getAttribute('src')}`);
     }
 
     screenToCanvas(px: number, py: number): { x: number; y: number } {
-        const dx = px - this.canvas.offsetLeft;
-        const dy = py - this.canvas.offsetTop;
+        // offsetLeft/offsetTop force a layout when read with pending style
+        // writes — and applyCanvasPinch calls this per pointermove (120Hz on
+        // iOS). The canvas is viewport-anchored, so cache the offset; a resize
+        // invalidates it (see setupEventListeners).
+        const off = this._canvasOffset ?? (this._canvasOffset = { left: this.canvas.offsetLeft, top: this.canvas.offsetTop });
+        const dx = px - off.left;
+        const dy = py - off.top;
         return {
             x: (dx - this.viewState.translateX) / this.viewState.scale,
             y: (dy - this.viewState.translateY) / this.viewState.scale
@@ -1258,7 +1348,12 @@ ${script.getAttribute('src')}`);
                 console.warn("Image failed to load", err);
             };
 
-            if (!el.src && !i.src) {
+            // Auto-generate a src-less img ONCE per element per session — a
+            // render loop retrying a failing generation was an unbounded
+            // stream of model jobs nobody asked for.
+            const attempted: Set<string> = ((window as any).__imgGenAttempted ??= new Set());
+            if (!el.src && !i.src && !attempted.has(el.id)) {
+                attempted.add(el.id);
                 regenerateImage(el).then(() => {
                     saveCanvasLocalOnly(this.canvasState);
                     this.requestRender();
@@ -1472,7 +1567,6 @@ ${script.getAttribute('src')}`);
             node.style.zIndex = String(zIndex);
             node.style.transform = `rotate(${rotation}deg) translate(calc(0px - var(--padding)), calc(0px - var(--padding)))`;
         }
-        const edges = this.findEdgesByElementId(el.id) || [];
         this.requestEdgeUpdate();
     }
     // ------------------------------------------------------------------
@@ -1489,10 +1583,20 @@ ${script.getAttribute('src')}`);
         node.dataset.elId = el.id;
         node.dataset.type = el.type;
 
-        /* Let the view create its inside DOM */
+        /* Let the view create its inside DOM. A view that THROWS must not
+         * leave an invisible element (or abort the whole render pass — the
+         * forEach above it renders every element): badge it and fall back
+         * to the fact card so there is always something to see and tap. */
         if (view) {
-            const inner = view.mount(el, this);
-            inner && node.appendChild(inner);
+            try {
+                const inner = view.mount(el, this, this.ctx); // ctx = ADR-0056 SDK; controller kept one increment
+                inner && node.appendChild(inner);
+            } catch (err: any) {
+                console.warn('[canvas] view mount failed — fact-card fallback', { type: el.type, id: el.id, error: err?.message });
+                const fb = this.elementRegistry.viewFor('fact')?.mount?.(el, this, this.ctx);
+                if (fb) node.appendChild(fb);
+                this._showElementError(node, `renderer ${el.type}: ${err?.message ?? 'failed'}`);
+            }
         } else {
             /* fallback – keep old hard-wired rendering for legacy types */
             this.setElementContent(node, el);
@@ -1581,7 +1685,7 @@ ${script.getAttribute('src')}`);
         hdr.innerHTML = '<strong style="font-family:Georgia,serif;flex:1">Edit</strong>';
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '✕ Close';
-        closeBtn.style.cssText = 'border:0;background:transparent;color:#8a8a82;font:inherit;cursor:pointer;padding:4px 6px';
+        closeBtn.style.cssText = 'border:0;background:transparent;color:#85795f;font:inherit;cursor:pointer;padding:4px 6px';
         closeBtn.addEventListener('click', () => closeModal());
         hdr.appendChild(closeBtn);
         host.appendChild(hdr);
@@ -1648,6 +1752,11 @@ async function tryHydrate(canvasId: string, token: string | null, t0: number): P
 
         registerSubstrateTypes(); // built-in element renderers (text/markdown/html/img/…)
         clearSsrPaint();
+        // The controller's first render funnels every element through the write
+        // queue; with the dedup maps still unseeded that used to persist a full
+        // board rewrite on EVERY hydrated open. Gate writes until the background
+        // load below seeds the maps and lifts it.
+        beginBoardPriming();
         const cc = new CanvasController({ canvasId, elements: h.elements, edges: [], versionHistory: [] } as any);
         // Prefer the framed REGION over the server's pre-baked camera: the SSR cam
         // was fit to a fixed 1200×800, so re-fitting the bbox to the real device

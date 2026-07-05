@@ -14,7 +14,9 @@
  * ------------------------------------------------------------------------- */
 import { act } from './substrate.ts';
 import { saveCanvas } from './storage.ts';
+import { uid } from '../uid.ts';
 import { showInspector, clearInspector, inspectorHeader } from './inspectorPanel.ts';
+import { plainSnippet } from '../text.ts';
 
 const cc = (): any => (window as { CC?: any }).CC;
 const elId = (k: string): string => (k.startsWith('el:') ? k.slice(3) : k);
@@ -45,7 +47,7 @@ function promoteIfBare(c: any, edge: any): void {
     c[m]?.[edge.id]?.remove?.();
     if (c[m]) delete c[m][edge.id];
   }
-  edge.id = `edge-${Date.now().toString(36)}`;
+  edge.id = uid('edge');
 }
 
 function applyEdit(edge: any, patch: { rel?: string; label?: string; style?: Record<string, string> }): void {
@@ -75,13 +77,52 @@ function deleteEdge(edge: any): void {
 }
 
 function field(label: string, input: string): string {
-  return `<label><span style="color:#8a8a82;font-size:11px">${label}</span>${input}</label>`;
+  return `<label><span style="color:#85795f;font-size:11px">${label}</span>${input}</label>`;
+}
+
+/** Human name for an edge endpoint (an element id, or another edge's id). */
+function endpointTitle(id: string): string {
+  const c = cc();
+  const el = c?.findElementById?.(id);
+  if (el) {
+    return String(el._factTitle || plainSnippet(el.content, 44) || el.id);
+  }
+  const e = c?.findEdgeElementById?.(id);
+  if (e) return `edge: ${relOf(e)}`;
+  return id;
+}
+
+/** What the edge links: source —rel→ target, each endpoint tappable to focus. */
+function endpointsRow(edge: any): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px';
+  const chip = (id: string): HTMLElement => {
+    const b = document.createElement('button');
+    b.textContent = endpointTitle(id);
+    b.title = id;
+    b.className = 'pc-chip';
+    b.addEventListener('click', () => {
+      const c = cc();
+      if (c?.findElementById?.(id)) c.recenterOnElement?.(id);
+    });
+    return b;
+  };
+  const arrow = document.createElement('span');
+  arrow.style.cssText = 'color:#85795f;font-size:11px;flex-shrink:0';
+  arrow.textContent = `—${relOf(edge)}→`;
+  row.appendChild(chip(edge.source));
+  row.appendChild(arrow);
+  row.appendChild(chip(edge.target));
+  return row;
 }
 
 function openInspector(edge: any): void {
   const body = document.createElement('div');
   body.style.cssText = 'display:grid;gap:9px';
   body.appendChild(inspectorHeader('Edge', clearSelection));
+  // WHAT this edge links — the first thing an inspector of a line should say.
+  // Tapping an endpoint pans the camera to it.
+  body.appendChild(endpointsRow(edge));
   const grid = document.createElement('div');
   grid.className = 'ctx-row';
   grid.innerHTML = `
@@ -90,7 +131,7 @@ function openInspector(edge: any): void {
     ${field('Colour', `<input data-f="color" type="color" value="${edge.style?.color || '#cccccc'}"/>`)}
     ${field('Width', `<input data-f="thickness" type="number" min="1" max="12" value="${parseFloat(edge.style?.thickness) || 2}"/>`)}
     ${field('Dash', `<select data-f="dash"><option value="">solid</option><option value="6,4" ${edge.style?.dash === '6,4' ? 'selected' : ''}>dashed</option><option value="2,4" ${edge.style?.dash === '2,4' ? 'selected' : ''}>dotted</option></select>`)}
-    <div style="display:flex;align-items:flex-end"><button data-act="delete" style="border:1px solid #7a1f1f;background:transparent;color:#7a1f1f;border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer">Delete</button></div>`;
+    <div style="display:flex;align-items:flex-end"><button data-act="delete" class="pc-btn-danger">Delete</button></div>`;
   body.appendChild(grid);
 
   const get = (f: string): string => (grid.querySelector(`[data-f="${f}"]`) as HTMLInputElement | null)?.value ?? '';

@@ -61,8 +61,8 @@ body.embed-unauthed::before {
 /* — The renderer ladder (canvas-substrate-design.md §1) — */
 
 .canvas-element .view-tile {
-  background: #fff;
-  border: 1px solid #ddd;
+  background: var(--pc-panel, #fdf9ef);
+  border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 10px;
   padding: 0.6em 0.8em;
   overflow: auto;
@@ -96,8 +96,8 @@ body.embed-unauthed::before {
   box-sizing: border-box;
   border-radius: 10px;
   overflow: hidden;
-  border: 1px solid #ddd;
-  background: #fff;
+  border: 1px solid var(--pc-border, #ddd2b8);
+  background: var(--pc-panel, #fdf9ef);
 }
 .surface-tile iframe {
   width: 100%;
@@ -113,8 +113,8 @@ body.embed-unauthed::before {
 /* — The ladder's floor: generic fact cards — */
 .canvas-element .fact-card {
   box-sizing: border-box;
-  background: #fff;
-  border: 1px solid #ddd;
+  background: var(--pc-panel, #fdf9ef);
+  border: 1px solid var(--pc-border, #ddd2b8);
   border-radius: 10px;
   padding: 0.55em 0.8em;
   font-family: system-ui, sans-serif;
@@ -125,7 +125,7 @@ body.embed-unauthed::before {
   color: #999; font-size: 0.66rem; margin-top: 0.25em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.fact-card .fc-open { font-size: 0.7rem; color: #2f6f4f; text-decoration: none; }
+.fact-card .fc-open { font-size: 0.7rem; color: var(--pc-accent, #2e5e43); text-decoration: none; }
 
 .fact-card { position: relative; }
 .fact-card .fc-expand {
@@ -150,9 +150,9 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   overflow-y: auto;
   padding: 0.35rem;
   border-radius: 14px;
-  background: #fff;
-  border: 1px solid #ddd;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16);
+  background: var(--pc-panel, #fdf9ef);
+  border: 1px solid var(--pc-border, #ddd2b8);
+  box-shadow: 0 10px 32px rgba(51, 46, 35, 0.18);
   font-family: system-ui, sans-serif;
 }
 .cm2 .cm-head {
@@ -162,7 +162,7 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
 }
 .cm2 .cm-head strong { display: block; font-size: 0.88rem; line-height: 1.3; }
 .cm2 .cm-head code { display: block; color: #999; font-size: 0.66rem; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cm2 .cm-open { font-size: 0.75rem; color: #2f6f4f; text-decoration: none; }
+.cm2 .cm-open { font-size: 0.75rem; color: var(--pc-accent, #2e5e43); text-decoration: none; }
 .cm2 .cm-row {
   display: flex;
   align-items: center;
@@ -177,9 +177,9 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   text-align: left;
   cursor: pointer;
 }
-.cm2 .cm-row:hover, .cm2 .cm-row:active { background: #f1f1ea; }
+.cm2 .cm-row:hover, .cm2 .cm-row:active { background: #f2ecdc; }
 .cm2 .cm-row i { width: 1.1rem; text-align: center; color: #8a8a82; }
-.cm2 .cm-danger, .cm2 .cm-danger i { color: #7a1f1f; }
+.cm2 .cm-danger, .cm2 .cm-danger i { color: var(--pc-danger, #b5523c); }
 .cm2 .cm-appearance { border-top: 1px solid #eee; margin-top: 0.25rem; padding: 0.25rem 0; }
 .cm2 .cm-appearance summary { padding: 0.45rem 0.65rem; color: #8a8a82; font-size: 0.8rem; cursor: pointer; }
 .cm2 .cm-field {
@@ -191,9 +191,14 @@ body.readonly .fc-expand, body.embed .fc-expand { display: none; }
   font-size: 0.8rem;
   color: #8a8a82;
 }
-.cm2 .cm-field select { font-size: 0.85rem; padding: 3px 6px; border-radius: 7px; border: 1px solid #e4e4dc; }
+.cm2 .cm-field select { font-size: 0.85rem; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--pc-border, #ddd2b8); }
+/* A bare color input stretches into a giant black bar in the field row. */
+.cm2 .cm-field input[type="color"] {
+  width: 52px; height: 28px; padding: 2px; flex: 0 0 auto;
+  border: 1px solid var(--pc-border, #ddd2b8); border-radius: 6px; background: var(--pc-panel, #fdf9ef);
+}
 
-.canvas-element .minimap-tile { background: #fbfbf8; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-sizing: border-box; }
+.canvas-element .minimap-tile { background: var(--pc-panel, #fdf9ef); border: 1px solid var(--pc-border, #ddd2b8); border-radius: 10px; overflow: hidden; box-sizing: border-box; }
 .minimap-tile canvas { width: 100%; height: 100%; display: block; }
 
 .surface-tile.surface-blocked { display: flex; align-items: center; justify-content: center; padding: 0.8em; color: #8a8a82; font-family: system-ui, sans-serif; font-size: 0.8rem; text-align: center; }

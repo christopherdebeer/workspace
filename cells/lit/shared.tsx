@@ -15,6 +15,11 @@
 import * as React from 'react';
 import { marked } from 'marked';
 import { bodyText, fieldsToHtml, wikiLinkExtension } from '@parc/ui';
+import { parseFenceMeta } from './fence';
+
+// The fence meta-grammar (ADR-0059) — one grammar, parsed AND serialized,
+// shared by SSR, client, and tests (tests/lit-fence.test.ts pins it).
+export { parseFenceMeta, fenceToString, fenceTagsOf, type FenceMeta } from './fence';
 
 /** A document is a *view* over facts: thin metadata only. Membership + order live
  *  entirely in substrate-native `_doc/<id>/<factKey>={seq,fold}` decorations — any
@@ -66,6 +71,9 @@ marked.setOptions({ gfm: true, breaks: false });
 // sides — the SSR/hydration parity contract is preserved.
 const escHtml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+/** dotlit's admonition directives (verified: styling_and_themes.lit §dir-*):
+ *  an `md` fence carrying one renders as a colored callout, not code. */
+const ADMONITIONS = ['warn', 'info', 'success', 'error', 'note', 'box'];
 marked.use({
   renderer: {
     // marked@12 passes positional args; guard for the token-object form too.
@@ -75,16 +83,28 @@ marked.use({
         infostring = tok.lang; escaped = tok.escaped; code = tok.text;
       }
       const info = (infostring || '').trim();
-      const lang = info.split(/\s+/)[0] || '';
+      // The FULL grammar on both sides (ADR-0059): `>lang` output cells parse
+      // to their real lang, directives select admonitions — SSR and client
+      // classify identically. Classification only: nothing executes here.
+      const meta = parseFenceMeta(info);
+      const lang = meta.lang;
+      const outCls = meta.isOutput ? ' fence-output' : '';
       // A markdown fence names the markdown renderer: render its body as markdown
-      // (nested), so ```md / ```markdown is respected on both SSR and client.
-      if (lang === 'md' || lang === 'markdown') {
-        return `<div class="md-fence">${marked.parse(code as string, { async: false }) as string}</div>\n`;
+      // (nested), so ```md / ```markdown (and dotlit's `>md !warn` admonition
+      // form) is respected on both SSR and client. A fence with a `< source`
+      // is a TRANSCLUSION (ADR-0061) — it must stay a pre[data-fence] so the
+      // client can resolve the reference; its body is a placeholder, not content.
+      if ((lang === 'md' || lang === 'markdown') && !meta.source) {
+        const dirs = meta.directives.filter((d) => ADMONITIONS.includes(d)).map((d) => ` dir-${d}`).join('');
+        return `<div class="md-fence${dirs}${outCls}">${marked.parse(code as string, { async: false }) as string}</div>\n`;
       }
       const text = escaped ? (code as string) : escHtml(code as string);
-      const cls = lang ? ` class="language-${escAttr(lang)}"` : '';
-      const meta = info ? ` data-fence="${escAttr(info)}"` : '';
-      return `<pre${meta}><code${cls}>${text}\n</code></pre>\n`;
+      const cls = lang ? ` class="language-${escAttr(lang)}${outCls}"` : outCls ? ` class="${outCls.trim()}"` : '';
+      const metaAttr = info ? ` data-fence="${escAttr(info)}"` : '';
+      // Output cells (leading `>`) carry provenance chips the client can dress;
+      // as plain HTML they degrade to a labelled band via CSS.
+      const outAttr = meta.isOutput ? ` data-output-lang="${escAttr(lang)}"` : '';
+      return `<pre${metaAttr}${outAttr}${outCls ? ` class="fence-output"` : ''}><code${cls}>${text}\n</code></pre>\n`;
     },
   },
 });
@@ -112,7 +132,14 @@ export const factRoute = (key: string): string => `/r/${encodeKeyPath(key)}`;
 // client share the marked instance, so both render identically.
 export { extractWikiTargets, resolveWikiTarget } from '@parc/ui';
 marked.use({
-  extensions: [wikiLinkExtension(({ key, label }) => `<a class="wikilink" href="${escAttr(factRoute(key))}">${escHtml(label)}</a>`)],
+  extensions: [wikiLinkExtension(({ key, label, fragment }) => {
+    // Fragments (ADR-0061): a member key or heading text within the target.
+    // Key '' = the current document ([[#frag]]) — a bare hash anchor. The
+    // client soft-resolves free-text fragments against member headings.
+    const frag = fragment ? `#${encodeURIComponent(fragment)}` : '';
+    const href = key ? `${factRoute(key)}${frag}` : frag || '#';
+    return `<a class="wikilink" data-wiki-key="${escAttr(key)}" href="${escAttr(href)}">${escHtml(label)}</a>`;
+  })],
 } as Parameters<typeof marked.use>[0]);
 
 export function renderMarkdown(md: string): string {
@@ -156,8 +183,16 @@ export function seqBetween(a: number | null, b: number | null): number {
  *  (dangerouslySetInnerHTML over the shared renderer), then enhances fences in
  *  place via an effect — so server HTML and client first render match exactly. */
 export function Block({ data }: { data: BlockData }): React.JSX.Element {
+  // ADR-0060: an `out:<src>:<ts>` member is an ATTACHED output — its key
+  // encodes provenance. Rendered identically on both halves (parity contract);
+  // the client's editor view adds scroll-to-source on top.
+  const k = data.key;
+  const outSrc = k.startsWith('out:') && k.lastIndexOf(':') > 4 ? k.slice(4, k.lastIndexOf(':')) : null;
   return (
-    <article className="block" data-key={data.key}>
+    <article className={`block${outSrc ? ' block-output' : ''}`} data-key={data.key} id={data.key}>
+      {outSrc ? (
+        <div className="block-out-prov">⤷ output of <a href={factRoute(outSrc)}>{outSrc}</a></div>
+      ) : null}
       <div className="block-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(data.md) }} />
     </article>
   );
