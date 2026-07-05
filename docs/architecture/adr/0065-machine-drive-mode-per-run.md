@@ -168,6 +168,36 @@ spawns a model, driven parks — so no rail-mode change was needed either.
 3. Port `weave`/`fix`/`improve` as sub-machines the tending driver dispatches
    (each itself drivable in either mode).
 
+## Production finding — driven runs need an explicit closer (2026-07-05)
+
+The first real scheduled-routine driven run of `machine/tending`
+(`run/2026-07-05T16-45-31-093Z`) surfaced a lifecycle gap. The driver did
+everything right *as a protocol*: it walked the val.town + sync-docs source
+surfaces, recorded honest `WALK` notes, refused to fake the GitHub walk its
+session grant couldn't cover, and wrote a thorough `tending/latest` audit
+(`grounds` both source facts, `elaborates` the trigger). But it treated the
+machine purely as a **prompt/checklist** and never touched the run fact — so
+the run sat at `node:"Audit", status:"running", rev 1`, a completed pass that
+reads as perpetually in-flight.
+
+Root cause: in `reactive` mode the step subscription walks the run to a terminal
+and stops; in `driven` mode that sub is (correctly) skipped, so **nothing closes
+the run unless the driver does**. The reframed driven routine prompt said "do the
+tending + write the audit," not "advance the run to Done." Result: every driven
+run leaks a dangling `running` fact that future Observe passes could miscount.
+
+Fix (prompt-level, no cell change): the driven routine MUST end by terminating
+its run — minimally write the run fact `status:"done"` (preserving
+`mode:"driven"`), ideally by stepping `Audit→Assess`, recording the Assess choice
+as a `claim` fact, and advancing to the chosen terminal (`Clear`/`Done`) so the
+run carries a real trajectory + a queryable decision, not just audit prose. The
+2026-07-05 orphan was closed post-hoc to `Clear`/`done` as a demonstration.
+Open: should the cell auto-close a driven run when its declared output
+(`tending/latest`, via `protocol/tending --produces-->`) is written — i.e. an
+output-completes-the-run subscription — so the driver can't forget? Leaning yes
+as an Inc 2 convenience, but the prompt-level close is the correct default
+(the driver owns termination in driven mode).
+
 ## Costs & open questions
 
 - The cell change is real work (subscription + stepper branch on `run.mode`).
