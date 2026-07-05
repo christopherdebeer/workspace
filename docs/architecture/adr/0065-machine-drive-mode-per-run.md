@@ -92,14 +92,45 @@ needs one.
 
 ## Increments
 
-1. `@c15r/machine` cell: add `mode` to `trigger_run` + the run fact; make the
-   `step` subscription skip decision-node auto-resolution when
-   `run.mode === "driven"`; make `step` (the tool) return the decision yield
-   unresolved in driven mode. `defaultMode` on `define_machine`. Keep `work`/
-   `task` as accepted aliases that set the *default* resolution (back-compat).
+**Inc 1 — code-confirmed spec (`cells/machine/`, read 2026-07-05).** The change
+is small because `step()` is *already* mode-neutral: `engine.ts:590` yields
+`{kind, node, choices}` at any non-`auto` rail and never spawns a model. All
+reactive auto-driving lives in three projected subscriptions — so "driven" =
+"these subs skip this run; the external `step` tool drives it." Exact edits:
+
+1. **Thread `mode` onto the run.** `index.ts` `trigger_run` (`:519`) writes a
+   `machine-trigger` fact whose value a trigger→run subscription materializes as
+   the run. Add `...(a.mode ? { mode: a.mode } : {})` to that trigger value
+   (`:525`), and have the trigger→run projection copy `value.mode` onto the run
+   fact it creates (default absent ⇒ reactive). `step()` already preserves it
+   (`{ ...cur }`), so it rides every advance.
+2. **Make the three reactive subs skip driven runs** — append
+   `&& value.mode != "driven"` to each `match.cel` in `engine.ts`:
+   - `projectStepSubscription` (`:476`) — the deterministic auto-walker.
+   - the `decide-<from>` agent delivery (`:338`).
+   - the `work-<from>` model delivery (`:359`).
+   Back-compat: runs with no `mode` field satisfy `null != "driven"` ⇒ still
+   auto-drive. Existing machines keep their already-projected subs until
+   redefined, so **deploying the code alone changes no live machine's behavior**
+   — `mode` takes effect per machine only on its next `define_machine`.
+3. **`step` tool is already the driven counterpart** (`index.ts:533`,
+   `:301` doc) — no change; a driven caller loops step → resolve+advance → step.
+   The driver's advance write MUST preserve `mode:"driven"` (else the run
+   reverts to reactive and the subs re-engage) — bake this into the driven
+   routine prompt and the `decide-<from>` template's "back UNCHANGED except…".
+4. Optional `defaultMode` on `define_machine` (identity fact, like today's
+   `reactive`), overridable by `trigger_run { mode }`. Keep `reactive:false`
+   working as "defaultMode: driven".
+
+Test plan (non-spendy): define a scratch machine, `trigger_run {mode:"driven"}`
+→ assert the run parks (no auto-advance, no model spawn) and `step` returns the
+yield; `trigger_run {mode:"reactive"}` → assert it self-drives (one model spawn
+— the only spendy assertion, run once). Then redefine `machine/tending`.
+
 2. Define `machine/tending` v2 with mode-neutral decision nodes (Observe →
-   Assess → Dispatch/Tend → Audit). API trigger uses `reactive`; the scheduled
-   Claude routine uses `driven`.
+   Assess → Dispatch/Tend → Audit; dry-run validated 2026-07-05, 7 nodes/10
+   rails, acyclic). API trigger uses `reactive`; the scheduled Claude routine
+   uses `driven`.
 3. Port `weave`/`fix`/`improve` as sub-machines the tending driver dispatches
    (each itself drivable in either mode).
 
