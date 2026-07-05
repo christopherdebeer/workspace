@@ -188,3 +188,10 @@ pre.fence-output::before{content:'⤷ output ' attr(data-output-lang);display:bl
 .picker-hit:hover{background:var(--paper,#fbfbf8)}
 .picker-title{font-weight:600;font-size:.9rem}
 .picker-meta{color:var(--faint);font-size:.72rem;font-family:ui-monospace,Menlo,monospace}
+/* ADR-0063: fence chips — the declaration visible, white-board restraint */
+.fence-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin:.5rem 0 0;font:600 .68rem ui-monospace,Menlo,monospace}
+.fence-chips+pre{margin-top:.25rem}
+.fchip{border:1px solid var(--line);border-left-width:3px;border-radius:5px;padding:.08rem .4rem;color:var(--faint);background:#fff}
+.fchip.fc-lang{color:var(--ink,#1c1c1a)}
+.fchip.fc-error{border-left-color:#b5523c!important;color:#b5523c}
+.fchip.fc-link{cursor:pointer;text-decoration:underline dotted}

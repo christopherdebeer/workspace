@@ -1,6 +1,11 @@
 # ADR-0063 — The dotlit interaction gems: lit's surface grows hands
 
-- **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
+- **Status:** Inc 1 shipped 2026-07-05 (lit v1783211050381) — the floating
+  block menu (verbatim dotlit anatomy: sticky mid-viewport round cluster on
+  the selected block; fan = edit/fold/move/add/insert-existing/close) and
+  the fence chip row (declaration as chips: output/lang/file/!dirs/attrs/
+  #tags/</> refs/updated-ago; hash-hue on the left border only; `!hidemeta`
+  honored; key-shaped `< src` chips navigate). Inc 2–3 open.
 - **Depends on:** ADR-0059 (the grammar the chips render), ADR-0060 (outputs
   the chips describe), ADR-0061 (the verbs the gestures invoke). Sources:
   dotlit `CodeMeta.jsx`, `Editor.jsx`, `Header.jsx`, `CellMenu.jsx`,

@@ -198,6 +198,49 @@ async function saveCellSplit(docId: string, cell: LoadedCell, nextSeq: number | 
   }
   return out;
 }
+/** ADR-0063 gem 1: a fence's declaration rendered as a chip row above the
+ *  code — dotlit's CodeMeta, on the grammar we round-trip. Chips only when
+ *  the meta says more than a bare lang; `!hidemeta` opts out. Hash-hue rides
+ *  a thin left border only (white-board restraint), never a background. */
+function addFenceChips(root: HTMLElement): void {
+  for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
+    if (pre.dataset.chipped) continue;
+    const m = parseFenceMeta(pre.dataset.fence || '');
+    const noisy = new Set(['attached', 'updated']);
+    const attrs = Object.entries(m.attrs).filter(([k, v]) => !noisy.has(k) && v !== 'true');
+    const hasMeta = m.isOutput || m.directives.length > 0 || m.tags.length > 0 || attrs.length > 0 || !!m.source || !!m.output || !!m.file;
+    if (!hasMeta || m.directives.includes('hidemeta')) continue;
+    pre.dataset.chipped = '1';
+    const row = el('div', 'fence-chips');
+    const hue = (s: string): number => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return h; };
+    const chip = (cls: string, text: string, colored = true): HTMLElement => {
+      const c = el('span', `fchip ${cls}`, text);
+      if (colored) c.style.borderLeftColor = `hsl(${hue(text)} 45% 55%)`;
+      row.appendChild(c);
+      return c;
+    };
+    if (m.isOutput) chip('fc-out', '⤷ output', false);
+    chip('fc-lang', m.lang || 'txt', false);
+    if (m.file) chip('fc-file', m.file);
+    for (const d of m.directives) chip(`fc-dir${d === 'error' ? ' fc-error' : ''}`, `!${d}`);
+    for (const [k, v] of attrs) chip('fc-attr', `${k}=${v}`);
+    for (const t of m.tags) chip('fc-tag', `#${t}`);
+    if (m.fromSource) {
+      const c = chip('fc-src', `< ${m.fromSource}`);
+      if (/[:/]/.test(m.fromSource) && !/^https?:|^\/\//.test(m.fromSource)) {
+        c.classList.add('fc-link');
+        c.onclick = () => { location.href = factRoute(m.fromSource!); };
+      }
+    }
+    if (m.output) chip('fc-target', `> ${[m.output.lang, m.output.file].filter(Boolean).join(' ')}`);
+    if (m.attrs.updated && Number(m.attrs.updated)) {
+      const mins = Math.max(0, Math.round((Date.now() - Number(m.attrs.updated)) / 60000));
+      chip('fc-time', mins < 60 ? `updated ${mins}m ago` : mins < 60 * 48 ? `updated ${Math.round(mins / 60)}h ago` : `updated ${Math.round(mins / 1440)}d ago`, false);
+    }
+    pre.parentElement?.insertBefore(row, pre);
+  }
+}
+
 /** ADR-0059 Inc 3 (a scoped-feed consumer, ADR-0055): tail ONLY this doc's
  *  slice — its order decorations, its doc fact, and its current member keys
  *  (exact keys are valid prefixes) — state-changing ops only. An idle doc's
@@ -334,6 +377,7 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
   // Iterate <pre data-fence> (set by the shared renderer) so the full meta-grammar
   // — not just the first-word lang — drives routing.
   void markRedLinks(root); // ADR-0061 §1b — stubs style in as checks resolve
+  addFenceChips(root); // ADR-0063 gem 1 — the declaration rendered as chips
   for (const pre of Array.from(root.querySelectorAll('pre[data-fence]')) as HTMLElement[]) {
     const body = (pre.querySelector('code')?.textContent || '').trim();
     const fence = parseFence(pre.dataset.fence || '', body);
