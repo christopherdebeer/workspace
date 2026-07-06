@@ -24,6 +24,9 @@ export interface RememberInput {
   tags?: string[];
   /** CAS: require the stored revision to equal this (0 = must not exist). */
   ifRevision?: number;
+  /** CAS (proof-of-read, ADR-0066): require the stored content hash (`_meta.version`)
+   *  to equal this. `""` = create-only. Unforgeable without having read the value. */
+  ifVersion?: string;
   /** CAS: require the key not to exist. */
   ifAbsent?: boolean;
   /** Lease/reveal timer, evaluated at read (no scheduler). */
@@ -105,6 +108,7 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
           type: input.type,
           tags: input.tags,
           ifRevision: input.ifRevision,
+          ifVersion: input.ifVersion,
           ifAbsent: input.ifAbsent,
           timer: input.timer,
           import: input.import,

@@ -214,22 +214,27 @@ describe('workspace sharing / view layer', () => {
         'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'pruneSimilar', 'suggestions', 'ratify',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
-        'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant',
+        'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena',
       ].sort(),
     );
     // Per-slice ops gate on ownership AND a verb scope derived from kind, so a
     // token's read/write consent is enforced (reads → read:workspace, acts →
-    // write:workspace). tend stays the operator-only workspace:admin override.
+    // write:workspace). tend/reindex/pruneSimilar stay the operator-only
+    // workspace:admin override; athena is the cross-slice SQL surface, admin-only
+    // (platform:*) until the lake is partitioned per-slice.
     expect(
       tools.every((t) =>
         t.name === 'tend' || t.name === 'reindex' || t.name === 'pruneSimilar'
           ? t.scope === 'workspace:admin'
-          : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+          : t.name === 'athena'
+            ? t.scope === 'platform:*'
+            : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
       ),
     ).toBe(true);
     expect(tools.find((t) => t.name === 'tend')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'reindex')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'pruneSimilar')!.scope).toBe('workspace:admin');
+    expect(tools.find((t) => t.name === 'athena')!.scope).toBe('platform:*');
     expect(tools.find((t) => t.name === 'recall')!.scope).toBe('read:workspace');
     expect(tools.find((t) => t.name === 'remember')!.scope).toBe('write:workspace');
     // Every tool ships a JSON Schema the gateway can surface to clients.
@@ -1043,6 +1048,40 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
     const listed = await cmds.actions(undefined, alice());
     expect(listed.actions.map((a) => a.id).sort()).toEqual(['claim-task', 'set-phase', 'ship']);
     await expect(cmds.invoke({ action: 'set-phase-2' }, alice())).rejects.toThrow(/not_found/);
+  });
+
+  it('a declared-action write carries ifVersion proof-of-read (ADR-0066 Inc 2)', async () => {
+    // The token rides in via a ${params.*} substitution — parity with sync's
+    // action write-templates. Registers + deletes itself to leave the shared
+    // vocabulary unchanged for sibling tests.
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'por-write',
+          description: 'Proof-of-read write to por:${params.k}',
+          params: { k: { type: 'string', required: true }, ver: { type: 'string', required: true }, v: { type: 'any' } },
+          writes: [{ key: 'por:${params.k}', value: '${params.v}', ifVersion: '${params.ver}' }],
+        },
+      },
+      alice(),
+    );
+
+    // ifVersion:"" = create-only
+    const created = await cmds.invoke({ action: 'por-write', params: { k: 's', ver: '', v: 'one' } }, alice());
+    const token = created.writes[0]._meta.version;
+    expect(token).toMatch(/^[0-9a-f]{16}$/);
+
+    // a guessed token is rejected
+    await expect(
+      cmds.invoke({ action: 'por-write', params: { k: 's', ver: 'deadbeefdeadbeef', v: 'two' } }, alice()),
+    ).rejects.toThrow(/precondition_failed/);
+
+    // the token from the create succeeds and rotates the version
+    const ok = await cmds.invoke({ action: 'por-write', params: { k: 's', ver: token, v: 'two' } }, alice());
+    expect(ok.writes[0].value).toBe('two');
+    expect(ok.writes[0]._meta.version).not.toBe(token);
+
+    await cmds.deleteAction({ id: 'por-write' }, alice());
   });
 
   it('a declared action may not write the vocabulary itself', async () => {

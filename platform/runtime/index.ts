@@ -66,6 +66,7 @@ export {
   INTENT_PRESET,
   SALIENCE_CONFIG_KEY,
 } from './state';
+export { contentHash } from './content-hash';
 // The DynamoDB-backed StateStore — surfaced in the barrel (ADR-0042 Inc 0) so a
 // cell's own SSR Lambda can run the SAME read pipeline the gateway does
 // (`createObservedState(createDynamoStateStore(table))`) against its IAM-scoped

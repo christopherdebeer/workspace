@@ -15,6 +15,7 @@ import {
   PlatformEventBus,
   DynamicCellControlPlane,
   SubstrateTable,
+  SubstrateAnalyticsLane,
 } from '../platform/infra';
 
 export interface PlatformStackProps extends cdk.StackProps {
@@ -138,7 +139,7 @@ export class PlatformStack extends cdk.Stack {
       name: 'workspace',
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
-      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'pruneSimilar', 'suggestions', 'ratify', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'describeTools'],
+      commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'pruneSimilar', 'suggestions', 'ratify', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena', 'describeTools'],
       emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
       // The hot write path: each put recomputes salience, so ingest is CPU-bound.
@@ -204,6 +205,41 @@ export class PlatformStack extends cdk.Stack {
         bisectBatchOnError: true,
       }),
     );
+    // Analytics + durable-archive lane (docs/substrate-analytics.md): a SECOND
+    // consumer on the SubstrateTable stream (alongside the vector indexer)
+    // flattens each fact change and forwards it to Kinesis Firehose, which lands
+    // newline-JSON in S3 (gzip, date-partitioned), catalogued in Glue via
+    // partition projection so Athena queries the whole substrate with SQL — the
+    // ad-hoc/analytical surface DynamoDB's access model can't serve, plus a
+    // permanent (TTL-free) archive of the trajectory. Isolated from the write
+    // path (runs off the stream); no-ops until FIREHOSE_STREAM is set.
+    const analytics = new SubstrateAnalyticsLane(this, 'SubstrateAnalytics', {
+      envName,
+      account: this.account,
+      region: this.region,
+    });
+    const archiver = new NodejsFunction(this, 'SubstrateArchiver', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '..', '..', 'services', 'substrate-archiver', 'handler.ts'),
+      handler: 'handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(60),
+      logRetention: logs.RetentionDays.ONE_WEEK,
+      bundling: { externalModules: [] }, // bundle the SDK (not in the Node 20 image)
+    });
+    analytics.grantPutRecords(archiver);
+    // The admin-gated `workspace.athena` SQL surface reads the lake via Athena.
+    analytics.grantQuery(workspace.fn);
+    archiver.addEventSource(
+      new DynamoEventSource(substrate.table, {
+        startingPosition: lambda.StartingPosition.LATEST, // archive from now forward
+        batchSize: 200,
+        maxBatchingWindow: cdk.Duration.seconds(30),
+        retryAttempts: 3,
+        bisectBatchOnError: true,
+      }),
+    );
+
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
     // cell-<id>) emit substrate.write.requested; the workspace applies the
     // fact in the owner's slice. See docs/substrate-storage.md.
