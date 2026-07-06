@@ -6,11 +6,15 @@
 > and coordination for AI agents — that make *opposite bets* on the hardest part.
 >
 > **Sources & honesty.** The substrate side is grounded in this repo
-> (`docs/substrate*.md`, the ADRs, the live `$catalog`). The Omnigraph side is from
-> its README + the agent `SKILL.md` playbook + docs, read over the public web — a
-> full source clone was blocked by this session's repo-scope egress policy, so
-> claims about Omnigraph *internals* (merge-conflict resolution, Lance revision
-> mapping) are taken from its own prose and flagged where that prose is silent.
+> (`docs/substrate*.md`, the ADRs, the live `$catalog`). The Omnigraph side was first
+> drafted from its README + `SKILL.md` + docs (clone/archive were blocked by
+> repo-scope egress policy), then **corrected against a full source read** of an
+> uploaded archive — chiefly `docs/dev/{merge,invariants,architecture,
+> write-latency-roadmap}.md` and `.context/merge-insert-cas-granularity.md`. The
+> correction was material: Omnigraph's merge is a rigorous **three-way, graph-aware,
+> strong-consistency** merge (not the under-specified mechanic the README's silence
+> implied), and its real cost is **measured single-row write latency**, actively
+> being optimized. Passages changed by the source read are marked "verified".
 
 ---
 
@@ -71,7 +75,7 @@ single-owner, not distributed.
 
 | Dimension | Omnigraph | Substrate |
 |---|---|---|
-| **Multi-agent writes** | Git-style **branch** isolation + sequential merge to `main` | **Shared blackboard** (scope = partition); writes land directly |
+| **Multi-agent writes** | Git-style **branch** isolation + **three-way semantic merge** (graph-aware conflicts, structured 409); strong-consistency default | **Shared blackboard** (scope = partition); writes land directly; optimistic per-key CAS |
 | **History / versioning** | Commits + branches + **time-travel** | **Monotonic trajectory**, supersede-not-delete (linear, no branches) |
 | **Data model** | **Schema-first**, enforced: `.pg` files, `@key`/`@card`/`@unique`/`@embed` | **Schema-light** facts `{value,_meta}`; types are cell-declared *render/handler hints*, not constraints |
 | **Query** | `.gq` parameterized stored queries; one language | `read`/`query` verbs + projections; primitives composed in-Lambda |
@@ -162,12 +166,28 @@ coordination is **structural, not algorithmic**: the playbook tells agents to
 (retraction + re-insert) so immutable facts never collide. Merges are sequential
 into `main`.
 
-- **What's underspecified (and it matters):** neither the README nor the SKILL
-  documents *what a merge does when two branches touch the same keyed node* —
-  conflict detection, resolution policy, or failure mode. "Merged safely, Git-style"
-  is asserted; the hard part of git-for-data — semantic merge of graph state — is
-  the least-documented part. At v0.8, treat "safe merge" as a design intent whose
-  mechanics you'd want to verify against source before betting a fleet on it.
+- **What the source shows (verified against a full read).** The README's silence
+  is *not* absence: merge is a real **three-way** merge
+  (`MergeOutcome{AlreadyUpToDate | FastForward | Merged}` — Git semantics), an ordered
+  row-by-row cursor over each per-type Lance dataset, staged and published as **one
+  atomic manifest update**. Conflicts are a **graph-aware taxonomy** —
+  `DivergentInsert`, `DivergentUpdate`, `DeleteVsUpdate`, **`OrphanEdge`** (an edge
+  referencing a node the other side deleted), plus `Unique`/`Cardinality`/
+  `ValueConstraint` violations — validated *at merge time* through one Δ-scoped
+  evaluator shared with the mutation and load paths, and surfaced as a structured
+  **HTTP 409**. **Strong consistency is the default** (invariant 6: snapshot-isolated
+  reads, durable-before-ack writes, one-winner manifest CAS + recovery sidecars).
+  This is *more* rigorous than most "git-for-data" — it's git for a **typed graph**
+  with referential integrity + constraints enforced on merge. My earlier "safe merge
+  is unverified design intent" caveat was wrong; corrected here.
+- **The real cost is elsewhere — write latency.** Their own validated trace measured
+  **~7.2 s median for a single keyed-node insert** on a 343 MB graph on R2, root-caused
+  to object-store `LIST` amplification (resolving "latest version" repeatedly), with a
+  layered fix in flight (RFC-013). And multi-**process** concurrent writers to one
+  graph are explicitly "one-winner-CAS territory" with documented sharp edges. So the
+  trade is sharp and honest: **strong-consistency semantic merge, bought with
+  object-store write latency** — exactly the axis where the substrate's operational KV
+  is strong.
 
 **Substrate — shared blackboard + reactivity.** There are no branches. Every write
 lands directly in a scope partition; authority is *scope = partition*, enforced
@@ -318,13 +338,15 @@ analytical + multimodal unified); strong typed schema + migrations + linting; un
 RRF retrieval; branch isolation scales cleanly to many parallel writers; Cedar
 governance uniform across every interface; a real product with distribution, docs, and
 a community; Rust performance headroom.
-**Weaknesses** — **merge-conflict semantics are undocumented** (the hardest part of
-git-for-data is the least-shown); **no attention/salience** (relevance ≠ persistent
-importance); **no reactivity** (no pub/sub/triggers); **no in-system compute**; young
-(v0.8, no benchmarks, Python SDK pending); **sequential merge to `main`** is a
-potential throughput bottleneck at true fleet scale; schema-first ceremony can lag
-fast-moving agent ontologies; a columnar/S3 lakehouse is typically *worse* than a KV
-store for hot single-fact latency (architecturally likely; unverified).
+**Weaknesses** — **single-row write latency** is the real cost: their own trace
+measured **~7 s median** for one keyed-node insert on object storage (LIST
+amplification), root-caused with an in-flight fix (RFC-013) but real today; **no
+attention/salience** (relevance ≠ persistent importance); **no reactivity** (no
+pub/sub/triggers); **no in-system compute**; **multi-process** concurrent writers to
+one graph are "one-winner-CAS" with documented sharp edges (cross-process
+serialization gaps); young (v0.8, no published benchmarks, Python SDK pending);
+schema-first ceremony can lag fast-moving agent ontologies; `create_vector_index`
+still advances HEAD inline (the last non-staged residual).
 
 ### Substrate
 **Strengths** — **salience/attention/tending** (surfaces + self-maintains, unique);
@@ -344,12 +366,13 @@ known ✗; **AWS-locked**, personal/bespoke, not a product; unproven beyond one 
 
 ## 7. Failure modes — where each breaks
 
-- **Omnigraph:** two agents mutate the same keyed node on different branches → a merge
-  that must resolve a conflict whose policy isn't documented (last-writer-wins? manual?
-  reject?) — the "safe" claim rides on this. Sequential merge into `main` serializes
-  the fleet's write-commit path → a throughput ceiling. Lock-step `schema apply`
-  centralizes schema evolution → a coordination bottleneck. Hot single-fact reads over
-  a columnar lakehouse may disappoint latency-sensitive paths.
+- **Omnigraph:** two branches edit the same node → a **typed 409 conflict**
+  (`DivergentUpdate`/`DeleteVsUpdate`/`OrphanEdge`) the caller must resolve — safe, but
+  merge becomes a human/agent decision point, not automatic. **Write latency is the
+  real failure surface:** ~7 s median for a single keyed-node insert on object storage
+  in their own trace (LIST amplification), being optimized (RFC-013) but real today.
+  Multi-*process* concurrent writers to one graph are one-winner-CAS with documented
+  sharp edges. Lock-step `schema apply` centralizes schema evolution.
 - **Substrate:** two writers (or one agent across sessions) hit the same key → lost
   updates unless every writer remembers CAS. Mis-tuned salience → important facts
   elided or noise surfaced (mitigated by tending, but it's a tuning surface).
