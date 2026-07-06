@@ -656,7 +656,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
             enabled: { type: 'array', description: 'Availability conditions (same shape as if)', items: { type: 'object' } },
             writes: {
               type: 'array',
-              description: 'Declared writes: [{ key, value?, ifAbsent?, timer?, type?, tags? }]',
+              description: 'Declared writes: [{ key, value?, ifAbsent?, ifVersion?, timer?, type?, tags? }]. ifVersion is proof-of-read CAS (a content hash, "" = create-only); supports ${params.*} so the caller can pass a token they read.',
               items: { type: 'object' },
             },
             params: { type: 'object', description: 'Param schema: { <name>: { type?, description?, enum?, required? } }' },

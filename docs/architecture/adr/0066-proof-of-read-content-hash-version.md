@@ -1,11 +1,16 @@
 # ADR-0066 — Proof-of-read: content-hash `version` conditional writes
 
-- **Status:** Accepted 2026-07-06. **Inc 1 implemented** — persisted `version` content
-  hash + `ifVersion` on `remember` + `_meta.version` read exposure + primitive/command
-  tests (`platform/runtime/content-hash.ts`, `state.ts`, `state-store-codec.ts`,
-  `services/workspace/{commands-write,descriptors}.ts`, `tests/fact.test.ts`). Pending
-  live validation on the next deploy. Inc 2 (declarative-actions parity + store-level
-  `version` condition) open.
+- **Status:** Accepted 2026-07-06. **Inc 1 shipped + validated live** — persisted
+  `version` content hash + `ifVersion` on `remember` + `_meta.version` read exposure
+  (`platform/runtime/content-hash.ts`, `state.ts`, `state-store-codec.ts`,
+  `services/workspace/{commands-write,descriptors}.ts`, `tests/fact.test.ts`). Prod
+  gauntlet passed: a read token passes and rotates the version, a guessed hash and a
+  stale token are both rejected, and pre-ADR facts expose a computed version with no
+  migration. **Inc 2 shipped** — declarative `_actions` write-templates carry `ifVersion`
+  (`services/workspace/actions.ts`, parity with sync's kernel). The optional store-level
+  `version` physical condition is **closed / won't-do** — see Rollout: a version-only
+  guard would permit metadata-only lost updates, so the revision-based closer is
+  strictly safer.
 - **Depends on:** ADR-0044 (the write/remember/CAS vocabulary), `docs/substrate-storage.md`
   (phase-2 Gap 3 — the `ifRevision`/`ifAbsent` CAS), and the substrate's ancestor
   **sync** (`christopherdebeer/sync.parc.land`), whose `version`/`revision` split this
@@ -130,8 +135,7 @@ the record spread (`...fields`, `dynamo-state-store-v3.ts:115`).
 (One deliberate semantic: because the physical closer is revision-based, a *same-value*
 concurrent write — identical hash but a bumped revision — will conflict an `ifVersion` write
 that sync's pure-hash guard would have allowed. This is stricter, never looser: it never
-permits a lost update. Exact sync parity — a `version = :ver` physical condition — is offered
-as Increment 2, not the default.)
+permits a lost update — and, as Inc 2 established, it is the *right* choice: see Rollout.)
 
 ## The seam — exact insertion points
 
@@ -206,9 +210,15 @@ SDK-at-import concern). Matches sync's shape (`utils.ts:45-52`). Determinism not
   prove a read.
 - **Compute the hash on read only, never persist.** Rejected — cannot expose it cheaply in
   `_meta`, forces canonical serialization for round-trip stability, and re-hashes on every read.
-- **A store-level `version = :ver` physical condition (full sync parity).** Deferred to
-  Increment 2 — it buys same-value-concurrent-write tolerance at the cost of a storage-layer
-  change and a second condition; the revision-based closer is correct and free today.
+- **A store-level `version = :ver` physical condition (full sync parity).** **Closed in
+  Inc 2 (won't-do).** Its only benefit is tolerating a *same-value* concurrent write (hash
+  unchanged, revision bumped). But to get that, the physical guard must drop `revision` in
+  favour of `version` — and a `version`-only guard is *less* safe: a concurrent
+  **metadata-only** rewrite (a `type`/`tags` change, or a salience touch) bumps `revision`
+  but leaves `version` (a hash of `value`) unchanged, so a `version`-only `ifVersion` write
+  would slip past it and clobber the concurrent metadata change — a lost update the
+  revision-based closer prevents. Trading correctness for a marginal tolerance case is the
+  wrong trade; the Inc-1 revision closer stands.
 
 ## Rollout
 
@@ -216,5 +226,10 @@ SDK-at-import concern). Matches sync's shape (`utils.ts:45-52`). Determinism not
   Validate live: read a fact, echo its `_meta.version` on a conditional write (succeeds);
   mutate it out-of-band, retry the same token (rejected `precondition_failed`); confirm a
   guessed `ifRevision` cannot stand in for a stale `ifVersion`.
-- **Inc 2:** declarative-actions `ifVersion` parity; optional store-level `version` condition
-  for exact sync semantics.
+- **Inc 2 (shipped):** declarative `_actions` write-templates carry `ifVersion` (parity with
+  sync's kernel), with `${params.*}` substitution so an action can pass a token the caller
+  read; validated (`tests/workspace.test.ts` — create-only, guessed-token rejection, real-token
+  rotation). The optional store-level `version` condition is **closed / won't-do** — a
+  `version`-only physical guard permits metadata-only lost updates (a concurrent `type`/`tags`
+  change bumps `revision` but not the value hash), so the revision-based closer from Inc 1 is
+  strictly safer and stands.

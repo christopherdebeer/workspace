@@ -1050,6 +1050,40 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
     await expect(cmds.invoke({ action: 'set-phase-2' }, alice())).rejects.toThrow(/not_found/);
   });
 
+  it('a declared-action write carries ifVersion proof-of-read (ADR-0066 Inc 2)', async () => {
+    // The token rides in via a ${params.*} substitution — parity with sync's
+    // action write-templates. Registers + deletes itself to leave the shared
+    // vocabulary unchanged for sibling tests.
+    await cmds.registerAction(
+      {
+        action: {
+          id: 'por-write',
+          description: 'Proof-of-read write to por:${params.k}',
+          params: { k: { type: 'string', required: true }, ver: { type: 'string', required: true }, v: { type: 'any' } },
+          writes: [{ key: 'por:${params.k}', value: '${params.v}', ifVersion: '${params.ver}' }],
+        },
+      },
+      alice(),
+    );
+
+    // ifVersion:"" = create-only
+    const created = await cmds.invoke({ action: 'por-write', params: { k: 's', ver: '', v: 'one' } }, alice());
+    const token = created.writes[0]._meta.version;
+    expect(token).toMatch(/^[0-9a-f]{16}$/);
+
+    // a guessed token is rejected
+    await expect(
+      cmds.invoke({ action: 'por-write', params: { k: 's', ver: 'deadbeefdeadbeef', v: 'two' } }, alice()),
+    ).rejects.toThrow(/precondition_failed/);
+
+    // the token from the create succeeds and rotates the version
+    const ok = await cmds.invoke({ action: 'por-write', params: { k: 's', ver: token, v: 'two' } }, alice());
+    expect(ok.writes[0].value).toBe('two');
+    expect(ok.writes[0]._meta.version).not.toBe(token);
+
+    await cmds.deleteAction({ id: 'por-write' }, alice());
+  });
+
   it('a declared action may not write the vocabulary itself', async () => {
     await expect(
       cmds.registerAction(

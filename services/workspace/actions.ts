@@ -58,6 +58,10 @@ export interface DeclaredWrite {
   value?: unknown;
   /** CAS: only write if the key does not (live-)exist — the atomic claim. */
   ifAbsent?: boolean;
+  /** CAS (proof-of-read, ADR-0066): only write if the stored content hash equals
+   *  this (supports `${params.*}` substitution, so an action can carry a token the
+   *  caller read). `""` = create-only. Parity with sync's action write-templates. */
+  ifVersion?: string;
   /** Lease/reveal timer on the written fact. */
   timer?: FactTimer;
   type?: string;
@@ -347,6 +351,8 @@ export function createDeclarativeActions(state: ObservedState): DeclarativeActio
       for (const w of def.writes) {
         const key = substituteString(w.key, args, self, now);
         const value = substituteDeep(w.value, args, self, now);
+        // Proof-of-read token may carry a caller-supplied `${params.*}` (ADR-0066).
+        const ifVersion = w.ifVersion !== undefined ? substituteString(w.ifVersion, args, self, now) : undefined;
         const result = await state.put(
           {
             scope,
@@ -356,6 +362,7 @@ export function createDeclarativeActions(state: ObservedState): DeclarativeActio
             type: w.type,
             tags: w.tags,
             ifAbsent: w.ifAbsent,
+            ifVersion,
             timer: w.timer,
           },
           identity,
