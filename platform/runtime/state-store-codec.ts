@@ -80,6 +80,8 @@ export function itemToRecord(item: Item): StateRecord {
     key: item.key as string,
     value: item.value ?? null,
     revision: num(item.revision),
+    // Proof-of-read token (ADR-0066); absent on facts written before it.
+    ...(item.version !== undefined ? { version: item.version as string } : {}),
     seq: num(item.seq),
     firstSeq: num(item.firstSeq),
     writer: (item.writer as string | null) ?? null,

@@ -43,12 +43,16 @@ import type { ActorClass, Identity } from './auth';
 import { resolveType, type Type } from './type-schema';
 import { layer } from './resolution';
 import { matchesSelector } from './selector';
+import { contentHash } from './content-hash';
 
 // ── wrapped entry (the read-facing shape) ──────────────────────────
 
 export interface EntryMeta {
   /** Monotonic per-(scope,key) write count. */
   revision: number;
+  /** Content hash of the value — the unforgeable proof-of-read token for
+   *  `ifVersion` conditional writes (ADR-0066). Echo it back to guard a write. */
+  version: string;
   /** Monotonic per-scope sequence of the last write — the trajectory ordinal. */
   seq: number;
   /** The principal who last wrote (server-stamped from identity). */
@@ -198,6 +202,10 @@ export interface StateRecord {
   key: string;
   value: unknown;
   revision: number;
+  /** Content hash of `value` — the proof-of-read `version` token (ADR-0066).
+   *  Set on every native write; absent (`undefined`) on facts written before the
+   *  ADR — reads compute it on the fly, the next write persists it. */
+  version?: string;
   /** seq of the last write. */
   seq: number;
   /** seq of the first write (createdAt ordinal). */
@@ -1043,6 +1051,9 @@ export interface WriteInput {
   tags?: string[];
   /** CAS: require the stored revision to equal this (0 = must not exist). */
   ifRevision?: number;
+  /** CAS (proof-of-read, ADR-0066): require the stored content hash to equal this.
+   *  `""` = the key must not exist (create-only). Unforgeable without a read. */
+  ifVersion?: string;
   /** CAS: require the key not to exist. */
   ifAbsent?: boolean;
   /**
@@ -1385,6 +1396,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       value: rec.value,
       _meta: {
         revision: rec.revision,
+        // Proof-of-read token (ADR-0066): computed for pre-ADR facts that lack it.
+        version: rec.version || contentHash(rec.value),
         seq: rec.seq,
         writer: rec.writer,
         via: rec.via,
@@ -1491,7 +1504,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
       // CAS: fail fast on what we just read; the store's revision guard
       // closes the remaining race window atomically.
-      const hasCas = input.ifRevision !== undefined || !!input.ifAbsent;
+      const hasCas = input.ifRevision !== undefined || !!input.ifAbsent || input.ifVersion !== undefined;
       if (hasCas) {
         if (input.ifAbsent && livePrev) {
           throw new StatePreconditionError(`"${input.key}" already exists (revision ${livePrev.revision})`);
@@ -1500,6 +1513,18 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
           throw new StatePreconditionError(
             `"${input.key}" is at revision ${livePrev?.revision ?? 0}, expected ${input.ifRevision}`,
           );
+        }
+        // Proof-of-read (ADR-0066): the caller must echo the current content hash.
+        // `""` asserts the key is absent (create-only). Pre-ADR facts have no stored
+        // `version`, so hash the live value on the fly — the same fn used everywhere,
+        // over the same stored value, so it agrees with the read that produced the token.
+        if (input.ifVersion !== undefined) {
+          const liveVersion = livePrev ? (livePrev.version || contentHash(livePrev.value)) : '';
+          if (liveVersion !== input.ifVersion) {
+            throw new StatePreconditionError(
+              `"${input.key}" failed proof-of-read (content changed since it was read)`,
+            );
+          }
         }
       }
 
@@ -1516,6 +1541,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         scope: input.scope,
         key: input.key,
         value: input.value,
+        // Proof-of-read token (ADR-0066): the value's content hash, persisted so
+        // reads can hand it out and a later `ifVersion` write can demand it back.
+        version: contentHash(input.value),
         // physical continuity even across a lapsed lease — monotonic always
         revision: (prev?.revision ?? 0) + 1,
         seq,

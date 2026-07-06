@@ -33,7 +33,7 @@ export interface ToolDescriptor {
 const META_SCHEMA = {
   type: 'object',
   description:
-    'Provenance + salience: revision, seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided. With a read `explain:true`, also `explain: { signals, weights, contribution, degree }` — the score breakdown for tuning.',
+    'Provenance + salience: revision, version (content hash — the proof-of-read token to echo on an ifVersion write), seq, writer, via, createdAt, updatedAt, writers[], superseded, supersededBy, type, tags[], timer, score, velocity, standing, centrality, elided. With a read `explain:true`, also `explain: { signals, weights, contribution, degree }` — the score breakdown for tuning.',
 } as const;
 
 /** Per-call salience lens — an ergonomic bias over the tuned defaults. */
@@ -128,7 +128,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'remember',
     description:
-      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
+      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifVersion`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold; `ifVersion` echoes a read\'s content hash as unforgeable proof-of-read). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
     scope: null,
     scopeFamily: 'write:type:*',
     kind: 'act',
@@ -142,6 +142,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         type: { type: 'string', description: 'Optional indexable fact type (e.g. "decision", "todo")' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags (filterable in query)' },
         ifRevision: { type: 'number', description: 'Only write if the stored revision equals this (0 = key must not exist)' },
+        ifVersion: { type: 'string', description: 'Proof-of-read CAS: only write if the stored content hash (a read\'s `_meta.version`) equals this ("" = key must not exist). Unlike ifRevision, it cannot be supplied without having read the value — use it for contended keys.' },
         ifAbsent: { type: 'boolean', description: 'Only write if the key does not exist (treats an expired lease as absent)' },
         timer: {
           type: 'object',

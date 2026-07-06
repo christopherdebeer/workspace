@@ -61,6 +61,34 @@ describe('Fact: the monotonic floor (ADR-0013)', () => {
     await expect(s.put({ scope: 'r', key: 'k', value: 'x', ifRevision: 0 }, alice)).rejects.toThrow(/precondition_failed/);
   });
 
+  it('CAS: ifVersion enforces proof-of-read — a read token passes, a stale/guessed one is rejected (ADR-0066)', async () => {
+    const s = createObservedState(createMemoryStateStore());
+    const e1 = await s.put({ scope: 'r', key: 'k', value: { n: 1 } }, alice);
+    const token = e1._meta.version; // the proof-of-read token handed out on write/read
+    expect(token).toMatch(/^[0-9a-f]{16}$/);
+
+    // a guessed/wrong hash cannot forge a read
+    await expect(
+      s.put({ scope: 'r', key: 'k', value: { n: 2 }, ifVersion: 'deadbeefdeadbeef' }, alice),
+    ).rejects.toThrow(/precondition_failed/);
+
+    // the token from an actual read succeeds — and rotates the version
+    const e2 = await s.put({ scope: 'r', key: 'k', value: { n: 2 }, ifVersion: token }, alice);
+    expect(e2._meta.revision).toBe(2);
+    expect(e2._meta.version).not.toBe(token);
+
+    // the now-stale token is rejected — you must re-read. This is the regression fix:
+    // a guessed revision cannot substitute for the hash.
+    await expect(
+      s.put({ scope: 'r', key: 'k', value: { n: 3 }, ifVersion: token }, alice),
+    ).rejects.toThrow(/precondition_failed/);
+
+    // ifVersion:"" is create-only (must not exist)
+    await expect(s.put({ scope: 'r', key: 'k', value: 'x', ifVersion: '' }, alice)).rejects.toThrow(/precondition_failed/);
+    const created = await s.put({ scope: 'r', key: 'fresh', value: 'new', ifVersion: '' }, alice);
+    expect(created._meta.revision).toBe(1);
+  });
+
   it('timer lease (delete): live now, absent after expiry — the crash-safe re-claim', async () => {
     const s = createObservedState(createMemoryStateStore());
     await s.put({ scope: 'r', key: 'lease', value: 'held', timer: { ms: 30, effect: 'delete' } }, alice);

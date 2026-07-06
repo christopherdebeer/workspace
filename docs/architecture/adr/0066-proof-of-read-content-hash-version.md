@@ -1,6 +1,11 @@
 # ADR-0066 — Proof-of-read: content-hash `version` conditional writes
 
-- **Status:** Proposed 2026-07-06.
+- **Status:** Accepted 2026-07-06. **Inc 1 implemented** — persisted `version` content
+  hash + `ifVersion` on `remember` + `_meta.version` read exposure + primitive/command
+  tests (`platform/runtime/content-hash.ts`, `state.ts`, `state-store-codec.ts`,
+  `services/workspace/{commands-write,descriptors}.ts`, `tests/fact.test.ts`). Pending
+  live validation on the next deploy. Inc 2 (declarative-actions parity + store-level
+  `version` condition) open.
 - **Depends on:** ADR-0044 (the write/remember/CAS vocabulary), `docs/substrate-storage.md`
   (phase-2 Gap 3 — the `ifRevision`/`ifAbsent` CAS), and the substrate's ancestor
   **sync** (`christopherdebeer/sync.parc.land`), whose `version`/`revision` split this
