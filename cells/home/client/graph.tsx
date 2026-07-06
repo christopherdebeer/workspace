@@ -1,22 +1,34 @@
 /**
- * FullGraph (ADR-0047, v2) — home's primary surface: the salience-shaped slice
+ * FullGraph (ADR-0047, v3) — home's primary surface: the WHOLE substrate slice
  * as a full-viewport force graph. The graph IS the workspace; everything else
  * floats over it.
  *
- * Data: `workspace.query {rankBy:'salience', limit:140}` picks the nodes (the
- * focus band — progressive disclosure, not the whole slice), `workspace.graph`
- * supplies the full Reference projection (authored + derived), filtered to
- * edges among visible nodes. Node radius = salience score (degree assist);
- * node hue = type (stable hash). Edge grammar mirrors the board renderer:
- * authored solid, `similarTo` the faint constellation, membership
+ * Data: `workspace.query {rankBy:'salience'}` (no limit) loads the entire slice,
+ * `workspace.graph` supplies the full Reference projection (authored + derived),
+ * filtered to edges among visible nodes. Node radius = salience score (degree
+ * assist); node hue = type (stable hash). Edge grammar mirrors the board
+ * renderer: authored solid, `similarTo` the faint constellation, membership
  * (onBoard/inDoc/inView — ADR-0046) a light dash, other derived dashed.
+ *
+ * v3 (this pass): the graph no longer draws only the top salience band — it
+ * loads EVERYTHING and lifts the *focus band* (the salience focus tier, facts at
+ * or above the viewer's `focusThreshold`; default 0.5, ADR-0033) out of it. The
+ * band renders bright and labelled; the periphery is loaded but recedes to a dim
+ * wash (nodes, their labels, and edges buried off-band all fade). Selection and
+ * console highlights still override this baseline — they were already the
+ * "dim-everything-else" states, so the focus wash is just the resting one.
+ *
+ * Labels: EVERY node is labelled now, drawn centered BELOW the node over up to
+ * two wrapped lines; the label block participates in the sim (a node's collide
+ * radius covers the text below it, so the always-on labels don't stack).
+ * Selection PINS the node at viewport center and pans the camera onto it, so the
+ * neighbours a selection pulls in (one-hop expand) arrange around it and it
+ * stays centered rather than drifting with the layout.
  *
  * v2 (use feedback): edges lifted to warm-light strokes (they were invisible
  * against the dusk bg); non-similarTo edges carry their `rel` label (midpoint,
- * dark halo; derived/membership labels fade in past zoom 1.3×); LABELS
- * PARTICIPATE IN THE SIM — a labeled node's collide radius extends to cover
- * its text extent, so labels stop overlapping visually; external SELECTION
- * (`selectedKey` prop) pans/eases the camera to the node and rings it; and
+ * dark halo; derived/membership labels fade in past zoom 1.3×); external
+ * SELECTION (`selectedKey` prop) eases the camera to the node and rings it; and
  * console results reach the graph over the `home:console-result` CustomEvent
  * (the openFact pattern) — a search/query/recall's returned keys get an accent
  * ring while everything else dims, and the camera FITS to them.
@@ -65,6 +77,21 @@ function edgeStyle(e: GEdge): { stroke: string; dash?: string; opacity: number; 
 }
 
 const shortLabel = (s: string): string => (s.length > 26 ? s.slice(0, 25) + '…' : s);
+
+/** Wrap a title into up to two centered lines (~16 chars each) for the
+ *  below-node label — breaking on a word boundary where possible, ellipsising
+ *  the overflow. Labels always show now, so long titles must not run off. */
+function wrapLabel(s: string): string[] {
+  const MAX = 16;
+  const t = s.trim();
+  if (t.length <= MAX) return [t];
+  let cut = t.lastIndexOf(' ', MAX);
+  if (cut <= 0) cut = MAX; // no space to break on — hard-wrap
+  const line1 = t.slice(0, cut).trim();
+  let line2 = t.slice(cut).trim();
+  if (line2.length > MAX) line2 = line2.slice(0, MAX - 1) + '…';
+  return [line1, line2];
+}
 
 /** Extract fact keys from an arbitrary console result (search/query/recall/
  *  neighbors/single-fact shapes) — best-effort, empty = no graph reaction. */
@@ -121,11 +148,15 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
     let onResult: ((ev: Event) => void) | null = null;
 
     (async () => {
-      // ADR-0048 shaped reads: the graph needs titles + salience (card, not
-      // bodies) and only the edges AROUND its visible nodes (keys-scoped, not
-      // the whole multi-MB projection).
-      const [nodesRes, d3] = await Promise.all([
-        mcpCall('read', 'workspace.query', { rankBy: 'salience', limit: 140, shape: 'card' }),
+      // v3: load the WHOLE slice (card-shaped — titles + salience, not bodies)
+      // and the whole Reference projection. `query` with no limit returns every
+      // ranked fact; `graph {}` (no keys) returns every edge — the focus band is
+      // lifted out of the full graph client-side, not fetched in isolation.
+      // Alongside, the viewer's `_config/salience` gives the real focus
+      // threshold (default 0.5) so "the focus band" means *their* focus tier.
+      const [nodesRes, cfgRes, d3] = await Promise.all([
+        mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
+        mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
         loadD3(),
       ]);
       if (disposed) return;
@@ -133,10 +164,13 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">graph renderer unavailable (offline?)</div>';
         return;
       }
+      const cfgVal = (cfgRes && cfgRes.ok ? (cfgRes.value as { value?: { focusThreshold?: unknown } } | null)?.value : null) ?? null;
+      const ftRaw = Number(cfgVal?.focusThreshold);
+      const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
       const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
       const entries = allEntries.filter((e) => !isPlumbing(e));
       const byKey = new Map(entries.map((e) => [e.key, e]));
-      const edgesRes = await mcpCall('read', 'workspace.graph', { keys: entries.map((e) => e.key) });
+      const edgesRes = await mcpCall('read', 'workspace.graph', {});
       if (disposed) return;
       const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
       const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
@@ -150,8 +184,19 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         type: e._meta?.type ?? null,
         score: Number(e._meta?.score) || 0,
         label: shortLabel(factTitle(e)),
+        lines: wrapLabel(factTitle(e)),
         deg: deg.get(e.key) ?? 0,
       }));
+      // The focus band: the salience focus tier (score ≥ the viewer's threshold).
+      // The graph loads everything, but only this band is lifted out. Guard the
+      // degenerate case — a flat/low slice where nothing clears the tier — by
+      // falling back to the top slice so the band is never empty (all-dim).
+      const bandByTier = nodes.filter((n) => n.score >= focusThreshold);
+      const focusKeys = new Set<string>(
+        (bandByTier.length ? bandByTier : [...nodes].sort((a, b) => b.score - a.score).slice(0, Math.min(20, nodes.length))).map(
+          (n) => n.id,
+        ),
+      );
       // v3: nodes/links are MUTABLE — selection pulls a node's off-band
       // neighbourhood into the live sim (ADR-0047's one-hop expand), so every
       // selection is keyed and the selections re-join instead of binding once.
@@ -182,17 +227,23 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       let link: any, edgeLabel: any, node: any, label: any;
 
       const r = (d: any): number => 4 + d.score * 13 + Math.min(6, Math.sqrt(d.deg) * 1.4);
-      const labeled = (d: any): boolean => d.score > 0.4 || d.deg > 4 || d.ghost;
-      // v2: labels participate in the sim — a labeled node's collision footprint
-      // extends rightward over its text, approximated as a wider circle, so the
-      // layout itself keeps labels from stacking.
-      const collideR = (d: any): number => (labeled(d) ? r(d) + 6 + d.label.length * 2.4 : r(d) + 6);
+      const inFocus = (d: any): boolean => !!d && focusKeys.has(d.id);
+      // Every node carries a label now, drawn centered BELOW the node over up to
+      // two lines. Labels participate in the sim: the collision footprint drops
+      // to cover the text block below (its height) and out to its half-width, so
+      // the layout itself keeps the always-on labels from stacking.
+      const labelW = (d: any): number => Math.max(...d.lines.map((l: string) => l.length)) * 6;
+      const labelH = (d: any): number => d.lines.length * 11 + 4;
+      const collideR = (d: any): number => Math.max(r(d) + labelH(d), labelW(d) / 2 + 2, r(d) + 6);
       const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
 
       // ── selection + highlight state (shared by paint/select/expand) ──
       let selKey: string | null = null;
       let nbrSet: Set<string> | null = null;
       let hiSet: Set<string> | null = null;
+      // The node currently pinned at viewport center (the live selection). Only
+      // one at a time; released when selection changes/clears or it's dragged.
+      let pinned: any = null;
       const touchesSel = (d: any): boolean => !!selKey && (idOf(d.source) === selKey || idOf(d.target) === selKey);
       const neighborsOf = (key: string): Set<string> => {
         const out = new Set<string>();
@@ -276,29 +327,42 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
             c.on('click', onNodeClick).on('dblclick', onNodeDbl).call(dragBehavior);
             return c;
           });
+        // Every node is labelled (centered, below the node). A <g> per label
+        // holds a middle-anchored <text> whose lines are tspans — the group's
+        // transform places it in tick, its opacity carries the focus dimming.
         label = labelG
-          .selectAll('text')
-          .data(nodes.filter(labeled), (d: any) => d.id)
-          .join((enter: any) =>
-            enter
-              .append('text')
-              .text((d: any) => d.label)
+          .selectAll('g')
+          .data(nodes, (d: any) => d.id)
+          .join((enter: any) => {
+            const gl = enter.append('g').attr('pointer-events', 'none');
+            gl.append('text')
+              .attr('text-anchor', 'middle')
               .attr('font-size', 10)
               .attr('font-family', 'ui-monospace, monospace')
               .attr('fill', '#efe9dc')
-              .attr('fill-opacity', 0.8)
-              .attr('pointer-events', 'none')
               .attr('paint-order', 'stroke')
               .attr('stroke', '#241f18')
-              .attr('stroke-width', 3),
-          );
+              .attr('stroke-width', 3)
+              .each(function (this: any, d: any) {
+                const t = d3.select(this);
+                d.lines.forEach((ln: string, i: number) =>
+                  t.append('tspan').attr('x', 0).attr('dy', i === 0 ? 0 : '1.05em').text(ln),
+                );
+              });
+            return gl;
+          });
       }
 
       function paintEdgeLabels(): void {
         edgeLabel
           .attr('display', (d: any) => {
             if (selKey) return touchesSel(d) ? null : 'none';
-            return d.derived && curK < 1.3 ? 'none' : null;
+            if (d.derived && curK < 1.3) return 'none';
+            // Base view: an authored edge label only shows if it reaches the
+            // focus band (or you've zoomed in) — otherwise the periphery's
+            // labels bury the band in text.
+            const lit = inFocus(nodeById.get(idOf(d.source))) || inFocus(nodeById.get(idOf(d.target)));
+            return lit || curK >= 1.3 ? null : 'none';
           })
           .attr('fill-opacity', (d: any) => (selKey && touchesSel(d) ? 0.95 : 0.8));
       }
@@ -316,20 +380,26 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           .attr('fill-opacity', (n: any) => {
             if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.95 : 0.2;
             if (hiSet) return hiSet.has(n.id) ? 0.85 : 0.25;
-            return n.ghost ? 0.7 : 0.85;
+            // Base view: the whole slice is loaded, but only the focus band
+            // stands out — off-band facts recede to a dim wash.
+            return inFocus(n) ? 0.9 : 0.22;
           });
         link
           .attr('stroke-opacity', (d: any) => {
             const base = edgeStyle(d).opacity;
             if (selKey) return touchesSel(d) ? Math.min(0.95, base + 0.5) : base * 0.12;
-            if (!hiSet) return base;
-            return hiSet.has(idOf(d.source)) || hiSet.has(idOf(d.target)) ? base : base * 0.25;
+            if (hiSet) return hiSet.has(idOf(d.source)) || hiSet.has(idOf(d.target)) ? base : base * 0.25;
+            // Base view: an edge that reaches the focus band stays lit; edges
+            // buried in the periphery fade with their nodes.
+            return inFocus(nodeById.get(idOf(d.source))) || inFocus(nodeById.get(idOf(d.target))) ? base : base * 0.22;
           })
           .attr('stroke-width', (d: any) => edgeStyle(d).width + (touchesSel(d) ? 0.8 : 0));
-        label.attr('fill-opacity', (n: any) => {
-          if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.95 : 0.2;
-          if (hiSet) return hiSet.has(n.id) ? 0.8 : 0.3;
-          return 0.8;
+        // Labels always show; opacity carries the focus dimming (the <g> wraps a
+        // stroked text, so opacity — not fill-opacity — dims halo and fill alike).
+        label.attr('opacity', (n: any) => {
+          if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.98 : 0.28;
+          if (hiSet) return hiSet.has(n.id) ? 0.9 : 0.32;
+          return inFocus(n) ? 0.92 : 0.4;
         });
         paintEdgeLabels();
       }
@@ -361,6 +431,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
             type: entry._meta?.type ?? null,
             score: Number(entry._meta?.score) || 0.05,
             label: shortLabel(factTitle(entry)),
+            lines: wrapLabel(factTitle(entry)),
             deg: 1,
             ghost: true,
             x: (anchor?.x ?? W / 2) + Math.cos(i * 2.399) * 90,
@@ -413,14 +484,28 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity.translate(W / 2 - k * (minX + maxX) / 2, H / 2 - k * (minY + maxY) / 2).scale(k));
       };
       api.current = {
-        select: (key: string | null, pan = false) => {
-          lastExternal.current = key; // a tap-select's prop echo must not re-pan
+        select: (key: string | null, _pan = false) => {
+          lastExternal.current = key; // a tap-select's prop echo must not re-fire
+          // Release the previous pin — only one node is held at center at a time.
+          if (pinned && pinned.id !== key) {
+            pinned.fx = null;
+            pinned.fy = null;
+            pinned = null;
+          }
           selKey = key;
           nbrSet = key ? neighborsOf(key) : null;
           if (key) hiSet = null; // an explicit selection clears a result highlight
           paint();
           const d = key ? nodes.find((n: any) => n.id === key) : null;
-          if (d && pan) panTo(d);
+          if (d && Number.isFinite(d.x) && Number.isFinite(d.y)) {
+            // Keep the selection centered: pin it where it is and pan the camera
+            // onto it, so the neighbours expand() pulls in arrange AROUND it and
+            // it stays put instead of drifting with the layout.
+            pinned = d;
+            d.fx = d.x;
+            d.fy = d.y;
+            panTo(d);
+          }
           if (key) void expand(key).catch((err) => (window.reportError ?? console.error)(err));
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
@@ -451,7 +536,8 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           link.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y).attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y);
           edgeLabel.attr('x', (d: any) => (d.source.x + d.target.x) / 2).attr('y', (d: any) => (d.source.y + d.target.y) / 2 - 2);
           node.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
-          label.attr('x', (d: any) => d.x + r(d) + 3).attr('y', (d: any) => d.y + 3);
+          // Centered below the node; the first line clears the node radius.
+          label.attr('transform', (d: any) => `translate(${d.x},${d.y + r(d) + 11})`);
         });
       rejoin();
       paint();
