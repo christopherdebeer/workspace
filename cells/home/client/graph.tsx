@@ -982,7 +982,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         vertexShader:
           'attribute vec3 color; varying vec3 vColor; uniform float uFar;' +
           'void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); float dist = -mv.z;' +
-          'float depthFade = clamp(1.0 - (dist - uFar*0.35)/(uFar*1.3), 0.06, 1.0);' +
+          'float depthFade = clamp(1.0 - (dist - uFar*0.3)/(uFar*1.15), 0.0, 1.0);' +
           'vColor = color * depthFade; gl_Position = projectionMatrix * mv; }',
         fragmentShader: 'varying vec3 vColor; void main(){ gl_FragColor = vec4(vColor, 1.0); }',
         transparent: true,
@@ -1002,7 +1002,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const makeLabel = (n: any): any => {
         const div = document.createElement('div');
         div.textContent = n.label;
-        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap';
+        // pointer-events:auto so the label itself is a hit target (the CSS2D
+        // overlay is inert otherwise) — tapping it selects + flies to the node.
+        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:auto;cursor:pointer';
+        div.onclick = (ev) => { ev.stopPropagation(); api.current?.select(n.id, true); };
         const obj = new CSS2DObject(div);
         obj.position.set(n.x, n.y + rad(n) + 7, n.z);
         return obj;
@@ -1110,7 +1113,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         camera.getWorldPosition(camPos);
         for (const [, obj] of labelObjs) {
           const d = camPos.distanceTo(obj.position);
-          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1 - (d - SPREAD * 0.5) / (SPREAD * 1.7))));
+          // Full up close, dissolving to nothing in the far field (floor 0) — a
+          // steeper falloff so distant labels recede rather than hazing over.
+          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.6 - d / (SPREAD * 2.0))));
         }
       };
 
