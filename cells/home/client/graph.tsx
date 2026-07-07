@@ -929,7 +929,10 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
         eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
         eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
       }
-      const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.5 : l.derived ? 0.42 : 0.85);
+      // Lower than the 2D strokes: additive One/One means overlapping edges SUM,
+      // so hubs would otherwise clip to a white hairball. Depth-fade (in the
+      // shader below) does the rest of the atmosphere.
+      const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.3 : l.derived ? 0.26 : 0.5);
       const edgeAlphaOf = (l: any): number => {
         const a = edgeBaseAlpha(l);
         const s = idOf(l.source), t = idOf(l.target);
@@ -948,8 +951,18 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
       const egeo = new THREE.BufferGeometry();
       egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
       egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
-      const eMat = new THREE.LineBasicMaterial({
-        vertexColors: true,
+      // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
+      // point cloud — otherwise they stay full-bright at every depth and flatten
+      // the atmosphere. Per-vertex colour already carries the focus/selection
+      // alpha (premultiplied); the shader multiplies in the distance falloff.
+      const eMat = new THREE.ShaderMaterial({
+        uniforms: { uFar: { value: SPREAD * 2.6 } },
+        vertexShader:
+          'attribute vec3 color; varying vec3 vColor; uniform float uFar;' +
+          'void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); float dist = -mv.z;' +
+          'float depthFade = clamp(1.0 - (dist - uFar*0.35)/(uFar*1.3), 0.06, 1.0);' +
+          'vColor = color * depthFade; gl_Position = projectionMatrix * mv; }',
+        fragmentShader: 'varying vec3 vColor; void main(){ gl_FragColor = vec4(vColor, 1.0); }',
         transparent: true,
         depthWrite: false,
         blending: THREE.CustomBlending,

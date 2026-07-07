@@ -199,7 +199,7 @@ function MonoPill({ children, color }: { children: React.ReactNode; color?: stri
  * straight away); results stack below, newest first. The human drives the same
  * read/act wire an agent does.
  */
-export function Console({ authed, seed }: { authed: boolean; seed?: { q: string; n: number } | null }): React.JSX.Element {
+export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?: { q: string; n: number } | null; onSelectKey?: (k: string) => void }): React.JSX.Element {
   const [cmds, setCmds] = useState<Cmd[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -212,6 +212,7 @@ export function Console({ authed, seed }: { authed: boolean; seed?: { q: string;
   const [rawJson, setRawJson] = useState(false);
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
+  const [results, setResults] = useState<ListEntry[]>([]);
   const counter = React.useRef(0);
 
   // ADR-0049: a contextual verb chip (palette selection) seeds the search box —
@@ -256,6 +257,31 @@ export function Console({ authed, seed }: { authed: boolean; seed?: { q: string;
   }, [authed]);
 
   const q = query.trim().toLowerCase();
+
+  // Search-first, like the canvas palette: free text runs a SEMANTIC query over
+  // the slice (ADR-0051 `query{text}` — meaning-ranked, salience-aware). Matches
+  // surface as fact results that drive graph focus — highlight + fit the whole
+  // set here (debounced), and tapping one selects + pans to it. Skipped for
+  // capability-address-looking input (has a dot, no space), which is a command.
+  useEffect(() => {
+    if (!authed) { setResults([]); return; }
+    const semantic = q.length >= 2 && (query.includes(' ') || !query.includes('.'));
+    if (!semantic) { setResults([]); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: 8, shape: 'card' }).then((r) => {
+        if (!live || !r.ok) return;
+        const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
+        setResults(entries);
+        // Light up the matches on the graph and fit to them (the palette drives
+        // the territory) — the same seam a run result uses.
+        if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: r.value } }));
+      });
+    }, 300);
+    return () => { live = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, authed]);
+
   const filtered = React.useMemo(() => {
     const all = cmds ?? [];
     if (!q) return [];
@@ -460,7 +486,7 @@ export function Console({ authed, seed }: { authed: boolean; seed?: { q: string;
               setQuery('');
             }
           }}
-          placeholder="Type a command — workspace.query, cells.list, whoami…"
+          placeholder="Search your workspace, or run a capability…"
           spellCheck={false}
           autoComplete="off"
           style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: inputColor, fontFamily: theme.mono, fontSize: '0.85rem' }}
@@ -475,9 +501,32 @@ export function Console({ authed, seed }: { authed: boolean; seed?: { q: string;
       {err && !cmds?.length ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
       {!cmds && !err ? <p style={{ color: machine.dim, margin: 0 }}>Loading capabilities…</p> : null}
 
+      {/* Semantic matches lead (search-first) — tap to select + pan the graph. */}
+      {results.length ? (
+        <div style={{ display: 'grid', gap: '0.15rem' }}>
+          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            matches · tap to focus
+          </span>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.1rem' }}>
+            {results.map((e) => (
+              <li key={e.key}>
+                <button
+                  onClick={() => onSelectKey?.(e.key)}
+                  style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.55rem', borderRadius: 6, border: '1px solid transparent', background: 'transparent', color: machine.text, cursor: 'pointer' }}
+                >
+                  <span aria-hidden>{typeIcon(e)}</span>
+                  <span style={{ fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{factTitle(e)}</span>
+                  <code style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.66rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '38%' }}>{e.key}</code>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {q ? (
         filtered.length === 0 ? (
-          <p style={{ color: machine.dim, margin: 0, fontSize: '0.82rem' }}>No command matches “{query}”.</p>
+          results.length ? null : <p style={{ color: machine.dim, margin: 0, fontSize: '0.82rem' }}>No match for “{query}”.</p>
         ) : (
           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.15rem' }}>
             {filtered.map((c, i) => (

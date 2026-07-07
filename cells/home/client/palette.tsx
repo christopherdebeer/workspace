@@ -188,7 +188,9 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
       {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {open ? (
         <div style={{ maxHeight: '56vh', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel }}>
-          <Console authed={authed} seed={seed} />
+          {/* Tapping a semantic match selects it (pans/fits the graph) and closes
+              the sheet so the focus is visible. */}
+          <Console authed={authed} seed={seed} onSelectKey={(k) => { onSelectKey(k); setOpen(false); }} />
         </div>
       ) : null}
       <div
