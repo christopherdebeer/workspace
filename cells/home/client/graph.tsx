@@ -1088,6 +1088,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       controls.infinityDolly = true; // fly THROUGH the cloud, don't bounce off a min distance
       controls.minDistance = SPREAD * 0.04;
       controls.maxDistance = SPREAD * 6;
+      // Gestures don't confound: one finger orbits, TWO fingers are a PURE dolly
+      // (move the camera origin in/out — the default fuses dolly+truck into the
+      // pinch), three fingers pan. Wheel = dolly. FOV is fixed (this is dolly,
+      // not a zoom-lens).
+      controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
+      controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY;
+      controls.touches.three = CameraControls.ACTION.TOUCH_TRUCK;
       controls.dampingFactor = 0.05;
       controls.draggingDampingFactor = 0.25;
       controls.setLookAt(0, 0, SPREAD * 2.15, 0, 0, 0, false);
