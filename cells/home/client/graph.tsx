@@ -94,6 +94,24 @@ function edgeStyle(e: GEdge): EdgeStyle {
   return { stroke: '#e8ddc2', dash: null, opacity: 0.55, width: 1.5 };
 }
 
+/**
+ * Degree-of-Interest (Furnas) — ONE continuous [0,1] emphasis per node, the
+ * unified "focus+context" signal that drives opacity, size, labels, and edge
+ * brightness alike (so they can't disagree). It blends intrinsic salience with
+ * graph-focus (the current selection/highlight neighbourhood). The renderers
+ * layer their own SPATIAL focal falloff on top — the 3D shader by world distance
+ * to the camera target; 2D is a flat map, so it has none. Selection lifts a
+ * node's DOI above any spatial penalty, so a selected node's neighbour reads as
+ * focused even when it's far from the camera (the disagreement the old stacked
+ * dimmers had).
+ */
+function nodeDOI(n: any, selKey: string | null, nbr: Set<string> | null, hiSet: Set<string> | null, N: number): number {
+  if (selKey) return n.id === selKey ? 1 : nbr?.has(n.id) ? 0.8 : 0.1;
+  if (hiSet) return hiSet.has(n.id) ? 1 : 0.12;
+  const salN = 1 - (n.rank ?? N) / Math.max(1, N); // 1 = most salient
+  return 0.12 + 0.88 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
+}
+
 const shortLabel = (s: string): string => (s.length > 26 ? s.slice(0, 25) + '…' : s);
 
 /** Wrap a title into up to two centered lines (~16 chars each) for the
@@ -291,28 +309,21 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
         return out;
       };
 
-      // ── per-element style (state-dependent alpha), the old paint() as pure fns ──
-      const nodeAlpha = (n: any): number => {
-        if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.95 : 0.2;
-        if (hiSet) return hiSet.has(n.id) ? 0.85 : 0.25;
-        return inFocus(n) ? 0.9 : 0.22;
-      };
+      // ── per-element emphasis, all derived from ONE degree-of-interest ──
+      // (2D is a flat map, so DOI is the whole story — no spatial focal term.)
+      const doi = (n: any): number => nodeDOI(n, selKey, nbrSet, hiSet, nodes.length);
+      const nodeAlpha = (n: any): number => 0.08 + 0.9 * doi(n); // faint floor keeps context visible
       const nodeRing = (n: any): { stroke: string; width: number } =>
         n.id === selKey ? { stroke: '#f5c453', width: 3 }
         : selKey && nbrSet?.has(n.id) ? { stroke: '#e8ddc2', width: 1.6 }
         : hiSet?.has(n.id) ? { stroke: '#f5c453', width: 2 }
         : { stroke: '#2e2a22', width: 1 };
       const edgeAlpha = (l: any): number => {
-        const base = edgeStyle(l).opacity;
-        if (selKey) return touchesSel(l) ? Math.min(0.95, base + 0.5) : base * 0.12;
-        if (hiSet) return hiSet.has(idOf(l.source)) || hiSet.has(idOf(l.target)) ? base : base * 0.25;
-        return inFocus(l.source) || inFocus(l.target) ? base : base * 0.22;
+        // An edge is as interesting as its most-interesting endpoint.
+        const d = Math.max(doi(l.source), doi(l.target));
+        return Math.min(0.98, edgeStyle(l).opacity * (0.12 + 0.88 * d) + (touchesSel(l) ? 0.25 : 0));
       };
-      const labelAlpha = (n: any): number => {
-        if (selKey) return n.id === selKey || nbrSet?.has(n.id) ? 0.98 : 0.28;
-        if (hiSet) return hiSet.has(n.id) ? 0.9 : 0.32;
-        return inFocus(n) ? 0.92 : 0.4;
-      };
+      const labelAlpha = (n: any): number => 0.12 + 0.88 * doi(n);
       // A label is worth drawing when it's in the focus band, when the camera is
       // zoomed in enough to read the periphery, or when it's part of the current
       // selection/highlight — LOD: at low zoom the off-band labels are illegible
@@ -897,12 +908,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         colBuf[i * 3] = r; colBuf[i * 3 + 1] = g; colBuf[i * 3 + 2] = b;
         sizeBuf[i] = rad(n) * 2.4;
       }
+      // Stable DOI (salience + graph-focus) baked into the buffer; the shader
+      // multiplies the SPATIAL focal falloff on top each frame.
       const nodeAlphaOf = (i: number): number => {
         const n = nodes[i];
         if (!isVis(n)) return 0; // culled by the salience slider
-        if (selKey) return n.id === selKey || nbr?.has(n.id) ? 1 : 0.08;
-        if (hiSet) return hiSet.has(n.id) ? 1 : 0.08;
-        return inFocus(n) ? 1 : 0.32;
+        return nodeDOI(n, selKey, nbr, hiSet, N);
       };
 
       // ── renderer / scene / camera ──
@@ -996,12 +1007,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // shader below) does the rest of the atmosphere.
       const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.3 : l.derived ? 0.26 : 0.5);
       const edgeAlphaOf = (l: any): number => {
-        const a = edgeBaseAlpha(l);
-        const s = idOf(l.source), t = idOf(l.target);
-        if (!isVis(nodeById.get(s)) || !isVis(nodeById.get(t))) return 0; // salience slider
-        if (selKey) return s === selKey || t === selKey ? Math.min(1, a + 0.15) : a * 0.04;
-        if (hiSet) return hiSet.has(s) || hiSet.has(t) ? a : a * 0.06;
-        return focusKeys.has(s) || focusKeys.has(t) ? a : a * 0.35;
+        const sN = nodeById.get(idOf(l.source)), tN = nodeById.get(idOf(l.target));
+        if (!isVis(sN) || !isVis(tN)) return 0; // salience slider
+        // As interesting as its most-interesting endpoint (DOI); shader adds focal fade.
+        const d = Math.max(nodeDOI(sN, selKey, nbr, hiSet, N), nodeDOI(tN, selKey, nbr, hiSet, N));
+        return edgeBaseAlpha(l) * (0.1 + 0.9 * d);
       };
       const applyEdgeColor = (): void => {
         for (let i = 0; i < E; i++) {
@@ -1172,15 +1182,17 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const REFD = SPREAD * 2.15; // the camera's resting distance → base font size
       const updateLabels = (): void => {
         camera.getWorldPosition(camPos);
-        for (const [, obj] of labelObjs) {
+        for (const [id, obj] of labelObjs) {
           // SIZE by perspective (camera distance) — nearer labels bigger, clamped
           // — so text carries the depth cue the way the points do.
           const camD = camPos.distanceTo(obj.position) || 1;
           obj.element.style.fontSize = Math.max(7.5, Math.min(15, 11 * (REFD / camD))).toFixed(1) + 'px';
-          // OPACITY by focal distance — tighter falloff so distance actually reads
-          // (near the focus full, gone by ~0.9· the cloud spread out).
-          const focD = focusVec.distanceTo(obj.position);
-          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.25 - focD / (SPREAD * 0.7))));
+          // OPACITY = DOI × spatial focal falloff — same signal as the node, so a
+          // label is exactly as prominent as its node (selection lifts it; salience
+          // grades it; distance from the focus fades it).
+          const spatial = Math.max(0, Math.min(1, 1.25 - focusVec.distanceTo(obj.position) / (SPREAD * 0.7)));
+          const d = nodeDOI(nodeById.get(id), selKey, nbr, hiSet, N);
+          obj.element.style.opacity = (d * spatial).toFixed(3);
         }
       };
 
