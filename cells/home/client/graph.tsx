@@ -909,8 +909,10 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         title={mode === '2d' ? 'Explore in 3D' : 'Back to the 2D map'}
         style={{
           position: 'fixed',
+          // Below app.tsx's top bar (Wordmark + the `dashboard` button at
+          // top:10) so it doesn't sit under that control.
           right: 12,
-          top: 12,
+          top: 48,
           zIndex: 20,
           padding: '0.3rem 0.6rem',
           fontFamily: 'ui-monospace, monospace',
