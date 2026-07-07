@@ -39,8 +39,9 @@
  * principal axis, flattened away in the map, becomes depth you orbit. Rendered
  * as a luminous additive point cloud (one draw call) with additive backbone
  * edges (`similarTo` dropped — proximity already says it), UnrealBloom (desktop),
- * ACES tone mapping, shader depth-fade for atmosphere, damped OrbitControls with
- * idle auto-rotate, and CSS2D labels (focus band + selection, distance-faded).
+ * ACES tone mapping, focal depth-fade for atmosphere, a star-map camera
+ * (camera-controls: dolly-to-cursor, fly-through, fitToSphere framing) with idle
+ * auto-rotate, and CSS2D labels (focus band + selection, distance-faded).
  * The 2D map stays the default.
  *
  * Labels: EVERY node is labelled, centered BELOW the node over up to two wrapped
@@ -733,8 +734,8 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
  * force engine — a thin three.js scene we own end to end, which is what lets us
  * do the "make it glow / make it breathe" treatment: additive-blended point
  * nodes (ONE draw call) and additive edges, UnrealBloom (desktop), ACES tone
- * mapping, depth-fade for atmosphere, and OrbitControls with damping + idle
- * auto-rotate. Edges are the authored + derived BACKBONE only — `similarTo` is
+ * mapping, focal depth-fade for atmosphere, and a star-map camera (camera-
+ * controls) — dolly-to-cursor, fly-through, and fitToSphere framing on select. Edges are the authored + derived BACKBONE only — `similarTo` is
  * already expressed by proximity, so it's dropped. Labels are CSS2D (focus band
  * + selection), faded by camera distance. The 2D canvas stays the legible default. */
 
@@ -750,14 +751,17 @@ const loadThree = (): Promise<any> =>
 let addonsMod: Promise<any> | null = null;
 const loadThreeAddons = (): Promise<any> =>
   (addonsMod ??= Promise.all([
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/controls/OrbitControls.js`)),
+    // camera-controls (yomotsu): the star-map camera — damped orbit, dolly-to-
+    // cursor, fly-through, and smooth fitToSphere/moveTo framing. Uses an
+    // injected THREE subset (no bundled three), so it shares our instance.
+    import(/* @vite-ignore */ esmURL(`camera-controls@2.9.0`)),
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/EffectComposer.js`)),
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/RenderPass.js`)),
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/UnrealBloomPass.js`)),
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/renderers/CSS2DRenderer.js`)),
   ])
-    .then(([ctrl, comp, rp, bloom, css]) => ({
-      OrbitControls: ctrl.OrbitControls,
+    .then(([cc, comp, rp, bloom, css]) => ({
+      CameraControls: cc.default ?? cc,
       EffectComposer: comp.EffectComposer,
       RenderPass: rp.RenderPass,
       UnrealBloomPass: bloom.UnrealBloomPass,
@@ -765,6 +769,7 @@ const loadThreeAddons = (): Promise<any> =>
       CSS2DObject: css.CSS2DObject,
     }))
     .catch(() => null));
+let ccInstalled = false;
 
 /** HSL (h∈[0,360], s,l∈[0,1]) → [r,g,b] in [0,1], for colour buffers. */
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
@@ -842,7 +847,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
         return;
       }
-      const { OrbitControls, EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject } = addons;
+      const { CameraControls, EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject } = addons;
+      if (!ccInstalled) { CameraControls.install({ THREE }); ccInstalled = true; }
       const { nodes, nodeById, coordMap, focusKeys } = model;
       // Drop `similarTo`: kinship is already expressed by proximity in this
       // layout, so only the authored edges + the derived backbone add info.
@@ -1066,19 +1072,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       }
 
       // ── controls: damped orbit + idle auto-rotate (stops on touch, resumes) ──
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.08;
-      controls.rotateSpeed = 0.75;
-      controls.autoRotate = true;
-      controls.autoRotateSpeed = 0.35;
-      let idleTimer: ReturnType<typeof setTimeout> | null = null;
-      const wake = (): void => {
-        controls.autoRotate = false;
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => { if (!disposed) controls.autoRotate = true; }, 5000);
-      };
-      controls.addEventListener('start', wake);
+      // ── star-map camera (camera-controls) ──
+      const controls = new CameraControls(camera, renderer.domElement);
+      controls.dollyToCursor = true; // zoom toward the finger, so the target drifts to where you work
+      controls.infinityDolly = true; // fly THROUGH the cloud, don't bounce off a min distance
+      controls.minDistance = SPREAD * 0.04;
+      controls.maxDistance = SPREAD * 6;
+      controls.dampingFactor = 0.05;
+      controls.draggingDampingFactor = 0.25;
+      controls.setLookAt(0, 0, SPREAD * 2.15, 0, 0, 0, false);
+      // Idle auto-rotate: resume a slow orbit ~5s after the last user gesture.
+      let interacting = false;
+      let lastInput = performance.now();
+      controls.addEventListener('controlstart', () => { interacting = true; lastInput = performance.now(); });
+      controls.addEventListener('controlend', () => { interacting = false; lastInput = performance.now(); });
+      const focusVec = new THREE.Vector3();
 
       // ── picking: a tap (not a drag) raycasts the point cloud ──
       const raycaster = new THREE.Raycaster();
@@ -1117,18 +1125,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       renderer.domElement.addEventListener('pointermove', onMove);
       renderer.domElement.addEventListener('pointerup', onUp);
 
-      // ── eased camera fly to a point ──
-      let flight: { fromP: any; toP: any; fromT: any; toT: any; t0: number; dur: number } | null = null;
-      const flyTo = (n: { x: number; y: number; z: number }): void => {
-        const tgt = new THREE.Vector3(n.x, n.y, n.z);
-        const dir = camera.position.clone().sub(controls.target).normalize();
-        flight = {
-          fromP: camera.position.clone(), toP: tgt.clone().add(dir.multiplyScalar(160)),
-          fromT: controls.target.clone(), toT: tgt.clone(), t0: performance.now(), dur: 700,
-        };
-        wake();
+      // Frame a point and re-anchor the orbit to it — camera-controls eases the
+      // whole transition (position + target) and rotation then pivots around it.
+      // A radius (~the local neighbourhood) sets how close it dollies in.
+      const frame = (x: number, y: number, z: number, radius: number): void => {
+        // fitToSphere eases position + target to frame the sphere; the target
+        // becomes the node, so orbit/dolly then pivot around it.
+        controls.fitToSphere(new THREE.Sphere(new THREE.Vector3(x, y, z), radius), true);
+        lastInput = performance.now();
       };
-      const ease = (t: number): number => 1 - Math.pow(1 - t, 3);
 
       api.current = {
         select: (key: string | null, doFly = false) => {
@@ -1138,7 +1143,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           applyNodeAlpha(); applyEdgeColor(); syncLabels();
           const d = key ? nodeById.get(key) : null;
           showRing(d);
-          if (d && doFly) flyTo(d);
+          if (d && doFly) frame(d.x, d.y, d.z, SPREAD * 0.42); // frame the node + its local neighbourhood
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
         setVisible: (f: number) => {
@@ -1156,7 +1161,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         showRing(null);
         applyNodeAlpha(); applyEdgeColor(); syncLabels();
         const pts = keys.map((k) => nodeById.get(k));
-        flyTo({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length, z: pts.reduce((s, p) => s + p.z, 0) / pts.length });
+        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length, cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+        // Frame the whole match set — radius covers the spread of the hits.
+        const rad = Math.max(SPREAD * 0.3, ...pts.map((p) => Math.hypot(p.x - cx, p.y - cy, p.z - cz))) + SPREAD * 0.1;
+        frame(cx, cy, cz, rad);
       });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
@@ -1171,24 +1179,23 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           obj.element.style.fontSize = Math.max(7.5, Math.min(15, 11 * (REFD / camD))).toFixed(1) + 'px';
           // OPACITY by focal distance — tighter falloff so distance actually reads
           // (near the focus full, gone by ~0.9· the cloud spread out).
-          const focD = controls.target.distanceTo(obj.position);
+          const focD = focusVec.distanceTo(obj.position);
           obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.25 - focD / (SPREAD * 0.7))));
         }
       };
 
+      const clock = new THREE.Clock();
+      const AUTOROT = 0.12; // rad/sec idle orbit
       const tick = (): void => {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
-        if (flight) {
-          const p = Math.min(1, (performance.now() - flight.t0) / flight.dur), e = ease(p);
-          camera.position.lerpVectors(flight.fromP, flight.toP, e);
-          controls.target.lerpVectors(flight.fromT, flight.toT, e);
-          if (p >= 1) flight = null;
-        }
-        controls.update();
-        // Feed the focal point (orbit target) to the fade shaders.
-        ptMat.uniforms.uFocus.value.copy(controls.target);
-        eMat.uniforms.uFocus.value.copy(controls.target);
+        const delta = clock.getDelta();
+        if (!interacting && performance.now() - lastInput > 5000) controls.rotate(AUTOROT * delta, 0, false);
+        controls.update(delta);
+        // Feed the focal point (orbit target) to the fade shaders + labels.
+        controls.getTarget(focusVec);
+        ptMat.uniforms.uFocus.value.copy(focusVec);
+        eMat.uniforms.uFocus.value.copy(focusVec);
         updateLabels();
         if (composer) composer.render(); else renderer.render(scene, camera);
         labelRenderer.render(scene, camera);
@@ -1207,8 +1214,6 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       ro.observe(el);
 
       cleanup = () => {
-        if (idleTimer) clearTimeout(idleTimer);
-        controls.removeEventListener('start', wake);
         renderer.domElement.removeEventListener('pointerdown', onDown);
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
