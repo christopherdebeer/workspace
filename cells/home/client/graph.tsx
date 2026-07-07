@@ -34,11 +34,14 @@
  * sim barely runs. Absent (or if a projection covers <half the slice), it falls
  * back to the edge-driven force layout (charge/link/center).
  *
- * 3D explore mode: a toggle (top-right) swaps the 2D canvas for a WebGL scene
- * (three.js via 3d-force-graph) where nodes sit at their full [x,y,z] semantic
- * coordinate — the 3rd principal axis, flattened away in the map, becomes depth
- * you orbit. Same model, focus band, and selection; labels move to hover/tap
- * (always-on 3D text is unreadable). The 2D map stays the default.
+ * 3D explore mode: a toggle (top-right) swaps the 2D canvas for a raw three.js
+ * scene where nodes sit at their full [x,y,z] semantic coordinate — the 3rd
+ * principal axis, flattened away in the map, becomes depth you orbit. Rendered
+ * as a luminous additive point cloud (one draw call) with additive backbone
+ * edges (`similarTo` dropped — proximity already says it), UnrealBloom (desktop),
+ * ACES tone mapping, shader depth-fade for atmosphere, damped OrbitControls with
+ * idle auto-rotate, and CSS2D labels (focus band + selection, distance-faded).
+ * The 2D map stays the default.
  *
  * Labels: EVERY node is labelled, centered BELOW the node over up to two wrapped
  * lines; the label block participates in the sim (a node's collide radius covers
@@ -709,34 +712,81 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
   );
 }
 
-/* ── 3D explore mode (WebGL, three.js via 3d-force-graph) ────────────────────
- * The same slice + semantic projection, but nodes are placed at their [x,y,z]
- * meaning-space coordinate in a WebGL scene you orbit. The 3rd principal axis
- * holds variance the 2D map has to flatten, so clusters that overlap in the map
- * separate in depth. Fixed positions (no live force engine) — GPU-cheap even at
- * ~1.4k nodes. Labels are on hover/selection (always-on 3D text is mush); the
- * focus band and selection drive colour/opacity as in 2D. */
-let fg3dMod: Promise<any> | null = null;
-// A COMPUTED specifier (function call, not a literal) so the SSR/server bundler
-// can't statically resolve it and leaves it a pure runtime import. three.js is
-// browser-only — letting the server bundler fetch+bundle its whole tree OOMs the
-// deploy bundler (512 MB). The browser evaluates this and fetches at runtime.
-const cdnEsm = (pkg: string): string => `https://cdn.jsdelivr.net/npm/${pkg}/+esm`;
-const loadFG3D = (): Promise<any> =>
-  (fg3dMod ??= import(/* @vite-ignore */ cdnEsm('3d-force-graph')).then((m) => m.default ?? m).catch(() => null));
-// Camera-facing text labels for 3D (the canonical 3d-force-graph companion;
-// resolves `three` to the same jsdelivr +esm URL the graph lib does, so they
-// share one THREE instance). Computed specifier — keep it out of the SSR bundle.
-let spriteMod: Promise<any> | null = null;
-const loadSpriteText = (): Promise<any> =>
-  (spriteMod ??= import(/* @vite-ignore */ cdnEsm('three-spritetext')).then((m) => m.default ?? m).catch(() => null));
+/* ── 3D explore mode (raw three.js) ──────────────────────────────────────────
+ * The same slice + semantic projection as the 2D map, rendered as a luminous
+ * point-cloud constellation you orbit. Positions are precomputed, so there is no
+ * force engine — a thin three.js scene we own end to end, which is what lets us
+ * do the "make it glow / make it breathe" treatment: additive-blended point
+ * nodes (ONE draw call) and additive edges, UnrealBloom (desktop), ACES tone
+ * mapping, depth-fade for atmosphere, and OrbitControls with damping + idle
+ * auto-rotate. Edges are the authored + derived BACKBONE only — `similarTo` is
+ * already expressed by proximity, so it's dropped. Labels are CSS2D (focus band
+ * + selection), faded by camera distance. The 2D canvas stays the legible default. */
 
-/** '#rrggbb' → 'rgba(r,g,b,a)' — the edge grammar's hex strokes need an alpha
- *  channel for focus/selection dimming in the 3D scene. */
-function hexA(hex: string, a: number): string {
+// three + its addons from a SINGLE pinned version so they share one module
+// instance (bloom/controls break across mismatched three copies). esm.sh
+// externalizes each addon's `three` to this same URL. Computed specifiers keep
+// the whole three tree out of the SSR bundle (bundling it OOMs the deployer).
+const THREE_VER = '0.160.0';
+const esmURL = (path: string): string => `https://esm.sh/${path}`;
+let threeMod: Promise<any> | null = null;
+const loadThree = (): Promise<any> =>
+  (threeMod ??= import(/* @vite-ignore */ esmURL(`three@${THREE_VER}`)).catch(() => null));
+let addonsMod: Promise<any> | null = null;
+const loadThreeAddons = (): Promise<any> =>
+  (addonsMod ??= Promise.all([
+    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/controls/OrbitControls.js`)),
+    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/EffectComposer.js`)),
+    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/RenderPass.js`)),
+    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/UnrealBloomPass.js`)),
+    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/renderers/CSS2DRenderer.js`)),
+  ])
+    .then(([ctrl, comp, rp, bloom, css]) => ({
+      OrbitControls: ctrl.OrbitControls,
+      EffectComposer: comp.EffectComposer,
+      RenderPass: rp.RenderPass,
+      UnrealBloomPass: bloom.UnrealBloomPass,
+      CSS2DRenderer: css.CSS2DRenderer,
+      CSS2DObject: css.CSS2DObject,
+    }))
+    .catch(() => null));
+
+/** HSL (h∈[0,360], s,l∈[0,1]) → [r,g,b] in [0,1], for colour buffers. */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  h /= 360;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hue = (t: number): number => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return s === 0 ? [l, l, l] : [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)];
+}
+/** '#rrggbb' → [r,g,b] in [0,1]. */
+function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
   const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a.toFixed(3)})`;
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+/** A soft round sprite (radial alpha falloff) for the additive point cloud. */
+function makeDiscTexture(THREE: any): any {
+  const s = 64;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d')!;
+  const grad = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.35, 'rgba(255,255,255,0.82)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, s, s);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
 }
 
 function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
@@ -750,172 +800,328 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
     const el = host.current;
     if (!el) return;
     let disposed = false;
-    let graph: any = null;
+    let raf = 0;
     let ro: ResizeObserver | null = null;
     let onResult: ((ev: Event) => void) | null = null;
+    let cleanup: (() => void) | null = null;
 
     (async () => {
-      const [model, FG, SpriteText] = await Promise.all([fetchGraphModel(), loadFG3D(), loadSpriteText()]);
+      const [model, THREE, addons] = await Promise.all([fetchGraphModel(), loadThree(), loadThreeAddons()]);
       if (disposed) return;
-      if (!FG) {
+      if (!THREE || !addons) {
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
         return;
       }
-      const { nodes, links, nodeById, coordMap, focusKeys } = model;
+      const { OrbitControls, EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject } = addons;
+      const { nodes, nodeById, coordMap, focusKeys } = model;
+      // Drop `similarTo`: kinship is already expressed by proximity in this
+      // layout, so only the authored edges + the derived backbone add info.
+      const links = model.links.filter((l: any) => l.rel !== 'similarTo');
       const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
       const inFocus = (n: any): boolean => !!n && focusKeys.has(n.id);
-      const r = (n: any): number => 2 + n.score * 7 + Math.min(4, Math.sqrt(n.deg) * 1.1);
+      const rad = (n: any): number => 2 + n.score * 7 + Math.min(4, Math.sqrt(n.deg) * 1.1);
+      const idx = new Map<string, number>(nodes.map((n: any, i: number) => [n.id, i]));
 
-      // Fix every node at its semantic [x,y,z] (scaled to world units). Nodes
-      // without a coordinate scatter on a ring so they don't pile at the origin.
+      // ── fixed positions from the semantic [x,y,z] (scattered ring if missing) ──
       const SPREAD = 420;
-      for (let i = 0; i < nodes.length; i++) {
+      const N = nodes.length;
+      const posBuf = new Float32Array(N * 3);
+      for (let i = 0; i < N; i++) {
         const n = nodes[i];
         const c = coordMap?.[n.id];
-        if (c) {
-          n.fx = c[0] * SPREAD;
-          n.fy = c[1] * SPREAD;
-          n.fz = (c[2] ?? 0) * SPREAD;
-        } else {
-          const a = i * 2.3999;
-          n.fx = Math.cos(a) * SPREAD * 0.6;
-          n.fy = Math.sin(a) * SPREAD * 0.6;
-          n.fz = ((i % 13) - 6) * 14;
-        }
-        n.x = n.fx; n.y = n.fy; n.z = n.fz;
+        let x: number, y: number, z: number;
+        if (c) { x = c[0] * SPREAD; y = c[1] * SPREAD; z = (c[2] ?? 0) * SPREAD; }
+        else { const a = i * 2.3999; x = Math.cos(a) * SPREAD * 0.6; y = Math.sin(a) * SPREAD * 0.6; z = ((i % 13) - 6) * 14; }
+        n.x = x; n.y = y; n.z = z;
+        posBuf[i * 3] = x; posBuf[i * 3 + 1] = y; posBuf[i * 3 + 2] = z;
       }
 
+      // ── selection / highlight state ──
       let selKey: string | null = null;
       let nbr: Set<string> | null = null;
       let hiSet: Set<string> | null = null;
       const neighborsOf = (k: string): Set<string> => {
         const s = new Set<string>();
-        for (const l of links) {
-          const a = idOf(l.source), b = idOf(l.target);
-          if (a === k) s.add(b);
-          else if (b === k) s.add(a);
+        for (const l of links) { const a = idOf(l.source), b = idOf(l.target); if (a === k) s.add(b); else if (b === k) s.add(a); }
+        return s;
+      };
+
+      // ── node colour / size / alpha buffers ──
+      const colBuf = new Float32Array(N * 3);
+      const sizeBuf = new Float32Array(N);
+      const alphaBuf = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const n = nodes[i];
+        const [r, g, b] = n.type ? hslToRgb(hueOf(n.type), 0.5, 0.62) : [0.62, 0.6, 0.55];
+        colBuf[i * 3] = r; colBuf[i * 3 + 1] = g; colBuf[i * 3 + 2] = b;
+        sizeBuf[i] = rad(n) * 2.4;
+      }
+      const nodeAlphaOf = (i: number): number => {
+        const n = nodes[i];
+        if (selKey) return n.id === selKey || nbr?.has(n.id) ? 1 : 0.08;
+        if (hiSet) return hiSet.has(n.id) ? 1 : 0.08;
+        return inFocus(n) ? 1 : 0.32;
+      };
+
+      // ── renderer / scene / camera ──
+      let W = el.clientWidth || window.innerWidth, H = el.clientHeight || window.innerHeight;
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#1b1710');
+      const camera = new THREE.PerspectiveCamera(55, W / H, 1, 8000);
+      camera.position.set(0, 0, SPREAD * 2.15);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.setSize(W, H);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+      renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
+      el.innerHTML = '';
+      el.appendChild(renderer.domElement);
+
+      const labelRenderer = new CSS2DRenderer();
+      labelRenderer.setSize(W, H);
+      labelRenderer.domElement.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+      el.appendChild(labelRenderer.domElement);
+
+      // ── the point cloud (one draw call, additive glow, per-point size) ──
+      const disc = makeDiscTexture(THREE);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(posBuf, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colBuf, 3));
+      geo.setAttribute('size', new THREE.BufferAttribute(sizeBuf, 1));
+      geo.setAttribute('alpha', new THREE.BufferAttribute(alphaBuf, 1));
+      const applyNodeAlpha = (): void => {
+        for (let i = 0; i < N; i++) alphaBuf[i] = nodeAlphaOf(i);
+        (geo.attributes.alpha as any).needsUpdate = true;
+      };
+      applyNodeAlpha();
+      const ptMat = new THREE.ShaderMaterial({
+        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFar: { value: SPREAD * 2.6 } },
+        vertexShader:
+          'attribute float size; attribute float alpha; attribute vec3 color;' +
+          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uFar;' +
+          'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float dist = -mv.z;' +
+          'float depthFade = clamp(1.0 - (dist - uFar*0.35)/(uFar*1.3), 0.12, 1.0);' +
+          'vAlpha = alpha * depthFade; gl_PointSize = size * (uScale / max(dist, 1.0));' +
+          'gl_Position = projectionMatrix * mv; }',
+        fragmentShader:
+          'uniform sampler2D uTex; varying float vAlpha; varying vec3 vColor;' +
+          'void main(){ float m = texture2D(uTex, gl_PointCoord).a; gl_FragColor = vec4(vColor * vAlpha * m, 1.0); }',
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneFactor,
+      });
+      const points = new THREE.Points(geo, ptMat);
+      points.frustumCulled = false;
+      scene.add(points);
+
+      // ── edges: additive LineSegments (alpha premultiplied into the colours) ──
+      const E = links.length;
+      const eposBuf = new Float32Array(E * 6);
+      const ecolBuf = new Float32Array(E * 6);
+      const edgeRGB: Array<[number, number, number]> = links.map((l: any) => hexToRgb(edgeStyle(l).stroke));
+      for (let i = 0; i < E; i++) {
+        const l = links[i];
+        const ai = idx.get(idOf(l.source)) ?? 0, bi = idx.get(idOf(l.target)) ?? 0;
+        eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
+        eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
+      }
+      const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.5 : l.derived ? 0.42 : 0.85);
+      const edgeAlphaOf = (l: any): number => {
+        const a = edgeBaseAlpha(l);
+        const s = idOf(l.source), t = idOf(l.target);
+        if (selKey) return s === selKey || t === selKey ? Math.min(1, a + 0.15) : a * 0.04;
+        if (hiSet) return hiSet.has(s) || hiSet.has(t) ? a : a * 0.06;
+        return focusKeys.has(s) || focusKeys.has(t) ? a : a * 0.35;
+      };
+      const applyEdgeColor = (): void => {
+        for (let i = 0; i < E; i++) {
+          const [r, g, b] = edgeRGB[i], al = edgeAlphaOf(links[i]);
+          ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
+          ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
         }
-        return s;
+        (egeo.attributes.color as any).needsUpdate = true;
       };
-      const touchesSel = (l: any): boolean => !!selKey && (idOf(l.source) === selKey || idOf(l.target) === selKey);
+      const egeo = new THREE.BufferGeometry();
+      egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
+      egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
+      const eMat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneFactor,
+      });
+      const lineSegs = new THREE.LineSegments(egeo, eMat);
+      lineSegs.frustumCulled = false;
+      scene.add(lineSegs);
+      applyEdgeColor();
 
-      const nodeCol = (n: any): string => {
-        const tint = n.type ? `${hueOf(n.type)},42%,55%` : '40,8%,55%';
-        let a: number;
-        if (selKey) a = n.id === selKey || nbr?.has(n.id) ? 1 : 0.12;
-        else if (hiSet) a = hiSet.has(n.id) ? 0.95 : 0.12;
-        else a = inFocus(n) ? 0.95 : 0.35;
-        return `hsla(${tint},${a})`;
+      // ── labels (CSS2D — focus band + selection, faded by camera distance) ──
+      const labelObjs = new Map<string, any>();
+      const makeLabel = (n: any): any => {
+        const div = document.createElement('div');
+        div.textContent = n.label;
+        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap';
+        const obj = new CSS2DObject(div);
+        obj.position.set(n.x, n.y + rad(n) + 7, n.z);
+        return obj;
       };
-      // Edges run brighter in 3D than the 2D map — thin GL lines over a dark
-      // scene need the extra punch, and `linkOpacity(1)` lets these alphas rule.
-      const edge3dBase = (l: any): number =>
-        l.rel === 'similarTo' ? 0.22 : MEMBER_RELS.has(l.rel) ? 0.5 : l.derived ? 0.42 : 0.85;
-      const linkCol = (l: any): string => {
-        let a = edge3dBase(l);
-        if (selKey) a = touchesSel(l) ? Math.min(1, a + 0.15) : a * 0.05;
-        else if (hiSet) a = hiSet.has(idOf(l.source)) || hiSet.has(idOf(l.target)) ? a : a * 0.08;
-        else a = inFocus(l.source) || inFocus(l.target) ? a : a * 0.4;
-        return hexA(edgeStyle(l).stroke, a);
+      const labelWanted = (n: any): boolean => inFocus(n) || n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id);
+      const syncLabels = (): void => {
+        for (const n of nodes) {
+          const want = labelWanted(n), has = labelObjs.has(n.id);
+          if (want && !has) { const o = makeLabel(n); labelObjs.set(n.id, o); scene.add(o); }
+          else if (!want && has) { const o = labelObjs.get(n.id); scene.remove(o); o.element.remove?.(); labelObjs.delete(n.id); }
+        }
       };
-      // A label sprite for a node — camera-facing text above the sphere. Shown
-      // for the focus band (and, on selection, the selected node + neighbours);
-      // always-on labels for all ~1.4k nodes would be unreadable mush in 3D.
-      const labelFor = (n: any): boolean => inFocus(n) || n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id);
-      const nodeObject = (n: any): any => {
-        if (!SpriteText || !labelFor(n)) return undefined; // undefined → default sphere only
-        const s = new SpriteText(n.label);
-        s.color = '#efe9dc';
-        s.textHeight = 7;
-        s.fontFace = 'ui-monospace, monospace';
-        s.backgroundColor = 'rgba(24,21,17,0.55)';
-        s.padding = 1.2;
-        s.borderRadius = 2;
-        s.position.set(0, r(n) + 9, 0); // float above the node
-        return s;
-      };
-      const repaint = (): void => {
-        graph.nodeColor(nodeCol).linkColor(linkCol);
-        graph.nodeThreeObject(nodeObject); // re-evaluate which nodes carry a label
-      };
+      syncLabels();
 
-      graph = FG()(el)
-        .backgroundColor('#221d16')
-        .graphData({ nodes, links })
-        .nodeRelSize(2)
-        .nodeVal((n: any) => r(n))
-        .nodeColor(nodeCol)
-        .nodeLabel((n: any) => n.label as string)
-        .nodeThreeObjectExtend(true) // keep the default sphere; add the label sprite
-        .nodeThreeObject(nodeObject)
-        .linkColor(linkCol)
-        .linkWidth(0) // thin GL lines (cylinders for ~9k edges would be too heavy)
-        .linkOpacity(1)
-        .enableNodeDrag(false)
-        .cooldownTicks(0) // positions are fixed (fx/fy/fz) — don't relayout
-        .warmupTicks(1) // …but tick once so link geometry initializes
-        .onNodeClick((n: any) => api.current?.select(n.id, true))
-        .onBackgroundClick(() => api.current?.select(null));
-      // Strip the layout forces so nothing perturbs the fixed positions — but
-      // KEEP the link force: it resolves each link's source/target from key
-      // strings into node objects (without it 3d-force-graph draws no edges).
-      // With fixed fx/fy/fz it can't move anything.
-      graph.d3Force('charge', null);
-      graph.d3Force('center', null);
-      graph.width(el.clientWidth || window.innerWidth).height(el.clientHeight || window.innerHeight);
-      setTimeout(() => { if (!disposed) graph.zoomToFit(600, 50); }, 350);
+      // ── bloom (desktop only — fill-rate heavy on phones) ──
+      const bigScreen = Math.min(W, H) >= 620 && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+      let composer: any = null;
+      if (bigScreen) {
+        composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.85, 0.6, 0.12)); // strength, radius, threshold
+        composer.setSize(W, H);
+      }
 
-      const flyTo = (d: any, pad = 130): void => {
-        const dist = Math.hypot(d.x, d.y, d.z) || 1;
-        const k = 1 + pad / dist;
-        graph.cameraPosition({ x: d.x * k, y: d.y * k, z: d.z * k }, { x: d.x, y: d.y, z: d.z }, 700);
+      // ── controls: damped orbit + idle auto-rotate (stops on touch, resumes) ──
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.rotateSpeed = 0.75;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 0.35;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const wake = (): void => {
+        controls.autoRotate = false;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => { if (!disposed) controls.autoRotate = true; }, 5000);
       };
+      controls.addEventListener('start', wake);
+
+      // ── picking: a tap (not a drag) raycasts the point cloud ──
+      const raycaster = new THREE.Raycaster();
+      (raycaster.params as any).Points = { threshold: 9 };
+      const ndc = new THREE.Vector2();
+      let downX = 0, downY = 0, moved = false;
+      const pickAt = (cx: number, cy: number): any => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+        raycaster.setFromCamera(ndc, camera);
+        const hits = raycaster.intersectObject(points);
+        if (!hits.length) return null;
+        let best = hits[0];
+        for (const h of hits) if ((h.distanceToRay ?? 1e9) < (best.distanceToRay ?? 1e9)) best = h;
+        return best.index != null ? nodes[best.index] : null;
+      };
+      const onDown = (e: PointerEvent): void => { downX = e.clientX; downY = e.clientY; moved = false; };
+      const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 6) moved = true; };
+      const onUp = (e: PointerEvent): void => { if (moved) return; const n = pickAt(e.clientX, e.clientY); api.current?.select(n ? n.id : null); };
+      renderer.domElement.addEventListener('pointerdown', onDown);
+      renderer.domElement.addEventListener('pointermove', onMove);
+      renderer.domElement.addEventListener('pointerup', onUp);
+
+      // ── eased camera fly to a point ──
+      let flight: { fromP: any; toP: any; fromT: any; toT: any; t0: number; dur: number } | null = null;
+      const flyTo = (n: { x: number; y: number; z: number }): void => {
+        const tgt = new THREE.Vector3(n.x, n.y, n.z);
+        const dir = camera.position.clone().sub(controls.target).normalize();
+        flight = {
+          fromP: camera.position.clone(), toP: tgt.clone().add(dir.multiplyScalar(160)),
+          fromT: controls.target.clone(), toT: tgt.clone(), t0: performance.now(), dur: 700,
+        };
+        wake();
+      };
+      const ease = (t: number): number => 1 - Math.pow(1 - t, 3);
 
       api.current = {
-        select: (key: string | null, fly = false) => {
+        select: (key: string | null, doFly = false) => {
           lastExternal.current = key;
-          selKey = key;
-          nbr = key ? neighborsOf(key) : null;
+          selKey = key; nbr = key ? neighborsOf(key) : null;
           if (key) hiSet = null;
-          repaint();
+          applyNodeAlpha(); applyEdgeColor(); syncLabels();
           const d = key ? nodeById.get(key) : null;
-          if (d && fly) flyTo(d);
+          if (d && doFly) flyTo(d);
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
       };
 
-      // Console results light up the hits and the camera flies to their centroid.
       onResult = guard((ev: Event): void => {
         const detail = (ev as CustomEvent<{ ok: boolean; value: unknown }>).detail;
         if (!detail?.ok) return;
         const keys = keysOfResult(detail.value).filter((k) => nodeById.has(k));
         if (!keys.length) return;
-        hiSet = new Set(keys);
-        selKey = null;
-        nbr = null;
-        repaint();
+        hiSet = new Set(keys); selKey = null; nbr = null;
+        applyNodeAlpha(); applyEdgeColor(); syncLabels();
         const pts = keys.map((k) => nodeById.get(k));
-        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-        const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-        const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
-        flyTo({ x: cx, y: cy, z: cz }, 260);
+        flyTo({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length, z: pts.reduce((s, p) => s + p.z, 0) / pts.length });
       });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
-      ro = new ResizeObserver(() => {
-        if (!el.clientWidth || !el.clientHeight) return;
-        graph.width(el.clientWidth).height(el.clientHeight);
-      });
+      const camPos = new THREE.Vector3();
+      const updateLabels = (): void => {
+        camera.getWorldPosition(camPos);
+        for (const [, obj] of labelObjs) {
+          const d = camPos.distanceTo(obj.position);
+          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1 - (d - SPREAD * 0.5) / (SPREAD * 1.7))));
+        }
+      };
+
+      const tick = (): void => {
+        if (disposed) return;
+        raf = requestAnimationFrame(tick);
+        if (flight) {
+          const p = Math.min(1, (performance.now() - flight.t0) / flight.dur), e = ease(p);
+          camera.position.lerpVectors(flight.fromP, flight.toP, e);
+          controls.target.lerpVectors(flight.fromT, flight.toT, e);
+          if (p >= 1) flight = null;
+        }
+        controls.update();
+        updateLabels();
+        if (composer) composer.render(); else renderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
+      };
+      tick();
+
+      const resize = (): void => {
+        const w = el.clientWidth, h = el.clientHeight;
+        if (!w || !h) return;
+        W = w; H = h;
+        camera.aspect = W / H; camera.updateProjectionMatrix();
+        renderer.setSize(W, H); labelRenderer.setSize(W, H); composer?.setSize(W, H);
+        ptMat.uniforms.uScale.value = H / 2;
+      };
+      ro = new ResizeObserver(resize);
       ro.observe(el);
+
+      cleanup = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        controls.removeEventListener('start', wake);
+        renderer.domElement.removeEventListener('pointerdown', onDown);
+        renderer.domElement.removeEventListener('pointermove', onMove);
+        renderer.domElement.removeEventListener('pointerup', onUp);
+        for (const [, o] of labelObjs) o.element.remove?.();
+        controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
+        disc.dispose?.(); composer?.dispose?.(); renderer.dispose();
+      };
     })().catch((err) => (window.reportError ?? console.error)(err));
 
     return () => {
       disposed = true;
+      if (raf) cancelAnimationFrame(raf);
       ro?.disconnect();
       if (onResult) window.removeEventListener(CONSOLE_RESULT_EVENT, onResult);
-      try { graph?._destructor?.(); } catch { /* ignore */ }
+      cleanup?.();
       api.current = null;
-      el.innerHTML = '';
+      if (el) el.innerHTML = '';
     };
   }, []);
 
@@ -925,12 +1131,9 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
     api.current?.select(selectedKey, true);
   }, [selectedKey]);
 
-  return <div ref={host} style={{ position: 'fixed', inset: 0, background: '#221d16', overflow: 'hidden' }} />;
+  return <div ref={host} style={{ position: 'fixed', inset: 0, background: '#1b1710', overflow: 'hidden' }} />;
 }
 
-/** Home's graph surface: the 2D canvas map (default — legible at a glance) with
- *  a toggle into the 3D WebGL explore mode (orbit the semantic cloud in depth).
- *  Both render the same model; the toggle just swaps the renderer. */
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
   return (
