@@ -712,8 +712,13 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
  * ~1.4k nodes. Labels are on hover/selection (always-on 3D text is mush); the
  * focus band and selection drive colour/opacity as in 2D. */
 let fg3dMod: Promise<any> | null = null;
+// A COMPUTED specifier (function call, not a literal) so the SSR/server bundler
+// can't statically resolve it and leaves it a pure runtime import. three.js is
+// browser-only — letting the server bundler fetch+bundle its whole tree OOMs the
+// deploy bundler (512 MB). The browser evaluates this and fetches at runtime.
+const cdnEsm = (pkg: string): string => `https://cdn.jsdelivr.net/npm/${pkg}/+esm`;
 const loadFG3D = (): Promise<any> =>
-  (fg3dMod ??= import(/* @vite-ignore */ 'https://cdn.jsdelivr.net/npm/3d-force-graph/+esm').then((m) => m.default ?? m).catch(() => null));
+  (fg3dMod ??= import(/* @vite-ignore */ cdnEsm('3d-force-graph')).then((m) => m.default ?? m).catch(() => null));
 
 /** '#rrggbb' → 'rgba(r,g,b,a)' — the edge grammar's hex strokes need an alpha
  *  channel for focus/selection dimming in the 3D scene. */
