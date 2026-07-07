@@ -916,7 +916,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       const labelRenderer = new CSS2DRenderer();
       labelRenderer.setSize(W, H);
-      labelRenderer.domElement.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+      labelRenderer.domElement.style.cssText = 'position:absolute;inset:0;pointer-events:none;user-select:none;-webkit-user-select:none';
       el.appendChild(labelRenderer.domElement);
 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
@@ -1036,10 +1036,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const makeLabel = (n: any): any => {
         const div = document.createElement('div');
         div.textContent = n.label;
-        // pointer-events:auto so the label itself is a hit target (the CSS2D
-        // overlay is inert otherwise) — tapping it selects + flies to the node.
-        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:auto;cursor:pointer;-webkit-text-size-adjust:100%;text-size-adjust:100%';
-        div.onclick = (ev) => { ev.stopPropagation(); api.current?.select(n.id, true); };
+        // Fully inert to the browser: pointer-events:none so drags pass through
+        // to the canvas (orbit/pan keep working when a gesture starts on a
+        // label), and no text selection / iOS callout. Label TAPS are hit-tested
+        // against the div rects in the canvas pointerup handler below.
+        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%;text-size-adjust:100%';
         const obj = new CSS2DObject(div);
         obj.position.set(n.x, n.y + rad(n) + 7, n.z);
         return obj;
@@ -1094,9 +1095,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const h of hits) if ((h.distanceToRay ?? 1e9) < (best.distanceToRay ?? 1e9)) best = h;
         return best.index != null ? nodes[best.index] : null;
       };
+      // A tap over a label's rect selects that node — labels are pointer-events:
+      // none, so their taps arrive here on the canvas rather than via a DOM click.
+      const labelAt = (cx: number, cy: number): string | null => {
+        for (const [id, obj] of labelObjs) {
+          const r = obj.element.getBoundingClientRect();
+          if (r.width && cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return id;
+        }
+        return null;
+      };
       const onDown = (e: PointerEvent): void => { downX = e.clientX; downY = e.clientY; moved = false; };
       const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 6) moved = true; };
-      const onUp = (e: PointerEvent): void => { if (moved) return; const n = pickAt(e.clientX, e.clientY); api.current?.select(n ? n.id : null); };
+      const onUp = (e: PointerEvent): void => {
+        if (moved) return;
+        const lid = labelAt(e.clientX, e.clientY);
+        if (lid) { api.current?.select(lid, true); return; }
+        const n = pickAt(e.clientX, e.clientY);
+        api.current?.select(n ? n.id : null);
+      };
       renderer.domElement.addEventListener('pointerdown', onDown);
       renderer.domElement.addEventListener('pointermove', onMove);
       renderer.domElement.addEventListener('pointerup', onUp);
