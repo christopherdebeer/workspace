@@ -24,8 +24,15 @@
  * constellation and edge `rel` labels only past a zoom threshold; off-band
  * labels only when zoomed in). Hit-testing is `sim.find` over a quadtree. No
  * fidelity is dropped — the same nodes and edges are drawn, just cheaply and
- * with detail on demand. Layout is still the live d3-force sim (v5 will replace
- * it with a precomputed semantic projection, which also retires the sim).
+ * with detail on demand.
+ *
+ * Layout is SEMANTIC when a projection exists (ADR-0047 stage 2): `workspace.project`
+ * writes `_home/embed2d` — each fact's 2D place in embedding meaning-space (PCA
+ * over its Titan vector) — and the client places nodes there, the sim only
+ * pulling each toward its coordinate (forceX/Y) while collide unstacks labels.
+ * A fact's position is then its *meaning*, not an edge-force equilibrium, and the
+ * sim barely runs. Absent (or if a projection covers <half the slice), it falls
+ * back to the edge-driven force layout (charge/link/center).
  *
  * Labels: EVERY node is labelled, centered BELOW the node over up to two wrapped
  * lines; the label block participates in the sim (a node's collide radius covers
@@ -155,9 +162,13 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       // lifted out of the full graph client-side. The viewer's `_config/salience`
       // gives the real focus threshold (default 0.5) so the band means *their*
       // focus tier.
-      const [nodesRes, cfgRes, d3] = await Promise.all([
+      const [nodesRes, cfgRes, layoutRes, d3] = await Promise.all([
         mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
         mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
+        // The precomputed 2D SEMANTIC layout (workspace.project → `_home/embed2d`).
+        // When present, position = meaning-space and the live sim only declutters;
+        // when absent, fall back to the edge-driven force layout.
+        mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
         loadD3(),
       ]);
       if (disposed) return;
@@ -180,7 +191,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
         deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
       }
-      const nodes = entries.map((e) => ({
+      const nodes: any[] = entries.map((e) => ({
         id: e.key,
         type: e._meta?.type ?? null,
         score: Number(e._meta?.score) || 0,
@@ -188,6 +199,9 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         lines: wrapLabel(factTitle(e)),
         deg: deg.get(e.key) ?? 0,
       }));
+      // Semantic coordinates (workspace.project): key → [x,y] in ~[-1.3,1.3].
+      const layoutV = (layoutRes && layoutRes.ok ? (layoutRes.value as { value?: { coords?: Record<string, [number, number]> } } | null)?.value : null) ?? null;
+      const coordMap = layoutV?.coords && typeof layoutV.coords === 'object' ? (layoutV.coords as Record<string, [number, number]>) : null;
       // The focus band: the salience focus tier (score ≥ the viewer's threshold),
       // WIDENED to at least the top ~12% (and ≥12 nodes) by score — a very flat
       // slice can leave the tier at a handful, which reads as scattered specks
@@ -487,6 +501,8 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           if (nodeById.has(k)) continue;
           const entry = { ...(v?.entries?.[k] ?? {}), key: k } as ListEntry;
           if (isPlumbing(entry)) continue;
+          const gx = (anchor?.x ?? W / 2) + Math.cos(i * 2.399) * 90;
+          const gy = (anchor?.y ?? H / 2) + Math.sin(i * 2.399) * 90;
           const n = {
             id: k,
             type: entry._meta?.type ?? null,
@@ -495,8 +511,13 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
             lines: wrapLabel(factTitle(entry)),
             deg: 1,
             ghost: true,
-            x: (anchor?.x ?? W / 2) + Math.cos(i * 2.399) * 90,
-            y: (anchor?.y ?? H / 2) + Math.sin(i * 2.399) * 90,
+            x: gx,
+            y: gy,
+            // A pulled-in neighbour has no semantic coord — anchor it (weakly) near
+            // where it spawned so it doesn't yank to origin under the x/y forces.
+            sx: gx - W / 2,
+            sy: gy - H / 2,
+            hasSem: false,
           };
           nodes.push(n as any);
           nodeById.set(k, n);
@@ -520,7 +541,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           }
         }
         sim.nodes(nodes);
-        sim.force('link').links(links);
+        sim.force('link')?.links(links); // absent in semantic layout (no edge force)
         if (selKey) nbrSet = neighborsOf(selKey);
         sim.alpha(0.3).restart();
         setTimeout(() => sim?.stop(), 4000);
@@ -581,13 +602,48 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
-      sim = d3
-        .forceSimulation(nodes)
-        .force('link', d3.forceLink(links).id((d: any) => d.id).distance(74).strength(0.4))
-        .force('charge', d3.forceManyBody().strength(-200))
-        .force('center', d3.forceCenter(W / 2, H / 2))
-        .force('collide', d3.forceCollide(collideR))
-        .on('tick', requestDraw);
+      // Seed positions. In SEMANTIC mode each node carries `sx,sy` — a world
+      // offset from center derived from its meaning-space coordinate — and starts
+      // there; the sim then only pulls it back toward that anchor while collide
+      // declutters overlapping labels. Nodes without a coordinate (or when there's
+      // no layout) scatter and, in force mode, settle by the edge forces.
+      const SPREAD = Math.min(W, H) * 0.42;
+      let semCount = 0;
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        const c = coordMap?.[n.id];
+        if (c) {
+          n.sx = c[0] * SPREAD;
+          n.sy = c[1] * SPREAD;
+          n.hasSem = true;
+          semCount++;
+        } else {
+          n.sx = Math.cos(i * 2.3999) * 40;
+          n.sy = Math.sin(i * 2.3999) * 40;
+          n.hasSem = false;
+        }
+        n.x = W / 2 + n.sx + ((i * 37) % 11) - 5;
+        n.y = H / 2 + n.sy + ((i * 53) % 11) - 5;
+      }
+      // Use the semantic layout only when it actually covers the slice — a stale
+      // or partial projection shouldn't strand half the graph at the origin.
+      const semantic = semCount >= Math.max(3, nodes.length * 0.5);
+
+      sim = semantic
+        ? d3
+            .forceSimulation(nodes)
+            .force('x', d3.forceX((d: any) => W / 2 + d.sx).strength((d: any) => (d.hasSem ? 0.7 : 0.08)))
+            .force('y', d3.forceY((d: any) => H / 2 + d.sy).strength((d: any) => (d.hasSem ? 0.7 : 0.08)))
+            .force('collide', d3.forceCollide(collideR))
+            .force('charge', d3.forceManyBody().strength(-24)) // gentle — just unstacks, doesn't relayout
+            .on('tick', requestDraw)
+        : d3
+            .forceSimulation(nodes)
+            .force('link', d3.forceLink(links).id((d: any) => d.id).distance(74).strength(0.4))
+            .force('charge', d3.forceManyBody().strength(-200))
+            .force('center', d3.forceCenter(W / 2, H / 2))
+            .force('collide', d3.forceCollide(collideR))
+            .on('tick', requestDraw);
       requestDraw();
       setTimeout(() => sim?.stop(), 9000);
 
@@ -597,7 +653,10 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         W = w;
         H = h;
         sizeCanvas();
-        sim?.force('center', d3.forceCenter(W / 2, H / 2)).alpha(0.2).restart();
+        // Force layout re-centers explicitly; the semantic layout's forceX/Y
+        // accessors already read the live W/H, so they re-center on their own.
+        if (!semantic) sim?.force('center', d3.forceCenter(W / 2, H / 2));
+        sim?.alpha(0.2).restart();
         requestDraw();
         setTimeout(() => sim?.stop(), 3000);
       });

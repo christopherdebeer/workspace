@@ -25,6 +25,7 @@ import {
   type SuggestionCandidate,
   SIMILAR_REL,
   SIMILAR_WRITER,
+  projectionFact,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { shapeEntryList, type ReadShape } from './shape';
@@ -135,7 +136,12 @@ export interface RatifyResult {
 }
 
 /** The search/vectors command handlers (ADR-0044 Inc 5). */
-export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'search' | 'reindex' | 'pruneSimilar' | 'suggestions' | 'ratify'> {
+/** Where the 2D semantic layout is stored (ADR-0047 stage 2): a single owner
+ *  fact the home graph peeks to place nodes in meaning-space. `_home/*` is
+ *  plumbing (owner-only, filtered out of the node band itself). */
+export const LAYOUT_KEY = '_home/embed2d';
+
+export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'search' | 'reindex' | 'project' | 'pruneSimilar' | 'suggestions' | 'ratify'> {
   return {
     async search(input, ctx) {
       const viewer = requireUser(ctx.identity);
@@ -229,6 +235,30 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       await ctx.events.emit('workspace.reindex.requested', { scope, type: input?.type, prefix: input?.prefix, max: input?.max, phase: 'embed', indexed: 0, skipped: 0, edges: 0 });
       ctx.logger.info('reindex dispatched (async, chunked)', { scope, type: input?.type, prefix: input?.prefix });
       return { status: 'started', poll: statusKey, hint: `reindex runs async in chunks; poll peek("${statusKey}") for { status, phase, indexed, edges }` };
+    },
+
+    async project(_input, ctx) {
+      const scope = requireUser(ctx.identity);
+      // Compute the 2D SEMANTIC layout (ADR-0047 stage 2): read the whole vector
+      // index and project it to a plane the home graph places nodes on. Owner/
+      // admin-gated (it reads every vector). SYNCHRONOUS, unlike reindex — PCA
+      // over ~1k vectors is a few hundred ms (no per-fact Titan calls; the index
+      // is already embedded), so it stays inside the request budget.
+      if (!hasScope(ctx.identity, 'workspace:admin') && !hasScope(ctx.identity, 'platform:*')) {
+        throw new ServiceAuthError('project requires workspace:admin');
+      }
+      const { state, vectors } = build(ctx);
+      if (!vectors) return { status: 'unconfigured', hint: 'semantic search is not configured on this deployment' };
+      const dim = vectors.embedder.dimension;
+      const index = indexForScope(scope, dim);
+      const records = await vectors.store.list(index);
+      if (records.length < 3) {
+        return { status: 'empty', count: records.length, hint: 'too few indexed vectors to project — run reindex first' };
+      }
+      const fact = projectionFact(records.map((r) => r.vector), records.map((r) => r.key), dim, new Date().toISOString());
+      await state.put({ scope, key: LAYOUT_KEY, value: fact, via: 'project', type: 'graph-layout' }, ctx.identity);
+      ctx.logger.info('semantic projection written', { scope, count: fact.count, method: fact.method });
+      return { status: 'ok', count: fact.count, method: fact.method, key: LAYOUT_KEY };
     },
 
     async pruneSimilar(input, ctx) {

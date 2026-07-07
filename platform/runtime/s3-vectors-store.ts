@@ -131,6 +131,39 @@ export class S3VectorsStore implements VectorStore {
       if (!isNotFound(err)) throw err;
     }
   }
+
+  /** Page ListVectors (returnData) to pull the whole index. S3 Vectors caps a
+   *  page at ~1 MB regardless of `maxResults`, so this follows `nextToken` to the
+   *  end. A never-created index is "not found" → empty. */
+  async list(index: string): Promise<VectorRecord[]> {
+    const { ListVectorsCommand } = await sdk();
+    const client = await this.client();
+    const out: VectorRecord[] = [];
+    let nextToken: string | undefined;
+    try {
+      do {
+        const res = await client.send(
+          new ListVectorsCommand({
+            vectorBucketName: this.opts.bucket,
+            indexName: index,
+            returnData: true,
+            returnMetadata: true,
+            maxResults: 500,
+            nextToken,
+          }),
+        );
+        for (const v of res.vectors ?? []) {
+          const data = (v.data as { float32?: number[] } | undefined)?.float32;
+          if (v.key && data) out.push({ key: v.key, vector: data, metadata: (v.metadata as VectorRecord['metadata']) ?? undefined });
+        }
+        nextToken = res.nextToken;
+      } while (nextToken);
+    } catch (err) {
+      if (isNotFound(err)) return [];
+      throw err;
+    }
+    return out;
+  }
 }
 
 function errName(err: unknown): string {
