@@ -194,6 +194,7 @@ async function fetchGraphModel(): Promise<GraphModel> {
   // The focus band: the salience focus tier (score ≥ threshold), WIDENED to at
   // least the top ~12% (and ≥12) by score so a flat slice still reads as a band.
   const byScore = [...nodes].sort((a, b) => b.score - a.score);
+  byScore.forEach((n, i) => { n.rank = i; }); // salience rank (0 = most salient) — drives the visibility slider
   const tierCount = nodes.filter((n) => n.score >= focusThreshold).length;
   const bandN = Math.min(nodes.length, Math.max(tierCount, Math.ceil(nodes.length * 0.12), 12));
   const focusKeys = new Set<string>(byScore.slice(0, bandN).map((n) => n.id));
@@ -202,12 +203,12 @@ async function fetchGraphModel(): Promise<GraphModel> {
   return { nodes, links, nodeById, coordMap, focusKeys };
 }
 
-function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void; visible: number }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
   // The imperative surface the effects below share (built once the sim mounts).
-  const api = useRef<{ select: (key: string | null, pan?: boolean) => void } | null>(null);
+  const api = useRef<{ select: (key: string | null, pan?: boolean) => void; setVisible: (f: number) => void } | null>(null);
   const lastExternal = useRef<string | null>(null);
 
   useEffect(() => {
@@ -259,6 +260,11 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
 
       const r = (d: any): number => 4 + d.score * 13 + Math.min(6, Math.sqrt(d.deg) * 1.4);
       const inFocus = (d: any): boolean => !!d && focusKeys.has(d.id);
+      // Salience visibility: show the top `visCount` by rank (never fewer than the
+      // focus band). Ghost/expand satellites always show. Set by the slider.
+      const minVis = focusKeys.size;
+      let visCount = nodes.length;
+      const isVis = (d: any): boolean => !!d && (d.ghost || d.rank === undefined || d.rank < visCount);
       // Labels: centered below the node over up to two lines; the collision
       // footprint covers the text block below (height) and out to its half-width,
       // so the always-on labels don't stack.
@@ -350,6 +356,7 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
           if (l.rel === 'similarTo' && !showConstellation) continue;
           const s = l.source, t = l.target;
           if (!s || !t || typeof s !== 'object') continue;
+          if (!isVis(s) || !isVis(t)) continue; // salience slider
           // Segment-bbox vs viewport cull.
           if (Math.max(s.x, t.x) < minX || Math.min(s.x, t.x) > maxX || Math.max(s.y, t.y) < minY || Math.min(s.y, t.y) > maxY) continue;
           const st = edgeStyle(l);
@@ -375,6 +382,7 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
             if (selKey ? !touchesSel(l) : !showEdgeLabels) continue;
             const s = l.source, t = l.target;
             if (!s || !t || typeof s !== 'object') continue;
+            if (!isVis(s) || !isVis(t)) continue;
             const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2 - 2;
             if (mx < minX || mx > maxX || my < minY || my > maxY) continue;
             ctx.globalAlpha = selKey && touchesSel(l) ? 0.95 : 0.8;
@@ -388,7 +396,7 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
 
         // ── nodes ──
         for (const n of nodes) {
-          if (!visible(n)) continue;
+          if (!visible(n) || !isVis(n)) continue;
           const rad = r(n);
           ctx.globalAlpha = nodeAlpha(n);
           ctx.fillStyle = nodeColor(n.type);
@@ -407,7 +415,7 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
         ctx.textBaseline = 'top';
         ctx.lineJoin = 'round';
         for (const n of nodes) {
-          if (!visible(n) || !labelShown(n)) continue;
+          if (!visible(n) || !isVis(n) || !labelShown(n)) continue;
           const top = n.y + r(n) + 4;
           ctx.globalAlpha = labelAlpha(n);
           ctx.strokeStyle = '#241f18';
@@ -604,6 +612,10 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
           if (key) void expand(key).catch((err) => (window.reportError ?? console.error)(err));
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
+        setVisible: (f: number) => {
+          visCount = f >= 0.999 ? nodes.length : Math.max(minVis, Math.round(nodes.length * f));
+          requestDraw();
+        },
       };
 
       // Console results (search / query / recall / neighbors) light up the graph
@@ -704,6 +716,9 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
     api.current?.select(selectedKey, true);
   }, [selectedKey]);
 
+  // Salience slider → cull below the corresponding rank.
+  useEffect(() => { api.current?.setVisible(visible); }, [visible]);
+
   return (
     <div
       ref={host}
@@ -789,11 +804,11 @@ function makeDiscTexture(THREE: any): any {
   return tex;
 }
 
-function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void; visible: number }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
-  const api = useRef<{ select: (key: string | null, fly?: boolean) => void } | null>(null);
+  const api = useRef<{ select: (key: string | null, fly?: boolean) => void; setVisible: (f: number) => void } | null>(null);
   const lastExternal = useRef<string | null>(null);
 
   useEffect(() => {
@@ -840,6 +855,11 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
       let selKey: string | null = null;
       let nbr: Set<string> | null = null;
       let hiSet: Set<string> | null = null;
+      // Salience visibility (slider): show the top `visCount` by rank; hidden
+      // nodes/edges/labels get alpha 0. Never below the focus band.
+      const minVis = focusKeys.size;
+      let visCount = N;
+      const isVis = (n: any): boolean => !!n && (n.rank === undefined || n.rank < visCount);
       const neighborsOf = (k: string): Set<string> => {
         const s = new Set<string>();
         for (const l of links) { const a = idOf(l.source), b = idOf(l.target); if (a === k) s.add(b); else if (b === k) s.add(a); }
@@ -858,6 +878,7 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
       }
       const nodeAlphaOf = (i: number): number => {
         const n = nodes[i];
+        if (!isVis(n)) return 0; // culled by the salience slider
         if (selKey) return n.id === selKey || nbr?.has(n.id) ? 1 : 0.08;
         if (hiSet) return hiSet.has(n.id) ? 1 : 0.08;
         return inFocus(n) ? 1 : 0.32;
@@ -936,6 +957,7 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
       const edgeAlphaOf = (l: any): number => {
         const a = edgeBaseAlpha(l);
         const s = idOf(l.source), t = idOf(l.target);
+        if (!isVis(nodeById.get(s)) || !isVis(nodeById.get(t))) return 0; // salience slider
         if (selKey) return s === selKey || t === selKey ? Math.min(1, a + 0.15) : a * 0.04;
         if (hiSet) return hiSet.has(s) || hiSet.has(t) ? a : a * 0.06;
         return focusKeys.has(s) || focusKeys.has(t) ? a : a * 0.35;
@@ -985,7 +1007,7 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
         obj.position.set(n.x, n.y + rad(n) + 7, n.z);
         return obj;
       };
-      const labelWanted = (n: any): boolean => inFocus(n) || n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id);
+      const labelWanted = (n: any): boolean => isVis(n) && (inFocus(n) || n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id));
       const syncLabels = (): void => {
         for (const n of nodes) {
           const want = labelWanted(n), has = labelObjs.has(n.id);
@@ -1064,6 +1086,10 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
           const d = key ? nodeById.get(key) : null;
           if (d && doFly) flyTo(d);
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
+        },
+        setVisible: (f: number) => {
+          visCount = f >= 0.999 ? N : Math.max(minVis, Math.round(N * f));
+          applyNodeAlpha(); applyEdgeColor(); syncLabels();
         },
       };
 
@@ -1144,41 +1170,59 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
     api.current?.select(selectedKey, true);
   }, [selectedKey]);
 
+  useEffect(() => { api.current?.setVisible(visible); }, [visible]);
+
   return <div ref={host} style={{ position: 'fixed', inset: 0, background: '#1b1710', overflow: 'hidden' }} />;
 }
 
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
+  // Salience visibility: 0 → only the focus band, 1 → the whole slice. The
+  // renderers cull nodes/edges above the corresponding salience rank.
+  const [visible, setVisible] = useState(1);
+  const pillBtn: React.CSSProperties = {
+    padding: '0.3rem 0.6rem', fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem',
+    color: '#efe9dc', background: 'rgba(36,31,24,0.72)', border: '1px solid #5a5142',
+    borderRadius: 999, cursor: 'pointer', backdropFilter: 'blur(4px)',
+  };
   return (
     <>
       {mode === '2d' ? (
-        <Canvas2DGraph selectedKey={selectedKey} onSelect={onSelect} />
+        <Canvas2DGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
       ) : (
-        <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} />
+        <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
       )}
       <button
         onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
         title={mode === '2d' ? 'Explore in 3D' : 'Back to the 2D map'}
-        style={{
-          position: 'fixed',
-          // Below app.tsx's top bar (Wordmark + the `dashboard` button at
-          // top:10) so it doesn't sit under that control.
-          right: 12,
-          top: 48,
-          zIndex: 20,
-          padding: '0.3rem 0.6rem',
-          fontFamily: 'ui-monospace, monospace',
-          fontSize: '0.72rem',
-          color: '#efe9dc',
-          background: 'rgba(36,31,24,0.72)',
-          border: '1px solid #5a5142',
-          borderRadius: 999,
-          cursor: 'pointer',
-          backdropFilter: 'blur(4px)',
-        }}
+        style={{ position: 'fixed', right: 12, top: 48, zIndex: 20, ...pillBtn }}
       >
         {mode === '2d' ? '3D ◎' : '2D ▦'}
       </button>
+      {/* Salience slider — dial from just the focus band to the whole slice. */}
+      <div
+        title="Show more or fewer facts, by salience"
+        style={{
+          position: 'fixed', right: 12, top: 84, zIndex: 20,
+          display: 'flex', alignItems: 'center', gap: '0.4rem',
+          padding: '0.25rem 0.55rem', ...pillBtn, cursor: 'default',
+        }}
+      >
+        <span aria-hidden style={{ opacity: 0.8 }}>◐</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.02}
+          value={visible}
+          onChange={(e) => setVisible(Number(e.target.value))}
+          aria-label="Salience visibility"
+          style={{ width: 96, accentColor: '#f5c453', cursor: 'pointer' }}
+        />
+        <span style={{ width: 30, textAlign: 'right', opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}>
+          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+        </span>
+      </div>
     </>
   );
 }
