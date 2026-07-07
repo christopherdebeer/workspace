@@ -719,6 +719,12 @@ let fg3dMod: Promise<any> | null = null;
 const cdnEsm = (pkg: string): string => `https://cdn.jsdelivr.net/npm/${pkg}/+esm`;
 const loadFG3D = (): Promise<any> =>
   (fg3dMod ??= import(/* @vite-ignore */ cdnEsm('3d-force-graph')).then((m) => m.default ?? m).catch(() => null));
+// Camera-facing text labels for 3D (the canonical 3d-force-graph companion;
+// resolves `three` to the same jsdelivr +esm URL the graph lib does, so they
+// share one THREE instance). Computed specifier — keep it out of the SSR bundle.
+let spriteMod: Promise<any> | null = null;
+const loadSpriteText = (): Promise<any> =>
+  (spriteMod ??= import(/* @vite-ignore */ cdnEsm('three-spritetext')).then((m) => m.default ?? m).catch(() => null));
 
 /** '#rrggbb' → 'rgba(r,g,b,a)' — the edge grammar's hex strokes need an alpha
  *  channel for focus/selection dimming in the 3D scene. */
@@ -744,7 +750,7 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
     let onResult: ((ev: Event) => void) | null = null;
 
     (async () => {
-      const [model, FG] = await Promise.all([fetchGraphModel(), loadFG3D()]);
+      const [model, FG, SpriteText] = await Promise.all([fetchGraphModel(), loadFG3D(), loadSpriteText()]);
       if (disposed) return;
       if (!FG) {
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
@@ -796,16 +802,37 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
         else a = inFocus(n) ? 0.95 : 0.35;
         return `hsla(${tint},${a})`;
       };
+      // Edges run brighter in 3D than the 2D map — thin GL lines over a dark
+      // scene need the extra punch, and `linkOpacity(1)` lets these alphas rule.
+      const edge3dBase = (l: any): number =>
+        l.rel === 'similarTo' ? 0.22 : MEMBER_RELS.has(l.rel) ? 0.5 : l.derived ? 0.42 : 0.85;
       const linkCol = (l: any): string => {
-        const st = edgeStyle(l);
-        let a = st.opacity;
-        if (selKey) a = touchesSel(l) ? Math.min(0.95, a + 0.4) : a * 0.08;
-        else if (hiSet) a = hiSet.has(idOf(l.source)) || hiSet.has(idOf(l.target)) ? a : a * 0.12;
-        else a = inFocus(l.source) || inFocus(l.target) ? a : a * 0.25;
-        return hexA(st.stroke, a);
+        let a = edge3dBase(l);
+        if (selKey) a = touchesSel(l) ? Math.min(1, a + 0.15) : a * 0.05;
+        else if (hiSet) a = hiSet.has(idOf(l.source)) || hiSet.has(idOf(l.target)) ? a : a * 0.08;
+        else a = inFocus(l.source) || inFocus(l.target) ? a : a * 0.4;
+        return hexA(edgeStyle(l).stroke, a);
       };
-      const linkW = (l: any): number => (touchesSel(l) ? 1.4 : 0.5);
-      const repaint = (): void => graph.nodeColor(nodeCol).linkColor(linkCol).linkWidth(linkW);
+      // A label sprite for a node — camera-facing text above the sphere. Shown
+      // for the focus band (and, on selection, the selected node + neighbours);
+      // always-on labels for all ~1.4k nodes would be unreadable mush in 3D.
+      const labelFor = (n: any): boolean => inFocus(n) || n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id);
+      const nodeObject = (n: any): any => {
+        if (!SpriteText || !labelFor(n)) return undefined; // undefined → default sphere only
+        const s = new SpriteText(n.label);
+        s.color = '#efe9dc';
+        s.textHeight = 7;
+        s.fontFace = 'ui-monospace, monospace';
+        s.backgroundColor = 'rgba(24,21,17,0.55)';
+        s.padding = 1.2;
+        s.borderRadius = 2;
+        s.position.set(0, r(n) + 9, 0); // float above the node
+        return s;
+      };
+      const repaint = (): void => {
+        graph.nodeColor(nodeCol).linkColor(linkCol);
+        graph.nodeThreeObject(nodeObject); // re-evaluate which nodes carry a label
+      };
 
       graph = FG()(el)
         .backgroundColor('#221d16')
@@ -814,12 +841,14 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
         .nodeVal((n: any) => r(n))
         .nodeColor(nodeCol)
         .nodeLabel((n: any) => n.label as string)
+        .nodeThreeObjectExtend(true) // keep the default sphere; add the label sprite
+        .nodeThreeObject(nodeObject)
         .linkColor(linkCol)
-        .linkWidth(linkW)
-        .linkOpacity(0.6)
+        .linkWidth(0) // thin GL lines (cylinders for ~9k edges would be too heavy)
+        .linkOpacity(1)
         .enableNodeDrag(false)
-        .cooldownTicks(0) // positions are fixed — never run the force engine
-        .warmupTicks(0)
+        .cooldownTicks(0) // positions are fixed (fx/fy/fz) — don't relayout
+        .warmupTicks(1) // …but tick once so link geometry initializes
         .onNodeClick((n: any) => api.current?.select(n.id, true))
         .onBackgroundClick(() => api.current?.select(null));
       // Belt-and-braces: strip the forces so nothing perturbs the fixed layout.
