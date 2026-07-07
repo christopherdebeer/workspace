@@ -43,33 +43,37 @@ function seedVector(d: number, salt: number): Float64Array {
 }
 
 /**
- * Top principal component of the mean-centered rows `X` (n×d) by power iteration.
- * `against`, when given, is deflated out each step (Gram–Schmidt), so the second
- * call returns a component orthogonal to the first.
+ * The top `k` principal components of the mean-centered rows `X` (n×d) by power
+ * iteration. Each component is deflated (Gram–Schmidt) against the ones already
+ * found, so they come back mutually orthogonal — the axes of a k-D projection.
  */
-function principal(X: Float64Array[], d: number, iters: number, salt: number, against?: Float64Array): Float64Array {
+function principalComponents(X: Float64Array[], d: number, k: number, iters: number): Float64Array[] {
   const n = X.length;
-  let v = seedVector(d, salt);
+  const pcs: Float64Array[] = [];
   const u = new Float64Array(n);
-  for (let it = 0; it < iters; it++) {
-    for (let i = 0; i < n; i++) u[i] = dot(X[i], v, d); // u = X v   (length n)
-    const w = new Float64Array(d);
-    for (let i = 0; i < n; i++) {
-      const ui = u[i], xi = X[i];
-      for (let j = 0; j < d; j++) w[j] += xi[j] * ui; // w = Xᵀ u   (length d)
+  for (let c = 0; c < k; c++) {
+    let v = seedVector(d, c + 1);
+    for (let it = 0; it < iters; it++) {
+      for (let i = 0; i < n; i++) u[i] = dot(X[i], v, d); // u = X v   (length n)
+      const w = new Float64Array(d);
+      for (let i = 0; i < n; i++) {
+        const ui = u[i], xi = X[i];
+        for (let j = 0; j < d; j++) w[j] += xi[j] * ui; // w = Xᵀ u   (length d)
+      }
+      for (const prev of pcs) {
+        const proj = dot(w, prev, d);
+        for (let j = 0; j < d; j++) w[j] -= proj * prev[j]; // orthogonalize vs earlier PCs
+      }
+      normalizeInPlace(w);
+      v = w;
     }
-    if (against) {
-      const c = dot(w, against, d);
-      for (let j = 0; j < d; j++) w[j] -= c * against[j]; // orthogonalize
-    }
-    normalizeInPlace(w);
-    v = w;
+    pcs.push(v);
   }
-  return v;
+  return pcs;
 }
 
-/** Project `vectors` (n×d, aligned to `keys`) onto their top-2 principal axes. */
-export function pca2d(vectors: number[][], keys: string[], opts?: { iters?: number }): Projected {
+/** Project `vectors` (n×d, aligned to `keys`) onto their top-`comps` principal axes. */
+export function pca(vectors: number[][], keys: string[], comps: number, opts?: { iters?: number }): { keys: string[]; coords: number[][] } {
   const n = vectors.length;
   const d = n ? vectors[0].length : 0;
   if (n === 0 || d === 0) return { keys: [], coords: [] };
@@ -81,30 +85,38 @@ export function pca2d(vectors: number[][], keys: string[], opts?: { iters?: numb
     for (let j = 0; j < d; j++) r[j] = v[j] - mean[j];
     return r;
   });
-  const iters = opts?.iters ?? 60;
-  const pc1 = principal(X, d, iters, 1);
-  const pc2 = principal(X, d, iters, 2, pc1);
-  const coords: Array<[number, number]> = X.map((r) => [dot(r, pc1, d), dot(r, pc2, d)]);
+  const pcs = principalComponents(X, d, comps, opts?.iters ?? 60);
+  const coords = X.map((r) => pcs.map((pc) => dot(r, pc, d)));
   return { keys, coords };
 }
 
+/** Project onto the top-2 principal axes (the 2D map). */
+export function pca2d(vectors: number[][], keys: string[], opts?: { iters?: number }): Projected {
+  const { keys: kk, coords } = pca(vectors, keys, 2, opts);
+  return { keys: kk, coords: coords.map((c) => [c[0] ?? 0, c[1] ?? 0] as [number, number]) };
+}
+
 /**
- * Center and robustly scale coords into roughly [-1, 1] — divide by the
- * 98th-percentile radius so a few outliers don't shrink the whole cloud, then
- * clamp. Aspect is preserved (both axes share the scale), so semantic distances
- * survive. The client maps this unit square onto the viewport.
+ * Center and robustly scale coords (of any dimensionality) into roughly [-1, 1] —
+ * divide by the 98th-percentile radius so a few outliers don't shrink the whole
+ * cloud, then clamp. All axes share the scale, so semantic distances survive.
  */
-export function normalizeCoords(coords: Array<[number, number]>): Array<[number, number]> {
+export function normalizeCoordsN(coords: number[][]): number[][] {
   if (!coords.length) return coords;
-  let mx = 0, my = 0;
-  for (const [x, y] of coords) { mx += x; my += y; }
-  mx /= coords.length;
-  my /= coords.length;
-  const centered = coords.map(([x, y]) => [x - mx, y - my] as [number, number]);
-  const radii = centered.map(([x, y]) => Math.hypot(x, y)).sort((a, b) => a - b);
+  const dims = coords[0].length;
+  const mean = new Array<number>(dims).fill(0);
+  for (const c of coords) for (let j = 0; j < dims; j++) mean[j] += c[j];
+  for (let j = 0; j < dims; j++) mean[j] /= coords.length;
+  const centered = coords.map((c) => c.map((v, j) => v - mean[j]));
+  const radii = centered.map((c) => Math.hypot(...c)).sort((a, b) => a - b);
   const p98 = radii[Math.min(radii.length - 1, Math.floor(radii.length * 0.98))] || 1;
   const s = p98 > 0 ? 1 / p98 : 1;
-  return centered.map(([x, y]) => [clamp(x * s), clamp(y * s)] as [number, number]);
+  return centered.map((c) => c.map((v) => clamp(v * s)));
+}
+
+/** 2D convenience over {@link normalizeCoordsN} (preserves the tuple type). */
+export function normalizeCoords(coords: Array<[number, number]>): Array<[number, number]> {
+  return normalizeCoordsN(coords) as Array<[number, number]>;
 }
 
 function clamp(v: number): number {
@@ -112,22 +124,27 @@ function clamp(v: number): number {
 }
 
 /** The stored projection fact's value (`_home/embed2d`). Compact: coords rounded
- *  to 4 decimals. The client reads this and places nodes directly. */
+ *  to 4 decimals. Each coord is [x, y, z] — the 2D map uses x,y and the 3D
+ *  explore mode uses all three (a 2D reader simply ignores z). */
 export interface ProjectionFact {
   method: 'pca';
   dim: number;
   count: number;
   generatedAt: string;
-  /** key → [x, y] in [-1.3, 1.3]. */
-  coords: Record<string, [number, number]>;
+  /** key → [x, y, z], each in [-1.3, 1.3]. */
+  coords: Record<string, [number, number, number]>;
 }
 
-/** Build the storable projection fact from raw vectors (project → normalize → round). */
+/** Build the storable projection fact from raw vectors (project to 3 PCs →
+ *  normalize → round). Stores x,y,z so one fact serves both the 2D and 3D views. */
 export function projectionFact(vectors: number[][], keys: string[], dim: number, generatedAt: string): ProjectionFact {
-  const { coords } = pca2d(vectors, keys);
-  const norm = normalizeCoords(coords);
-  const out: Record<string, [number, number]> = {};
-  for (let i = 0; i < keys.length; i++) out[keys[i]] = [round4(norm[i][0]), round4(norm[i][1])];
+  const { coords } = pca(vectors, keys, 3);
+  const norm = normalizeCoordsN(coords);
+  const out: Record<string, [number, number, number]> = {};
+  for (let i = 0; i < keys.length; i++) {
+    const c = norm[i] ?? [];
+    out[keys[i]] = [round4(c[0] ?? 0), round4(c[1] ?? 0), round4(c[2] ?? 0)];
+  }
   return { method: 'pca', dim, count: keys.length, generatedAt, coords: out };
 }
 

@@ -34,6 +34,12 @@
  * sim barely runs. Absent (or if a projection covers <half the slice), it falls
  * back to the edge-driven force layout (charge/link/center).
  *
+ * 3D explore mode: a toggle (top-right) swaps the 2D canvas for a WebGL scene
+ * (three.js via 3d-force-graph) where nodes sit at their full [x,y,z] semantic
+ * coordinate — the 3rd principal axis, flattened away in the map, becomes depth
+ * you orbit. Same model, focus band, and selection; labels move to hover/tap
+ * (always-on 3D text is unreadable). The 2D map stays the default.
+ *
  * Labels: EVERY node is labelled, centered BELOW the node over up to two wrapped
  * lines; the label block participates in the sim (a node's collide radius covers
  * the text below it, so labels don't stack). Selection PINS the node at viewport
@@ -44,7 +50,7 @@ import * as React from 'react';
 import { mcpCall } from './lib';
 import { openFact, factTitle, type ListEntry } from './facts';
 
-const { useEffect, useRef } = React;
+const { useEffect, useRef, useState } = React;
 
 export interface GraphNode {
   key: string;
@@ -139,7 +145,61 @@ function guard<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
   };
 }
 
-export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+interface GraphModel {
+  nodes: any[];
+  links: any[];
+  nodeById: Map<string, any>;
+  /** key → [x, y, z] semantic coords in ~[-1.3, 1.3], or null when unprojected. */
+  coordMap: Record<string, number[]> | null;
+  focusKeys: Set<string>;
+}
+
+/** Load the whole slice + projection into a render-ready model — shared by the
+ *  2D canvas and 3D WebGL renderers so they agree on nodes, edges, the focus
+ *  band, and the semantic coordinates. */
+async function fetchGraphModel(): Promise<GraphModel> {
+  const [nodesRes, cfgRes, layoutRes] = await Promise.all([
+    mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
+    mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
+    // The precomputed SEMANTIC layout (workspace.project → `_home/embed2d`, [x,y,z]).
+    mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
+  ]);
+  const cfgVal = (cfgRes && cfgRes.ok ? (cfgRes.value as { value?: { focusThreshold?: unknown } } | null)?.value : null) ?? null;
+  const ftRaw = Number(cfgVal?.focusThreshold);
+  const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
+  const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
+  const entries = allEntries.filter((e) => !isPlumbing(e));
+  const byKey = new Map(entries.map((e) => [e.key, e]));
+  const edgesRes = await mcpCall('read', 'workspace.graph', {});
+  const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
+  const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
+  const deg = new Map<string, number>();
+  for (const e of edges) {
+    deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
+    deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
+  }
+  const nodes: any[] = entries.map((e) => ({
+    id: e.key,
+    type: e._meta?.type ?? null,
+    score: Number(e._meta?.score) || 0,
+    label: shortLabel(factTitle(e)),
+    lines: wrapLabel(factTitle(e)),
+    deg: deg.get(e.key) ?? 0,
+  }));
+  const layoutV = (layoutRes && layoutRes.ok ? (layoutRes.value as { value?: { coords?: Record<string, number[]> } } | null)?.value : null) ?? null;
+  const coordMap = layoutV?.coords && typeof layoutV.coords === 'object' ? (layoutV.coords as Record<string, number[]>) : null;
+  // The focus band: the salience focus tier (score ≥ threshold), WIDENED to at
+  // least the top ~12% (and ≥12) by score so a flat slice still reads as a band.
+  const byScore = [...nodes].sort((a, b) => b.score - a.score);
+  const tierCount = nodes.filter((n) => n.score >= focusThreshold).length;
+  const bandN = Math.min(nodes.length, Math.max(tierCount, Math.ceil(nodes.length * 0.12), 12));
+  const focusKeys = new Set<string>(byScore.slice(0, bandN).map((n) => n.id));
+  const links: any[] = edges.map((e) => ({ id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived }));
+  const nodeById = new Map<string, any>(nodes.map((n) => [n.id, n]));
+  return { nodes, links, nodeById, coordMap, focusKeys };
+}
+
+function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
@@ -162,59 +222,15 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       // lifted out of the full graph client-side. The viewer's `_config/salience`
       // gives the real focus threshold (default 0.5) so the band means *their*
       // focus tier.
-      const [nodesRes, cfgRes, layoutRes, d3] = await Promise.all([
-        mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
-        mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
-        // The precomputed 2D SEMANTIC layout (workspace.project → `_home/embed2d`).
-        // When present, position = meaning-space and the live sim only declutters;
-        // when absent, fall back to the edge-driven force layout.
-        mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
-        loadD3(),
-      ]);
+      const [model, d3] = await Promise.all([fetchGraphModel(), loadD3()]);
       if (disposed) return;
       if (!d3) {
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">graph renderer unavailable (offline?)</div>';
         return;
       }
-      const cfgVal = (cfgRes && cfgRes.ok ? (cfgRes.value as { value?: { focusThreshold?: unknown } } | null)?.value : null) ?? null;
-      const ftRaw = Number(cfgVal?.focusThreshold);
-      const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
-      const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
-      const entries = allEntries.filter((e) => !isPlumbing(e));
-      const byKey = new Map(entries.map((e) => [e.key, e]));
-      const edgesRes = await mcpCall('read', 'workspace.graph', {});
-      if (disposed) return;
-      const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
-      const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
-      const deg = new Map<string, number>();
-      for (const e of edges) {
-        deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
-        deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
-      }
-      const nodes: any[] = entries.map((e) => ({
-        id: e.key,
-        type: e._meta?.type ?? null,
-        score: Number(e._meta?.score) || 0,
-        label: shortLabel(factTitle(e)),
-        lines: wrapLabel(factTitle(e)),
-        deg: deg.get(e.key) ?? 0,
-      }));
-      // Semantic coordinates (workspace.project): key → [x,y] in ~[-1.3,1.3].
-      const layoutV = (layoutRes && layoutRes.ok ? (layoutRes.value as { value?: { coords?: Record<string, [number, number]> } } | null)?.value : null) ?? null;
-      const coordMap = layoutV?.coords && typeof layoutV.coords === 'object' ? (layoutV.coords as Record<string, [number, number]>) : null;
-      // The focus band: the salience focus tier (score ≥ the viewer's threshold),
-      // WIDENED to at least the top ~12% (and ≥12 nodes) by score — a very flat
-      // slice can leave the tier at a handful, which reads as scattered specks
-      // rather than a band. Top-12% of ~1.2k ≈ the old ~140-node band.
-      const byScore = [...nodes].sort((a, b) => b.score - a.score);
-      const tierCount = nodes.filter((n) => n.score >= focusThreshold).length;
-      const bandN = Math.min(nodes.length, Math.max(tierCount, Math.ceil(nodes.length * 0.12), 12));
-      const focusKeys = new Set<string>(byScore.slice(0, bandN).map((n) => n.id));
-
       // nodes/links are MUTABLE — selection pulls a node's off-band neighbourhood
       // into the live sim (ADR-0047's one-hop expand).
-      const links: any[] = edges.map((e) => ({ id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived }));
-      const nodeById = new Map<string, any>((nodes as any[]).map((n) => [n.id, n]));
+      const { nodes, links, nodeById, coordMap, focusKeys } = model;
       const linkIds = new Set<string>(links.map((l) => l.id));
       const expanded = new Set<string>();
 
@@ -685,5 +701,225 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       ref={host}
       style={{ position: 'fixed', inset: 0, background: 'radial-gradient(ellipse at 50% 30%, #3a3428 0%, #241f18 70%)', overflow: 'hidden' }}
     />
+  );
+}
+
+/* ── 3D explore mode (WebGL, three.js via 3d-force-graph) ────────────────────
+ * The same slice + semantic projection, but nodes are placed at their [x,y,z]
+ * meaning-space coordinate in a WebGL scene you orbit. The 3rd principal axis
+ * holds variance the 2D map has to flatten, so clusters that overlap in the map
+ * separate in depth. Fixed positions (no live force engine) — GPU-cheap even at
+ * ~1.4k nodes. Labels are on hover/selection (always-on 3D text is mush); the
+ * focus band and selection drive colour/opacity as in 2D. */
+let fg3dMod: Promise<any> | null = null;
+const loadFG3D = (): Promise<any> =>
+  (fg3dMod ??= import(/* @vite-ignore */ 'https://cdn.jsdelivr.net/npm/3d-force-graph/+esm').then((m) => m.default ?? m).catch(() => null));
+
+/** '#rrggbb' → 'rgba(r,g,b,a)' — the edge grammar's hex strokes need an alpha
+ *  channel for focus/selection dimming in the 3D scene. */
+function hexA(hex: string, a: number): string {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a.toFixed(3)})`;
+}
+
+function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+  const host = useRef<HTMLDivElement | null>(null);
+  const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
+  const api = useRef<{ select: (key: string | null, fly?: boolean) => void } | null>(null);
+  const lastExternal = useRef<string | null>(null);
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    let disposed = false;
+    let graph: any = null;
+    let ro: ResizeObserver | null = null;
+    let onResult: ((ev: Event) => void) | null = null;
+
+    (async () => {
+      const [model, FG] = await Promise.all([fetchGraphModel(), loadFG3D()]);
+      if (disposed) return;
+      if (!FG) {
+        el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
+        return;
+      }
+      const { nodes, links, nodeById, coordMap, focusKeys } = model;
+      const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
+      const inFocus = (n: any): boolean => !!n && focusKeys.has(n.id);
+      const r = (n: any): number => 2 + n.score * 7 + Math.min(4, Math.sqrt(n.deg) * 1.1);
+
+      // Fix every node at its semantic [x,y,z] (scaled to world units). Nodes
+      // without a coordinate scatter on a ring so they don't pile at the origin.
+      const SPREAD = 420;
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        const c = coordMap?.[n.id];
+        if (c) {
+          n.fx = c[0] * SPREAD;
+          n.fy = c[1] * SPREAD;
+          n.fz = (c[2] ?? 0) * SPREAD;
+        } else {
+          const a = i * 2.3999;
+          n.fx = Math.cos(a) * SPREAD * 0.6;
+          n.fy = Math.sin(a) * SPREAD * 0.6;
+          n.fz = ((i % 13) - 6) * 14;
+        }
+        n.x = n.fx; n.y = n.fy; n.z = n.fz;
+      }
+
+      let selKey: string | null = null;
+      let nbr: Set<string> | null = null;
+      let hiSet: Set<string> | null = null;
+      const neighborsOf = (k: string): Set<string> => {
+        const s = new Set<string>();
+        for (const l of links) {
+          const a = idOf(l.source), b = idOf(l.target);
+          if (a === k) s.add(b);
+          else if (b === k) s.add(a);
+        }
+        return s;
+      };
+      const touchesSel = (l: any): boolean => !!selKey && (idOf(l.source) === selKey || idOf(l.target) === selKey);
+
+      const nodeCol = (n: any): string => {
+        const tint = n.type ? `${hueOf(n.type)},42%,55%` : '40,8%,55%';
+        let a: number;
+        if (selKey) a = n.id === selKey || nbr?.has(n.id) ? 1 : 0.12;
+        else if (hiSet) a = hiSet.has(n.id) ? 0.95 : 0.12;
+        else a = inFocus(n) ? 0.95 : 0.35;
+        return `hsla(${tint},${a})`;
+      };
+      const linkCol = (l: any): string => {
+        const st = edgeStyle(l);
+        let a = st.opacity;
+        if (selKey) a = touchesSel(l) ? Math.min(0.95, a + 0.4) : a * 0.08;
+        else if (hiSet) a = hiSet.has(idOf(l.source)) || hiSet.has(idOf(l.target)) ? a : a * 0.12;
+        else a = inFocus(l.source) || inFocus(l.target) ? a : a * 0.25;
+        return hexA(st.stroke, a);
+      };
+      const linkW = (l: any): number => (touchesSel(l) ? 1.4 : 0.5);
+      const repaint = (): void => graph.nodeColor(nodeCol).linkColor(linkCol).linkWidth(linkW);
+
+      graph = FG()(el)
+        .backgroundColor('#221d16')
+        .graphData({ nodes, links })
+        .nodeRelSize(2)
+        .nodeVal((n: any) => r(n))
+        .nodeColor(nodeCol)
+        .nodeLabel((n: any) => n.label as string)
+        .linkColor(linkCol)
+        .linkWidth(linkW)
+        .linkOpacity(0.6)
+        .enableNodeDrag(false)
+        .cooldownTicks(0) // positions are fixed — never run the force engine
+        .warmupTicks(0)
+        .onNodeClick((n: any) => api.current?.select(n.id, true))
+        .onBackgroundClick(() => api.current?.select(null));
+      // Belt-and-braces: strip the forces so nothing perturbs the fixed layout.
+      graph.d3Force('charge', null);
+      graph.d3Force('link', null);
+      graph.d3Force('center', null);
+      graph.width(el.clientWidth || window.innerWidth).height(el.clientHeight || window.innerHeight);
+      setTimeout(() => { if (!disposed) graph.zoomToFit(600, 50); }, 350);
+
+      const flyTo = (d: any, pad = 130): void => {
+        const dist = Math.hypot(d.x, d.y, d.z) || 1;
+        const k = 1 + pad / dist;
+        graph.cameraPosition({ x: d.x * k, y: d.y * k, z: d.z * k }, { x: d.x, y: d.y, z: d.z }, 700);
+      };
+
+      api.current = {
+        select: (key: string | null, fly = false) => {
+          lastExternal.current = key;
+          selKey = key;
+          nbr = key ? neighborsOf(key) : null;
+          if (key) hiSet = null;
+          repaint();
+          const d = key ? nodeById.get(key) : null;
+          if (d && fly) flyTo(d);
+          selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
+        },
+      };
+
+      // Console results light up the hits and the camera flies to their centroid.
+      onResult = guard((ev: Event): void => {
+        const detail = (ev as CustomEvent<{ ok: boolean; value: unknown }>).detail;
+        if (!detail?.ok) return;
+        const keys = keysOfResult(detail.value).filter((k) => nodeById.has(k));
+        if (!keys.length) return;
+        hiSet = new Set(keys);
+        selKey = null;
+        nbr = null;
+        repaint();
+        const pts = keys.map((k) => nodeById.get(k));
+        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+        const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+        const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+        flyTo({ x: cx, y: cy, z: cz }, 260);
+      });
+      window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
+
+      ro = new ResizeObserver(() => {
+        if (!el.clientWidth || !el.clientHeight) return;
+        graph.width(el.clientWidth).height(el.clientHeight);
+      });
+      ro.observe(el);
+    })().catch((err) => (window.reportError ?? console.error)(err));
+
+    return () => {
+      disposed = true;
+      ro?.disconnect();
+      if (onResult) window.removeEventListener(CONSOLE_RESULT_EVENT, onResult);
+      try { graph?._destructor?.(); } catch { /* ignore */ }
+      api.current = null;
+      el.innerHTML = '';
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedKey === lastExternal.current) return;
+    lastExternal.current = selectedKey;
+    api.current?.select(selectedKey, true);
+  }, [selectedKey]);
+
+  return <div ref={host} style={{ position: 'fixed', inset: 0, background: '#221d16', overflow: 'hidden' }} />;
+}
+
+/** Home's graph surface: the 2D canvas map (default — legible at a glance) with
+ *  a toggle into the 3D WebGL explore mode (orbit the semantic cloud in depth).
+ *  Both render the same model; the toggle just swaps the renderer. */
+export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+  const [mode, setMode] = useState<'2d' | '3d'>('2d');
+  return (
+    <>
+      {mode === '2d' ? (
+        <Canvas2DGraph selectedKey={selectedKey} onSelect={onSelect} />
+      ) : (
+        <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} />
+      )}
+      <button
+        onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
+        title={mode === '2d' ? 'Explore in 3D' : 'Back to the 2D map'}
+        style={{
+          position: 'fixed',
+          right: 12,
+          top: 12,
+          zIndex: 20,
+          padding: '0.3rem 0.6rem',
+          fontFamily: 'ui-monospace, monospace',
+          fontSize: '0.72rem',
+          color: '#efe9dc',
+          background: 'rgba(36,31,24,0.72)',
+          border: '1px solid #5a5142',
+          borderRadius: 999,
+          cursor: 'pointer',
+          backdropFilter: 'blur(4px)',
+        }}
+      >
+        {mode === '2d' ? '3D ◎' : '2D ▦'}
+      </button>
+    </>
   );
 }

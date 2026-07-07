@@ -74,10 +74,13 @@ describe('projectionFact', () => {
     expect(fact.dim).toBe(3);
     expect(fact.count).toBe(8);
     expect(Object.keys(fact.coords)).toHaveLength(8);
-    for (const [, xy] of Object.entries(fact.coords)) {
-      expect(xy).toHaveLength(2);
-      // rounded to 4 decimals
-      expect(xy[0]).toBe(Math.round(xy[0] * 1e4) / 1e4);
+    for (const [, xyz] of Object.entries(fact.coords)) {
+      expect(xyz).toHaveLength(3); // [x, y, z] — one fact serves 2D and 3D
+      // rounded to 4 decimals, in range
+      for (const v of xyz) {
+        expect(v).toBe(Math.round(v * 1e4) / 1e4);
+        expect(Math.abs(v)).toBeLessThanOrEqual(1.3);
+      }
     }
   });
 });
