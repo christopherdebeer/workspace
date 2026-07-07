@@ -272,7 +272,9 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
       void mcpCall('read', 'workspace.query', { text: query.trim(), limit: 8, shape: 'card' }).then((r) => {
         if (!live || !r.ok) return;
         const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
-        setResults(entries);
+        // Keep results to knowledge facts — drop substrate plumbing (`_home/…`,
+        // `_types/…`, placements) that isn't a graph node anyway.
+        setResults(entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, 8));
         // Light up the matches on the graph and fit to them (the palette drives
         // the territory) — the same seam a run result uses.
         if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: r.value } }));
@@ -501,22 +503,26 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
       {err && !cmds?.length ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
       {!cmds && !err ? <p style={{ color: machine.dim, margin: 0 }}>Loading capabilities…</p> : null}
 
-      {/* Semantic matches lead (search-first) — tap to select + pan the graph. */}
+      {/* Semantic matches lead (search-first) — tap to select + pan the graph.
+          `textSizeAdjust` pins the size so iOS doesn't auto-inflate the rows. */}
       {results.length ? (
-        <div style={{ display: 'grid', gap: '0.15rem' }}>
-          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        <div style={{ display: 'grid', gap: '0.1rem', WebkitTextSizeAdjust: '100%', textSizeAdjust: '100%' } as React.CSSProperties}>
+          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 0.15rem' }}>
             matches · tap to focus
           </span>
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.1rem' }}>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 0 }}>
             {results.map((e) => (
               <li key={e.key}>
                 <button
                   onClick={() => onSelectKey?.(e.key)}
-                  style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.55rem', borderRadius: 6, border: '1px solid transparent', background: 'transparent', color: machine.text, cursor: 'pointer' }}
+                  title={e.key}
+                  style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.3rem 0.4rem', borderRadius: 6, border: 'none', background: 'transparent', color: machine.text, cursor: 'pointer', fontFamily: theme.mono }}
+                  onMouseEnter={(ev) => (ev.currentTarget.style.background = 'rgba(127,201,127,0.08)')}
+                  onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}
                 >
-                  <span aria-hidden>{typeIcon(e)}</span>
-                  <span style={{ fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{factTitle(e)}</span>
-                  <code style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.66rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '38%' }}>{e.key}</code>
+                  <span aria-hidden style={{ fontSize: '0.8rem', flexShrink: 0 }}>{typeIcon(e) || '·'}</span>
+                  <span style={{ fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{factTitle(e)}</span>
+                  {e._meta?.type ? <span style={{ color: machine.dim, fontSize: '0.6rem', flexShrink: 0 }}>{e._meta.type}</span> : null}
                 </button>
               </li>
             ))}

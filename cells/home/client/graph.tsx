@@ -803,6 +803,21 @@ function makeDiscTexture(THREE: any): any {
   tex.needsUpdate = true;
   return tex;
 }
+/** A hollow ring sprite — the selection highlight around the chosen node. */
+function makeRingTexture(THREE: any): any {
+  const s = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d')!;
+  g.strokeStyle = 'rgba(255,255,255,1)';
+  g.lineWidth = 7;
+  g.beginPath();
+  g.arc(s / 2, s / 2, s / 2 - 10, 0, Math.PI * 2);
+  g.stroke();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
+}
 
 function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void; visible: number }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
@@ -945,6 +960,20 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       points.frustumCulled = false;
       scene.add(points);
 
+      // Selection highlight: a glowing accent ring parked on the selected node
+      // (opacity alone washed out under the focal fade).
+      const ringTex = makeRingTexture(THREE);
+      const ringMat = new THREE.SpriteMaterial({ map: ringTex, color: 0xf5c453, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+      const ring = new THREE.Sprite(ringMat);
+      ring.visible = false;
+      scene.add(ring);
+      const showRing = (n: any): void => {
+        if (!n) { ring.visible = false; return; }
+        ring.position.set(n.x, n.y, n.z);
+        ring.scale.setScalar(rad(n) * 7 + 22);
+        ring.visible = true;
+      };
+
       // ── edges: additive LineSegments (alpha premultiplied into the colours) ──
       const E = links.length;
       const eposBuf = new Float32Array(E * 6);
@@ -1009,7 +1038,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         div.textContent = n.label;
         // pointer-events:auto so the label itself is a hit target (the CSS2D
         // overlay is inert otherwise) — tapping it selects + flies to the node.
-        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:auto;cursor:pointer';
+        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:auto;cursor:pointer;-webkit-text-size-adjust:100%;text-size-adjust:100%';
         div.onclick = (ev) => { ev.stopPropagation(); api.current?.select(n.id, true); };
         const obj = new CSS2DObject(div);
         obj.position.set(n.x, n.y + rad(n) + 7, n.z);
@@ -1092,6 +1121,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           if (key) hiSet = null;
           applyNodeAlpha(); applyEdgeColor(); syncLabels();
           const d = key ? nodeById.get(key) : null;
+          showRing(d);
           if (d && doFly) flyTo(d);
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
@@ -1107,18 +1137,26 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const keys = keysOfResult(detail.value).filter((k) => nodeById.has(k));
         if (!keys.length) return;
         hiSet = new Set(keys); selKey = null; nbr = null;
+        showRing(null);
         applyNodeAlpha(); applyEdgeColor(); syncLabels();
         const pts = keys.map((k) => nodeById.get(k));
         flyTo({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length, z: pts.reduce((s, p) => s + p.z, 0) / pts.length });
       });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
+      const camPos = new THREE.Vector3();
+      const REFD = SPREAD * 2.15; // the camera's resting distance → base font size
       const updateLabels = (): void => {
-        // Fade labels by the SAME focal falloff — full near the focus (orbit
-        // target), dissolving radially outward (floor 0).
+        camera.getWorldPosition(camPos);
         for (const [, obj] of labelObjs) {
-          const d = controls.target.distanceTo(obj.position);
-          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.15 - (d - SPREAD * 0.18) / (SPREAD * 1.15))));
+          // SIZE by perspective (camera distance) — nearer labels bigger, clamped
+          // — so text carries the depth cue the way the points do.
+          const camD = camPos.distanceTo(obj.position) || 1;
+          obj.element.style.fontSize = Math.max(7.5, Math.min(15, 11 * (REFD / camD))).toFixed(1) + 'px';
+          // OPACITY by focal distance — tighter falloff so distance actually reads
+          // (near the focus full, gone by ~0.9· the cloud spread out).
+          const focD = controls.target.distanceTo(obj.position);
+          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.25 - focD / (SPREAD * 0.7))));
         }
       };
 
@@ -1160,7 +1198,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         renderer.domElement.removeEventListener('pointerup', onUp);
         for (const [, o] of labelObjs) o.element.remove?.();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
-        disc.dispose?.(); composer?.dispose?.(); renderer.dispose();
+        disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
     })().catch((err) => (window.reportError ?? console.error)(err));
 
