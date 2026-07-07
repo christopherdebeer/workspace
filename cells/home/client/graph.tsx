@@ -916,14 +916,20 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         (geo.attributes.alpha as any).needsUpdate = true;
       };
       applyNodeAlpha();
+      // FOCAL falloff (not view-depth): fade by world distance from the focal
+      // point (the orbit target — the centre you're looking at, which flies to a
+      // node on select). Sharp near it, dissolving RADIALLY in every direction,
+      // so the rim fades toward the camera too — not just the far side.
+      const NEAR = (SPREAD * 0.18).toFixed(1); // core radius held sharp
+      const RANGE = (SPREAD * 1.15).toFixed(1); // falloff distance
       const ptMat = new THREE.ShaderMaterial({
-        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFar: { value: SPREAD * 2.6 } },
+        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFocus: { value: new THREE.Vector3() } },
         vertexShader:
           'attribute float size; attribute float alpha; attribute vec3 color;' +
-          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uFar;' +
-          'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float dist = -mv.z;' +
-          'float depthFade = clamp(1.0 - (dist - uFar*0.35)/(uFar*1.3), 0.12, 1.0);' +
-          'vAlpha = alpha * depthFade; gl_PointSize = size * (uScale / max(dist, 1.0));' +
+          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform vec3 uFocus;' +
+          'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
+          `float fade = clamp(1.0 - (length(position - uFocus) - ${NEAR})/${RANGE}, 0.1, 1.0);` +
+          'vAlpha = alpha * fade; gl_PointSize = size * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; varying float vAlpha; varying vec3 vColor;' +
@@ -978,12 +984,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // the atmosphere. Per-vertex colour already carries the focus/selection
       // alpha (premultiplied); the shader multiplies in the distance falloff.
       const eMat = new THREE.ShaderMaterial({
-        uniforms: { uFar: { value: SPREAD * 2.6 } },
+        uniforms: { uFocus: { value: new THREE.Vector3() } },
         vertexShader:
-          'attribute vec3 color; varying vec3 vColor; uniform float uFar;' +
-          'void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); float dist = -mv.z;' +
-          'float depthFade = clamp(1.0 - (dist - uFar*0.3)/(uFar*1.15), 0.0, 1.0);' +
-          'vColor = color * depthFade; gl_Position = projectionMatrix * mv; }',
+          'attribute vec3 color; varying vec3 vColor; uniform vec3 uFocus;' +
+          `void main(){ float fade = clamp(1.0 - (length(position - uFocus) - ${NEAR})/${RANGE}, 0.0, 1.0);` +
+          'vColor = color * fade; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader: 'varying vec3 vColor; void main(){ gl_FragColor = vec4(vColor, 1.0); }',
         transparent: true,
         depthWrite: false,
@@ -1108,14 +1113,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
-      const camPos = new THREE.Vector3();
       const updateLabels = (): void => {
-        camera.getWorldPosition(camPos);
+        // Fade labels by the SAME focal falloff — full near the focus (orbit
+        // target), dissolving radially outward (floor 0).
         for (const [, obj] of labelObjs) {
-          const d = camPos.distanceTo(obj.position);
-          // Full up close, dissolving to nothing in the far field (floor 0) — a
-          // steeper falloff so distant labels recede rather than hazing over.
-          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.6 - d / (SPREAD * 2.0))));
+          const d = controls.target.distanceTo(obj.position);
+          obj.element.style.opacity = String(Math.max(0, Math.min(1, 1.15 - (d - SPREAD * 0.18) / (SPREAD * 1.15))));
         }
       };
 
@@ -1129,6 +1132,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           if (p >= 1) flight = null;
         }
         controls.update();
+        // Feed the focal point (orbit target) to the fade shaders.
+        ptMat.uniforms.uFocus.value.copy(controls.target);
+        eMat.uniforms.uFocus.value.copy(controls.target);
         updateLabels();
         if (composer) composer.render(); else renderer.render(scene, camera);
         labelRenderer.render(scene, camera);
