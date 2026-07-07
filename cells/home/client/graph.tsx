@@ -648,6 +648,11 @@ function Canvas2DGraph({ selectedKey, onSelect }: { selectedKey: string | null; 
       sim = semantic
         ? d3
             .forceSimulation(nodes)
+            // strength-0 link force: it never pulls (semantic positions rule),
+            // but its initialize() resolves each link's source/target from key
+            // strings into node objects — without it the draw loop sees strings
+            // and skips every edge.
+            .force('link', d3.forceLink(links).id((d: any) => d.id).strength(0))
             .force('x', d3.forceX((d: any) => W / 2 + d.sx).strength((d: any) => (d.hasSem ? 0.7 : 0.08)))
             .force('y', d3.forceY((d: any) => H / 2 + d.sy).strength((d: any) => (d.hasSem ? 0.7 : 0.08)))
             .force('collide', d3.forceCollide(collideR))
@@ -851,9 +856,11 @@ function ThreeGraph({ selectedKey, onSelect }: { selectedKey: string | null; onS
         .warmupTicks(1) // …but tick once so link geometry initializes
         .onNodeClick((n: any) => api.current?.select(n.id, true))
         .onBackgroundClick(() => api.current?.select(null));
-      // Belt-and-braces: strip the forces so nothing perturbs the fixed layout.
+      // Strip the layout forces so nothing perturbs the fixed positions — but
+      // KEEP the link force: it resolves each link's source/target from key
+      // strings into node objects (without it 3d-force-graph draws no edges).
+      // With fixed fx/fy/fz it can't move anything.
       graph.d3Force('charge', null);
-      graph.d3Force('link', null);
       graph.d3Force('center', null);
       graph.width(el.clientWidth || window.innerWidth).height(el.clientHeight || window.innerHeight);
       setTimeout(() => { if (!disposed) graph.zoomToFit(600, 50); }, 350);
