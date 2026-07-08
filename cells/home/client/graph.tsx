@@ -1000,7 +1000,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const showRing = (n: any): void => {
         if (!n) { ring.visible = false; return; }
         ring.position.set(n.x, n.y, n.z);
-        ring.scale.setScalar(rad(n) * 7 + 22);
+        // Scaled to the node's own footprint (a snug halo, not a big disc). The
+        // sprite is world-scaled, so it stays locked to the node through dolly.
+        ring.scale.setScalar(rad(n) * 2.6 + 3);
         ring.visible = true;
       };
 
@@ -1071,9 +1073,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // against the div rects in the canvas pointerup handler below.
         div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%;text-size-adjust:100%';
         const obj = new CSS2DObject(div);
-        // Sit just above the node, gap scaled to the node's own size so the
-        // label reads as attached rather than floating a fixed distance away.
-        obj.position.set(n.x, n.y + rad(n) * 1.5, n.z);
+        // Anchor the label's TOP edge at the node's projected point (center.y = 0)
+        // so it hangs BELOW the node, horizontally centered — in SCREEN space,
+        // regardless of camera orientation. The world position is the node centre;
+        // the small gap that clears the dot is a padding-top applied per frame in
+        // updateLabels (scaled to the node's on-screen size).
+        obj.center.set(0.5, 0);
+        obj.position.set(n.x, n.y, n.z);
         return obj;
       };
       // Labels are driven by the BEAM (torchAt, below) — sweeping the focal point
@@ -1258,7 +1264,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          obj.element.style.fontSize = Math.max(6, Math.min(24, nodePx * 1.8 + 2)).toFixed(1) + 'px';
+          obj.element.style.fontSize = Math.max(4.5, Math.min(12, nodePx * 1.1)).toFixed(1) + 'px';
+          obj.element.style.paddingTop = (nodePx * 0.5 + 1).toFixed(1) + 'px'; // clear the dot
           // OPACITY is BEAM-primary: the torch decides how lit a label is, so a
           // sweep reveals whatever is near the line of sight — salient or not.
           // Selection/neighbours lift; salience adds only a whisper.
