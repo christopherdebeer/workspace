@@ -948,20 +948,33 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         (geo.attributes.alpha as any).needsUpdate = true;
       };
       applyNodeAlpha();
-      // FOCAL falloff (not view-depth): fade by world distance from the focal
-      // point (the orbit target — the centre you're looking at, which flies to a
-      // node on select). Sharp near it, dissolving RADIALLY in every direction,
-      // so the rim fades toward the camera too — not just the far side.
-      const NEAR = (SPREAD * 0.18).toFixed(1); // core radius held sharp
-      const RANGE = (SPREAD * 1.15).toFixed(1); // falloff distance
+      // TORCH falloff: a spotlight cone from the camera aimed at the focal point
+      // (orbit target = screen centre). Brightness drops by ANGLE off the beam
+      // axis (quick smoothstep between an inner and outer cone), plus a gentle
+      // distance attenuation along the beam. Sweeps with the camera, unlike a
+      // fixed sphere. `torch()` is shared GLSL, injected into both materials.
+      const CONE_IN = 0.14, CONE_OUT = 0.42; // tan(half-angle): full inside → dark outside the beam
+      const DEPTH_IN = SPREAD * 0.45, DEPTH_OUT = SPREAD * 1.7; // in-focus depth band around the focal point
+      const FLOOR = 0.04;
+      // A FOCUSED spotlight: brightest where the beam axis meets the focal depth
+      // (the focal point), dropping off both off-axis (the beam) AND off the focal
+      // depth — so the focal point is the single brightest spot, not the near rim.
+      const TORCH_GLSL =
+        'uniform vec3 uFocus; uniform vec3 uCam;' +
+        'float torch(vec3 p){ vec3 d = uFocus - uCam; float td = length(d); vec3 axis = d / max(td, 1e-3);' +
+        ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return ' + FLOOR.toFixed(2) + ';' +
+        ' float radial = length(toP - axis*along);' +
+        ` float ang = 1.0 - smoothstep(${CONE_IN.toFixed(3)}, ${CONE_OUT.toFixed(3)}, radial / along);` +
+        ` float dep = 1.0 - smoothstep(${DEPTH_IN.toFixed(1)}, ${DEPTH_OUT.toFixed(1)}, abs(along - td));` +
+        ` return max(${FLOOR.toFixed(2)}, ang * dep); }`;
       const ptMat = new THREE.ShaderMaterial({
-        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFocus: { value: new THREE.Vector3() } },
+        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFocus: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() } },
         vertexShader:
           'attribute float size; attribute float alpha; attribute vec3 color;' +
-          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform vec3 uFocus;' +
+          'varying float vAlpha; varying vec3 vColor; uniform float uScale;' +
+          TORCH_GLSL +
           'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
-          `float fade = clamp(1.0 - (length(position - uFocus) - ${NEAR})/${RANGE}, 0.1, 1.0);` +
-          'vAlpha = alpha * fade; gl_PointSize = size * (uScale / max(vd, 1.0));' +
+          'vAlpha = alpha * torch(position); gl_PointSize = size * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; varying float vAlpha; varying vec3 vColor;' +
@@ -1029,11 +1042,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // the atmosphere. Per-vertex colour already carries the focus/selection
       // alpha (premultiplied); the shader multiplies in the distance falloff.
       const eMat = new THREE.ShaderMaterial({
-        uniforms: { uFocus: { value: new THREE.Vector3() } },
+        uniforms: { uFocus: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() } },
         vertexShader:
-          'attribute vec3 color; varying vec3 vColor; uniform vec3 uFocus;' +
-          `void main(){ float fade = clamp(1.0 - (length(position - uFocus) - ${NEAR})/${RANGE}, 0.0, 1.0);` +
-          'vColor = color * fade; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          'attribute vec3 color; varying vec3 vColor;' +
+          TORCH_GLSL +
+          'void main(){ vColor = color * torch(position); vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader: 'varying vec3 vColor; void main(){ gl_FragColor = vec4(vColor, 1.0); }',
         transparent: true,
         depthWrite: false,
@@ -1187,19 +1200,31 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       const camPos = new THREE.Vector3();
       const REFD = SPREAD * 2.15; // the camera's resting distance → base font size
+      // The same torch, in JS, for the CSS2D labels (so text is lit by the beam
+      // exactly like the points). axis = camera → focal point.
+      const axisV = new THREE.Vector3(), toPV = new THREE.Vector3();
+      const smoothstep = (a: number, b: number, x: number): number => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+      const torchAt = (pos: any): number => {
+        const td = axisV.copy(focusVec).sub(camPos).length();
+        axisV.multiplyScalar(1 / Math.max(td, 1e-3));
+        toPV.copy(pos).sub(camPos);
+        const along = toPV.dot(axisV);
+        if (along <= 0) return FLOOR;
+        const radial = toPV.addScaledVector(axisV, -along).length(); // toP - axis*along
+        const ang = 1 - smoothstep(CONE_IN, CONE_OUT, radial / along);
+        const dep = 1 - smoothstep(DEPTH_IN, DEPTH_OUT, Math.abs(along - td));
+        return Math.max(FLOOR, ang * dep);
+      };
       const updateLabels = (): void => {
-        camera.getWorldPosition(camPos);
         for (const [id, obj] of labelObjs) {
-          // SIZE by perspective (camera distance) — nearer labels bigger, clamped
-          // — so text carries the depth cue the way the points do.
+          // SIZE by perspective (camera distance) — nearer labels bigger, clamped.
           const camD = camPos.distanceTo(obj.position) || 1;
           obj.element.style.fontSize = Math.max(7.5, Math.min(15, 11 * (REFD / camD))).toFixed(1) + 'px';
-          // OPACITY = DOI × spatial focal falloff — same signal as the node, so a
-          // label is exactly as prominent as its node (selection lifts it; salience
-          // grades it; distance from the focus fades it).
-          const spatial = Math.max(0, Math.min(1, 1.25 - focusVec.distanceTo(obj.position) / (SPREAD * 0.7)));
+          // OPACITY = DOI × torch — same signal as the node, so a label is exactly
+          // as prominent as its node (selection lifts it, salience grades it, and
+          // the beam lights it only when it's near the line of sight).
           const d = nodeDOI(nodeById.get(id), selKey, nbr, hiSet, N);
-          obj.element.style.opacity = (d * spatial).toFixed(3);
+          obj.element.style.opacity = (d * torchAt(obj.position)).toFixed(3);
         }
       };
 
@@ -1211,10 +1236,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const delta = clock.getDelta();
         if (!interacting && performance.now() - lastInput > 5000) controls.rotate(AUTOROT * delta, 0, false);
         controls.update(delta);
-        // Feed the focal point (orbit target) to the fade shaders + labels.
+        // Feed the beam (camera + focal point) to the torch shaders + labels.
         controls.getTarget(focusVec);
-        ptMat.uniforms.uFocus.value.copy(focusVec);
-        eMat.uniforms.uFocus.value.copy(focusVec);
+        camera.getWorldPosition(camPos);
+        ptMat.uniforms.uFocus.value.copy(focusVec); ptMat.uniforms.uCam.value.copy(camPos);
+        eMat.uniforms.uFocus.value.copy(focusVec); eMat.uniforms.uCam.value.copy(camPos);
         updateLabels();
         if (composer) composer.render(); else renderer.render(scene, camera);
         labelRenderer.render(scene, camera);
