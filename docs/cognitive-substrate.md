@@ -82,19 +82,24 @@ The rest of this document is the seam between them.
 ### 2. The mapping — every biological layer already has a substrate primitive
 
 Each row is a layer the framing names, the function it performs, and the
-capability in *this* system that already performs it. Targets are real; they
-resolve against `read("$catalog")`.
+capability in *this* system that already performs it. A caution before reading it:
+the MCP surface exposes only **three verbs** — `whoami` / `read` / `act`
+(`services/gateway`) — and all capability lives in the `target` argument. So
+`$catalog` is a deliberate *projection*; the real primitive count is an order of
+magnitude larger, declared in `services/workspace/descriptors.ts` (~34 workspace
+tools), the `platform/runtime/*` physics, and each cell's `TOOLS` array. The names
+below are real targets, not a wishlist.
 
 | Neuro layer | Function | Substrate primitive (exists today) |
 | --- | --- | --- |
-| **Spinal cord / reflex arc** | fast, local, stereotyped loops | `workspace.registerSubscription` (reactions to matching writes); declared `actions` with `if` guards; `@c15r/machine` rails; the `machine/tending` scheduled trigger |
-| **Tectum / orienting** | detect salience; turn toward / away | salience **bands** (`focus` / `peripheral` / `elided`) shaping every `recall`; `workspace.attention` (what needs tending); the whole of `adaptive-salience.md` |
-| **Basal ganglia** | action selection: approach, avoid, **inhibit** | `registerAction` + `invoke`; `@c15r/tasks.next` (actionable-work arbitration); `@c15r/machine.step` (the stateless stepper). An action's `if` precondition *is* inhibition — an affordance withheld until state permits |
-| **Thalamus** | routing / gating between systems | read-shaping in `recall` / `query` (`depth` / `only` / `include`); the contextual menu `read("$catalog", { for: <key> })` (ADR-0049) — *given this fact, what may act on it*; the gateway/dispatch tool-router |
-| **Pallium / cortex** | maps, abstraction, simulation, planning | facts + typed `links` + the `graph` projection + canvas boards + `project` (PCA into 2D meaning-space, ADR-0047) + registered `views`; `@c15r/models.agent` as the reasoning loop with the substrate as its toolbox |
-| **Hippocampus** | episodic / contextual binding | `log` + `capture` facts (the daily log, `@c15r/input.capture`); `workspace.changes` (tail the slice's trajectory); `machine-run` history |
-| **Cerebellum** | prediction, calibration, **error-correction** | `workspace.tend` (attention distilled to an audit + `delta`); the `weave` protocol; `ratify` (promote inferred `similarTo` → authored edge); `pruneSimilar` — **and the reward-signal gap that §5 is about** |
-| **Neocortex expansion** | higher-order planning, social modelling | `@c15r/machine` (DyGram machines); `@c15r/tasks` goals; **`cells.create` — neurogenesis at runtime**; multi-tenant slices + `share`/`grants` (shared world models — a theory-of-mind substrate); `@c15r/regwatch` as a specialised cortical column (a full perception → triage → review → feedback organ) |
+| **Spinal cord / reflex arc** | fast, local, stereotyped loops | `registerSubscription` (reactions to matching writes → `invoke` or `deliver`); declared `actions` with `if`/`enabled` guards; fact **timers/leases** (`FactTimer`, `ifAbsent`+`timer` atomic claim, `state.ts`); the subscription reactor (`event-handlers.ts`) |
+| **Tectum / orienting** | detect salience; turn toward / away | **six salience signals** — recency · velocity · attention · standing · centrality · relevance (`state.ts:406-731`); **lenses** (`salience/recent/connected/durable/active`); per-actor weighting (ADR-0050); `_config/salience` tuning + `ScoreExplain`; focus/peripheral/elided bands; reads `recall` / `query` / `peek` / `changes` |
+| **Basal ganglia** | action selection: approach, avoid, **inhibit** | `read("$catalog", { for \| forType })` (ADR-0049 — *what can act on this fact*); `$types` handlers; `registerAction`+`actions`+`invoke`; `suggestions` (ratification candidates); `@c15r/tasks.next`. An action's `if` precondition *is* inhibition — an affordance withheld until state permits |
+| **Thalamus** | routing / gating between systems | the `read`/`act`/`whoami` spine (target grammar + read/act boundary + scope gate, `services/gateway`); `services/dispatch` HTTP ingress (`/@*`, `/d/*`) → forge proxy + SSR compose; shaping tiers (`refs`/`card`/`full`); `registerSubscription({deliver})` event routing |
+| **Hippocampus** | episodic / contextual binding + the blackboard | facts `{value, _meta}` with server-stamped provenance; `remember`/`ingest`; `supersede`+`migrateLinks` (retire-not-delete); content-hash **CAS** (`ifVersion`/`ifRevision`/`ifAbsent`); sharing/authority (`share`/`grants`/`group`/`requestGrant`), `auth` identity; `changes` (trajectory tail); `athena` (SQL over the whole change history via the archiver) |
+| **Pallium / cortex** | maps, abstraction, simulation | authored edges (`link`/`unlink`) + **derived backbone** (`instanceOf`/`managedBy`/…) + inferred `similarTo` (`vectors.ts`, `similar-edges.ts`); reads `neighbors`/`links`/`graph`/`members`; `reindex` + `project` (PCA→2D/3D, ADR-0047); canvas boards + `views`; `@c15r/models.agent` as the reasoning loop |
+| **Cerebellum** | prediction, calibration, **error-correction** | `attention` (stale/unlinked/dangling); `tend` (audit + `delta` vs prior); `ratify` (promote inferred → authored); `pruneSimilar`; `supersede`+`migrateLinks` — **the primitives exist, but the loop is open** (§5): they measure and repair structure, nothing scores the correction |
+| **Neocortex expansion** | higher planning, execution, social | `@c15r/machine` (DyGram, `define_machine`/`step`); the **effectors** `@c15r/models` (`run`/`agent`) and `@c15r/run` (`exec`); `@c15r/tasks` goals; **`cells.create` — neurogenesis at runtime**; multi-tenant slices + `share`/`grants` (shared world models — a theory-of-mind substrate) |
 
 Read the table twice. Downward, it says: *the organism's layers each have a home.*
 Upward, it says something sharper — **the substrate was not designed as a brain,
@@ -102,6 +107,19 @@ and it converged on one anyway**, because the pressures are the same. A system
 that must perceive a growing world, decide what to attend to, select actions under
 scarcity, remember what happened, and not drift, grows these organs whether you
 name them in Latin or in TypeScript.
+
+**Organs versus applications.** Not every cell is an organ. The rows above are
+*cognition* — the substrate's own physics. Built *on* that organism is an
+**application / interface layer**: `@c15r/regwatch` (a regulatory-monitoring app —
+collect → review → calibrate), `@c15r/lit` (a prose/doc editor and fact renderer),
+`@c15r/canvas` (spatial boards over the graph), `@c15r/home` (the signed-in
+dashboard), `@c15r/input` (a capture PWA), and the shared render modules
+(`viewers`/`kernel`/`starter`). These are things built *with* cognition, not organs
+*of* it — the same distinction the visual plate draws as a surface resting on the
+stack. (`@c15r/regwatch`, filed in the first draft as "a cortical column," belongs
+here: it is an app that happens to run a perception→feedback loop, not a substrate
+primitive.) Infrastructure — `services/cells` (the forge) and `services/auth` — is
+a third category: the ground the organism grows in, not part of it.
 
 ---
 
@@ -259,9 +277,105 @@ Sequenced: **(2) before (1)** — the organ needs the contradiction read to act 
 **(3) alongside (1)** — the reward signal is what stops the organ from thrashing;
 **(4)** is the longer arc, the one that earns the word *simulation*.
 
+The first two are specified build-ready in
+[`cerebellar-loop.md`](./cerebellar-loop.md) — the consolidation organ and the
+`_contested` view, against the real primitives named above.
+
 ---
 
-### 7. Coda — a fifth lens on the convergence
+### 7. Substrate-native artifacts — the surface layer folds back in
+
+The visual plate that accompanies this document is, today, a *claude.ai* artifact:
+a standalone HTML page hosted outside the substrate. That is a small betrayal of
+the thesis — the surface is supposed to be a projection *of* shared truth, not a
+thing that lives beside it. So: could an artifact be **substrate-native** — a page
+served from the substrate itself, at its own URL?
+
+It essentially **already works**. Three mechanisms bear on it, and the smallest
+path uses none of them new:
+
+- **(a) An artifact as a public file under one cell.** `cells.putData` stores a
+  blob in a cell's per-caller space; the `public/` sub-space is served straight
+  from S3 at `GET /@<owner>/<cell>/_data/<user>/public/<key>` with its stored
+  content-type (`services/cells/service.ts:482-501`), gated by the same `_public/`
+  anonymous-read mechanism that already makes lit docs and canvas boards publicly
+  viewable. Write an `.html` blob with `content-type: text/html` and you have a
+  browsable, substrate-hosted page **now** — no platform work. The only polish is a
+  friendlier URL, which is exactly what the `_types` `open.surface` handler
+  (`type-vocabulary.md`) is for.
+- **(b) An artifact as a backend-less cell.** A cell with no table/reads/writes is
+  already valid — `viewers` and `kernel` serve only static assets
+  (`cell-contract.md`). An artifact could be a de-featured `starter` that serves its
+  `static/` files at `/@owner/<name>` (and `<owner>-<name>.on.parc.land`). It works,
+  but pays a CFN-stack-per-artifact cost — heavy if artifacts are numerous. This is
+  the parked *"declarative cells"* tier (`dynamic-cells.md`).
+- **`ui://` is a third, orthogonal modality.** The `ui://@owner/cell/…` scheme
+  (ADR-0039, `services/gateway/widgets.ts`) is a renderer *fragment run inside a
+  host's card*, resolved through the gateway — the **embed-in-a-surface** modality,
+  not **open-in-a-tab**. It is how a fact renders inline on a board or in home, not
+  how an artifact gets a standalone URL.
+
+**Recommendation: framing (a)** — an artifact is a `public/` HTML blob (or a
+`file` fact whose managing cell SSRs it), cheap and already shipped. The one
+load-bearing caveat for *any* user-authored HTML is **origin isolation**: arbitrary
+scripts must be served from an isolated cell origin (`<owner>-<name>.on.parc.land`
+or a separate user-content domain), never the apex `parc.land`
+(`cell-origin-isolation.md`). With that settled, the plate stops being a page
+beside the substrate and becomes a fact inside it — the surface layer folding back
+into the truth it projects, which is the whole point.
+
+---
+
+### 8. Appendix — the capture: consolidation opportunities & gaps
+
+A full primitive inventory (the source for the plate's expandable cards) surfaced
+two lists worth keeping. Per the "capture first" discipline, these are **recorded,
+not actioned** — naming them is the work here.
+
+**Consolidation opportunities** (the vocabulary has accreted; some verbs overlap):
+
+- `search` is deprecated → `query({ text })`; three semantic entry points
+  (`search` / `query({text})` / `recall({text})`) share one ranking core.
+- `links` / `graph` / `neighbors` / `$graph` → one edge-query with
+  `derived?` / `keys` / `dir` flags.
+- The `register* / list / delete` triplets (actions · views · subscriptions) are
+  one lifecycle over a generic registry → `declare(kind)` / `undeclare` / `list`.
+- One async job+poll primitive would remove the duplicate `fetch` on `@c15r/run`
+  and `@c15r/models`; `models.run` vs `models.agent` could be one tool with a
+  `loop` flag.
+- `@c15r/input.capture` and `@c15r/reef-writer.report` are thin `remember`/`ingest`
+  wrappers → `remember` presets or declared actions.
+- `reindex` / `project` / `pruneSimilar` / `tend` are all admin homeostasis passes
+  → one `maintain({ task })`.
+
+**Gaps** (functions present in structure, thin or absent in fact):
+
+- **No forgetting / compaction** — supersede tombstones, the archiver retains
+  everything, standing only grows; no GC, decay-to-cold, or summarizing memory
+  consolidation.
+- **No persistent global goal/attention state** — `relevance` biases a read only
+  when `text` is passed that call; no standing "current goal" auto-conditions
+  recall.
+- **No non-text semantic reach** — images/PDF/audio need an extraction lane that
+  doesn't exist (`vectors.ts`).
+- **Maps are PCA-only** — UMAP is intended behind the same seam (`projection.ts`).
+- **No salience learning loop** — weights are hand-tuned (`_config/salience`);
+  nothing feeds observed usefulness back. This is §5's reward-signal gap, seen from
+  the perception side.
+- **Reflex scheduling is ad hoc** — per-fact timers + a daily `tend` cron; no
+  first-class recurring primitive.
+- **Cross-slice retrieval is limited** to the shared public index; no federated
+  multi-owner semantic search.
+
+Several of these are the same animal wearing different coats — the reward-signal
+gap shows up as tending that won't converge (§5), as salience weights that can't
+learn (here), and as vocabulary that accretes without an opinion
+(`adaptive-salience.md`). Closing the cerebellar loop is load-bearing for more of
+the stack than it first appears.
+
+---
+
+### 9. Coda — a fifth lens on the convergence
 
 There is a live open question in the slice, `kb/26e75e4ae7034c`:
 
