@@ -1265,7 +1265,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          obj.element.style.fontSize = Math.max(4.5, Math.min(10, nodePx * 0.85)).toFixed(1) + 'px';
+          // No lower clamp: label size is proportional to the node's on-screen
+          // size, so small/distant nodes get small labels that recede into the
+          // wash (torch opacity fades them out too) — only the top is capped.
+          obj.element.style.fontSize = Math.min(10, nodePx * 0.85).toFixed(1) + 'px';
           obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
           // OPACITY is BEAM-primary: the torch decides how lit a label is, so a
           // sweep reveals whatever is near the line of sight — salient or not.
