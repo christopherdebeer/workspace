@@ -1000,9 +1000,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const showRing = (n: any): void => {
         if (!n) { ring.visible = false; return; }
         ring.position.set(n.x, n.y, n.z);
-        // Scaled to the node's own footprint (a snug halo, not a big disc). The
-        // sprite is world-scaled, so it stays locked to the node through dolly.
-        ring.scale.setScalar(rad(n) * 2.6 + 3);
+        // A snug halo ~1.5× the node's on-screen dot (the sprite is world-scaled
+        // and the dot is perspective-scaled, so the ratio holds through dolly).
+        // No additive constant — that inflated the ring on small nodes.
+        ring.scale.setScalar(rad(n) * 2.1);
         ring.visible = true;
       };
 
@@ -1239,7 +1240,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // point surface nearby low-salience items.
       const scratchP = new THREE.Vector3();
       const torchNode = (n: any): number => torchAt(scratchP.set(n.x, n.y, n.z));
-      const BEAM_ON = 0.5, BEAM_OFF = 0.28, LABEL_CAP = 48;
+      const BEAM_ON = 0.62, BEAM_OFF = 0.38, LABEL_CAP = 28;
       const syncBeamLabels = (): void => {
         const keep = pinnedSet();
         const lit: Array<[string, number]> = [];
@@ -1264,8 +1265,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          obj.element.style.fontSize = Math.max(4.5, Math.min(12, nodePx * 1.1)).toFixed(1) + 'px';
-          obj.element.style.paddingTop = (nodePx * 0.5 + 1).toFixed(1) + 'px'; // clear the dot
+          obj.element.style.fontSize = Math.max(4.5, Math.min(10, nodePx * 0.85)).toFixed(1) + 'px';
+          obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
           // OPACITY is BEAM-primary: the torch decides how lit a label is, so a
           // sweep reveals whatever is near the line of sight — salient or not.
           // Selection/neighbours lift; salience adds only a whisper.
