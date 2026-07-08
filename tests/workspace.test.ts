@@ -211,7 +211,7 @@ describe('workspace sharing / view layer', () => {
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
         'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
-        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'pruneSimilar', 'suggestions', 'ratify',
+        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'project', 'pruneSimilar', 'suggestions', 'ratify',
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena',
@@ -224,7 +224,7 @@ describe('workspace sharing / view layer', () => {
     // (platform:*) until the lake is partitioned per-slice.
     expect(
       tools.every((t) =>
-        t.name === 'tend' || t.name === 'reindex' || t.name === 'pruneSimilar'
+        t.name === 'tend' || t.name === 'reindex' || t.name === 'project' || t.name === 'pruneSimilar'
           ? t.scope === 'workspace:admin'
           : t.name === 'athena'
             ? t.scope === 'platform:*'

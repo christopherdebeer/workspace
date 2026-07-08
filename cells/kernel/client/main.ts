@@ -226,20 +226,47 @@ function scheduleRefresh(expiresInSec?: number): void {
   refreshTimer = setTimeout(() => { void refresh(); }, delayMs);
 }
 
-async function refresh(): Promise<boolean> {
+/**
+ * Single-flight guard. The dashboard boots MANY parallel reads; when the access
+ * token has lapsed they all 401 at once and each would fire its own refresh with
+ * the SAME single-use refresh token. The server rotates on first use, so every
+ * loser then presents a just-deleted token, gets `invalid_grant`, and wipes a
+ * session that is actually fine — the daily-sign-out bug. Memoizing the in-flight
+ * refresh makes N concurrent callers share ONE round-trip.
+ */
+let refreshInflight: Promise<boolean> | null = null;
+
+function refresh(): Promise<boolean> {
+  if (refreshInflight) return refreshInflight;
+  refreshInflight = doRefresh().finally(() => { refreshInflight = null; });
+  return refreshInflight;
+}
+
+async function doRefresh(): Promise<boolean> {
   const t = getTokens();
   if (!t?.refresh_token) return false;
-  const res = await fetch(apiBase() + '/oauth/token', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
-  });
-  const j = (await res.json()) as Tokens & { expires_in?: number };
-  if (!j.access_token) {
-    setTokens(null);
-    return false;
+  const usedRefresh = t.refresh_token;
+  let res: Response;
+  try {
+    res = await fetch(apiBase() + '/oauth/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: usedRefresh }),
+    });
+  } catch {
+    // Network error (mobile wifi↔cellular hand-off, tab resumed mid-flight) —
+    // leave tokens intact so a later call can retry, don't sign the user out.
+    return !!getTokens()?.access_token;
   }
-  setTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, scope: j.scope ?? t.scope });
+  const j = (await res.json().catch(() => ({}))) as Tokens & { expires_in?: number };
+  if (!j.access_token) {
+    // Refresh rejected. Only wipe if OUR refresh token is still the stored one:
+    // if a concurrent refresh (another tab) already rotated it and stored a fresh
+    // session, this is harmless rotation-reuse — must NOT clear the good session.
+    if (getTokens()?.refresh_token === usedRefresh) setTokens(null);
+    return !!getTokens()?.access_token;
+  }
+  setTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? usedRefresh, scope: j.scope ?? t.scope });
   scheduleRefresh(j.expires_in); // re-arm the next proactive refresh
   return true;
 }

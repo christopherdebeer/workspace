@@ -108,6 +108,8 @@ export {
 export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig } from './vectors';
 export { refreshSimilarEdges, dropSimilarEdges, authoredPairs, pairKey, suggestionCandidates, dropSimilarPair, RATIFY_LINK_TYPES } from './similar-edges';
 export type { EdgeIO, SuggestionCandidate, RatifyLinkType } from './similar-edges';
+export { pca, pca2d, normalizeCoords, normalizeCoordsN, projectionFact } from './projection';
+export type { Projected, ProjectionFact } from './projection';
 export { createDeclarationRegistry } from './declarations';
 export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {

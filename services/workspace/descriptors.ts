@@ -746,6 +746,24 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'project',
+    description:
+      'Compute the 2D SEMANTIC layout (ADR-0047 stage 2): read every vector in your slice index and project it (PCA) to a plane, so a fact\'s position becomes its place in meaning-space rather than a force-of-edges equilibrium. Writes the coords to `_home/embed2d` (peek it; the home graph places nodes from it). Synchronous — projection is cheap (no per-fact embedding; the index is already built). Run after `reindex` (it needs the vectors present) and re-run to refresh as the slice drifts. Admin-only.',
+    scope: 'workspace:admin',
+    kind: 'act',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: "'ok', 'empty' (too few vectors), or 'unconfigured'" },
+        count: { type: 'number', description: 'Facts projected' },
+        method: { type: 'string', description: 'Projection method (pca)' },
+        key: { type: 'string', description: 'The fact the layout was written to' },
+        hint: { type: 'string' },
+      },
+    },
+  },
+  {
     name: 'pruneSimilar',
     description:
       'Prune redundant inferred `similarTo` edges (ADR-0031/0032): delete every `platform/vectors`-written kinship edge whose endpoints are ALREADY connected by an authored edge (in either direction) — a real link a person/grant asserted makes the machine-inferred hint redundant, both as structure and as a salience signal. Synchronous, vector-free (pure edge scan + deletes). The live indexer/reindex now skip these on create (dedup-on-create); this is the one-time backfill for edges written before that. Admin-only.',

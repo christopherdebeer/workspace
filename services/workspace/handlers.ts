@@ -113,6 +113,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   query: CommandHandler<QueryInput | undefined, QueryResult>;
   search: CommandHandler<SearchInput, SearchResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
+  project: CommandHandler<undefined, { status: string; count?: number; method?: string; key?: string; hint?: string }>;
   pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
   suggestions: CommandHandler<SuggestionsInput | undefined, SuggestionsResult>;
   ratify: CommandHandler<RatifyInput, RatifyResult>;

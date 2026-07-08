@@ -46,6 +46,10 @@ export interface VectorStore {
   put(index: string, records: VectorRecord[]): Promise<void>;
   query(index: string, vector: Vector, opts?: { topK?: number; filter?: VectorFilter }): Promise<VectorMatch[]>;
   remove(index: string, keys: string[]): Promise<void>;
+  /** Bulk-read every vector in an index (key + data + metadata), paged
+   *  internally — for whole-index analysis like a 2D semantic projection, which
+   *  the kNN `query` can't serve. Empty for a never-created index. */
+  list(index: string): Promise<VectorRecord[]>;
 }
 
 export interface Embedder {
@@ -295,6 +299,11 @@ export class MemoryVectorStore implements VectorStore {
     const idx = this.indexes.get(index);
     if (!idx) return;
     for (const k of keys) idx.delete(k);
+  }
+
+  async list(index: string): Promise<VectorRecord[]> {
+    const idx = this.indexes.get(index);
+    return idx ? [...idx.values()] : [];
   }
 }
 
