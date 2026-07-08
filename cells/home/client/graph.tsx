@@ -1071,17 +1071,29 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // against the div rects in the canvas pointerup handler below.
         div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%;text-size-adjust:100%';
         const obj = new CSS2DObject(div);
-        obj.position.set(n.x, n.y + rad(n) + 7, n.z);
+        // Sit just above the node, gap scaled to the node's own size so the
+        // label reads as attached rather than floating a fixed distance away.
+        obj.position.set(n.x, n.y + rad(n) * 1.5, n.z);
         return obj;
       };
-      const labelWanted = (n: any): boolean => isVis(n) && (inFocus(n) || n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id));
-      const syncLabels = (): void => {
+      // Labels are driven by the BEAM (torchAt, below) — sweeping the focal point
+      // over the constellation lights whatever is near the line of sight so you can
+      // explore low-salience neighbours. Salience no longer gates label existence;
+      // it stays an affordance via node SIZE (rad ∝ score) and a whisper of label
+      // opacity. PINNED nodes (selection / its neighbours / a highlight set) are
+      // always labelled regardless of the beam.
+      const labelPinned = (n: any): boolean => isVis(n) && (n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id));
+      const pinnedSet = (): Set<string> => { const s = new Set<string>(); for (const n of nodes) if (labelPinned(n)) s.add(n.id); return s; };
+      const reconcileLabels = (keep: Set<string>): void => {
         for (const n of nodes) {
-          const want = labelWanted(n), has = labelObjs.has(n.id);
+          const want = keep.has(n.id), has = labelObjs.has(n.id);
           if (want && !has) { const o = makeLabel(n); labelObjs.set(n.id, o); scene.add(o); }
           else if (!want && has) { const o = labelObjs.get(n.id); scene.remove(o); o.element.remove?.(); labelObjs.delete(n.id); }
         }
       };
+      // Safe before the beam exists (setup / selection): pinned labels only. The
+      // tick's syncBeamLabels adds the beam-lit set once the camera is running.
+      const syncLabels = (): void => reconcileLabels(pinnedSet());
       syncLabels();
 
       // ── bloom (desktop only — fill-rate heavy on phones) ──
@@ -1101,12 +1113,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       controls.infinityDolly = true; // fly THROUGH the cloud, don't bounce off a min distance
       controls.minDistance = SPREAD * 0.04;
       controls.maxDistance = SPREAD * 6;
-      // Gestures don't confound: one finger orbits, TWO fingers are a PURE dolly
-      // (move the camera origin in/out — the default fuses dolly+truck into the
-      // pinch), three fingers pan. Wheel = dolly. FOV is fixed (this is dolly,
-      // not a zoom-lens).
+      // One finger orbits. TWO fingers do both, disambiguated by the gesture: a
+      // symmetric PINCH is a pure dolly (moves the camera origin in/out — FOV is
+      // fixed, this is not a zoom-lens), while a two-finger DRAG trucks (pans).
+      // camera-controls' DOLLY_TRUCK splits them by pinch-distance vs centroid-
+      // motion, so they read as separate gestures on the same two fingers.
       controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
-      controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY;
+      controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY_TRUCK;
       controls.touches.three = CameraControls.ACTION.TOUCH_TRUCK;
       controls.dampingFactor = 0.05;
       controls.draggingDampingFactor = 0.25;
@@ -1170,7 +1183,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           lastExternal.current = key;
           selKey = key; nbr = key ? neighborsOf(key) : null;
           if (key) hiSet = null;
-          applyNodeAlpha(); applyEdgeColor(); syncLabels();
+          applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
           const d = key ? nodeById.get(key) : null;
           showRing(d);
           if (d && doFly) frame(d.x, d.y, d.z, SPREAD * 0.42); // frame the node + its local neighbourhood
@@ -1178,7 +1191,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         },
         setVisible: (f: number) => {
           visCount = f >= 0.999 ? N : Math.max(minVis, Math.round(N * f));
-          applyNodeAlpha(); applyEdgeColor(); syncLabels();
+          applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         },
       };
 
@@ -1189,7 +1202,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (!keys.length) return;
         hiSet = new Set(keys); selKey = null; nbr = null;
         showRing(null);
-        applyNodeAlpha(); applyEdgeColor(); syncLabels();
+        applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         const pts = keys.map((k) => nodeById.get(k));
         const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length, cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
         // Frame the whole match set — radius covers the spread of the hits.
@@ -1199,7 +1212,6 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
       const camPos = new THREE.Vector3();
-      const REFD = SPREAD * 2.15; // the camera's resting distance → base font size
       // The same torch, in JS, for the CSS2D labels (so text is lit by the beam
       // exactly like the points). axis = camera → focal point.
       const axisV = new THREE.Vector3(), toPV = new THREE.Vector3();
@@ -1215,21 +1227,53 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const dep = 1 - smoothstep(DEPTH_IN, DEPTH_OUT, Math.abs(along - td));
         return Math.max(FLOOR, ang * dep);
       };
+      // Beam-driven label set: label the nodes the torch is currently lighting
+      // (brightest first, capped) plus the pinned set, with hysteresis so labels
+      // don't flicker at the beam's edge. This is what lets a sweep of the focal
+      // point surface nearby low-salience items.
+      const scratchP = new THREE.Vector3();
+      const torchNode = (n: any): number => torchAt(scratchP.set(n.x, n.y, n.z));
+      const BEAM_ON = 0.5, BEAM_OFF = 0.28, LABEL_CAP = 48;
+      const syncBeamLabels = (): void => {
+        const keep = pinnedSet();
+        const lit: Array<[string, number]> = [];
+        for (const n of nodes) {
+          if (!isVis(n) || keep.has(n.id)) continue;
+          const t = torchNode(n);
+          // Enter at BEAM_ON, stay until BEAM_OFF — hysteresis against edge flicker.
+          if (t > BEAM_ON || (labelObjs.has(n.id) && t > BEAM_OFF)) lit.push([n.id, t]);
+        }
+        lit.sort((a, b) => b[1] - a[1]);
+        let added = 0;
+        for (const [id] of lit) { if (added >= LABEL_CAP) break; keep.add(id); added++; }
+        reconcileLabels(keep);
+      };
+      // Label SIZE tracks the node's on-screen size (the same projection the point
+      // shader uses: pxDiameter = size·(H/2)/viewDepth), so a label reads as
+      // attached to its node — small nodes get small labels, and everything grows
+      // and recedes with the camera instead of snapping to a fixed pixel band
+      // (which flattened the depth and broke the atmosphere).
       const updateLabels = (): void => {
         for (const [id, obj] of labelObjs) {
-          // SIZE by perspective (camera distance) — nearer labels bigger, clamped.
+          const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
-          obj.element.style.fontSize = Math.max(7.5, Math.min(15, 11 * (REFD / camD))).toFixed(1) + 'px';
-          // OPACITY = DOI × torch — same signal as the node, so a label is exactly
-          // as prominent as its node (selection lifts it, salience grades it, and
-          // the beam lights it only when it's near the line of sight).
-          const d = nodeDOI(nodeById.get(id), selKey, nbr, hiSet, N);
-          obj.element.style.opacity = (d * torchAt(obj.position)).toFixed(3);
+          const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
+          obj.element.style.fontSize = Math.max(6, Math.min(24, nodePx * 1.8 + 2)).toFixed(1) + 'px';
+          // OPACITY is BEAM-primary: the torch decides how lit a label is, so a
+          // sweep reveals whatever is near the line of sight — salient or not.
+          // Selection/neighbours lift; salience adds only a whisper.
+          const torch = torchAt(obj.position);
+          let op = torch;
+          if (id === selKey) op = 1;
+          else if (nbr?.has(id)) op = Math.max(0.75, torch);
+          else { const salN = 1 - (n?.rank ?? N) / Math.max(1, N); op = torch * (0.9 + 0.1 * salN); }
+          obj.element.style.opacity = op.toFixed(3);
         }
       };
 
       const clock = new THREE.Clock();
       const AUTOROT = 0.12; // rad/sec idle orbit
+      let beamFrame = 0;
       const tick = (): void => {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
@@ -1241,6 +1285,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         camera.getWorldPosition(camPos);
         ptMat.uniforms.uFocus.value.copy(focusVec); ptMat.uniforms.uCam.value.copy(camPos);
         eMat.uniforms.uFocus.value.copy(focusVec); eMat.uniforms.uCam.value.copy(camPos);
+        // Re-pick the beam-lit label set a few times a second (DOM churn is the
+        // cost; the beam moves slowly), then size/opacity every frame.
+        if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
         updateLabels();
         if (composer) composer.render(); else renderer.render(scene, camera);
         labelRenderer.render(scene, camera);
