@@ -86,6 +86,9 @@ export interface EntryMeta {
   /** Cosine similarity to the read's intent (`text`), present only on a read
    *  that stated one (ADR-0051). */
   relevance?: number;
+  /** The fact's persisted earned-salience term (ADR-0070), present only when
+   *  set. Contributes `rewardWeight × reward` to the score (default weight 0). */
+  reward?: number;
   /** True when the value was withheld because the entry fell below the tier. */
   elided: boolean;
   /** Full salience breakdown, attached only when a read sets `explain` — the
@@ -98,9 +101,9 @@ export interface EntryMeta {
  *  blended by (resolved defaults ← config ← lens ← override), and its weighted
  *  contribution to the final score — so a tuner can see *why* a fact scored. */
 export interface ScoreExplain {
-  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
-  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
-  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
+  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number; reward: number };
+  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number; reward: number };
+  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number; reward: number };
   /** Raw inbound+outbound graph degree feeding centrality (pre-saturation). */
   degree: number;
   /** The type prior the blended score was multiplied by (ADR-0050). */
@@ -230,6 +233,15 @@ export interface StateRecord {
    */
   seedReads?: number;
   seedWrites?: number;
+  /**
+   * Earned salience (ADR-0070): a persisted per-fact number in [0,1], the
+   * seventh score signal. Written when work involving this fact demonstrably
+   * paid off — canonically by the consolidation pass, whose backlog delta is the
+   * substrate's opinion about trajectory quality. Weighted by `rewardWeight`
+   * (default 0, so inert until configured). Preserved across rewrites like the
+   * import seeds; absent = 0.
+   */
+  reward?: number;
   /**
    * Cumulative touch counters by actor class (ADR-0050) — the durable form of
    * "lifetime reads+writes". Maintained on every touch (a write folds them into
@@ -440,6 +452,12 @@ export interface SalienceOptions {
    *  a caller-supplied intent (`text`). Default 0: a read with no intent pays and
    *  changes nothing. Callers passing `text` layer the intent preset instead. */
   relevanceWeight?: number;
+  /** Weight of the per-fact `reward` signal (ADR-0070) — a persisted, EARNED
+   *  number in [0,1] (normally written by the consolidation pass, whose backlog
+   *  delta is the substrate's first opinion about trajectory quality). Default 0:
+   *  inert until configured (`_config/salience`) or supplied per-call — the same
+   *  discipline `relevanceWeight` followed, so every existing read is unchanged. */
+  rewardWeight?: number;
   /** How much a touch by each actor class counts toward attention/velocity/
    *  standing (ADR-0050). Defaults: human 1, agent 0.25, platform 0 — the
    *  substrate's own machinery no longer manufactures salience by churning. */
@@ -480,6 +498,7 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
     standingWeight: o?.standingWeight ?? 0.3,
     centralityWeight: o?.centralityWeight ?? 0.1,
     relevanceWeight: o?.relevanceWeight ?? 0,
+    rewardWeight: o?.rewardWeight ?? 0,
     humanTouchWeight: o?.humanTouchWeight ?? 1,
     agentTouchWeight: o?.agentTouchWeight ?? 0.25,
     platformTouchWeight: o?.platformTouchWeight ?? 0,
@@ -512,6 +531,7 @@ const SALIENCE_NUMERIC_KEYS = [
   'standingWeight',
   'centralityWeight',
   'relevanceWeight',
+  'rewardWeight',
   'humanTouchWeight',
   'agentTouchWeight',
   'platformTouchWeight',
@@ -668,6 +688,8 @@ export interface ScoreParts {
   centrality: number;
   /** Cosine similarity to the read's intent (`text`), 0 when none (ADR-0051). */
   relevance: number;
+  /** The fact's persisted earned-salience term, 0 when unset (ADR-0070). */
+  reward: number;
   /** The type prior the blend was multiplied by (ADR-0050); 1 when undeclared. */
   prior: number;
 }
@@ -694,7 +716,7 @@ export function computeScore(
 
 /** `computeScore` with the term breakdown exposed (for `_meta` + tuning). */
 export function scoreParts(
-  args: { updatedAtMs: number; nowMs: number; relevance?: number; prior?: number } & Partial<KeySignals>,
+  args: { updatedAtMs: number; nowMs: number; relevance?: number; reward?: number; prior?: number } & Partial<KeySignals>,
   s: ResolvedSalience,
 ): ScoreParts {
   const age = Math.max(0, args.nowMs - args.updatedAtMs);
@@ -710,11 +732,15 @@ export function scoreParts(
   const centrality =
     s.centralitySaturation > 0 ? Math.min(Math.log1p(args.degree ?? 0) / Math.log1p(s.centralitySaturation), 1) : 0;
   const relevance = clamp01(args.relevance ?? 0);
+  const reward = clamp01(args.reward ?? 0);
   const prior = args.prior ?? 1;
   // The type prior scales the AMBIENT terms only — "plumbing when you have no
   // intent" is a statement about the intent-free part of the blend. Relevance
   // rides unprioered, so a matching goal genuinely lifts a demoted type
   // (ADR-0052: a capability fact stays quiet until an intent names it).
+  // Reward rides unprioered too (ADR-0070): earned importance is fact-specific,
+  // not an ambient type bias — and its weight defaults to 0, so it is inert
+  // until a config/lens/override opts in.
   const score = clamp01(
     prior *
       (s.recencyWeight * recency +
@@ -722,9 +748,10 @@ export function scoreParts(
         s.attentionWeight * attention +
         s.standingWeight * standing +
         s.centralityWeight * centrality) +
-      s.relevanceWeight * relevance,
+      s.relevanceWeight * relevance +
+      s.rewardWeight * reward,
   );
-  return { score, recency, velocity, attention, standing, centrality, relevance, prior };
+  return { score, recency, velocity, attention, standing, centrality, relevance, reward, prior };
 }
 
 /** Fold a scope's trajectory + edges into per-key salience signals in one pass. */
@@ -1068,6 +1095,13 @@ export interface WriteInput {
    * `import.createdAt` only applies on first write (creation).
    */
   import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
+  /**
+   * Earned salience (ADR-0070): set/replace this fact's persisted `reward` in
+   * [0,1] (clamped). Omit to preserve what is stored — like the import seeds.
+   * Weighted by `rewardWeight` (default 0), so writing it is inert until a
+   * config/lens/override opts in.
+   */
+  reward?: number;
 }
 
 export interface ReadOptions {
@@ -1387,6 +1421,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         lifetimeReads: touch.lifetimeReads + (rec.seedReads ?? 0),
         lifetimeWrites: touch.lifetimeWrites + (rec.seedWrites ?? 0),
         relevance: rel,
+        reward: rec.reward,
         prior: sCall.typePriors[rec.type ?? ''] ?? 1,
       },
       sCall,
@@ -1415,6 +1450,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         standing: round4(parts.standing),
         centrality: round4(parts.centrality),
         ...(rel !== undefined ? { relevance: round4(parts.relevance) } : {}),
+        ...(rec.reward !== undefined ? { reward: round4(parts.reward) } : {}),
         elided: false,
         ...(explain ? { explain: explainScore(parts, { ...sig, ...touch }, sCall) } : {}),
       },
@@ -1431,6 +1467,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       standing: round4(parts.standing),
       centrality: round4(parts.centrality),
       relevance: round4(parts.relevance),
+      reward: round4(parts.reward),
     };
     const weights = {
       recency: sCall.recencyWeight,
@@ -1439,6 +1476,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       standing: sCall.standingWeight,
       centrality: sCall.centralityWeight,
       relevance: sCall.relevanceWeight,
+      reward: sCall.rewardWeight,
     };
     return {
       signals,
@@ -1450,6 +1488,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         standing: round4(parts.standing * weights.standing),
         centrality: round4(parts.centrality * weights.centrality),
         relevance: round4(parts.relevance * weights.relevance),
+        reward: round4(parts.reward * weights.reward),
       },
       degree: sig.degree ?? 0,
       prior: parts.prior,
@@ -1570,6 +1609,12 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
           : {}),
         ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
           ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
+          : {}),
+        // Earned salience (ADR-0070): set/replace when supplied, else preserved —
+        // the same carry rule as the import seeds. Clamped: a reward is a signal
+        // in [0,1], not an unbounded boost.
+        ...(input.reward !== undefined || prev?.reward !== undefined
+          ? { reward: clamp01(input.reward ?? prev?.reward ?? 0) }
           : {}),
         // Actor-classed touch counters (ADR-0050): a write folds its own touch
         // into the record it rewrites — no extra round trip, no trajectory scan

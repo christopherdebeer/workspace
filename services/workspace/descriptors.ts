@@ -157,6 +157,11 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           additionalProperties: false,
         },
         import: IMPORT_SCHEMA,
+        reward: {
+          type: 'number',
+          description:
+            'Earned salience in [0,1] (ADR-0070): a persisted per-fact reward term, normally written by the consolidation pass when work involving this fact paid off. Omit to preserve what is stored. Inert unless `rewardWeight` is set (`_config/salience` or a per-read salience override).',
+        },
       },
       required: ['key', 'value'],
       additionalProperties: false,
