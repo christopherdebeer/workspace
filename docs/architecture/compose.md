@@ -223,16 +223,18 @@ as the built line advances.
 | C4 | Causal relations — `causes/enables/predicts` on `EdgeRecord` | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | sketch (forward) |
 | C5 | Vendor cell-jobs — run/models → `platform/runtime/cell-jobs` | 2 copies → 1 | ADR-0026/0028 (the in-code TODO) | sketch |
 | C6 | Reward, the 7th signal — default-0 weight into `scoreParts` | +1 signal | ADR-0006/0050/0051; `adaptive-salience.md` | **ADR-0070 ✓ built + live (07-09)** |
-| C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072** (buffer) |
-| C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | sketch |
+| C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072 ✓ built + live (07-09)** |
+| C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | **ADR-0073** (buffer) |
 
-> **Progress (2026-07-09):** C1 + C3 built behind parity gates, deployed to prod, and
-> live-validated (`edges` ≡ neighbors/links/graph/members; `declare/declarations/evaluate/
-> undeclare` ≡ the legacy declaration verbs). C6 followed the same day — the reward term
-> is live (default-inert; `_config/salience.rewardWeight` or a per-read override opts in),
-> giving the substrate its first earned score signal. The two-ahead buffer is now
-> **ADR-0071 (C2 read)** and **ADR-0072 (C7 `_contested` view)** — the path to C8, the
-> consolidation organ that closes the loop.
+> **Progress (2026-07-09):** four contractions built, gated, deployed to prod, and
+> live-validated in one day's loop: C1 (`declare/declarations/undeclare/evaluate`),
+> C3 (`edges`), C6 (the reward term — the substrate's first earned score signal,
+> default-inert), and C7 (`contested` — the contradiction-candidate read with the
+> `checked/<hash>` idempotence contract; Stage B adjudication runs through existing
+> verbs, no new write surface). The two-ahead buffer is now **ADR-0071 (C2 read)** and
+> **ADR-0073 (C8, the consolidation organ)** — the terminal piece: it consumes
+> `attention` + `contested`, repairs through `ratify`/`link`/`supersede`, writes the
+> `reward` C6 gave a home, and is scored on the backlog delta it moves.
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

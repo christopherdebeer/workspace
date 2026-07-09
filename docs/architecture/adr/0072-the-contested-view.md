@@ -1,8 +1,8 @@
 # ADR-0072 — The `_contested` view: a two-stage contradiction read
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C7 of the
-  second contraction wave (ADR-0067); enters the buffer now that its dependencies
-  (C3 edges, C6 reward) are built.
+- **Status:** Accepted 2026-07-09 — Inc 1 (Stage A + the idempotence contract)
+  shipped behind its gate; prod deploy dispatched (live Stage B recorded in the
+  implementation log as it lands). C7 of the second contraction wave (ADR-0067).
 - **Context doc:** [`docs/cerebellar-loop.md`](../../cerebellar-loop.md) — Primitive 1
   (the full design); [`compose.md`](../compose.md) §7.
 - **Depends on:** ADR-0069 (edges — the `contradicts` rel rides the same EdgeRecord),
@@ -79,11 +79,36 @@ hold) and **metering** (top-N candidates per cycle by cosine × combined salienc
 never unbounded).
 
 ## Open questions
-1. θ (the cosine floor): start at the `suggestions` default or higher? Proposal:
-   higher — contradiction candidates should be *close*, not merely related.
-2. Stage B's model budget: per-cycle N and which model tier. Proposal: N=10,
-   the cheap tier; escalate ambiguous verdicts to a stronger model rather than
-   raising the default spend.
+1. θ (the cosine floor): start at the `suggestions` default or higher? **Decided
+   (Inc 1): higher — `minScore` default 0.5, caller-tunable.**
+2. Stage B's model budget: per-cycle N and which model tier. **Partly decided:
+   the read meters at `limit` 1–50 (default 10)**; the tier/escalation policy
+   belongs to the C8 organ ADR.
 3. Does `contested/*` belong in the slice or under a `_contested/` system prefix?
-   Proposal: the slice (`contested/`) — it is knowledge about the corpus, not
-   plumbing; tending should see it.
+   **Decided (Inc 1): the slice (`contested/`)** — knowledge about the corpus, not
+   plumbing; tending sees it. The `checked/*` markers likewise live in the slice
+   (type `adjudication`).
+
+## Implementation log
+
+- **2026-07-09 — Inc 1 shipped.** `workspace.contested` (a read command in
+  `commands-search.ts`, beside `suggestions`): candidates = `suggestionCandidates`
+  (inferred `similarTo`, score-desc) ∩ both-live ∩ cosine ≥ `minScore` ∩ no authored
+  edge (`authoredPairs` asserted, not just assumed from write-time dedup) ∩ same type
+  OR shared tag ∩ not noise (`_` keys + the suggestions runtime-type filter) ∩ no
+  current `checked/<hash>` marker with matching content-hash versions. Each candidate
+  carries `hash` (= `contentHash(pairKey(a,b))`), labels/types/sharedTags, and both
+  facts' `versions` so the adjudicator writes the marker without recomputation.
+- **Refinement vs the sketch:** a **dedicated derived read**, not a `registerView` —
+  pair-computation over the edge set is not expressible in the view query/reduce
+  language; the read sits in the `suggestions`/`attention` family instead (the same
+  family `adaptive-salience.md`'s `_contested` synthetic view pointed at). Stage B
+  needs **no new write surface**: verdicts land via existing `remember`/`link`
+  (the `hint` field teaches the protocol inline).
+- **Gate green.** `tests/contested-read.test.ts` — common-ground precondition
+  (same type or shared tag), cosine floor, authored-pair exclusion, noise filter,
+  `checked/<hash>` idempotence, **version-drift re-open**, limit-vs-total. Full
+  suite 596 green.
+- **Prod deploy dispatched** (Deploy CDK on the branch head); the live Stage B run —
+  executing the contested read against the real slice, adjudicating pairs, and
+  verifying idempotence — is recorded below as it lands.
