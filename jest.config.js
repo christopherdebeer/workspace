@@ -18,6 +18,7 @@ module.exports = {
     // canonical source so cell tests import the same code that deploys.
     'vendor/gateway-client\\.js$': '<rootDir>/cells/kernel/static/gateway-client.js',
     'vendor/cell-jobs\\.js$': '<rootDir>/cells/kernel/static/cell-jobs.js',
+    'vendor/substrate\\.js$': '<rootDir>/cells/kernel/static/substrate.js',
   },
   transform: {
     // Transpile-only (isolatedModules in tsconfig.test.json): full type-checking

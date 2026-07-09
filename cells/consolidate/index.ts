@@ -146,11 +146,17 @@ export const CAPS = {
 
 /* ── Inc 2 pure helpers (ADR-0077) — exported for the gate ────────────────── */
 
-/** A declared `keyPattern` ('task/{goal}/{id}') as an anchored regex — `{x}`
- *  captures match one segment (no `/`). */
+/** A declared `keyPattern` ('task/{goal}/{id}') as an anchored regex. Interior
+ *  `{x}` captures match one segment (no `/`); a TRAILING capture is greedy —
+ *  substrate keys nest (`el:inbox/arch-…`, a placement's `{el}` is itself a
+ *  fact key), so the last capture swallows the rest. */
 export function keyPatternToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.*+?^$()[\]\\|]/g, '\\$&').replace(/\{[^}]+\}/g, '[^/]+');
-  return new RegExp(`^${escaped}$`);
+  const escaped = pattern.replace(/[.*+?^$()[\]\\|]/g, '\\$&');
+  const trailing = /\{[^}]+\}$/.test(escaped);
+  const body = trailing
+    ? escaped.replace(/\{[^}]+\}$/, '§TAIL§').replace(/\{[^}]+\}/g, '[^/]+').replace('§TAIL§', '.+')
+    : escaped.replace(/\{[^}]+\}/g, '[^/]+');
+  return new RegExp(`^${body}$`);
 }
 
 /** The single declared type whose keyPattern matches `key` — null when none or
@@ -353,24 +359,38 @@ async function observe(token: string): Promise<Observations & { contestedCandida
     }
   }
 
-  // Typing backfill candidates (ADR-0077): peek the unlinked debt in parallel;
-  // untyped facts matching exactly one declared keyPattern gain that type.
+  // Typing backfill candidates (ADR-0077): query each patterned type's key
+  // PREFIX directly (the pattern up to its first capture) — complete coverage
+  // of the family, unlike sampling attention's alphabetical unlinked page
+  // (which never reaches past the plumbing prefixes). Untyped entries matching
+  // exactly one declared keyPattern gain that type.
   let untyped: Observations['untyped'] = [];
-  const unlinkedKeys = Array.isArray(att.unlinked) ? att.unlinked.slice(0, 25) : [];
-  if (unlinkedKeys.length && Object.keys(types).length) {
-    const peeks = await gwCallMany(
+  const patterned = Object.entries(types).filter(
+    (e): e is [string, { keyPattern: string }] => typeof e[1]?.keyPattern === 'string' && !e[1].keyPattern.startsWith('{'),
+  );
+  if (patterned.length) {
+    const pages = await gwCallMany(
       token,
-      unlinkedKeys.map((key) => ({ target: 'workspace.peek', input: { key }, kind: 'read' as const })),
+      patterned.map(([, d]) => ({
+        target: 'workspace.query',
+        input: { prefix: d.keyPattern.split('{')[0], limit: 50, includeSuperseded: false },
+        kind: 'read' as const,
+      })),
       { url: GATEWAY_MCP },
     );
-    untyped = unlinkedKeys
-      .map((key, i) => {
-        const entry = peeks[i] as { value?: unknown; _meta?: { type?: string | null; version?: string } } | { error: string } | null;
-        if (!entry || 'error' in (entry as object) || (entry as { _meta?: { type?: string | null } })._meta?.type) return null;
-        const type = matchTypeByKey(key, types);
-        return type ? { key, type, version: (entry as { _meta?: { version?: string } })._meta?.version } : null;
-      })
-      .filter((x): x is NonNullable<typeof x> => !!x);
+    const seen = new Set<string>();
+    for (const page of pages) {
+      if (failed(page)) continue;
+      const entries = ((page as { entries?: Array<{ key: string; _meta?: { type?: string | null; version?: string } }> }).entries ?? []);
+      for (const e of entries) {
+        if (e._meta?.type || seen.has(e.key)) continue;
+        const type = matchTypeByKey(e.key, types);
+        if (type) {
+          seen.add(e.key);
+          untyped.push({ key: e.key, type, version: e._meta?.version });
+        }
+      }
+    }
   }
 
   return {

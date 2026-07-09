@@ -143,3 +143,31 @@ audit trail as Inc 1.
   never-actions. Suite 640 green.
 - Two consecutive live cycles: delta +7 (11 repairs) and +3 (8 repairs) —
   the backlog keeps moving under the composed machinery.
+
+## Follow-ups round (2026-07-09, same day — owner-directed)
+
+- **`models.run` gained provider failover** (mirroring the agent path): a
+  pinned `provider` is honoured exactly; unpinned walks the enabled chain
+  (text: anthropic → openai → google; image: openai → google) and aggregates
+  failures verbatim. Validated live: the chain walked correctly — and revealed
+  that **both** enabled providers are currently blocked at billing (anthropic:
+  credit balance; openai: quota exceeded). Stage B activates the moment either
+  account is funded; no code change remains.
+- **Canvas declared `canvas-element`** (`el:{id}` keyPattern) — the type its
+  client already defaults new writes to; the declaration lets the substrate
+  recognise the legacy untyped mirrors. Pattern semantics sharpened in the
+  matcher: a TRAILING capture is greedy (element ids and placement fact-keys
+  nest — `el:inbox/…`, `_canvas/<board>/<factKey>`); interior captures stay
+  single-segment.
+- **Backfill candidate source fixed**: sampling attention's alphabetical
+  unlinked page never reaches past the plumbing prefixes — observe now queries
+  each patterned type's key PREFIX directly (one `query {prefix}` per declared
+  pattern, via gwCallMany). Validated live: **10 retypes applied** (the cap) —
+  the exact `el:inbox/arch-*` mirrors from the ADR-0073 finding →
+  `canvas-element`, six `_canvas/*/edge:*` placements → `canvas-placement`.
+  The typing-backfill loop is closed.
+- **machine migrated off its manual copy**: `import './vendor/substrate.js'`,
+  the hand-synced `cells/machine/substrate.js` deleted (only its header
+  comment had diverged), the overlay materializes the canonical kernel source
+  at push. Validated live: `machine.bootstrap` runs through the vendored
+  client.

@@ -919,13 +919,37 @@ async function toolCall(name: string, args: Record<string, unknown>, caller: str
       await jobs.submit(jobId, { input: rest });
       return { jobId, status: 'pending' };
     }
-    const provider = input.provider ?? 'anthropic';
-    const rec = await getProvider(provider);
-    if (!rec) throw new Error(`provider "${provider}" not enabled — paste a key at /@${OWNER}/models/secrets`);
-    if (provider === 'anthropic') return runAnthropic(rec, input);
-    if (provider === 'openai') return runOpenAI(rec, input);
-    if (provider === 'google') return runGoogle(rec, input);
-    throw new Error(`unknown provider "${provider}"`);
+    // Provider failover (mirrors the agent path): a pinned `provider` is
+    // honoured exactly; unpinned walks the enabled chain and falls back on a
+    // provider error — a funded provider serves the call even when the default
+    // is out of credit. Image mode skips text-only providers.
+    const dispatch = (provider: string, rec: ProviderRec): Promise<RunOutput> => {
+      if (provider === 'anthropic') return runAnthropic(rec, input);
+      if (provider === 'openai') return runOpenAI(rec, input);
+      if (provider === 'google') return runGoogle(rec, input);
+      throw new Error(`unknown provider "${provider}"`);
+    };
+    if (input.provider) {
+      const rec = await getProvider(input.provider);
+      if (!rec) throw new Error(`provider "${input.provider}" not enabled — paste a key at /@${OWNER}/models/secrets`);
+      return dispatch(input.provider, rec);
+    }
+    const chain = input.mode === 'image' ? ['openai', 'google'] : ['anthropic', 'openai', 'google'];
+    const failures: string[] = [];
+    for (const provider of chain) {
+      const rec = await getProvider(provider);
+      if (!rec) continue;
+      try {
+        return await dispatch(provider, rec);
+      } catch (err) {
+        failures.push(`${provider}: ${(err as Error).message}`);
+      }
+    }
+    throw new Error(
+      failures.length
+        ? `run: every enabled provider failed — ${failures.join(' | ')}`
+        : `run: no provider enabled — paste a key at /@${OWNER}/models/secrets`,
+    );
   }
   throw new Error(`unknown tool "${name}"`);
 }

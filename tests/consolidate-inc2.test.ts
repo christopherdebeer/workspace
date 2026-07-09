@@ -34,11 +34,16 @@ describe('ADR-0077 — typing backfill (keyPattern matching)', () => {
     capture: { keyPattern: 'inbox/{id}' },
   };
 
-  it('keyPatternToRegex anchors and keeps {captures} to one segment', () => {
+  it('keyPatternToRegex: interior {captures} are one segment; the TRAILING capture is greedy (keys nest)', () => {
     expect(keyPatternToRegex('task/{goal}/{id}').test('task/g1/t1')).toBe(true);
-    expect(keyPatternToRegex('task/{goal}/{id}').test('task/g1/t1/extra')).toBe(false);
     expect(keyPatternToRegex('goal/{id}').test('goal/g1')).toBe(true);
     expect(keyPatternToRegex('goal/{id}').test('nested/goal/g1')).toBe(false);
+    // Trailing greed: element ids and placement fact-keys contain slashes.
+    expect(keyPatternToRegex('el:{id}').test('el:inbox/arch-2021-07-21-1')).toBe(true);
+    expect(keyPatternToRegex('_canvas/{board}/{el}').test('_canvas/b1/el:inbox/x')).toBe(true);
+    // Interior capture stays strict: the board segment can't span slashes.
+    expect(keyPatternToRegex('_canvas/{board}/{el}').test('_canvas/el:only')).toBe(false);
+    expect(keyPatternToRegex('el:{id}').test('kb/el:nope')).toBe(false);
   });
 
   it('matchTypeByKey: exactly-one-match wins; none or ambiguous → null', () => {
