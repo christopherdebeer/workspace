@@ -218,7 +218,7 @@ as the built line advances.
 | # | Contraction | Collapses | Completes / depends | Lands as |
 |---|---|---|---|---|
 | **C1** | **One declaration surface** — `declare/declarations/undeclare(kind)` + `evaluate` | 11 → 4 | ADR-0001 (the surface it left) | **ADR-0068 ✓ built + live (07-09)** |
-| C2 | One read by candidate source — recall/query/search → `read(source, shape)` | 3 → 1 (+ fixes `search` salience) | ADR-0004/0048/0050/0051; deprecates `search` | **ADR-0071** (buffer) |
+| **C2** | **One read by candidate source** — recall/query/search → `read(source, shape)` | 3 → 1 (+ fixes `search` salience) | ADR-0004/0048/0050/0051; deprecates `search` | **ADR-0071 ✓ built + live (07-09)** |
 | **C3** | **One edge query** — neighbors/graph/members/links → `edges(…)` | 4 → 1 | ADR-0044 Inc 5 / ADR-0048; feeds ADR-0016 | **ADR-0069 ✓ built + live (07-09)** |
 | C4 | Causal relations — `causes/enables/predicts` on `EdgeRecord` | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | sketch (forward) |
 | C5 | Vendor cell-jobs — run/models → `platform/runtime/cell-jobs` | 2 copies → 1 | ADR-0026/0028 (the in-code TODO) | sketch |
@@ -226,18 +226,21 @@ as the built line advances.
 | C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072 ✓ built + live (07-09)** |
 | C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | **ADR-0073 ✓ built + live (07-09, delta +11)** |
 
-> **Progress (2026-07-09): the loop is closed.** Five contractions built, gated,
-> deployed, and live-validated in one day's loop: C1 (`declare/…/evaluate`), C3
-> (`edges`), C6 (`reward`), C7 (`contested`), and **C8 — `@c15r/consolidate`, the
-> organ itself**, running as a scoped principal. Its first clean cycle on the real
-> backlog scored **delta +11** (1025 → 1014), zeroed the dangling category, landed
-> the protocol-doc↔protocol-fact links the weave dispatches never managed, and
-> **wrote the first earned rewards** onto the previous cycle's surviving repairs —
-> the substrate now has an opinion about its own trajectory *and acts on it*. The
-> two-ahead buffer: **ADR-0071 (C2 read** — + secondary/elided-neighbour context, +
-> a reserved principal layer**)** and **ADR-0074 (principal-adopted goals** — the
-> ADR-0022/0024/0025 reassessment: attention, not just scope, attenuates through
-> delegation**)**. Remaining sketches: C4 (causal rels), C5 (cell-jobs).
+> **Progress (2026-07-09): all three shapes composed, the loop closed.** Six
+> contractions built, gated, deployed, and live-validated in one day's loop: C1
+> (`declare/…/evaluate`), C3 (`edges`), C6 (`reward`), C7 (`contested`), **C8 —
+> `@c15r/consolidate`, the organ itself** (first clean cycle: **delta +11**,
+> 1025 → 1014, dangling zeroed, the first earned rewards written), and **C2 —
+> `read(source, shape)`**, the composed read with the `context:'refs'` periphery
+> (every result can arrive *situated* — one-hop value-free neighbour refs) and the
+> reserved principal layer in its defaults merge. The substrate now has one
+> declaration surface, one edge query, one read — and an opinion about its own
+> trajectory that it acts on. The two-ahead buffer: **ADR-0074 (principal-adopted
+> goals** — the ADR-0022/0024/0025 reassessment, grounded in the `@c15r/tasks`
+> goal vocabulary: adopting a `goal/<id>` fact postures the principal**)** and
+> **ADR-0075 (C4 causal relations** — zero-schema: the rel family is declared
+> vocabulary, confidence rides `strength`, one directional walk on `edges`**)**.
+> Remaining sketch: C5 (cell-jobs).
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

@@ -1,7 +1,7 @@
 # ADR-0071 — One read by candidate source: `recall` / `query` / `search` → `read(source, shape)`
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C2 of the
-  second contraction wave (ADR-0067); the second forward buffer entry.
+- **Status:** Accepted 2026-07-09 (built, gated, deployed run #328, validated live).
+  C2 of the second contraction wave (ADR-0067).
 - **Context doc:** [`docs/architecture/compose.md`](../compose.md) — §2 (Shape B).
 - **Depends on:** ADR-0004 (the projection pipeline), ADR-0048 (reads answer at the
   caller's altitude), ADR-0050/0051 (materialized score + relevance). Deprecates
@@ -127,3 +127,37 @@ area than any single verb (mitigated: presets are the documented entry points).
 2. Is `source: vector` always `relevance`-driven, or can it rank by salience alone
    (a "most-salient semantically-near" read)? Proposal: `relevance` optional; absent
    = salience-only over the vector candidate set.
+
+## Implementation log (2026-07-09)
+
+- **The shape.** `services/workspace/commands-read.ts`: `read(input)` — a pure
+  dispatch over the presets (the C1/C3 pattern), `source ∈ slice · store · vector ·
+  key · changes`, inferred from the args when omitted (`inferSource`: explicit wins;
+  `key` → key; `sinceSeq`/`last`/`include` → changes; store filters → store;
+  `text` → vector; bare → slice). Presets (`recall`/`query`/`peek`/`changes`) stay
+  first-class; `search` stays deprecated with `read({source:'vector'})` as its
+  replacement — the vector source rides `query({text})`, so it is salience-ranked
+  (the fix), not raw cosine.
+- **Enrichment 1 — the periphery (owner steer).** `context:'refs'` attaches
+  `_context` to each result: one-hop neighbour refs `{key, rel, dir, type?,
+  derived?}` — NO values (the elided tier as a hint, ADR-0048) — computed from ONE
+  Reference-projection pass indexed by endpoint, capped (`contextLimit`, default 8,
+  max 24). Default `'none'` → byte parity. Overview and changes shapes skip it.
+- **Enrichment 2 — the principal seam (ADR-0074 reservation).** `principalPosture()`
+  is a typed no-op in the defaults merge (`defaults ← config ← PRINCIPAL ← lens ←
+  override`); posture supplies what the call didn't say, caller args win. ADR-0074
+  lands there without moving C2.
+- **Gate.** `tests/read-composed.test.ts` (7): inference table; per-source parity
+  (bare/full ≡ recall, type/text ≡ query, key ≡ peek, changes ≡ changes); periphery
+  attach/cap/value-free; principal-layer inertness. Peek parity is **modulo
+  touch-derived fields** (score/standing/velocity) — a read *touches* by design
+  (ADR-0007), so two sequential reads are never byte-equal; documented in the test.
+  Suite 611 green; catalog-sync gate covers the new descriptor.
+- **Deploy + live validation.** Deploy CDK run #328 (commit `2b4d0cf`) → prod,
+  success. Live: bare `workspace.read` ≡ recall overview; `read({key:
+  'kb/cognitive-substrate', context:'refs'})` returned the fact + 8 value-free refs
+  (authored `addresses`/`elaborates`/`informs`/`refines` + inferred `similarTo`,
+  both directions); `read({type:'goal', context:'refs', contextLimit:4})` decorated
+  each entry, correctly capped.
+- **Open question 1 resolved as proposed:** peek/changes stay named presets;
+  `read` subsumes them by dispatch, not by removal.

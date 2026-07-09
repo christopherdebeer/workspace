@@ -34,6 +34,36 @@ Three facts already point at one seam:
   on every read, or forgets to — the unknown-unknowns failure `adaptive-salience.md`
   named ("an agent choosing its own curriculum").
 
+### Grounding — the goal surfaces that already exist (owner aside, 2026-07-09)
+
+Posture must not invent a goal vocabulary; the substrate already has one, in
+three layers, and the sketch below is revised to *reference* it:
+
+1. **Durable goals are facts, slice-declared.** `@c15r/tasks` declares the
+   `goal` type in its own `types.json` (not compiled code): `goal/<id>` facts
+   with a lifecycle (`proposed → active → (done|blocked|dropped)`), a `project`
+   pointer to a `kb/proj_*` fact, and tasks whose key-encoded rule projects
+   `task —partOf→ goal` edges (`cells/tasks/types.json`, `cells/tasks/index.ts`).
+   Live prod carries real instances managed by `@c15r/tasks`, tagged
+   `goal · status:* · project:*`. This is exactly the open-vocabulary discipline
+   (compose.md §8): the goal shape is slice-declared data.
+2. **Per-call goal conditioning already works.** ADR-0051's `recall({text})` /
+   `query({text})` is the intent lens — "orient relative to a goal: free text,
+   matched by meaning" (`descriptors.ts`) — and capability facts are written so
+   "relevance can match a goal to a tool" (`event-handlers.ts:629`). Posture is
+   that same machinery hoisted from per-call to per-principal; no new scoring.
+3. **Named lenses are the one closed set in the seam.** `SalienceLens`
+   (`recent|connected|durable|active`) is a compiled preset table
+   (`state.ts` `LENS_PRESETS`). Under the open-vocabulary rule this is a *floor*,
+   not a ceiling — a `_config/lenses` slice-declared preset layer is the natural
+   companion (recorded as open question 4, not built here).
+
+The consequence for the sketch: **adopting a goal should mean adopting a
+`goal/<id>` fact** where one exists — the posture then derives its relevance
+text from the fact's `title`/`detail`, inherits its `project` edge for
+observability, and the adoption itself is graph-visible — with free text as the
+degenerate case for ephemeral purposes no one has filed as a goal fact.
+
 ```mermaid
 flowchart TD
   subgraph before["BEFORE — posture is per-call or nowhere"]
@@ -63,10 +93,16 @@ flowchart TD
    slot in the existing layered merge (ADR-0010), nothing else moves. A principal
    with `goal` gets that goal embedded once and applied as the `relevance` map on
    every read (the ADR-0051 machinery, principal-conditioned instead of per-call).
-3. **Adoption is a verb.** `auth.adoptGoal { tokenId?, goal, lens?, salience? }`
-   (self by default) — an agent *adopts* a goal mid-session; `auth.dropGoal`
-   releases it. Adoption events land in the trajectory, so tending can see what
-   the fleet is attending to.
+3. **Adoption is a verb, and it prefers the goal graph.** `auth.adoptGoal
+   { tokenId?, goal, lens?, salience? }` (self by default) — an agent *adopts* a
+   goal mid-session; `auth.dropGoal` releases it. `goal` is either a **fact key**
+   (`goal/<id>` — the `@c15r/tasks` vocabulary; the posture embeds the fact's
+   `title`+`detail` and records the reference, so the principal is visibly
+   attached to the goal graph and its `project`) or **free text** (the degenerate
+   case, for purposes not yet filed). Adoption events land in the trajectory, so
+   tending can see what the fleet is attending to — and a fact-referenced
+   adoption is itself tendable (a dropped/done goal with postured principals
+   still attached is a contested-view candidate).
 4. **Delegation attenuates attention (the 0024/0025 reassessment).** When a
    principal mints a child (0024's chain), the child inherits the parent's posture
    and may only **narrow** it (a sub-goal), exactly as scope only narrows — 0025's
@@ -102,3 +138,10 @@ reads equal today's reads with the equivalent per-call `text`/`lens` supplied.
    home UI surface the active posture?
 3. Interaction with grants: does a shared slice read under the *reader's* posture
    only (proposal: yes — posture is the observer's, never the owner's)?
+4. Lens vocabulary: `LENS_PRESETS` is compiled-closed — should posture's arrival
+   bring a slice-declared `_config/lenses` preset layer (compiled names as the
+   floor, per the open-vocabulary discipline), so a posture can name a lens the
+   slice itself defined?
+5. Goal lifecycle coupling: when a referenced `goal/<id>` transitions to
+   `done`/`dropped`, does the posture auto-release, warn on next read, or persist
+   until dropped (proposal: persist + surface via contested/tending, not magic)?
