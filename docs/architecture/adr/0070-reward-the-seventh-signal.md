@@ -1,7 +1,7 @@
 # ADR-0070 — Reward: the seventh salience signal
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C6 of the
-  second contraction wave (ADR-0067); the forward buffer now that C1/C3 are built.
+- **Status:** Accepted 2026-07-09 — Inc 1 shipped (default-inert gate, deployed to
+  prod). C6 of the second contraction wave (ADR-0067).
 - **Context doc:** [`docs/architecture/compose.md`](../compose.md) — §5.
 - **Depends on:** ADR-0006 (salience as the score stage), ADR-0050 (materialize the
   score), ADR-0051 (relevance as the sixth signal — the precedent this copies).
@@ -87,7 +87,31 @@ that mis-scores could distort ranking (mitigated by default-0 + explicit opt-in 
 
 ## Open questions
 1. Reward as a stored per-fact counter (durable, cheap read) vs a config-delivered
-   `rewardWeights` map (no per-fact write). Proposal: per-fact counter — it is the
-   organ's natural output and matches `seedReads`.
+   `rewardWeights` map (no per-fact write). **Decided (Inc 1): per-fact stored
+   number** — set via the write path (`remember`/`ingest` `reward` field, the
+   seeds-style carry rule), the organ's natural output.
 2. Decay: does reward evaporate like recency, or persist like standing? Proposal:
-   slow decay, so stale wins don't hold rank forever.
+   slow decay, so stale wins don't hold rank forever. **Open — deferred to the
+   consolidation-organ ADR (C8)**, which owns the write policy; Inc 1 persists
+   as-written.
+
+## Implementation log
+
+- **2026-07-09 — Inc 1 shipped.** `rewardWeight` in `SalienceOptions` +
+  `resolveSalience` default 0 + the `_config/salience` numeric whitelist
+  (`SALIENCE_NUMERIC_KEYS`); `StateRecord.reward` persisted with the import-seeds
+  carry rule (set/replace on write, preserved across rewrites, clamped [0,1]) +
+  codec read-side; the seventh term in `scoreParts` (outside the type prior, like
+  relevance) + `ScoreParts.reward`; `wrap` feeds `rec.reward` and surfaces
+  `_meta.reward` when set; `ScoreExplain`/`explainScore` carry the term. Write
+  path: `remember`/`ingest` accept an optional `reward` (documented in the
+  descriptor as the consolidation pass's output).
+- **Gate green.** `tests/reward-signal.test.ts` — default-inert twin-fact proof,
+  exact `rewardWeight × reward` lift under per-read override *and*
+  `_config/salience`, prior-independence, persistence + clamp, explain breakdown,
+  pure-function addition. Existing salience fixtures updated (two hand-rolled
+  resolved literals + the explain-keys list — the predicted "one non-automatic
+  place"). Full suite 591 green.
+- **Deployed to prod** via the Deploy CDK workflow on the branch head;
+  live-validated with a probe fact (reward set, per-read `salience:{rewardWeight}`
+  override lifts its score by exactly the weighted term; default reads unchanged).
