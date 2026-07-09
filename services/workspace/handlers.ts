@@ -61,6 +61,8 @@ import {
   type SuggestionsResult,
   type RatifyInput,
   type RatifyResult,
+  type ContestedInput,
+  type ContestedResult,
 } from './commands-search';
 import {
   createDeclaredCommands,
@@ -121,6 +123,8 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
   suggestions: CommandHandler<SuggestionsInput | undefined, SuggestionsResult>;
   ratify: CommandHandler<RatifyInput, RatifyResult>;
+  // ADR-0072 (C7): the contradiction-candidate read (Stage A of the contested view).
+  contested: CommandHandler<ContestedInput | undefined, ContestedResult>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;

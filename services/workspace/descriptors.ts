@@ -430,6 +430,48 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
+    name: 'contested',
+    description:
+      "Contradiction-candidate read (ADR-0072, Stage A of the contested view): semantically-near pairs (inferred `similarTo` kinship ≥ minScore) that NO authored edge connects, sharing a type or tag, and not yet adjudicated. Each candidate carries a pair `hash` + both facts' content-hash `versions`. Adjudicate (any agent): verdict contradict → remember `contested/<hash>` {a,b,why} + link a --contradicts--> b; duplicate → consider supersede; subsumes → a refines edge; ALWAYS remember `checked/<hash>` {a,b,verdict,versions} — the idempotence marker; the pair re-surfaces only when either fact's version drifts. Semantic debt for the consolidation pass; the wiki's 'detect contradictions', made a standing read.",
+    scope: null,
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Cap on candidates returned (1–50, default 10) — adjudication is metered' },
+        minScore: { type: 'number', description: 'Cosine floor (default 0.5) — contradiction candidates should be close, not merely related' },
+        includeRuntime: { type: 'boolean', description: 'Include runtime/machine fact types filtered out by default' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        candidates: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              a: { type: 'string' },
+              b: { type: 'string' },
+              score: { type: 'number', description: 'Cosine similarity between the pair' },
+              aLabel: { type: 'string' },
+              bLabel: { type: 'string' },
+              aType: { type: 'string' },
+              bType: { type: 'string' },
+              sharedTags: { type: 'array', items: { type: 'string' } },
+              hash: { type: 'string', description: 'Unordered pair hash — the checked/<hash> and contested/<hash> key suffix' },
+              versions: { type: 'object', description: "Both facts' current content-hash versions — echo onto the checked/<hash> marker" },
+            },
+          },
+        },
+        total: { type: 'number', description: 'Candidates before the limit cap' },
+        checked: { type: 'number', description: 'Pairs skipped: already adjudicated and unchanged since' },
+        hint: { type: 'string', description: 'How to write a verdict back (existing verbs only)' },
+      },
+    },
+  },
+  {
     name: 'ratify',
     description:
       'Accept a suggested connection (ADR-0032): write a typed, directed, authored edge `from --rel--> to` (full weight — you assert it, not the machine) and drop the redundant inferred `similarTo` between the pair. `rel` should be one of refines/grounds/duplicates/contradicts/elaborates/relatesTo (any string accepted). The substrate-native way to graduate a machine hint into curated structure; pairs come from `suggestions`.',
