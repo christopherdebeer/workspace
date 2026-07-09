@@ -49,7 +49,7 @@ import {
   type ChangesWithEntries,
   type AttentionInput,
 } from './commands-read';
-import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput } from './commands-graph';
+import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput, type EdgesInput } from './commands-graph';
 import { type EdgeScopeInput } from './shape';
 import {
   createSearchCommands,
@@ -72,6 +72,10 @@ import {
   type DeleteViewInput,
   type RegisterSubscriptionInput,
   type DeleteSubscriptionInput,
+  type DeclareInput,
+  type DeclarationsInput,
+  type UndeclareInput,
+  type EvaluateInput,
 } from './commands-declared';
 import {
   createSharingCommands,
@@ -123,6 +127,8 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[]; total: number }>;
   graph: CommandHandler<EdgeScopeInput | undefined, { edges: EdgeRecord[]; total: number }>;
   members: CommandHandler<MembersInput, MembersResult>;
+  // ADR-0069 (C3): the one edge query (neighbors/links/graph/members are aliases).
+  edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: EdgeRecord[]; total: number }>;
   changes: CommandHandler<ChangesInput | undefined, ChangesWithEntries>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
@@ -137,6 +143,11 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   registerSubscription: CommandHandler<RegisterSubscriptionInput, SubscriptionDefinition>;
   subscriptions: CommandHandler<undefined, { subscriptions: SubscriptionDefinition[] }>;
   deleteSubscription: CommandHandler<DeleteSubscriptionInput, { ok: true }>;
+  // ADR-0068 (C1): the one declaration surface (legacy verbs above are aliases).
+  declare: CommandHandler<DeclareInput, RegisterResult | ViewDefinition | SubscriptionDefinition>;
+  declarations: CommandHandler<DeclarationsInput | undefined, { declarations: unknown[] }>;
+  undeclare: CommandHandler<UndeclareInput, { ok: true }>;
+  evaluate: CommandHandler<EvaluateInput, InvokeResult | ViewResult>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;

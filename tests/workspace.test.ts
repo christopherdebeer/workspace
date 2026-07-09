@@ -215,6 +215,9 @@ describe('workspace sharing / view layer', () => {
         'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
         'registerSubscription', 'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena',
+        // ADR-0068 (C1) declaration surface + ADR-0069 (C3) edge query — the legacy
+        // verbs above remain as aliases during the deprecation window.
+        'declare', 'declarations', 'undeclare', 'evaluate', 'edges',
       ].sort(),
     );
     // Per-slice ops gate on ownership AND a verb scope derived from kind, so a
