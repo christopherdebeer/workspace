@@ -17,20 +17,21 @@
   | **C1** | One declaration surface | 11 → 4 | ADR-0001 (surface) | **ADR-0068 ✓ built + live** |
   | **C2** | One read by candidate source | 3 → 1 | ADR-0004/0048/0050/0051 | **ADR-0071 ✓ built + live** |
   | **C3** | One edge query | 4 → 1 | ADR-0044 Inc 5 / 0048; feeds 0016 | **ADR-0069 ✓ built + live** |
-  | C4 | Causal relations | +1 rel family, 0 schema | depends C3 | sketch |
-  | C5 | Vendor cell-jobs | 2 → 1 | ADR-0026/0028 (in-code TODO) | sketch |
+  | C4 | Causal relations | +1 rel family, 0 schema | depends C3 | **ADR-0075 (buffer)** |
+  | C5 | Vendor cell-jobs | 3 → 1 | ADR-0026/0028 (in-code TODO) | **ADR-0076 (buffer)** |
   | C6 | Reward — the 7th signal | +1 signal | ADR-0006/0050/0051 | **ADR-0070 ✓ built + live** |
   | C7 | The `_contested` view | new read | ADR-0040/0045; C3,C6 | **ADR-0072 ✓ built + live** |
   | C8 | The consolidation organ | new organ | ADR-0045; C6,C7 | **ADR-0073 ✓ built + live (delta +11)** |
 
-  *Buffer advanced 2026-07-09 (five times): C1/C3, then C6, then C7, then C8, then
-  C2 — each built, gated, deployed, and validated live. **All three shapes are now
-  composed** (declaration, edge, read) and the self-maintenance loop is closed (the
-  organ's first clean cycle scored delta +11 and wrote the first earned rewards).
-  The two-ahead buffer is now **ADR-0074 (principal-adopted goals — the
-  0022/0024/0025 reassessment, grounded in the `@c15r/tasks` goal vocabulary)** and
-  **ADR-0075 (C4 causal relations — the zero-schema simulation affordance)**.
-  Remaining sketch: C5 (cell-jobs — now with a third consumer).*
+  *Buffer advanced 2026-07-09 (six times): C1/C3, then C6, then C7, then C8, then
+  C2, then **ADR-0074 (principal-adopted goals)** — each built, gated, deployed,
+  and validated live. All three shapes are composed, the self-maintenance loop is
+  closed (delta +11, first earned rewards), and the principal now carries its
+  purpose: `auth.adoptGoal` postures a token (a `goal/<id>` fact or free text) and
+  every composed read resolves through it — the organ's standing token is the
+  first postured principal. The two-ahead buffer is now **ADR-0075 (C4 causal
+  relations — the zero-schema simulation affordance)** and **ADR-0076 (C5 vendor
+  cell-jobs — the wave's DRY completion and last row)**.*
 
 ---
 

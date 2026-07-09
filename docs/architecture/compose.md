@@ -220,8 +220,8 @@ as the built line advances.
 | **C1** | **One declaration surface** — `declare/declarations/undeclare(kind)` + `evaluate` | 11 → 4 | ADR-0001 (the surface it left) | **ADR-0068 ✓ built + live (07-09)** |
 | **C2** | **One read by candidate source** — recall/query/search → `read(source, shape)` | 3 → 1 (+ fixes `search` salience) | ADR-0004/0048/0050/0051; deprecates `search` | **ADR-0071 ✓ built + live (07-09)** |
 | **C3** | **One edge query** — neighbors/graph/members/links → `edges(…)` | 4 → 1 | ADR-0044 Inc 5 / ADR-0048; feeds ADR-0016 | **ADR-0069 ✓ built + live (07-09)** |
-| C4 | Causal relations — `causes/enables/predicts` on `EdgeRecord` | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | sketch (forward) |
-| C5 | Vendor cell-jobs — run/models → `platform/runtime/cell-jobs` | 2 copies → 1 | ADR-0026/0028 (the in-code TODO) | sketch |
+| C4 | Causal relations — `causes/enables/predicts` on `EdgeRecord` | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | **ADR-0075** (buffer) |
+| C5 | Vendor cell-jobs — run/models/consolidate → vendored modules | 3 copies → 1 | ADR-0026/0028 (the in-code TODO) | **ADR-0076** (buffer) |
 | C6 | Reward, the 7th signal — default-0 weight into `scoreParts` | +1 signal | ADR-0006/0050/0051; `adaptive-salience.md` | **ADR-0070 ✓ built + live (07-09)** |
 | C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072 ✓ built + live (07-09)** |
 | C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | **ADR-0073 ✓ built + live (07-09, delta +11)** |
@@ -233,14 +233,20 @@ as the built line advances.
 > 1025 → 1014, dangling zeroed, the first earned rewards written), and **C2 —
 > `read(source, shape)`**, the composed read with the `context:'refs'` periphery
 > (every result can arrive *situated* — one-hop value-free neighbour refs) and the
-> reserved principal layer in its defaults merge. The substrate now has one
-> declaration surface, one edge query, one read — and an opinion about its own
-> trajectory that it acts on. The two-ahead buffer: **ADR-0074 (principal-adopted
-> goals** — the ADR-0022/0024/0025 reassessment, grounded in the `@c15r/tasks`
-> goal vocabulary: adopting a `goal/<id>` fact postures the principal**)** and
-> **ADR-0075 (C4 causal relations** — zero-schema: the rel family is declared
-> vocabulary, confidence rides `strength`, one directional walk on `edges`**)**.
-> Remaining sketch: C5 (cell-jobs).
+> reserved principal layer in its defaults merge — a layer **ADR-0074
+> (principal-adopted goals, built + live the same day)** then filled: scope says
+> what a principal MAY touch, posture says what it is FOR. `auth.adoptGoal`
+> postures a token (a `goal/<id>` fact from the `@c15r/tasks` vocabulary, or free
+> text) and every composed read resolves through it (`defaults ← config ←
+> PRINCIPAL ← lens ← override`) — ranking only, never membership, caller always
+> wins; delegation postures child tokens (attention attenuates, not just scope);
+> the consolidation organ's standing token is the first postured principal. The
+> substrate now has one declaration surface, one edge query, one read — and
+> principals that carry their purpose. The two-ahead buffer: **ADR-0075 (C4
+> causal relations** — zero-schema: the rel family is declared vocabulary,
+> confidence rides `strength`, one directional walk on `edges`**)** and
+> **ADR-0076 (C5 vendor cell-jobs** — the DRY completion; the gateway client now
+> has three hand copies**)**.
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

@@ -1,9 +1,8 @@
 # ADR-0074 — Principal-adopted goals: attention as a property of the principal
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). Enters
-  the buffer beside ADR-0071 (C2) now that C8 closed the wave's loop; this is the
-  owner-directed reassessment of the auth track (ADR-0022/0024/0025) against the
-  score stage (ADR-0050/0051/0070).
+- **Status:** Accepted 2026-07-09 (built, gated, deployed run #329, validated live).
+  The owner-directed reassessment of the auth track (ADR-0022/0024/0025) against
+  the score stage (ADR-0050/0051/0070).
 - **Context:** owner direction (2026-07-09): *"goals and even salience might be
   principal specific — an agent can adopt a goal and its queries are automatically
   permuted/perturbed by that."* Also the standing gap the plate has carried since
@@ -145,3 +144,46 @@ reads equal today's reads with the equivalent per-call `text`/`lens` supplied.
 5. Goal lifecycle coupling: when a referenced `goal/<id>` transitions to
    `done`/`dropped`, does the posture auto-release, warn on next read, or persist
    until dropped (proposal: persist + surface via contested/tending, not magic)?
+
+## Implementation log (2026-07-09)
+
+- **Storage (open question 1 → resolved: token record).** `TokenPosture {goal?,
+  lens?, salience?, adoptedAt}` on the token, mutated by `setPosture` — the exact
+  `setEffectiveScope` shape (owner-keyed, both stores: memory + Dynamo
+  SET/REMOVE). No `_principals/*` mirror yet; the trajectory carries adoption
+  via `auth.goal.adopted`/`auth.goal.dropped` events.
+- **The verbs.** `auth.adoptGoal {tokenId?, goal?, lens?, salience?}` (self by
+  default; an explicit tokenId postures a child token you minted — the
+  delegation-attenuates-attention path) and `auth.dropGoal {tokenId?}`. Empty
+  postures rejected; strangers refused (owner-keyed).
+- **The thread.** `validateBearer → ValidatedToken.posture →
+  identityFromValidated → Identity.posture → the command envelope
+  (service-client) → ctx.identity` in every downstream cell; surfaced in
+  `whoami`.
+- **The read merge (grounded per the owner aside).** `principalPosture()` — the
+  slot C2 reserved — went live in the composed `read`: `defaults ← config ←
+  PRINCIPAL ← lens ← override`. A `goal/<id>` posture resolves the **fact**
+  (touch-free `store.get`, own slice) to `title — detail` as the relevance
+  text — the `@c15r/tasks` vocabulary, not a parallel one; free text is the
+  degenerate case; unknown lens names are ignored (open-vocabulary floor).
+  Shape is the caller's: the source is inferred from the caller's args *before*
+  the merge, so a standing goal conditions a bare read (`recall({text})`,
+  ADR-0051 hoisted) and never flips an overview into a search. Caller args win.
+- **Gate.** `tests/posture-read.test.ts` (10): adopt/validate/drop round-trip;
+  child-token posturing + stranger refusal; empty-posture rejection; postured ≡
+  per-call equivalent (slice + store); goal-fact resolution + dangling fallback;
+  caller-wins; shape preservation; double default-inertness. Suite 621 green.
+- **Live validation (deploy run #329).** Minted a scratch principal, postured it
+  with the real `goal/mr8dvy55fzjq` fact (+ `lens:'recent'`): `whoami` showed the
+  posture; the postured `read({type:'decision'})` came back **identical to the
+  per-call equivalent** (goal resolved to its title—detail) and **re-ranked vs
+  the unbiased read** (the goal's subject rose); `dropGoal` returned reads to
+  byte-unbiased. Token revoked after.
+- **First standing postured principal:** the consolidation organ's token
+  (`consolidate-organ`, ADR-0073) now carries its purpose as posture —
+  declarative today (the organ reads via attention/contested/peek, not the
+  composed read); it becomes active when the organ's observe pass migrates to
+  `read` (Inc 2 note).
+- **Open question 4 stands** (slice-declared `_config/lenses` over the compiled
+  floor) and **question 5 resolved as proposed**: a done/dropped goal's posture
+  persists and is surfaced by tending/contested, never auto-released.
