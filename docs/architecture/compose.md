@@ -220,7 +220,7 @@ as the built line advances.
 | **C1** | **One declaration surface** — `declare/declarations/undeclare(kind)` + `evaluate` | 11 → 4 | ADR-0001 (the surface it left) | **ADR-0068 ✓ built + live (07-09)** |
 | **C2** | **One read by candidate source** — recall/query/search → `read(source, shape)` | 3 → 1 (+ fixes `search` salience) | ADR-0004/0048/0050/0051; deprecates `search` | **ADR-0071 ✓ built + live (07-09)** |
 | **C3** | **One edge query** — neighbors/graph/members/links → `edges(…)` | 4 → 1 | ADR-0044 Inc 5 / ADR-0048; feeds ADR-0016 | **ADR-0069 ✓ built + live (07-09)** |
-| C4 | Causal relations — `causes/enables/predicts` on `EdgeRecord` | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | **ADR-0075** (buffer) |
+| **C4** | **Causal relations** — the directional walk over authored causal edges | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | **ADR-0075 ✓ built + live (07-09)** |
 | C5 | Vendor cell-jobs — run/models/consolidate → vendored modules | 3 copies → 1 | ADR-0026/0028 (the in-code TODO) | **ADR-0076** (buffer) |
 | C6 | Reward, the 7th signal — default-0 weight into `scoreParts` | +1 signal | ADR-0006/0050/0051; `adaptive-salience.md` | **ADR-0070 ✓ built + live (07-09)** |
 | C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072 ✓ built + live (07-09)** |
@@ -242,11 +242,15 @@ as the built line advances.
 > wins; delegation postures child tokens (attention attenuates, not just scope);
 > the consolidation organ's standing token is the first postured principal. The
 > substrate now has one declaration surface, one edge query, one read — and
-> principals that carry their purpose. The two-ahead buffer: **ADR-0075 (C4
-> causal relations** — zero-schema: the rel family is declared vocabulary,
-> confidence rides `strength`, one directional walk on `edges`**)** and
-> **ADR-0076 (C5 vendor cell-jobs** — the DRY completion; the gateway client now
-> has three hand copies**)**.
+> principals that carry their purpose. **C4 (ADR-0075) followed the same day:**
+> causal rels (`causes·enables·predicts·prevents·contradicts`, a documented
+> floor) are ordinary authored edges — confidence rides `strength` — and
+> `edges({around, rel, depth, direction})` walks them transitively with
+> compound confidence, cycle-guarded: **the map runs forward**. One wave row
+> remains: **ADR-0076 (C5 vendor cell-jobs** — the DRY completion; the gateway
+> client has three hand copies**)**; beside it the buffer holds **ADR-0077 (the
+> postured organ** — consolidate Inc 2: observe through the composed read under
+> the adopted posture, via the vendored client — the wave's outputs, composed**)**.
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

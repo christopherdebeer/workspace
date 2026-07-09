@@ -1,8 +1,8 @@
 # ADR-0075 — Causal relations: the simulation affordance on existing edges
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). Enters
-  the buffer beside ADR-0074 as C2 (ADR-0071) moves to built — this is **C4** of
-  the second contraction wave (ADR-0067), the "completion" that costs no schema.
+- **Status:** Accepted 2026-07-09 (built, gated, deployed run #331, validated live).
+  **C4** of the second contraction wave (ADR-0067), the "completion" that costs
+  no schema.
 - **Context doc:** `docs/architecture/compose.md` (C4 row);
   `docs/cognitive-substrate.md` §6 proposal 4 (the counterfactual gap);
   `docs/trajectory/2026-06-18-elicit-world-models-and-the-substrate.md` §1 "Next".
@@ -106,3 +106,37 @@ confidence, cycle guard, caps).
 3. Does compound confidence interact with salience (a low-confidence causal
    neighbourhood scoring lower), or stay a read-time annotation only? Leaning
    annotation-only until reward (C6 data) says otherwise.
+
+## Implementation log (2026-07-09)
+
+- **Zero schema held.** No store, salience, or write-path change. The family is
+  documented as a floor (`causes · enables · predicts · prevents · contradicts`)
+  in the `edges` descriptor — nothing in code enumerates it; any rel walks.
+  Confidence rides the existing authored `strength` (open question... resolved
+  as sketched; `score` stays inferred-only per ADR-0032).
+- **The walk (open question 2 → `edges`, as leaned).**
+  `edges({around, rel?, depth: 2–6, direction: 'out'|'in'})`
+  (`commands-graph.ts` `walkFrom`): all maximal simple paths over AUTHORED
+  edges via the `edgesFrom`/`edgesTo` indexes (the derived backbone is type
+  plumbing — a simulation follows asserted claims), compound confidence =
+  Π step strength (authored null = 1), cycle-guarded, capped (depth 6 ·
+  200 paths · 500 expansions, `truncated` flag), sorted confidence-descending,
+  steps auditable in stored from→to orientation. `depth` 1/absent keeps every
+  C3 framing byte-identical.
+- **Gate.** `tests/causal-walk.test.ts` (6): one-hop parity; compound
+  confidence + ordering + step audit; rel-family isolation (and the no-rel
+  walk); cycle guard (a c→a back-edge never revisits); upstream walk; depth
+  clamp + leaf root. Suite 627 green.
+- **Live validation (deploy run #331).** Authored the first real causal chain:
+  `kb/contested-view —enables(0.9)→ kb/consolidation-organ —enables(0.8)→
+  kb/cognitive-substrate` (both true claims: the contested read is the organ's
+  Stage A input; the organ powers the substrate's self-maintenance layer).
+  Downstream walk from `kb/contested-view` returned the 2-step path at
+  confidence **0.72**; the upstream walk from `kb/cognitive-substrate`
+  (`direction:'in'`) returned the same path mirrored, steps in stored
+  orientation.
+- **Open question 1 (where the family declaration lives) deferred** to the
+  first consumer that needs to *enumerate* the family (a renderer-by-rel or the
+  organ's Stage B) — until then the floor is documentation, which is exactly
+  what the open-vocabulary discipline wants. Question 3 resolved as leaned:
+  confidence stays a read-time annotation; reward data may revisit.
