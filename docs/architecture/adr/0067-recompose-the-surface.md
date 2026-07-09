@@ -1,6 +1,7 @@
 # ADR-0067 — Recompose the surface: three shapes, not thirty tools
 
-- **Status:** Proposed 2026-07-09 (buffer — opens the second contraction wave;
+- **Status:** Accepted 2026-07-09 — the wave it sequenced is COMPLETE (every row built,
+  gated, deployed, validated live in one day's loop; see the table). Originally: (buffer — opens the second contraction wave;
   feedback welcome before build). A distillation ADR (à la ADR-0044): it decides
   *the cut and the sequence*, not the implementation of any one contraction.
 - **Context doc:** [`docs/architecture/compose.md`](../compose.md) — the full

@@ -1,6 +1,11 @@
 # ADR-0016 — Edges as first-class: a Reference rendered through an edge-renderer
 
 - **Status:** Proposed — a feature ADR on the settled substrate, sibling to 0015 (frames).
+  **Reconciled 2026-07-09:** the DATA side is now complete — one edge query (`edges`,
+  ADR-0069) with the authored-vs-derived feed this ADR asked for, plus rel-typed causal
+  edges with confidence and the directional walk (ADR-0075). The canvas UX core (edge
+  selection, the rel-vs-label split, the edge-renderer seam) remains unbuilt — that is
+  what this ADR still proposes.
 - **Date:** 2026-06-22
 - **Context:** the canvas draws edges as dumb SVG lines with a flaky "inline edit," yet edges are
   first-class substrate **References** (`{from, rel, to, strength}`, ADR-0003/0009). The UX must

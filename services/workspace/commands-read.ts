@@ -234,8 +234,9 @@ export interface RecallInput {
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
-  /** Bias salience via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience via a named lens — compiled (recent/connected/durable/
+   *  active) or slice-declared (`_config/lenses`, ADR-0078). Unknown ⇒ ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-call salience override (merges over the lens + defaults). */
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
@@ -262,8 +263,9 @@ export interface QueryInput {
    *  ranking are both intent-conditioned. */
   text?: string;
   rankBy?: 'salience' | 'recency';
-  /** Bias salience via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience via a named lens — compiled (recent/connected/durable/
+   *  active) or slice-declared (`_config/lenses`, ADR-0078). Unknown ⇒ ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-call salience override (merges over the lens + defaults). */
   salience?: Partial<SalienceOptions>;
   limit?: number;
@@ -346,11 +348,10 @@ export interface ComposedReadInput extends RecallInput, Omit<QueryInput, 'shape'
 
 export type ComposedReadResult = ReadResult | RecallOverview | QueryResult | Entry | ChangesWithEntries | null;
 
-/** The named lenses the read path accepts from a posture. Open-vocabulary
- *  discipline: an unknown lens name is IGNORED (posture must never break a
- *  read), and `_config/lenses` slice-declared presets are the sketched
- *  follow-up (ADR-0074 open question 4) — this set is the floor, not truth. */
-const POSTURE_LENSES = new Set<SalienceLens>(['salience', 'recent', 'connected', 'durable', 'active']);
+// ADR-0078 resolved ADR-0074's open question 4: lens names are open vocabulary
+// end-to-end. A posture's lens passes through verbatim — resolution happens in
+// the state layer (compiled floor ← `_config/lenses` declared presets), and an
+// unknown name is ignored there, never fatal.
 
 /**
  * The PRINCIPAL layer of the defaults merge (ADR-0074, live):
@@ -368,7 +369,7 @@ export function principalPosture(
   const posture = (identity as { posture?: { goal?: string; lens?: string; salience?: Record<string, number> } } | undefined)
     ?.posture;
   if (!posture) return null;
-  const lens = posture.lens && POSTURE_LENSES.has(posture.lens as SalienceLens) ? (posture.lens as SalienceLens) : undefined;
+  const lens = typeof posture.lens === 'string' && posture.lens.trim() ? (posture.lens as SalienceLens) : undefined;
   const salience =
     posture.salience && Object.keys(posture.salience).length ? (posture.salience as Partial<SalienceOptions>) : undefined;
   const goal = typeof posture.goal === 'string' && posture.goal.trim() ? posture.goal.trim() : undefined;
@@ -473,11 +474,15 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
+      // Declared lens presets (ADR-0078) resolve under the VIEWER's config,
+      // exactly like the salience policy — granted slices are read through
+      // the reader's lenses, never the owner's.
+      const lensesConfig = await state.lensesConfig(viewer);
       const typeRules = await typeRulesFor(ctx);
       const relevance = text ? await relevanceFor(vectors, viewer, text) : undefined;
       const own = await state.read(
         viewer,
-        { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance },
+        { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, lensesConfig, typeRules, relevance },
         ctx.identity,
       );
       const merged: Record<string, Entry> = { ...own.entries };
@@ -492,7 +497,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           const gRelevance = text ? await relevanceFor(vectors, g.owner, text) : undefined;
           const slice = await state.read(
             g.owner,
-            { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance: gRelevance },
+            { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, lensesConfig, typeRules, relevance: gRelevance },
             ctx.identity,
           );
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
@@ -506,7 +511,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       }
 
       // Shape the whole assembled view once (lens echoes into _shaping).
-      const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig, lensesConfig });
       const decls = await typeDeclsFor(ctx);
 
       // ADR-0033: progressive disclosure by default. A *bare* recall (the context-less

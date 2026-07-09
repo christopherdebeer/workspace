@@ -119,11 +119,16 @@ describe('ADR-0074 — read() resolves through the principal', () => {
     );
   });
 
-  it('principalPosture maps the identity; unknown lenses are ignored, never fatal', () => {
+  it('principalPosture maps the identity; lens names pass through (ADR-0078: resolution is the state layer’s)', () => {
     expect(principalPosture({ user: 'a' })).toBeNull();
     expect(principalPosture({ user: 'a', posture: {} })).toBeNull();
-    expect(principalPosture({ user: 'a', posture: { lens: 'bogus' } })).toBeNull(); // unknown lens → no posture
-    expect(principalPosture({ user: 'a', posture: { goal: 'x', lens: 'bogus' } })).toEqual({ goal: 'x' });
+    // A lens name the compiled floor doesn't know may be slice-DECLARED
+    // (`_config/lenses`) — it passes through; an unknown name is ignored at
+    // resolution, never fatal (gated in declared-lenses.test.ts).
+    expect(principalPosture({ user: 'a', posture: { goal: 'x', lens: 'my-review-lens' } })).toEqual({
+      goal: 'x',
+      lens: 'my-review-lens',
+    });
     expect(principalPosture({ user: 'a', posture: { goal: 'x', lens: 'recent', salience: { rewardWeight: 0.1 } } })).toEqual({
       goal: 'x',
       lens: 'recent',

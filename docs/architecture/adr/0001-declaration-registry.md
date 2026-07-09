@@ -1,6 +1,8 @@
 # ADR-0001 — The Declaration registry
 
-- **Status:** Proposed
+- **Status:** Accepted — the registry landed 2026-06-19 (see the log); the agent-facing
+  surface completed 2026-07-09 as **C1 of the second wave (ADR-0068**, `declare/declarations/
+  undeclare/evaluate`**)**. Reconciled by the 2026-07-09 ledger scan.
 - **Date:** 2026-06-19
 - **Context doc:** [`docs/architecture/breathe.md`](../breathe.md) — Wave 6 (the
   contraction), Wave 5 (Resolution), Wave 10 (the evaluate boundary).

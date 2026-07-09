@@ -65,6 +65,8 @@ export {
   touchSignals,
   INTENT_PRESET,
   SALIENCE_CONFIG_KEY,
+  LENSES_CONFIG_KEY,
+  parseLensesConfig,
 } from './state';
 export { contentHash } from './content-hash';
 // The DynamoDB-backed StateStore — surfaced in the barrel (ADR-0042 Inc 0) so a

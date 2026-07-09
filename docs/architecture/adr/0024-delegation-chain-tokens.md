@@ -1,6 +1,10 @@
 # ADR-0024 — Delegation-chain tokens (RFC 8693 `sub`+`act`)
 
-- **Status:** Proposed (buffer, not built). First of the two-ahead sketch buffer ahead of the accepted
+- **Status:** Proposed (buffer, not built). **Reconciled 2026-07-09:** partially realised
+  and reassessed by **ADR-0074** — a minted child can now be POSTURED by its minter
+  (delegation attenuates attention, not just scope), and mint-time scope narrowing already
+  enforces the ceiling. Remaining here: the chain PROVENANCE record (`sub` + nested `act`)
+  and depth-aware enforcement. First of the two-ahead sketch buffer ahead of the accepted
   line. Captures the next decision so the direction is legible before code exists.
 - **Date:** 2026-06-25
 - **Context:** ADR-0022 made a token a principal acting on behalf of `c15r`, but only **one writer** is

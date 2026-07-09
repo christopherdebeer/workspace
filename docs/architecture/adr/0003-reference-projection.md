@@ -1,6 +1,9 @@
 # ADR-0003 — Reference as a projection (declared rules)
 
-- **Status:** Proposed
+- **Status:** Accepted — the Reference projection IS the live edge substrate: the derived
+  backbone + key-encoded rules ship in `platform/runtime/state.ts` and every later edge ADR
+  builds on it (0009 strengths, 0046/0054 placements, 0069 `edges`, 0075 the walk).
+  Reconciled by the 2026-07-09 ledger scan.
 - **Date:** 2026-06-19
 - **Context:** [`breathe.md`](../breathe.md) Wave 3 (the contraction) + Wave 7 (the
   *grounded finding*: the graph is lossy) + Wave 9 (the rule grammar).

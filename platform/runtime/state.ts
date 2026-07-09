@@ -122,8 +122,9 @@ export interface ShapingSummary {
   focusThreshold: number;
   elideThreshold: number;
   elision: 'auto' | 'none';
-  /** The salience lens this read was computed under, when not the default. */
-  lens?: SalienceLens;
+  /** The salience lens this read was computed under, when not the default —
+   *  a compiled name or a slice-declared one (ADR-0078). */
+  lens?: SalienceLens | (string & {});
   counts: { focus: number; peripheral: number; elided: number; total: number };
 }
 
@@ -517,6 +518,17 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
  */
 export const SALIENCE_CONFIG_KEY = '_config/salience';
 
+/**
+ * Reserved key for a scope's DECLARED lens presets (ADR-0078): a fact whose
+ * value is `{ <name>: Partial<SalienceOptions> }` — e.g.
+ * `{ review: { rewardWeight: 0.4, recencyWeight: 0.2 } }` — names a reusable
+ * per-read bias the slice itself defined. The compiled `LENS_PRESETS` five are
+ * the FLOOR (never shadowable); an unknown name is ignored, never fatal.
+ * Everything that takes `lens` benefits at once — per-call reads and adopted
+ * posture (ADR-0074) alike — because resolution happens inside `callSalience`.
+ */
+export const LENSES_CONFIG_KEY = '_config/lenses';
+
 /** Numeric `SalienceOptions` fields a config fact may set, and which are unit [0,1]. */
 const SALIENCE_NUMERIC_KEYS = [
   'halfLifeMs',
@@ -577,6 +589,31 @@ export function parseSalienceConfig(value: unknown): Partial<SalienceOptions> | 
 }
 
 /**
+ * Extract sanitized declared lens presets (ADR-0078) from a `_config/lenses`
+ * fact's value: `{ <name>: Partial<SalienceOptions> }`, each preset run through
+ * the same defensive numeric filter as `_config/salience` (a config fact must
+ * never be able to break a read). Accepts the map directly or wrapped under a
+ * `lenses` key. Floor names are dropped here (never shadowable). Returns `null`
+ * when nothing usable is present.
+ */
+export function parseLensesConfig(value: unknown): Record<string, Partial<SalienceOptions>> | null {
+  const wrapped = value as { lenses?: unknown } | null | undefined;
+  const src =
+    wrapped && typeof wrapped === 'object' && wrapped.lenses && typeof wrapped.lenses === 'object'
+      ? wrapped.lenses
+      : value;
+  if (!src || typeof src !== 'object') return null;
+  const out: Record<string, Partial<SalienceOptions>> = {};
+  for (const [name, preset] of Object.entries(src as Record<string, unknown>)) {
+    if (!name || name.length > 64) continue;
+    if ((LENS_PRESETS as Record<string, unknown>)[name] !== undefined) continue; // the floor wins
+    const parsed = parseSalienceConfig(preset);
+    if (parsed) out[name] = parsed;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
  * Named salience lenses — ergonomic per-read biases over the tuned defaults, for
  * the common "I want a particular view" cases. Each preset's weights sum to 1 so
  * the score stays in [0,1] and the elision tiers keep their meaning. For precise
@@ -624,10 +661,19 @@ export const INTENT_PRESET: Partial<SalienceOptions> = {
 
 /** Resolve the salience params for one call: instance defaults ← lens preset ←
  *  raw override. Returns the base unchanged when neither is set. A raw override
- *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights). */
-function callSalience(base: ResolvedSalience, lens?: SalienceLens, override?: Partial<SalienceOptions>): ResolvedSalience {
-  if (!lens && !override) return base;
-  return resolveSalience({ ...base, ...(lens ? LENS_PRESETS[lens] : {}), ...override });
+ *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights).
+ *  Lens resolution (ADR-0078): the compiled floor first (never shadowable),
+ *  then the scope's declared `_config/lenses` presets; an unknown name is
+ *  ignored — a lens can bias a read, never break one. */
+function callSalience(
+  base: ResolvedSalience,
+  lens?: string,
+  override?: Partial<SalienceOptions>,
+  declared?: Record<string, Partial<SalienceOptions>> | null,
+): ResolvedSalience {
+  const preset = lens ? ((LENS_PRESETS as Record<string, Partial<SalienceOptions> | undefined>)[lens] ?? declared?.[lens]) : undefined;
+  if (!preset && !override) return base;
+  return resolveSalience({ ...base, ...preset, ...override });
 }
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
@@ -1114,8 +1160,10 @@ export interface ReadOptions {
   /** Per-read threshold overrides. */
   focusThreshold?: number;
   elideThreshold?: number;
-  /** Bias salience for this read via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience for this read via a named lens — compiled
+   *  (recent/connected/durable/active) or slice-declared (`_config/lenses`,
+   *  ADR-0078). Unknown names are ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-read salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) to every entry —
@@ -1130,6 +1178,10 @@ export interface ReadOptions {
    * policy governs the assembled result. Pass `null` to force instance defaults.
    */
   salienceConfig?: Partial<SalienceOptions> | null;
+  /** Declared lens presets to resolve `lens` against (ADR-0078) — same
+   *  handler-supplied semantics as `salienceConfig` (recall passes the
+   *  viewer's); `undefined` = load this scope's own `_config/lenses`. */
+  lensesConfig?: Record<string, Partial<SalienceOptions>> | null;
   /** Resolved per-type Reference rules (`cells.describeTypes` → resolveType): manager
    *  (managedBy), `ref` fields (embedded edges), keyPattern/keyEdges. Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
@@ -1149,8 +1201,9 @@ export interface QueryOptions {
   prefix?: string;
   /** Ranking: read-time salience (default) or last-write recency. */
   rankBy?: 'salience' | 'recency';
-  /** Bias salience for this query via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience for this query via a named lens — compiled or
+   *  slice-declared (`_config/lenses`, ADR-0078). Unknown names are ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-query salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) to each entry. */
@@ -1316,6 +1369,10 @@ export interface ObservedState {
   /** The scope's stored salience policy (`_config/salience`), sanitized — or `null`
    *  when unset/malformed. Recall loads the viewer's once to shape the merged view. */
   salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null>;
+  /** The scope's declared lens presets (`_config/lenses`, ADR-0078), sanitized —
+   *  the handler-facing accessor (recall folds granted slices under the
+   *  VIEWER's declared lenses, exactly as with `salienceConfig`). */
+  lensesConfig(scope: string): Promise<Record<string, Partial<SalienceOptions>> | null>;
   /** Add a typed, directed edge `from --rel--> to` within the scope. */
   link(scope: string, from: string, rel: string, to: string, strength: number | null, identity?: Identity): Promise<LinkResult>;
   unlink(scope: string, from: string, rel: string, to: string, identity?: Identity): Promise<{ ok: true }>;
@@ -1376,6 +1433,19 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
    *  malformed fact yields `null` and the read proceeds on instance defaults — a
    *  config fact must never be able to break a read). */
+  /** Load a scope's declared lens presets (`_config/lenses`, ADR-0078) — same
+   *  best-effort posture as the salience config: absent/retired/malformed ⇒ null. */
+  async function loadLensesConfig(scope: string): Promise<Record<string, Partial<SalienceOptions>> | null> {
+    let rec: StateRecord | null;
+    try {
+      rec = await store.get(scope, LENSES_CONFIG_KEY);
+    } catch {
+      return null;
+    }
+    if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+    return parseLensesConfig(rec.value);
+  }
+
   async function loadSalienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
     let rec: StateRecord | null;
     try {
@@ -1662,7 +1732,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Re-tiers an already-scored set, so a lens here only adjusts thresholds
       // (it can't recompute scores without the scope's signals). Being scopeless,
       // it takes the salience config explicitly (recall passes the viewer's).
-      return shapeEntries(entries, opts, callSalience(baseSalience(opts?.salienceConfig), opts?.lens, opts?.salience));
+      return shapeEntries(entries, opts, callSalience(baseSalience(opts?.salienceConfig), opts?.lens, opts?.salience, opts?.lensesConfig));
     },
 
     async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
@@ -1670,7 +1740,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Honor a handler-supplied config (recall scores granted slices under the
       // viewer's policy); otherwise load this scope's own `_config/salience`.
       const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
-      const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
+      const lenses = opts?.lensesConfig !== undefined ? opts.lensesConfig : await loadLensesConfig(scope);
+      const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience, lenses);
       const records = await store.list(scope);
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
 
@@ -1689,7 +1760,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
-      const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience);
+      const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience, await loadLensesConfig(scope));
       const queryTypeRules = opts?.typeRules;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
@@ -1732,6 +1803,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
       return loadSalienceConfig(scope);
+    },
+
+    async lensesConfig(scope: string): Promise<Record<string, Partial<SalienceOptions>> | null> {
+      return loadLensesConfig(scope);
     },
 
     async link(scope, from, rel, to, strength, identity?: Identity): Promise<LinkResult> {

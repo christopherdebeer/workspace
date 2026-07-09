@@ -1,6 +1,9 @@
 # ADR-0004 — The Projection pipeline (and `$graph`)
 
-- **Status:** Proposed (with `$graph` **implemented** as the first slice)
+- **Status:** Accepted — `$graph` landed as the first slice (see the log); the pipeline
+  (`select → score → shape → present`) then materialised across ADR-0048 (tiering),
+  0050/0051 (score), and completed as **C2 (ADR-0071**, one read by candidate source**)**.
+  Reconciled by the 2026-07-09 ledger scan.
 - **Date:** 2026-06-19
 - **Context:** [`breathe.md`](../breathe.md) Wave 4 (the pipeline) + Wave 15 (the
   self-model / `$graph`).
