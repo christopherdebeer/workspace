@@ -1,10 +1,11 @@
 # ADR-0077 — The postured organ: consolidate Inc 2, observing through the composed read
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). Enters
-  the buffer beside ADR-0076 as ADR-0075 (C4) moves to built. First entry *after*
-  the second contraction wave's table — the wave's outputs, composed: the organ
-  (C8) reads through the one read (C2) under its adopted posture (ADR-0074),
-  via the vendored client (C5).
+- **Status:** Accepted 2026-07-09 (built, gated, deployed tier-2, validated live).
+  First entry *after* the second contraction wave's table — the wave's outputs,
+  composed: the organ (C8) observes in parallel through the vendored client (C5)
+  under its self-adopted posture (ADR-0074), adjudicates the easy contested tier
+  with the C4 `contradicts` verdict, and submits its own runs through the
+  vendored jobs choreography.
 - **Depends on:** ADR-0073 (the organ + its Inc 2 log), ADR-0071 (C2 `read` +
   `context:'refs'`), ADR-0074 (posture — the organ's token is already the first
   postured principal, currently declarative), ADR-0076 (C5 — build that first:
@@ -96,3 +97,49 @@ audit trail as Inc 1.
 3. Does `callMany` belong in ADR-0076's client from the start (build it there)
    or as this ADR's extension? Leaning: build it in 0076 — a concurrency knob
    is transport, not policy.
+
+## Implementation log (2026-07-09)
+
+- **Open question 1 → resolved by owner steer: the organ bootstraps its own
+  goal fact** — the cell-owned-facts precedent (a cell's `types.json`
+  bootstraps its `_types/*` at deploy; machine.bootstrap ensures its rails).
+  Each non-dry run ensures `goal/consolidation` (the `@c15r/tasks` goal shape,
+  linked `addresses → kb/consolidation-organ`) and adopts it onto the running
+  principal via `auth.adoptGoal` when `whoami` shows no posture. Live: cycle 1
+  logged `bootstrapped goal/consolidation` + (after the gwWhoami fix)
+  `adopted goal/consolidation onto this principal`; cycle 2 logged nothing —
+  idempotent. Every composed read the organ makes now resolves through its
+  goal (ADR-0074), for free.
+- **The SDK grew `gwWhoami`** — the first live cycle exposed that `whoami` is
+  the third MCP verb, not a read target; the kernel gateway-client now covers
+  all three.
+- **Observe parallelised** (sketch items 1/3): the five base reads go out
+  through `gwCallMany`; the survivor re-check collapsed from a serial per-pair
+  loop to ONE `links {keys:[…]}` call.
+- **Typing backfill** (sketch item 4): `matchTypeByKey` over `$types`
+  keyPatterns, unambiguous matches only, adds-only CAS re-write, capped 10.
+  Live finding: `unlinkedSampled: 25, untypedMatched: 0` — the sampled debt is
+  typed or pattern-less; the `el:` mirrors need canvas to DECLARE their
+  keyPattern (the real ADR-0073 fix — follow-up for the canvas cell, not the
+  organ).
+- **Stage B, the easy tier** (sketch item 5): capped 5 pairs, floor 0.9, the
+  CONTESTED_HINT vocabulary (`duplicate` → older-is-canonical supersede +
+  migrateLinks; `independent` → checked marker; `contradict` → contested fact
+  + the ADR-0075 `contradicts` edge (strength = confidence) + marker;
+  `subsumes`/`uncertain`/below-floor → escalate, NO marker so the pair stays
+  visible). Scope denials skip the stage gracefully; the first failure reason
+  lands in the audit. Live: the machinery reached `@c15r/models.run` correctly
+  — and surfaced an environmental blocker, *"anthropic: Your credit balance is
+  too low"*; all 10 pairs escalated. Stage B goes fully live the moment the
+  provider account is funded; no code change needed.
+- **The organ eats its own cooking**: a full cycle outruns the ~30s edge cap,
+  so `run` gained `{async:true}` → the vendored cell-jobs submit/self-invoke/
+  `fetch` choreography (AWS clients lazy-loaded per the platform convention —
+  the jest gate imports the pure core SDK-free). Live: async submit → poll →
+  `done` with the audit; delta +3, 8 repairs applied.
+- **Gate.** `tests/consolidate-inc2.test.ts` (6): keyPattern regex + exactly-
+  one-match discipline, retype capping, rubric content, verdict validation
+  (closed set, 0..1 confidence, prose-wrapped JSON tolerated), contradictions-
+  never-actions. Suite 640 green.
+- Two consecutive live cycles: delta +7 (11 repairs) and +3 (8 repairs) —
+  the backlog keeps moving under the composed machinery.

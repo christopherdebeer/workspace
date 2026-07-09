@@ -30,10 +30,12 @@
   (delta +11, earned rewards), principals carry their purpose (posture), the
   graph is predictive (the walk), and the duplication is gone (the kernel SDK
   gained gateway-client + cell-jobs; ~90 hand-copied lines deleted, two latent
-  drift bugs fixed at the seam). The two-ahead buffer opens the next wave:
-  **ADR-0077 (the postured organ — the wave's outputs, composed)** and
-  **ADR-0078 (slice-declared lenses — the last compiled vocabulary in the read
-  seam falls)**.*
+  drift bugs fixed at the seam). **The first post-wave entry is also built:
+  ADR-0077 (the postured organ)** — the organ bootstraps and adopts its own
+  goal fact, observes in parallel, backfills types, adjudicates the easy
+  contested tier, and submits its own runs through the vendored jobs. The
+  two-ahead buffer: **ADR-0078 (slice-declared lenses)** and **ADR-0079 (decay
+  to cold — forgetting as shaping, never deletion: the plate's last gap)**.*
 
 ---
 

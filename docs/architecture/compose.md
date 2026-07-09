@@ -252,11 +252,17 @@ as the built line advances.
 > the PEP is the classification oracle — and bounded-concurrency `gwCallMany`)
 > and `cell-jobs` (the JOB#/self-invoke/chunking choreography), auto-vendored
 > into run/models/consolidate by `cell-sync push`; ~90 hand-copied lines
-> deleted, two latent drift bugs fixed at the seam. **THE WAVE IS COMPLETE.**
-> The buffer opens the next: **ADR-0077 (the postured organ** — the wave's
-> outputs, composed**)** and **ADR-0078 (slice-declared lenses** —
-> `_config/lenses` over the compiled floor; the read seam's last closed
-> vocabulary falls**)**.
+> deleted, two latent drift bugs fixed at the seam. **THE WAVE IS COMPLETE —
+> and its outputs already composed: ADR-0077 (the postured organ, built + live
+> the same day)**: the organ bootstraps and ADOPTS its own `goal/consolidation`
+> fact (the cell-owned-facts precedent, per owner steer), observes in parallel
+> (`gwCallMany` + one collapsed survivor check), backfills types by declared
+> keyPattern, adjudicates the easy contested tier in-cycle (strict rubric,
+> `contradicts` = the C4 verdict; blocked live only by provider credit), and
+> submits its own runs through the vendored jobs (`run {async:true}` — the
+> edge cap retired). Two consecutive live cycles: delta +7, +3. The buffer:
+> **ADR-0078 (slice-declared lenses)** and **ADR-0079 (decay to cold** —
+> forgetting as shaping, never deletion**)**.
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

@@ -106,6 +106,36 @@ export async function gwCall(token, target, input, opts) {
 }
 
 /**
+ * The third MCP verb: who is this token? Returns {user, scopes, grant, actor?,
+ * posture?} — posture is the adopted goal (ADR-0074). `whoami` is a top-level
+ * tool, not a read target, so it needs its own envelope.
+ * @param {string} token
+ * @param {{url?: string, fetchImpl?: typeof fetch}} [opts]
+ */
+export async function gwWhoami(token, opts) {
+  const url = opts?.url ?? (typeof process !== 'undefined' ? process.env?.GATEWAY_MCP_URL : undefined) ?? GATEWAY_MCP_DEFAULT;
+  const fetchImpl = opts?.fetchImpl ?? fetch;
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'whoami', arguments: {} } }),
+  });
+  if (!res.ok) throw new GatewayError(`gateway HTTP ${res.status}`, 'whoami');
+  const body = await res.json();
+  const text = body?.result?.content?.[0]?.text ?? '';
+  let value = text;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    /* raw */
+  }
+  if (body?.error || body?.result?.isError) {
+    throw new GatewayError(body?.error?.message ?? (typeof value === 'string' ? value : JSON.stringify(value)), 'whoami');
+  }
+  return value;
+}
+
+/**
  * Run many calls with bounded concurrency (ADR-0073's serial-call wall-clock
  * finding, fixed at the shared seam). Results keep input order; a failed call
  * yields `{error}` in its slot rather than rejecting the batch.
