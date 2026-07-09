@@ -335,7 +335,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'read',
     description:
-      "One read, by candidate source (ADR-0071): `source` ∈ slice (the assembled view; = recall) · store (type/tag/prefix/contains; = query) · vector (semantic, salience-aware — the fixed form of the deprecated `search`) · key (= peek) · changes (the trajectory). Inferred from the args when omitted. `context:'refs'` folds each result's one-hop neighbourhood (refs tier — key/rel/dir/type, no values) into `_context` — perception with a periphery. Defaults resolve through the layered merge with a reserved PRINCIPAL slot (ADR-0074): an adopted goal will bias reads without per-call plumbing.",
+      "One read, by candidate source (ADR-0071): `source` ∈ slice (the assembled view; = recall) · store (type/tag/prefix/contains; = query) · vector (semantic, salience-aware — the fixed form of the deprecated `search`) · key (= peek) · changes (the trajectory). Inferred from the args when omitted. `context:'refs'` folds each result's one-hop neighbourhood (refs tier — key/rel/dir/type, no values) into `_context` — perception with a periphery. Defaults resolve through the principal (ADR-0074, live): a posture adopted via auth.adoptGoal (a `goal/<id>` fact or free text, + lens/salience) conditions every read — ranking only, never membership — and your per-call args always win. Check `whoami` for your active posture.",
     scope: null,
     kind: 'read',
     inputSchema: {
