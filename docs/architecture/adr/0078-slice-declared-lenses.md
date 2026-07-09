@@ -1,9 +1,8 @@
 # ADR-0078 — Slice-declared lenses: `_config/lenses` over the compiled floor
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). Enters
-  the buffer beside ADR-0077 as ADR-0076 closes the second contraction wave's
-  table. Resolves ADR-0074 open question 4; the last compiled vocabulary in the
-  read seam falls to the open-world discipline.
+- **Status:** Accepted 2026-07-09 (built, gated, deployed run #332, validated live).
+  Resolves ADR-0074 open question 4; the last compiled vocabulary in the read
+  seam falls to the open-world discipline.
 - **Depends on:** ADR-0010 (layered salience resolution), ADR-0050 (tuned
   weights), ADR-0074 (posture — the first consumer that wants to *name* a lens
   a slice defined), compose.md §8 (the open-vocabulary rule).
@@ -66,3 +65,29 @@ default-inert, and it retires the last closed vocabulary in the read path.
 2. Should a declared lens be able to reference another as a base
    (`{extends: 'recent', rewardWeight: .3}`)? Leaning no — flat presets, keep
    the merge legible.
+
+## Implementation log (2026-07-09)
+
+- **The seam held to one function.** `parseLensesConfig` (per-preset through the
+  same defensive numeric filter as `_config/salience`; floor names dropped —
+  never shadowable) + `loadLensesConfig` beside the salience loader; resolution
+  in `callSalience` (floor first, declared second, unknown ignored). The lens
+  NAME echoes in `_shaping` (open question 1: yes). Option 2 (preset `extends`)
+  stays out, as leaned.
+- **Everything that takes `lens` benefits at once** — `recall`/`query`/`read`
+  per-call AND posture (`principalPosture` now passes any lens name through;
+  ADR-0074's compiled-set guard deleted). `recall` folds granted slices under
+  the VIEWER's declared lenses (`state.lensesConfig`), exactly as with
+  `salienceConfig`. Input types widen to `SalienceLens | (string & {})`.
+- **Gate.** `tests/declared-lenses.test.ts` (5): parser sanitize + floor
+  non-shadow; declared ≡ raw override (modulo the `_shaping` echo, asserted
+  explicitly); floor wins its names + unknown inert; posture-adopted declared
+  lens ≡ per-call; default-inert (no config ⇒ byte-identical). Suite 645 green.
+- **Live validation (deploy run #332).** Declared `_config/lenses {review:
+  {rewardWeight: .5, …}}` on the real slice: `query({type:'decision',
+  lens:'review'})` returned entries and order IDENTICAL to the raw-weights
+  call — and the reward-heavy lens surfaced exactly the facts carrying the
+  organ's earned `reward: 0.5` at the top. The lens system and the reward loop
+  (C6/C8) compose: "what has earned its keep" is now a one-word read.
+- The `review` lens stays declared on the c15r slice — the first slice-defined
+  lens, in use.
