@@ -221,7 +221,7 @@ as the built line advances.
 | **C2** | **One read by candidate source** — recall/query/search → `read(source, shape)` | 3 → 1 (+ fixes `search` salience) | ADR-0004/0048/0050/0051; deprecates `search` | **ADR-0071 ✓ built + live (07-09)** |
 | **C3** | **One edge query** — neighbors/graph/members/links → `edges(…)` | 4 → 1 | ADR-0044 Inc 5 / ADR-0048; feeds ADR-0016 | **ADR-0069 ✓ built + live (07-09)** |
 | **C4** | **Causal relations** — the directional walk over authored causal edges | +1 rel family, 0 schema | depends C3; feeds ADR-0016 renderer-by-rel | **ADR-0075 ✓ built + live (07-09)** |
-| C5 | Vendor cell-jobs — run/models/consolidate → vendored modules | 3 copies → 1 | ADR-0026/0028 (the in-code TODO) | **ADR-0076** (buffer) |
+| **C5** | **Vendor cell-jobs** — run/models/consolidate → the kernel SDK | 3 copies → 1 | ADR-0026/0028 (the in-code TODO) | **ADR-0076 ✓ built + live (07-09)** |
 | C6 | Reward, the 7th signal — default-0 weight into `scoreParts` | +1 signal | ADR-0006/0050/0051; `adaptive-salience.md` | **ADR-0070 ✓ built + live (07-09)** |
 | C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072 ✓ built + live (07-09)** |
 | C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | **ADR-0073 ✓ built + live (07-09, delta +11)** |
@@ -246,11 +246,17 @@ as the built line advances.
 > causal rels (`causes·enables·predicts·prevents·contradicts`, a documented
 > floor) are ordinary authored edges — confidence rides `strength` — and
 > `edges({around, rel, depth, direction})` walks them transitively with
-> compound confidence, cycle-guarded: **the map runs forward**. One wave row
-> remains: **ADR-0076 (C5 vendor cell-jobs** — the DRY completion; the gateway
-> client has three hand copies**)**; beside it the buffer holds **ADR-0077 (the
-> postured organ** — consolidate Inc 2: observe through the composed read under
-> the adopted posture, via the vendored client — the wave's outputs, composed**)**.
+> compound confidence, cycle-guarded: **the map runs forward**. And **C5
+> (ADR-0076) closed the table**: the kernel SDK (ADR-0017's home, per owner
+> aside) gained `gateway-client` (verb floor + wrong-verb self-healing —
+> the PEP is the classification oracle — and bounded-concurrency `gwCallMany`)
+> and `cell-jobs` (the JOB#/self-invoke/chunking choreography), auto-vendored
+> into run/models/consolidate by `cell-sync push`; ~90 hand-copied lines
+> deleted, two latent drift bugs fixed at the seam. **THE WAVE IS COMPLETE.**
+> The buffer opens the next: **ADR-0077 (the postured organ** — the wave's
+> outputs, composed**)** and **ADR-0078 (slice-declared lenses** —
+> `_config/lenses` over the compiled floor; the read seam's last closed
+> vocabulary falls**)**.
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

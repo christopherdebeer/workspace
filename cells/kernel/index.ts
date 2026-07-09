@@ -27,12 +27,14 @@ export const handler = async (event: any) => {
         'access-control-allow-origin': '*',
       });
     }
-    if (path === '/substrate.js') {
-      // The shared SERVER-side substrate client (ADR-0017). NOT a browser module:
-      // a cell's Lambda imports this URL, the cell bundler fetches + inlines it at
-      // deploy time (its `@aws-sdk`/`node:` imports stay external, runtime-provided).
-      // Served verbatim from static/ — git truth: cells/kernel/static/substrate.js.
-      return respond(200, 'application/javascript; charset=utf-8', read('static/substrate.js'), {
+    if (path === '/substrate.js' || path === '/gateway-client.js' || path === '/cell-jobs.js') {
+      // The shared SERVER-side SDK modules (ADR-0017 substrate.js; ADR-0076
+      // gateway-client.js + cell-jobs.js). Served verbatim from static/ — git
+      // truth: cells/kernel/static/<module>.js. Server-side cells do NOT import
+      // these URLs (a https import hangs the forge bundler) — `cell-sync push`
+      // overlays them into consuming cells as `vendor/<module>.js`; the URLs
+      // exist so the SDK is browsable/fetchable like the browser kernel.
+      return respond(200, 'application/javascript; charset=utf-8', read(`static${path}`), {
         'cache-control': 'public, max-age=60',
         'access-control-allow-origin': '*',
       });

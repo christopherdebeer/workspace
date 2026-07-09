@@ -18,19 +18,22 @@
   | **C2** | One read by candidate source | 3 → 1 | ADR-0004/0048/0050/0051 | **ADR-0071 ✓ built + live** |
   | **C3** | One edge query | 4 → 1 | ADR-0044 Inc 5 / 0048; feeds 0016 | **ADR-0069 ✓ built + live** |
   | **C4** | Causal relations | +1 rel family, 0 schema | depends C3 | **ADR-0075 ✓ built + live** |
-  | C5 | Vendor cell-jobs | 3 → 1 | ADR-0026/0028 (in-code TODO) | **ADR-0076 (buffer)** |
+  | **C5** | Vendor cell-jobs | 3 → 1 | ADR-0026/0028 (in-code TODO) | **ADR-0076 ✓ built + live** |
   | C6 | Reward — the 7th signal | +1 signal | ADR-0006/0050/0051 | **ADR-0070 ✓ built + live** |
   | C7 | The `_contested` view | new read | ADR-0040/0045; C3,C6 | **ADR-0072 ✓ built + live** |
   | C8 | The consolidation organ | new organ | ADR-0045; C6,C7 | **ADR-0073 ✓ built + live (delta +11)** |
 
-  *Buffer advanced 2026-07-09 (seven times): C1/C3, then C6, then C7, then C8,
-  then C2, then ADR-0074 (principal-adopted goals), then **C4 (ADR-0075 — the
-  directional walk: the map runs forward over authored causal edges with
-  compound confidence)** — each built, gated, deployed, and validated live. All
-  three shapes are composed, the loop is closed, principals carry their purpose,
-  and the graph is predictive. **One row remains: C5 (ADR-0076, buffer)** — the
-  DRY completion. Beside it the buffer holds **ADR-0077 (the postured organ —
-  consolidate Inc 2, the first post-wave entry: the wave's outputs composed)**.*
+  ***THE TABLE IS COMPLETE** (2026-07-09, eight buffer advances in one day's
+  loop): C1/C3 → C6 → C7 → C8 → C2 → ADR-0074 (principal-adopted goals) → C4 →
+  C5 — every row built, gated, deployed, and validated live. The three shapes
+  are composed (declaration · edge · read), the self-maintenance loop is closed
+  (delta +11, earned rewards), principals carry their purpose (posture), the
+  graph is predictive (the walk), and the duplication is gone (the kernel SDK
+  gained gateway-client + cell-jobs; ~90 hand-copied lines deleted, two latent
+  drift bugs fixed at the seam). The two-ahead buffer opens the next wave:
+  **ADR-0077 (the postured organ — the wave's outputs, composed)** and
+  **ADR-0078 (slice-declared lenses — the last compiled vocabulary in the read
+  seam falls)**.*
 
 ---
 

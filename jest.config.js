@@ -13,6 +13,11 @@ module.exports = {
     '^@parc/runtime/cell$': '<rootDir>/platform/runtime/cell-sdk.ts',
     // `@parc/ui` — the platform UI kit virtual module (ADR-0044 Inc 3), same deal.
     '^@parc/ui$': '<rootDir>/platform/ui/parc-ui.ts',
+    // `./vendor/<module>.js` is materialized into a cell at push time from the
+    // kernel SDK (cell-sync overlay, ADR-0076); repo-side, resolve to the
+    // canonical source so cell tests import the same code that deploys.
+    'vendor/gateway-client\\.js$': '<rootDir>/cells/kernel/static/gateway-client.js',
+    'vendor/cell-jobs\\.js$': '<rootDir>/cells/kernel/static/cell-jobs.js',
   },
   transform: {
     // Transpile-only (isolatedModules in tsconfig.test.json): full type-checking

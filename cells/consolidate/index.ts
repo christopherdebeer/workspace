@@ -19,6 +19,9 @@
  * it with fixtures (convergence, caps, escalation-only for contradictions).
  * ------------------------------------------------------------------------- */
 import { createCellReader, createDynamoStateStore } from '@parc/runtime/cell';
+// Materialized at push from cells/kernel/static/ (cell-sync vendor overlay, ADR-0076).
+// eslint-disable-next-line import/no-unresolved
+import { gwCall } from './vendor/gateway-client.js';
 
 const OWNER = process.env.CELL_OWNER || 'c15r';
 const TABLE = process.env.SUBSTRATE_TABLE || '';
@@ -105,33 +108,14 @@ export function planCycle(obs: Observations, caps = CAPS): CyclePlan {
   return { ratify, unlink, rewards, backlog, delta, escalations: { contested: obs.contestedTotal } };
 }
 
-/* ── the gateway client (scoped-principal calls; own verb table) ─────────── */
-
-const READ_TOOLS = new Set(['attention', 'contested', 'suggestions', 'peek', 'links', 'edges']);
+/* ── the gateway client — the vendored kernel-SDK module (ADR-0076) ────────
+ * This cell was copy #3 of the hand-rolled /mcp caller; it now consumes
+ * @c15r/kernel/gateway-client (materialized at push as vendor/, one source).
+ * Same throwing contract as the old gw(); classification self-heals instead
+ * of relying on a private verb table. */
 
 async function gw(token: string, target: string, input?: unknown): Promise<unknown> {
-  const verb = READ_TOOLS.has(target.split('.').pop() ?? '') ? 'read' : 'act';
-  const res = await fetch(GATEWAY_MCP, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: 'tools/call',
-      params: { name: verb, arguments: input === undefined ? { target } : { target, input } },
-    }),
-  });
-  if (!res.ok) throw new Error(`gateway HTTP ${res.status} for ${target}`);
-  const rpc = (await res.json()) as { error?: unknown; result?: { isError?: boolean; content?: Array<{ text?: string }> } };
-  const text = rpc?.result?.content?.[0]?.text ?? '';
-  let value: unknown = text;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    /* raw text */
-  }
-  if (rpc?.error || rpc?.result?.isError) throw new Error(`${target}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
-  return value;
+  return gwCall(token, target, input, { url: GATEWAY_MCP });
 }
 
 /* ── the cycle shell ─────────────────────────────────────────────────────── */

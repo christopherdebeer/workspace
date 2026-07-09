@@ -1,9 +1,8 @@
 # ADR-0076 — Vendor cell-jobs: one async harness, one gateway client
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). Enters
-  the buffer beside ADR-0075 as ADR-0074 (principal-adopted goals) moves to built —
-  this is **C5** of the second contraction wave (ADR-0067), the DRY completion and
-  the wave's last entry.
+- **Status:** Accepted 2026-07-09 (built, gated, deployed tier-2, validated live).
+  **C5** of the second contraction wave (ADR-0067) — the DRY completion and the
+  wave's last entry: **the ADR-0067 table is complete**.
 - **Context doc:** `docs/architecture/compose.md` (C5 row).
 - **Depends on:** ADR-0026/0028 (the run/models cells whose in-code TODO this
   honours), ADR-0073 (C8 — the third consumer), ADR-0074 (postured principals —
@@ -92,3 +91,50 @@ the obvious next) starts from the vendored client instead of a fourth copy.
    policy is the organ's, not the transport's.
 3. Does the `$catalog` kind cache live per-invocation (simple) or in the cell's
    table (fewer catalog reads)? Leaning per-invocation until measured.
+
+## Implementation log (2026-07-09)
+
+- **Home redirected by owner aside** (*"do we not already have a shared sdk?"*):
+  yes — `@c15r/kernel` IS the SDK cell (ADR-0017: `static/substrate.js`, the
+  shared server-side client; machine's copy is a manual "keep in sync" vendored
+  duplicate because server-side https imports hang the forge bundler). So the
+  two new modules joined the EXISTING SDK — `cells/kernel/static/
+  gateway-client.js` + `cell-jobs.js`, plain JS + JSDoc + injected adapters,
+  exactly the substrate.js idiom — instead of opening a parallel `cells/_vendor`
+  lane. Served at `/@c15r/kernel/{gateway-client,cell-jobs}.js`.
+- **The overlay (open question 1 → resolved: vendor at deploy).** `cell-sync
+  push` scans the cell's sources for `vendor/<module>.js` references and
+  materializes each from `cells/kernel/static/` into the cell as
+  `vendor/<module>` (the forge rejects a leading-underscore segment); `pull`
+  skips `vendor/` so no copy ever lands in git. This is the machine cell's
+  manual keep-in-sync note, automated. Jest maps `vendor/*.js` to the canonical
+  source (the `@parc/runtime/cell` virtual-module precedent).
+- **gateway-client.** `gwCall(token, target, input?, {kind?, url?, fetchImpl?})`
+  — throws `GatewayError`; `{error}`-contract consumers wrap. Classification:
+  `READ_VERB_FLOOR` (the union of the three drifted copies + C2's `read`) as a
+  floor, with **wrong-verb self-healing** — the gateway's own mismatch error
+  names the right verb and the call retries once — so classification can't
+  drift per copy again (sketch item 3's $catalog cache replaced by something
+  cheaper and truer: the PEP is the oracle). `gwCallMany` = bounded-concurrency
+  batching (default 4; ADR-0073's wall-clock finding fixed at the seam —
+  open question 3 resolved: it belongs here). Open question 2 resolved as
+  leaned: call-only, minting stays the organ's policy.
+- **cell-jobs.** `cellJobs({put, get, invokeSelf})` — the JOB# row shape, TTL,
+  `submit` (pending + `{__job}` self-invoke), and chunking (`JOB_CHUNK` under
+  the DDB item cap). SDK-free by injected ops, like substrate.js.
+- **Consumers.** run (copy #1: proxy + jobs), models (the original, and the most
+  drifted — its verb set was missing six read verbs and it had DROPPED the
+  tool-isError check, so a failed proxied tool returned to the agent loop as a
+  success payload; both fixed at the seam), consolidate (copy #3: `gw()` is now
+  a one-line wrapper). ~90 duplicated lines deleted across the three.
+- **Gate.** `tests/kernel-sdk-jobs.test.ts` (7): envelope/token/classification,
+  isError + HTTP throw, wrong-verb self-heal both directions (+ explicit-kind
+  bypass), callMany order/concurrency/failure-isolation, JOB# row shape,
+  submit envelope, chunk round-trip. Suite 634 green.
+- **Live validation (tier-2 deploys: consolidate, run, models, kernel).**
+  `@c15r/run.exec` with `parc.call` peeked a fact AND ran the C4 walk (0.72)
+  through the vendored client; an async exec round-tripped submit → self-invoke
+  → `fetch {status:'done', out:{n:42}}` through the vendored jobs; the organ's
+  full dryRun observe cycle (backlog 1021, 5 ratify candidates, 6 reward
+  survivors, 308 contradictions escalated) ran through `gwCall`; models'
+  `fetch` answers correctly; both SDK URLs serve 200 `application/javascript`.

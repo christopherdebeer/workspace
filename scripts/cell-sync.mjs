@@ -97,6 +97,13 @@ const localRoot = join(process.cwd(), 'cells', name);
 if (cmd === 'pull') {
   const { files } = await call('read', 'cells.listFiles', { owner, name });
   for (const f of files) {
+    // Vendored modules (ADR-0076) are materialized at push time from
+    // cells/vendor/ — never pull them back as cell source (one source, no
+    // committed copies).
+    if (f.startsWith('vendor/')) {
+      console.log('skipped', f, '(vendored — source of truth is cells/vendor/)');
+      continue;
+    }
     const { content } = await call('read', 'cells.readFile', { owner, name, path: f });
     const dest = join(localRoot, f);
     mkdirSync(dirname(dest), { recursive: true });
@@ -110,6 +117,24 @@ if (cmd === 'pull') {
     const content = readFileSync(join(localRoot, f), 'utf8');
     await call('act', 'cells.writeFile', { owner, name, path: f, content });
     console.log('pushed', f, `(${content.length}b)`);
+  }
+  // Kernel-SDK vendor overlay (ADR-0076): a server-side https import hangs the
+  // forge bundler (ADR-0017), so cells that use shared kernel modules import
+  // `./vendor/<module>.js` instead — and push materializes each referenced
+  // module from its canonical source, cells/kernel/static/<module>.js. This is
+  // the automated form of the machine cell's manual keep-in-sync copy: git
+  // keeps ONE source; copies exist only in the deployed bundle (pull skips them).
+  const sdkRoot = join(process.cwd(), 'cells', 'kernel', 'static');
+  const referenced = new Set();
+  for (const f of local) {
+    if (!f.match(/\.(ts|tsx|js|mjs)$/)) continue;
+    const src = readFileSync(join(localRoot, f), 'utf8');
+    for (const m of src.matchAll(/vendor\/([\w-]+\.js)/g)) referenced.add(m[1]);
+  }
+  for (const mod of referenced) {
+    const content = readFileSync(join(sdkRoot, mod), 'utf8');
+    await call('act', 'cells.writeFile', { owner, name, path: `vendor/${mod}`, content });
+    console.log('pushed', `vendor/${mod}`, `(${content.length}b, vendored from kernel/static)`);
   }
   if (flags.includes('--deploy')) {
     // Deploy is asynchronous: it returns DEPLOYING immediately (the bundle runs
