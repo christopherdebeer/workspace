@@ -220,6 +220,8 @@ describe('workspace sharing / view layer', () => {
         'declare', 'declarations', 'undeclare', 'evaluate', 'edges',
         // ADR-0072 (C7): the contradiction-candidate read (Stage A).
         'contested',
+        // ADR-0071 (C2): the one read by candidate source.
+        'read',
       ].sort(),
     );
     // Per-slice ops gate on ownership AND a verb scope derived from kind, so a

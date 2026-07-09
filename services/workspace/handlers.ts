@@ -48,6 +48,8 @@ import {
   type ChangesInput,
   type ChangesWithEntries,
   type AttentionInput,
+  type ComposedReadInput,
+  type ComposedReadResult,
 } from './commands-read';
 import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput, type EdgesInput } from './commands-graph';
 import { type EdgeScopeInput } from './shape';
@@ -117,6 +119,9 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   recall: CommandHandler<RecallInput | undefined, ReadResult | RecallOverview>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
+  // ADR-0071 (C2): the one read by candidate source (recall/query/peek/changes
+  // remain as ergonomic presets; `search` retires into read({source:'vector'})).
+  read: CommandHandler<ComposedReadInput | undefined, ComposedReadResult>;
   search: CommandHandler<SearchInput, SearchResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
   project: CommandHandler<undefined, { status: string; count?: number; method?: string; key?: string; hint?: string }>;
