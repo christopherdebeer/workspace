@@ -61,6 +61,8 @@ interface ValidatedToken {
   /** The token id, so the session can mutate its own effective scope. */
   tokenId?: string;
   clientId: string | null;
+  /** The token's adopted posture (ADR-0074); absent/null ⇒ none. */
+  posture?: { goal?: string; lens?: string; salience?: Record<string, number>; adoptedAt?: string } | null;
 }
 
 /** Shape returned by the auth cell's `refreshSession` command (edge silent-refresh). */
@@ -124,6 +126,7 @@ function identityFromValidated(validated: ValidatedToken): Identity {
     scopes: effective,
     grantScopes: grant,
     ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
+    ...(validated.posture ? { posture: validated.posture } : {}),
     // Mediation (ADR-0022 × ADR-0050): a DCR-minted client token is a distinct
     // embodiment acting on-behalf-of — its attention weighs as `agent`, even
     // though its subject is the user. A first-party session (no clientId — the
@@ -243,6 +246,7 @@ export function defineService(definition: ServiceDefinition) {
       grantScopes: opts.identity.grantScopes?.length ? opts.identity.grantScopes : undefined,
       tokenId: opts.identity.tokenId,
       actor: opts.identity.actor,
+      posture: opts.identity.posture,
     });
     return {
       logger,
@@ -304,6 +308,7 @@ export function defineService(definition: ServiceDefinition) {
           ...(event.grantScopes ? { grantScopes: event.grantScopes } : {}),
           ...(event.tokenId ? { tokenId: event.tokenId } : {}),
           ...(event.actor ? { actor: event.actor } : {}),
+          ...(event.posture ? { posture: event.posture } : {}),
         },
       });
       try {

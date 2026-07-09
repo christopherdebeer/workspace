@@ -318,6 +318,59 @@ async function requestScope(
   return { effective: widened, grant, granted: denied.length === 0, denied };
 }
 
+// ─── Principal-adopted goals (ADR-0074): a token's posture ────────────────────
+// Scope says what a principal MAY touch; posture says what it is FOR. A posture
+// {goal, lens, salience} rides the token record (like effectiveScope), is
+// threaded into the identity by validateToken, and the workspace read path
+// resolves its defaults through it (defaults ← config ← PRINCIPAL ← lens ←
+// override). Auth stores it opaquely — goal may be a workspace fact key
+// (`goal/<id>`, the @c15r/tasks vocabulary) or free text; interpretation is the
+// reader's. Default-inert: a token with no posture behaves exactly as today.
+
+interface AdoptGoalInput {
+  /** The token to posture — defaults to the calling session's own token. An
+   *  explicit id lets a minter posture a child principal it owns (delegation
+   *  attenuates attention, ADR-0024/0025 reassessment). */
+  tokenId?: string;
+  /** A workspace `goal/<id>` fact key (preferred — graph-visible) or free text. */
+  goal?: string;
+  /** A salience lens name to apply to every read (open vocabulary — the reader
+   *  validates; unknown names are ignored, never fatal). */
+  lens?: string;
+  /** A partial salience-weights override (numeric map, e.g. {rewardWeight: 0.1}). */
+  salience?: Record<string, number>;
+}
+async function adoptGoal(input: AdoptGoalInput, ctx: ServiceContext) {
+  requireUser(ctx.identity);
+  const tokenId = input?.tokenId ?? ctx.identity.tokenId;
+  if (!tokenId) throw new Error('adoptGoal needs a bearer-authenticated session (no token id on this identity) or an explicit tokenId');
+  if (!input?.goal?.trim() && !input?.lens?.trim() && !input?.salience) {
+    throw new Error('A posture needs at least one of `goal`, `lens`, or `salience`');
+  }
+  const posture = {
+    ...(input.goal?.trim() ? { goal: input.goal.trim() } : {}),
+    ...(input.lens?.trim() ? { lens: input.lens.trim() } : {}),
+    ...(input.salience ? { salience: input.salience } : {}),
+    adoptedAt: new Date().toISOString(),
+  };
+  const ok = await store.setPosture(tokenId, await callerAccountId(ctx), posture);
+  if (!ok) return { adopted: false };
+  await ctx.events.emit('auth.goal.adopted', { tokenId, ...posture });
+  return { adopted: true, tokenId, posture };
+}
+
+interface DropGoalInput {
+  tokenId?: string;
+}
+async function dropGoal(input: DropGoalInput | undefined, ctx: ServiceContext) {
+  requireUser(ctx.identity);
+  const tokenId = input?.tokenId ?? ctx.identity.tokenId;
+  if (!tokenId) throw new Error('dropGoal needs a bearer-authenticated session (no token id on this identity) or an explicit tokenId');
+  const ok = await store.setPosture(tokenId, await callerAccountId(ctx), null);
+  if (ok) await ctx.events.emit('auth.goal.dropped', { tokenId });
+  return { dropped: ok };
+}
+
 /**
  * The gateway provider contract: the small token-management vocabulary
  * (`auth.tokens` / `auth.mintToken` / `auth.revokeToken`). auth stays an
@@ -453,6 +506,43 @@ function describeTools() {
         },
       },
       {
+        name: 'adoptGoal',
+        description:
+          "Adopt a goal as your session's posture (ADR-0074): every workspace read then resolves through it — the goal becomes the standing relevance bias, the lens/salience the standing weights — without passing text/lens per call. `goal` is ideally a workspace `goal/<id>` fact key (the @c15r/tasks vocabulary — graph-visible, project-linked); free text works for purposes not yet filed. Posture biases RANKING only, never membership: scope is untouched, and a caller's per-call args always win. Drop with auth.dropGoal. With tokenId, posture a child token you minted — delegation attenuates attention, not just scope.",
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tokenId: { type: 'string', description: 'Token to posture (default: your own session token)' },
+            goal: { type: 'string', description: 'A goal/<id> fact key (preferred) or free text' },
+            lens: { type: 'string', description: 'A salience lens name (recent·connected·durable·active)' },
+            salience: { type: 'object', description: 'Partial salience weights, e.g. {"rewardWeight": 0.1}' },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            adopted: { type: 'boolean' },
+            tokenId: { type: 'string' },
+            posture: { type: 'object', description: 'The stored posture {goal?, lens?, salience?, adoptedAt}' },
+          },
+        },
+      },
+      {
+        name: 'dropGoal',
+        description: 'Release your session\'s adopted posture (or a child token\'s, with tokenId) — reads return to unbiased defaults. Idempotent.',
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: { tokenId: { type: 'string', description: 'Token to clear (default: your own session token)' } },
+          additionalProperties: false,
+        },
+        resultSchema: { type: 'object', properties: { dropped: { type: 'boolean' } } },
+      },
+      {
         name: 'requestScope',
         description:
           "Widen your session's effective scope toward the requested scopes, up to your grant ceiling — the self-serve answer to a `scope_offer`. No re-consent. Scopes outside your grant come back in `denied` (those need your human to re-consent / mint a wider token).",
@@ -516,9 +606,11 @@ export const handler = defineService({
     scope: scopeView,
     focusScope,
     requestScope,
+    adoptGoal,
+    dropGoal,
     describeTools: () => describeTools(),
   },
-  events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked', 'auth.scope.focused', 'auth.scope.requested'] },
+  events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked', 'auth.scope.focused', 'auth.scope.requested', 'auth.goal.adopted', 'auth.goal.dropped'] },
   http: [
     { method: 'GET', path: '/.well-known/oauth-protected-resource', handler: (req) => handlePRM(req, OAUTH_CONFIG) },
     // RFC 9728 / MCP 2025-06-18: clients construct the PRM URL by inserting the

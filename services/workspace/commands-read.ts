@@ -346,24 +346,58 @@ export interface ComposedReadInput extends RecallInput, Omit<QueryInput, 'shape'
 
 export type ComposedReadResult = ReadResult | RecallOverview | QueryResult | Entry | ChangesWithEntries | null;
 
+/** The named lenses the read path accepts from a posture. Open-vocabulary
+ *  discipline: an unknown lens name is IGNORED (posture must never break a
+ *  read), and `_config/lenses` slice-declared presets are the sketched
+ *  follow-up (ADR-0074 open question 4) — this set is the floor, not truth. */
+const POSTURE_LENSES = new Set<SalienceLens>(['salience', 'recent', 'connected', 'durable', 'active']);
+
 /**
- * ADR-0074 reservation — the PRINCIPAL layer of the defaults merge
- * (`defaults ← config ← principal ← lens ← override`). A principal that has
- * ADOPTED a posture (a goal, a lens, a salience bias) gets it applied to every
- * composed read without per-call plumbing. Inc 1 of C2 reserves the slot and
- * resolves it to nothing, so today's reads are byte-identical; ADR-0074 fills it
- * from the acting principal (token posture / `_principals/*`).
+ * The PRINCIPAL layer of the defaults merge (ADR-0074, live):
+ * `defaults ← config ← PRINCIPAL ← lens ← override`. A principal that has
+ * ADOPTED a posture (`auth.adoptGoal` — a goal, a lens, a salience bias) gets
+ * it applied to every composed read without per-call plumbing. The posture
+ * rides the validated token into `ctx.identity`; this maps it to read terms.
+ * `goal` stays unresolved here — a `goal/<id>` fact reference is resolved by
+ * `read()` against the caller's own slice (title/detail → relevance text).
+ * No posture ⇒ null ⇒ reads are byte-identical to before.
  */
-export function principalPosture(_identity: unknown): { text?: string; lens?: SalienceLens; salience?: Partial<SalienceOptions> } | null {
-  return null;
+export function principalPosture(
+  identity: unknown,
+): { goal?: string; lens?: SalienceLens; salience?: Partial<SalienceOptions> } | null {
+  const posture = (identity as { posture?: { goal?: string; lens?: string; salience?: Record<string, number> } } | undefined)
+    ?.posture;
+  if (!posture) return null;
+  const lens = posture.lens && POSTURE_LENSES.has(posture.lens as SalienceLens) ? (posture.lens as SalienceLens) : undefined;
+  const salience =
+    posture.salience && Object.keys(posture.salience).length ? (posture.salience as Partial<SalienceOptions>) : undefined;
+  const goal = typeof posture.goal === 'string' && posture.goal.trim() ? posture.goal.trim() : undefined;
+  if (!goal && !lens && !salience) return null;
+  return { ...(goal ? { goal } : {}), ...(lens ? { lens } : {}), ...(salience ? { salience } : {}) };
 }
 
-/** Infer the candidate source from the arguments (explicit `source` wins). */
+/** Derive relevance text from a referenced goal fact's value — the
+ *  `@c15r/tasks` shape (`title`/`detail`) first, generic text fields after. */
+export function goalTextOf(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const str = (x: unknown): string | undefined => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+  const head = str(v.title) ?? str(v.name);
+  const body = str(v.detail) ?? str(v.content) ?? str(v.text);
+  return head && body ? `${head} — ${body}` : (head ?? body ?? null);
+}
+
+/** Infer the candidate source from the arguments (explicit `source` wins).
+ *  An explicit `view` names the assembled slice view even when `text` is also
+ *  present — `read({view:'full', text})` is a goal-conditioned recall
+ *  (ADR-0051), not a vector search. */
 export function inferSource(input?: ComposedReadInput): ReadSource {
   if (input?.source) return input.source;
   if (input?.key) return 'key';
   if (input?.sinceSeq !== undefined || input?.last !== undefined || input?.include !== undefined) return 'changes';
   if (input?.type || input?.tag || input?.prefix || input?.contains || input?.cursor || input?.rankBy) return 'store';
+  if (input?.view) return 'slice';
   if (typeof input?.text === 'string' && input.text.trim()) return 'vector';
   return 'slice';
 }
@@ -617,13 +651,29 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
     // pattern) plus the two enrichments: `context:'refs'` periphery, and the
     // reserved principal layer (ADR-0074) applied between defaults and the call.
     async read(input, ctx): Promise<ComposedReadResult> {
-      // The principal layer (empty today — ADR-0074 fills it): posture supplies
-      // what the call didn't say; anything the caller passes still wins.
+      // The PRINCIPAL layer (ADR-0074, live): posture supplies what the call
+      // didn't say; anything the caller passes still wins. The SHAPE stays the
+      // caller's — the source is inferred from the caller's own args BEFORE the
+      // merge, so a standing goal *conditions* the read (recall({text})
+      // semantics, ADR-0051) but never flips an overview into a search.
+      const source = inferSource(input);
+      const merged: ComposedReadInput = { ...(input ?? {}) };
       const posture = principalPosture(ctx.identity);
-      const merged: ComposedReadInput = posture
-        ? { text: posture.text, lens: posture.lens, ...input, salience: { ...posture.salience, ...input?.salience } }
-        : (input ?? {});
-      const source = inferSource(merged);
+      if (posture && ctx.identity.user) {
+        if (posture.goal && merged.text === undefined && (source === 'slice' || source === 'store' || source === 'vector')) {
+          // A `goal/<id>` posture references the goal graph: resolve the fact
+          // (touch-free, own slice) to its title/detail; free text passes as-is.
+          let text: string | null = posture.goal;
+          if (posture.goal.includes('/')) {
+            const { store } = build(ctx);
+            const rec = store ? await store.get(ctx.identity.user, posture.goal).catch(() => null) : null;
+            if (rec && !rec.superseded) text = goalTextOf(rec.value) ?? posture.goal;
+          }
+          if (text) merged.text = text;
+        }
+        if (posture.lens && merged.lens === undefined) merged.lens = posture.lens;
+        if (posture.salience) merged.salience = { ...posture.salience, ...merged.salience };
+      }
       const cap = Math.min(Math.max(merged.contextLimit ?? 8, 1), 24);
       const wantContext = merged.context === 'refs';
 

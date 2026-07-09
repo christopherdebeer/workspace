@@ -504,16 +504,22 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   return withRender(await cap.forward(input?.input, ctx), cap);
 }
 
-function whoamiTool(_input: unknown, ctx: ServiceContext): { user: string; scopes: string[]; grant: string[]; actor?: string } {
+function whoamiTool(
+  _input: unknown,
+  ctx: ServiceContext,
+): { user: string; scopes: string[]; grant: string[]; actor?: string; posture?: unknown } {
   // `scopes` is the session's effective focus (what's enforced now); `grant` is the
   // token ceiling. They differ once a session narrows/widens (incremental auth).
   // `actor` is the embodiment class (ADR-0022 mediation): a connected client is
   // an `agent` acting on-behalf-of, and its attention weighs accordingly.
+  // `posture` is the adopted goal (ADR-0074): what this session is FOR — every
+  // workspace read resolves through it (adopt/drop via auth.adoptGoal/dropGoal).
   return {
     user: ctx.identity.user ?? 'anonymous',
     scopes: ctx.identity.scopes,
     grant: ctx.identity.grantScopes ?? ctx.identity.scopes,
     ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
+    ...(ctx.identity.posture ? { posture: ctx.identity.posture } : {}),
   };
 }
 

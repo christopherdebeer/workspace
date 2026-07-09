@@ -285,6 +285,7 @@ export function createDynamoStore(tableName: string): AuthStore {
         mintedBy: i.mintedBy,
         scope: i.scope,
         effectiveScope: i.effectiveScope ?? null,
+        posture: i.posture ?? null,
         label: i.label ?? null,
         clientId: i.clientId ?? null,
         expiresAt: i.expiresAt ?? null,
@@ -303,6 +304,22 @@ export function createDynamoStore(tableName: string): AuthStore {
           ...(effectiveScope === null
             ? { UpdateExpression: 'REMOVE effectiveScope' }
             : { UpdateExpression: 'SET effectiveScope = :e', ExpressionAttributeValues: { ':e': effectiveScope } }),
+        })
+        .promise();
+      return true;
+    },
+    async setPosture(tokenId, userId, posture): Promise<boolean> {
+      // Same shape as setEffectiveScope: the TOKEN# row is the authoritative
+      // state validateTokenByHash reads; the posture is stored opaquely.
+      const idx = await get(`USERTOK#${userId}`, tokenId);
+      if (!idx) return false;
+      await db
+        .update({
+          TableName: tableName,
+          Key: { pk: `TOKEN#${idx.tokenHash}`, sk: SK },
+          ...(posture === null
+            ? { UpdateExpression: 'REMOVE posture' }
+            : { UpdateExpression: 'SET posture = :p', ExpressionAttributeValues: { ':p': posture } }),
         })
         .promise();
       return true;

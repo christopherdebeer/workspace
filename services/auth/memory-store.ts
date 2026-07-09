@@ -13,6 +13,7 @@ import {
   MintTokenParams,
   MintedToken,
   TokenInfo,
+  TokenPosture,
   TokenSummary,
   RefreshResult,
   DeviceCode,
@@ -37,6 +38,7 @@ interface TokenRow {
   mintedBy: string;
   scope: string;
   effectiveScope?: string | null;
+  posture?: TokenPosture | null;
   label: string | null;
   clientId: string | null;
   revoked: boolean;
@@ -211,6 +213,7 @@ export function createMemoryStore(): AuthStore {
         mintedBy: t.mintedBy,
         scope: t.scope,
         effectiveScope: t.effectiveScope ?? null,
+        posture: t.posture ?? null,
         label: t.label,
         clientId: t.clientId,
         expiresAt: t.expiresAt,
@@ -221,6 +224,15 @@ export function createMemoryStore(): AuthStore {
       for (const t of tokens.values()) {
         if (t.id === tokenId && t.mintedBy === userId) {
           t.effectiveScope = effectiveScope;
+          return true;
+        }
+      }
+      return false;
+    },
+    async setPosture(tokenId, userId, posture): Promise<boolean> {
+      for (const t of tokens.values()) {
+        if (t.id === tokenId && t.mintedBy === userId) {
+          t.posture = posture;
           return true;
         }
       }

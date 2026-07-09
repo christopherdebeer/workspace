@@ -111,6 +111,21 @@ export interface MintedToken {
   expiresAt: string | null;
 }
 
+/**
+ * A principal's adopted posture (ADR-0074): what this credential is currently
+ * *for*, not what it may touch. `goal` is either a workspace fact key
+ * (`goal/<id>` — the @c15r/tasks vocabulary) or free text; `lens`/`salience`
+ * name a read bias. Auth stores it opaquely — the workspace read path is what
+ * interprets it (defaults ← config ← PRINCIPAL ← lens ← override). Mutable via
+ * `setPosture`, exactly like `effectiveScope`: a session property of the token.
+ */
+export interface TokenPosture {
+  goal?: string;
+  lens?: string;
+  salience?: Record<string, number>;
+  adoptedAt?: string;
+}
+
 export interface TokenInfo {
   id: string;
   mintedBy: string;
@@ -118,6 +133,8 @@ export interface TokenInfo {
   /** The session's effective scope (≤ `scope`); null ⇒ the full grant is effective.
    *  Mutable via `setEffectiveScope` — incremental authorization. */
   effectiveScope?: string | null;
+  /** The adopted posture (ADR-0074); null/absent ⇒ no posture (reads unbiased). */
+  posture?: TokenPosture | null;
   label: string | null;
   clientId: string | null;
   expiresAt: string | null;
@@ -211,6 +228,12 @@ export interface AuthStore {
    * only narrow/widen its own token. Returns false when no such token exists.
    */
   setEffectiveScope(tokenId: string, userId: string, effectiveScope: string | null): Promise<boolean>;
+  /**
+   * Set (or clear, with null) a token's adopted posture (ADR-0074) — the
+   * session's declared purpose, mirrored into every read via the identity.
+   * Owner-keyed like `setEffectiveScope`; returns false when no such token.
+   */
+  setPosture(tokenId: string, userId: string, posture: TokenPosture | null): Promise<boolean>;
   /**
    * Patch a token you own — token-as-principal stewardship (docs/token-as-principal-plan.md).
    * Relabel, re-scope (the GRANT ceiling; resets `effectiveScope` so the new grant is

@@ -24,6 +24,21 @@
  */
 export type ActorClass = 'human' | 'agent' | 'platform';
 
+/**
+ * A principal's adopted posture (ADR-0074) — what this session is currently
+ * *for*. Adopted via `auth.adoptGoal`, stored on the token record, threaded
+ * here by the validated-token path. `goal` is a workspace fact key
+ * (`goal/<id>`) or free text; `lens`/`salience` name a read bias. Readers
+ * interpret it (the workspace read resolves `defaults ← config ← PRINCIPAL ←
+ * lens ← override`); it biases ranking only, never scope or membership.
+ */
+export interface PrincipalPosture {
+  goal?: string;
+  lens?: string;
+  salience?: Record<string, number>;
+  adoptedAt?: string;
+}
+
 export interface Identity {
   /** Authenticated principal, e.g. a username. Undefined for anonymous calls. */
   user?: string;
@@ -51,6 +66,8 @@ export interface Identity {
   /** The id of the bearer token backing this session, when known — the handle the
    *  session uses to mutate its own effective scope. Absent for internal/event calls. */
   tokenId?: string;
+  /** The adopted posture riding this session's token (ADR-0074), when any. */
+  posture?: PrincipalPosture;
 }
 
 const ANONYMOUS: Identity = { user: undefined, scopes: [] };
