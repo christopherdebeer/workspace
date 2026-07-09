@@ -51,7 +51,7 @@ import {
   type ComposedReadInput,
   type ComposedReadResult,
 } from './commands-read';
-import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput, type EdgesInput } from './commands-graph';
+import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput, type EdgesInput, type WalkResult } from './commands-graph';
 import { type EdgeScopeInput } from './shape';
 import {
   createSearchCommands,
@@ -137,7 +137,8 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   graph: CommandHandler<EdgeScopeInput | undefined, { edges: EdgeRecord[]; total: number }>;
   members: CommandHandler<MembersInput, MembersResult>;
   // ADR-0069 (C3): the one edge query (neighbors/links/graph/members are aliases).
-  edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: EdgeRecord[]; total: number }>;
+  // ADR-0075 (C4): `{around, depth ≥ 2, direction}` adds the directional walk.
+  edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: EdgeRecord[]; total: number } | WalkResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesWithEntries>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;

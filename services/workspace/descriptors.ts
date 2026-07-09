@@ -556,26 +556,28 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'edges',
     description:
-      "One edge query over the Reference projection (ADR-0069) — the unified form of neighbors/links/graph/members. `around` = edges incident to a key (+ `dir`/`rel`; `membership:true` = that collection's members); no `around` = the whole projection, `derived:false` = authored only (+ `prefix`). Scope with `keys`/`rels`/`limit` (ADR-0048). Derived backbone edges carry `derived:true`.",
+      "One edge query over the Reference projection (ADR-0069) — the unified form of neighbors/links/graph/members. `around` = edges incident to a key (+ `dir`/`rel`; `membership:true` = that collection's members); no `around` = the whole projection, `derived:false` = authored only (+ `prefix`). Scope with `keys`/`rels`/`limit` (ADR-0048). Derived backbone edges carry `derived:true`. With `depth` ≥ 2 (ADR-0075): the DIRECTIONAL WALK — all transitive simple paths from `around` over AUTHORED edges, compound confidence = Π step strength, cycle-guarded, capped. This is the simulation read for causal rels (`causes · enables · predicts · prevents · contradicts` — a documented floor, not a closed set: any rel walks; confidence is the edge's `strength`, set at `link`).",
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
-        around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members)' },
-        dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'With `around`: direction (default both)' },
-        rel: { type: 'string', description: 'Only edges of this rel type' },
+        around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members; with `depth` → the walk root)' },
+        dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'With `around` (one hop): direction (default both)' },
+        rel: { type: 'string', description: 'Only edges of this rel type (for a walk: the rel family to follow, e.g. "enables")' },
         membership: { type: 'boolean', description: "With `around`: only membership edges pointing at it (the collection's members)" },
         derived: { type: 'boolean', description: 'Include derived backbone edges (default true); false = authored only' },
         prefix: { type: 'string', description: 'Authored-only: only edges whose from/to starts with this prefix' },
         keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end)' },
         rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
         limit: { type: 'number', description: 'Cap returned edges; `total` still counts every match (0 = count only)' },
+        depth: { type: 'number', description: 'ADR-0075: walk this many hops from `around` (2–6). 1/absent = one-hop framings' },
+        direction: { type: 'string', enum: ['out', 'in'], description: "Walk direction: 'out' = downstream of the root (what X leads to), 'in' = upstream (what leads to X). Default out" },
         shape: SHAPE_SCHEMA,
       },
       additionalProperties: false,
     },
-    resultSchema: { type: 'object', description: 'Per framing: `{ edges, total }` (projection / authored), `{ outbound, inbound, entries, types }` (around), or the members result (membership).' },
+    resultSchema: { type: 'object', description: 'Per framing: `{ edges, total }` (projection / authored), `{ outbound, inbound, entries, types }` (around), the members result (membership), or `{ root, direction, depth, paths: [{nodes, steps, confidence}], total, truncated? }` (walk).' },
   },
   {
     name: 'neighbors',
