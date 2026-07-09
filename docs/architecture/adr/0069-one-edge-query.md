@@ -1,7 +1,7 @@
 # ADR-0069 — One edge query: `neighbors` / `graph` / `members` / `links` → `edges(…)`
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C3 of the
-  second contraction wave (ADR-0067). Behaviour-preserving; read-side only.
+- **Status:** Accepted 2026-07-09 — Inc 1 shipped (parity-gated, deployed to prod).
+  C3 of the second contraction wave (ADR-0067). Behaviour-preserving; read-side only.
 - **Context doc:** [`docs/architecture/compose.md`](../compose.md) — §3 (Shape C).
 - **Depends on:** ADR-0044 Inc 5 (which *split* the graph reads into four verbs),
   ADR-0048 (`scopeEdges` altitude), ADR-0003/0009 (References + edge strength).
@@ -171,3 +171,23 @@ authored + derived + `similarTo` edges:
 3. Should `edges` carry the ADR-0016 render hint (`_types/<rel>` edge treatment)
    inline, so the canvas needs one call? Likely yes as a follow-on, gated on 0016
    landing.
+
+## Implementation log
+
+- **2026-07-09 — Inc 1 shipped.** `edges(around?,dir?,rel?,membership?,derived?,prefix?,keys?,rels?,limit?,shape?)`
+  added to `services/workspace/commands-graph.ts`, wired into `WorkspaceCommands`
+  (`handlers.ts`) and `TOOL_DESCRIPTORS` (`descriptors.ts`); `neighbors`/`links`/`graph`/
+  `members` marked **DEPRECATED** in prose. Default `derived: true` (graph framing);
+  `around` → neighbours, `+membership` → members, `derived:false` → authored links; a
+  top-level `rel` folds into the `rels` scope filter.
+- **Scope refinement vs the sketch.** The composed command dispatches to the *existing*
+  `state.neighbors`/`graph`/`members`/`edges` methods, so it is behaviour-preserving by
+  construction. Migration steps 1–2 (extracting the shared `edgeSet(scope,{derived})`
+  helper to dedup the `[...authored, ...deriveBackboneEdges]` reduction copy-pasted at
+  `state.ts:1766/1790` — and routing `neighbors` around it) are a **separable follow-on**;
+  they are internal cleanup, not part of the surface collapse.
+- **Gate green.** `tests/edges-query.test.ts` asserts each `edges` preset structurally
+  equals its legacy verb (edge lists, neighbour/member key sets, membership, total) and
+  that `derived:false` really excludes the backbone. Full suite 584 green; typecheck clean.
+- **Deployed to prod** (run 29008771978) and live-validated via the substrate MCP: the
+  four presets match `neighbors`/`links`/`graph`/`members` on the live slice.

@@ -14,14 +14,17 @@
 
   | # | Contraction | Collapses | Completes / depends | Lands as |
   |---|---|---|---|---|
-  | **C1** | One declaration surface | 11 → 4 | ADR-0001 (surface) | **ADR-0068** |
-  | C2 | One read by candidate source | 3 → 1 | ADR-0004/0048/0050/0051 | sketch |
-  | **C3** | One edge query | 4 → 1 | ADR-0044 Inc 5 / 0048; feeds 0016 | **ADR-0069** |
+  | **C1** | One declaration surface | 11 → 4 | ADR-0001 (surface) | **ADR-0068 ✓ built + live** |
+  | C2 | One read by candidate source | 3 → 1 | ADR-0004/0048/0050/0051 | **ADR-0071 (buffer)** |
+  | **C3** | One edge query | 4 → 1 | ADR-0044 Inc 5 / 0048; feeds 0016 | **ADR-0069 ✓ built + live** |
   | C4 | Causal relations | +1 rel family, 0 schema | depends C3 | sketch |
   | C5 | Vendor cell-jobs | 2 → 1 | ADR-0026/0028 (in-code TODO) | sketch |
-  | C6 | Reward — the 7th signal | +1 signal | ADR-0006/0050/0051 | sketch |
+  | C6 | Reward — the 7th signal | +1 signal | ADR-0006/0050/0051 | **ADR-0070 (buffer)** |
   | C7 | The `_contested` view | new read | ADR-0040/0045; C3,C6 | sketch |
   | C8 | The consolidation organ | new organ | ADR-0045; C6,C7 | sketch |
+
+  *Buffer advanced 2026-07-09: C1/C3 built + validated live; the two-ahead buffer is
+  now **ADR-0070 (C6 reward)** and **ADR-0071 (C2 read)**.*
 
 ---
 

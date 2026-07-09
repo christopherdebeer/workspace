@@ -1,0 +1,108 @@
+# ADR-0071 — One read by candidate source: `recall` / `query` / `search` → `read(source, shape)`
+
+- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C2 of the
+  second contraction wave (ADR-0067); the second forward buffer entry.
+- **Context doc:** [`docs/architecture/compose.md`](../compose.md) — §2 (Shape B).
+- **Depends on:** ADR-0004 (the projection pipeline), ADR-0048 (reads answer at the
+  caller's altitude), ADR-0050/0051 (materialized score + relevance). Deprecates
+  `search` (already prose-deprecated, ADR-0051).
+
+---
+
+## Context (grounded)
+
+Every read is the pipeline `select → score → shape → present`. `recall`, `query`,
+and `search` share the `wrap`/`scoreParts` score stage **and** a `relevance`
+injection (ADR-0051), but each re-implements the candidate source and the
+own-slice-∪-grants fold:
+
+- `recall` (`commands-read.ts:319-431`) assembles the full slice + folds granted
+  slices (`:362-390`), then shapes once.
+- `query` (`state.ts:1645-1686`) filters candidates by type/tag/prefix, sorts, pages
+  — a projection, no elision.
+- `search` (`commands-search.ts:146-213`) pulls the vector top-K (`:180-189`), ranks
+  by **raw cosine** (`:197`), re-reads each hit — and **discards salience entirely**.
+  Yet `query({ text })` is already documented as "semantic search that still respects
+  earned salience" (`commands-read.ts:256`). So `search` is the deprecated shell of a
+  read `query` already does correctly; the grant-fold is coded twice
+  (`commands-search.ts:180-189` vs `commands-read.ts:373-390`).
+
+The three differ only in **where candidates come from** and **how much shaping the
+answer gets**.
+
+```mermaid
+flowchart TD
+  subgraph before["BEFORE — 3 reads, 3 hand-rolled folds"]
+    RC["recall — assemble slice + grant fold → overview"]
+    QU["query — store list (type/tag/prefix) → projection"]
+    SE["search — vector top-K → raw cosine (salience DISCARDED)"]
+  end
+  subgraph after["AFTER — one read, parametrized"]
+    RD["read(scope, { source, shape, relevance? })"]
+    SRC["source: slice · store · vector · key · changes"]
+    SHP["shape: overview · projection · tiered · raw"]
+    RD --- SRC & SHP
+  end
+  RC ==collapse==> RD
+  QU ==collapse==> RD
+  SE ==collapse==> RD
+```
+
+## Decision (sketch — tentative)
+
+One read parametrized by candidate source and output shape; the grant-fold and the
+`relevance` map computed **once** in the shared path:
+
+```
+read(scope, { source, shape, relevance?, ...filters })
+   source ∈ { slice (assembled + grants) | store (type/tag/prefix) | vector (top-K) | key | changes }
+   shape  ∈ { overview | projection | tiered | raw }
+
+   recall  = read(slice,  overview)
+   query   = read(store,  projection)
+   search  = read(vector, projection, { relevance })   ← now salience-aware (bug fixed)
+   peek    = read(key,    raw)
+   changes = read(changes)
+```
+
+- Retire `search` into `read(vector, …)`: it gains proper salience ranking for free,
+  and the duplicate grant-fold is deleted.
+- Legacy `recall` / `query` / `search` / `peek` / `changes` remain as **preset
+  aliases** during the deprecation window.
+
+**Boundary.** `attention` (the derived self-maintenance read, `state.ts:1871-1950`)
+is a distinct source (settled/stale/unlinked/dangling), not a candidate list — it
+stays its own verb (C7/C8 build on it). `peek`/`changes` stay named aliases for
+ergonomics (open question).
+
+## Why now (buffer rationale)
+
+C2 is the third of the three shapes, and the one that closes the "surface tells the
+truth the runtime implements" story — but it touches salience and the grant fold, so
+it follows C1/C3 (which proved the dispatch-by-parameter pattern on lower-risk
+surfaces). Sketching it now keeps it in the buffer; it promotes to a full ADR once
+C1/C3 are validated live and the pattern is trusted.
+
+## Behaviour-preservation (the gate)
+
+Parity harness: each preset's output deep-equals its legacy verb over a fixture slice
+— `recall`'s overview + `_shaping`, `query`'s paging + rank, `peek`'s single fact,
+`changes`' tail. The one **intended** change is called out explicitly: `search`
+(→ `read(vector)`) now returns salience-ranked results, not raw cosine — a separate
+test asserts the *new* ordering and documents the fix (it is a behaviour *change* for
+`search` specifically, gated on the ADR, not silent).
+
+## Consequences
+
+**Positive** — one read to reason about; the grant-fold + relevance computed once;
+`search`'s salience bug fixed; the three-shapes surface complete. **Negative /
+risks** — `search`'s ordering changes (intended, but visible to callers — the
+deprecation note must say so); `read`'s `source`/`shape` matrix is larger surface
+area than any single verb (mitigated: presets are the documented entry points).
+
+## Open questions
+1. Do `peek`/`changes` fold into `read` or stay named aliases? Proposal: named
+   aliases — `read(key)` / `read(changes)` — collapse only recall/query/search.
+2. Is `source: vector` always `relevance`-driven, or can it rank by salience alone
+   (a "most-salient semantically-near" read)? Proposal: `relevance` optional; absent
+   = salience-only over the vector candidate set.

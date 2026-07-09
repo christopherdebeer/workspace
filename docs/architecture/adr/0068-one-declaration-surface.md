@@ -1,7 +1,7 @@
 # ADR-0068 — One declaration surface: `declare` / `list` / `undeclare` + `evaluate`
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C1 of
-  the second contraction wave (ADR-0067). Behaviour-preserving; unblocks the rest.
+- **Status:** Accepted 2026-07-09 — Inc 1 shipped (parity-gated, deployed to prod).
+  C1 of the second contraction wave (ADR-0067). Behaviour-preserving; unblocks the rest.
 - **Context doc:** [`docs/architecture/compose.md`](../compose.md) — §1 (Shape A).
 - **Depends on:** ADR-0001 (the declaration registry — this completes its *surface*),
   ADR-0044 Inc 5 (which grouped the eleven handlers into `commands-declared.ts`).
@@ -81,7 +81,7 @@ const REGISTRY: Record<DeclKind, (state) => DeclarationRegistry<unknown>> = {
 };
 
 declare(kind, def)        // → REGISTRY[kind](state).register(scope, def, identity)
-list(kind)                // → REGISTRY[kind](state).list(scope)
+declarations(kind?)       // → REGISTRY[kind](state).list(scope); no kind = union, tagged
 undeclare(kind, id)       // → REGISTRY[kind](state).remove(scope, id, identity)
 
 // evaluate stays per-kind (the ADR-0001 boundary, at the surface):
@@ -98,7 +98,7 @@ per-kind register semantics changes; only the dispatch does.
 | Composed | Subsumes | Notes |
 |---|---|---|
 | `declare(kind, def)` | registerAction · registerView · registerSubscription | dispatch by `kind` |
-| `list(kind)` | actions · views · subscriptions | one pager |
+| `declarations(kind?)` | actions · views · subscriptions | one pager (`declarations` not a bare `list` — `workspace.list` is too generic; no `kind` = tagged union) |
 | `undeclare(kind, id)` | deleteAction · deleteView · deleteSubscription | one remove |
 | `evaluate(kind, id, args)` | invoke · view | the two evaluate verbs, unified name |
 
@@ -181,6 +181,29 @@ dispatch refactor.
    `evaluate` as the action-only verb? Proposal: `evaluate(kind,…)` primary, `view`
    and `invoke` as aliases — symmetry wins, and it generalises if a future kind gains
    an evaluate.
-2. Should `list()` (no kind) return *all* declarations across kinds (a unified
-   registry view)? Attractive for a "what have I declared" surface; costs a
-   multi-prefix scan. Proposal: yes, as an optional `list()` with no `kind` = union.
+2. Should `declarations()` (no kind) return *all* declarations across kinds (a
+   unified registry view)? **Decided (Inc 1): yes** — `declarations()` returns the
+   union, each entry tagged with its `kind`.
+
+## Implementation log
+
+- **2026-07-09 — Inc 1 shipped.** `declare` / `declarations` / `undeclare` /
+  `evaluate` added to `services/workspace/commands-declared.ts` (dispatch over
+  `createDeclarativeActions`/`createRegisteredViews`/`createSubscriptions`), wired into
+  `WorkspaceCommands` (`handlers.ts`) and `TOOL_DESCRIPTORS` (`descriptors.ts`); the
+  eleven legacy verbs marked **DEPRECATED** in prose (the `search` precedent). Naming
+  refinement vs the sketch: the list verb is **`declarations`** (a bare `workspace.list`
+  is too generic); `evaluate('subscription')` errors (no evaluate side).
+- **Gate green.** `tests/declarations-surface.test.ts` (9 cases) asserts composed ==
+  legacy for declare/declarations/undeclare/evaluate (incl. actions' `{contested}`,
+  invoke's emitted events) **and** the catalog↔command-keys sync invariant. Full suite
+  584 green; `tsc` + client typecheck clean.
+- **Deployed to prod** via the `Deploy CDK` workflow on the branch head (run
+  29008771978), live-validated through the substrate MCP: `declare`/`declarations`/
+  `evaluate`/`undeclare` match their legacy verbs on the live slice; legacy aliases
+  intact.
+- **Deferred to a follow-on (not this increment):** migration step 2 — *re-pointing*
+  the eleven legacy handlers to delegate into the composed group (pure dedup). Shipped
+  as **additive** (composed alongside legacy) to keep the increment behaviour-preserving
+  and reversible; both call the same registry, so parity holds. Removal of the legacy
+  descriptors follows the deprecation window (step 4).
