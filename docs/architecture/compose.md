@@ -224,17 +224,20 @@ as the built line advances.
 | C5 | Vendor cell-jobs — run/models → `platform/runtime/cell-jobs` | 2 copies → 1 | ADR-0026/0028 (the in-code TODO) | sketch |
 | C6 | Reward, the 7th signal — default-0 weight into `scoreParts` | +1 signal | ADR-0006/0050/0051; `adaptive-salience.md` | **ADR-0070 ✓ built + live (07-09)** |
 | C7 | The `_contested` view — two-stage contradiction read | new read | ADR-0040/0045; depends C3,C6; `cerebellar-loop.md` | **ADR-0072 ✓ built + live (07-09)** |
-| C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | **ADR-0073** (buffer) |
+| C8 | The consolidation organ — tending scored on the delta it moves | new organ | ADR-0045; depends C6,C7; `cerebellar-loop.md` | **ADR-0073 ✓ built + live (07-09, delta +11)** |
 
-> **Progress (2026-07-09):** four contractions built, gated, deployed to prod, and
-> live-validated in one day's loop: C1 (`declare/declarations/undeclare/evaluate`),
-> C3 (`edges`), C6 (the reward term — the substrate's first earned score signal,
-> default-inert), and C7 (`contested` — the contradiction-candidate read with the
-> `checked/<hash>` idempotence contract; Stage B adjudication runs through existing
-> verbs, no new write surface). The two-ahead buffer is now **ADR-0071 (C2 read)** and
-> **ADR-0073 (C8, the consolidation organ)** — the terminal piece: it consumes
-> `attention` + `contested`, repairs through `ratify`/`link`/`supersede`, writes the
-> `reward` C6 gave a home, and is scored on the backlog delta it moves.
+> **Progress (2026-07-09): the loop is closed.** Five contractions built, gated,
+> deployed, and live-validated in one day's loop: C1 (`declare/…/evaluate`), C3
+> (`edges`), C6 (`reward`), C7 (`contested`), and **C8 — `@c15r/consolidate`, the
+> organ itself**, running as a scoped principal. Its first clean cycle on the real
+> backlog scored **delta +11** (1025 → 1014), zeroed the dangling category, landed
+> the protocol-doc↔protocol-fact links the weave dispatches never managed, and
+> **wrote the first earned rewards** onto the previous cycle's surviving repairs —
+> the substrate now has an opinion about its own trajectory *and acts on it*. The
+> two-ahead buffer: **ADR-0071 (C2 read** — + secondary/elided-neighbour context, +
+> a reserved principal layer**)** and **ADR-0074 (principal-adopted goals** — the
+> ADR-0022/0024/0025 reassessment: attention, not just scope, attenuates through
+> delegation**)**. Remaining sketches: C4 (causal rels), C5 (cell-jobs).
 
 **Sequencing logic.** C1 and C3 are pure, behaviour-preserving surface collapses
 that complete open decisions — the safe, high-legibility start (and the two written

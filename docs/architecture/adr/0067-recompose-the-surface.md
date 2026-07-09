@@ -21,12 +21,15 @@
   | C5 | Vendor cell-jobs | 2 → 1 | ADR-0026/0028 (in-code TODO) | sketch |
   | C6 | Reward — the 7th signal | +1 signal | ADR-0006/0050/0051 | **ADR-0070 ✓ built + live** |
   | C7 | The `_contested` view | new read | ADR-0040/0045; C3,C6 | **ADR-0072 ✓ built + live** |
-  | C8 | The consolidation organ | new organ | ADR-0045; C6,C7 | **ADR-0073 (buffer)** |
+  | C8 | The consolidation organ | new organ | ADR-0045; C6,C7 | **ADR-0073 ✓ built + live (delta +11)** |
 
-  *Buffer advanced 2026-07-09 (three times): C1/C3, then C6, then C7 — each built,
-  parity/idempotence-gated, deployed to prod, and validated live. The two-ahead
-  buffer is now **ADR-0071 (C2 read)** and **ADR-0073 (C8 consolidation organ)** —
-  the wave's terminal piece, with every dependency built.*
+  *Buffer advanced 2026-07-09 (four times): C1/C3, then C6, then C7, then C8 — each
+  built, gated, deployed, and validated live. **The wave's loop is closed**: the
+  organ's first clean cycle scored delta +11 on the real backlog and wrote the
+  first earned rewards. The two-ahead buffer is now **ADR-0071 (C2 read — enriched
+  with secondary/elided-neighbour context and a reserved principal layer)** and
+  **ADR-0074 (principal-adopted goals — the 0022/0024/0025 reassessment)**.
+  Remaining sketches: C4 (causal rels), C5 (cell-jobs — now with a third consumer).*
 
 ---
 

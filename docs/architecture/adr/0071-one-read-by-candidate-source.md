@@ -75,6 +75,27 @@ is a distinct source (settled/stale/unlinked/dangling), not a candidate list —
 stays its own verb (C7/C8 build on it). `peek`/`changes` stay named aliases for
 ergonomics (open question).
 
+**Secondary context — elided neighbours (owner direction, 2026-07-09).** Reading an
+item or a set is *perception*, and perception has a periphery: the composed `read`
+must be able to carry each result's **one-hop neighbourhood at the elided/refs
+tier** — key, type, rel, score, no values — so a fact arrives situated, not bare.
+Shape: `read(…, { context: 'none' | 'refs' })` (default `none` so parity holds),
+where `refs` folds `edges({ around })` per result into a `_context` field, capped
+per entry. This reuses C3's composed edge query (the reduction is already one call)
+and ADR-0048's tiering — the periphery is *shaped*, never a second full read. The
+salience gate already decides what a read shows; this decides what it *hints*.
+
+**Principal-conditioned reads (forward pointer → ADR-0074).** Goals — and even
+salience posture — may be properties of the **principal**, not the call: an agent
+that has *adopted* a goal should have its reads automatically permuted by it
+(relevance bias, lens, thresholds) without passing `text`/`salience` every call.
+C2's `read` must therefore resolve its defaults through the same layered merge that
+salience already uses (`defaults ← config ← principal ← lens ← override`) with a
+**principal layer** slot reserved — so building C2 now does not foreclose ADR-0074.
+This is the ADR-0022/0024/0025 reassessment: tokens are minted principals; a
+delegation that carries an adopted goal is attenuation *of attention*, not just of
+scope.
+
 ## Why now (buffer rationale)
 
 C2 is the third of the three shapes, and the one that closes the "surface tells the

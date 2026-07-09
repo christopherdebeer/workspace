@@ -1,8 +1,10 @@
 # ADR-0073 — The consolidation organ: tending scored on the delta it moves
 
-- **Status:** Proposed 2026-07-09 (buffer — feedback welcome before build). C8 of the
-  second contraction wave (ADR-0067) — the wave's terminal piece: the closed
-  self-maintenance loop. Enters the buffer with every dependency built.
+- **Status:** Accepted 2026-07-09 — Inc 1 shipped as `@c15r/consolidate`
+  (tier-2, cell-sync deployed), first live cycles run on prod: **delta +11**, the
+  first positive consolidation delta on the real backlog; the reward loop fired on
+  its first opportunity. C8 of the second contraction wave (ADR-0067) — the loop,
+  closed.
 - **Context doc:** [`docs/cerebellar-loop.md`](../../cerebellar-loop.md) — Primitive 2
   (the full design); [`compose.md`](../compose.md) §7.
 - **Depends on:** ADR-0070 (reward — the signal this organ *writes*), ADR-0072
@@ -99,10 +101,41 @@ delta > 0` across three consecutive prod cycles on the real backlog — the exac
 failure the 2026-07-08 tending audit records, reversed.
 
 ## Open questions
-1. Cell vs machine-rail: a `@c15r/consolidate` cell, or a `machine/consolidation`
-   DyGram with `work` rails? Proposal: cell first (simpler loop, own logs), machine
-   integration after.
+1. Cell vs machine-rail. **Decided (Inc 1): cell** (`@c15r/consolidate`); machine
+   integration (a tending rail dispatching `run`) is the follow-on.
 2. Reward decay policy (deferred from ADR-0070): proposal — multiply by ~0.9 per
    cycle-touched, floor at 0; revisit with live data.
 3. Does the organ subsume the `tend` audit, or feed it? Proposal: feed —
    `tend` remains the observer of record; the organ is the actor it reports on.
+
+## Implementation log
+
+- **2026-07-09 — Inc 1 shipped** as `cells/consolidate/index.ts` (tier-2;
+  `cells.create` + `cell-sync push --deploy` under a minted, since-revoked deploy
+  token). The organ acts as a **scoped principal**: `run({ token, dryRun? })` takes
+  a narrowed bearer (`read:workspace write:workspace`) and reaches the substrate
+  only through the gateway PEP — the ADR-0022/0024 delegation pattern in practice,
+  and the seam ADR-0074 (principal-adopted goals) extends. `latest` is the one
+  ambient-IAM read. Planning core (`planCycle`) is pure and exported; gate
+  `tests/consolidate-plan.test.ts` (caps · delta scoring · contradictions
+  escalate-only · survivor-only rewards · clean-slice idempotence).
+- **First live cycles (prod).** Dry run scored the real backlog at **1025**
+  (stale 311 · unlinked 409 · dangling 3 · contested 302). Cycle 1 applied 5
+  ratifies + 3 dangling unlinks (and hit the default 10s cell timeout mid-cycle —
+  fixed with `cells.configureCell { timeoutSeconds: 120 }` + redeploy; the audit
+  had landed, so the chain held). Cycle 2 ran clean: **backlog 1014, delta +11** —
+  the first positive consolidation delta on the live corpus (against the 07-08
+  tending audits' frozen/growing pattern) — ratifying, among others, the four
+  val-town protocol docs to their protocol facts (`fix.md ↔ kb/ae96…`,
+  `weave.md ↔ kb/b3fe…`, `improve.md ↔ kb/cdd3…`) — links the weave dispatches
+  never landed. **Dangling: 3 → 0** (a category zeroed on the first pass).
+- **The reward loop fired on its first opportunity:** cycle 2 verified cycle 1's
+  ratifications still held and wrote `reward: 0.5` onto the six surviving
+  endpoints (`via: consolidate.reward`) — the organ now *writes* the signal
+  ADR-0070 gave a home. `consolidation/latest` + a per-run archive carry the audit.
+- **Live findings for Inc 2:** (a) top kinship pairs were *untyped* legacy `el:`
+  mirrors that evade the type-based noise floor — a typing backfill (or key-prefix
+  noise rule in `_config/suggestions`) sharpens SELECT; (b) contested Stage B
+  in-cycle (a metered `models` call for verdicts) remains the next autonomy rung;
+  (c) sequential gateway calls dominate the cycle wall-clock — batch or parallelise
+  under the 120s budget.
