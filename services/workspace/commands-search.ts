@@ -45,7 +45,43 @@ import type { WorkspaceCommands } from './handlers';
 /** High-volume runtime/machine fact types that cluster by *format* rather than meaning
  *  (ADR-0032) — excluded from `suggestions` by default so the candidate list stays
  *  curatable; `includeRuntime: true` surfaces them. */
-const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim', 'canvas-element']);
+const SUGGESTION_RUNTIME_TYPES = new Set([
+  'transcript',
+  'agent-run',
+  'cell',
+  'reindex-status',
+  'audit',
+  'claim',
+  'canvas-element',
+  // The machine vocabulary (ADR-0072 live finding): run/trigger/node facts of the
+  // same machine cluster at cosine ≈0.9999 by format — the first live `contested`
+  // read was 90% these pairs. Plumbing, not meaning; `includeRuntime` re-admits.
+  'machine-run',
+  'machine-trigger',
+  'machine-node',
+  'machine-rail',
+  'trigger',
+]);
+
+/** Reserved key for a scope's suggestion/contested noise policy. The built-in set
+ *  above is only the FALLBACK FLOOR — vocabulary is the protocol, and which types
+ *  are format-clustered plumbing is a property of a slice's own vocabulary, not of
+ *  the platform. A fact here (`{ noiseTypes?: string[], admitTypes?: string[] }`)
+ *  extends the floor (`noiseTypes`) and/or re-admits floor entries (`admitTypes`)
+ *  — open-ended, per-slice, no redeploy. */
+export const SUGGESTIONS_CONFIG_KEY = '_config/suggestions';
+
+/** Resolve the effective noise-type set from the slice's declared config over the
+ *  built-in floor (defensive: unknown shapes are ignored, never fatal). */
+function noiseTypesFor(records: Array<{ key: string; superseded: boolean; value: unknown }>): Set<string> {
+  const out = new Set(SUGGESTION_RUNTIME_TYPES);
+  const cfg = records.find((r) => r.key === SUGGESTIONS_CONFIG_KEY && !r.superseded)?.value as
+    | { noiseTypes?: unknown; admitTypes?: unknown }
+    | undefined;
+  if (Array.isArray(cfg?.noiseTypes)) for (const t of cfg.noiseTypes) if (typeof t === 'string') out.add(t);
+  if (Array.isArray(cfg?.admitTypes)) for (const t of cfg.admitTypes) if (typeof t === 'string') out.delete(t);
+  return out;
+}
 
 /** How an adjudicator writes a contested verdict back — existing verbs only (ADR-0072). */
 const CONTESTED_HINT =
@@ -351,8 +387,9 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
       const typeByKey = new Map(records.map((r) => [r.key, r.type]));
       const labelByKey = new Map(records.map((r) => [r.key, labelForRecord(r.key, r.value)]));
+      const noiseTypes = noiseTypesFor(records); // slice-declared over the floor
       const isNoise = (k: string): boolean =>
-        k.startsWith('_') || SUGGESTION_RUNTIME_TYPES.has(typeByKey.get(k) ?? '');
+        k.startsWith('_') || noiseTypes.has(typeByKey.get(k) ?? '');
       let candidates = suggestionCandidates(edges); // already score-desc
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
       const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => ({
@@ -382,8 +419,9 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const minScore = input?.minScore ?? 0.5;
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
       const byKey = new Map(records.map((r) => [r.key, r]));
+      const noiseTypes = noiseTypesFor(records); // slice-declared over the floor
       const isNoise = (k: string): boolean =>
-        k.startsWith('_') || SUGGESTION_RUNTIME_TYPES.has(byKey.get(k)?.type ?? '');
+        k.startsWith('_') || noiseTypes.has(byKey.get(k)?.type ?? '');
       // A current adjudication: a live `checked/<hash>` marker whose stored versions
       // still match both facts — version drift re-opens the pair (ADR-0066 hashes).
       const markers = new Map<string, { a?: string; b?: string; versions?: Record<string, string> }>();

@@ -256,3 +256,14 @@ C6 → C7 → C8**.
 - **Not a rewrite.** Strangler-fig throughout: the composed verb wraps the existing
   ones, the old names alias for a deprecation window, the parity tests are the
   proof. No data migration — the on-disk facts and edges are untouched.
+- **Not hardcoded vocabulary (owner discipline, 2026-07-09).** A wave that
+  consolidates the surface must not smuggle the *content* of one slice into the
+  platform: type names, tag names, and rel names are **open-world, slice-declared
+  data**, never compiled sets — a compiled set is at best a fallback floor that a
+  `_config/*` or `_types/*` declaration extends or overrides (the
+  `_config/suggestions` noise policy is the template; `_config/salience` the
+  precedent). The exception is *structural* kinds bounded by a code seam — the
+  declaration kinds (`action`/`view`/`subscription`) are closed **because each has
+  a bespoke evaluate implementation** (the ADR-0001 boundary), not because the
+  vocabulary is assumed. When in doubt: if adding an entry would not require new
+  code, it must be declarable.

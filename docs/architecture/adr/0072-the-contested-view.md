@@ -1,8 +1,8 @@
 # ADR-0072 — The `_contested` view: a two-stage contradiction read
 
-- **Status:** Accepted 2026-07-09 — Inc 1 (Stage A + the idempotence contract)
-  shipped behind its gate; prod deploy dispatched (live Stage B recorded in the
-  implementation log as it lands). C7 of the second contraction wave (ADR-0067).
+- **Status:** Accepted 2026-07-09 — Inc 1 shipped, deployed to prod (run 29011714951),
+  Stage B adjudicated live (verdicts written, idempotence verified). C7 of the second
+  contraction wave (ADR-0067).
 - **Context doc:** [`docs/cerebellar-loop.md`](../../cerebellar-loop.md) — Primitive 1
   (the full design); [`compose.md`](../compose.md) §7.
 - **Depends on:** ADR-0069 (edges — the `contradicts` rel rides the same EdgeRecord),
@@ -109,6 +109,24 @@ never unbounded).
   (same type or shared tag), cosine floor, authored-pair exclusion, noise filter,
   `checked/<hash>` idempotence, **version-drift re-open**, limit-vs-total. Full
   suite 596 green.
-- **Prod deploy dispatched** (Deploy CDK on the branch head); the live Stage B run —
-  executing the contested read against the real slice, adjudicating pairs, and
-  verifying idempotence — is recorded below as it lands.
+- **Deployed to prod + Stage B run live (2026-07-09).** The first live read returned
+  436 candidates. Two adjudicated with existing verbs, both exit paths proven:
+  - **duplicate (real find):** `inbox/arch-2023-11-17-1` ↔ `inbox/arch-2023-11-18-1`
+    — the same capture (newhouseb/clownfish) archived twice on consecutive days,
+    cosine 0.99997. Verdict marker written; the later copy **superseded by** the
+    earlier (`migrateLinks`) — the pair left the read *structurally* (both-live
+    filter), the first live consolidation action of the wave.
+  - **independent:** a `machine/tending` run ↔ its own trigger — two roles of one
+    execution, related plumbing, not divergent claims. `checked/<hash>` marker
+    written; re-read showed `checked: 1` and the pair gone — **idempotence verified
+    live** (total 436 → 434 via the two distinct exit paths).
+- **Live finding → filter hardened, then de-hardcoded (owner aside).** The first
+  read was ~90% machine-vocabulary pairs (run/trigger/node clustering at cosine
+  ≈0.9999 by *format*). First fix widened the compiled noise set — which the owner
+  correctly flagged as **hardcoding one slice's type names into the platform**.
+  Final form: the noise set resolves from a slice-declared **`_config/suggestions`**
+  fact (`{ noiseTypes?, admitTypes? }`) merged over the built-in floor — open-ended,
+  per-slice, no redeploy; shared by `contested` *and* `suggestions`; gated in
+  `tests/contested-read.test.ts`. The principle is recorded as wave discipline in
+  `compose.md` §8. Rides the next deploy; exactly the calibration data the C8 organ
+  ADR (0073) wanted.

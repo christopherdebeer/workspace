@@ -106,4 +106,16 @@ describe('ADR-0072 — the contested read (Stage A)', () => {
     expect(res.candidates).toHaveLength(1);
     expect(res.total).toBe(2);
   });
+
+  it('noise types are slice-declared (_config/suggestions), not only hardcoded', async () => {
+    // Declare a slice-local noise type: the built-in set is only the floor.
+    await cmds.remember({ key: '_config/suggestions', value: { noiseTypes: ['decision'] } }, ctx);
+    let res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('k/e', 'k/f')); // k/f is a decision → now noise
+    // …and admitTypes re-admits a floor entry the same open-ended way.
+    await cmds.remember({ key: '_config/suggestions', value: { noiseTypes: ['decision'], admitTypes: ['decision'] } }, ctx);
+    res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).toContain(pairKey('k/e', 'k/f'));
+    await cmds.supersede({ key: '_config/suggestions' }, ctx);
+  });
 });

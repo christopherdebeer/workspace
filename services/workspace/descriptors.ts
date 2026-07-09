@@ -440,7 +440,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         limit: { type: 'number', description: 'Cap on candidates returned (1–50, default 10) — adjudication is metered' },
         minScore: { type: 'number', description: 'Cosine floor (default 0.5) — contradiction candidates should be close, not merely related' },
-        includeRuntime: { type: 'boolean', description: 'Include runtime/machine fact types filtered out by default' },
+        includeRuntime: { type: 'boolean', description: 'Include format-clustered noise types. The noise set is slice-declared: `_config/suggestions` `{ noiseTypes?, admitTypes? }` over a built-in floor — vocabulary, not hardcoding.' },
       },
       additionalProperties: false,
     },
