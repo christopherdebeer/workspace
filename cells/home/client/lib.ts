@@ -4,7 +4,7 @@
  * origin-aware link localisation, and the painted-asset URLs.
  */
 import * as React from 'react';
-import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl } from './bridge';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSessionCookie, cellUrl } from './bridge';
 
 /**
  * Make an apex-style `/@owner/name<rest>` link origin-aware. Home now runs as a
@@ -41,6 +41,14 @@ export interface Session {
  * and re-resolves identity from the same `whoami` an agent sees — the human and
  * the agent reading one identity. Returns helpers so the header can offer sign
  * in / sign out.
+ *
+ * The SSR verdict is AUTHORITATIVE, not a hint (owner direction 2026-07-10):
+ * dispatch already validated the session cookie server-side, so the client only
+ * *corrects* it on definitive evidence — a 401/403 from whoami (token truly
+ * dead) or no client token at all. A transient failure (network, 5xx) keeps
+ * the seeded state instead of bouncing a signed-in visitor to the landing.
+ * The mount also re-mirrors the session cookie, so the SSR fork stays right on
+ * the NEXT navigation even after the cookie's 1h Max-Age lapses.
  */
 export function useAuth(initial?: Session): Session & { signIn: () => void; signOut: () => void } {
   const [s, setS] = useState<Session>(initial ?? { ready: false, user: null, scopes: [], error: null });
@@ -55,6 +63,7 @@ export function useAuth(initial?: Session): Session & { signIn: () => void; sign
         error = (e as Error).message;
       }
       if (isAuthed()) {
+        refreshSessionCookie();
         try {
           // Identity via the `whoami` MCP tool over POST /mcp — the CORS-enabled
           // endpoint (the bare GET /mcp/whoami isn't CORS'd for cell origins, so
@@ -75,10 +84,20 @@ export function useAuth(initial?: Session): Session & { signIn: () => void; sign
             if (live) setS({ ready: true, user: b.user ?? b.userId ?? 'signed in', scopes: b.scopes ?? [], error });
             return;
           }
+          if (res.status !== 401 && res.status !== 403) {
+            // Transient (5xx, gateway hiccup): the token isn't disproven — keep
+            // the SSR-seeded identity rather than flashing the landing.
+            if (live) setS((prev) => ({ ...prev, ready: true, error: error ?? `whoami HTTP ${res.status}` }));
+            return;
+          }
         } catch (e) {
+          // Network failure: same judgement — keep the seed.
           error = error ?? (e as Error).message;
+          if (live) setS((prev) => ({ ...prev, ready: true, error }));
+          return;
         }
       }
+      // No client token, or whoami said 401/403: genuinely signed out.
       if (live) setS({ ready: true, user: null, scopes: [], error });
     })();
     return () => {

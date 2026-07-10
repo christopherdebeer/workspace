@@ -16,13 +16,10 @@ export const ink = {
   dim: '#9a917f',
   accent: '#f5c453',
   mono: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  /** The graph scene: the dusk ground and the warm-light strokes drawn on it. */
-  sceneBg: '#241f18',
-  sceneBgLift: '#3a3428',
+  /** The graph scene: the night ground and the warm-light strokes drawn on it. */
+  sceneBg: '#1b1710',
   edge: '#cfc4aa',
   edgeAuthored: '#e8ddc2',
-  edgeLabel: '#bfb49a',
-  nodeHalo: '#2e2a22',
   danger: '#e8a0a0',
 } as const;
 

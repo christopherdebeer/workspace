@@ -1,7 +1,13 @@
 /**
- * FullGraph (ADR-0047, v4) — home's primary surface: the WHOLE substrate slice
- * as a full-viewport force graph. The graph IS the workspace; everything else
- * floats over it.
+ * FullGraph (ADR-0047, v5) — home's primary surface: the WHOLE substrate slice
+ * as a full-viewport 3D constellation. The graph IS the workspace; everything
+ * else floats over it.
+ *
+ * v5 (owner direction, 2026-07-10): the 2D canvas map is GONE — the three.js
+ * explore mode is the graph, not a mode. One renderer to refine instead of two
+ * to keep visually consistent; the semantic [x,y,z] projection was always the
+ * fuller signal (the map flattened its third axis away). d3 (the 2D force sim)
+ * is no longer loaded at all.
  *
  * Data: `workspace.query {rankBy:'salience'}` (no limit) loads the entire slice,
  * `workspace.graph` supplies the full Reference projection (authored + derived),
@@ -16,43 +22,21 @@
  * labelled; the periphery is loaded but recedes to a dim wash. Selection and
  * console highlights override this resting state.
  *
- * v4 (perf): the renderer is CANVAS, not SVG. At ~1.2k nodes / ~9k edges an SVG
- * DOM (a node per <circle>, a label per <g>, an edge per <line>) is the mobile
- * bottleneck — thousands of elements restyled every simulation tick. Canvas
- * draws the whole scene in one pass per animation frame, with viewport CULLING
- * (off-screen nodes/edges skipped) and zoom LEVEL-OF-DETAIL (the `similarTo`
- * constellation and edge `rel` labels only past a zoom threshold; off-band
- * labels only when zoomed in). Hit-testing is `sim.find` over a quadtree. No
- * fidelity is dropped — the same nodes and edges are drawn, just cheaply and
- * with detail on demand.
+ * Layout is SEMANTIC: `workspace.project` writes `_home/embed2d` — each fact's
+ * [x,y,z] place in embedding meaning-space (PCA over its Titan vector) — and
+ * nodes sit at that coordinate scaled into the scene (a scattered ring when a
+ * fact has none). A fact's position is its *meaning*, not a force equilibrium.
  *
- * Layout is SEMANTIC when a projection exists (ADR-0047 stage 2): `workspace.project`
- * writes `_home/embed2d` — each fact's 2D place in embedding meaning-space (PCA
- * over its Titan vector) — and the client places nodes there, the sim only
- * pulling each toward its coordinate (forceX/Y) while collide unstacks labels.
- * A fact's position is then its *meaning*, not an edge-force equilibrium, and the
- * sim barely runs. Absent (or if a projection covers <half the slice), it falls
- * back to the edge-driven force layout (charge/link/center).
- *
- * 3D explore mode: a toggle (top-right) swaps the 2D canvas for a raw three.js
- * scene where nodes sit at their full [x,y,z] semantic coordinate — the 3rd
- * principal axis, flattened away in the map, becomes depth you orbit. Rendered
- * as a luminous additive point cloud (one draw call) with additive backbone
- * edges (`similarTo` dropped — proximity already says it), UnrealBloom (desktop),
- * ACES tone mapping, focal depth-fade for atmosphere, a star-map camera
- * (camera-controls: dolly-to-cursor, fly-through, fitToSphere framing) with idle
- * auto-rotate, and CSS2D labels (focus band + selection, distance-faded).
- * The 2D map stays the default.
- *
- * Labels: EVERY node is labelled, centered BELOW the node over up to two wrapped
- * lines; the label block participates in the sim (a node's collide radius covers
- * the text below it, so labels don't stack). Selection PINS the node at viewport
- * center and pans the camera onto it, so the neighbours a selection pulls in
- * (one-hop expand) arrange around it and it stays centered.
+ * The scene: a luminous additive point cloud (one draw call) with additive
+ * backbone edges (`similarTo` dropped — proximity already says it), UnrealBloom
+ * (desktop), ACES tone mapping, a camera-aimed TORCH falloff for atmosphere,
+ * a star-map camera (camera-controls: dolly-to-cursor, fly-through, fitToSphere
+ * framing on select) with idle auto-rotate, and CSS2D labels lit by the beam
+ * (plus the selection/highlight set, always).
  */
 import * as React from 'react';
 import { mcpCall } from './lib';
-import { openFact, factTitle, type ListEntry } from './facts';
+import { factTitle, type ListEntry } from './facts';
 import { ink } from './ink';
 
 const { useEffect, useRef, useState } = React;
@@ -75,9 +59,6 @@ interface GEdge {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-let d3Mod: Promise<any> | null = null;
-const loadD3 = (): Promise<any> => (d3Mod ??= import(/* @vite-ignore */ 'https://cdn.jsdelivr.net/npm/d3@7/+esm').catch(() => null));
-
 const hueOf = (t: string): number => {
   let h = 0;
   for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 360;
@@ -102,9 +83,8 @@ function edgeStyle(e: GEdge): EdgeStyle {
  * Degree-of-Interest (Furnas) — ONE continuous [0,1] emphasis per node, the
  * unified "focus+context" signal that drives opacity, size, labels, and edge
  * brightness alike (so they can't disagree). It blends intrinsic salience with
- * graph-focus (the current selection/highlight neighbourhood). The renderers
- * layer their own SPATIAL focal falloff on top — the 3D shader by world distance
- * to the camera target; 2D is a flat map, so it has none. Selection lifts a
+ * graph-focus (the current selection/highlight neighbourhood). The renderer
+ * layers its SPATIAL focal falloff (the torch) on top. Selection lifts a
  * node's DOI above any spatial penalty, so a selected node's neighbour reads as
  * focused even when it's far from the camera (the disagreement the old stacked
  * dimmers had).
@@ -117,21 +97,6 @@ function nodeDOI(n: any, selKey: string | null, nbr: Set<string> | null, hiSet: 
 }
 
 const shortLabel = (s: string): string => (s.length > 26 ? s.slice(0, 25) + '…' : s);
-
-/** Wrap a title into up to two centered lines (~16 chars each) for the
- *  below-node label — breaking on a word boundary where possible, ellipsising
- *  the overflow. Labels always show now, so long titles must not run off. */
-function wrapLabel(s: string): string[] {
-  const MAX = 16;
-  const t = s.trim();
-  if (t.length <= MAX) return [t];
-  let cut = t.lastIndexOf(' ', MAX);
-  if (cut <= 0) cut = MAX; // no space to break on — hard-wrap
-  const line1 = t.slice(0, cut).trim();
-  let line2 = t.slice(cut).trim();
-  if (line2.length > MAX) line2 = line2.slice(0, MAX - 1) + '…';
-  return [line1, line2];
-}
 
 /** Extract fact keys from an arbitrary console result (search/query/recall/
  *  neighbors/single-fact shapes) — best-effort, empty = no graph reaction. */
@@ -158,8 +123,8 @@ function keysOfResult(value: unknown): string[] {
  *  scatter edgeless satellites across the graph. */
 const isPlumbing = (e: ListEntry): boolean => e.key.startsWith('_') || (e._meta?.type ?? '') === 'canvas-placement';
 
-/** Errors thrown inside d3-dispatched handlers surface as a masked
- *  "Script error." on Safari (the dispatch frames are cross-origin CDN code).
+/** Errors thrown inside externally-dispatched handlers (event listeners fed by
+ *  cross-origin CDN code) surface as a masked "Script error." on Safari.
  *  Re-reporting from this same-origin module keeps the message + stack. */
 function guard<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
   return (...a: A) => {
@@ -180,9 +145,8 @@ interface GraphModel {
   focusKeys: Set<string>;
 }
 
-/** Load the whole slice + projection into a render-ready model — shared by the
- *  2D canvas and 3D WebGL renderers so they agree on nodes, edges, the focus
- *  band, and the semantic coordinates. */
+/** Load the whole slice + projection into a render-ready model: nodes, edges,
+ *  the focus band, and the semantic coordinates. */
 async function fetchGraphModel(): Promise<GraphModel> {
   const [nodesRes, cfgRes, layoutRes] = await Promise.all([
     mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
@@ -209,7 +173,6 @@ async function fetchGraphModel(): Promise<GraphModel> {
     type: e._meta?.type ?? null,
     score: Number(e._meta?.score) || 0,
     label: shortLabel(factTitle(e)),
-    lines: wrapLabel(factTitle(e)),
     deg: deg.get(e.key) ?? 0,
   }));
   const layoutV = (layoutRes && layoutRes.ok ? (layoutRes.value as { value?: { coords?: Record<string, number[]> } } | null)?.value : null) ?? null;
@@ -224,534 +187,6 @@ async function fetchGraphModel(): Promise<GraphModel> {
   const links: any[] = edges.map((e) => ({ id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived }));
   const nodeById = new Map<string, any>(nodes.map((n) => [n.id, n]));
   return { nodes, links, nodeById, coordMap, focusKeys };
-}
-
-function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void; visible: number }): React.JSX.Element {
-  const host = useRef<HTMLDivElement | null>(null);
-  const selectRef = useRef(onSelect);
-  selectRef.current = onSelect;
-  // The imperative surface the effects below share (built once the sim mounts).
-  const api = useRef<{ select: (key: string | null, pan?: boolean) => void; setVisible: (f: number) => void } | null>(null);
-  const lastExternal = useRef<string | null>(null);
-
-  useEffect(() => {
-    const el = host.current;
-    if (!el) return;
-    let disposed = false;
-    let sim: any = null;
-    let ro: ResizeObserver | null = null;
-    let onResult: ((ev: Event) => void) | null = null;
-
-    (async () => {
-      // Load the WHOLE slice (card-shaped — titles + salience, not bodies) and
-      // the whole Reference projection. `query` with no limit returns every
-      // ranked fact; `graph {}` (no keys) returns every edge — the focus band is
-      // lifted out of the full graph client-side. The viewer's `_config/salience`
-      // gives the real focus threshold (default 0.5) so the band means *their*
-      // focus tier.
-      const [model, d3] = await Promise.all([fetchGraphModel(), loadD3()]);
-      if (disposed) return;
-      if (!d3) {
-        el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">graph renderer unavailable (offline?)</div>';
-        return;
-      }
-      // nodes/links are MUTABLE — selection pulls a node's off-band neighbourhood
-      // into the live sim (ADR-0047's one-hop expand).
-      const { nodes, links, nodeById, coordMap, focusKeys } = model;
-      const linkIds = new Set<string>(links.map((l) => l.id));
-      const expanded = new Set<string>();
-
-      let W = el.clientWidth || window.innerWidth;
-      let H = el.clientHeight || window.innerHeight;
-      let dpr = window.devicePixelRatio || 1;
-
-      // ── the canvas ──
-      el.innerHTML = '';
-      const canvas = document.createElement('canvas');
-      canvas.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
-      el.appendChild(canvas);
-      const ctx = canvas.getContext('2d')!;
-      const sizeCanvas = (): void => {
-        dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.round(W * dpr));
-        canvas.height = Math.max(1, Math.round(H * dpr));
-      };
-      sizeCanvas();
-
-      const canvasSel = d3.select(canvas);
-      let curT: any = d3.zoomIdentity;
-
-      const r = (d: any): number => 4 + d.score * 13 + Math.min(6, Math.sqrt(d.deg) * 1.4);
-      const inFocus = (d: any): boolean => !!d && focusKeys.has(d.id);
-      // Salience visibility: show the top `visCount` by rank (never fewer than the
-      // focus band). Ghost/expand satellites always show. Set by the slider.
-      const minVis = focusKeys.size;
-      let visCount = nodes.length;
-      const isVis = (d: any): boolean => !!d && (d.ghost || d.rank === undefined || d.rank < visCount);
-      // Labels: centered below the node over up to two lines; the collision
-      // footprint covers the text block below (height) and out to its half-width,
-      // so the always-on labels don't stack.
-      const labelW = (d: any): number => Math.max(...d.lines.map((l: string) => l.length)) * 6;
-      const labelH = (d: any): number => d.lines.length * 11 + 4;
-      const collideR = (d: any): number => Math.max(r(d) + labelH(d), labelW(d) / 2 + 2, r(d) + 6);
-      const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
-
-      // ── selection + highlight state ──
-      let selKey: string | null = null;
-      let nbrSet: Set<string> | null = null;
-      let hiSet: Set<string> | null = null;
-      // The node currently pinned at viewport center (the live selection). Only
-      // one at a time; released when selection changes/clears or it's dragged.
-      let pinned: any = null;
-      const touchesSel = (l: any): boolean => !!selKey && (idOf(l.source) === selKey || idOf(l.target) === selKey);
-      const neighborsOf = (key: string): Set<string> => {
-        const out = new Set<string>();
-        for (const l of links) {
-          if (idOf(l.source) === key) out.add(idOf(l.target));
-          else if (idOf(l.target) === key) out.add(idOf(l.source));
-        }
-        return out;
-      };
-
-      // ── per-element emphasis, all derived from ONE degree-of-interest ──
-      // (2D is a flat map, so DOI is the whole story — no spatial focal term.)
-      const doi = (n: any): number => nodeDOI(n, selKey, nbrSet, hiSet, nodes.length);
-      const nodeAlpha = (n: any): number => 0.08 + 0.9 * doi(n); // faint floor keeps context visible
-      const nodeRing = (n: any): { stroke: string; width: number } =>
-        n.id === selKey ? { stroke: ink.accent, width: 3 }
-        : selKey && nbrSet?.has(n.id) ? { stroke: ink.edgeAuthored, width: 1.6 }
-        : hiSet?.has(n.id) ? { stroke: ink.accent, width: 2 }
-        : { stroke: ink.nodeHalo, width: 1 };
-      const edgeAlpha = (l: any): number => {
-        // An edge earns brightness from its LEAST interesting endpoint — an edge
-        // into the periphery is periphery. (Max let every hub radiate its whole
-        // degree at rest, which is what painted the wash.) Selection still lifts
-        // its own edges outright.
-        const d = Math.min(doi(l.source), doi(l.target));
-        return Math.min(0.98, edgeStyle(l).opacity * (0.05 + 0.95 * d) + (touchesSel(l) ? 0.3 : 0));
-      };
-      const labelAlpha = (n: any): number => 0.12 + 0.88 * doi(n);
-      // Labels are rank-budgeted: at rest only the top of the salience order
-      // speaks (a phone gets a smaller budget than a desktop), and zooming in
-      // grows the budget quadratically — detail on demand, not all at once. The
-      // selection neighbourhood and console highlights are always labelled.
-      // (The old rule — the whole focus band + everything past k≥1.1 — put
-      // ~150 colliding labels on screen at rest.)
-      const LABEL_BUDGET = Math.min(W, H) < 700 ? 16 : 36;
-      const labelShown = (n: any): boolean =>
-        n.id === selKey || !!nbrSet?.has(n.id) || !!hiSet?.has(n.id) ||
-        (n.rank ?? Infinity) < LABEL_BUDGET * curT.k * curT.k;
-
-      // ── the draw loop (one pass per animation frame) ──
-      let drawScheduled = false;
-      function requestDraw(): void {
-        if (drawScheduled || disposed) return;
-        drawScheduled = true;
-        requestAnimationFrame(() => {
-          drawScheduled = false;
-          draw();
-        });
-      }
-
-      function draw(): void {
-        if (disposed) return;
-        // Base transform = DPR; world transform (pan/zoom) layered on top, so
-        // everything below is authored in world coordinates.
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, W, H);
-        ctx.translate(curT.x, curT.y);
-        ctx.scale(curT.k, curT.k);
-
-        // Visible world rect (+margin for radius/label overflow) — the cull test.
-        const M = 80 / curT.k;
-        const [vx0, vy0] = curT.invert([0, 0]);
-        const [vx1, vy1] = curT.invert([W, H]);
-        const minX = vx0 - M, maxX = vx1 + M, minY = vy0 - M, maxY = vy1 + M;
-        const visible = (n: any): boolean => n.x >= minX && n.x <= maxX && n.y >= minY && n.y <= maxY;
-
-        const k = curT.k;
-        // The faint similarTo web is a zoomed-IN texture: at rest (k≈1) it read
-        // as noise over the whole slice, so it now waits for a real zoom — the
-        // same judgement the 3D mode makes by dropping similarTo entirely
-        // (proximity already says it).
-        const showConstellation = k >= 1.2;
-        const showEdgeLabels = k >= 1.3;
-
-        // ── edges ──
-        ctx.lineCap = 'round';
-        for (const l of links) {
-          if (l.rel === 'similarTo' && !showConstellation) continue;
-          const s = l.source, t = l.target;
-          if (!s || !t || typeof s !== 'object') continue;
-          if (!isVis(s) || !isVis(t)) continue; // salience slider
-          // Segment-bbox vs viewport cull.
-          if (Math.max(s.x, t.x) < minX || Math.min(s.x, t.x) > maxX || Math.max(s.y, t.y) < minY || Math.min(s.y, t.y) > maxY) continue;
-          const st = edgeStyle(l);
-          ctx.globalAlpha = edgeAlpha(l);
-          ctx.strokeStyle = st.stroke;
-          ctx.lineWidth = st.width + (touchesSel(l) ? 0.8 : 0);
-          ctx.setLineDash(st.dash ?? []);
-          ctx.beginPath();
-          ctx.moveTo(s.x, s.y);
-          ctx.lineTo(t.x, t.y);
-          ctx.stroke();
-        }
-        ctx.setLineDash([]);
-
-        // ── edge rel labels (LOD: zoomed in, or the selection's own edges) ──
-        if (showEdgeLabels || selKey) {
-          ctx.font = '7.5px ui-monospace, monospace';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.lineJoin = 'round';
-          for (const l of links) {
-            if (l.rel === 'similarTo') continue;
-            if (selKey ? !touchesSel(l) : !showEdgeLabels) continue;
-            const s = l.source, t = l.target;
-            if (!s || !t || typeof s !== 'object') continue;
-            if (!isVis(s) || !isVis(t)) continue;
-            const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2 - 2;
-            if (mx < minX || mx > maxX || my < minY || my > maxY) continue;
-            ctx.globalAlpha = selKey && touchesSel(l) ? 0.95 : 0.8;
-            ctx.strokeStyle = ink.sceneBg;
-            ctx.lineWidth = 2.5 / k;
-            ctx.strokeText(l.rel, mx, my);
-            ctx.fillStyle = ink.edgeLabel;
-            ctx.fillText(l.rel, mx, my);
-          }
-        }
-
-        // ── nodes ──
-        for (const n of nodes) {
-          if (!visible(n) || !isVis(n)) continue;
-          const rad = r(n);
-          ctx.globalAlpha = nodeAlpha(n);
-          ctx.fillStyle = nodeColor(n.type);
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, rad, 0, Math.PI * 2);
-          ctx.fill();
-          const ring = nodeRing(n);
-          ctx.lineWidth = ring.width;
-          ctx.strokeStyle = ring.stroke;
-          ctx.stroke();
-        }
-
-        // ── labels (centered below the node, up to two lines) ──
-        ctx.font = '10px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.lineJoin = 'round';
-        for (const n of nodes) {
-          if (!visible(n) || !isVis(n) || !labelShown(n)) continue;
-          const top = n.y + r(n) + 4;
-          ctx.globalAlpha = labelAlpha(n);
-          ctx.strokeStyle = ink.sceneBg;
-          ctx.lineWidth = 3;
-          ctx.fillStyle = ink.text;
-          for (let i = 0; i < n.lines.length; i++) {
-            const ly = top + i * 11;
-            ctx.strokeText(n.lines[i], n.x, ly);
-            ctx.fillText(n.lines[i], n.x, ly);
-          }
-        }
-        ctx.globalAlpha = 1;
-      }
-
-      // ── hit-testing (screen → world → nearest node) ──
-      const pickAt = (sx: number, sy: number): any => {
-        const [wx, wy] = curT.invert([sx, sy]);
-        return sim ? sim.find(wx, wy, 28 / curT.k) : undefined;
-      };
-      const pickEvent = (ev: any): any => {
-        const [sx, sy] = d3.pointer(ev, canvas);
-        return pickAt(sx, sy);
-      };
-
-      // ── zoom / pan (pan only on empty space; a node grabs the drag instead) ──
-      const zoom = d3
-        .zoom()
-        .scaleExtent([0.15, 4])
-        .filter((ev: any) => {
-          if (ev.type === 'wheel') return true;
-          if (ev.touches && ev.touches.length > 1) return true; // pinch always zooms
-          if (ev.button) return false;
-          return !pickEvent(ev); // empty space → pan; on a node → let drag win
-        })
-        .on('zoom', guard((ev: any) => {
-          curT = ev.transform;
-          requestDraw();
-        }));
-      canvasSel.call(zoom).on('dblclick.zoom', null); // double-tap opens a fact, not zoom
-
-      // ── node drag ──
-      // Subject = the node under the pointer. Position is taken from the RAW
-      // pointer mapped through the current transform each move (not d3-drag's
-      // event.x — that mixes the subject's world coords with screen deltas and
-      // drifts under zoom).
-      let dragMoved = false;
-      const drag = d3
-        .drag()
-        .container(canvas)
-        .subject((ev: any) => pickEvent(ev.sourceEvent ?? ev) ?? null)
-        .on('start', guard((ev: any) => {
-          dragMoved = false;
-          sim.alphaTarget(0.25).restart();
-          ev.subject.fx = ev.subject.x;
-          ev.subject.fy = ev.subject.y;
-        }))
-        .on('drag', guard((ev: any) => {
-          dragMoved = true;
-          const [sx, sy] = d3.pointer(ev.sourceEvent, canvas);
-          const [wx, wy] = curT.invert([sx, sy]);
-          ev.subject.fx = wx;
-          ev.subject.fy = wy;
-          requestDraw();
-        }))
-        .on('end', guard((ev: any) => {
-          sim.alphaTarget(0);
-          if (dragMoved) {
-            // A real reposition — release so it rejoins the layout.
-            ev.subject.fx = null;
-            ev.subject.fy = null;
-          } else {
-            // A tap, not a drag — select it (which re-pins + centers).
-            api.current?.select(ev.subject.id);
-          }
-        }));
-      canvasSel.call(drag);
-
-      canvasSel.on('pointerdown', () => { dragMoved = false; });
-      canvasSel.on('click', guard((ev: any) => {
-        if (dragMoved) return; // the drag already handled a node tap
-        if (!pickEvent(ev)) api.current?.select(null); // empty tap clears
-      }));
-      canvasSel.on('dblclick.open', guard((ev: any) => {
-        const n = pickEvent(ev);
-        if (n) openFact({ key: n.id } as ListEntry);
-      }));
-      // Native tooltip on hover (canvas can't carry per-node <title>).
-      canvasSel.on('mousemove', guard((ev: any) => {
-        const n = pickEvent(ev);
-        canvas.title = n ? `${n.id}${n.type ? ` · ${n.type}` : ''}` : '';
-      }));
-
-      /** One-hop expand: pull the selected fact's off-band neighbours into the
-       *  live sim as small "ghost" satellites, then stitch EVERY projection edge
-       *  whose two ends are now both visible. Once per key; plumbing filtered. */
-      async function expand(key: string): Promise<void> {
-        if (expanded.has(key) || !nodeById.has(key)) return;
-        expanded.add(key);
-        const res = await mcpCall('read', 'workspace.neighbors', { key, shape: 'card' });
-        if (disposed || !res.ok) return;
-        const v = res.value as { outbound?: Array<{ to?: string; rel: string; derived?: boolean }>; inbound?: Array<{ from?: string; rel: string; derived?: boolean }>; entries?: Record<string, ListEntry> } | null;
-        const anchor = nodeById.get(key);
-        const far: string[] = [];
-        for (const e of v?.outbound ?? []) if (e.to) far.push(e.to);
-        for (const e of v?.inbound ?? []) if (e.from) far.push(e.from);
-        const newKeys: string[] = [];
-        let added = 0;
-        for (const [i, k] of far.entries()) {
-          if (added >= 8) break;
-          if (nodeById.has(k)) continue;
-          const entry = { ...(v?.entries?.[k] ?? {}), key: k } as ListEntry;
-          if (isPlumbing(entry)) continue;
-          const gx = (anchor?.x ?? W / 2) + Math.cos(i * 2.399) * 90;
-          const gy = (anchor?.y ?? H / 2) + Math.sin(i * 2.399) * 90;
-          const n = {
-            id: k,
-            type: entry._meta?.type ?? null,
-            score: Number(entry._meta?.score) || 0.05,
-            label: shortLabel(factTitle(entry)),
-            lines: wrapLabel(factTitle(entry)),
-            deg: 1,
-            ghost: true,
-            x: gx,
-            y: gy,
-            // A pulled-in neighbour has no semantic coord — anchor it (weakly) near
-            // where it spawned so it doesn't yank to origin under the x/y forces.
-            sx: gx - W / 2,
-            sy: gy - H / 2,
-            hasSem: false,
-          };
-          nodes.push(n as any);
-          nodeById.set(k, n);
-          newKeys.push(k);
-          added++;
-        }
-        const stitch = (from: string | undefined, to: string | undefined, rel: string, derived?: boolean): void => {
-          if (!from || !to || !nodeById.has(from) || !nodeById.has(to)) return;
-          const id = `${from}|${rel}|${to}`;
-          if (linkIds.has(id)) return;
-          linkIds.add(id);
-          links.push({ id, source: from, target: to, rel, derived });
-        };
-        for (const e of v?.outbound ?? []) stitch(key, e.to, e.rel, e.derived);
-        for (const e of v?.inbound ?? []) stitch(e.from, key, e.rel, e.derived);
-        if (newKeys.length) {
-          const around = await mcpCall('read', 'workspace.graph', { keys: newKeys });
-          if (disposed) return;
-          if (around.ok) {
-            for (const e of ((around.value as { edges?: GEdge[] })?.edges ?? []) as GEdge[]) stitch(e.from, e.to, e.rel, e.derived);
-          }
-        }
-        sim.nodes(nodes);
-        sim.force('link')?.links(links); // absent in semantic layout (no edge force)
-        if (selKey) nbrSet = neighborsOf(selKey);
-        sim.alpha(0.3).restart();
-        setTimeout(() => sim?.stop(), 4000);
-      }
-
-      const panTo = (d: any): void => {
-        canvasSel.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(W / 2 - curT.k * d.x, H / 2 - curT.k * d.y).scale(curT.k));
-      };
-      const fitTo = (keys: Set<string>): void => {
-        const pts = nodes.filter((n: any) => keys.has(n.id));
-        if (!pts.length) return;
-        const xs = pts.map((p: any) => p.x), ys = pts.map((p: any) => p.y);
-        const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
-        const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
-        const k = Math.min(3, 0.9 / Math.max((maxX - minX) / W, (maxY - minY) / H));
-        canvasSel.transition().duration(600).call(zoom.transform, d3.zoomIdentity.translate(W / 2 - k * (minX + maxX) / 2, H / 2 - k * (minY + maxY) / 2).scale(k));
-      };
-      api.current = {
-        select: (key: string | null, _pan = false) => {
-          lastExternal.current = key; // a tap-select's prop echo must not re-fire
-          // Release the previous pin — only one node is held at center at a time.
-          if (pinned && pinned.id !== key) {
-            pinned.fx = null;
-            pinned.fy = null;
-            pinned = null;
-          }
-          selKey = key;
-          nbrSet = key ? neighborsOf(key) : null;
-          if (key) hiSet = null; // an explicit selection clears a result highlight
-          const d = key ? nodes.find((n: any) => n.id === key) : null;
-          if (d && Number.isFinite(d.x) && Number.isFinite(d.y)) {
-            // Keep the selection centered: pin it where it is and pan the camera
-            // onto it, so the neighbours expand() pulls in arrange AROUND it and
-            // it stays put instead of drifting with the layout.
-            pinned = d;
-            d.fx = d.x;
-            d.fy = d.y;
-            panTo(d);
-          }
-          requestDraw();
-          if (key) void expand(key).catch((err) => (window.reportError ?? console.error)(err));
-          selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
-        },
-        setVisible: (f: number) => {
-          visCount = f >= 0.999 ? nodes.length : Math.max(minVis, Math.round(nodes.length * f));
-          requestDraw();
-        },
-      };
-
-      // Console results (search / query / recall / neighbors) light up the graph
-      // and the camera fits to them — the palette drives the territory.
-      onResult = guard((ev: Event): void => {
-        const detail = (ev as CustomEvent<{ ok: boolean; value: unknown }>).detail;
-        if (!detail?.ok) return;
-        const keys = keysOfResult(detail.value).filter((k) => nodeById.has(k));
-        if (!keys.length) return;
-        hiSet = new Set(keys);
-        selKey = null;
-        nbrSet = null;
-        requestDraw();
-        fitTo(hiSet);
-      });
-      window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
-
-      // Seed positions. In SEMANTIC mode each node carries `sx,sy` — a world
-      // offset from center derived from its meaning-space coordinate — and starts
-      // there; the sim then only pulls it back toward that anchor while collide
-      // declutters overlapping labels. Nodes without a coordinate (or when there's
-      // no layout) scatter and, in force mode, settle by the edge forces.
-      const SPREAD = Math.min(W, H) * 0.42;
-      let semCount = 0;
-      for (let i = 0; i < nodes.length; i++) {
-        const n = nodes[i];
-        const c = coordMap?.[n.id];
-        if (c) {
-          n.sx = c[0] * SPREAD;
-          n.sy = c[1] * SPREAD;
-          n.hasSem = true;
-          semCount++;
-        } else {
-          n.sx = Math.cos(i * 2.3999) * 40;
-          n.sy = Math.sin(i * 2.3999) * 40;
-          n.hasSem = false;
-        }
-        n.x = W / 2 + n.sx + ((i * 37) % 11) - 5;
-        n.y = H / 2 + n.sy + ((i * 53) % 11) - 5;
-      }
-      // Use the semantic layout only when it actually covers the slice — a stale
-      // or partial projection shouldn't strand half the graph at the origin.
-      const semantic = semCount >= Math.max(3, nodes.length * 0.5);
-
-      sim = semantic
-        ? d3
-            .forceSimulation(nodes)
-            // strength-0 link force: it never pulls (semantic positions rule),
-            // but its initialize() resolves each link's source/target from key
-            // strings into node objects — without it the draw loop sees strings
-            // and skips every edge.
-            .force('link', d3.forceLink(links).id((d: any) => d.id).strength(0))
-            .force('x', d3.forceX((d: any) => W / 2 + d.sx).strength((d: any) => (d.hasSem ? 0.7 : 0.08)))
-            .force('y', d3.forceY((d: any) => H / 2 + d.sy).strength((d: any) => (d.hasSem ? 0.7 : 0.08)))
-            .force('collide', d3.forceCollide(collideR))
-            .force('charge', d3.forceManyBody().strength(-24)) // gentle — just unstacks, doesn't relayout
-            .on('tick', requestDraw)
-        : d3
-            .forceSimulation(nodes)
-            .force('link', d3.forceLink(links).id((d: any) => d.id).distance(74).strength(0.4))
-            .force('charge', d3.forceManyBody().strength(-200))
-            .force('center', d3.forceCenter(W / 2, H / 2))
-            .force('collide', d3.forceCollide(collideR))
-            .on('tick', requestDraw);
-      requestDraw();
-      setTimeout(() => sim?.stop(), 9000);
-
-      ro = new ResizeObserver(() => {
-        const w = el.clientWidth, h = el.clientHeight;
-        if (!w || !h || (w === W && h === H)) return;
-        W = w;
-        H = h;
-        sizeCanvas();
-        // Force layout re-centers explicitly; the semantic layout's forceX/Y
-        // accessors already read the live W/H, so they re-center on their own.
-        if (!semantic) sim?.force('center', d3.forceCenter(W / 2, H / 2));
-        sim?.alpha(0.2).restart();
-        requestDraw();
-        setTimeout(() => sim?.stop(), 3000);
-      });
-      ro.observe(el);
-    })().catch((err) => (window.reportError ?? console.error)(err));
-
-    return () => {
-      disposed = true;
-      sim?.stop();
-      ro?.disconnect();
-      if (onResult) window.removeEventListener(CONSOLE_RESULT_EVENT, onResult);
-      api.current = null;
-      el.innerHTML = '';
-    };
-  }, []);
-
-  // External selection (context-row neighbor chips, etc.): pan the camera there.
-  useEffect(() => {
-    if (selectedKey === lastExternal.current) return;
-    lastExternal.current = selectedKey;
-    api.current?.select(selectedKey, true);
-  }, [selectedKey]);
-
-  // Salience slider → cull below the corresponding rank.
-  useEffect(() => { api.current?.setVisible(visible); }, [visible]);
-
-  return (
-    <div
-      ref={host}
-      style={{ position: 'fixed', inset: 0, background: `radial-gradient(ellipse at 50% 30%, ${ink.sceneBgLift} 0%, ${ink.sceneBg} 70%)`, overflow: 'hidden' }}
-    />
-  );
 }
 
 /* ── 3D explore mode (raw three.js) ──────────────────────────────────────────
@@ -928,13 +363,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const nodeAlphaOf = (i: number): number => {
         const n = nodes[i];
         if (!isVis(n)) return 0; // culled by the salience slider
-        return nodeDOI(n, selKey, nbr, hiSet, N);
+        // 0.75: a global dimmer — the additive core of a dense slice summed to
+        // white; the torch supplies the contrast, points don't need to.
+        return 0.75 * nodeDOI(n, selKey, nbr, hiSet, N);
       };
 
       // ── renderer / scene / camera ──
       let W = el.clientWidth || window.innerWidth, H = el.clientHeight || window.innerHeight;
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color('#1b1710');
+      scene.background = new THREE.Color(ink.sceneBg);
       const camera = new THREE.PerspectiveCamera(55, W / H, 1, 8000);
       camera.position.set(0, 0, SPREAD * 2.15);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1008,7 +445,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // Selection highlight: a glowing accent ring parked on the selected node
       // (opacity alone washed out under the focal fade).
       const ringTex = makeRingTexture(THREE);
-      const ringMat = new THREE.SpriteMaterial({ map: ringTex, color: 0xf5c453, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+      const ringMat = new THREE.SpriteMaterial({ map: ringTex, color: ink.accent, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
       const ring = new THREE.Sprite(ringMat);
       ring.visible = false;
       scene.add(ring);
@@ -1036,7 +473,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // Lower than the 2D strokes: additive One/One means overlapping edges SUM,
       // so hubs would otherwise clip to a white hairball. Depth-fade (in the
       // shader below) does the rest of the atmosphere.
-      const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.3 : l.derived ? 0.26 : 0.5);
+      // Quieter than the old 2D strokes AND the previous 3D bases: additive
+      // One/One SUMS overlapping edges, and the dense semantic core has enough
+      // of them to clip to a white mass under bloom (figure/ground again).
+      const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.16 : l.derived ? 0.12 : 0.3);
       const edgeAlphaOf = (l: any): number => {
         const sN = nodeById.get(idOf(l.source)), tN = nodeById.get(idOf(l.target));
         if (!isVis(sN) || !isVis(tN)) return 0; // salience slider
@@ -1124,7 +564,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       if (bigScreen) {
         composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.85, 0.6, 0.12)); // strength, radius, threshold
+        // Threshold above the resting wash so only genuinely bright points
+        // bloom — at 0.12 the dense core's additive sum ALL bloomed and clipped
+        // to a white blob that swallowed its labels.
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.45, 0.5, 0.35)); // strength, radius, threshold
         composer.setSize(W, H);
       }
 
@@ -1146,6 +589,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       controls.dampingFactor = 0.05;
       controls.draggingDampingFactor = 0.25;
       controls.setLookAt(0, 0, SPREAD * 2.15, 0, 0, 0, false);
+      // Open FRAMING the cloud's BODY, not a fixed dolly and not its extremes:
+      // centre = per-axis MEDIAN (a mean drifts toward outlier tendrils),
+      // radius = the 80th-percentile distance — the far strays hang offscreen
+      // and the mass the eye reads as "the graph" fills the frame.
+      {
+        const med = (vals: number[]): number => { const s = [...vals].sort((a, b) => a - b); return s[s.length >> 1] ?? 0; };
+        const xs: number[] = [], ys: number[] = [], zs: number[] = [];
+        for (let i = 0; i < N; i++) { xs.push(posBuf[i * 3]); ys.push(posBuf[i * 3 + 1]); zs.push(posBuf[i * 3 + 2]); }
+        const c = new THREE.Vector3(med(xs), med(ys), med(zs));
+        const dists: number[] = [];
+        for (let i = 0; i < N; i++) dists.push(c.distanceTo(new THREE.Vector3(posBuf[i * 3], posBuf[i * 3 + 1], posBuf[i * 3 + 2])));
+        dists.sort((a, b) => a - b);
+        const r = (dists[Math.floor(dists.length * 0.8)] ?? SPREAD) * 1.1;
+        controls.fitToSphere(new THREE.Sphere(c, Math.max(r, SPREAD * 0.3)), false);
+      }
       // Idle auto-rotate: resume a slow orbit ~5s after the last user gesture.
       let interacting = false;
       let lastInput = performance.now();
@@ -1255,9 +713,23 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // point surface nearby low-salience items.
       const scratchP = new THREE.Vector3();
       const torchNode = (n: any): number => torchAt(scratchP.set(n.x, n.y, n.z));
-      const BEAM_ON = 0.62, BEAM_OFF = 0.38, LABEL_CAP = 28;
+      // Fewer beam-lit labels on a phone — 28 at once piled up in the core.
+      const BEAM_ON = 0.62, BEAM_OFF = 0.38, LABEL_CAP = Math.min(W, H) < 700 ? 12 : 22;
+      // Legibility gates (the dense core turned its beam labels into a white
+      // pile of 7px mush): a candidate must render big enough to READ, and must
+      // not land on top of an already-placed label — greedy, brightest first.
+      const projV = new THREE.Vector3();
+      const distV = new THREE.Vector3();
+      const MIN_LABEL_PX = 7;
+      const screenXY = (n: any): [number, number] => {
+        projV.set(n.x, n.y, n.z).project(camera);
+        return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H];
+      };
       const syncBeamLabels = (): void => {
         const keep = pinnedSet();
+        const placed: Array<[number, number]> = [];
+        for (const id of keep) { const n = nodeById.get(id); if (n) placed.push(screenXY(n)); }
+        const collides = (sx: number, sy: number): boolean => placed.some(([px, py]) => Math.abs(px - sx) < 90 && Math.abs(py - sy) < 16);
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || keep.has(n.id)) continue;
@@ -1267,7 +739,17 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         }
         lit.sort((a, b) => b[1] - a[1]);
         let added = 0;
-        for (const [id] of lit) { if (added >= LABEL_CAP) break; keep.add(id); added++; }
+        for (const [id] of lit) {
+          if (added >= LABEL_CAP) break;
+          const n = nodeById.get(id);
+          const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
+          if (rad(n) * 2.4 * (H / 2) / camD < MIN_LABEL_PX) continue; // sub-readable
+          const [sx, sy] = screenXY(n);
+          if (collides(sx, sy)) continue;
+          placed.push([sx, sy]);
+          keep.add(id);
+          added++;
+        }
         reconcileLabels(keep);
       };
       // Label SIZE tracks the node's on-screen size (the same projection the point
@@ -1280,10 +762,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          // No lower clamp: label size is proportional to the node's on-screen
-          // size, so small/distant nodes get small labels that recede into the
-          // wash (torch opacity fades them out too) — only the top is capped.
-          obj.element.style.fontSize = Math.min(10, nodePx * 0.85).toFixed(1) + 'px';
+          // Clamped to a READABLE floor: a rendered label must earn its pixels
+          // (syncBeamLabels already drops sub-readable candidates and
+          // declutters), so anything that survives is worth 8px. Proportional
+          // sizing above the floor keeps the attached-to-its-node feel.
+          obj.element.style.fontSize = Math.min(11, Math.max(8, nodePx * 0.85)).toFixed(1) + 'px';
           obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
           // OPACITY is BEAM-primary: the torch decides how lit a label is, so a
           // sweep reveals whatever is near the line of sight — salient or not.
@@ -1360,16 +843,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
   useEffect(() => { api.current?.setVisible(visible); }, [visible]);
 
-  return <div ref={host} style={{ position: 'fixed', inset: 0, background: '#1b1710', overflow: 'hidden' }} />;
+  return <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />;
 }
 
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
-  const [mode, setMode] = useState<'2d' | '3d'>('2d');
   // Salience visibility: 0 → only the focus band, 1 → the whole slice. The
-  // renderers cull nodes/edges above the corresponding salience rank.
+  // renderer culls nodes/edges above the corresponding salience rank.
   const [visible, setVisible] = useState(1);
-  // One control cluster, one surface language (ink) — pills sized so the whole
-  // row is a ≥44px touch target on a phone, not a 26px sliver over the canvas.
+  // Ink surface, sized so the control is a real touch target over the canvas.
   const pill: React.CSSProperties = {
     fontFamily: ink.mono, fontSize: '0.75rem', color: ink.text,
     background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
@@ -1378,38 +859,27 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
   };
   return (
     <>
-      {mode === '2d' ? (
-        <Canvas2DGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
-      ) : (
-        <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
-      )}
-      <div style={{ position: 'fixed', right: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20, display: 'grid', gap: 8, justifyItems: 'end' }}>
-        <button
-          onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
-          title={mode === '2d' ? 'Explore in 3D' : 'Back to the 2D map'}
-          aria-pressed={mode === '3d'}
-          style={{ ...pill, cursor: 'pointer' }}
-        >
-          {mode === '2d' ? '3D ◎' : '2D ▦'}
-        </button>
-        {/* Salience dial — from just the focus band to the whole slice. */}
-        <label title="Show more or fewer facts, by salience" style={{ ...pill, cursor: 'default' }}>
-          <span style={{ color: ink.dim }}>focus</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.02}
-            value={visible}
-            onChange={(e) => setVisible(Number(e.target.value))}
-            aria-label="Salience visibility"
-            style={{ width: 96, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
-          />
-          <span style={{ width: 26, textAlign: 'right', color: ink.dim, fontVariantNumeric: 'tabular-nums' }}>
-            {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
-          </span>
-        </label>
-      </div>
+      <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
+      {/* Salience dial — from just the focus band to the whole slice. */}
+      <label
+        title="Show more or fewer facts, by salience"
+        style={{ ...pill, position: 'fixed', right: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20, cursor: 'default' }}
+      >
+        <span style={{ color: ink.dim }}>focus</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.02}
+          value={visible}
+          onChange={(e) => setVisible(Number(e.target.value))}
+          aria-label="Salience visibility"
+          style={{ width: 96, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
+        />
+        <span style={{ width: 26, textAlign: 'right', color: ink.dim, fontVariantNumeric: 'tabular-nums' }}>
+          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+        </span>
+      </label>
     </>
   );
 }
