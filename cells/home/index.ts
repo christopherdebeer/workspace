@@ -17,106 +17,21 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { App, typeDeclsFrom, type Session, type Boot, type DashboardData, type LayoutSection, type ChangeEvent } from './client/app';
+import { App, typeDeclsFrom, type Session, type Boot } from './client/app';
 import { installBridge } from './client/bridge';
 
-/** Keep in lockstep with the client's loadDashboard bucketing so seeded and any
- *  later client-computed activity match. */
-const ACTIVITY_BUCKETS = 16;
-
-/**
- * Build the dashboard view model from forge's SSR reads (run as the caller — see
- * runSsrReads). Mirrors the client's loadDashboard so the seeded snapshot is what
- * the client would have fetched — but server-side, so it paints with no flash.
+/** Assemble the first-paint seed: session + the canonical type vocabulary
+ *  (describeTypes), assembled the same way the client's loadTypeDecls does — so
+ *  icons/titles/routing paint server-side. The graph and the field computer load
+ *  their own data live; home no longer seeds a dashboard snapshot (the section
+ *  dashboard is gone — home is the graph + the field computer, owner direction
+ *  2026-07-10), so SSR reads collapse from eleven to one (ssr.json).
  */
-function buildDash(d: Record<string, unknown>): DashboardData | undefined {
-  const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
-  // Counts derive from the section reads (no redundant count queries): facts from
-  // the windowed query's total, cells from cells.list, views/edges from their lists.
-  const facts = num((d.window as { total?: number } | undefined)?.total);
-  const cells = (d.cellsList as { cells?: unknown[] } | undefined)?.cells?.length;
-  const views = (d.views as { views?: unknown[] } | undefined)?.views?.length;
-  // ADR-0048: the SSR links read is `{limit: 0}` — a count, not 1.4MB of edges.
-  const edges = (d.links as { total?: number; edges?: unknown[] } | undefined)?.total ?? (d.links as { edges?: unknown[] } | undefined)?.edges?.length;
-  const events = ((d.changes as { events?: ChangeEvent[] } | undefined)?.events ?? []) as ChangeEvent[];
-  if (facts === undefined && !events.length) return undefined; // nothing useful read
-
-  const writes = events.filter((e) => e.op !== 'read');
-  const times = writes
-    .map((e) => Date.parse(e.at))
-    .filter((t) => !Number.isNaN(t))
-    .sort((a, b) => a - b);
-  let activity: number[] = [];
-  let activitySpanMs = 0;
-  if (times.length >= 2) {
-    const lo = times[0];
-    const hi = times[times.length - 1];
-    activitySpanMs = hi - lo;
-    const span = Math.max(1, hi - lo);
-    const buckets = new Array(ACTIVITY_BUCKETS).fill(0);
-    for (const t of times) buckets[Math.min(ACTIVITY_BUCKETS - 1, Math.floor(((t - lo) / span) * ACTIVITY_BUCKETS))]++;
-    activity = buckets;
-  }
-  return {
-    facts: facts ?? 0,
-    cells: cells ?? 0,
-    views: views ?? 0,
-    edges: edges ?? 0,
-    activity,
-    activitySpanMs,
-    recent: writes.slice(-8).reverse(),
-  };
-}
-
-/** Assemble the first-paint seed: session + (for an authed nav) the layout and
- *  dashboard data forge read on the caller's behalf. */
 function buildBoot(session: Session, ssrData: Record<string, unknown> | undefined): Boot {
   const boot: Boot = { session };
   if (!session.user || !ssrData) return boot;
-  const d = ssrData;
-
-  const layoutEntry = d.layout as { value?: { sections?: LayoutSection[] } } | null | undefined;
-  const sections = layoutEntry?.value?.sections;
-  if (Array.isArray(sections) && sections.length) boot.layout = sections;
-
-  // The canonical type vocabulary (describeTypes), assembled the same way the
-  // client's loadTypeDecls does — so the viewer (render hints) paints server-side.
-  const typesRaw = (d.types as { types?: Record<string, unknown> } | undefined)?.types;
+  const typesRaw = (ssrData.types as { types?: Record<string, unknown> } | undefined)?.types;
   if (typesRaw) boot.types = typeDeclsFrom(typesRaw);
-
-  const dash = buildDash(d);
-  if (dash) boot.dash = dash;
-
-  // The workspace window: salience-ranked facts (the windowed query), attention,
-  // and edges — exactly what the client would have fetched.
-  const win = d.window as { entries?: unknown[]; total?: number } | undefined;
-  if (win) {
-    boot.workspace = {
-      attention: d.attention ?? null,
-      facts: win.entries ?? [],
-      total: win.total ?? 0,
-      edges: (d.links as { edges?: unknown[] } | undefined)?.edges ?? [],
-    } as Boot['workspace'];
-  }
-  const cellsList = (d.cellsList as { cells?: unknown[] } | undefined)?.cells;
-  if (cellsList) boot.cells = cellsList as Boot['cells'];
-  const viewsList = (d.views as { views?: unknown[] } | undefined)?.views;
-  if (viewsList) boot.views = viewsList as Boot['views'];
-
-  // Identity & grants: tokens (auth, read-only), shared/receiving + grant inbox
-  // (workspace) — assembled exactly as the client's IdentityShell.load() does.
-  const tokens = (d.tokens as { tokens?: Array<{ revoked?: boolean }> } | undefined)?.tokens;
-  if (tokens || d.shared || d.grantRequests) {
-    const shared = d.shared as { shared?: unknown[]; receiving?: unknown[] } | undefined;
-    const reqs = d.grantRequests as { incoming?: unknown[]; answers?: unknown[] } | undefined;
-    boot.identity = {
-      tokens: (tokens ?? []).filter((t) => !t.revoked),
-      shared: shared?.shared ?? [],
-      receiving: shared?.receiving ?? [],
-      incoming: reqs?.incoming ?? [],
-      answers: reqs?.answers ?? [],
-    } as Boot['identity'];
-  }
   return boot;
 }
 
