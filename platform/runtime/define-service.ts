@@ -197,10 +197,12 @@ async function resolveHttpIdentity(
     }
     return { identity: ANONYMOUS };
   } catch (err) {
-    // A validation failure (revoked/expired/unknown token, or auth unavailable)
-    // is treated as anonymous; handlers enforce auth via requireUser/requireScope.
+    // The auth service ERRORED (cold start, throttle, mid-deploy) — the
+    // credential was never checked. Resolve anonymous but flag it, so HTTP
+    // seams answer `auth_unavailable` (retryable) instead of `invalid_token`
+    // (which reads as "your token is dead" and makes clients discard it).
     console.warn('[auth] identity resolution errored', { service: serviceName, error: (err as Error).message });
-    return { identity: ANONYMOUS };
+    return { identity: { ...ANONYMOUS, degraded: true } };
   }
 }
 

@@ -102,5 +102,13 @@ chain. The pre-existing cascade/revocation/expiry tests pass unchanged.
 - Per-holder refresh tokens (cookie chain and JS chain each minted their own) —
   strictly stronger, but a two-store/two-cookie migration for the same user-facing
   result; revisit if replay detection becomes a requirement.
-- The gateway conflating "auth service unreachable" with `invalid_token`
-  (`resolveHttpIdentity` catches errors to ANONYMOUS) — a separate hardening.
+- ~~The gateway conflating "auth service unreachable" with `invalid_token`~~ —
+  built alongside this ADR after the differential probe cleared the store: an
+  identity that resolved anonymous because auth *errored* now carries
+  `degraded: true` (`platform/runtime/define-service.ts`), and the `/mcp` +
+  `/whoami` seams answer a retryable **503 `auth_unavailable`** instead of a
+  401 `invalid_token` for a credential that was never checked. This is the
+  probable mechanism behind "scratch tokens dying at ~25–45 min": transient
+  auth-service unavailability (cold start/throttle/mid-deploy) reported as
+  `invalid_token`, prompting re-mints instead of retries — the probe showed
+  browser-used and control tokens both living to exact TTL.

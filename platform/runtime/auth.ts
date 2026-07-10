@@ -68,6 +68,14 @@ export interface Identity {
   tokenId?: string;
   /** The adopted posture riding this session's token (ADR-0074), when any. */
   posture?: PrincipalPosture;
+  /**
+   * True when identity resolution ERRORED (auth service unreachable/throwing)
+   * rather than returning a clean verdict — the caller's credential was never
+   * actually checked. HTTP seams should answer `auth_unavailable`/503, never
+   * `invalid_token`, so clients retry instead of discarding a token that may
+   * be perfectly fine.
+   */
+  degraded?: boolean;
 }
 
 const ANONYMOUS: Identity = { user: undefined, scopes: [] };

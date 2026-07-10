@@ -598,6 +598,11 @@ const tools: Record<string, McpToolDefinition> = {
 // ─── human/browser discovery ─────────────────────────────────────
 
 function whoamiHttp(req: ServiceHttpRequest, ctx: ServiceContext): ServiceHttpResponse {
+  // Auth errored ≠ token invalid: answer retryable 503 so the caller doesn't
+  // discard a credential that was never actually checked.
+  if (!ctx.identity.user && ctx.identity.degraded) {
+    return { statusCode: 503, headers: { ...NO_STORE, 'retry-after': '2' }, body: { error: 'auth_unavailable' } };
+  }
   if (!ctx.identity.user) return unauthorized(req, 'invalid_token');
   return { statusCode: 200, headers: NO_STORE, body: { user: ctx.identity.user, scopes: ctx.identity.scopes } };
 }
