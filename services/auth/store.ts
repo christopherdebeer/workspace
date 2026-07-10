@@ -154,7 +154,13 @@ export interface TokenSummary {
 export interface RefreshResult {
   id: string;
   token: string;
-  refreshToken: string;
+  /** Present only if the refresh credential itself was re-minted. Absent ⇒ the
+   *  refresh token is STABLE (ADR-0080): the caller keeps presenting the value
+   *  it already holds. Stability is load-bearing — the same refresh value
+   *  legitimately lives in two agents at once (the httpOnly `parc_refresh`
+   *  cookie and the JS client's localStorage), so single-use rotation made
+   *  whichever chain refreshed first invalidate the other's live session. */
+  refreshToken?: string;
   expiresAt: string;
 }
 

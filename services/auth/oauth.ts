@@ -450,12 +450,14 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
     if (neverExpires) return ok({ error: 'unsupported_grant_type', error_description: 'Tokens are non-expiring' }, 400);
     const result = await store.refreshUnifiedToken(sha256(body.refresh_token), configuredExpiry, refreshExpiry);
     if (!result) return ok({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
-    // Refresh keeps BOTH navigation cookies current (access + rotated refresh), so
-    // the edge silent-refresh path can keep re-priming the session up to the grant.
-    const cookies = [sessionCookie(result.token, configuredExpiry)];
-    if (result.refreshToken) cookies.push(refreshCookie(result.refreshToken, refreshExpiry));
+    // Refresh keeps BOTH navigation cookies current (access + refresh), so the
+    // edge silent-refresh path can keep re-priming the session up to the grant.
+    // The refresh credential is STABLE (ADR-0080) — re-issue the value the caller
+    // presented, so the cookie chain and the localStorage chain stay in step.
+    const stableRefresh = result.refreshToken ?? body.refresh_token;
+    const cookies = [sessionCookie(result.token, configuredExpiry), refreshCookie(stableRefresh, refreshExpiry)];
     return okWithCookies(
-      { access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: result.refreshToken },
+      { access_token: result.token, token_type: 'Bearer', expires_in: configuredExpiry, refresh_token: stableRefresh },
       cookies,
     );
   }
@@ -596,7 +598,9 @@ export async function handleRefreshSession(refreshToken: string, store: AuthStor
     scope: validated.scope,
     effectiveScope: validated.effectiveScope,
     tokenId: validated.tokenId,
-    setCookies: [sessionCookie(result.token, configuredExpiry), refreshCookie(result.refreshToken, refreshExpiry)],
+    // Stable refresh credential (ADR-0080): when the store didn't re-mint it,
+    // re-prime the cookie with the value the navigation presented.
+    setCookies: [sessionCookie(result.token, configuredExpiry), refreshCookie(result.refreshToken ?? refreshToken, refreshExpiry)],
   };
 }
 
