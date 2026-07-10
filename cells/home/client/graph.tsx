@@ -391,13 +391,30 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
       const disc = makeDiscTexture(THREE);
       const geo = new THREE.BufferGeometry();
+      // `boost` lets a FOCUS point (selection / neighbour / search hit) bypass
+      // the torch: without it, a match off the beam axis multiplied down to the
+      // 0.04 floor and "highlighting" survived only as a floating label over an
+      // unlit scene (owner feedback: labels lit, nodes and edges not).
+      const boostBuf = new Float32Array(N);
       geo.setAttribute('position', new THREE.BufferAttribute(posBuf, 3));
       geo.setAttribute('color', new THREE.BufferAttribute(colBuf, 3));
       geo.setAttribute('size', new THREE.BufferAttribute(sizeBuf, 1));
       geo.setAttribute('alpha', new THREE.BufferAttribute(alphaBuf, 1));
+      geo.setAttribute('boost', new THREE.BufferAttribute(boostBuf, 1));
+      const nodeBoostOf = (i: number): number => {
+        const n = nodes[i];
+        if (!isVis(n)) return 0;
+        if (n.id === selKey || hiSet?.has(n.id)) return 1;
+        if (nbr?.has(n.id)) return 0.85; // lit, with a whisper of depth left
+        return 0;
+      };
       const applyNodeAlpha = (): void => {
-        for (let i = 0; i < N; i++) alphaBuf[i] = nodeAlphaOf(i);
+        for (let i = 0; i < N; i++) {
+          alphaBuf[i] = nodeAlphaOf(i);
+          boostBuf[i] = nodeBoostOf(i);
+        }
         (geo.attributes.alpha as any).needsUpdate = true;
+        (geo.attributes.boost as any).needsUpdate = true;
       };
       applyNodeAlpha();
       // TORCH falloff: a spotlight cone from the camera aimed at the focal point
@@ -422,11 +439,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const ptMat = new THREE.ShaderMaterial({
         uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFocus: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() } },
         vertexShader:
-          'attribute float size; attribute float alpha; attribute vec3 color;' +
+          'attribute float size; attribute float alpha; attribute vec3 color; attribute float boost;' +
           'varying float vAlpha; varying vec3 vColor; uniform float uScale;' +
           TORCH_GLSL +
           'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
-          'vAlpha = alpha * torch(position); gl_PointSize = size * (uScale / max(vd, 1.0));' +
+          // Focus points also grow a little — brightness alone undersold a
+          // small match dot; size makes the hit read as an OBJECT.
+          'vAlpha = alpha * max(torch(position), boost); gl_PointSize = size * (1.0 + 0.45 * boost) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; varying float vAlpha; varying vec3 vColor;' +
@@ -484,17 +503,32 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const d = Math.max(nodeDOI(sN, selKey, nbr, hiSet, N), nodeDOI(tN, selKey, nbr, hiSet, N));
         return edgeBaseAlpha(l) * (0.1 + 0.9 * d);
       };
+      // An edge CARRIES the focus (and bypasses the torch) when it fans out of
+      // the selected node, or joins two search hits — the structure the user
+      // asked the graph about, visible even off the beam axis. A hit's whole
+      // degree does NOT boost (that would re-paint the hairball).
+      const eboostBuf = new Float32Array(E * 2);
+      const edgeBoostOf = (l: any): number => {
+        const a = idOf(l.source), b = idOf(l.target);
+        if (selKey && (a === selKey || b === selKey)) return 1;
+        if (hiSet && hiSet.has(a) && hiSet.has(b)) return 1;
+        return 0;
+      };
       const applyEdgeColor = (): void => {
         for (let i = 0; i < E; i++) {
           const [r, g, b] = edgeRGB[i], al = edgeAlphaOf(links[i]);
+          const bo = edgeBoostOf(links[i]);
           ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
           ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
+          eboostBuf[i * 2] = bo; eboostBuf[i * 2 + 1] = bo;
         }
         (egeo.attributes.color as any).needsUpdate = true;
+        (egeo.attributes.boost as any).needsUpdate = true;
       };
       const egeo = new THREE.BufferGeometry();
       egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
       egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
+      egeo.setAttribute('boost', new THREE.BufferAttribute(eboostBuf, 1));
       // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
       // point cloud — otherwise they stay full-bright at every depth and flatten
       // the atmosphere. Per-vertex colour already carries the focus/selection
@@ -502,9 +536,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const eMat = new THREE.ShaderMaterial({
         uniforms: { uFocus: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() } },
         vertexShader:
-          'attribute vec3 color; varying vec3 vColor;' +
+          'attribute vec3 color; attribute float boost; varying vec3 vColor;' +
           TORCH_GLSL +
-          'void main(){ vColor = color * torch(position); vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          'void main(){ vColor = color * max(torch(position), boost); vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader: 'varying vec3 vColor; void main(){ gl_FragColor = vec4(vColor, 1.0); }',
         transparent: true,
         depthWrite: false,
@@ -798,25 +832,32 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          // ROLE-styled: the selection reads as the anchor (accent, bold, a
-          // taller floor), its neighbours as the connected set (bright, never
-          // sub-readable), everything else as the beam's atmosphere. Roles
-          // change with selection state, so they're applied here per frame
-          // rather than baked into the label element.
+          // ROLE-styled, DEPTH-blended. Hard uniform floors made every label
+          // the same size at every distance — legible but flat (owner: "breaks
+          // 3d exploration and immersion"). Focus labels keep a readable floor
+          // but SCALE and FADE with depth inside their band; atmosphere labels
+          // are fully proportional, receding into the wash as before.
           const isSel = id === selKey;
           const isNbr = !isSel && (!!nbr?.has(id) || !!hiSet?.has(id));
-          const floor = isSel ? 11 : isNbr ? 9 : 8;
-          obj.element.style.fontSize = Math.min(isSel ? 13 : 11, Math.max(floor, nodePx * 0.85)).toFixed(1) + 'px';
+          const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
+          const torch = torchAt(obj.position);
+          let size: number;
+          let op: number;
+          if (isSel) {
+            size = 11 + 3 * t;
+            op = 1;
+          } else if (isNbr) {
+            size = 8.5 + 3.5 * t;
+            op = 0.7 + 0.3 * t; // near neighbours read solid, far ones recede
+          } else {
+            size = Math.min(11, nodePx * 0.85); // proportional — the atmosphere
+            const salN = 1 - (n?.rank ?? N) / Math.max(1, N);
+            op = torch * (0.9 + 0.1 * salN);
+          }
+          obj.element.style.fontSize = size.toFixed(1) + 'px';
           obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
           obj.element.style.color = isSel ? ink.accent : ink.text;
           obj.element.style.fontWeight = isSel ? '700' : '600';
-          // OPACITY is BEAM-primary at rest (a sweep reveals whatever is near
-          // the line of sight); selection lifts its neighbourhood above it.
-          const torch = torchAt(obj.position);
-          let op = torch;
-          if (isSel) op = 1;
-          else if (isNbr) op = Math.max(0.9, torch);
-          else { const salN = 1 - (n?.rank ?? N) / Math.max(1, N); op = torch * (0.9 + 0.1 * salN); }
           obj.element.style.opacity = op.toFixed(3);
         }
       };

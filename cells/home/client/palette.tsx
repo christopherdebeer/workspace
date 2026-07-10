@@ -15,7 +15,7 @@
  */
 import * as React from 'react';
 import { Console } from './console';
-import { typeIcon, factTitle, factHref, FactDetail, type ListEntry } from './facts';
+import { typeIcon, factTitle, factHref, factEdit, FactDetail, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
 
@@ -41,6 +41,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
   const [showBody, setShowBody] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -48,6 +49,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
     setNeighbors([]);
     setVerbs([]);
     setShowBody(false);
+    setEditing(false);
     // The contextual capability menu — what can ACT on this fact, inferred
     // from its type signals (ADR-0049). Type-specific tools lead; the
     // always-applicable workspace verbs stay in the console's full list.
@@ -90,6 +92,8 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
 
   const e = entry ?? ({ key: factKey } as ListEntry);
   const href = factHref(e);
+  const editHref = entry ? factEdit(e) : null;
+  const canEditInline = !!entry && !editHref && !factKey.startsWith('_');
   // A chip whose label is an icon and an ellipsis says nothing — only
   // neighbours with a resolvable TITLE earn a chip.
   const namedNeighbors = neighbors.filter((n) => !!factTitle(n.entry));
@@ -104,12 +108,37 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
         >
           {entry ? factTitle(e) : factKey} <span style={{ color: ink.dim }}>{showBody ? '▾' : '▸'}</span>
         </button>
+        {/* Actions live on the panel FRAME (where peek used to be), not inside
+            the scrolling body — owner feedback. */}
+        {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
+        {canEditInline ? (
+          <button
+            style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
+            onClick={() => {
+              setEditing((v) => !v);
+              setShowBody(true);
+            }}
+          >
+            edit
+          </button>
+        ) : null}
         {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
         <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none' }} onClick={onClear} aria-label="clear selection">×</button>
       </div>
       {showBody && entry ? (
         <div style={{ maxHeight: 'min(42dvh, 340px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.6rem 0.7rem', fontSize: '0.82rem' }}>
-          <FactDetail e={entry} compact />
+          {editing ? (
+            <InlineFactEditor
+              e={entry}
+              onCancel={() => setEditing(false)}
+              onSaved={(v) => {
+                setEntry({ ...entry, value: v });
+                setEditing(false);
+              }}
+            />
+          ) : (
+            <FactDetail e={entry} compact />
+          )}
         </div>
       ) : null}
       {/* ONE row of context, not three (the stacked verb + icon-chip rows read
@@ -123,11 +152,26 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
             </button>
           ))}
           {verbs.length && namedNeighbors.length ? <span aria-hidden style={{ color: ink.line, flexShrink: 0 }}>·</span> : null}
-          {namedNeighbors.slice(0, 8).map((n) => (
-            <button key={`${n.rel}:${n.key}`} style={chip} title={`${n.rel} · ${n.key}`} onClick={() => onSelectKey(n.key)}>
-              {typeIcon(n.entry)} {factTitle(n.entry)}
-            </button>
-          ))}
+          {namedNeighbors.slice(0, 8).map((n) => {
+            // The REL and DIRECTION are what make a neighbour chip mean
+            // something ("what even is this?") — kept secondary: dim, after
+            // the title. `rel ›` points out of this fact; `‹ rel` into it.
+            // The rel NEVER truncates (flexShrink 0) — the title ellipsizes.
+            const inbound = n.rel.startsWith('← ');
+            const rel = n.rel.replace('← ', '');
+            return (
+              <button
+                key={`${n.rel}:${n.key}`}
+                style={{ ...chip, maxWidth: 250, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                title={`${inbound ? `${rel} from` : `${rel} to`} ${n.key}`}
+                onClick={() => onSelectKey(n.key)}
+              >
+                <span aria-hidden style={{ flexShrink: 0 }}>{typeIcon(n.entry)}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{factTitle(n.entry)}</span>
+                <span style={{ color: ink.dim, flexShrink: 0 }}>{inbound ? `‹ ${rel}` : `${rel} ›`}</span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>

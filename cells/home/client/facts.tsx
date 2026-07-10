@@ -123,7 +123,7 @@ export function factHref(e: ListEntry): string | null {
 }
 
 /** Where a fact edits — its type's `edit` handler, if it declares one. */
-function factEdit(e: ListEntry): string | null {
+export function factEdit(e: ListEntry): string | null {
   return handlerUrl(resolve(e, 'edit', typeDecls));
 }
 
@@ -530,6 +530,14 @@ function FactEditor({
   );
 }
 
+/** The generic in-place editor, usable OUTSIDE this module (the context
+ *  panel's Edit action) — resolves the type's declared fields (ADR-0002
+ *  shape.fields) exactly as FactDetail does. */
+export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (v: unknown) => void }): React.JSX.Element {
+  const fields = (declFor(e, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
+  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(v) => onSaved(v)} />;
+}
+
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
@@ -584,12 +592,14 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
               <Neighbourhood keyName={entry.key} />
             </div>
           ) : null}
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            {open ? <a href={open} style={inkAction}>Open ↗</a> : null}
-            {edit ? <a href={edit} style={inkAction}>Edit in cell ↗</a> : !system ? (
-              <button onClick={() => setEditing(true)} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: 'pointer' }}>Edit</button>
-            ) : null}
-          </div>
+          {!compact ? (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              {open ? <a href={open} style={inkAction}>Open ↗</a> : null}
+              {edit ? <a href={edit} style={inkAction}>Edit in cell ↗</a> : !system ? (
+                <button onClick={() => setEditing(true)} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: 'pointer' }}>Edit</button>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
     </div>
