@@ -266,7 +266,16 @@ function runsDirectly(c: Cmd): boolean {
  *  single arrow-key order (the old split made matches mouse-only). */
 type Item = { kind: 'fact'; e: ListEntry } | { kind: 'cmd'; c: Cmd };
 
-export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?: { q: string; n: number } | null; onSelectKey?: (k: string) => void }): React.JSX.Element {
+export function Console({ authed, seed, onSelectKey, collapsed = false, onCollapse }: {
+  authed: boolean;
+  seed?: { q: string; n: number } | null;
+  onSelectKey?: (k: string) => void;
+  /** Collapsed = the sheet (results/commands/tape) hides but the INPUT stays —
+   *  and so does every piece of state: the query, the semantic matches, the
+   *  graph highlights. On a phone that's how you see what a search lit up. */
+  collapsed?: boolean;
+  onCollapse?: (collapsed: boolean) => void;
+}): React.JSX.Element {
   const [cmds, setCmds] = useState<Cmd[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -450,12 +459,11 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     }
   };
 
-  // ── focused: one command's arg entry ──
-  if (focused) {
-    const { primary, advanced } = splitSchema(focused.schema);
-    const advancedCount = Object.keys((advanced as { properties?: object } | undefined)?.properties ?? {}).length;
-    return (
-      <div style={{ display: 'grid', gap: '0.7rem', padding: '0.7rem' }}>
+  // ── focused: one command's arg entry (renders in the sheet area) ──
+  const focusedSchema = focused ? splitSchema(focused.schema) : null;
+  const advancedCount = Object.keys((focusedSchema?.advanced as { properties?: object } | undefined)?.properties ?? {}).length;
+  const focusedView = focused && focusedSchema ? (
+      <div style={{ display: 'grid', gap: '0.7rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
           <button
             onClick={() => setFocused(null)}
@@ -500,12 +508,12 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
             />
           ) : !rawJson && isFormable(focused.schema) ? (
             <div style={{ ...inset, padding: '0.65rem', display: 'grid', gap: '0.55rem' }}>
-              <SchemaForm schema={primary} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
+              <SchemaForm schema={focusedSchema.primary} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
               {advancedCount ? (
                 <details>
                   <summary style={{ ...CAPTION, cursor: 'pointer', listStyle: 'none' }}>▸ more options · {advancedCount}</summary>
                   <div style={{ paddingTop: '0.55rem' }}>
-                    <SchemaForm schema={advanced} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
+                    <SchemaForm schema={focusedSchema.advanced} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
                   </div>
                 </details>
               ) : null}
@@ -538,51 +546,12 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
             ) : null}
           </div>
         </div>
-        <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
       </div>
-    );
-  }
+  ) : null;
 
-  // ── browse: search + one navigable list (matches/commands or recents) ──
-  return (
-    <div style={{ display: 'grid', gap: '0.6rem', padding: '0.7rem' }}>
-      <div style={{ ...inset, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.55rem 0.7rem' }}>
-        <span style={{ color: ink.accent, fontFamily: ink.mono }}>›</span>
-        <input
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSel(0);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setSel((s) => Math.max(0, stepSelection(s, 1, items.length)));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setSel((s) => Math.max(0, stepSelection(s, -1, items.length)));
-            } else if (e.key === 'Enter' && items[sel]) {
-              e.preventDefault();
-              activate(items[sel]);
-            } else if (e.key === 'Escape' && query) {
-              // With a query: Esc clears it and STOPS there; the palette's own
-              // Esc (close the sheet) takes over only on an empty box.
-              e.stopPropagation();
-              setQuery('');
-            }
-          }}
-          placeholder="Search your workspace, or run a capability…"
-          spellCheck={false}
-          autoComplete="off"
-          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '0.85rem', minWidth: 0 }}
-        />
-        {query ? (
-          <button onClick={() => setQuery('')} aria-label="clear" style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1rem', padding: '0 0.2rem' }}>
-            ×
-          </button>
-        ) : null}
-      </div>
-
+  // ── the browse sheet: one navigable list (matches/commands or recents) ──
+  const browseView = (
+    <>
       {err && !cmds?.length ? <span style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.78rem' }}>{err}</span> : null}
 
       {q && items.length === 0 ? (
@@ -631,10 +600,11 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
       ) : null}
 
       {!q && cmds ? (
-        // Idle, below recents: the vocabulary at a glance — namespaces as chips.
-        <div style={{ display: 'grid', gap: '0.35rem' }}>
-          <span style={CAPTION}>{cmds.length} commands</span>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+        // Idle, below recents: the vocabulary waits behind one quiet line —
+        // commands shouldn't dominate the opening view (owner feedback).
+        <details style={{ marginTop: recent.length ? '0.2rem' : 0 }}>
+          <summary style={{ ...CAPTION, cursor: 'pointer', listStyle: 'none', padding: '0.2rem 0.15rem' }}>▸ {cmds.length} commands</summary>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', paddingTop: '0.35rem' }}>
             {namespaces.map(([ns, n]) => (
               <button
                 key={ns}
@@ -649,11 +619,76 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
               </button>
             ))}
           </div>
-        </div>
+        </details>
       ) : null}
       {!cmds && !err ? <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>Loading capabilities…</p> : null}
+    </>
+  );
 
-      <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
+  // ── the shell: a collapsible sheet ABOVE a persistent input row. Collapsing
+  // hides the sheet but unmounts NOTHING — query, matches, selection, and the
+  // graph highlights all survive, which is how a phone reviews what a search
+  // lit up behind the palette. ──
+  return (
+    <div style={{ display: 'grid' }}>
+      {!collapsed ? (
+        <div style={{ background: ink.panel, maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem', display: 'grid', gap: '0.6rem', borderBottom: `1px solid ${ink.line}`, alignContent: 'start' }}>
+          {focusedView ?? browseView}
+          <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem', minHeight: 50 }}>
+        <span aria-hidden style={{ color: ink.accent, fontFamily: ink.mono }}>›</span>
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSel(0);
+            setFocused(null);
+            onCollapse?.(false); // typing re-opens the sheet
+          }}
+          onFocus={() => onCollapse?.(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              onCollapse?.(false);
+              setSel((s) => Math.max(0, stepSelection(s, 1, items.length)));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              onCollapse?.(false);
+              setSel((s) => Math.max(0, stepSelection(s, -1, items.length)));
+            } else if (e.key === 'Enter' && items[sel]) {
+              e.preventDefault();
+              if (collapsed) {
+                onCollapse?.(false);
+                return;
+              }
+              activate(items[sel]);
+            } else if (e.key === 'Escape' && query) {
+              // With a query: Esc clears it and STOPS there; the palette's own
+              // Esc (collapse the sheet) takes over only on an empty box.
+              e.stopPropagation();
+              setQuery('');
+            }
+          }}
+          placeholder="Search your workspace, or run a capability…"
+          spellCheck={false}
+          autoComplete="off"
+          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '0.9rem', minWidth: 0, minHeight: 34 }}
+        />
+        {query ? (
+          <button onClick={() => setQuery('')} aria-label="clear search" style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1rem', padding: '0.3rem 0.4rem' }}>
+            ×
+          </button>
+        ) : null}
+        <button
+          onClick={() => onCollapse?.(!collapsed)}
+          aria-label={collapsed ? 'expand the console' : 'collapse the console'}
+          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.85rem', padding: '0.3rem 0.45rem' }}
+        >
+          {collapsed ? '▴' : '▾'}
+        </button>
+      </div>
     </div>
   );
 }
