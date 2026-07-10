@@ -773,13 +773,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const scratchP = new THREE.Vector3();
       const torchNode = (n: any): number => torchAt(scratchP.set(n.x, n.y, n.z));
       // Fewer beam-lit labels on a phone — 28 at once piled up in the core.
-      const BEAM_ON = 0.62, BEAM_OFF = 0.38, LABEL_CAP = Math.min(W, H) < 700 ? 12 : 22;
+      const BEAM_ON = 0.35, BEAM_OFF = 0.2, LABEL_CAP = Math.min(W, H) < 700 ? 12 : 22;
       // Legibility gates (the dense core turned its beam labels into a white
       // pile of 7px mush): a candidate must render big enough to READ, and must
       // not land on top of an already-placed label — greedy, brightest first.
       const projV = new THREE.Vector3();
       const distV = new THREE.Vector3();
-      const MIN_LABEL_PX = 7;
       const screenXY = (n: any): [number, number] => {
         projV.set(n.x, n.y, n.z).project(camera);
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H];
@@ -844,12 +843,17 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const syncBeamLabels = (): void => {
         syncEdgeLabels();
         const want = new Map<string, LabelRole>();
-        const placed: Array<[number, number]> = [];
-        const collides = (sx: number, sy: number): boolean => placed.some(([px, py]) => Math.abs(px - sx) < 90 && Math.abs(py - sy) < 16);
-        const readable = (n: any): boolean => {
+        // Size-aware declutter: a small (far) label needs little clearance, so
+        // depth-proportional labels pack naturally instead of fighting a fixed
+        // 90px box sized for the biggest.
+        const placed: Array<[number, number, number]> = [];
+        const pxOf = (n: any): number => {
           const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
-          return rad(n) * 2.4 * (H / 2) / camD >= MIN_LABEL_PX;
+          return rad(n) * 2.4 * (H / 2) / camD;
         };
+        const boxOf = (n: any): number => Math.max(36, pxOf(n) * 7);
+        const collides = (sx: number, sy: number, w: number): boolean =>
+          placed.some(([px, py, pw]) => Math.abs(px - sx) < (pw + w) / 2 && Math.abs(py - sy) < 14);
         const focusActive = !!(selKey || hiSet);
 
         // FOCUS DECLARES: the anchor and every search hit label unconditionally
@@ -859,7 +863,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(selKey);
           if (n && isVis(n)) {
             want.set(selKey, 'sel');
-            placed.push(screenXY(n));
+            const [sx, sy] = screenXY(n);
+            placed.push([sx, sy, boxOf(n)]);
           }
         }
         if (hiSet) {
@@ -868,11 +873,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             const n = nodeById.get(id);
             if (n && isVis(n)) {
               want.set(id, 'hit');
-              placed.push(screenXY(n));
+              const [sx, sy] = screenXY(n);
+              placed.push([sx, sy, boxOf(n)]);
             }
           }
         }
         if (selKey && nbr) {
+          // EVERY neighbour that wins a collision slot gets a label — at its
+          // depth-proportional size. No readable() admission gate: a far
+          // neighbour is a tiny label, not a missing one.
           const cands = [...nbr]
             .map((id) => nodeById.get(id))
             .filter((n) => n && isVis(n) && !want.has(n.id))
@@ -880,10 +889,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           let added = 0;
           for (const n of cands) {
             if (added >= LABEL_CAP) break;
-            if (!readable(n)) continue;
             const [sx, sy] = screenXY(n);
-            if (collides(sx, sy)) continue;
-            placed.push([sx, sy]);
+            const w = boxOf(n);
+            if (collides(sx, sy, w)) continue;
+            placed.push([sx, sy, w]);
             want.set(n.id, 'nbr');
             added++;
           }
@@ -908,14 +917,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const [id] of lit) {
           if (added >= beamCap) break;
           const n = nodeById.get(id);
-          if (!readable(n)) continue;
           const [sx, sy] = screenXY(n);
-          if (collides(sx, sy)) continue;
+          const w = boxOf(n);
+          if (collides(sx, sy, w)) continue;
           inBeam.add(id);
           const streak = (beamStreak.get(id) ?? 0) + 1;
           beamStreak.set(id, streak);
           if (streak < 2 && !labelObjs.has(id)) continue; // entry debounce
-          placed.push([sx, sy]);
+          placed.push([sx, sy, w]);
           want.set(id, 'beam');
           added++;
         }
@@ -934,31 +943,34 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const obj = st.obj;
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           const torch = torchAt(obj.position);
-          // ROLE-styled, DEPTH-blended. Focus roles keep readable floors and
-          // scale/fade with depth inside their band; the beam is the visibly
-          // SECONDARY suggestion — smaller, dimmer, lighter — so a torch catch
-          // can never impersonate a search hit or a neighbour.
+          // ROLE-styled, size UNCLAMPED (owner direction): every label scales
+          // purely with its node's on-screen size — depth stays honest, a far
+          // neighbour is a tiny label rather than a uniform or missing one.
+          // Roles differentiate by MULTIPLIER, weight, colour, and opacity.
+          const base = nodePx * 0.85;
           let size: number;
           let target: number;
           let color = ink.text;
           let weight = '600';
+          const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           if (st.role === 'sel') {
-            size = 11 + 3 * t;
+            size = base * 1.35;
             target = 1;
             color = ink.accent;
             weight = '700';
           } else if (st.role === 'hit') {
-            size = 9.5 + 3 * t;
+            size = base * 1.2;
             target = 1;
           } else if (st.role === 'nbr') {
-            size = 8.5 + 3.5 * t;
-            target = 0.7 + 0.3 * t;
+            size = base * 1.05;
+            target = 0.55 + 0.45 * t; // far neighbours recede, near ones read solid
           } else {
-            size = Math.min(9.5, Math.max(6.5, nodePx * 0.8));
-            const salN = 1 - (n?.rank ?? N) / Math.max(1, N);
-            target = Math.min(0.55, torch * (0.5 + 0.1 * salN));
+            // The beam's GENTLE slope: opacity rises smoothly from ~0 at the
+            // admission boundary to its ceiling as the beam centres a node —
+            // no cliff where labels used to pop.
+            size = base * 0.8;
+            target = 0.55 * smoothstep(BEAM_OFF, 0.95, torch);
             weight = '500';
           }
           if (st.dying) target = 0;
