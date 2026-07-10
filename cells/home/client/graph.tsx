@@ -59,6 +59,43 @@ interface GEdge {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+// ─── scene tunables (?tune=1 mounts a live panel; ?tune=0 clears) ──────────
+// Every hand-tuned constant of the torch/beam/label/edge/bloom system, in one
+// mutable object. The tuner (lil-gui, esm.sh) writes here, persists overrides
+// to localStorage, and pokes the refresh hooks — so feel can be dialled on a
+// PHONE against live data, then the winning values sent back to be hard-coded.
+const TUNE_DEFAULTS = {
+  // torch (the camera-aimed spotlight)
+  coneIn: 0.14, coneOut: 0.42, depthIn: 0.45, depthOut: 1.7, torchFloor: 0.04,
+  // beam labels (the suggestion voice)
+  beamOn: 0.35, beamOff: 0.2, beamCapFocus: 6, labelCap: 0, // labelCap 0 = viewport default (12/22)
+  beamOpacity: 0.55, beamSizeMult: 0.8,
+  // focus labels
+  selSizeMult: 1.35, hitSizeMult: 1.2, nbrSizeMult: 1.05, nbrOpFar: 0.55, nbrOpNear: 1.0,
+  labelFade: 7, // lerp rate: higher = snappier
+  // nodes
+  nodeDim: 0.75, nbrBoost: 0.85, boostSizeGain: 0.45,
+  // edges
+  edgeSimilar: 0.06, edgeMember: 0.16, edgeDerived: 0.12, edgeAuthored: 0.3,
+  focusEdgeAlpha: 0.75, atmosphereDim: 0.45,
+  // bloom / exposure (desktop)
+  bloomStrength: 0.45, bloomRadius: 0.5, bloomThreshold: 0.35, exposure: 1.15,
+};
+const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
+const TUNE_LS = 'parc.home.tune';
+try {
+  const saved = JSON.parse(localStorage.getItem(TUNE_LS) ?? 'null');
+  if (saved && typeof saved === 'object') Object.assign(TUNE, saved);
+} catch { /* defaults */ }
+const tuneEnabled = (): boolean => {
+  try {
+    const q = new URLSearchParams(location.search).get('tune');
+    if (q === '0') localStorage.removeItem(TUNE_LS + '.on');
+    else if (q === '1' || location.hash.includes('tune')) localStorage.setItem(TUNE_LS + '.on', '1');
+    return q === '1' || location.hash.includes('tune') || localStorage.getItem(TUNE_LS + '.on') === '1';
+  } catch { return false; }
+};
 const hueOf = (t: string): number => {
   let h = 0;
   for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 360;
@@ -363,9 +400,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const nodeAlphaOf = (i: number): number => {
         const n = nodes[i];
         if (!isVis(n)) return 0; // culled by the salience slider
-        // 0.75: a global dimmer — the additive core of a dense slice summed to
-        // white; the torch supplies the contrast, points don't need to.
-        return 0.75 * nodeDOI(n, selKey, nbr, hiSet, N);
+        // Global dimmer — the additive core of a dense slice summed to white;
+        // the torch supplies the contrast, points don't need to.
+        return TUNE.nodeDim * nodeDOI(n, selKey, nbr, hiSet, N);
       };
 
       // ── renderer / scene / camera ──
@@ -378,7 +415,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
       renderer.setSize(W, H);
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.15;
+      renderer.toneMappingExposure = TUNE.exposure;
       renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
       el.innerHTML = '';
       el.appendChild(renderer.domElement);
@@ -405,7 +442,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const n = nodes[i];
         if (!isVis(n)) return 0;
         if (n.id === selKey || hiSet?.has(n.id)) return 1;
-        if (nbr?.has(n.id)) return 0.85; // lit, with a whisper of depth left
+        if (nbr?.has(n.id)) return TUNE.nbrBoost; // lit, with a whisper of depth left
         return 0;
       };
       const applyNodeAlpha = (): void => {
@@ -422,30 +459,36 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // axis (quick smoothstep between an inner and outer cone), plus a gentle
       // distance attenuation along the beam. Sweeps with the camera, unlike a
       // fixed sphere. `torch()` is shared GLSL, injected into both materials.
-      const CONE_IN = 0.14, CONE_OUT = 0.42; // tan(half-angle): full inside → dark outside the beam
-      const DEPTH_IN = SPREAD * 0.45, DEPTH_OUT = SPREAD * 1.7; // in-focus depth band around the focal point
-      const FLOOR = 0.04;
-      // A FOCUSED spotlight: brightest where the beam axis meets the focal depth
-      // (the focal point), dropping off both off-axis (the beam) AND off the focal
-      // depth — so the focal point is the single brightest spot, not the near rim.
+      // Torch parameters are UNIFORMS (shared object, both materials) so the
+      // tuner can dial them live; depthIn/Out are SPREAD-relative factors.
+      const torchUniforms = {
+        uFocus: { value: new THREE.Vector3() },
+        uCam: { value: new THREE.Vector3() },
+        uConeIn: { value: TUNE.coneIn },
+        uConeOut: { value: TUNE.coneOut },
+        uDepthIn: { value: SPREAD * TUNE.depthIn },
+        uDepthOut: { value: SPREAD * TUNE.depthOut },
+        uFloor: { value: TUNE.torchFloor },
+        uSizeBoost: { value: TUNE.boostSizeGain },
+      };
       const TORCH_GLSL =
-        'uniform vec3 uFocus; uniform vec3 uCam;' +
+        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor;' +
         'float torch(vec3 p){ vec3 d = uFocus - uCam; float td = length(d); vec3 axis = d / max(td, 1e-3);' +
-        ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return ' + FLOOR.toFixed(2) + ';' +
+        ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return uFloor;' +
         ' float radial = length(toP - axis*along);' +
-        ` float ang = 1.0 - smoothstep(${CONE_IN.toFixed(3)}, ${CONE_OUT.toFixed(3)}, radial / along);` +
-        ` float dep = 1.0 - smoothstep(${DEPTH_IN.toFixed(1)}, ${DEPTH_OUT.toFixed(1)}, abs(along - td));` +
-        ` return max(${FLOOR.toFixed(2)}, ang * dep); }`;
+        ' float ang = 1.0 - smoothstep(uConeIn, uConeOut, radial / along);' +
+        ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
+        ' return max(uFloor, ang * dep); }';
       const ptMat = new THREE.ShaderMaterial({
-        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uFocus: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() } },
+        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, ...torchUniforms },
         vertexShader:
           'attribute float size; attribute float alpha; attribute vec3 color; attribute float boost;' +
-          'varying float vAlpha; varying vec3 vColor; uniform float uScale;' +
+          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost;' +
           TORCH_GLSL +
           'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
           // Focus points also grow a little — brightness alone undersold a
           // small match dot; size makes the hit read as an OBJECT.
-          'vAlpha = alpha * max(torch(position), boost); gl_PointSize = size * (1.0 + 0.45 * boost) * (uScale / max(vd, 1.0));' +
+          'vAlpha = alpha * max(torch(position), boost); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; varying float vAlpha; varying vec3 vColor;' +
@@ -495,7 +538,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // Quieter than the old 2D strokes AND the previous 3D bases: additive
       // One/One SUMS overlapping edges, and the dense semantic core has enough
       // of them to clip to a white mass under bloom (figure/ground again).
-      const edgeBaseAlpha = (l: any): number => (MEMBER_RELS.has(l.rel) ? 0.16 : l.derived ? 0.12 : 0.3);
+      const edgeBaseAlpha = (l: any): number => (l.rel === 'similarTo' ? TUNE.edgeSimilar : MEMBER_RELS.has(l.rel) ? TUNE.edgeMember : l.derived ? TUNE.edgeDerived : TUNE.edgeAuthored);
       const edgeAlphaOf = (l: any): number => {
         const sN = nodeById.get(idOf(l.source)), tN = nodeById.get(idOf(l.target));
         if (!isVis(sN) || !isVis(tN)) return 0; // salience slider
@@ -527,10 +570,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           let r: number, g: number, b: number, al: number;
           if (bo > 0) {
             [r, g, b] = ACCENT_RGB;
-            al = 0.75;
+            al = TUNE.focusEdgeAlpha;
           } else {
             [r, g, b] = edgeRGB[i];
-            al = edgeAlphaOf(links[i]) * (focusActive ? 0.45 : 1);
+            al = edgeAlphaOf(links[i]) * (focusActive ? TUNE.atmosphereDim : 1);
           }
           ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
           ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
@@ -548,7 +591,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // the atmosphere. Per-vertex colour already carries the focus/selection
       // alpha (premultiplied); the shader multiplies in the distance falloff.
       const eMat = new THREE.ShaderMaterial({
-        uniforms: { uFocus: { value: new THREE.Vector3() }, uCam: { value: new THREE.Vector3() } },
+        uniforms: torchUniforms,
         vertexShader:
           'attribute vec3 color; attribute float boost; varying vec3 vColor;' +
           TORCH_GLSL +
@@ -619,13 +662,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // ── bloom (desktop only — fill-rate heavy on phones) ──
       const bigScreen = Math.min(W, H) >= 620 && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
       let composer: any = null;
+      let bloomPass: any = null;
       if (bigScreen) {
         composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
         // Threshold above the resting wash so only genuinely bright points
         // bloom — at 0.12 the dense core's additive sum ALL bloomed and clipped
         // to a white blob that swallowed its labels.
-        composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.45, 0.5, 0.35)); // strength, radius, threshold
+        bloomPass = new UnrealBloomPass(new THREE.Vector2(W, H), TUNE.bloomStrength, TUNE.bloomRadius, TUNE.bloomThreshold);
+        composer.addPass(bloomPass);
         composer.setSize(W, H);
       }
 
@@ -760,11 +805,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         axisV.multiplyScalar(1 / Math.max(td, 1e-3));
         toPV.copy(pos).sub(camPos);
         const along = toPV.dot(axisV);
-        if (along <= 0) return FLOOR;
+        if (along <= 0) return TUNE.torchFloor;
         const radial = toPV.addScaledVector(axisV, -along).length(); // toP - axis*along
-        const ang = 1 - smoothstep(CONE_IN, CONE_OUT, radial / along);
-        const dep = 1 - smoothstep(DEPTH_IN, DEPTH_OUT, Math.abs(along - td));
-        return Math.max(FLOOR, ang * dep);
+        const ang = 1 - smoothstep(TUNE.coneIn, TUNE.coneOut, radial / along);
+        const dep = 1 - smoothstep(SPREAD * TUNE.depthIn, SPREAD * TUNE.depthOut, Math.abs(along - td));
+        return Math.max(TUNE.torchFloor, ang * dep);
       };
       // Beam-driven label set: label the nodes the torch is currently lighting
       // (brightest first, capped) plus the pinned set, with hysteresis so labels
@@ -773,7 +818,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const scratchP = new THREE.Vector3();
       const torchNode = (n: any): number => torchAt(scratchP.set(n.x, n.y, n.z));
       // Fewer beam-lit labels on a phone — 28 at once piled up in the core.
-      const BEAM_ON = 0.35, BEAM_OFF = 0.2, LABEL_CAP = Math.min(W, H) < 700 ? 12 : 22;
+      const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 12 : 22;
+      const labelCap = (): number => TUNE.labelCap > 0 ? TUNE.labelCap : LABEL_CAP_DEFAULT;
       // Legibility gates (the dense core turned its beam labels into a white
       // pile of 7px mush): a candidate must render big enough to READ, and must
       // not land on top of an already-placed label — greedy, brightest first.
@@ -888,7 +934,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             .sort((a, b) => (a.rank ?? N) - (b.rank ?? N));
           let added = 0;
           for (const n of cands) {
-            if (added >= LABEL_CAP) break;
+            if (added >= labelCap()) break;
             const [sx, sy] = screenXY(n);
             const w = boxOf(n);
             if (collides(sx, sy, w)) continue;
@@ -903,13 +949,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // the focus labels above, and a candidate must hold the beam across
         // consecutive syncs before it fades in (the camera drifting past
         // something no longer pops a label).
-        const beamCap = focusActive ? 6 : LABEL_CAP;
+        const beamCap = focusActive ? TUNE.beamCapFocus : labelCap();
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id)) continue;
           const t = torchNode(n);
           // Enter at BEAM_ON, stay until BEAM_OFF — hysteresis against edge flicker.
-          if (t > BEAM_ON || (labelObjs.has(n.id) && t > BEAM_OFF)) lit.push([n.id, t]);
+          if (t > TUNE.beamOn || (labelObjs.has(n.id) && t > TUNE.beamOff)) lit.push([n.id, t]);
         }
         lit.sort((a, b) => b[1] - a[1]);
         const inBeam = new Set<string>();
@@ -937,7 +983,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // and recedes with the camera instead of snapping to a fixed pixel band
       // (which flattened the depth and broke the atmosphere).
       const updateLabels = (dt: number): void => {
-        const k = Math.min(1, dt * 7); // ~150ms to settle — a fade, not a pop
+        const k = Math.min(1, dt * TUNE.labelFade); // ~150ms to settle — a fade, not a pop
         for (const [id, st] of labelObjs) {
           const n = nodeById.get(id);
           const obj = st.obj;
@@ -955,22 +1001,22 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           let weight = '600';
           const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           if (st.role === 'sel') {
-            size = base * 1.35;
+            size = base * TUNE.selSizeMult;
             target = 1;
             color = ink.accent;
             weight = '700';
           } else if (st.role === 'hit') {
-            size = base * 1.2;
+            size = base * TUNE.hitSizeMult;
             target = 1;
           } else if (st.role === 'nbr') {
-            size = base * 1.05;
-            target = 0.55 + 0.45 * t; // far neighbours recede, near ones read solid
+            size = base * TUNE.nbrSizeMult;
+            target = TUNE.nbrOpFar + (TUNE.nbrOpNear - TUNE.nbrOpFar) * t; // far neighbours recede
           } else {
             // The beam's GENTLE slope: opacity rises smoothly from ~0 at the
             // admission boundary to its ceiling as the beam centres a node —
             // no cliff where labels used to pop.
-            size = base * 0.8;
-            target = 0.55 * smoothstep(BEAM_OFF, 0.95, torch);
+            size = base * TUNE.beamSizeMult;
+            target = TUNE.beamOpacity * smoothstep(TUNE.beamOff, 0.95, torch);
             weight = '500';
           }
           if (st.dying) target = 0;
@@ -1001,8 +1047,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // Feed the beam (camera + focal point) to the torch shaders + labels.
         controls.getTarget(focusVec);
         camera.getWorldPosition(camPos);
-        ptMat.uniforms.uFocus.value.copy(focusVec); ptMat.uniforms.uCam.value.copy(camPos);
-        eMat.uniforms.uFocus.value.copy(focusVec); eMat.uniforms.uCam.value.copy(camPos);
+        torchUniforms.uFocus.value.copy(focusVec);
+        torchUniforms.uCam.value.copy(camPos);
         // Re-pick the beam-lit label set a few times a second (DOM churn is the
         // cost; the beam moves slowly), then size/opacity every frame.
         if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
@@ -1023,7 +1069,89 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       ro = new ResizeObserver(resize);
       ro.observe(el);
 
+      // ── the tuner (?tune=1, sticky; ?tune=0 clears): lil-gui over TUNE.
+      // Touch-friendly, loads from esm.sh like the rest of the 3D stack, and
+      // only ever mounts behind the flag — a field instrument for dialling the
+      // torch/beam/label/edge/bloom feel on live data. `copy values` puts the
+      // current JSON on the clipboard to send back for hard-coding.
+      let gui: any = null;
+      if (tuneEnabled()) {
+        void import(/* @vite-ignore */ esmURL('lil-gui@0.19.2')).then((m: any) => {
+          if (disposed) return;
+          const GUI = m.default ?? m.GUI;
+          gui = new GUI({ title: 'graph tune' });
+          gui.domElement.style.cssText = 'position:fixed;top:64px;right:8px;z-index:60;max-height:70dvh;overflow-y:auto';
+          const persist = (): void => { try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ } };
+          const refresh = (): void => {
+            torchUniforms.uConeIn.value = TUNE.coneIn;
+            torchUniforms.uConeOut.value = TUNE.coneOut;
+            torchUniforms.uDepthIn.value = SPREAD * TUNE.depthIn;
+            torchUniforms.uDepthOut.value = SPREAD * TUNE.depthOut;
+            torchUniforms.uFloor.value = TUNE.torchFloor;
+            torchUniforms.uSizeBoost.value = TUNE.boostSizeGain;
+            if (bloomPass) {
+              bloomPass.strength = TUNE.bloomStrength;
+              bloomPass.radius = TUNE.bloomRadius;
+              bloomPass.threshold = TUNE.bloomThreshold;
+            }
+            renderer.toneMappingExposure = TUNE.exposure;
+            applyNodeAlpha();
+            applyEdgeColor();
+            persist();
+          };
+          const add = (folder: any, key: keyof typeof TUNE, min: number, max: number, step = 0.01): void => {
+            folder.add(TUNE, key, min, max, step).onChange(refresh);
+          };
+          const torchF = gui.addFolder('torch');
+          add(torchF, 'coneIn', 0.02, 0.5);
+          add(torchF, 'coneOut', 0.1, 1.2);
+          add(torchF, 'depthIn', 0.05, 1.5);
+          add(torchF, 'depthOut', 0.3, 4);
+          add(torchF, 'torchFloor', 0, 0.2, 0.005);
+          const beamF = gui.addFolder('beam');
+          add(beamF, 'beamOn', 0.05, 0.9);
+          add(beamF, 'beamOff', 0.02, 0.8);
+          add(beamF, 'beamOpacity', 0, 1);
+          add(beamF, 'beamSizeMult', 0.3, 1.5);
+          add(beamF, 'beamCapFocus', 0, 20, 1);
+          add(beamF, 'labelCap', 0, 40, 1);
+          const labelsF = gui.addFolder('labels');
+          add(labelsF, 'selSizeMult', 0.8, 2.5);
+          add(labelsF, 'hitSizeMult', 0.8, 2.5);
+          add(labelsF, 'nbrSizeMult', 0.6, 2);
+          add(labelsF, 'nbrOpFar', 0.1, 1);
+          add(labelsF, 'nbrOpNear', 0.3, 1);
+          add(labelsF, 'labelFade', 1, 20, 0.5);
+          const nodesF = gui.addFolder('nodes');
+          add(nodesF, 'nodeDim', 0.2, 1.5);
+          add(nodesF, 'nbrBoost', 0, 1);
+          add(nodesF, 'boostSizeGain', 0, 1.5);
+          const edgesF = gui.addFolder('edges');
+          add(edgesF, 'edgeSimilar', 0, 0.3, 0.005);
+          add(edgesF, 'edgeMember', 0, 0.5, 0.005);
+          add(edgesF, 'edgeDerived', 0, 0.5, 0.005);
+          add(edgesF, 'edgeAuthored', 0, 1, 0.005);
+          add(edgesF, 'focusEdgeAlpha', 0, 1);
+          add(edgesF, 'atmosphereDim', 0, 1);
+          const postF = gui.addFolder('bloom');
+          add(postF, 'bloomStrength', 0, 2);
+          add(postF, 'bloomRadius', 0, 1.5);
+          add(postF, 'bloomThreshold', 0, 1);
+          add(postF, 'exposure', 0.4, 2.5);
+          gui.add({ copy: () => { void navigator.clipboard?.writeText(JSON.stringify(TUNE, null, 2)); } }, 'copy').name('copy values');
+          gui.add({
+            reset: () => {
+              Object.assign(TUNE, TUNE_DEFAULTS);
+              try { localStorage.removeItem(TUNE_LS); } catch { /* */ }
+              refresh();
+              gui.controllersRecursive().forEach((c: any) => c.updateDisplay());
+            },
+          }, 'reset').name('reset defaults');
+        }).catch(() => null);
+      }
+
       cleanup = () => {
+        gui?.destroy?.();
         renderer.domElement.removeEventListener('pointerdown', onDown);
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
