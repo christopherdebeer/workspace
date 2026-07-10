@@ -66,9 +66,12 @@ interface GEdge {
 // to localStorage, and pokes the refresh hooks — so feel can be dialled on a
 // PHONE against live data, then the winning values sent back to be hard-coded.
 const TUNE_DEFAULTS = {
-  // torch (the scene LIGHTING — owner-tuned 2026-07-10 to a floodlight: wide
-  // cones, deep band, lifted floor; glow re-built in the post chain instead)
-  coneIn: 0.5, coneOut: 1.2, depthIn: 1.5, depthOut: 4, torchFloor: 0.2,
+  // torch (the scene LIGHTING — owner re-grade 2026-07-10 #2: a graded VIGNETTE,
+  // not a flood. coneIn/depthIn at ~0 mean there is no full-brightness plateau
+  // at all — light falls continuously from the focal point outward in angle AND
+  // depth, down to the 0.2 floor. Shape over flatness; brightness is bought
+  // back with exposure, not with a wider hot zone.)
+  coneIn: 0.02, coneOut: 1.2, depthIn: 0.05, depthOut: 4, torchFloor: 0.2,
   // label admission (the SELECTOR) — decoupled from the lighting: labels need
   // a sharp instrument even when the light is flat, so admission ranks by its
   // own narrow cone. beamOn 0.85 / beamOff 0.2 = admit dead-centre, linger.
@@ -79,16 +82,23 @@ const TUNE_DEFAULTS = {
   // points, bloom) carries structure; text names things.
   selSizeMult: 0.8, hitSizeMult: 0.8, nbrSizeMult: 0.74, nbrOpFar: 0.38, nbrOpNear: 1.0,
   labelFade: 4, // lerp rate: higher = snappier
-  // nodes — hot going in, compressed by low exposure (film grading)
-  nodeDim: 1.5, nbrBoost: 1.0, boostSizeGain: 0.47,
-  // edges (resting bases untouched by the re-grade — that layer is settled)
-  edgeSimilar: 0.06, edgeMember: 0.16, edgeDerived: 0.12, edgeAuthored: 0.3,
-  focusEdgeAlpha: 1.0, atmosphereDim: 0.35,
-  // bloom / exposure — luminosity lives HERE, not in raw whites: strong wide
-  // bloom over an ACES curve at low exposure. bloomMode: 'auto' = desktop only
-  // (fill-rate heavy on phones); the tuner can force 'on' to TRY it on mobile.
-  bloomStrength: 0.93, bloomRadius: 1.02, bloomThreshold: 0.25, exposure: 0.4,
-  bloomMode: 'auto' as 'auto' | 'on' | 'off',
+  // nodes — hot going in, compressed by tone mapping (film grading).
+  // boostSizeGain > 1: a focused node more than doubles — selection reads as
+  // an OBJECT in the scene, not a brighter dot.
+  nodeDim: 1.5, nbrBoost: 1.0, boostSizeGain: 1.12,
+  // edges — membership-forward at rest: the container lattice (member 0.35)
+  // is the visible structure, similar kinship a quiet field (0.14), authored
+  // statements pulled back to parity (0.17) — they get their moment as the
+  // full-alpha amber fan when a node is selected, not as resting clutter.
+  edgeSimilar: 0.14, edgeMember: 0.35, edgeDerived: 0.135, edgeAuthored: 0.17,
+  focusEdgeAlpha: 1.0, atmosphereDim: 0.45,
+  // bloom / exposure — selective accent, not wash: higher threshold (0.6) so
+  // only genuinely hot pixels bloom (boosted focus, cluster cores), tight
+  // radius, over a brighter ACES base (exposure 0.74). Forced ON everywhere —
+  // mobile is correct since the composer pixel-ratio fix, and the owner graded
+  // with it on.
+  bloomStrength: 0.78, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.74,
+  bloomMode: 'on' as 'auto' | 'on' | 'off',
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -1148,9 +1158,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             folder.add(TUNE, key, min, max, step).onChange(refresh);
           };
           const torchF = gui.addFolder('torch');
-          add(torchF, 'coneIn', 0.02, 0.5);
+          // Mins go to TRUE zero — the owner's grade railed the old bottom stops
+          // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
+          add(torchF, 'coneIn', 0, 0.5);
           add(torchF, 'coneOut', 0.1, 1.2);
-          add(torchF, 'depthIn', 0.05, 1.5);
+          add(torchF, 'depthIn', 0, 1.5);
           add(torchF, 'depthOut', 0.3, 4);
           add(torchF, 'torchFloor', 0, 0.2, 0.005);
           const beamF = gui.addFolder('beam');
@@ -1187,6 +1199,34 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(postF, 'bloomThreshold', 0, 1);
           add(postF, 'exposure', 0.4, 2.5);
           gui.add({ copy: () => { void navigator.clipboard?.writeText(JSON.stringify(TUNE, null, 2)); } }, 'copy').name('copy values');
+          // `paste values` closes the loop `copy values` opened: a grade JSON
+          // from another device/session (or hard-coded defaults under trial)
+          // drops straight back into the live instrument. Unknown keys are
+          // ignored; types are checked against the defaults' shapes.
+          const applyTune = (text: string | null | undefined): void => {
+            let obj: Record<string, unknown>;
+            try { obj = JSON.parse(text ?? ''); } catch { return; }
+            if (!obj || typeof obj !== 'object') return;
+            for (const k of Object.keys(TUNE_DEFAULTS) as Array<keyof typeof TUNE>) {
+              const v = obj[k];
+              if (v === undefined || typeof v !== typeof TUNE_DEFAULTS[k]) continue;
+              if (k === 'bloomMode' && !['auto', 'on', 'off'].includes(v as string)) continue;
+              (TUNE as any)[k] = v;
+            }
+            refresh(); // also persists
+            gui.controllersRecursive().forEach((c: any) => c.updateDisplay());
+          };
+          gui.add({
+            paste: () => {
+              // Clipboard read needs a permission grant some browsers refuse
+              // (iOS Safari prompts, Firefox denies) — fall back to a prompt box.
+              if (navigator.clipboard?.readText) {
+                navigator.clipboard.readText().then(applyTune, () => applyTune(window.prompt('paste tune JSON')));
+              } else {
+                applyTune(window.prompt('paste tune JSON'));
+              }
+            },
+          }, 'paste').name('paste values');
           gui.add({
             reset: () => {
               Object.assign(TUNE, TUNE_DEFAULTS);
