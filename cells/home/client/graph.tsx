@@ -566,8 +566,18 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       scene.add(lineSegs);
       applyEdgeColor();
 
-      // ── labels (CSS2D — focus band + selection, faded by camera distance) ──
-      const labelObjs = new Map<string, any>();
+      // ── labels (CSS2D) — a role-typed pool with a FADE lifecycle. Roles:
+      // 'sel' (the anchor), 'hit' (a search result), 'nbr' (a selection
+      // neighbour), 'beam' (the torch's SUGGESTION — the sweep-to-reveal
+      // affordance). The beam had two sins (owner feedback): binary DOM
+      // add/remove made labels POP, and beam catches wore the same styling as
+      // search hits, so unrelated items read as results. Now every label fades
+      // in/out (lerped per frame), and the beam is a visibly SECONDARY voice —
+      // smaller, dimmer, lighter weight — that yields collision priority to
+      // focus and needs consecutive in-beam syncs before it appears.
+      type LabelRole = 'sel' | 'hit' | 'nbr' | 'beam';
+      interface LabelState { obj: any; cur: number; role: LabelRole; dying: boolean }
+      const labelObjs = new Map<string, LabelState>();
       const makeLabel = (n: any): any => {
         const div = document.createElement('div');
         div.textContent = n.label;
@@ -586,25 +596,25 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         obj.position.set(n.x, n.y, n.z);
         return obj;
       };
-      // Labels are driven by the BEAM (torchAt, below) — sweeping the focal point
-      // over the constellation lights whatever is near the line of sight so you can
-      // explore low-salience neighbours. Salience no longer gates label existence;
-      // it stays an affordance via node SIZE (rad ∝ score) and a whisper of label
-      // opacity. PINNED nodes (selection / its neighbours / a highlight set) are
-      // always labelled regardless of the beam.
-      const labelPinned = (n: any): boolean => isVis(n) && (n.id === selKey || !!nbr?.has(n.id) || !!hiSet?.has(n.id));
-      const pinnedSet = (): Set<string> => { const s = new Set<string>(); for (const n of nodes) if (labelPinned(n)) s.add(n.id); return s; };
-      const reconcileLabels = (keep: Set<string>): void => {
-        for (const n of nodes) {
-          const want = keep.has(n.id), has = labelObjs.has(n.id);
-          if (want && !has) { const o = makeLabel(n); labelObjs.set(n.id, o); scene.add(o); }
-          else if (!want && has) { const o = labelObjs.get(n.id); scene.remove(o); o.element.remove?.(); labelObjs.delete(n.id); }
+      /** Reconcile membership: departures FADE (dying → removed at ~0), not pop. */
+      const reconcileLabels = (want: Map<string, LabelRole>): void => {
+        for (const [id, st] of labelObjs) {
+          const role = want.get(id);
+          if (role) {
+            st.role = role;
+            st.dying = false;
+          } else st.dying = true;
+        }
+        for (const [id, role] of want) {
+          if (labelObjs.has(id)) continue;
+          const n = nodeById.get(id);
+          if (!n) continue;
+          const obj = makeLabel(n);
+          obj.element.style.opacity = '0'; // arrivals fade IN from nothing
+          scene.add(obj);
+          labelObjs.set(id, { obj, cur: 0, role, dying: false });
         }
       };
-      // Safe before the beam exists (setup / selection): pinned labels only. The
-      // tick's syncBeamLabels adds the beam-lit set once the camera is running.
-      const syncLabels = (): void => reconcileLabels(pinnedSet());
-      syncLabels();
 
       // ── bloom (desktop only — fill-rate heavy on phones) ──
       const bigScreen = Math.min(W, H) >= 620 && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -677,8 +687,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // A tap over a label's rect selects that node — labels are pointer-events:
       // none, so their taps arrive here on the canvas rather than via a DOM click.
       const labelAt = (cx: number, cy: number): string | null => {
-        for (const [id, obj] of labelObjs) {
-          const r = obj.element.getBoundingClientRect();
+        for (const [id, st] of labelObjs) {
+          if (st.cur < 0.3) continue; // a barely-there label shouldn't catch taps
+          const r = st.obj.element.getBoundingClientRect();
           if (r.width && cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return id;
         }
         return null;
@@ -829,34 +840,43 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         }
       };
 
+      const beamStreak = new Map<string, number>();
       const syncBeamLabels = (): void => {
         syncEdgeLabels();
+        const want = new Map<string, LabelRole>();
         const placed: Array<[number, number]> = [];
         const collides = (sx: number, sy: number): boolean => placed.some(([px, py]) => Math.abs(px - sx) < 90 && Math.abs(py - sy) < 16);
         const readable = (n: any): boolean => {
           const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
           return rad(n) * 2.4 * (H / 2) / camD >= MIN_LABEL_PX;
         };
-        // FOCUS MODE: with a selection (or a highlight set) the NEIGHBOURHOOD
-        // owns the scene — no beam-lit bystanders. But a hub's neighbourhood is
-        // itself a crowd (the tending protocol touches every run and audit), so
-        // neighbours pass the SAME legibility gates as beam labels: most
-        // salient first, readable size, no pile-ups, capped. Every neighbour
-        // POINT stays bright (DOI 0.8) — connectedness shows even where a
-        // label doesn't fit.
-        if (selKey || hiSet) {
-          const keep = new Set<string>();
-          const anchor = selKey ? [selKey] : [];
-          for (const id of [...anchor, ...(hiSet ?? [])]) {
-            const n = nodeById.get(id);
-            if (!n || !isVis(n)) continue;
-            keep.add(id);
+        const focusActive = !!(selKey || hiSet);
+
+        // FOCUS DECLARES: the anchor and every search hit label unconditionally
+        // (they are the question being asked); neighbours pass legibility gates
+        // (salience-first, readable, decluttered, capped).
+        if (selKey) {
+          const n = nodeById.get(selKey);
+          if (n && isVis(n)) {
+            want.set(selKey, 'sel');
             placed.push(screenXY(n));
           }
-          const cands = [...(nbr ?? [])]
+        }
+        if (hiSet) {
+          for (const id of hiSet) {
+            if (want.has(id)) continue;
+            const n = nodeById.get(id);
+            if (n && isVis(n)) {
+              want.set(id, 'hit');
+              placed.push(screenXY(n));
+            }
+          }
+        }
+        if (selKey && nbr) {
+          const cands = [...nbr]
             .map((id) => nodeById.get(id))
-            .filter((n) => n && isVis(n) && !keep.has(n.id))
-            .sort((a, b) => (a.rank ?? N) - (b.rank ?? N)); // most salient neighbours first
+            .filter((n) => n && isVis(n) && !want.has(n.id))
+            .sort((a, b) => (a.rank ?? N) - (b.rank ?? N));
           let added = 0;
           for (const n of cands) {
             if (added >= LABEL_CAP) break;
@@ -864,72 +884,96 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             const [sx, sy] = screenXY(n);
             if (collides(sx, sy)) continue;
             placed.push([sx, sy]);
-            keep.add(n.id);
+            want.set(n.id, 'nbr');
             added++;
           }
-          reconcileLabels(keep);
-          return;
         }
-        const keep = pinnedSet();
-        for (const id of keep) { const n = nodeById.get(id); if (n) placed.push(screenXY(n)); }
+
+        // THE BEAM SUGGESTS — in both modes, but as the secondary voice: a
+        // smaller allowance under focus, collision priority already ceded to
+        // the focus labels above, and a candidate must hold the beam across
+        // consecutive syncs before it fades in (the camera drifting past
+        // something no longer pops a label).
+        const beamCap = focusActive ? 6 : LABEL_CAP;
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
-          if (!isVis(n) || keep.has(n.id)) continue;
+          if (!isVis(n) || want.has(n.id)) continue;
           const t = torchNode(n);
           // Enter at BEAM_ON, stay until BEAM_OFF — hysteresis against edge flicker.
           if (t > BEAM_ON || (labelObjs.has(n.id) && t > BEAM_OFF)) lit.push([n.id, t]);
         }
         lit.sort((a, b) => b[1] - a[1]);
+        const inBeam = new Set<string>();
         let added = 0;
         for (const [id] of lit) {
-          if (added >= LABEL_CAP) break;
+          if (added >= beamCap) break;
           const n = nodeById.get(id);
-          if (!readable(n)) continue; // sub-readable
+          if (!readable(n)) continue;
           const [sx, sy] = screenXY(n);
           if (collides(sx, sy)) continue;
+          inBeam.add(id);
+          const streak = (beamStreak.get(id) ?? 0) + 1;
+          beamStreak.set(id, streak);
+          if (streak < 2 && !labelObjs.has(id)) continue; // entry debounce
           placed.push([sx, sy]);
-          keep.add(id);
+          want.set(id, 'beam');
           added++;
         }
-        reconcileLabels(keep);
+        for (const id of [...beamStreak.keys()]) if (!inBeam.has(id)) beamStreak.delete(id);
+        reconcileLabels(want);
       };
       // Label SIZE tracks the node's on-screen size (the same projection the point
       // shader uses: pxDiameter = size·(H/2)/viewDepth), so a label reads as
       // attached to its node — small nodes get small labels, and everything grows
       // and recedes with the camera instead of snapping to a fixed pixel band
       // (which flattened the depth and broke the atmosphere).
-      const updateLabels = (): void => {
-        for (const [id, obj] of labelObjs) {
+      const updateLabels = (dt: number): void => {
+        const k = Math.min(1, dt * 7); // ~150ms to settle — a fade, not a pop
+        for (const [id, st] of labelObjs) {
           const n = nodeById.get(id);
+          const obj = st.obj;
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          // ROLE-styled, DEPTH-blended. Hard uniform floors made every label
-          // the same size at every distance — legible but flat (owner: "breaks
-          // 3d exploration and immersion"). Focus labels keep a readable floor
-          // but SCALE and FADE with depth inside their band; atmosphere labels
-          // are fully proportional, receding into the wash as before.
-          const isSel = id === selKey;
-          const isNbr = !isSel && (!!nbr?.has(id) || !!hiSet?.has(id));
           const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           const torch = torchAt(obj.position);
+          // ROLE-styled, DEPTH-blended. Focus roles keep readable floors and
+          // scale/fade with depth inside their band; the beam is the visibly
+          // SECONDARY suggestion — smaller, dimmer, lighter — so a torch catch
+          // can never impersonate a search hit or a neighbour.
           let size: number;
-          let op: number;
-          if (isSel) {
+          let target: number;
+          let color = ink.text;
+          let weight = '600';
+          if (st.role === 'sel') {
             size = 11 + 3 * t;
-            op = 1;
-          } else if (isNbr) {
+            target = 1;
+            color = ink.accent;
+            weight = '700';
+          } else if (st.role === 'hit') {
+            size = 9.5 + 3 * t;
+            target = 1;
+          } else if (st.role === 'nbr') {
             size = 8.5 + 3.5 * t;
-            op = 0.7 + 0.3 * t; // near neighbours read solid, far ones recede
+            target = 0.7 + 0.3 * t;
           } else {
-            size = Math.min(11, nodePx * 0.85); // proportional — the atmosphere
+            size = Math.min(9.5, Math.max(6.5, nodePx * 0.8));
             const salN = 1 - (n?.rank ?? N) / Math.max(1, N);
-            op = torch * (0.9 + 0.1 * salN);
+            target = Math.min(0.55, torch * (0.5 + 0.1 * salN));
+            weight = '500';
+          }
+          if (st.dying) target = 0;
+          st.cur += (target - st.cur) * k;
+          if (st.dying && st.cur < 0.03) {
+            scene.remove(obj);
+            obj.element.remove?.();
+            labelObjs.delete(id);
+            continue;
           }
           obj.element.style.fontSize = size.toFixed(1) + 'px';
           obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
-          obj.element.style.color = isSel ? ink.accent : ink.text;
-          obj.element.style.fontWeight = isSel ? '700' : '600';
-          obj.element.style.opacity = op.toFixed(3);
+          obj.element.style.color = color;
+          obj.element.style.fontWeight = weight;
+          obj.element.style.opacity = st.cur.toFixed(3);
         }
       };
 
@@ -950,7 +994,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // Re-pick the beam-lit label set a few times a second (DOM churn is the
         // cost; the beam moves slowly), then size/opacity every frame.
         if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
-        updateLabels();
+        updateLabels(delta);
         if (composer) composer.render(); else renderer.render(scene, camera);
         labelRenderer.render(scene, camera);
       };
@@ -971,7 +1015,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         renderer.domElement.removeEventListener('pointerdown', onDown);
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
-        for (const [, o] of labelObjs) o.element.remove?.();
+        for (const [, st] of labelObjs) st.obj.element.remove?.();
         for (const [, o] of edgeLabelObjs) o.element.remove?.();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
         disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
