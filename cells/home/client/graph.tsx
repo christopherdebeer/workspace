@@ -84,9 +84,11 @@ const TUNE_DEFAULTS = {
   // edges (resting bases untouched by the re-grade — that layer is settled)
   edgeSimilar: 0.06, edgeMember: 0.16, edgeDerived: 0.12, edgeAuthored: 0.3,
   focusEdgeAlpha: 1.0, atmosphereDim: 0.35,
-  // bloom / exposure (desktop; phones skip bloom) — luminosity lives HERE, not
-  // in raw whites: strong wide bloom over an ACES curve at low exposure.
+  // bloom / exposure — luminosity lives HERE, not in raw whites: strong wide
+  // bloom over an ACES curve at low exposure. bloomMode: 'auto' = desktop only
+  // (fill-rate heavy on phones); the tuner can force 'on' to TRY it on mobile.
   bloomStrength: 0.93, bloomRadius: 1.02, bloomThreshold: 0.25, exposure: 0.4,
+  bloomMode: 'auto' as 'auto' | 'on' | 'off',
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -669,7 +671,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const bigScreen = Math.min(W, H) >= 620 && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
       let composer: any = null;
       let bloomPass: any = null;
-      if (bigScreen) {
+      // Bloom is a TOGGLE now (tuner: auto/on/off — 'on' lets a phone try it),
+      // so the composer builds lazily the first frame it's wanted and the tick
+      // simply routes around it when it isn't.
+      const useBloom = (): boolean => TUNE.bloomMode === 'on' || (TUNE.bloomMode === 'auto' && bigScreen);
+      const ensureComposer = (): void => {
+        if (composer) return;
         composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
         // Threshold above the resting wash so only genuinely bright points
@@ -677,8 +684,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // to a white blob that swallowed its labels.
         bloomPass = new UnrealBloomPass(new THREE.Vector2(W, H), TUNE.bloomStrength, TUNE.bloomRadius, TUNE.bloomThreshold);
         composer.addPass(bloomPass);
+        // The composer must MATCH the renderer's pixel ratio — on a 2x phone
+        // its targets otherwise mismatch the drawing buffer and the scene
+        // renders black (why bloom 'on' looked dead on mobile).
+        composer.setPixelRatio(renderer.getPixelRatio());
         composer.setSize(W, H);
-      }
+      };
+      if (useBloom()) ensureComposer();
 
       // ── controls: damped orbit + idle auto-rotate (stops on touch, resumes) ──
       // ── star-map camera (camera-controls) ──
@@ -713,6 +725,28 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const r = (dists[Math.floor(dists.length * 0.8)] ?? SPREAD) * 1.1;
         controls.fitToSphere(new THREE.Sphere(c, Math.max(r, SPREAD * 0.3)), false);
       }
+      // Hold SPACE: left-drag TRUCKS (pans) instead of orbiting — the design-
+      // tool convention, matching mobile's two-finger drag. Temporary while
+      // held; skipped when the palette (or any field) has keyboard focus.
+      let spaceHeld = false;
+      const onSpaceDown = (e: KeyboardEvent): void => {
+        if (e.code !== 'Space' || spaceHeld) return;
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement as HTMLElement | null)?.isContentEditable) return;
+        e.preventDefault(); // keep Space from scrolling/activating
+        spaceHeld = true;
+        controls.mouseButtons.left = CameraControls.ACTION.TRUCK;
+        renderer.domElement.style.cursor = 'grab';
+      };
+      const onSpaceUp = (e: KeyboardEvent): void => {
+        if (e.code !== 'Space' || !spaceHeld) return;
+        spaceHeld = false;
+        controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
+        renderer.domElement.style.cursor = '';
+      };
+      window.addEventListener('keydown', onSpaceDown);
+      window.addEventListener('keyup', onSpaceUp);
+
       // Idle auto-rotate: resume a slow orbit ~5s after the last user gesture.
       let interacting = false;
       let lastInput = performance.now();
@@ -1060,7 +1094,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // cost; the beam moves slowly), then size/opacity every frame.
         if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
         updateLabels(delta);
-        if (composer) composer.render(); else renderer.render(scene, camera);
+        if (useBloom()) {
+          ensureComposer();
+          composer.render();
+        } else renderer.render(scene, camera);
         labelRenderer.render(scene, camera);
       };
       tick();
@@ -1096,6 +1133,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             torchUniforms.uDepthOut.value = SPREAD * TUNE.depthOut;
             torchUniforms.uFloor.value = TUNE.torchFloor;
             torchUniforms.uSizeBoost.value = TUNE.boostSizeGain;
+            if (useBloom()) ensureComposer();
             if (bloomPass) {
               bloomPass.strength = TUNE.bloomStrength;
               bloomPass.radius = TUNE.bloomRadius;
@@ -1143,6 +1181,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(edgesF, 'focusEdgeAlpha', 0, 1);
           add(edgesF, 'atmosphereDim', 0, 1);
           const postF = gui.addFolder('bloom');
+          postF.add(TUNE, 'bloomMode', ['auto', 'on', 'off']).onChange(refresh);
           add(postF, 'bloomStrength', 0, 2);
           add(postF, 'bloomRadius', 0, 1.5);
           add(postF, 'bloomThreshold', 0, 1);
@@ -1161,6 +1200,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       cleanup = () => {
         gui?.destroy?.();
+        window.removeEventListener('keydown', onSpaceDown);
+        window.removeEventListener('keyup', onSpaceUp);
         renderer.domElement.removeEventListener('pointerdown', onDown);
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
