@@ -87,7 +87,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   const e = entry ?? ({ key: factKey } as ListEntry);
   const href = factHref(e);
   return (
-    <div style={{ display: 'grid', gap: '0.35rem', padding: '0.45rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
+    <div style={{ display: 'grid', gap: '0.4rem', padding: '0.55rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
         <span aria-hidden>{typeIcon(e)}</span>
         <button
@@ -175,9 +175,14 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     <div
       style={{
         position: 'fixed',
-        left: '50%',
+        left: 0,
+        right: 0,
+        marginInline: 'auto',
         bottom: 'max(10px, env(safe-area-inset-bottom))',
-        transform: pos ? `translate(calc(-50% + ${pos.x}px), ${pos.y}px)` : 'translateX(-50%)',
+        // Centering via auto margins, NOT translateX(-50%): the transform put
+        // the whole instrument on a half-pixel (blurry text at odd widths) and
+        // forced a composited layer that misrendered under some compositors.
+        transform: pos ? `translate(${pos.x}px, ${pos.y}px)` : undefined,
         width: 'min(720px, calc(100vw - 12px))',
         zIndex: 40,
         display: 'grid',
@@ -191,7 +196,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     >
       {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {open ? (
-        <div style={{ maxHeight: '56vh', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel }}>
+        <div style={{ maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel }}>
           {/* Tapping a semantic match selects it (pans/fits the graph) and closes
               the sheet so the focus is visible. */}
           <Console authed={authed} seed={seed} onSelectKey={(k) => { onSelectKey(k); setOpen(false); }} />
