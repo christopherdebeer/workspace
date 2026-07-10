@@ -514,10 +514,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (hiSet && hiSet.has(a) && hiSet.has(b)) return 1;
         return 0;
       };
+      // Focus edges take the ACCENT — the same hue as the selection ring and
+      // anchor label, so "this is the structure you asked about" is one visual
+      // statement — at an alpha far above the resting bases (which exist to
+      // keep 9k edges from summing to a wash; a dozen fan edges have no such
+      // problem). Meanwhile the atmosphere dims further: contrast is relative.
+      const ACCENT_RGB = hexToRgb(ink.accent);
       const applyEdgeColor = (): void => {
+        const focusActive = !!(selKey || hiSet);
         for (let i = 0; i < E; i++) {
-          const [r, g, b] = edgeRGB[i], al = edgeAlphaOf(links[i]);
           const bo = edgeBoostOf(links[i]);
+          let r: number, g: number, b: number, al: number;
+          if (bo > 0) {
+            [r, g, b] = ACCENT_RGB;
+            al = 0.75;
+          } else {
+            [r, g, b] = edgeRGB[i];
+            al = edgeAlphaOf(links[i]) * (focusActive ? 0.45 : 1);
+          }
           ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
           ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
           eboostBuf[i * 2] = bo; eboostBuf[i * 2 + 1] = bo;
@@ -759,7 +773,64 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         projV.set(n.x, n.y, n.z).project(camera);
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H];
       };
+      // TERTIARY layer: the selection fan's REL labels, at edge midpoints —
+      // what each connection IS, not just that it exists. Selection-only
+      // (search-hit pairs stay unlabelled), capped, and an edge must be long
+      // enough on screen for a word to sit on it. Fixed small size and dim
+      // colour: these support the neighbourhood, they never compete with it.
+      const edgeLabelObjs = new Map<number, any>();
+      const syncEdgeLabels = (): void => {
+        const want = new Set<number>();
+        if (selKey) {
+          const cands: Array<[number, number]> = [];
+          for (let i = 0; i < E; i++) {
+            const l = links[i];
+            const a = idOf(l.source), b = idOf(l.target);
+            if (a !== selKey && b !== selKey) continue;
+            const farN = nodeById.get(a === selKey ? b : a);
+            if (!farN || !isVis(farN)) continue;
+            cands.push([i, farN.rank ?? N]);
+          }
+          cands.sort((x, y) => x[1] - y[1]); // label the salient connections first
+          const placedMid: Array<[number, number]> = [];
+          let added = 0;
+          for (const [i] of cands) {
+            if (added >= 12) break;
+            const l = links[i];
+            const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
+            const [ax, ay] = screenXY(aN);
+            const [bx, by] = screenXY(bN);
+            if (Math.hypot(bx - ax, by - ay) < 80) continue; // no room for a word
+            const mx = (ax + bx) / 2, my = (ay + by) / 2;
+            if (placedMid.some(([px, py]) => Math.abs(px - mx) < 70 && Math.abs(py - my) < 14)) continue;
+            placedMid.push([mx, my]);
+            want.add(i);
+            added++;
+          }
+        }
+        for (const [i, obj] of edgeLabelObjs) {
+          if (!want.has(i)) {
+            scene.remove(obj);
+            obj.element.remove?.();
+            edgeLabelObjs.delete(i);
+          }
+        }
+        for (const i of want) {
+          if (edgeLabelObjs.has(i)) continue;
+          const l = links[i];
+          const div = document.createElement('div');
+          div.textContent = l.rel;
+          div.style.cssText = 'font:500 8.5px ui-monospace,monospace;color:#a89e8a;text-shadow:0 1px 3px #000;white-space:nowrap;pointer-events:none;user-select:none;opacity:0.85';
+          const obj = new CSS2DObject(div);
+          const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
+          obj.position.set((aN.x + bN.x) / 2, (aN.y + bN.y) / 2, (aN.z + bN.z) / 2);
+          scene.add(obj);
+          edgeLabelObjs.set(i, obj);
+        }
+      };
+
       const syncBeamLabels = (): void => {
+        syncEdgeLabels();
         const placed: Array<[number, number]> = [];
         const collides = (sx: number, sy: number): boolean => placed.some(([px, py]) => Math.abs(px - sx) < 90 && Math.abs(py - sy) < 16);
         const readable = (n: any): boolean => {
@@ -901,6 +972,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
         for (const [, o] of labelObjs) o.element.remove?.();
+        for (const [, o] of edgeLabelObjs) o.element.remove?.();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
         disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
