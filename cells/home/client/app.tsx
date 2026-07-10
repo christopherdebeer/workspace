@@ -19,6 +19,7 @@ import { Landing, Wordmark } from './dashboard';
 import { FullGraph } from './graph';
 import { Palette } from './palette';
 import { setTypeDecls, FactDetailHost } from './facts';
+import { ink } from './ink';
 
 // The public surface: index.ts (SSR) and main.tsx (hydration) import from here.
 export type { Session } from './lib';
@@ -87,13 +88,13 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     <>
       <GraphBoundary
         fallback={(err) => (
-          <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: '#241f18', color: '#efe9dc', padding: '1rem' }}>
+          <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: ink.sceneBg, color: ink.text, padding: '1rem' }}>
             <div style={{ maxWidth: 640 }}>
-              <p style={{ fontFamily: theme.mono }}>the graph hit an error:</p>
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', color: '#e8a0a0', maxHeight: '40vh', overflowY: 'auto' }}>{err.message}{'\n'}{err.stack?.split('\n').slice(0, 8).join('\n')}</pre>
+              <p style={{ fontFamily: ink.mono }}>the graph hit an error:</p>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', color: ink.danger, maxHeight: '40vh', overflowY: 'auto' }}>{err.message}{'\n'}{err.stack?.split('\n').slice(0, 8).join('\n')}</pre>
               <button
                 onClick={() => window.location.reload()}
-                style={{ background: 'none', color: '#f5c453', border: '1px solid #3d362b', borderRadius: 8, padding: '0.4rem 0.9rem', cursor: 'pointer' }}
+                style={{ background: 'none', color: ink.accent, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.4rem 0.9rem', cursor: 'pointer' }}
               >
                 reload
               </button>
@@ -103,8 +104,10 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       >
         <FullGraph selectedKey={selectedKey} onSelect={(n) => setSelectedKey(n?.key ?? null)} />
         <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />
-        <div style={{ position: 'fixed', top: 10, left: 12, zIndex: 30, pointerEvents: 'none' }}>
-          <span style={{ pointerEvents: 'auto', filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))' }}><Wordmark /></span>
+        <div style={{ position: 'fixed', top: 'max(10px, env(safe-area-inset-top))', left: 12, zIndex: 30, pointerEvents: 'none' }}>
+          {/* `light` — the parchment-on-dark variant; the default (theme.text,
+              near-black) vanished into the dusk canvas. */}
+          <span style={{ pointerEvents: 'auto', filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))' }}><Wordmark light /></span>
         </div>
       </GraphBoundary>
       <FactDetailHost />

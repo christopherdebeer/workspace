@@ -53,6 +53,7 @@
 import * as React from 'react';
 import { mcpCall } from './lib';
 import { openFact, factTitle, type ListEntry } from './facts';
+import { ink } from './ink';
 
 const { useEffect, useRef, useState } = React;
 
@@ -85,13 +86,16 @@ const hueOf = (t: string): number => {
 const nodeColor = (t: string | null): string => (t ? `hsl(${hueOf(t)} 42% 55%)` : '#9a917f');
 
 const MEMBER_RELS = new Set(['onBoard', 'inDoc', 'inView']);
-// Warm-light strokes — a dark #5a5142 vanished into the dusk background.
+// Warm-light strokes — a dark #5a5142 vanished into the dusk background. Base
+// opacities are the CEILING an edge reaches at full interest; at rest the DOI
+// scaling below keeps the mat far quieter (the ~9k-edge slice was drowning the
+// nodes in a beige wash — figure/ground collapse).
 interface EdgeStyle { stroke: string; dash: number[] | null; opacity: number; width: number }
 function edgeStyle(e: GEdge): EdgeStyle {
-  if (e.rel === 'similarTo') return { stroke: '#cfc4aa', dash: null, opacity: 0.12, width: 1 };
-  if (MEMBER_RELS.has(e.rel)) return { stroke: '#cfc4aa', dash: [2, 3], opacity: 0.32, width: 1 };
-  if (e.derived) return { stroke: '#cfc4aa', dash: [3, 3], opacity: 0.26, width: 1 };
-  return { stroke: '#e8ddc2', dash: null, opacity: 0.55, width: 1.5 };
+  if (e.rel === 'similarTo') return { stroke: ink.edge, dash: null, opacity: 0.06, width: 1 };
+  if (MEMBER_RELS.has(e.rel)) return { stroke: ink.edge, dash: [2, 3], opacity: 0.22, width: 1 };
+  if (e.derived) return { stroke: ink.edge, dash: [3, 3], opacity: 0.18, width: 1 };
+  return { stroke: ink.edgeAuthored, dash: null, opacity: 0.45, width: 1.5 };
 }
 
 /**
@@ -314,22 +318,29 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
       const doi = (n: any): number => nodeDOI(n, selKey, nbrSet, hiSet, nodes.length);
       const nodeAlpha = (n: any): number => 0.08 + 0.9 * doi(n); // faint floor keeps context visible
       const nodeRing = (n: any): { stroke: string; width: number } =>
-        n.id === selKey ? { stroke: '#f5c453', width: 3 }
-        : selKey && nbrSet?.has(n.id) ? { stroke: '#e8ddc2', width: 1.6 }
-        : hiSet?.has(n.id) ? { stroke: '#f5c453', width: 2 }
-        : { stroke: '#2e2a22', width: 1 };
+        n.id === selKey ? { stroke: ink.accent, width: 3 }
+        : selKey && nbrSet?.has(n.id) ? { stroke: ink.edgeAuthored, width: 1.6 }
+        : hiSet?.has(n.id) ? { stroke: ink.accent, width: 2 }
+        : { stroke: ink.nodeHalo, width: 1 };
       const edgeAlpha = (l: any): number => {
-        // An edge is as interesting as its most-interesting endpoint.
-        const d = Math.max(doi(l.source), doi(l.target));
-        return Math.min(0.98, edgeStyle(l).opacity * (0.12 + 0.88 * d) + (touchesSel(l) ? 0.25 : 0));
+        // An edge earns brightness from its LEAST interesting endpoint — an edge
+        // into the periphery is periphery. (Max let every hub radiate its whole
+        // degree at rest, which is what painted the wash.) Selection still lifts
+        // its own edges outright.
+        const d = Math.min(doi(l.source), doi(l.target));
+        return Math.min(0.98, edgeStyle(l).opacity * (0.05 + 0.95 * d) + (touchesSel(l) ? 0.3 : 0));
       };
       const labelAlpha = (n: any): number => 0.12 + 0.88 * doi(n);
-      // A label is worth drawing when it's in the focus band, when the camera is
-      // zoomed in enough to read the periphery, or when it's part of the current
-      // selection/highlight — LOD: at low zoom the off-band labels are illegible
-      // mush anyway, so skipping them is cheaper AND clearer.
+      // Labels are rank-budgeted: at rest only the top of the salience order
+      // speaks (a phone gets a smaller budget than a desktop), and zooming in
+      // grows the budget quadratically — detail on demand, not all at once. The
+      // selection neighbourhood and console highlights are always labelled.
+      // (The old rule — the whole focus band + everything past k≥1.1 — put
+      // ~150 colliding labels on screen at rest.)
+      const LABEL_BUDGET = Math.min(W, H) < 700 ? 16 : 36;
       const labelShown = (n: any): boolean =>
-        inFocus(n) || curT.k >= 1.1 || n.id === selKey || !!nbrSet?.has(n.id) || !!hiSet?.has(n.id);
+        n.id === selKey || !!nbrSet?.has(n.id) || !!hiSet?.has(n.id) ||
+        (n.rank ?? Infinity) < LABEL_BUDGET * curT.k * curT.k;
 
       // ── the draw loop (one pass per animation frame) ──
       let drawScheduled = false;
@@ -359,7 +370,11 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
         const visible = (n: any): boolean => n.x >= minX && n.x <= maxX && n.y >= minY && n.y <= maxY;
 
         const k = curT.k;
-        const showConstellation = k >= 0.6; // the faint similarTo web is LOD-gated
+        // The faint similarTo web is a zoomed-IN texture: at rest (k≈1) it read
+        // as noise over the whole slice, so it now waits for a real zoom — the
+        // same judgement the 3D mode makes by dropping similarTo entirely
+        // (proximity already says it).
+        const showConstellation = k >= 1.2;
         const showEdgeLabels = k >= 1.3;
 
         // ── edges ──
@@ -398,10 +413,10 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
             const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2 - 2;
             if (mx < minX || mx > maxX || my < minY || my > maxY) continue;
             ctx.globalAlpha = selKey && touchesSel(l) ? 0.95 : 0.8;
-            ctx.strokeStyle = '#241f18';
+            ctx.strokeStyle = ink.sceneBg;
             ctx.lineWidth = 2.5 / k;
             ctx.strokeText(l.rel, mx, my);
-            ctx.fillStyle = '#bfb49a';
+            ctx.fillStyle = ink.edgeLabel;
             ctx.fillText(l.rel, mx, my);
           }
         }
@@ -430,9 +445,9 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
           if (!visible(n) || !isVis(n) || !labelShown(n)) continue;
           const top = n.y + r(n) + 4;
           ctx.globalAlpha = labelAlpha(n);
-          ctx.strokeStyle = '#241f18';
+          ctx.strokeStyle = ink.sceneBg;
           ctx.lineWidth = 3;
-          ctx.fillStyle = '#efe9dc';
+          ctx.fillStyle = ink.text;
           for (let i = 0; i < n.lines.length; i++) {
             const ly = top + i * 11;
             ctx.strokeText(n.lines[i], n.x, ly);
@@ -734,7 +749,7 @@ function Canvas2DGraph({ selectedKey, onSelect, visible }: { selectedKey: string
   return (
     <div
       ref={host}
-      style={{ position: 'fixed', inset: 0, background: 'radial-gradient(ellipse at 50% 30%, #3a3428 0%, #241f18 70%)', overflow: 'hidden' }}
+      style={{ position: 'fixed', inset: 0, background: `radial-gradient(ellipse at 50% 30%, ${ink.sceneBgLift} 0%, ${ink.sceneBg} 70%)`, overflow: 'hidden' }}
     />
   );
 }
@@ -1353,10 +1368,13 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
   // Salience visibility: 0 → only the focus band, 1 → the whole slice. The
   // renderers cull nodes/edges above the corresponding salience rank.
   const [visible, setVisible] = useState(1);
-  const pillBtn: React.CSSProperties = {
-    padding: '0.3rem 0.6rem', fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem',
-    color: '#efe9dc', background: 'rgba(36,31,24,0.72)', border: '1px solid #5a5142',
-    borderRadius: 999, cursor: 'pointer', backdropFilter: 'blur(4px)',
+  // One control cluster, one surface language (ink) — pills sized so the whole
+  // row is a ≥44px touch target on a phone, not a 26px sliver over the canvas.
+  const pill: React.CSSProperties = {
+    fontFamily: ink.mono, fontSize: '0.75rem', color: ink.text,
+    background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
+    borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
+    display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.35rem 0.8rem',
   };
   return (
     <>
@@ -1365,36 +1383,32 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
       ) : (
         <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
       )}
-      <button
-        onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
-        title={mode === '2d' ? 'Explore in 3D' : 'Back to the 2D map'}
-        style={{ position: 'fixed', right: 12, top: 48, zIndex: 20, ...pillBtn }}
-      >
-        {mode === '2d' ? '3D ◎' : '2D ▦'}
-      </button>
-      {/* Salience slider — dial from just the focus band to the whole slice. */}
-      <div
-        title="Show more or fewer facts, by salience"
-        style={{
-          position: 'fixed', right: 12, top: 84, zIndex: 20,
-          display: 'flex', alignItems: 'center', gap: '0.4rem',
-          padding: '0.25rem 0.55rem', ...pillBtn, cursor: 'default',
-        }}
-      >
-        <span aria-hidden style={{ opacity: 0.8 }}>◐</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.02}
-          value={visible}
-          onChange={(e) => setVisible(Number(e.target.value))}
-          aria-label="Salience visibility"
-          style={{ width: 96, accentColor: '#f5c453', cursor: 'pointer' }}
-        />
-        <span style={{ width: 30, textAlign: 'right', opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}>
-          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
-        </span>
+      <div style={{ position: 'fixed', right: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20, display: 'grid', gap: 8, justifyItems: 'end' }}>
+        <button
+          onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
+          title={mode === '2d' ? 'Explore in 3D' : 'Back to the 2D map'}
+          aria-pressed={mode === '3d'}
+          style={{ ...pill, cursor: 'pointer' }}
+        >
+          {mode === '2d' ? '3D ◎' : '2D ▦'}
+        </button>
+        {/* Salience dial — from just the focus band to the whole slice. */}
+        <label title="Show more or fewer facts, by salience" style={{ ...pill, cursor: 'default' }}>
+          <span style={{ color: ink.dim }}>focus</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.02}
+            value={visible}
+            onChange={(e) => setVisible(Number(e.target.value))}
+            aria-label="Salience visibility"
+            style={{ width: 96, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
+          />
+          <span style={{ width: 26, textAlign: 'right', color: ink.dim, fontVariantNumeric: 'tabular-nums' }}>
+            {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+          </span>
+        </label>
       </div>
     </>
   );

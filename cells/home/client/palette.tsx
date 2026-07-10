@@ -17,14 +17,13 @@ import * as React from 'react';
 import { Console } from './console';
 import { openFact, typeIcon, factTitle, factHref, FactBody, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
+import { ink, isCoarsePointer } from './ink';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
-const ink = { bg: '#181511', panel: '#221d16', line: '#3d362b', text: '#efe9dc', dim: '#9a917f', accent: '#f5c453', mono: 'ui-monospace, SFMono-Regular, Menlo, monospace' };
-
 const chip: React.CSSProperties = {
   background: 'none', border: `1px solid ${ink.line}`, color: ink.text, borderRadius: 999,
-  fontSize: '0.72rem', fontFamily: ink.mono, padding: '0.15rem 0.6rem', cursor: 'pointer', textDecoration: 'none',
+  fontSize: '0.72rem', fontFamily: ink.mono, padding: '0.28rem 0.65rem', cursor: 'pointer', textDecoration: 'none',
   maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };
 
@@ -141,6 +140,11 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     setOpen(true);
   }, []);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+  // ⌘K means nothing to a thumb — hide the shortcut chip on touch devices.
+  // Decided post-mount (SSR renders the Palette too, and the server can't know
+  // the pointer; first client render must match the server markup).
+  const [touch, setTouch] = useState(false);
+  useEffect(() => { setTouch(isCoarsePointer()); }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -172,7 +176,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
       style={{
         position: 'fixed',
         left: '50%',
-        bottom: 10,
+        bottom: 'max(10px, env(safe-area-inset-bottom))',
         transform: pos ? `translate(calc(-50% + ${pos.x}px), ${pos.y}px)` : 'translateX(-50%)',
         width: 'min(720px, calc(100vw - 12px))',
         zIndex: 40,
@@ -198,17 +202,22 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         onPointerMove={onHandleMove}
         onPointerUp={onHandleUp}
         onDoubleClick={() => setPos(null)}
-        style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.45rem 0.8rem', cursor: 'grab', userSelect: 'none', touchAction: 'none' }}
+        style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.8rem', cursor: 'grab', userSelect: 'none', touchAction: 'none' }}
       >
         <button
           onClick={() => setOpen((o) => !o)}
-          style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.85rem', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, textAlign: 'left' }}
+          aria-expanded={open}
+          style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.85rem', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, textAlign: 'left', minHeight: 24 }}
         >
           <span style={{ color: ink.accent }}>{open ? '▾' : '▴'}</span>
           field computer
-          <span style={{ color: ink.dim, fontSize: '0.72rem' }}>{open ? 'esc to close' : 'search or run a capability'}</span>
+          <span style={{ color: ink.dim, fontSize: '0.72rem' }}>
+            {open ? (touch ? 'tap ▾ to close' : 'esc to close') : (touch ? 'tap to search or act' : 'search or run a capability')}
+          </span>
         </button>
-        <kbd style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.7rem', border: `1px solid ${ink.line}`, borderRadius: 5, padding: '0.05rem 0.35rem' }}>⌘K</kbd>
+        {touch ? null : (
+          <kbd style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.7rem', border: `1px solid ${ink.line}`, borderRadius: 5, padding: '0.05rem 0.35rem' }}>⌘K</kbd>
+        )}
       </div>
     </div>
   );
