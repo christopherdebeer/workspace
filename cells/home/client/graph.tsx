@@ -66,21 +66,27 @@ interface GEdge {
 // to localStorage, and pokes the refresh hooks — so feel can be dialled on a
 // PHONE against live data, then the winning values sent back to be hard-coded.
 const TUNE_DEFAULTS = {
-  // torch (the camera-aimed spotlight)
-  coneIn: 0.14, coneOut: 0.42, depthIn: 0.45, depthOut: 1.7, torchFloor: 0.04,
-  // beam labels (the suggestion voice)
-  beamOn: 0.35, beamOff: 0.2, beamCapFocus: 6, labelCap: 0, // labelCap 0 = viewport default (12/22)
-  beamOpacity: 0.55, beamSizeMult: 0.8,
-  // focus labels
-  selSizeMult: 1.35, hitSizeMult: 1.2, nbrSizeMult: 1.05, nbrOpFar: 0.55, nbrOpNear: 1.0,
-  labelFade: 7, // lerp rate: higher = snappier
-  // nodes
-  nodeDim: 0.75, nbrBoost: 0.85, boostSizeGain: 0.45,
-  // edges
+  // torch (the scene LIGHTING — owner-tuned 2026-07-10 to a floodlight: wide
+  // cones, deep band, lifted floor; glow re-built in the post chain instead)
+  coneIn: 0.5, coneOut: 1.2, depthIn: 1.5, depthOut: 4, torchFloor: 0.2,
+  // label admission (the SELECTOR) — decoupled from the lighting: labels need
+  // a sharp instrument even when the light is flat, so admission ranks by its
+  // own narrow cone. beamOn 0.85 / beamOff 0.2 = admit dead-centre, linger.
+  labelConeIn: 0.14, labelConeOut: 0.42,
+  beamOn: 0.85, beamOff: 0.2, beamCapFocus: 5, labelCap: 0, // labelCap 0 = viewport default (12/22)
+  beamOpacity: 0.57, beamSizeMult: 0.39,
+  // focus labels — annotation, not headline: the geometry (amber fan, boosted
+  // points, bloom) carries structure; text names things.
+  selSizeMult: 0.8, hitSizeMult: 0.8, nbrSizeMult: 0.74, nbrOpFar: 0.38, nbrOpNear: 1.0,
+  labelFade: 4, // lerp rate: higher = snappier
+  // nodes — hot going in, compressed by low exposure (film grading)
+  nodeDim: 1.5, nbrBoost: 1.0, boostSizeGain: 0.47,
+  // edges (resting bases untouched by the re-grade — that layer is settled)
   edgeSimilar: 0.06, edgeMember: 0.16, edgeDerived: 0.12, edgeAuthored: 0.3,
-  focusEdgeAlpha: 0.75, atmosphereDim: 0.45,
-  // bloom / exposure (desktop)
-  bloomStrength: 0.45, bloomRadius: 0.5, bloomThreshold: 0.35, exposure: 1.15,
+  focusEdgeAlpha: 1.0, atmosphereDim: 0.35,
+  // bloom / exposure (desktop; phones skip bloom) — luminosity lives HERE, not
+  // in raw whites: strong wide bloom over an ACES curve at low exposure.
+  bloomStrength: 0.93, bloomRadius: 1.02, bloomThreshold: 0.25, exposure: 0.4,
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -796,18 +802,19 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
       const camPos = new THREE.Vector3();
-      // The same torch, in JS, for the CSS2D labels (so text is lit by the beam
-      // exactly like the points). axis = camera → focal point.
+      // The label SELECTOR's cone, in JS (decoupled from the lighting torch —
+      // the light can be a floodlight while admission stays a sharp beam).
+      // axis = camera → focal point.
       const axisV = new THREE.Vector3(), toPV = new THREE.Vector3();
       const smoothstep = (a: number, b: number, x: number): number => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-      const torchAt = (pos: any): number => {
+      const labelTorchAt = (pos: any): number => {
         const td = axisV.copy(focusVec).sub(camPos).length();
         axisV.multiplyScalar(1 / Math.max(td, 1e-3));
         toPV.copy(pos).sub(camPos);
         const along = toPV.dot(axisV);
         if (along <= 0) return TUNE.torchFloor;
         const radial = toPV.addScaledVector(axisV, -along).length(); // toP - axis*along
-        const ang = 1 - smoothstep(TUNE.coneIn, TUNE.coneOut, radial / along);
+        const ang = 1 - smoothstep(TUNE.labelConeIn, TUNE.labelConeOut, radial / along);
         const dep = 1 - smoothstep(SPREAD * TUNE.depthIn, SPREAD * TUNE.depthOut, Math.abs(along - td));
         return Math.max(TUNE.torchFloor, ang * dep);
       };
@@ -816,7 +823,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // don't flicker at the beam's edge. This is what lets a sweep of the focal
       // point surface nearby low-salience items.
       const scratchP = new THREE.Vector3();
-      const torchNode = (n: any): number => torchAt(scratchP.set(n.x, n.y, n.z));
+      const labelTorchNode = (n: any): number => labelTorchAt(scratchP.set(n.x, n.y, n.z));
       // Fewer beam-lit labels on a phone — 28 at once piled up in the core.
       const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 12 : 22;
       const labelCap = (): number => TUNE.labelCap > 0 ? TUNE.labelCap : LABEL_CAP_DEFAULT;
@@ -953,7 +960,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id)) continue;
-          const t = torchNode(n);
+          const t = labelTorchNode(n);
           // Enter at BEAM_ON, stay until BEAM_OFF — hysteresis against edge flicker.
           if (t > TUNE.beamOn || (labelObjs.has(n.id) && t > TUNE.beamOff)) lit.push([n.id, t]);
         }
@@ -989,7 +996,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const obj = st.obj;
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          const torch = torchAt(obj.position);
+          const torch = labelTorchAt(obj.position);
           // ROLE-styled, size UNCLAMPED (owner direction): every label scales
           // purely with its node's on-screen size — depth stays honest, a far
           // neighbour is a tiny label rather than a uniform or missing one.
@@ -1109,6 +1116,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(torchF, 'depthOut', 0.3, 4);
           add(torchF, 'torchFloor', 0, 0.2, 0.005);
           const beamF = gui.addFolder('beam');
+          add(beamF, 'labelConeIn', 0.02, 0.5);
+          add(beamF, 'labelConeOut', 0.1, 1.2);
           add(beamF, 'beamOn', 0.05, 0.9);
           add(beamF, 'beamOff', 0.02, 0.8);
           add(beamF, 'beamOpacity', 0, 1);
