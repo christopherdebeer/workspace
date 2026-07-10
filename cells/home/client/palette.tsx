@@ -6,16 +6,16 @@
  * expands above it and collapses without losing the query, the matches, or the
  * graph highlights (Console stays mounted). ⌘K expands; Esc collapses.
  *
- * v2 (use feedback): the CONTEXT ROW grew into a context PANEL — selecting a
- * graph node peeks the fact and shows its CONTENT (FactBody, the shared render
- * floor) plus its NEIGHBOURHOOD as chips; tapping a neighbour chip changes the
- * selection, which pans the graph (App owns `selectedKey`; the graph eases its
- * camera to any external selection). Peek still opens the full progressive
- * detail modal; open follows the type's declared surface.
+ * v3 (use feedback): the context panel's EXPAND is the one fact detail —
+ * tapping the title unfolds FactDetail (provenance, full body, edit/open)
+ * in place; the separate peek sheet was a second, differently-styled copy of
+ * the same content and is gone from this flow. Neighbour chips change the
+ * selection, which pans the graph (App owns `selectedKey`); `open ↗` escalates
+ * to the type's declared surface.
  */
 import * as React from 'react';
 import { Console } from './console';
-import { openFact, typeIcon, factTitle, factHref, FactBody, type ListEntry } from './facts';
+import { typeIcon, factTitle, factHref, FactDetail, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
 
@@ -104,13 +104,12 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
         >
           {entry ? factTitle(e) : factKey} <span style={{ color: ink.dim }}>{showBody ? '▾' : '▸'}</span>
         </button>
-        <button style={chip} onClick={() => openFact({ key: factKey } as ListEntry)}>peek</button>
         {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
         <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none' }} onClick={onClear} aria-label="clear selection">×</button>
       </div>
       {showBody && entry ? (
-        <div style={{ maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.82rem' }}>
-          <FactBody e={entry} full />
+        <div style={{ maxHeight: 'min(42dvh, 340px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.6rem 0.7rem', fontSize: '0.82rem' }}>
+          <FactDetail e={entry} compact />
         </div>
       ) : null}
       {/* ONE row of context, not three (the stacked verb + icon-chip rows read

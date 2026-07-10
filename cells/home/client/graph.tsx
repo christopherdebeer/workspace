@@ -726,10 +726,47 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H];
       };
       const syncBeamLabels = (): void => {
-        const keep = pinnedSet();
         const placed: Array<[number, number]> = [];
-        for (const id of keep) { const n = nodeById.get(id); if (n) placed.push(screenXY(n)); }
         const collides = (sx: number, sy: number): boolean => placed.some(([px, py]) => Math.abs(px - sx) < 90 && Math.abs(py - sy) < 16);
+        const readable = (n: any): boolean => {
+          const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
+          return rad(n) * 2.4 * (H / 2) / camD >= MIN_LABEL_PX;
+        };
+        // FOCUS MODE: with a selection (or a highlight set) the NEIGHBOURHOOD
+        // owns the scene — no beam-lit bystanders. But a hub's neighbourhood is
+        // itself a crowd (the tending protocol touches every run and audit), so
+        // neighbours pass the SAME legibility gates as beam labels: most
+        // salient first, readable size, no pile-ups, capped. Every neighbour
+        // POINT stays bright (DOI 0.8) — connectedness shows even where a
+        // label doesn't fit.
+        if (selKey || hiSet) {
+          const keep = new Set<string>();
+          const anchor = selKey ? [selKey] : [];
+          for (const id of [...anchor, ...(hiSet ?? [])]) {
+            const n = nodeById.get(id);
+            if (!n || !isVis(n)) continue;
+            keep.add(id);
+            placed.push(screenXY(n));
+          }
+          const cands = [...(nbr ?? [])]
+            .map((id) => nodeById.get(id))
+            .filter((n) => n && isVis(n) && !keep.has(n.id))
+            .sort((a, b) => (a.rank ?? N) - (b.rank ?? N)); // most salient neighbours first
+          let added = 0;
+          for (const n of cands) {
+            if (added >= LABEL_CAP) break;
+            if (!readable(n)) continue;
+            const [sx, sy] = screenXY(n);
+            if (collides(sx, sy)) continue;
+            placed.push([sx, sy]);
+            keep.add(n.id);
+            added++;
+          }
+          reconcileLabels(keep);
+          return;
+        }
+        const keep = pinnedSet();
+        for (const id of keep) { const n = nodeById.get(id); if (n) placed.push(screenXY(n)); }
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || keep.has(n.id)) continue;
@@ -742,8 +779,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const [id] of lit) {
           if (added >= LABEL_CAP) break;
           const n = nodeById.get(id);
-          const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
-          if (rad(n) * 2.4 * (H / 2) / camD < MIN_LABEL_PX) continue; // sub-readable
+          if (!readable(n)) continue; // sub-readable
           const [sx, sy] = screenXY(n);
           if (collides(sx, sy)) continue;
           placed.push([sx, sy]);
@@ -762,19 +798,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const camD = camPos.distanceTo(obj.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
-          // Clamped to a READABLE floor: a rendered label must earn its pixels
-          // (syncBeamLabels already drops sub-readable candidates and
-          // declutters), so anything that survives is worth 8px. Proportional
-          // sizing above the floor keeps the attached-to-its-node feel.
-          obj.element.style.fontSize = Math.min(11, Math.max(8, nodePx * 0.85)).toFixed(1) + 'px';
+          // ROLE-styled: the selection reads as the anchor (accent, bold, a
+          // taller floor), its neighbours as the connected set (bright, never
+          // sub-readable), everything else as the beam's atmosphere. Roles
+          // change with selection state, so they're applied here per frame
+          // rather than baked into the label element.
+          const isSel = id === selKey;
+          const isNbr = !isSel && (!!nbr?.has(id) || !!hiSet?.has(id));
+          const floor = isSel ? 11 : isNbr ? 9 : 8;
+          obj.element.style.fontSize = Math.min(isSel ? 13 : 11, Math.max(floor, nodePx * 0.85)).toFixed(1) + 'px';
           obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
-          // OPACITY is BEAM-primary: the torch decides how lit a label is, so a
-          // sweep reveals whatever is near the line of sight — salient or not.
-          // Selection/neighbours lift; salience adds only a whisper.
+          obj.element.style.color = isSel ? ink.accent : ink.text;
+          obj.element.style.fontWeight = isSel ? '700' : '600';
+          // OPACITY is BEAM-primary at rest (a sweep reveals whatever is near
+          // the line of sight); selection lifts its neighbourhood above it.
           const torch = torchAt(obj.position);
           let op = torch;
-          if (id === selKey) op = 1;
-          else if (nbr?.has(id)) op = Math.max(0.75, torch);
+          if (isSel) op = 1;
+          else if (isNbr) op = Math.max(0.9, torch);
           else { const salN = 1 - (n?.rank ?? N) / Math.max(1, N); op = torch * (0.9 + 0.1 * salN); }
           obj.element.style.opacity = op.toFixed(3);
         }

@@ -533,7 +533,7 @@ function FactEditor({
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
+export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(false);
   const [hints, setHints] = useState<string[] | null>(null);
@@ -578,10 +578,12 @@ function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
               ))}
             </div>
           ) : null}
-          <div style={{ display: 'grid', gap: '0.3rem' }}>
-            <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
-            <Neighbourhood keyName={entry.key} />
-          </div>
+          {!compact ? (
+            <div style={{ display: 'grid', gap: '0.3rem' }}>
+              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
+              <Neighbourhood keyName={entry.key} />
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
             {open ? <a href={open} style={inkAction}>Open ↗</a> : null}
             {edit ? <a href={edit} style={inkAction}>Edit in cell ↗</a> : !system ? (
