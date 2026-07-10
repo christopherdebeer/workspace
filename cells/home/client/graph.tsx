@@ -99,6 +99,13 @@ const TUNE_DEFAULTS = {
   // with it on.
   bloomStrength: 0.78, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.74,
   bloomMode: 'on' as 'auto' | 'on' | 'off',
+  // places (cartography): constellation captions — COMPUTED from salience
+  // hubs + dominant types, with registered VIEWS as the authored layer — and
+  // resting orientation anchors (top-salience node per screen region).
+  // constNear/Far: approach-fade band as multiples of a cluster's radius —
+  // captions read from afar and hand off to fact labels as you arrive.
+  constCap: 8, constOpacity: 0.6, constNear: 1.15, constFar: 2.4,
+  anchorCap: 8, anchorOpacity: 0.5, anchorSizeMult: 0.62,
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -120,6 +127,31 @@ const hueOf = (t: string): number => {
   return h;
 };
 const nodeColor = (t: string | null): string => (t ? `hsl(${hueOf(t)} 42% 55%)` : '#9a917f');
+
+// Typography carries ONTOLOGY (the map-reading trick: a river and a road are
+// distinguishable by letterform alone). Hue already codes type on the dots;
+// letterform repeats it on the labels, so the coding survives at label-only
+// zoom. Groups, not an exhaustive registry — unknown types stay instrument mono.
+const TYPE_SERIF = 'Georgia,"Iowan Old Style","Palatino Linotype",serif';
+const TYPE_SANS = 'system-ui,-apple-system,"Segoe UI",sans-serif';
+const ACTIONABLE_TYPES = new Set(['project', 'goal', 'task', 'todo', 'machine', 'cell', 'view']);
+const DOCUMENT_TYPES = new Set(['source', 'doc', 'document', 'capture', 'log', 'file', 'trajectory', 'article']);
+const KB_TYPES = new Set(['knowledge', 'decision', 'question', 'mental-model', 'idea', 'insight']);
+function labelFont(t: string | null): { family: string; style: string; variant: string } {
+  if (t && ACTIONABLE_TYPES.has(t)) return { family: TYPE_SANS, style: 'normal', variant: 'small-caps' };
+  if (t && DOCUMENT_TYPES.has(t)) return { family: TYPE_SERIF, style: 'italic', variant: 'normal' };
+  if (t && KB_TYPES.has(t)) return { family: TYPE_SERIF, style: 'normal', variant: 'normal' };
+  return { family: 'ui-monospace,monospace', style: 'normal', variant: 'normal' };
+}
+// Knockout halo: thin text must survive sitting over a bloom core.
+const LABEL_HALO = 'text-shadow:0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
+
+// A name fit to stand for a PLACE (or hold an orientation anchor): human
+// words, not machine keys. "Design Models world time" qualifies; a run key
+// like "machine/weave/run/2026-07-01T21…" is data, not a toponym — first
+// screenshots put exactly those in 24px caps across the map.
+const placeworthy = (s: string | null | undefined): boolean =>
+  !!s && s.length >= 3 && !s.includes('/') && !/\d{4}-\d{2}/.test(s);
 
 const MEMBER_RELS = new Set(['onBoard', 'inDoc', 'inView']);
 // Warm-light strokes — a dark #5a5142 vanished into the dusk background. Base
@@ -636,17 +668,36 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // in/out (lerped per frame), and the beam is a visibly SECONDARY voice —
       // smaller, dimmer, lighter weight — that yields collision priority to
       // focus and needs consecutive in-beam syncs before it appears.
-      type LabelRole = 'sel' | 'hit' | 'nbr' | 'beam';
-      interface LabelState { obj: any; cur: number; role: LabelRole; dying: boolean }
+      type LabelRole = 'sel' | 'hit' | 'nbr' | 'beam' | 'anchor';
+      /** What a sync wants a label to be: its role, plus an optional screen-px
+       *  DISPLACEMENT (dense-core collision resolved by nudging the label aside
+       *  and drawing a hairline leader back to its node — classic map labeling
+       *  keeps the name; dropping it was losing neighbours). */
+      interface LabelWant { role: LabelRole; ox?: number; oy?: number }
+      interface LabelState { obj: any; cur: number; role: LabelRole; dying: boolean; ox: number; oy: number; cox: number; coy: number }
       const labelObjs = new Map<string, LabelState>();
       const makeLabel = (n: any): any => {
         const div = document.createElement('div');
-        div.textContent = n.label;
+        const text = document.createElement('span');
+        text.textContent = n.label;
+        // Hairline leader back to the node anchor, shown only when the label
+        // was displaced by collision (updateLabels drives its geometry).
+        const leader = document.createElement('div');
+        leader.style.cssText = 'position:absolute;left:50%;top:0;height:1px;background:#59503f;transform-origin:0 0;display:none;opacity:0.7';
+        div.append(leader, text);
+        (div as any)._leader = leader;
         // Fully inert to the browser: pointer-events:none so drags pass through
         // to the canvas (orbit/pan keep working when a gesture starts on a
         // label), and no text selection / iOS callout. Label TAPS are hit-tested
         // against the div rects in the canvas pointerup handler below.
-        div.style.cssText = 'font:600 11px ui-monospace,monospace;color:#efe9dc;text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%;text-size-adjust:100%';
+        div.style.cssText = `position:relative;font-weight:600;font-size:11px;color:#efe9dc;${LABEL_HALO};white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%;text-size-adjust:100%`;
+        // Letterform = type (labelFont): actionable small-caps sans, documents
+        // italic serif, knowledge serif, else mono — set once, role styling
+        // (size/weight/colour/opacity) stays per-frame in updateLabels.
+        const f = labelFont(n.type);
+        div.style.fontFamily = f.family;
+        div.style.fontStyle = f.style;
+        div.style.fontVariant = f.variant;
         const obj = new CSS2DObject(div);
         // Anchor the label's TOP edge at the node's projected point (center.y = 0)
         // so it hangs BELOW the node, horizontally centered — in SCREEN space,
@@ -658,22 +709,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         return obj;
       };
       /** Reconcile membership: departures FADE (dying → removed at ~0), not pop. */
-      const reconcileLabels = (want: Map<string, LabelRole>): void => {
+      const reconcileLabels = (want: Map<string, LabelWant>): void => {
         for (const [id, st] of labelObjs) {
-          const role = want.get(id);
-          if (role) {
-            st.role = role;
+          const w = want.get(id);
+          if (w) {
+            st.role = w.role;
+            st.ox = w.ox ?? 0;
+            st.oy = w.oy ?? 0;
             st.dying = false;
           } else st.dying = true;
         }
-        for (const [id, role] of want) {
+        for (const [id, w] of want) {
           if (labelObjs.has(id)) continue;
           const n = nodeById.get(id);
           if (!n) continue;
           const obj = makeLabel(n);
           obj.element.style.opacity = '0'; // arrivals fade IN from nothing
           scene.add(obj);
-          labelObjs.set(id, { obj, cur: 0, role, dying: false });
+          labelObjs.set(id, { obj, cur: 0, role: w.role, dying: false, ox: w.ox ?? 0, oy: w.oy ?? 0, cox: w.ox ?? 0, coy: w.oy ?? 0 });
         }
       };
 
@@ -820,6 +873,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
           const d = key ? nodeById.get(key) : null;
           showRing(d);
+          showCrumb(key);
           if (d && doFly) frame(d.x, d.y, d.z, SPREAD * 0.42); // frame the node + its local neighbourhood
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
@@ -876,9 +930,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // not land on top of an already-placed label — greedy, brightest first.
       const projV = new THREE.Vector3();
       const distV = new THREE.Vector3();
-      const screenXY = (n: any): [number, number] => {
+      // Third element = NDC z (> 1 means behind the camera — anchor admission
+      // must skip those; a behind-camera point still projects to plausible xy).
+      const screenXY = (n: any): [number, number, number] => {
         projV.set(n.x, n.y, n.z).project(camera);
-        return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H];
+        return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H, projV.z];
       };
       // TERTIARY layer: the selection fan's REL labels, at edge midpoints —
       // what each connection IS, not just that it exists. Selection-only
@@ -937,9 +993,167 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       };
 
       const beamStreak = new Map<string, number>();
+      // Salience order, computed once — anchors and beam both admit best-first.
+      const byRank = [...nodes].sort((a: any, b: any) => (a.rank ?? N) - (b.rank ?? N));
+
+      // ── constellations: the map's PLACE NAMES ──────────────────────────
+      // COMPUTED from the data (salience hubs + dominant member types) — the
+      // generic layer. Registered VIEWS are the AUTHORED layer: a view is
+      // already a human-named grouping, so it takes the role hand-authored
+      // constellation names would otherwise need new machinery for (organ-
+      // authored region naming deliberately deferred). Captions are
+      // cartographic: faint, tracked-out, uppercase serif at the region's
+      // centroid — legible from afar, handing off to fact labels as the
+      // camera arrives. The approach fade IS the semantic zoom: continuous,
+      // per-region, no tier boundaries to flicker across.
+      interface Constellation { name: string; x: number; y: number; z: number; r: number; authored: boolean; obj: any; cur: number }
+      const constellations: Constellation[] = [];
+      const addConstellation = (name: string, cx: number, cy: number, cz: number, cr: number, authored: boolean): void => {
+        const div = document.createElement('div');
+        div.textContent = name;
+        // Authored places carry a whisper of the accent — a view is intent.
+        div.style.cssText = `font-family:${TYPE_SERIF};font-weight:400;letter-spacing:0.22em;text-transform:uppercase;white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;opacity:0;${LABEL_HALO};color:${authored ? '#e3c987' : '#b7ad99'}`;
+        const obj = new CSS2DObject(div);
+        obj.position.set(cx, cy, cz);
+        scene.add(obj);
+        constellations.push({ name, x: cx, y: cy, z: cz, r: cr, authored, obj, cur: 0 });
+      };
+      {
+        // Computed pass: greedy salience hubs with an exclusion radius, then a
+        // membership ball around each. The dominant type names the region when
+        // one truly dominates (a "notes quarter"); otherwise the hub fact
+        // itself stands for the neighbourhood.
+        const R_EX = SPREAD * 0.55, R_MEM = SPREAD * 0.45;
+        const d2 = (a: any, b: any): number => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
+        const hubs: any[] = [];
+        for (const n of byRank) {
+          if (hubs.length >= 16) break; // generous pool; TUNE.constCap gates at render
+          if (hubs.some((h) => d2(h, n) < R_EX * R_EX)) continue;
+          hubs.push(n);
+        }
+        for (const h of hubs) {
+          const members = nodes.filter((n: any) => d2(n, h) < R_MEM * R_MEM);
+          if (members.length < 6) continue; // a place needs a population
+          const counts = new Map<string, number>();
+          for (const m of members) if (m.type) counts.set(m.type, (counts.get(m.type) ?? 0) + 1);
+          let topType: string | null = null, topN = 0;
+          for (const [t, c] of counts) if (c > topN) { topType = t; topN = c; }
+          // Name the region: a truly dominant type ("notes"), else the most
+          // salient member whose title reads as WORDS — a region with only
+          // key-shaped names (machine runs, dated logs) gets no caption at
+          // all rather than a plumbing key in display caps.
+          let name: string | null = null;
+          if (topType && topN / members.length >= 0.5) {
+            name = topType.endsWith('s') || topType === 'knowledge' ? topType : `${topType}s`;
+          } else {
+            const speaker = members
+              .filter((m: any) => placeworthy(m.label))
+              .sort((a: any, b: any) => (a.rank ?? N) - (b.rank ?? N))[0];
+            if (speaker) name = String(speaker.label);
+          }
+          if (!name) continue;
+          name = name.length > 24 ? name.slice(0, 23) + '…' : name;
+          const cx = members.reduce((s: number, m: any) => s + m.x, 0) / members.length;
+          const cy = members.reduce((s: number, m: any) => s + m.y, 0) / members.length;
+          const cz = members.reduce((s: number, m: any) => s + m.z, 0) / members.length;
+          const dists = members.map((m: any) => Math.hypot(m.x - cx, m.y - cy, m.z - cz)).sort((a: number, b: number) => a - b);
+          const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
+          addConstellation(name, cx, cy, cz, cr, false);
+        }
+      }
+      // Authored pass (async garnish — the scene never waits on it): evaluate
+      // a handful of registered views, centroid their members present in this
+      // slice. Defensive about result shapes; silent when views are absent.
+      void (async () => {
+        try {
+          const decl = await mcpCall('read', 'workspace.declarations', { kind: 'view' }).catch(() => null);
+          const dv = (decl && decl.ok ? decl.value : null) as any;
+          const defs: any[] = Array.isArray(dv) ? dv : (dv?.declarations ?? dv?.views ?? dv?.entries ?? []);
+          const ids = defs.map((d: any) => (typeof d === 'string' ? d : (d?.id ?? d?.name))).filter(Boolean).slice(0, 6);
+          for (const id of ids) {
+            if (disposed) return;
+            const r = await mcpCall('read', 'workspace.view', { id }).catch(() => null);
+            if (!r || !r.ok) continue;
+            const keys = keysOfResult(r.value).filter((k) => nodeById.has(k));
+            if (keys.length < 3) continue;
+            const pts = keys.map((k) => nodeById.get(k));
+            const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+            const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+            const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+            const dists = pts.map((p) => Math.hypot(p.x - cx, p.y - cy, p.z - cz)).sort((a, b) => a - b);
+            const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
+            const vname = String(id);
+            addConstellation(vname.length > 24 ? vname.slice(0, 23) + '…' : vname, cx, cy, cz, cr, true);
+          }
+        } catch { /* views are optional */ }
+      })();
+      const constV = new THREE.Vector3();
+      const updateConstellations = (dt: number): void => {
+        const k = Math.min(1, dt * TUNE.labelFade * 0.5); // captions ease slower than labels
+        const focusActive = !!(selKey || hiSet);
+        let computedShown = 0;
+        // Captions declutter against EACH OTHER in screen space (authored
+        // first, then salience order) — the first render piled three names
+        // on the dense core. A losing caption fades, it doesn't pop.
+        const placedCaps: Array<[number, number, number]> = [];
+        for (const c of constellations) {
+          let target = 0;
+          let fontPx = 0;
+          const overCap = !c.authored && ++computedShown > TUNE.constCap;
+          if (!overCap) {
+            const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z));
+            // Approach fade: a caption reads from OUTSIDE its region and
+            // yields to fact labels once the camera is inside it.
+            target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
+            if (focusActive) target *= 0.3; // atmosphere under focus
+            if (target > 0.02) {
+              // Caption size tracks the REGION's on-screen size, not the
+              // camera depth of a point — big places read big, from anywhere.
+              const px = (c.r * (H / 2)) / Math.max(camD, 1);
+              fontPx = Math.max(9, Math.min(22, px * 0.13));
+              constV.set(c.x, c.y, c.z).project(camera);
+              if (constV.z > 1) target = 0;
+              else {
+                const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
+                const w = c.name.length * fontPx * 0.95; // caps + 0.22em tracking
+                if (placedCaps.some(([px2, py2, pw2]) => Math.abs(px2 - sx) < (pw2 + w) / 2 && Math.abs(py2 - sy) < fontPx * 1.6)) target = 0;
+                else placedCaps.push([sx, sy, w]);
+              }
+            }
+          }
+          c.cur += (target - c.cur) * k;
+          const div = c.obj.element as HTMLElement;
+          if (c.cur < 0.01) { div.style.opacity = '0'; continue; }
+          if (fontPx > 0) div.style.fontSize = fontPx.toFixed(1) + 'px';
+          div.style.opacity = c.cur.toFixed(3);
+        }
+      };
+      // Breadcrumb — "where am I": selecting a fact names its neighbourhood in
+      // a transient caption at the top of the scene, then gets out of the way.
+      const crumb = document.createElement('div');
+      crumb.style.cssText = `position:absolute;top:calc(env(safe-area-inset-top, 0px) + 10px);left:50%;transform:translateX(-50%);z-index:5;pointer-events:none;font-family:${TYPE_SERIF};font-size:11px;font-weight:400;letter-spacing:0.22em;text-transform:uppercase;color:#b7ad99;opacity:0;transition:opacity 0.7s;${LABEL_HALO}`;
+      el.appendChild(crumb);
+      let crumbTimer: ReturnType<typeof setTimeout> | null = null;
+      const showCrumb = (key: string | null): void => {
+        const n = key ? nodeById.get(key) : null;
+        let best: Constellation | null = null;
+        let bestD = Infinity;
+        if (n) {
+          for (const c of constellations) {
+            const d = Math.hypot(n.x - c.x, n.y - c.y, n.z - c.z);
+            if (d < c.r * 1.6 && d < bestD) { best = c; bestD = d; }
+          }
+        }
+        if (crumbTimer) { clearTimeout(crumbTimer); crumbTimer = null; }
+        if (!best) { crumb.style.opacity = '0'; return; }
+        crumb.textContent = best.name;
+        crumb.style.opacity = '0.85';
+        crumbTimer = setTimeout(() => { crumb.style.opacity = '0'; }, 3500);
+      };
+
       const syncBeamLabels = (): void => {
         syncEdgeLabels();
-        const want = new Map<string, LabelRole>();
+        const want = new Map<string, LabelWant>();
         // Size-aware declutter: a small (far) label needs little clearance, so
         // depth-proportional labels pack naturally instead of fighting a fixed
         // 90px box sized for the biggest.
@@ -959,7 +1173,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (selKey) {
           const n = nodeById.get(selKey);
           if (n && isVis(n)) {
-            want.set(selKey, 'sel');
+            want.set(selKey, { role: 'sel' });
             const [sx, sy] = screenXY(n);
             placed.push([sx, sy, boxOf(n)]);
           }
@@ -969,7 +1183,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             if (want.has(id)) continue;
             const n = nodeById.get(id);
             if (n && isVis(n)) {
-              want.set(id, 'hit');
+              want.set(id, { role: 'hit' });
               const [sx, sy] = screenXY(n);
               placed.push([sx, sy, boxOf(n)]);
             }
@@ -978,7 +1192,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (selKey && nbr) {
           // EVERY neighbour that wins a collision slot gets a label — at its
           // depth-proportional size. No readable() admission gate: a far
-          // neighbour is a tiny label, not a missing one.
+          // neighbour is a tiny label, not a missing one. A colliding
+          // neighbour is NUDGED to a free spot (down / up / aside, leader
+          // line back to the node) before it is ever dropped — the dense
+          // core kept eating exactly the labels a selection was asking for.
           const cands = [...nbr]
             .map((id) => nodeById.get(id))
             .filter((n) => n && isVis(n) && !want.has(n.id))
@@ -988,9 +1205,40 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             if (added >= labelCap()) break;
             const [sx, sy] = screenXY(n);
             const w = boxOf(n);
+            const tries: Array<[number, number]> = [[0, 0], [0, 18], [0, -26], [w / 2 + 14, 0], [-(w / 2 + 14), 0]];
+            for (const [ox, oy] of tries) {
+              if (collides(sx + ox, sy + oy, w)) continue;
+              placed.push([sx + ox, sy + oy, w]);
+              want.set(n.id, { role: 'nbr', ox, oy });
+              added++;
+              break;
+            }
+          }
+        }
+
+        // ORIENTATION ANCHORS — the map's resting place-holds: at rest (no
+        // selection, no search) the most salient visible node per screen
+        // region keeps a dim, persistent name up, so there is always something
+        // to navigate by before the beam or a selection speaks. A 3×3 grid
+        // spreads them; salience-first keeps them stable as the camera moves.
+        if (!focusActive && TUNE.anchorCap > 0) {
+          const takenCell = new Set<number>();
+          let added = 0;
+          for (const n of byRank) {
+            if (added >= TUNE.anchorCap) break;
+            if (!isVis(n) || want.has(n.id)) continue;
+            // Anchors are wayfinding text — a salient machine-run KEY is
+            // honest data but useless as a resting place-hold; words only.
+            if (!placeworthy(n.label)) continue;
+            const [sx, sy, sz] = screenXY(n);
+            if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) continue; // offscreen/behind
+            const cell = Math.min(2, Math.floor((sy / H) * 3)) * 3 + Math.min(2, Math.floor((sx / W) * 3));
+            if (takenCell.has(cell)) continue;
+            const w = boxOf(n);
             if (collides(sx, sy, w)) continue;
+            takenCell.add(cell);
             placed.push([sx, sy, w]);
-            want.set(n.id, 'nbr');
+            want.set(n.id, { role: 'anchor' });
             added++;
           }
         }
@@ -1022,7 +1270,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           beamStreak.set(id, streak);
           if (streak < 2 && !labelObjs.has(id)) continue; // entry debounce
           placed.push([sx, sy, w]);
-          want.set(id, 'beam');
+          want.set(id, { role: 'beam' });
           added++;
         }
         for (const id of [...beamStreak.keys()]) if (!inBeam.has(id)) beamStreak.delete(id);
@@ -1062,6 +1310,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           } else if (st.role === 'nbr') {
             size = base * TUNE.nbrSizeMult;
             target = TUNE.nbrOpFar + (TUNE.nbrOpNear - TUNE.nbrOpFar) * t; // far neighbours recede
+          } else if (st.role === 'anchor') {
+            // Orientation anchors: quieter than a beam catch in colour but
+            // steadier in presence — the resting wayfinding layer.
+            size = base * TUNE.anchorSizeMult;
+            target = TUNE.anchorOpacity;
+            color = ink.dim;
           } else {
             // The beam's GENTLE slope: opacity rises smoothly from ~0 at the
             // admission boundary to its ceiling as the beam centres a node —
@@ -1077,6 +1331,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             obj.element.remove?.();
             labelObjs.delete(id);
             continue;
+          }
+          // Collision displacement eases to its target; the hairline leader
+          // spans from the (shifted) label's anchor corner back to the node.
+          st.cox += (st.ox - st.cox) * k;
+          st.coy += (st.oy - st.coy) * k;
+          const displaced = Math.abs(st.cox) + Math.abs(st.coy) > 1.5;
+          obj.element.style.marginLeft = displaced ? st.cox.toFixed(1) + 'px' : '';
+          obj.element.style.marginTop = displaced ? st.coy.toFixed(1) + 'px' : '';
+          const leader = (obj.element as any)._leader;
+          if (leader) {
+            if (displaced) {
+              leader.style.display = 'block';
+              leader.style.width = Math.hypot(st.cox, st.coy).toFixed(1) + 'px';
+              leader.style.transform = `rotate(${Math.atan2(-st.coy, -st.cox).toFixed(4)}rad)`;
+            } else leader.style.display = 'none';
           }
           obj.element.style.fontSize = size.toFixed(1) + 'px';
           obj.element.style.paddingTop = (nodePx * 0.4 + 1).toFixed(1) + 'px'; // clear the dot
@@ -1104,6 +1373,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // cost; the beam moves slowly), then size/opacity every frame.
         if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
         updateLabels(delta);
+        updateConstellations(delta);
         if (useBloom()) {
           ensureComposer();
           composer.render();
@@ -1192,6 +1462,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(edgesF, 'edgeAuthored', 0, 1, 0.005);
           add(edgesF, 'focusEdgeAlpha', 0, 1);
           add(edgesF, 'atmosphereDim', 0, 1);
+          const placesF = gui.addFolder('places');
+          add(placesF, 'constCap', 0, 16, 1);
+          add(placesF, 'constOpacity', 0, 1);
+          add(placesF, 'constNear', 0.5, 2.5);
+          add(placesF, 'constFar', 1.2, 5);
+          add(placesF, 'anchorCap', 0, 16, 1);
+          add(placesF, 'anchorOpacity', 0, 1);
+          add(placesF, 'anchorSizeMult', 0.3, 1.5);
           const postF = gui.addFolder('bloom');
           postF.add(TUNE, 'bloomMode', ['auto', 'on', 'off']).onChange(refresh);
           add(postF, 'bloomStrength', 0, 2);
@@ -1247,6 +1525,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         renderer.domElement.removeEventListener('pointerup', onUp);
         for (const [, st] of labelObjs) st.obj.element.remove?.();
         for (const [, o] of edgeLabelObjs) o.element.remove?.();
+        for (const c of constellations) c.obj.element.remove?.();
+        if (crumbTimer) clearTimeout(crumbTimer);
+        crumb.remove();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
         disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
