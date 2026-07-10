@@ -19,6 +19,7 @@ module.exports = {
     'vendor/gateway-client\\.js$': '<rootDir>/cells/kernel/static/gateway-client.js',
     'vendor/cell-jobs\\.js$': '<rootDir>/cells/kernel/static/cell-jobs.js',
     'vendor/substrate\\.js$': '<rootDir>/cells/kernel/static/substrate.js',
+    'vendor/command-core\\.js$': '<rootDir>/cells/kernel/static/command-core.js',
   },
   transform: {
     // Transpile-only (isolatedModules in tsconfig.test.json): full type-checking

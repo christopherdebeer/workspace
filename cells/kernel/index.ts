@@ -27,9 +27,10 @@ export const handler = async (event: any) => {
         'access-control-allow-origin': '*',
       });
     }
-    if (path === '/substrate.js' || path === '/gateway-client.js' || path === '/cell-jobs.js') {
-      // The shared SERVER-side SDK modules (ADR-0017 substrate.js; ADR-0076
-      // gateway-client.js + cell-jobs.js). Served verbatim from static/ — git
+    if (path === '/substrate.js' || path === '/gateway-client.js' || path === '/cell-jobs.js' || path === '/command-core.js') {
+      // The shared SDK modules (ADR-0017 substrate.js; ADR-0076
+      // gateway-client.js + cell-jobs.js; command-core.js — the headless
+      // command-surface engine shared by palette UIs). Served verbatim from static/ — git
       // truth: cells/kernel/static/<module>.js. Server-side cells do NOT import
       // these URLs (a https import hangs the forge bundler) — `cell-sync push`
       // overlays them into consuming cells as `vendor/<module>.js`; the URLs

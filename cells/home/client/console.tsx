@@ -104,16 +104,14 @@ interface Output {
   argsKey?: string;
 }
 
-/** Subsequence fuzzy match (canvas palette's model): all query chars in order. */
-function fuzzy(text: string, q: string): boolean {
-  let ti = 0;
-  let qi = 0;
-  while (ti < text.length && qi < q.length) {
-    if (text[ti] === q[qi]) qi++;
-    ti++;
-  }
-  return qi === q.length;
-}
+// Matching/ranking, MRU recents, and selection stepping come from the kernel's
+// HEADLESS command-surface engine — the same module the canvas cmd-palette
+// runs on (owner direction 2026-07-10: consolidate the two palettes' shared
+// semantics; each host keeps its own rendering). Materialized at push time as
+// vendor/command-core.js (ADR-0076 overlay); git truth cells/kernel/static/.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — plain-JS kernel SDK module (JSDoc-typed).
+import { rankItems, createRecents, stepSelection } from '../vendor/command-core.js';
 
 const PROBE_CMDS: Cmd[] = [
   {
@@ -284,19 +282,25 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, authed]);
 
-  const filtered = React.useMemo(() => {
-    const all = cmds ?? [];
-    if (!q) return [];
-    return all
-      .filter((c) => fuzzy(c.search, q) || c.search.includes(q))
-      .sort((a, b) => {
-        const ae = a.search.includes(q);
-        const be = b.search.includes(q);
-        if (ae !== be) return ae ? -1 : 1;
-        return a.label.length - b.label.length;
-      })
-      .slice(0, 12);
-  }, [cmds, q]);
+  const filtered = React.useMemo(
+    () => (q ? (rankItems(cmds ?? [], q, { textOf: (c: Cmd) => c.search, limit: 12 }) as Cmd[]) : []),
+    [cmds, q],
+  );
+
+  // MRU recents (command-core) — the empty-query state leads with what the
+  // hands actually reach for, resolved against the LIVE command pool so a
+  // capability that disappeared drops out silently. Same discipline (and now
+  // same code) as the canvas palette; home simply didn't have recents before.
+  const recentsRef = React.useRef(createRecents({ key: 'parc.home.recents', limit: 6 }));
+  const [recentsV, setRecentsV] = useState(0);
+  const recent = React.useMemo(
+    () => (q || !cmds ? [] : (recentsRef.current.resolve(cmds, (c: Cmd) => c.id) as Cmd[])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cmds, q, recentsV],
+  );
+  // ↑/↓/Enter operate on whatever list is showing: matches while typing,
+  // recents when idle.
+  const list = q ? filtered : recent;
 
   // Namespaces with counts — the "what's available" overview when idle.
   const namespaces = React.useMemo(() => {
@@ -322,6 +326,8 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
   };
 
   const invoke = async (cmd: Cmd, input: unknown): Promise<void> => {
+    recentsRef.current.add(cmd.id);
+    setRecentsV((v) => v + 1);
     setBusy(true);
     const argsKey = input && typeof input === 'object' && typeof (input as { key?: unknown }).key === 'string' ? (input as { key: string }).key : undefined;
     try {
@@ -463,7 +469,7 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     );
   }
 
-  // ── browse: search + (recents-less) namespace overview or filtered list ──
+  // ── browse: search + recents/namespace overview or filtered list ──
   return (
     <div style={{ display: 'grid', gap: '0.8rem' }}>
       <div style={{ ...screen, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem' }}>
@@ -477,13 +483,13 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
-              setSel((s) => (filtered.length ? (s + 1) % filtered.length : 0));
+              setSel((s) => Math.max(0, stepSelection(s, 1, list.length)));
             } else if (e.key === 'ArrowUp') {
               e.preventDefault();
-              setSel((s) => (filtered.length ? (s - 1 + filtered.length) % filtered.length : 0));
-            } else if (e.key === 'Enter' && filtered[sel]) {
+              setSel((s) => Math.max(0, stepSelection(s, -1, list.length)));
+            } else if (e.key === 'Enter' && list[sel]) {
               e.preventDefault();
-              select(filtered[sel]);
+              select(list[sel]);
             } else if (e.key === 'Escape') {
               setQuery('');
             }
@@ -530,12 +536,22 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
         </div>
       ) : null}
 
-      {q ? (
-        filtered.length === 0 ? (
-          results.length ? null : <p style={{ color: machine.dim, margin: 0, fontSize: '0.82rem' }}>No match for “{query}”.</p>
-        ) : (
+      {q && list.length === 0 && !results.length ? (
+        <p style={{ color: machine.dim, margin: 0, fontSize: '0.82rem' }}>No match for “{query}”.</p>
+      ) : null}
+
+      {/* The command list: matches while typing; RECENTS when idle (command-
+          core MRU — same engine as the canvas palette). One list, one keyboard
+          model. */}
+      {list.length ? (
+        <div style={{ display: 'grid', gap: '0.1rem' }}>
+          {!q ? (
+            <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 0.15rem' }}>
+              recent
+            </span>
+          ) : null}
           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.15rem' }}>
-            {filtered.map((c, i) => (
+            {list.map((c, i) => (
               <li key={c.id}>
                 <button
                   onClick={() => select(c)}
@@ -565,8 +581,10 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
               </li>
             ))}
           </ul>
-        )
-      ) : (
+        </div>
+      ) : null}
+
+      {!q ? (
         // idle: the overview — namespaces as chips (progressive disclosure)
         <div style={{ display: 'grid', gap: '0.5rem' }}>
           <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -588,7 +606,7 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
             ))}
           </div>
         </div>
-      )}
+      ) : null}
 
       <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
     </div>

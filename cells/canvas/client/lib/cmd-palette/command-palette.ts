@@ -6,6 +6,13 @@ import { searchFacts, addFactToCanvas, knownTypes } from '../network/storage.ts'
 import { installKeyboardShortcuts } from './keyboard-shortcuts.ts';
 import { fitRegion } from '../../../shared/frame.ts';
 import { plainSnippet } from '../text.ts';
+// The kernel's HEADLESS command-surface engine (matching/ranking, MRU recents,
+// selection stepping) — shared with home's field computer (owner direction
+// 2026-07-10: consolidate the palettes' semantics; hosts keep their rendering).
+// Materialized at push time as vendor/command-core.js (ADR-0076 overlay);
+// git truth: cells/kernel/static/command-core.js.
+// @ts-ignore — plain-JS kernel SDK module (JSDoc-typed).
+import { rankItems, createRecents, stepSelection } from '../../../vendor/command-core.js';
 import type { CanvasController, CommandItem, ElementSuggestion, FactSuggestion, SuggestionItem, MenuItem } from '../../types.ts';
 
 /** User/agent content flows into the suggestion list (element snippets, fact
@@ -62,23 +69,13 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
   }
   const commandPool = (): CommandItem[] => flattenCommands();
   
-  // Recent commands persist across reloads (they're the empty-state content —
-  // a page-lifetime array made every fresh open start blank).
-  const RECENTS_KEY = 'parc.canvas.recents';
-  let recentKeys: string[] = [];
-  try { recentKeys = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch { /* fresh */ }
-  /** Resolve stored keys against the LIVE pool (guards apply, stale keys drop). */
-  const recentItems = (): CommandItem[] => {
-    const pool = commandPool();
-    return recentKeys
-      .map((k) => pool.find((c) => c.path.join(' ') === k))
-      .filter(Boolean) as CommandItem[];
-  };
-  const addToRecent = (cmd: CommandItem): void => {
-    const key = cmd.path.join(' ');
-    recentKeys = [key, ...recentKeys.filter((k) => k !== key)].slice(0, cfg.recentCommandsCount);
-    try { localStorage.setItem(RECENTS_KEY, JSON.stringify(recentKeys)); } catch { /* storage full */ }
-  };
+  // Recent commands persist across reloads (they're the empty-state content).
+  // command-core MRU: resolved against the LIVE pool on read (guards apply,
+  // stale keys drop) — same storage key and id scheme as before, so existing
+  // stored recents survive the consolidation.
+  const recents = createRecents({ key: 'parc.canvas.recents', limit: cfg.recentCommandsCount });
+  const recentItems = (): CommandItem[] => recents.resolve(commandPool(), (c: CommandItem) => c.path.join(' ')) as CommandItem[];
+  const addToRecent = (cmd: CommandItem): void => recents.add(cmd.path.join(' '));
 
   /* ── element suggestions ── */
   const iconForType = (t: string): string =>
@@ -97,29 +94,6 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     };
   });
   
-  /* ── fuzzy search ── */
-  function fuzzyMatch(text: string, query: string): boolean {
-    if (!cfg.fuzziness) return text.includes(query);
-
-    // Simple fuzzy matching algorithm
-    let textIndex = 0;
-    let queryIndex = 0;
-    let score = 0;
-
-    while (textIndex < text.length && queryIndex < query.length) {
-      if (text[textIndex] === query[queryIndex]) {
-        score += 2; // Consecutive matches get higher score
-        queryIndex++;
-      } else {
-        score -= 0.5; // Penalty for skipping
-      }
-      textIndex++;
-    }
-
-    // Return true if we matched all query characters with a positive score
-    return queryIndex === query.length && score > 0;
-  }
-
   /* ── DOM skeleton ── */
   const root = document.createElement('div');
   root.id = 'cmd-palette';
@@ -333,31 +307,15 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
     showingRecent = false;
     const term = q.toLowerCase();
 
-    // Combine command pool and element pool
-    const allItems: SuggestionItem[] = [...commandPool(), ...buildElementPool()];
-
-    // Filter based on fuzzy search or regular includes
-    const matchedItems = cfg.fuzziness
-      ? allItems.filter(i => fuzzyMatch(i.searchText, term))
-      : allItems.filter(i => i.searchText.includes(term));
-
-    // Sort by relevance - exact matches first, then by path length (shorter paths first)
-    return matchedItems
-      .sort((a, b) => {
-        // Exact matches first
-        const aExact = a.searchText.includes(' ' + term + ' ');
-        const bExact = b.searchText.includes(' ' + term + ' ');
-        if (aExact && !bExact) return -1;
-        if (!aExact && bExact) return 1;
-
-        // Then by path length (shorter paths first)
-        if (a.kind === 'command' && b.kind === 'command') {
-          return a.path.length - b.path.length;
-        }
-
-        return 0;
-      })
-      .slice(0, cfg.maxResults);
+    // Rank each pool with the shared engine (command-core: substring beats
+    // subsequence, word-start and shorter labels lead), keeping the pools
+    // SEPARATE so the section headers ("Commands" / "On this board") never
+    // interleave. cfg.fuzziness=false narrows to plain-substring matches.
+    const opts = { textOf: (i: SuggestionItem) => i.searchText, limit: cfg.maxResults };
+    const cmds = rankItems(commandPool(), term, opts) as CommandItem[];
+    const els = rankItems(buildElementPool(), term, opts) as ElementSuggestion[];
+    const ranked: SuggestionItem[] = [...cmds, ...els];
+    return (cfg.fuzziness ? ranked : ranked.filter(i => i.searchText.includes(term))).slice(0, cfg.maxResults);
   };
 
   /* ── helpers ── */
@@ -558,14 +516,14 @@ export function installCommandPalette(controller: CanvasController, opts: Partia
       return;
     }
 
-    // Navigation
+    // Navigation (command-core's wrap-around stepping; -1 enters at either end)
     if (e.key === 'ArrowDown' && filtered.length) {
-      sel = (sel + 1) % filtered.length;
+      sel = stepSelection(sel, 1, filtered.length);
       render();
       e.preventDefault();
     }
     else if (e.key === 'ArrowUp' && filtered.length) {
-      sel = (sel - 1 + filtered.length) % filtered.length;
+      sel = stepSelection(sel, -1, filtered.length);
       render();
       e.preventDefault();
     }
