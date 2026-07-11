@@ -109,13 +109,14 @@ const TUNE_DEFAULTS = {
   // small-print fact layer (cap 16, tiny, full opacity).
   constCap: 16, constOpacity: 0.6, constNear: 0.5, constFar: 1.2,
   anchorCap: 16, anchorOpacity: 1, anchorSizeMult: 0.3,
-  // in-scene label furniture: the black pill behind SDF text (owner: always
-  // on, opacity is the dial) and the outline halo width (em fraction).
-  // pillFeather: 0 = hard rounded CHIP (reads as UI sitting on the map);
-  // toward 1 the pill becomes a wide soft-edged KNOCKOUT — the field quiets
-  // under the text with no visible container (print cartography's halo,
-  // scaled up). The hard edge, not the darkening, was what felt wrong.
-  pillAlpha: 1, pillFeather: 0.65, labelOutline: 0.2,
+  // in-scene label furniture. pillAlpha 0 = OFF (owner preference — text
+  // stands on its outline halo alone). The dial is a real continuum now:
+  // below ~0.95 the pill is a translucent VEIL rendered over the cloud
+  // (genuine alpha gradient — dims what's behind); at ~1 it flips to the
+  // depth-writing OCCLUDER (fully culls what's behind). The old always-
+  // occluder path made the dial binary: its alpha blended against the
+  // near-black background while the depth test removed content outright.
+  pillAlpha: 0, pillFeather: 0.65, labelOutline: 0.2,
   // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
   // label that flies close now carries an OPAQUE pill, and unbounded it
   // becomes a viewport-eating billboard (the mis-step). Far labels still
@@ -1403,6 +1404,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
           c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
+          const cOccl = TUNE.pillAlpha > 0.95;
+          c.pill.renderOrder = cOccl ? -1 : 8;
+          c.pill.material.depthWrite = cOccl;
         }
       };
       // Breadcrumb — "where am I": selecting a fact names its neighbourhood in
@@ -1640,9 +1644,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           st.text.color = color;
           st.text.fillOpacity = st.cur;
           st.text.outlineOpacity = st.cur;
-          // The pill rides the label's own opacity — visible whenever the
-          // text is (owner direction; pillAlpha is the one dial).
+          // The pill rides the label's own opacity. Mode by strength:
+          // translucent veil (drawn over the cloud, real gradient) below
+          // ~0.95; hard depth-writing occluder at the top of the dial.
           st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * st.cur;
+          const occl = TUNE.pillAlpha > 0.95;
+          st.pill.renderOrder = occl ? -1 : 8;
+          st.pill.material.depthWrite = occl;
           // Near-field ceiling: compress (smoothly) once the projected size
           // exceeds the cap — sel/hit earn a third more headroom. Far labels
           // are untouched; depth-truth is only bounded at the near extreme.
