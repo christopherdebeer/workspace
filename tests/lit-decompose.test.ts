@@ -9,8 +9,12 @@ import { slugFromPath, extractRelativeMdLinks, planDecomposition, staleKeys, dif
 import { extractWikiTargets } from '../platform/ui/wiki-link';
 
 describe('slugFromPath', () => {
-  it('strips a leading docs/ root and the markdown extension', () => {
-    expect(slugFromPath('docs/architecture/adr/0081-typed-file-ingestion.md')).toBe('architecture/adr/0081-typed-file-ingestion');
+  it('keeps the full path (including its root) and strips only the markdown extension', () => {
+    // A live migration collided doc:machine (docs/machine.md) with a
+    // pre-existing hand-authored doc:machine — the path root must survive
+    // into the slug so a synced doc can never collide with the bare
+    // doc:<slug> namespace interactive authoring uses.
+    expect(slugFromPath('docs/architecture/adr/0081-typed-file-ingestion.md')).toBe('docs/architecture/adr/0081-typed-file-ingestion');
   });
   it('leaves a non-docs path alone but for the extension', () => {
     expect(slugFromPath('notes/2026-07-11.markdown')).toBe('notes/2026-07-11');
@@ -23,8 +27,8 @@ describe('extractRelativeMdLinks', () => {
   it('resolves ./ and ../ links against the source path, dedupes', () => {
     const content = '[breathe](./breathe.md) and [again](./breathe.md) and [up](../compose.md)';
     expect(extractRelativeMdLinks(content, path)).toEqual([
-      'doc:architecture/adr/breathe',
-      'doc:architecture/compose',
+      'doc:docs/architecture/adr/breathe',
+      'doc:docs/architecture/compose',
     ]);
   });
 
@@ -35,7 +39,7 @@ describe('extractRelativeMdLinks', () => {
 
   it('strips a trailing #fragment and an optional link title before resolving', () => {
     const content = '[sec](./breathe.md#section "a title")';
-    expect(extractRelativeMdLinks(content, path)).toEqual(['doc:architecture/adr/breathe']);
+    expect(extractRelativeMdLinks(content, path)).toEqual(['doc:docs/architecture/adr/breathe']);
   });
 });
 
@@ -45,13 +49,13 @@ describe('planDecomposition', () => {
   it('derives slug/title/summary and splits into keyed, ordered blocks', () => {
     const content = '# Typed file ingestion\n\nThe put seam infers types. See [[kb/thing]] and [more](./breathe.md).\n\n## Sketch\n\nSecond block.';
     const plan = planDecomposition(path, content, extractWikiTargets);
-    expect(plan.slug).toBe('architecture/adr/0081-typed-file-ingestion');
-    expect(plan.docKey).toBe('doc:architecture/adr/0081-typed-file-ingestion');
+    expect(plan.slug).toBe('docs/architecture/adr/0081-typed-file-ingestion');
+    expect(plan.docKey).toBe('doc:docs/architecture/adr/0081-typed-file-ingestion');
     expect(plan.title).toBe('Typed file ingestion');
     expect(plan.summary).toBe('The put seam infers types.');
     expect(plan.blocks.map((b) => b.key)).toEqual([
-      'doc-block:architecture/adr/0081-typed-file-ingestion/0',
-      'doc-block:architecture/adr/0081-typed-file-ingestion/1',
+      'doc-block:docs/architecture/adr/0081-typed-file-ingestion/0',
+      'doc-block:docs/architecture/adr/0081-typed-file-ingestion/1',
     ]);
     expect(plan.blocks.map((b) => b.seq)).toEqual([0, 1]);
   });
@@ -61,7 +65,7 @@ describe('planDecomposition', () => {
     const plan = planDecomposition(path, content, extractWikiTargets);
     const block0 = plan.blocks[0].key;
     expect(plan.edges).toContainEqual({ from: block0, rel: 'related', to: 'kb/thing' });
-    expect(plan.edges).toContainEqual({ from: block0, rel: 'references', to: 'doc:architecture/adr/breathe' });
+    expect(plan.edges).toContainEqual({ from: block0, rel: 'references', to: 'doc:docs/architecture/adr/breathe' });
   });
 
   it('falls back to a filename-derived title and empty summary when there is no heading/prose', () => {

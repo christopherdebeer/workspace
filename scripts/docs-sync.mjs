@@ -133,7 +133,7 @@ async function liveShas() {
   try {
     let cursor;
     do {
-      const res = await call('read', 'workspace.query', { type: 'file', prefix: KEY_PREFIX, limit: 100, ...(cursor ? { cursor } : {}) });
+      const res = await call('read', 'workspace.query', { type: 'markdown', prefix: KEY_PREFIX, limit: 100, ...(cursor ? { cursor } : {}) });
       for (const e of res.entries ?? []) if (e?.key && e.value?.sha) shas.set(e.key, e.value.sha);
       cursor = res.nextCursor;
     } while (cursor);
