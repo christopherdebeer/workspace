@@ -93,10 +93,12 @@ describe('projectionFact: persisted basis + projectVector (ADR-0047 stage 3)', (
     expect(fact.basis).toBeDefined();
     expect(fact.norm).toBeDefined();
     // Re-projecting an EXISTING vector through the persisted basis reproduces
-    // the exact coord the batch run stored for it (same map, same math).
+    // the batch run's stored coord for it, up to the basis's own round6
+    // storage precision (not bit-exact — the basis is rounded before persisting).
     for (let i = 0; i < keys.length; i++) {
       const viaVector = projectVector(vecs[i], fact.basis!, fact.norm!);
-      expect(viaVector).toEqual(fact.coords[keys[i]]);
+      const stored = fact.coords[keys[i]];
+      for (let j = 0; j < 3; j++) expect(viaVector[j]).toBeCloseTo(stored[j], 3);
     }
   });
 

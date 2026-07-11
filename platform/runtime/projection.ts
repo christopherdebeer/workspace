@@ -206,8 +206,16 @@ export function projectionFact(vectors: number[][], keys: string[], dim: number,
     const c = normed[i] ?? [];
     out[keys[i]] = [round4(c[0] ?? 0), round4(c[1] ?? 0), round4(c[2] ?? 0)];
   }
-  const basis: PcaBasis = { mean, axes: [axes[0] ?? [], axes[1] ?? [], axes[2] ?? []] };
-  return { method: 'pca', dim, count: keys.length, generatedAt, coords: out, basis, norm };
+  // The basis is `4 × dim` raw floats (mean + 3 axes) — at full float precision
+  // that's real storage (~80KB at dim=1024) for no benefit: round6 keeps ~1e-6
+  // precision (far below PCA's own iterative-approximation error) at roughly
+  // half the bytes, same as coords rounding to 4dp.
+  const basis: PcaBasis = {
+    mean: mean.map(round6),
+    axes: [(axes[0] ?? []).map(round6), (axes[1] ?? []).map(round6), (axes[2] ?? []).map(round6)],
+  };
+  const roundedNorm: NormParams = { center: norm.center.map(round6), scale: round6(norm.scale) };
+  return { method: 'pca', dim, count: keys.length, generatedAt, coords: out, basis, norm: roundedNorm };
 }
 
 /**
@@ -229,4 +237,8 @@ export function projectVector(vector: number[], basis: PcaBasis, norm: NormParam
 
 function round4(v: number): number {
   return Math.round(v * 1e4) / 1e4;
+}
+
+function round6(v: number): number {
+  return Math.round(v * 1e6) / 1e6;
 }
