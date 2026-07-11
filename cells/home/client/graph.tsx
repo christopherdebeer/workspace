@@ -510,6 +510,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
   selectRef.current = onSelect;
   const api = useRef<{ select: (key: string | null, fly?: boolean) => void; setVisible: (f: number) => void } | null>(null);
   const lastExternal = useRef<string | null>(null);
+  // The upgrade from the fast partial mount to the full one rebuilds the
+  // scene (a fresh api.current, fresh internal selection/visibility state) —
+  // read the LATEST selectedKey/visible here (not the mount effect's stale
+  // closure over its initial props) so a selection or dial change made
+  // during the loading window survives the rebuild instead of resetting.
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   // Loading UX (2026-07-11): 'fast' = fetching the first-page model for the
   // initial paint, 'full' = that's mounted, now paging in the rest of the
   // slice in the background, 'done' = the complete model is mounted (or
@@ -2084,6 +2093,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       if (disposed) return;
       await mountScene(fullModel, THREE, addons);
       if (disposed) return;
+      // The rebuild started a fresh api.current with fresh internal selection/
+      // visibility state — reapply whatever the user set during the fast
+      // phase's loading window instead of silently resetting it.
+      if (selectedKeyRef.current) api.current?.select(selectedKeyRef.current, false);
+      api.current?.setVisible(visibleRef.current);
       setLoadState('done');
     })().catch((err) => {
       (window.reportError ?? console.error)(err);
