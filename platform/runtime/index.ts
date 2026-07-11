@@ -69,6 +69,8 @@ export {
   parseLensesConfig,
 } from './state';
 export { contentHash } from './content-hash';
+export { inferIngestionType } from './ingestion-type';
+export type { IngestionConfig, IngestionRule } from './ingestion-type';
 // The DynamoDB-backed StateStore — surfaced in the barrel (ADR-0042 Inc 0) so a
 // cell's own SSR Lambda can run the SAME read pipeline the gateway does
 // (`createObservedState(createDynamoStateStore(table))`) against its IAM-scoped

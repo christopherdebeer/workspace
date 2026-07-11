@@ -1464,6 +1464,22 @@ describe('data-blob file mirror — text inlining for search (ADR-0030 blob extr
     expect((binFact?.value as { content?: string }).content).toBeUndefined();
     expect((binFact?.value as { s3Key: string }).s3Key).toBe('cells/notes-abc/data/alice/logo.png');
   });
+
+  it('types the mirrored fact from the blob name/content-type (ADR-0081), not flat `file`', async () => {
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'plan.md', bytes: 5, contentType: 'text/markdown', content: '# Plan' });
+    expect((await state.get('alice', 'file/cells/notes-abc/data/plan.md'))?._meta.type).toBe('markdown');
+
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'logo2.png', bytes: 9000, contentType: 'image/png' });
+    expect((await state.get('alice', 'file/cells/notes-abc/data/logo2.png'))?._meta.type).toBe('image');
+
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'blob.bin', bytes: 3, contentType: 'application/octet-stream' });
+    expect((await state.get('alice', 'file/cells/notes-abc/data/blob.bin'))?._meta.type).toBe('file');
+
+    // A `_config/ingestion` override under the same scope redirects the table.
+    await cmds.remember({ key: '_config/ingestion', value: { rules: [{ ext: ['.pdf'], type: 'slides' }] } }, ctxFor('alice').ctx);
+    await dataChanged({ cellId: 'notes-abc', owner: 'alice', name: 'notes', user: 'alice', key: 'deck.pdf', bytes: 4, contentType: 'application/pdf' });
+    expect((await state.get('alice', 'file/cells/notes-abc/data/deck.pdf'))?._meta.type).toBe('slides');
+  });
 });
 
 describe('workspace granular grants (write-through / prefix / request loop)', () => {

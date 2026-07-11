@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * docs-sync — upsert the repo's own docs into the substrate as `file` facts
- * (ADR-0027). Each `docs/**.md` becomes one `file/docs/<relpath>` fact with the
- * markdown inline (so `query { contains }` is full-text over it), then the whole
- * `file/docs/*` prefix is shared `public` (read-only) — one canonical, default-
- * visible, shared-by-all corpus.
+ * docs-sync — upsert the repo's own docs into the substrate as `markdown`
+ * facts (ADR-0027, typed per ADR-0081). Each `docs/**.md` becomes one
+ * `file/docs/<relpath>` fact with the markdown inline (so `query { contains }`
+ * is full-text over it), then the whole `file/docs/*` prefix is shared
+ * `public` (read-only) — one canonical, default-visible, shared-by-all corpus.
+ * The `markdown` type gives `@c15r/lit` (cells/lit) a manager to react on: its
+ * `decomposeMarkdown` tool turns each raw source fact into `doc`/`doc-block`
+ * structure with real links (see docs/architecture/adr/0081-typed-file-ingestion.md).
  *
  *   node scripts/docs-sync.mjs                 dry run — print the plan, write nothing
  *   node scripts/docs-sync.mjs --commit        ingest the facts + share public
@@ -99,7 +102,10 @@ export function fileFactFromDoc(relPath, content) {
   const tags = ['file', 'docs', ...(adr ? ['adr'] : []), ...(traj ? ['trajectory'] : [])];
   return {
     key: `${KEY_PREFIX}${relPath.split(sep).join('/')}`,
-    type: 'file',
+    // ADR-0081: typed at the put seam — `markdown` (not the flat `file` every
+    // upload used to get) is what @c15r/lit's decompose reaction (cells/lit)
+    // matches on to turn this raw source into `doc`/`doc-block` structure.
+    type: 'markdown',
     tags,
     value: {
       path,
