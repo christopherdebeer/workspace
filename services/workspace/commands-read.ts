@@ -574,6 +574,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
     },
 
     async query(input, ctx) {
+      const started = Date.now();
       const scope = requireUser(ctx.identity);
       const { state, vectors } = build(ctx);
       enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
@@ -605,6 +606,17 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
       const shaped = { ...result, entries: shapeEntryList(result.entries, input?.shape) };
+      // Observability (ADR-0081 home-cell incident): latency/size, so a future
+      // CloudFront-timeout or 6MB-payload regression is diagnosable from logs
+      // rather than manual CloudWatch archaeology.
+      ctx.logger.info('workspace.query complete', {
+        scope,
+        type: input?.type,
+        entries: shaped.entries.length,
+        cursor: !!input?.cursor,
+        nextCursor: !!result.nextCursor,
+        durationMs: Date.now() - started,
+      });
       return Object.keys(types).length ? { ...shaped, types } : shaped;
     },
 
