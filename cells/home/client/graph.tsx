@@ -191,7 +191,9 @@ function nodeDOI(n: any, selKey: string | null, nbr: Set<string> | null, hiSet: 
   return 0.12 + 0.88 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
 }
 
-const shortLabel = (s: string): string => (s.length > 26 ? s.slice(0, 25) + '…' : s);
+// Generous cap — SDF labels WRAP now (maxWidth), so a longer title becomes
+// two or three centred lines instead of an ellipsis at 26 chars.
+const shortLabel = (s: string): string => (s.length > 44 ? s.slice(0, 43) + '…' : s);
 
 /** Extract fact keys from an arbitrary console result (search/query/recall/
  *  neighbors/single-fact shapes) — best-effort, empty = no graph reaction. */
@@ -704,6 +706,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       interface LabelState {
         grp: any; inner: any; text: any; pill: any; leader: any;
         cur: number; role: LabelRole; dying: boolean;
+        /** Consecutive syncs this label has LOST its slot — stickiness: it
+         *  only starts dying past a grace threshold, so admission churn at
+         *  the beam edge / collision boundaries stops popping labels. */
+        miss: number;
         ox: number; oy: number; cox: number; coy: number; mult: number;
         fit: () => void;
       }
@@ -730,7 +736,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             'void main(){ vec2 p = (vUv - 0.5) * uSize; float r = uSize.y * 0.32;' +
             ' vec2 b = uSize * 0.5 - vec2(r); float d = length(max(abs(p) - b, 0.0)) - r;' +
             ' float a = uAlpha * (1.0 - smoothstep(-uSize.y * 0.06, 0.0, d));' +
-            ' gl_FragColor = vec4(0.035, 0.028, 0.018, a); }',
+            // Pure black (owner direction) — opacity is the only dial (pillAlpha).
+            ' gl_FragColor = vec4(0.0, 0.0, 0.0, a); }',
           transparent: true,
           depthWrite: false,
         });
@@ -745,6 +752,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         text.fontSize = fontWorld(n, roleMult(role));
         text.anchorX = 'center';
         text.anchorY = 'top';
+        // Long titles WRAP into centred lines (~18 chars/line) instead of
+        // running off as one strip — maxWidth tracks fontSize (applyFont).
+        text.maxWidth = text.fontSize * 10;
+        text.lineHeight = 1.15;
+        text.textAlign = 'center';
         text.position.y = -rad(n) * 1.15; // hang below the dot
         text.color = ink.text;
         text.outlineColor = '#0a0805';
@@ -766,7 +778,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         grp.add(leader);
         const st: LabelState = {
           grp, inner, text, pill, leader,
-          cur: 0, role, dying: false, ox: 0, oy: 0, cox: 0, coy: 0, mult: roleMult(role),
+          cur: 0, role, dying: false, miss: 0, ox: 0, oy: 0, cox: 0, coy: 0, mult: roleMult(role),
           fit: () => {
             const b = text.textRenderInfo?.blockBounds;
             if (!b) return;
@@ -783,7 +795,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         scene.add(grp);
         return st;
       };
-      /** Reconcile membership: departures FADE (dying → removed at ~0), not pop. */
+      /** Reconcile membership: departures FADE (dying → removed at ~0), not
+       *  pop — and only after a GRACE of consecutive losses (stickiness): a
+       *  label that loses one sync's collision contest or slips just past the
+       *  beam edge keeps its place instead of flickering. */
+      const LABEL_GRACE = 8; // syncs ≈ 0.7s at the 5-frame sync cadence
       const reconcileLabels = (want: Map<string, LabelWant>): void => {
         for (const [id, st] of labelObjs) {
           const w = want.get(id);
@@ -792,6 +808,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             st.ox = w.ox ?? 0;
             st.oy = w.oy ?? 0;
             st.dying = false;
+            st.miss = 0;
             // A role change can change the SIZE tier — troika relayouts async,
             // so only touch fontSize when it actually moved (sync is not free).
             const m = roleMult(w.role);
@@ -800,10 +817,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               const n = nodeById.get(id);
               if (n) {
                 st.text.fontSize = fontWorld(n, m);
+                st.text.maxWidth = st.text.fontSize * 10;
                 st.text.sync(st.fit);
               }
             }
-          } else st.dying = true;
+          } else if (++st.miss > LABEL_GRACE) st.dying = true;
         }
         for (const [id, w] of want) {
           if (labelObjs.has(id)) continue;
@@ -919,21 +937,32 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         return best.index != null ? nodes[best.index] : null;
       };
       // A tap over a label's projected rect selects that node — SDF labels are
-      // scene objects, so the rect is reconstructed from the same projection
-      // that placed them (host is fixed inset:0, so client px == canvas px).
+      // scene objects, so the rect is reconstructed from troika's OWN layout
+      // bounds (blockBounds), padded a little for fingers (host is fixed
+      // inset:0, so client px == canvas px).
       const labelAt = (cx: number, cy: number): string | null => {
         for (const [id, st] of labelObjs) {
-          if (st.cur < 0.3) continue; // a barely-there label shouldn't catch taps
+          if (st.cur < 0.25) continue; // a barely-there label shouldn't catch taps
           const n = nodeById.get(id);
           if (!n) continue;
           const camD = camPos.distanceTo(st.grp.position) || 1;
           const pxPer = (H / 2) / camD; // screen px per world unit at this depth
+          const b = st.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const fs = st.text.fontSize * pxPer;
-          const w = Math.max(44, String(n.label).length * fs * 0.62);
           const [sx, sy] = screenXY(n);
-          const lx = sx + st.cox;
-          const ly = sy + st.coy + rad(n) * 1.15 * pxPer; // top edge of the text
-          if (cx >= lx - w / 2 && cx <= lx + w / 2 && cy >= ly - 3 && cy <= ly + fs * 1.6) return id;
+          const cxc = sx + st.cox; // label centre column (with displacement)
+          if (b) {
+            // Block bounds are text-local (anchor top-centre at y=0), hung at
+            // text.position.y below the node; world +y is screen −y.
+            const top = sy + st.coy - (st.text.position.y + b[3]) * pxPer;
+            const bot = sy + st.coy - (st.text.position.y + b[1]) * pxPer;
+            const w = Math.max(44, (b[2] - b[0]) * pxPer + 8);
+            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= top - 4 && cy <= bot + 4) return id;
+          } else {
+            const w = Math.max(44, String(n.label).length * fs * 0.62);
+            const ly = sy + st.coy + rad(n) * 1.15 * pxPer;
+            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= ly - 3 && cy <= ly + fs * 1.6) return id;
+          }
         }
         return null;
       };
@@ -944,7 +973,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const lid = labelAt(e.clientX, e.clientY);
         if (lid) { api.current?.select(lid, true); return; }
         const n = pickAt(e.clientX, e.clientY);
-        api.current?.select(n ? n.id : null);
+        if (n) { api.current?.select(n.id); return; }
+        // A caption is a DOOR: tapping a constellation name flies to frame
+        // that region (a dot near the caption still wins — checked above).
+        const c = constellationAt(e.clientX, e.clientY);
+        if (c) { frame(c.x, c.y, c.z, c.r * 1.5); return; }
+        api.current?.select(null);
       };
       renderer.domElement.addEventListener('pointerdown', onDown);
       renderer.domElement.addEventListener('pointermove', onMove);
@@ -1229,6 +1263,20 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         } catch { /* views are optional */ }
       })();
       const constV = new THREE.Vector3();
+      // Tap target: a visible caption's projected rect. Captions are
+      // pointer-events:none DOM, so taps arrive via the canvas handler.
+      const constellationAt = (cx: number, cy: number): Constellation | null => {
+        for (const c of constellations) {
+          if (c.cur < 0.15) continue;
+          constV.set(c.x, c.y, c.z).project(camera);
+          if (constV.z > 1) continue;
+          const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
+          const fontPx = parseFloat((c.obj.element as HTMLElement).style.fontSize) || 12;
+          const w = c.name.length * fontPx * 0.95;
+          if (Math.abs(cx - sx) < w / 2 + 6 && Math.abs(cy - sy) < fontPx * 1.1 + 6) return c;
+        }
+        return null;
+      };
       // Display order: authored places (views, boards, docs) OUTRANK computed
       // ones for the caption budget — a human named those.
       const constOrdered = (): Constellation[] =>
@@ -1307,14 +1355,20 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // Size-aware declutter: a small (far) label needs little clearance, so
         // depth-proportional labels pack naturally instead of fighting a fixed
         // 90px box sized for the biggest.
-        const placed: Array<[number, number, number]> = [];
+        const placed: Array<[number, number, number, number]> = [];
         const pxOf = (n: any): number => {
           const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
           return rad(n) * 2.4 * (H / 2) / camD;
         };
         const boxOf = (n: any): number => Math.max(36, pxOf(n) * 7);
-        const collides = (sx: number, sy: number, w: number): boolean =>
-          placed.some(([px, py, pw]) => Math.abs(px - sx) < (pw + w) / 2 && Math.abs(py - sy) < 14);
+        // Wrapped labels are TALL — collision clearance is a box, not a row.
+        const hOf = (n: any): number => {
+          const fs = pxOf(n) * 0.85;
+          const lines = Math.max(1, Math.ceil(String(n.label).length / 18));
+          return Math.max(14, fs * 1.25 * lines);
+        };
+        const collides = (sx: number, sy: number, w: number, h: number): boolean =>
+          placed.some(([px, py, pw, ph]) => Math.abs(px - sx) < (pw + w) / 2 && Math.abs(py - sy) < (ph + h) / 2);
         const focusActive = !!(selKey || hiSet);
 
         // FOCUS DECLARES: the anchor and every search hit label unconditionally
@@ -1325,7 +1379,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           if (n && isVis(n)) {
             want.set(selKey, { role: 'sel' });
             const [sx, sy] = screenXY(n);
-            placed.push([sx, sy, boxOf(n)]);
+            placed.push([sx, sy, boxOf(n), hOf(n)]);
           }
         }
         if (hiSet) {
@@ -1335,7 +1389,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             if (n && isVis(n)) {
               want.set(id, { role: 'hit' });
               const [sx, sy] = screenXY(n);
-              placed.push([sx, sy, boxOf(n)]);
+              placed.push([sx, sy, boxOf(n), hOf(n)]);
             }
           }
         }
@@ -1355,10 +1409,16 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             if (added >= labelCap()) break;
             const [sx, sy] = screenXY(n);
             const w = boxOf(n);
-            const tries: Array<[number, number]> = [[0, 0], [0, 18], [0, -26], [w / 2 + 14, 0], [-(w / 2 + 14), 0]];
+            const h = hOf(n);
+            // Offset STICKINESS: a label that already found a displaced home
+            // tries its current offset first, so it doesn't wander between
+            // free slots as the contest order shifts frame to frame.
+            const prev = labelObjs.get(n.id);
+            const tries: Array<[number, number]> = [[0, 0], [0, h + 4], [0, -(h + 10)], [w / 2 + 14, 0], [-(w / 2 + 14), 0]];
+            if (prev && (prev.ox || prev.oy)) tries.unshift([prev.ox, prev.oy]);
             for (const [ox, oy] of tries) {
-              if (collides(sx + ox, sy + oy, w)) continue;
-              placed.push([sx + ox, sy + oy, w]);
+              if (collides(sx + ox, sy + oy, w, h)) continue;
+              placed.push([sx + ox, sy + oy, w, h]);
               want.set(n.id, { role: 'nbr', ox, oy });
               added++;
               break;
@@ -1374,22 +1434,32 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (!focusActive && TUNE.anchorCap > 0) {
           const takenCell = new Set<number>();
           let added = 0;
-          for (const n of byRank) {
-            if (added >= TUNE.anchorCap) break;
-            if (!isVis(n) || want.has(n.id)) continue;
+          const tryAnchor = (n: any): void => {
+            if (added >= TUNE.anchorCap || !n || !isVis(n) || want.has(n.id)) return;
             // Anchors are wayfinding text — a salient machine-run KEY is
             // honest data but useless as a resting place-hold; words only.
-            if (!placeworthy(n.label)) continue;
+            if (!placeworthy(n.label)) return;
             const [sx, sy, sz] = screenXY(n);
-            if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) continue; // offscreen/behind
+            if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) return; // offscreen/behind
             const cell = Math.min(2, Math.floor((sy / H) * 3)) * 3 + Math.min(2, Math.floor((sx / W) * 3));
-            if (takenCell.has(cell)) continue;
+            if (takenCell.has(cell)) return;
             const w = boxOf(n);
-            if (collides(sx, sy, w)) continue;
+            const h = hOf(n);
+            if (collides(sx, sy, w, h)) return;
             takenCell.add(cell);
-            placed.push([sx, sy, w]);
+            placed.push([sx, sy, w, h]);
             want.set(n.id, { role: 'anchor' });
             added++;
+          };
+          // INCUMBENCY: a standing anchor keeps its post while it stays on
+          // screen — the resting layer shouldn't reshuffle with every drift
+          // of the camera. New posts fill whatever cells remain.
+          for (const [id, st] of labelObjs) {
+            if (st.role === 'anchor' && !st.dying) tryAnchor(nodeById.get(id));
+          }
+          for (const n of byRank) {
+            if (added >= TUNE.anchorCap) break;
+            tryAnchor(n);
           }
         }
 
@@ -1404,7 +1474,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           if (!isVis(n) || want.has(n.id)) continue;
           const t = labelTorchNode(n);
           // Enter at BEAM_ON, stay until BEAM_OFF — hysteresis against edge flicker.
-          if (t > TUNE.beamOn || (labelObjs.has(n.id) && t > TUNE.beamOff)) lit.push([n.id, t]);
+          // Standing labels get an INCUMBENCY bonus in the contest for the cap,
+          // so the set doesn't reshuffle when two candidates trade rank.
+          if (t > TUNE.beamOn || (labelObjs.has(n.id) && t > TUNE.beamOff)) {
+            lit.push([n.id, t + (labelObjs.get(n.id)?.role === 'beam' ? 0.2 : 0)]);
+          }
         }
         lit.sort((a, b) => b[1] - a[1]);
         const inBeam = new Set<string>();
@@ -1414,12 +1488,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           const [sx, sy] = screenXY(n);
           const w = boxOf(n);
-          if (collides(sx, sy, w)) continue;
+          const h = hOf(n);
+          if (collides(sx, sy, w, h)) continue;
           inBeam.add(id);
           const streak = (beamStreak.get(id) ?? 0) + 1;
           beamStreak.set(id, streak);
           if (streak < 2 && !labelObjs.has(id)) continue; // entry debounce
-          placed.push([sx, sy, w]);
+          placed.push([sx, sy, w, h]);
           want.set(id, { role: 'beam' });
           added++;
         }
@@ -1486,12 +1561,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           st.text.color = color;
           st.text.fillOpacity = st.cur;
           st.text.outlineOpacity = st.cur;
-          // The pill earns its ink only when the text is big enough to read —
-          // a sub-legible deep label with a slab under it is pure clutter
-          // (the first SDF deploy stacked pill-slabs across the dense core).
-          const fsPx = st.text.fontSize * (H / 2) / camD;
-          const pillFade = Math.max(0, Math.min(1, (fsPx - 5.5) / 6));
-          st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * st.cur * pillFade;
+          // The pill rides the label's own opacity — visible whenever the
+          // text is (owner direction; pillAlpha is the one dial).
+          st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * st.cur;
         }
       };
 
@@ -1569,6 +1641,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               if (!n) continue;
               st.mult = roleMult(st.role);
               st.text.fontSize = fontWorld(n, st.mult);
+              st.text.maxWidth = st.text.fontSize * 10;
               st.text.outlineWidth = `${Math.round(TUNE.labelOutline * 100)}%`;
               st.text.sync(st.fit);
             }
