@@ -494,7 +494,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // toggle can restyle the live scene without a rebuild. ──
       const paletteFor = (m: string): Record<string, any> =>
         m === 'paper'
-          ? { bg: '#ece2cb', text: '#2b2318', accent: '#8a6410', dim: '#6c614e', outline: '#f0e8d4', pill: [0.937, 0.902, 0.812], capAuth: '#7a5c1a', capComp: '#5b5344', rel: '#6c614e' }
+          // outline == bg: the halo's job is to BE the ground (knock out
+          // linework behind glyphs), not to add a milky edge around them.
+          ? { bg: '#ece2cb', text: '#2b2318', accent: '#8a6410', dim: '#6c614e', outline: '#ece2cb', pill: [0.925, 0.886, 0.796], capAuth: '#7a5c1a', capComp: '#5b5344', rel: '#6c614e' }
           : { bg: ink.sceneBg, text: ink.text, accent: ink.accent, dim: ink.dim, outline: '#0a0805', pill: [0, 0, 0], capAuth: '#e3c987', capComp: '#b7ad99', rel: '#a89e8a' };
       let PAL = paletteFor(TUNE.sceneMode);
       const isPaper = (): boolean => TUNE.sceneMode === 'paper';
@@ -1082,10 +1084,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (lid) { api.current?.select(lid, true); return; }
         const n = pickAt(e.clientX, e.clientY);
         if (n) { api.current?.select(n.id); return; }
-        // A caption is a DOOR: tapping a constellation name flies to frame
-        // that region (a dot near the caption still wins — checked above).
+        // A caption is a DOOR: an AUTHORED place selects its container fact
+        // (context panel: members as neighbours, open ↗ to the board/doc);
+        // a computed place just flies to frame its region.
         const c = constellationAt(e.clientX, e.clientY);
-        if (c) { frame(c.x, c.y, c.z, c.r * 1.5); return; }
+        if (c) {
+          if (c.key && nodeById.has(c.key)) api.current?.select(c.key, true);
+          else frame(c.x, c.y, c.z, c.r * 1.5);
+          return;
+        }
         api.current?.select(null);
       };
       renderer.domElement.addEventListener('pointerdown', onDown);
@@ -1243,9 +1250,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // centroid — legible from afar, handing off to fact labels as the
       // camera arrives. The approach fade IS the semantic zoom: continuous,
       // per-region, no tier boundaries to flicker across.
-      interface Constellation { name: string; x: number; y: number; z: number; r: number; authored: boolean; grp: any; text: any; pill: any; fs: number; cur: number }
+      interface Constellation { name: string; x: number; y: number; z: number; r: number; authored: boolean; key?: string; grp: any; text: any; pill: any; fs: number; cur: number }
       const constellations: Constellation[] = [];
-      const addConstellation = (name: string, cx: number, cy: number, cz: number, cr: number, authored: boolean): void => {
+      const addConstellation = (name: string, cx: number, cy: number, cz: number, cr: number, authored: boolean, key?: string): void => {
         // One caption per name — a view and its placement container (inView
         // edges) are the same place arriving by two routes.
         if (constellations.some((c) => c.name === name)) return;
@@ -1274,7 +1281,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         pill.renderOrder = -1;
         grp.add(pill);
         grp.add(text);
-        const st: Constellation = { name, x: cx, y: cy, z: cz, r: cr, authored, grp, text, pill, fs: cr * 0.055, cur: 0 };
+        const st: Constellation = { name, x: cx, y: cy, z: cz, r: cr, authored, key, grp, text, pill, fs: cr * 0.055, cur: 0 };
         text.sync(() => fitPillTo(text, pill, 0));
         scene.add(grp);
         constellations.push(st);
@@ -1349,7 +1356,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const cz = members.reduce((s: number, m: any) => s + m.z, 0) / members.length;
           const dists = members.map((m: any) => Math.hypot(m.x - cx, m.y - cy, m.z - cz)).sort((a: number, b: number) => a - b);
           const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
-          addConstellation(rawName.length > 24 ? rawName.slice(0, 23) + '…' : rawName, cx, cy, cz, cr, true);
+          // Containers carry their fact key: the caption becomes a live door
+          // to the place itself (tap = SELECT the board/doc, not just fly).
+          addConstellation(rawName.length > 24 ? rawName.slice(0, 23) + '…' : rawName, cx, cy, cz, cr, true, cid);
         }
       }
       // Authored pass, part 2 (async garnish — the scene never waits on it):
@@ -1498,6 +1507,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         }
         for (const [, o] of edgeLabelObjs) (o.element as HTMLElement).style.color = PAL.rel;
         crumb.style.color = PAL.capComp;
+        // The DOM crumb's baked-in dusk halo is a black smudge on paper.
+        crumb.style.textShadow = paper ? 'none' : '0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
       };
       let crumbTimer: ReturnType<typeof setTimeout> | null = null;
       const showCrumb = (key: string | null): void => {
