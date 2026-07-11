@@ -1,6 +1,9 @@
 # ADR-0025 — Holder-side attenuation (macaroon-style caveats)
 
-- **Status:** Proposed (buffer, not built). Second of the two-ahead sketch buffer. The forward edge of
+- **Status:** Proposed (buffer, not built). **Reconciled 2026-07-09:** the attenuation
+  PRINCIPLE shipped piecewise — `focusScope`/`requestScope` (session self-narrowing),
+  mint-time intersection, and ADR-0074 posture (attention attenuation). Remaining here:
+  holder-side attenuation of a token you HOLD but did not mint. Second of the two-ahead sketch buffer. The forward edge of
   the auth direction — keep one decision sketched beyond ADR-0024.
 - **Date:** 2026-06-25
 - **Context:** Today a token narrows only at **mint/update** — an issuer round-trip (ADR-0022 §2). When

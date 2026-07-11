@@ -16,6 +16,11 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@a
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { randomUUID } from 'node:crypto';
+// Materialized at push from cells/kernel/static/ (cell-sync vendor overlay, ADR-0076).
+// eslint-disable-next-line import/no-unresolved
+import { gwCall } from './vendor/gateway-client.js';
+// eslint-disable-next-line import/no-unresolved
+import { cellJobs } from './vendor/cell-jobs.js';
 
 // removeUndefinedValues: a job result legitimately carries undefined fields
 // (`error` on success, `result` on failure) — without this, saving a
@@ -32,31 +37,19 @@ const SELF_SOURCE = process.env.SERVICE_NAME ?? ''; // = cell-run-<hash>, the IA
 const GATEWAY_MCP = process.env.GATEWAY_MCP_URL ?? 'https://parc.land/mcp';
 let SELF_FUNCTION = '';
 
-/* ── gateway tool proxy (ADR-0028, mirrors @c15r/models real-tool proxy) ──
+/* ── gateway tool proxy (ADR-0028) — the vendored kernel-SDK client ────────
  * The direct parc.read/query/emit bindings touch only the owner's slice via the
  * cell's ambient IAM. `parc.call` instead proxies to the /mcp gateway as a SCOPED
- * principal (a per-run token), so code reaches the FULL read/act surface
- * (workspace.*, @owner/cell.tool, whoami, $catalog…) under the gateway PEP — i.e.
- * bounded by the token's scope (incl. read:type/write:type), not ambient IAM.
- * NOTE: this is the same logic as cells/models/index.ts; vendor a shared module
- * when a second consumer lands (cf. the vendored substrate.js client). */
-const READ_VERBS = new Set(['query', 'peek', 'read', 'get', 'list', 'neighbors', 'links', 'recall', 'search', 'describe', 'whoami', 'stats', 'tags', 'history', 'tending', 'salience', 'graph', 'catalog', 'types', 'shared', 'members', 'attention', 'changes', 'views', 'groups']);
-const toolVerb = (target: string): 'read' | 'act' => (READ_VERBS.has(target.split('.').pop() ?? target) ? 'read' : 'act');
-
+ * principal (a per-run token), so code reaches the FULL read/act surface under
+ * the gateway PEP. The choreography lives in @c15r/kernel/gateway-client
+ * (ADR-0076 — this cell was copy #1 of three); `parc.call`'s contract stays
+ * `{error}` objects (user code inspects results, it doesn't catch). */
 async function callGatewayTool(token: string, target: string, input?: unknown): Promise<unknown> {
-  const verb = toolVerb(target);
-  const res = await fetch(GATEWAY_MCP, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: verb, arguments: input === undefined ? { target } : { target, input } } }),
-  });
-  if (!res.ok) return { error: `gateway HTTP ${res.status}` };
-  const rpc = await res.json();
-  const text = rpc?.result?.content?.[0]?.text ?? '';
-  let value: unknown = text;
-  try { value = JSON.parse(text); } catch { /* raw text result */ }
-  if (rpc?.error || rpc?.result?.isError) return { error: typeof value === 'string' ? value : JSON.stringify(value) };
-  return value;
+  try {
+    return await gwCall(token, target, input, { url: GATEWAY_MCP });
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }
 
 /* ── the substrate binding handed to user code ──────────────────── */
@@ -160,14 +153,21 @@ async function exec(input: ExecInput): Promise<unknown> {
   throw new Error(`lang "${lang}" not yet supported server-side (only js/ts; polyglot needs a container runtime — see docs)`);
 }
 
-/* ── async jobs (mirror the models cell) ────────────────────────── */
-
-async function putJob(jobId: string, patch: Record<string, unknown>): Promise<void> {
-  await ddb.send(new PutCommand({
-    TableName: TABLE,
-    Item: { pk: `JOB#${jobId}`, sk: 'v1', ttl: Math.floor(Date.now() / 1000) + 3600, ...patch },
-  }));
-}
+/* ── async jobs — the vendored kernel-SDK choreography (ADR-0076) ─────────
+ * The JOB# row shape, TTL, and {__job} self-invoke protocol live in
+ * @c15r/kernel/cell-jobs; this cell provides three thin ops over its own
+ * clients. SELF_FUNCTION is read at call time (set per invocation below). */
+const jobs = cellJobs({
+  put: async (item) => {
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+  },
+  get: async (key) =>
+    (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item as Record<string, unknown> | undefined,
+  invokeSelf: async (payload) => {
+    await lambda.send(new InvokeCommand({ FunctionName: SELF_FUNCTION, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify(payload)) }));
+  },
+});
+const putJob = jobs.putJob;
 
 /**
  * Dual-write a lean `run-job` observability fact (ADR-0026 Inc B) via the organ
@@ -192,8 +192,8 @@ async function emitJobFact(jobId: string, value: Record<string, unknown>): Promi
 }
 
 async function runJob(jobId: string): Promise<void> {
-  const job = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
-  const input = (job.Item as { input?: ExecInput } | undefined)?.input;
+  const job = await jobs.getJob(jobId);
+  const input = (job as { input?: ExecInput } | undefined)?.input;
   if (!input) return;
   let out: { result?: unknown; logs?: string[]; emitted?: string[]; error?: string };
   try {
@@ -247,8 +247,7 @@ const TOOLS = [
 async function toolCall(name: string, args: Record<string, unknown>): Promise<unknown> {
   if (name === 'fetch') {
     const jobId = String(args.jobId ?? '');
-    const res = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
-    const item = res.Item as { status?: string; out?: unknown; error?: string } | undefined;
+    const item = (await jobs.getJob(jobId)) as { status?: string; out?: unknown; error?: string } | undefined;
     if (!item) throw new Error(`unknown job "${jobId}"`);
     return { status: item.status, out: item.out, error: item.error };
   }
@@ -259,9 +258,8 @@ async function toolCall(name: string, args: Record<string, unknown>): Promise<un
       if (!SELF_FUNCTION) throw new Error('async unavailable: function name unknown');
       const jobId = randomUUID().slice(0, 13);
       const { async: _a, ...rest } = input;
-      await putJob(jobId, { status: 'pending', input: rest });
       await emitJobFact(jobId, { status: 'pending', at: new Date().toISOString(), lang: (rest.lang ?? 'js'), codeBytes: rest.code.length });
-      await lambda.send(new InvokeCommand({ FunctionName: SELF_FUNCTION, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify({ __job: jobId })) }));
+      await jobs.submit(jobId, { input: rest });
       return { jobId, status: 'pending' };
     }
     return exec(input);

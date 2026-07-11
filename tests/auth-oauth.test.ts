@@ -97,15 +97,19 @@ describe('auth store (in-memory)', () => {
     expect(await validateBearer(orphan.token, store)).toMatchObject({ userId: 'ghost' });
   });
 
-  it('refreshes a token, rotating and invalidating the old one', async () => {
+  it('refreshes a token without killing the previous access token (stable chains, ADR-0080)', async () => {
     const store = createMemoryStore();
     const minted = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
     const refreshed = await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60);
     expect(refreshed).not.toBeNull();
-    // old access token is now revoked
-    expect(await store.validateTokenByHash(sha256(minted.token))).toBeNull();
+    // The old access token is NOT revoked — it reaches its natural (short) expiry.
+    // The same refresh value lives in the parc_refresh cookie AND localStorage;
+    // revoking on refresh made one chain's refresh sign the other chain out.
+    expect(await store.validateTokenByHash(sha256(minted.token))).toMatchObject({ scope: 's' });
     // new access token works
     expect(await store.validateTokenByHash(sha256(refreshed!.token))).toMatchObject({ scope: 's' });
+    // and the refresh credential is stable — not re-minted on refresh
+    expect(refreshed!.refreshToken).toBeUndefined();
   });
 
   it('exposes effective scope + token id, and reflects a server-side narrowing (incremental auth)', async () => {
@@ -378,10 +382,19 @@ describe('refresh-token lifetime + revocation (hardening)', () => {
     expect(await store.validateTokenByHash(sha256(refreshed!.token))).toMatchObject({ scope: 's' });
   });
 
-  it('rotates: the old refresh token cannot be replayed', async () => {
+  it('the refresh credential is stable: both chains can refresh with the same value (ADR-0080)', async () => {
     const store = createMemoryStore();
     const minted = await store.mintToken({ userId: 'u1', scope: 's', expiresInSec: 60, withRefresh: true });
-    expect(await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60, 3600)).not.toBeNull();
+    // Two independent holders of the SAME refresh token (cookie jar + localStorage)
+    // each refresh — both succeed, and every minted access token stays valid.
+    const first = await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60, 3600);
+    const second = await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60, 3600);
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(await store.validateTokenByHash(sha256(first!.token))).toMatchObject({ scope: 's' });
+    expect(await store.validateTokenByHash(sha256(second!.token))).toMatchObject({ scope: 's' });
+    // Explicit revocation still ends the whole chain (revoke cascades to refresh).
+    await store.revokeByTokenValue(second!.token);
     expect(await store.refreshUnifiedToken(sha256(minted.refreshToken!), 60, 3600)).toBeNull();
   });
 

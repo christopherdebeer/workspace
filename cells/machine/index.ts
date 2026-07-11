@@ -21,12 +21,14 @@ import { App } from './client/app';
 import { installBridge } from './client/bridge';
 import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites } from './engine';
 // The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
-// over the owner's slice. VENDORED here (not a URL import): the forge bundler
+// over the owner's slice. Vendored (not a URL import): the forge bundler
 // only bundles relative imports within the cell dir + esm.sh-declared deps; a
 // server-side `https://` import HANGS the bundler (the browser kernel's URL is
 // browser-fetched, never server-bundled). Canonical source: cells/kernel/static/
-// substrate.js — kept in sync until it's published as an npm package (ADR-0017).
-import { createSubstrate } from './substrate';
+// substrate.js — materialized at push by the cell-sync vendor overlay
+// (ADR-0076), which retired this cell's manual keep-in-sync copy.
+// eslint-disable-next-line import/no-unresolved
+import { createSubstrate } from './vendor/substrate.js';
 
 const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const readFile = (rel) => readFileSync(join(__dirname, rel), 'utf8');

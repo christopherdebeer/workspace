@@ -5,7 +5,8 @@
  * fact detail (peek modal, generic editor), and the workspace window itself.
  */
 import * as React from 'react';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, Modal, theme, resolve, declFor, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { ink } from './ink';
 import { marked } from 'marked';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
@@ -122,7 +123,7 @@ export function factHref(e: ListEntry): string | null {
 }
 
 /** Where a fact edits — its type's `edit` handler, if it declares one. */
-function factEdit(e: ListEntry): string | null {
+export function factEdit(e: ListEntry): string | null {
   return handlerUrl(resolve(e, 'edit', typeDecls));
 }
 
@@ -131,7 +132,7 @@ export function EditLink({ e }: { e: ListEntry }): React.JSX.Element | null {
   const to = factEdit(e);
   if (!to) return null;
   return (
-    <a href={to} title="Edit" style={{ color: theme.dim, fontSize: '0.72rem', textDecoration: 'none', fontFamily: theme.mono }}>
+    <a href={to} title="Edit" style={{ color: ink.dim, fontSize: '0.72rem', textDecoration: 'none', fontFamily: theme.mono }}>
       ✎ edit
     </a>
   );
@@ -232,7 +233,7 @@ function FieldsBody({ value }: { value: unknown }): React.JSX.Element | null {
     <dl style={{ margin: 0, display: 'grid', gap: '0.15rem', fontSize: '0.8rem' }}>
       {rows.map(([k, val]) => (
         <div key={k} style={{ display: 'flex', gap: '0.45rem', minWidth: 0 }}>
-          <dt style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.72rem', flexShrink: 0 }}>{k}</dt>
+          <dt style={{ color: ink.dim, fontFamily: theme.mono, fontSize: '0.72rem', flexShrink: 0 }}>{k}</dt>
           <dd style={{ margin: 0, overflowWrap: 'anywhere', minWidth: 0 }}>{String(val).slice(0, 120)}</dd>
         </div>
       ))}
@@ -245,7 +246,7 @@ function FieldsBody({ value }: { value: unknown }): React.JSX.Element | null {
  *  code never touches home). Lazy-loaded; a transparent overlay link opens it. */
 function FactEmbed({ src, href, title }: { src: string; href: string | null; title: string }): React.JSX.Element {
   return (
-    <div style={{ position: 'relative', height: 200, borderRadius: 8, overflow: 'hidden', border: `1px solid ${theme.border}`, background: '#fff' }}>
+    <div style={{ position: 'relative', height: 200, borderRadius: 8, overflow: 'hidden', border: `1px solid ${ink.line}`, background: '#fff' }}>
       <iframe src={src} title={title} loading="lazy" scrolling="no" tabIndex={-1} aria-hidden style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', pointerEvents: 'none' }} />
       {href ? <a href={href} title={`Open ${title}`} aria-label={`Open ${title}`} style={{ position: 'absolute', inset: 0, display: 'block' }} /> : null}
     </div>
@@ -261,7 +262,7 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
   return (
     <div style={{ position: 'relative', maxHeight: '4.5em', overflow: 'hidden' }}>
       {children}
-      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: '1.6em', background: `linear-gradient(transparent, ${theme.panel})` }} />
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: '1.6em', background: `linear-gradient(transparent, ${ink.panel})` }} />
     </div>
   );
 }
@@ -315,7 +316,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   }
   const preview = factPreview(e);
   return preview ? (
-    <span style={{ color: theme.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{preview}</span>
+    <span style={{ color: ink.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{preview}</span>
   ) : null;
 }
 
@@ -361,8 +362,8 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       live = false;
     };
   }, [keyName]);
-  if (err) return <span style={{ color: theme.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
-  if (!n) return <span style={{ color: theme.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
+  if (err) return <span style={{ color: ink.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
+  if (!n) return <span style={{ color: ink.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
   const chip = (ed: Edge, other: string, label: string): React.JSX.Element => (
     <button
       key={`${ed.from}-${ed.rel}-${ed.to}`}
@@ -370,8 +371,8 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       title={`${ed.from} ${ed.rel} ${ed.to}`}
       style={{
         fontSize: '0.66rem',
-        color: ed.derived ? theme.dim : theme.accent,
-        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${theme.border}`,
+        color: ed.derived ? ink.dim : ink.accent,
+        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${ink.line}`,
         borderRadius: 999,
         padding: '0.05rem 0.45rem',
         fontFamily: theme.mono,
@@ -390,7 +391,7 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
   return chips.length ? (
     <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>{chips}</div>
   ) : (
-    <span style={{ color: theme.dim, fontSize: '0.72rem' }}>No edges yet.</span>
+    <span style={{ color: ink.dim, fontSize: '0.72rem' }}>No edges yet.</span>
   );
 }
 
@@ -405,15 +406,30 @@ interface FormField {
   description?: string;
 }
 
+/** An ink action (peek sheet buttons/links) — amber outline, quiet fill. */
+const inkAction: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '0.4rem 0.9rem',
+  minHeight: 38,
+  boxSizing: 'border-box',
+  borderRadius: 8,
+  border: `1px solid ${ink.accent}`,
+  background: 'none',
+  color: ink.accent,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontSize: '0.8rem',
+  textDecoration: 'none',
+};
+
 const editInput: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '0.4rem 0.5rem',
   fontSize: '0.8rem',
-  border: `1px solid ${theme.border}`,
+  border: `1px solid ${ink.line}`,
   borderRadius: 6,
-  background: theme.panel,
-  color: theme.text,
+  background: ink.panel,
+  color: ink.text,
 };
 
 /** A `$types[type].fields` entry's `type` (a loose vocabulary: string/number/
@@ -492,7 +508,7 @@ function FactEditor({
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       {useForm ? (
-        <SchemaForm schema={schema} value={form} onChange={setForm} />
+        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: ink.text, dim: ink.dim, border: ink.line, inputBg: ink.panel, accent: ink.accent, danger: ink.danger }} />
       ) : (
         <>
           <textarea
@@ -502,22 +518,30 @@ function FactEditor({
             spellCheck={false}
             style={{ ...editInput, padding: '0.55rem', fontFamily: theme.mono }}
           />
-          {!isStr ? <span style={{ color: theme.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
+          {!isStr ? <span style={{ color: ink.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
         </>
       )}
-      {err ? <Badge tone="danger">{err}</Badge> : null}
+      {err ? <span style={{ color: ink.danger, fontSize: '0.78rem', fontFamily: theme.mono }}>{err}</span> : null}
       <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <Button onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
-        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.dim, padding: '0.3rem 0.8rem', cursor: 'pointer' }}>Cancel</button>
+        <button onClick={() => void save()} disabled={busy} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Saving…' : 'Save'}</button>
+        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${ink.line}`, borderRadius: 8, color: ink.dim, padding: '0.4rem 0.9rem', cursor: 'pointer', fontFamily: theme.mono, fontSize: '0.8rem' }}>Cancel</button>
       </div>
     </div>
   );
 }
 
+/** The generic in-place editor, usable OUTSIDE this module (the context
+ *  panel's Edit action) — resolves the type's declared fields (ADR-0002
+ *  shape.fields) exactly as FactDetail does. */
+export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (v: unknown) => void }): React.JSX.Element {
+  const fields = (declFor(e, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
+  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(v) => onSaved(v)} />;
+}
+
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
+export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(false);
   const [hints, setHints] = useState<string[] | null>(null);
@@ -534,7 +558,7 @@ function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
   const fields = (declFor(entry, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
-      <div style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
+      <div style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
         {[meta?.type, entry.key].filter(Boolean).join(' · ')}
         {meta?.tags?.length ? '  ·  ' + meta.tags.map((t) => '#' + t).join(' ') : ''}
       </div>
@@ -555,21 +579,27 @@ function FactDetail({ e }: { e: ListEntry }): React.JSX.Element {
             <FactBody e={entry} full />
           </div>
           {hints?.length ? (
-            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: theme.panel }}>
-              <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
+            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: ink.panel }}>
+              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
               {hints.map((h, i) => (
-                <span key={i} style={{ fontSize: '0.76rem', color: theme.text }}>· {h}</span>
+                <span key={i} style={{ fontSize: '0.76rem', color: ink.text }}>· {h}</span>
               ))}
             </div>
           ) : null}
-          <div style={{ display: 'grid', gap: '0.3rem' }}>
-            <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
-            <Neighbourhood keyName={entry.key} />
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            {open ? <Anchor href={open}>Open ↗</Anchor> : null}
-            {edit ? <Anchor href={edit}>Edit in cell ↗</Anchor> : !system ? <Button onClick={() => setEditing(true)}>Edit</Button> : null}
-          </div>
+          {!compact ? (
+            <div style={{ display: 'grid', gap: '0.3rem' }}>
+              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
+              <Neighbourhood keyName={entry.key} />
+            </div>
+          ) : null}
+          {!compact ? (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              {open ? <a href={open} style={inkAction}>Open ↗</a> : null}
+              {edit ? <a href={edit} style={inkAction}>Edit in cell ↗</a> : !system ? (
+                <button onClick={() => setEditing(true)} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: 'pointer' }}>Edit</button>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
     </div>
@@ -597,12 +627,60 @@ export function FactDetailHost(): React.JSX.Element | null {
     window.addEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
     return () => window.removeEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
   }, []);
+  useEffect(() => {
+    if (!entry) return;
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') setEntry(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [entry]);
   if (!entry) return null;
   const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
+  // The peek is an INK bottom sheet — the same instrument language as the
+  // palette it was summoned from (it used to be the parchment Modal: a jarring
+  // theme flip mid-gesture — owner feedback 2026-07-10). Same width metric as
+  // the palette, so the two read as one system.
   return (
-    <Modal open onClose={() => setEntry(null)} title={title}>
-      <FactDetail e={entry} />
-    </Modal>
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={() => setEntry(null)}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
+    >
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        style={{
+          background: ink.bg,
+          color: ink.text,
+          width: 'min(720px, 100vw)',
+          maxHeight: '86dvh',
+          overflowY: 'auto',
+          overscrollBehavior: 'contain',
+          borderTopLeftRadius: 14,
+          borderTopRightRadius: 14,
+          border: `1px solid ${ink.line}`,
+          borderBottom: 'none',
+          boxShadow: '0 -12px 40px rgba(0,0,0,0.5)',
+          padding: '0.8rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))',
+          display: 'grid',
+          gap: '0.7rem',
+          alignContent: 'start',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+          <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
+          <button
+            onClick={() => setEntry(null)}
+            aria-label="close"
+            style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
+          >
+            ×
+          </button>
+        </div>
+        <FactDetail e={entry} />
+      </div>
+    </div>
   );
 }
 
@@ -740,12 +818,12 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
         <Heading sub="Your slice, salience-ranked — the same query an agent makes, rendered. The strip is the ranger's notebook.">
           Workspace
         </Heading>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: theme.dim, fontSize: '0.72rem', flexShrink: 0 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: ink.dim, fontSize: '0.72rem', flexShrink: 0 }}>
           <span style={{ fontFamily: theme.mono }}>{busy ? '…' : 'lens'}</span>
           <select
             value={lens}
             onChange={(e) => setLens(e.target.value)}
-            style={{ fontFamily: 'inherit', fontSize: '0.78rem', color: theme.text, background: '#fffef9', border: `1px solid ${theme.border}`, borderRadius: 6, padding: '0.15rem 0.35rem' }}
+            style={{ fontFamily: 'inherit', fontSize: '0.78rem', color: ink.text, background: '#fffef9', border: `1px solid ${ink.line}`, borderRadius: 6, padding: '0.15rem 0.35rem' }}
           >
             {LENSES.map((l) => (
               <option key={l.id} value={l.id}>{l.label}</option>
@@ -765,9 +843,9 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
         </div>
       ) : null}
       {facts === null ? (
-        <p style={{ color: theme.dim }}>Loading…</p>
+        <p style={{ color: ink.dim }}>Loading…</p>
       ) : facts.length === 0 ? (
-        <p style={{ color: theme.dim }}>An empty slice — remember something.</p>
+        <p style={{ color: ink.dim }}>An empty slice — remember something.</p>
       ) : (
         <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: '0.7rem' }}>
           {facts.map((e) => {
@@ -786,14 +864,14 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
                     ev.preventDefault();
                     openFact(e);
                   }}
-                  style={{ color: theme.accent, textDecoration: 'none', fontWeight: 600, cursor: 'pointer' }}
+                  style={{ color: ink.accent, textDecoration: 'none', fontWeight: 600, cursor: 'pointer' }}
                 >
                   {title}
                 </a>
                 {/* The type's declared default viewer (hint), else a text preview. */}
                 <FactBody e={e} />
                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                  <span style={{ color: theme.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>
+                  <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>
                     {[e._meta?.type, e.key].filter(Boolean).join(' · ')}
                   </span>
                   <EditLink e={e} />
@@ -801,18 +879,18 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
                     <span
                       key={i}
                       title={`${ed.rel} → ${ed.to}`}
-                      style={{ fontSize: '0.66rem', color: theme.accent, border: `1px solid ${theme.border}`, borderRadius: 999, padding: '0 0.4rem', fontFamily: theme.mono, whiteSpace: 'nowrap' }}
+                      style={{ fontSize: '0.66rem', color: ink.accent, border: `1px solid ${ink.line}`, borderRadius: 999, padding: '0 0.4rem', fontFamily: theme.mono, whiteSpace: 'nowrap' }}
                     >
                       {ed.rel}→{ed.to.length > 14 ? ed.to.slice(0, 13) + '…' : ed.to}
                     </span>
                   ))}
-                  {out.length > 5 ? <span style={{ color: theme.dim, fontSize: '0.66rem' }}>+{out.length - 5}</span> : null}
+                  {out.length > 5 ? <span style={{ color: ink.dim, fontSize: '0.66rem' }}>+{out.length - 5}</span> : null}
                 </div>
               </li>
             );
           })}
           {total > facts.length ? (
-            <li style={{ color: theme.dim, fontSize: '0.8rem' }}>… {total - facts.length} more (query/recall for the rest)</li>
+            <li style={{ color: ink.dim, fontSize: '0.8rem' }}>… {total - facts.length} more (query/recall for the rest)</li>
           ) : null}
         </ul>
       )}

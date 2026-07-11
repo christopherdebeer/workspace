@@ -5,7 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="light" />
   <title>parc.land</title>
-  <style>html,body{margin:0;background:#f3edde}</style>
+  <style>
+    html,body{margin:0;background:#f3edde}
+    /* Rendered fact markdown (.fact-md) appears inside PANELS — sheet-scale
+       headings, not document-scale (a peeked doc's H1 was 2em inside a 340px
+       scroll box). Code blocks scroll instead of stretching the panel. */
+    .fact-md h1{font-size:1.2em;margin:.5em 0 .3em}
+    .fact-md h2{font-size:1.1em;margin:.5em 0 .25em}
+    .fact-md h3,.fact-md h4{font-size:1em;margin:.4em 0 .2em}
+    .fact-md p{margin:.35em 0}
+    .fact-md ul,.fact-md ol{margin:.35em 0;padding-left:1.3em}
+    .fact-md pre{overflow-x:auto;background:rgba(0,0,0,.28);padding:.5em .6em;border-radius:8px;font-size:.92em}
+    .fact-md code{overflow-wrap:anywhere}
+    .fact-md a{color:#f5c453}
+  </style>
 </head>
 <body>
   <div id="root"></div>

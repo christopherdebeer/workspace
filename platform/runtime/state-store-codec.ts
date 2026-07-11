@@ -97,6 +97,8 @@ export function itemToRecord(item: Item): StateRecord {
     timerEffect: (item.timerEffect as StateRecord['timerEffect']) ?? null,
     ...(item.seedReads !== undefined ? { seedReads: num(item.seedReads) } : {}),
     ...(item.seedWrites !== undefined ? { seedWrites: num(item.seedWrites) } : {}),
+    // Earned salience (ADR-0070) — absent on facts that never earned one.
+    ...(item.reward !== undefined ? { reward: num(item.reward) } : {}),
     ...itemToTouches(item),
   };
 }

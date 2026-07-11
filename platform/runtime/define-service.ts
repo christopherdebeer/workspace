@@ -61,6 +61,8 @@ interface ValidatedToken {
   /** The token id, so the session can mutate its own effective scope. */
   tokenId?: string;
   clientId: string | null;
+  /** The token's adopted posture (ADR-0074); absent/null ⇒ none. */
+  posture?: { goal?: string; lens?: string; salience?: Record<string, number>; adoptedAt?: string } | null;
 }
 
 /** Shape returned by the auth cell's `refreshSession` command (edge silent-refresh). */
@@ -124,6 +126,7 @@ function identityFromValidated(validated: ValidatedToken): Identity {
     scopes: effective,
     grantScopes: grant,
     ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
+    ...(validated.posture ? { posture: validated.posture } : {}),
     // Mediation (ADR-0022 × ADR-0050): a DCR-minted client token is a distinct
     // embodiment acting on-behalf-of — its attention weighs as `agent`, even
     // though its subject is the user. A first-party session (no clientId — the
@@ -194,10 +197,12 @@ async function resolveHttpIdentity(
     }
     return { identity: ANONYMOUS };
   } catch (err) {
-    // A validation failure (revoked/expired/unknown token, or auth unavailable)
-    // is treated as anonymous; handlers enforce auth via requireUser/requireScope.
+    // The auth service ERRORED (cold start, throttle, mid-deploy) — the
+    // credential was never checked. Resolve anonymous but flag it, so HTTP
+    // seams answer `auth_unavailable` (retryable) instead of `invalid_token`
+    // (which reads as "your token is dead" and makes clients discard it).
     console.warn('[auth] identity resolution errored', { service: serviceName, error: (err as Error).message });
-    return { identity: ANONYMOUS };
+    return { identity: { ...ANONYMOUS, degraded: true } };
   }
 }
 
@@ -243,6 +248,7 @@ export function defineService(definition: ServiceDefinition) {
       grantScopes: opts.identity.grantScopes?.length ? opts.identity.grantScopes : undefined,
       tokenId: opts.identity.tokenId,
       actor: opts.identity.actor,
+      posture: opts.identity.posture,
     });
     return {
       logger,
@@ -304,6 +310,7 @@ export function defineService(definition: ServiceDefinition) {
           ...(event.grantScopes ? { grantScopes: event.grantScopes } : {}),
           ...(event.tokenId ? { tokenId: event.tokenId } : {}),
           ...(event.actor ? { actor: event.actor } : {}),
+          ...(event.posture ? { posture: event.posture } : {}),
         },
       });
       try {

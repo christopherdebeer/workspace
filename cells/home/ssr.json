@@ -1,68 +1,8 @@
 {
   "reads": [
     {
-      "as": "layout",
-      "target": "workspace.peek",
-      "input": {
-        "key": "_home/layout"
-      }
-    },
-    {
-      "as": "window",
-      "target": "workspace.query",
-      "input": {
-        "limit": 10
-      }
-    },
-    {
-      "as": "attention",
-      "target": "workspace.attention",
-      "input": {
-        "limit": 5
-      }
-    },
-    {
-      "as": "views",
-      "target": "workspace.views",
-      "input": {}
-    },
-    {
-      "as": "links",
-      "target": "workspace.links",
-      "input": {
-        "limit": 0
-      }
-    },
-    {
-      "as": "changes",
-      "target": "workspace.changes",
-      "input": {
-        "last": 1000
-      }
-    },
-    {
       "as": "types",
       "target": "cells.describeTypes",
-      "input": {}
-    },
-    {
-      "as": "cellsList",
-      "target": "cells.list",
-      "input": {}
-    },
-    {
-      "as": "tokens",
-      "target": "auth.tokens",
-      "input": {}
-    },
-    {
-      "as": "shared",
-      "target": "workspace.shared",
-      "input": {}
-    },
-    {
-      "as": "grantRequests",
-      "target": "workspace.grantRequests",
       "input": {}
     }
   ]

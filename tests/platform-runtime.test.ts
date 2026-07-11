@@ -208,6 +208,32 @@ describe('cookie session identity (dispatch tier, safe methods only)', () => {
     process.env.SERVICE_NAME = 'dispatch';
     const res = (await whoami('dispatch')(httpEvent('GET', '/@c15r/lit', undefined, nav('bogus')))) as FunctionUrlResponse;
     expect(userOf(res)).toBeNull();
+    // A clean "no" from auth is NOT degraded — the credential really is invalid.
+    const flags = defineService({
+      name: 'dispatch',
+      commands: {},
+      http: [{ method: 'GET', path: '/@*', handler: (_req, ctx) => ({ statusCode: 200, body: { user: ctx.identity.user ?? null, degraded: ctx.identity.degraded ?? false } }) }],
+    });
+    const clean = (await flags(httpEvent('GET', '/@c15r/lit', undefined, nav('bogus')))) as FunctionUrlResponse;
+    expect(JSON.parse(clean.body)).toEqual({ user: null, degraded: false });
+  });
+
+  it('an auth-service ERROR resolves anonymous but degraded — the credential was never checked', async () => {
+    process.env.SERVICE_NAME = 'gateway';
+    __setLambda({
+      invoke: () => ({
+        promise: async () => {
+          throw new Error('Lambda throttled');
+        },
+      }),
+    } as never);
+    const flags = defineService({
+      name: 'gateway',
+      commands: {},
+      http: [{ method: 'GET', path: '/@*', handler: (_req, ctx) => ({ statusCode: 200, body: { user: ctx.identity.user ?? null, degraded: ctx.identity.degraded ?? false } }) }],
+    });
+    const res = (await flags(httpEvent('GET', '/@x/y', undefined, { 'x-forwarded-authorization': `Bearer ${TOKEN}` }))) as FunctionUrlResponse;
+    expect(JSON.parse(res.body)).toEqual({ user: null, degraded: true });
   });
 
   it('a bearer still wins and works on any tier (cookie path is additive)', async () => {

@@ -285,6 +285,7 @@ export function createDynamoStore(tableName: string): AuthStore {
         mintedBy: i.mintedBy,
         scope: i.scope,
         effectiveScope: i.effectiveScope ?? null,
+        posture: i.posture ?? null,
         label: i.label ?? null,
         clientId: i.clientId ?? null,
         expiresAt: i.expiresAt ?? null,
@@ -303,6 +304,22 @@ export function createDynamoStore(tableName: string): AuthStore {
           ...(effectiveScope === null
             ? { UpdateExpression: 'REMOVE effectiveScope' }
             : { UpdateExpression: 'SET effectiveScope = :e', ExpressionAttributeValues: { ':e': effectiveScope } }),
+        })
+        .promise();
+      return true;
+    },
+    async setPosture(tokenId, userId, posture): Promise<boolean> {
+      // Same shape as setEffectiveScope: the TOKEN# row is the authoritative
+      // state validateTokenByHash reads; the posture is stored opaquely.
+      const idx = await get(`USERTOK#${userId}`, tokenId);
+      if (!idx) return false;
+      await db
+        .update({
+          TableName: tableName,
+          Key: { pk: `TOKEN#${idx.tokenHash}`, sk: SK },
+          ...(posture === null
+            ? { UpdateExpression: 'REMOVE posture' }
+            : { UpdateExpression: 'SET posture = :p', ExpressionAttributeValues: { ':p': posture } }),
         })
         .promise();
       return true;
@@ -345,19 +362,35 @@ export function createDynamoStore(tableName: string): AuthStore {
       // access row may already be gone via TTL).
       const ref = await get(`REFRESH#${oldRefreshHash}`);
       if (!ref || ref.revoked || isExpired(ref.expiresAt)) return null;
-      // Rotate: invalidate the old access token (best-effort; may be TTL-gone)
-      // and consume the old refresh row so it cannot be replayed.
-      await this.revokeToken(String(ref.tokenId), String(ref.mintedBy));
-      await del(`REFRESH#${oldRefreshHash}`);
+      // STABLE refresh credential (ADR-0080): mint a fresh access token, keep the
+      // refresh token as-is, and leave the previous access token to its natural
+      // (short) expiry. The same refresh value legitimately lives in TWO agents at
+      // once — the httpOnly `parc_refresh` cookie and the JS client's localStorage
+      // — so the old single-use rotation (revoke old access + delete this row) made
+      // whichever chain refreshed first kill the other's live session mid-grant.
+      // Explicit revocation (revokeToken / /oauth/revoke) still kills the chain.
       const minted = await this.mintToken({
         userId: ref.mintedBy,
         scope: ref.scope,
         clientId: ref.clientId ?? undefined,
         expiresInSec: newExpiresInSec,
-        withRefresh: true,
-        refreshExpiresInSec: newRefreshExpiresInSec,
       });
-      return { id: minted.id, token: minted.token, refreshToken: minted.refreshToken!, expiresAt: minted.expiresAt! };
+      const newHash = sha256(minted.token);
+      // Link the new access row to the kept refresh row, so revoking the access
+      // still cascades to the refresh credential…
+      await db
+        .update({
+          TableName: tableName,
+          Key: { pk: `TOKEN#${newHash}`, sk: SK },
+          UpdateExpression: 'SET refreshHash = :r',
+          ExpressionAttributeValues: { ':r': oldRefreshHash },
+        })
+        .promise();
+      // …and repoint the refresh row at the newest access pair, sliding its expiry
+      // (same lifetime a rotation used to re-mint it with).
+      const refreshExpiresAt = isoIn((newRefreshExpiresInSec ?? REFRESH_TTL_MS / 1000) * 1000);
+      await put({ ...ref, tokenId: minted.id, tokenHash: newHash, expiresAt: refreshExpiresAt, ttl: ttlOf(refreshExpiresAt) });
+      return { id: minted.id, token: minted.token, expiresAt: minted.expiresAt! };
     },
     async revokeToken(tokenId, userId): Promise<boolean> {
       const idx = await get(`USERTOK#${userId}`, tokenId);

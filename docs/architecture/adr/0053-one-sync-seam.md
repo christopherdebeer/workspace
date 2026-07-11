@@ -1,6 +1,8 @@
 # ADR-0053 — One sync seam: the kernel owns projection and the outbox
 
-- **Status:** Proposed 2026-07-04. Inc 1 (the outbox) implementing now.
+- **Status:** Accepted (Inc 1) — the outbox shipped and is live in the lit client
+  (`cells/lit/client/lib/outbox.ts`) and canvas storage; later increments open.
+  Status was stale (“implementing now”); reconciled by the 2026-07-09 ledger scan.
 - **Depends on:** ADR-0017 (kernel as the shared client), ADR-0044 (distill the
   substrate), ADR-0048 (read shaping). Repays the bug class documented in
   `docs/canvas-cell-review.md` §3.1–3 and `docs/canvas-stocktake.md`.

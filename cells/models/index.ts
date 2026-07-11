@@ -22,6 +22,11 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@a
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { randomUUID } from 'node:crypto';
+// Materialized at push from cells/kernel/static/ (cell-sync vendor overlay, ADR-0076).
+// eslint-disable-next-line import/no-unresolved
+import { gwCall } from './vendor/gateway-client.js';
+// eslint-disable-next-line import/no-unresolved
+import { cellJobs, JOB_CHUNK } from './vendor/cell-jobs.js';
 
 const lambda = new LambdaClient({});
 const events = new EventBridgeClient({});
@@ -261,24 +266,21 @@ interface AgentToolDef {
  * by proxying to the gateway /mcp as the owner. Provider tool names can't contain
  * `.`/`@`/`/`, so each proxy is exposed under a sanitised name mapped back here. */
 const GATEWAY_MCP = process.env.GATEWAY_MCP_URL ?? 'https://parc.land/mcp';
-const READ_VERBS = new Set(['query', 'peek', 'read', 'get', 'list', 'neighbors', 'links', 'recall', 'search', 'describe', 'whoami', 'stats', 'tags', 'history', 'tending', 'salience', 'graph', 'catalog', 'types']);
 const isDottedTool = (n: string): boolean => n.includes('.') || n.startsWith('@');
 const sanitizeToolName = (n: string): string => `x_${n.replace(/[^A-Za-z0-9_]/g, '_')}`;
-const toolVerb = (target: string): 'read' | 'act' => (READ_VERBS.has(target.split('.').pop() ?? target) ? 'read' : 'act');
 
+// The vendored kernel-SDK client (ADR-0076 — this cell was the ORIGINAL of the
+// three hand copies, and the most drifted: its private verb set was missing six
+// read verbs and it dropped the tool-isError check, so a failed proxied tool
+// came back to the agent loop as a success payload. Both fixed at the seam.)
+// The agent loop's contract stays `{error}` objects.
 async function callGatewayTool(token: string, target: string, args: Record<string, unknown>): Promise<unknown> {
-  const verb = toolVerb(target);
   const hasInput = args && Object.keys(args).length > 0;
-  const res = await fetch(GATEWAY_MCP, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: verb, arguments: hasInput ? { target, input: args } : { target } } }),
-  });
-  if (!res.ok) return { error: `gateway HTTP ${res.status}` };
-  const rpc = (await res.json()) as { result?: { content?: Array<{ text?: string }>; isError?: boolean }; error?: { message?: string } };
-  if (rpc.error) return { error: rpc.error.message ?? 'error' };
-  const text = rpc.result?.content?.[0]?.text ?? '';
-  try { return JSON.parse(text); } catch { return text; }
+  try {
+    return await gwCall(token, target, hasInput ? args : undefined, { url: GATEWAY_MCP });
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }
 
 /** The tool surface offered to the model — emit only exists when write is granted.
@@ -702,23 +704,26 @@ async function runAgentLoop(
   await putJob(jobId, { status: stopReason === 'final' ? 'done' : 'error', kind: 'agent', text: finalText, factKey, provider: adapter.provider, turns: turns + 1, toolCalls });
 }
 
-/* ── async jobs: submit fast, self-invoke for the long work, poll fetch ──
+/* ── async jobs — the vendored kernel-SDK choreography (ADR-0076) ─────────
  * The edge caps synchronous round trips at ~30s; async Lambda invocations
- * have no such cap — the cell re-invokes ITSELF with the job and the
- * caller polls `fetch`. Results chunk across items (DDB's 400KB ceiling). */
-
-const CHUNK = 300 * 1024; // b64 chars per item — safely under the item cap
-
-async function putJob(jobId: string, patch: Record<string, unknown>): Promise<void> {
-  await ddb.send(new PutCommand({
-    TableName: TABLE,
-    Item: { pk: `JOB#${jobId}`, sk: 'v1', ttl: Math.floor(Date.now() / 1000) + 3600, ...patch },
-  }));
-}
+ * have no such cap — the cell re-invokes ITSELF with the job and the caller
+ * polls `fetch`. The JOB# row shape, TTL, chunking (DDB's 400KB ceiling),
+ * and {__job} envelope live in @c15r/kernel/cell-jobs; this cell provides
+ * three thin ops over its own clients. */
+const jobs = cellJobs({
+  put: async (item) => {
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+  },
+  get: async (key) =>
+    (await ddb.send(new GetCommand({ TableName: TABLE, Key: key }))).Item as Record<string, unknown> | undefined,
+  invokeSelf: async (payload) => {
+    await lambda.send(new InvokeCommand({ FunctionName: SELF_FUNCTION, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify(payload)) }));
+  },
+});
+const putJob = jobs.putJob;
 
 async function runJob(jobId: string): Promise<void> {
-  const job = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
-  const item = job.Item as { input?: RunInput; kind?: string } | undefined;
+  const item = (await jobs.getJob(jobId)) as { input?: RunInput; kind?: string } | undefined;
   const input = item?.input;
   if (!input) return;
   if (item?.kind === 'agent') {
@@ -737,14 +742,8 @@ async function runJob(jobId: string): Promise<void> {
       | { text?: string }
       | { imageB64?: string; mime?: string };
     const imageB64 = (out as { imageB64?: string }).imageB64;
-    if (imageB64 && imageB64.length > CHUNK) {
-      const chunks = Math.ceil(imageB64.length / CHUNK);
-      for (let i = 0; i < chunks; i++) {
-        await ddb.send(new PutCommand({
-          TableName: TABLE,
-          Item: { pk: `JOB#${jobId}`, sk: `c${i}`, ttl: Math.floor(Date.now() / 1000) + 3600, data: imageB64.slice(i * CHUNK, (i + 1) * CHUNK) },
-        }));
-      }
+    if (imageB64 && imageB64.length > JOB_CHUNK) {
+      const chunks = await jobs.putChunks(jobId, imageB64);
       await putJob(jobId, { status: 'done', input, mime: (out as { mime?: string }).mime, chunks });
     } else {
       await putJob(jobId, { status: 'done', input, ...out });
@@ -884,16 +883,10 @@ async function toolCall(name: string, args: Record<string, unknown>, caller: str
   }
   if (name === 'fetch') {
     const jobId = String(args.jobId ?? '');
-    const res = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: 'v1' } }));
-    const item = res.Item as { status?: string; text?: string; imageB64?: string; mime?: string; error?: string; chunks?: number } | undefined;
+    const item = (await jobs.getJob(jobId)) as { status?: string; text?: string; imageB64?: string; mime?: string; error?: string; chunks?: number } | undefined;
     if (!item) throw new Error(`unknown job "${jobId}"`);
     if (item.chunks) {
-      let b64 = '';
-      for (let i = 0; i < item.chunks; i++) {
-        const c = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: `JOB#${jobId}`, sk: `c${i}` } }));
-        b64 += (c.Item as { data?: string } | undefined)?.data ?? '';
-      }
-      return { status: item.status, imageB64: b64, mime: item.mime };
+      return { status: item.status, imageB64: await jobs.getChunks(jobId, item.chunks), mime: item.mime };
     }
     const agent = item as { factKey?: string; turns?: number; toolCalls?: number };
     return {
@@ -913,12 +906,7 @@ async function toolCall(name: string, args: Record<string, unknown>, caller: str
     if (!SELF_FUNCTION) throw new Error('async unavailable: function name unknown');
     const jobId = randomUUID().slice(0, 13);
     const factKey = input.factKey ?? `agent/${jobId}`;
-    await putJob(jobId, { status: 'pending', kind: 'agent', input: { ...input, factKey } });
-    await lambda.send(new InvokeCommand({
-      FunctionName: SELF_FUNCTION,
-      InvocationType: 'Event',
-      Payload: Buffer.from(JSON.stringify({ __job: jobId })),
-    }));
+    await jobs.submit(jobId, { kind: 'agent', input: { ...input, factKey } });
     return { jobId, status: 'pending', factKey, note: 'poll fetch for status; result + transcript land as substrate facts at factKey' };
   }
   if (name === 'run') {
@@ -928,21 +916,40 @@ async function toolCall(name: string, args: Record<string, unknown>, caller: str
       if (!SELF_FUNCTION) throw new Error('async unavailable: function name unknown');
       const jobId = randomUUID().slice(0, 13);
       const { async: _a, ...rest } = input;
-      await putJob(jobId, { status: 'pending', input: rest });
-      await lambda.send(new InvokeCommand({
-        FunctionName: SELF_FUNCTION,
-        InvocationType: 'Event',
-        Payload: Buffer.from(JSON.stringify({ __job: jobId })),
-      }));
+      await jobs.submit(jobId, { input: rest });
       return { jobId, status: 'pending' };
     }
-    const provider = input.provider ?? 'anthropic';
-    const rec = await getProvider(provider);
-    if (!rec) throw new Error(`provider "${provider}" not enabled — paste a key at /@${OWNER}/models/secrets`);
-    if (provider === 'anthropic') return runAnthropic(rec, input);
-    if (provider === 'openai') return runOpenAI(rec, input);
-    if (provider === 'google') return runGoogle(rec, input);
-    throw new Error(`unknown provider "${provider}"`);
+    // Provider failover (mirrors the agent path): a pinned `provider` is
+    // honoured exactly; unpinned walks the enabled chain and falls back on a
+    // provider error — a funded provider serves the call even when the default
+    // is out of credit. Image mode skips text-only providers.
+    const dispatch = (provider: string, rec: ProviderRec): Promise<RunOutput> => {
+      if (provider === 'anthropic') return runAnthropic(rec, input);
+      if (provider === 'openai') return runOpenAI(rec, input);
+      if (provider === 'google') return runGoogle(rec, input);
+      throw new Error(`unknown provider "${provider}"`);
+    };
+    if (input.provider) {
+      const rec = await getProvider(input.provider);
+      if (!rec) throw new Error(`provider "${input.provider}" not enabled — paste a key at /@${OWNER}/models/secrets`);
+      return dispatch(input.provider, rec);
+    }
+    const chain = input.mode === 'image' ? ['openai', 'google'] : ['anthropic', 'openai', 'google'];
+    const failures: string[] = [];
+    for (const provider of chain) {
+      const rec = await getProvider(provider);
+      if (!rec) continue;
+      try {
+        return await dispatch(provider, rec);
+      } catch (err) {
+        failures.push(`${provider}: ${(err as Error).message}`);
+      }
+    }
+    throw new Error(
+      failures.length
+        ? `run: every enabled provider failed — ${failures.join(' | ')}`
+        : `run: no provider enabled — paste a key at /@${OWNER}/models/secrets`,
+    );
   }
   throw new Error(`unknown tool "${name}"`);
 }

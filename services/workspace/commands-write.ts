@@ -34,6 +34,10 @@ export interface RememberInput {
   /** Import-only: preserve a migrated fact's timestamps + cumulative read/write
    *  counts (folded into `standing`). See WriteInput.import. */
   import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
+  /** Earned salience (ADR-0070): set this fact's persisted reward in [0,1]
+   *  (clamped; omit to preserve). Normally written by the consolidation pass.
+   *  Inert unless `rewardWeight` is configured (default 0). */
+  reward?: number;
 }
 
 /** Bulk intake — imports and capture backfills land in one round trip. */
@@ -112,6 +116,7 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
           ifAbsent: input.ifAbsent,
           timer: input.timer,
           import: input.import,
+          reward: input.reward,
         },
         ctx.identity,
       );
@@ -161,6 +166,7 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
               ifAbsent: f.ifAbsent,
               timer: f.timer,
               import: f.import,
+              reward: f.reward,
             },
             ctx.identity,
           );

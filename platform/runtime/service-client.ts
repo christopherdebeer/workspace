@@ -7,7 +7,7 @@
  * events or queues for fan-out and long-running work.
  */
 import type { Lambda } from 'aws-sdk';
-import type { ActorClass } from './auth';
+import type { ActorClass, PrincipalPosture } from './auth';
 
 /** Envelope recognised by `defineService` to route a direct invoke to a command. */
 export interface CommandEnvelope {
@@ -33,6 +33,9 @@ export interface CommandEnvelope {
   /** The embodiment class behind the call (ADR-0022 mediation), propagated so a
    *  downstream cell's attention accounting matches what the edge validated. */
   actor?: ActorClass;
+  /** The caller's adopted posture (ADR-0074), propagated so a downstream read
+   *  resolves through the same principal the edge validated. */
+  posture?: PrincipalPosture;
 }
 
 export interface ServiceClientOptions {
@@ -43,6 +46,7 @@ export interface ServiceClientOptions {
   grantScopes?: string[];
   tokenId?: string;
   actor?: ActorClass;
+  posture?: PrincipalPosture;
 }
 
 export class ServiceInvokeError extends Error {
@@ -91,6 +95,7 @@ export function createServiceClient(options: ServiceClientOptions) {
           grantScopes: options.grantScopes,
           tokenId: options.tokenId,
           actor: options.actor,
+          posture: options.posture,
         };
         const result = await getClient()
           .invoke({

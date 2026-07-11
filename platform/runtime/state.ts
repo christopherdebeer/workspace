@@ -86,6 +86,9 @@ export interface EntryMeta {
   /** Cosine similarity to the read's intent (`text`), present only on a read
    *  that stated one (ADR-0051). */
   relevance?: number;
+  /** The fact's persisted earned-salience term (ADR-0070), present only when
+   *  set. Contributes `rewardWeight × reward` to the score (default weight 0). */
+  reward?: number;
   /** True when the value was withheld because the entry fell below the tier. */
   elided: boolean;
   /** Full salience breakdown, attached only when a read sets `explain` — the
@@ -98,9 +101,9 @@ export interface EntryMeta {
  *  blended by (resolved defaults ← config ← lens ← override), and its weighted
  *  contribution to the final score — so a tuner can see *why* a fact scored. */
 export interface ScoreExplain {
-  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
-  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
-  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number };
+  signals: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number; reward: number };
+  weights: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number; reward: number };
+  contribution: { recency: number; velocity: number; attention: number; standing: number; centrality: number; relevance: number; reward: number };
   /** Raw inbound+outbound graph degree feeding centrality (pre-saturation). */
   degree: number;
   /** The type prior the blended score was multiplied by (ADR-0050). */
@@ -119,8 +122,9 @@ export interface ShapingSummary {
   focusThreshold: number;
   elideThreshold: number;
   elision: 'auto' | 'none';
-  /** The salience lens this read was computed under, when not the default. */
-  lens?: SalienceLens;
+  /** The salience lens this read was computed under, when not the default —
+   *  a compiled name or a slice-declared one (ADR-0078). */
+  lens?: SalienceLens | (string & {});
   counts: { focus: number; peripheral: number; elided: number; total: number };
 }
 
@@ -230,6 +234,15 @@ export interface StateRecord {
    */
   seedReads?: number;
   seedWrites?: number;
+  /**
+   * Earned salience (ADR-0070): a persisted per-fact number in [0,1], the
+   * seventh score signal. Written when work involving this fact demonstrably
+   * paid off — canonically by the consolidation pass, whose backlog delta is the
+   * substrate's opinion about trajectory quality. Weighted by `rewardWeight`
+   * (default 0, so inert until configured). Preserved across rewrites like the
+   * import seeds; absent = 0.
+   */
+  reward?: number;
   /**
    * Cumulative touch counters by actor class (ADR-0050) — the durable form of
    * "lifetime reads+writes". Maintained on every touch (a write folds them into
@@ -440,6 +453,12 @@ export interface SalienceOptions {
    *  a caller-supplied intent (`text`). Default 0: a read with no intent pays and
    *  changes nothing. Callers passing `text` layer the intent preset instead. */
   relevanceWeight?: number;
+  /** Weight of the per-fact `reward` signal (ADR-0070) — a persisted, EARNED
+   *  number in [0,1] (normally written by the consolidation pass, whose backlog
+   *  delta is the substrate's first opinion about trajectory quality). Default 0:
+   *  inert until configured (`_config/salience`) or supplied per-call — the same
+   *  discipline `relevanceWeight` followed, so every existing read is unchanged. */
+  rewardWeight?: number;
   /** How much a touch by each actor class counts toward attention/velocity/
    *  standing (ADR-0050). Defaults: human 1, agent 0.25, platform 0 — the
    *  substrate's own machinery no longer manufactures salience by churning. */
@@ -480,6 +499,7 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
     standingWeight: o?.standingWeight ?? 0.3,
     centralityWeight: o?.centralityWeight ?? 0.1,
     relevanceWeight: o?.relevanceWeight ?? 0,
+    rewardWeight: o?.rewardWeight ?? 0,
     humanTouchWeight: o?.humanTouchWeight ?? 1,
     agentTouchWeight: o?.agentTouchWeight ?? 0.25,
     platformTouchWeight: o?.platformTouchWeight ?? 0,
@@ -498,6 +518,17 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
  */
 export const SALIENCE_CONFIG_KEY = '_config/salience';
 
+/**
+ * Reserved key for a scope's DECLARED lens presets (ADR-0078): a fact whose
+ * value is `{ <name>: Partial<SalienceOptions> }` — e.g.
+ * `{ review: { rewardWeight: 0.4, recencyWeight: 0.2 } }` — names a reusable
+ * per-read bias the slice itself defined. The compiled `LENS_PRESETS` five are
+ * the FLOOR (never shadowable); an unknown name is ignored, never fatal.
+ * Everything that takes `lens` benefits at once — per-call reads and adopted
+ * posture (ADR-0074) alike — because resolution happens inside `callSalience`.
+ */
+export const LENSES_CONFIG_KEY = '_config/lenses';
+
 /** Numeric `SalienceOptions` fields a config fact may set, and which are unit [0,1]. */
 const SALIENCE_NUMERIC_KEYS = [
   'halfLifeMs',
@@ -512,6 +543,7 @@ const SALIENCE_NUMERIC_KEYS = [
   'standingWeight',
   'centralityWeight',
   'relevanceWeight',
+  'rewardWeight',
   'humanTouchWeight',
   'agentTouchWeight',
   'platformTouchWeight',
@@ -554,6 +586,31 @@ export function parseSalienceConfig(value: unknown): Partial<SalienceOptions> | 
     if (Object.keys(priors).length) out.typePriors = priors;
   }
   return Object.keys(out).length ? (out as Partial<SalienceOptions>) : null;
+}
+
+/**
+ * Extract sanitized declared lens presets (ADR-0078) from a `_config/lenses`
+ * fact's value: `{ <name>: Partial<SalienceOptions> }`, each preset run through
+ * the same defensive numeric filter as `_config/salience` (a config fact must
+ * never be able to break a read). Accepts the map directly or wrapped under a
+ * `lenses` key. Floor names are dropped here (never shadowable). Returns `null`
+ * when nothing usable is present.
+ */
+export function parseLensesConfig(value: unknown): Record<string, Partial<SalienceOptions>> | null {
+  const wrapped = value as { lenses?: unknown } | null | undefined;
+  const src =
+    wrapped && typeof wrapped === 'object' && wrapped.lenses && typeof wrapped.lenses === 'object'
+      ? wrapped.lenses
+      : value;
+  if (!src || typeof src !== 'object') return null;
+  const out: Record<string, Partial<SalienceOptions>> = {};
+  for (const [name, preset] of Object.entries(src as Record<string, unknown>)) {
+    if (!name || name.length > 64) continue;
+    if ((LENS_PRESETS as Record<string, unknown>)[name] !== undefined) continue; // the floor wins
+    const parsed = parseSalienceConfig(preset);
+    if (parsed) out[name] = parsed;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -604,10 +661,19 @@ export const INTENT_PRESET: Partial<SalienceOptions> = {
 
 /** Resolve the salience params for one call: instance defaults ← lens preset ←
  *  raw override. Returns the base unchanged when neither is set. A raw override
- *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights). */
-function callSalience(base: ResolvedSalience, lens?: SalienceLens, override?: Partial<SalienceOptions>): ResolvedSalience {
-  if (!lens && !override) return base;
-  return resolveSalience({ ...base, ...(lens ? LENS_PRESETS[lens] : {}), ...override });
+ *  is NOT auto-normalized (it's an escape hatch — the caller owns the weights).
+ *  Lens resolution (ADR-0078): the compiled floor first (never shadowable),
+ *  then the scope's declared `_config/lenses` presets; an unknown name is
+ *  ignored — a lens can bias a read, never break one. */
+function callSalience(
+  base: ResolvedSalience,
+  lens?: string,
+  override?: Partial<SalienceOptions>,
+  declared?: Record<string, Partial<SalienceOptions>> | null,
+): ResolvedSalience {
+  const preset = lens ? ((LENS_PRESETS as Record<string, Partial<SalienceOptions> | undefined>)[lens] ?? declared?.[lens]) : undefined;
+  if (!preset && !override) return base;
+  return resolveSalience({ ...base, ...preset, ...override });
 }
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
@@ -668,6 +734,8 @@ export interface ScoreParts {
   centrality: number;
   /** Cosine similarity to the read's intent (`text`), 0 when none (ADR-0051). */
   relevance: number;
+  /** The fact's persisted earned-salience term, 0 when unset (ADR-0070). */
+  reward: number;
   /** The type prior the blend was multiplied by (ADR-0050); 1 when undeclared. */
   prior: number;
 }
@@ -694,7 +762,7 @@ export function computeScore(
 
 /** `computeScore` with the term breakdown exposed (for `_meta` + tuning). */
 export function scoreParts(
-  args: { updatedAtMs: number; nowMs: number; relevance?: number; prior?: number } & Partial<KeySignals>,
+  args: { updatedAtMs: number; nowMs: number; relevance?: number; reward?: number; prior?: number } & Partial<KeySignals>,
   s: ResolvedSalience,
 ): ScoreParts {
   const age = Math.max(0, args.nowMs - args.updatedAtMs);
@@ -710,11 +778,15 @@ export function scoreParts(
   const centrality =
     s.centralitySaturation > 0 ? Math.min(Math.log1p(args.degree ?? 0) / Math.log1p(s.centralitySaturation), 1) : 0;
   const relevance = clamp01(args.relevance ?? 0);
+  const reward = clamp01(args.reward ?? 0);
   const prior = args.prior ?? 1;
   // The type prior scales the AMBIENT terms only — "plumbing when you have no
   // intent" is a statement about the intent-free part of the blend. Relevance
   // rides unprioered, so a matching goal genuinely lifts a demoted type
   // (ADR-0052: a capability fact stays quiet until an intent names it).
+  // Reward rides unprioered too (ADR-0070): earned importance is fact-specific,
+  // not an ambient type bias — and its weight defaults to 0, so it is inert
+  // until a config/lens/override opts in.
   const score = clamp01(
     prior *
       (s.recencyWeight * recency +
@@ -722,9 +794,10 @@ export function scoreParts(
         s.attentionWeight * attention +
         s.standingWeight * standing +
         s.centralityWeight * centrality) +
-      s.relevanceWeight * relevance,
+      s.relevanceWeight * relevance +
+      s.rewardWeight * reward,
   );
-  return { score, recency, velocity, attention, standing, centrality, relevance, prior };
+  return { score, recency, velocity, attention, standing, centrality, relevance, reward, prior };
 }
 
 /** Fold a scope's trajectory + edges into per-key salience signals in one pass. */
@@ -1068,6 +1141,13 @@ export interface WriteInput {
    * `import.createdAt` only applies on first write (creation).
    */
   import?: { createdAt?: string; updatedAt?: string; seedReads?: number; seedWrites?: number };
+  /**
+   * Earned salience (ADR-0070): set/replace this fact's persisted `reward` in
+   * [0,1] (clamped). Omit to preserve what is stored — like the import seeds.
+   * Weighted by `rewardWeight` (default 0), so writing it is inert until a
+   * config/lens/override opts in.
+   */
+  reward?: number;
 }
 
 export interface ReadOptions {
@@ -1080,8 +1160,10 @@ export interface ReadOptions {
   /** Per-read threshold overrides. */
   focusThreshold?: number;
   elideThreshold?: number;
-  /** Bias salience for this read via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience for this read via a named lens — compiled
+   *  (recent/connected/durable/active) or slice-declared (`_config/lenses`,
+   *  ADR-0078). Unknown names are ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-read salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) to every entry —
@@ -1096,6 +1178,10 @@ export interface ReadOptions {
    * policy governs the assembled result. Pass `null` to force instance defaults.
    */
   salienceConfig?: Partial<SalienceOptions> | null;
+  /** Declared lens presets to resolve `lens` against (ADR-0078) — same
+   *  handler-supplied semantics as `salienceConfig` (recall passes the
+   *  viewer's); `undefined` = load this scope's own `_config/lenses`. */
+  lensesConfig?: Record<string, Partial<SalienceOptions>> | null;
   /** Resolved per-type Reference rules (`cells.describeTypes` → resolveType): manager
    *  (managedBy), `ref` fields (embedded edges), keyPattern/keyEdges. Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
@@ -1115,8 +1201,9 @@ export interface QueryOptions {
   prefix?: string;
   /** Ranking: read-time salience (default) or last-write recency. */
   rankBy?: 'salience' | 'recency';
-  /** Bias salience for this query via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience for this query via a named lens — compiled or
+   *  slice-declared (`_config/lenses`, ADR-0078). Unknown names are ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-query salience override (merges over the lens + instance defaults). */
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) to each entry. */
@@ -1282,6 +1369,10 @@ export interface ObservedState {
   /** The scope's stored salience policy (`_config/salience`), sanitized — or `null`
    *  when unset/malformed. Recall loads the viewer's once to shape the merged view. */
   salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null>;
+  /** The scope's declared lens presets (`_config/lenses`, ADR-0078), sanitized —
+   *  the handler-facing accessor (recall folds granted slices under the
+   *  VIEWER's declared lenses, exactly as with `salienceConfig`). */
+  lensesConfig(scope: string): Promise<Record<string, Partial<SalienceOptions>> | null>;
   /** Add a typed, directed edge `from --rel--> to` within the scope. */
   link(scope: string, from: string, rel: string, to: string, strength: number | null, identity?: Identity): Promise<LinkResult>;
   unlink(scope: string, from: string, rel: string, to: string, identity?: Identity): Promise<{ ok: true }>;
@@ -1342,6 +1433,19 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
    *  malformed fact yields `null` and the read proceeds on instance defaults — a
    *  config fact must never be able to break a read). */
+  /** Load a scope's declared lens presets (`_config/lenses`, ADR-0078) — same
+   *  best-effort posture as the salience config: absent/retired/malformed ⇒ null. */
+  async function loadLensesConfig(scope: string): Promise<Record<string, Partial<SalienceOptions>> | null> {
+    let rec: StateRecord | null;
+    try {
+      rec = await store.get(scope, LENSES_CONFIG_KEY);
+    } catch {
+      return null;
+    }
+    if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+    return parseLensesConfig(rec.value);
+  }
+
   async function loadSalienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
     let rec: StateRecord | null;
     try {
@@ -1387,6 +1491,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         lifetimeReads: touch.lifetimeReads + (rec.seedReads ?? 0),
         lifetimeWrites: touch.lifetimeWrites + (rec.seedWrites ?? 0),
         relevance: rel,
+        reward: rec.reward,
         prior: sCall.typePriors[rec.type ?? ''] ?? 1,
       },
       sCall,
@@ -1415,6 +1520,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         standing: round4(parts.standing),
         centrality: round4(parts.centrality),
         ...(rel !== undefined ? { relevance: round4(parts.relevance) } : {}),
+        ...(rec.reward !== undefined ? { reward: round4(parts.reward) } : {}),
         elided: false,
         ...(explain ? { explain: explainScore(parts, { ...sig, ...touch }, sCall) } : {}),
       },
@@ -1431,6 +1537,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       standing: round4(parts.standing),
       centrality: round4(parts.centrality),
       relevance: round4(parts.relevance),
+      reward: round4(parts.reward),
     };
     const weights = {
       recency: sCall.recencyWeight,
@@ -1439,6 +1546,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       standing: sCall.standingWeight,
       centrality: sCall.centralityWeight,
       relevance: sCall.relevanceWeight,
+      reward: sCall.rewardWeight,
     };
     return {
       signals,
@@ -1450,6 +1558,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         standing: round4(parts.standing * weights.standing),
         centrality: round4(parts.centrality * weights.centrality),
         relevance: round4(parts.relevance * weights.relevance),
+        reward: round4(parts.reward * weights.reward),
       },
       degree: sig.degree ?? 0,
       prior: parts.prior,
@@ -1571,6 +1680,12 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
           ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
           : {}),
+        // Earned salience (ADR-0070): set/replace when supplied, else preserved —
+        // the same carry rule as the import seeds. Clamped: a reward is a signal
+        // in [0,1], not an unbounded boost.
+        ...(input.reward !== undefined || prev?.reward !== undefined
+          ? { reward: clamp01(input.reward ?? prev?.reward ?? 0) }
+          : {}),
         // Actor-classed touch counters (ADR-0050): a write folds its own touch
         // into the record it rewrites — no extra round trip, no trajectory scan
         // to reconstruct "lifetime" later.
@@ -1617,7 +1732,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Re-tiers an already-scored set, so a lens here only adjusts thresholds
       // (it can't recompute scores without the scope's signals). Being scopeless,
       // it takes the salience config explicitly (recall passes the viewer's).
-      return shapeEntries(entries, opts, callSalience(baseSalience(opts?.salienceConfig), opts?.lens, opts?.salience));
+      return shapeEntries(entries, opts, callSalience(baseSalience(opts?.salienceConfig), opts?.lens, opts?.salience, opts?.lensesConfig));
     },
 
     async read(scope: string, opts?: ReadOptions, _identity?: Identity): Promise<ReadResult> {
@@ -1625,7 +1740,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // Honor a handler-supplied config (recall scores granted slices under the
       // viewer's policy); otherwise load this scope's own `_config/salience`.
       const cfg = opts?.salienceConfig !== undefined ? opts.salienceConfig : await loadSalienceConfig(scope);
-      const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience);
+      const lenses = opts?.lensesConfig !== undefined ? opts.lensesConfig : await loadLensesConfig(scope);
+      const sCall = callSalience(baseSalience(cfg), opts?.lens, opts?.salience, lenses);
       const records = await store.list(scope);
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
 
@@ -1644,7 +1760,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
-      const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience);
+      const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience, await loadLensesConfig(scope));
       const queryTypeRules = opts?.typeRules;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
       const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
@@ -1687,6 +1803,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async salienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
       return loadSalienceConfig(scope);
+    },
+
+    async lensesConfig(scope: string): Promise<Record<string, Partial<SalienceOptions>> | null> {
+      return loadLensesConfig(scope);
     },
 
     async link(scope, from, rel, to, strength, identity?: Identity): Promise<LinkResult> {

@@ -27,6 +27,20 @@
       "note": "A BOARD's identity fact, keyed canvas:<board> (ADR-0046) — the node board-membership edges point at (placements project `<fact> onBoard canvas:<board>`). Value: {board, title?}."
     },
     {
+      "type": "canvas-element",
+      "icon": "🔷",
+      "manager": "@c15r/canvas",
+      "keyPattern": "el:{id}",
+      "note": "A board ELEMENT's content fact, keyed el:<id> (ids may nest — mirrors like el:inbox/<capture> carry a path). The element's VALUE is its content (text/img/html/fact card…); geometry lives on the placement fact (_canvas/<board>/<factKey>), never here. New writes default to this type (client storage.ts); this declaration lets the substrate recognise the legacy untyped mirrors too — the ADR-0073/0077 typing-backfill finding.",
+      "handlers": {
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      }
+    },
+    {
       "type": "canvas-placement",
       "icon": "📍",
       "manager": "@c15r/canvas",

@@ -131,6 +131,7 @@ describe('observed state: salience scoring', () => {
       standingWeight: 0.2,
       centralityWeight: 0.1,
       relevanceWeight: 0,
+      rewardWeight: 0,
       focusThreshold: 0.5,
       elideThreshold: 0.1,
     };
@@ -213,6 +214,7 @@ describe('observed state: salience scoring', () => {
       standingWeight: 0.2,
       centralityWeight: 0.1,
       relevanceWeight: 0,
+      rewardWeight: 0,
       focusThreshold: 0.5,
       elideThreshold: 0.1,
     };
@@ -737,7 +739,7 @@ describe('salience: explain breakdown (ADR-0006)', () => {
     const res = await state.read('r', { elision: 'none', explain: true });
     const ex = res.entries['k']._meta.explain;
     expect(ex).toBeDefined();
-    expect(Object.keys(ex!.signals).sort()).toEqual(['attention', 'centrality', 'recency', 'relevance', 'standing', 'velocity']);
+    expect(Object.keys(ex!.signals).sort()).toEqual(['attention', 'centrality', 'recency', 'relevance', 'reward', 'standing', 'velocity']);
     // contribution = signal × weight, term by term
     for (const term of ['recency', 'velocity', 'attention', 'standing', 'centrality'] as const) {
       expect(ex!.contribution[term]).toBeCloseTo(ex!.signals[term] * ex!.weights[term], 4);

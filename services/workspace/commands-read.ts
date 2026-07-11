@@ -10,6 +10,8 @@ import {
   type ChangesResult,
   type ChangesScope,
   type Entry,
+  type ReadResult,
+  type QueryResult,
   type SalienceLens,
   type SalienceOptions,
 } from '../../platform/runtime';
@@ -232,8 +234,9 @@ export interface RecallInput {
   elision?: 'auto' | 'none';
   expand?: string[];
   includeSuperseded?: boolean;
-  /** Bias salience via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience via a named lens — compiled (recent/connected/durable/
+   *  active) or slice-declared (`_config/lenses`, ADR-0078). Unknown ⇒ ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-call salience override (merges over the lens + defaults). */
   salience?: Partial<SalienceOptions>;
   /** Attach `_meta.explain` (signals · weights · contributions) per entry. */
@@ -260,8 +263,9 @@ export interface QueryInput {
    *  ranking are both intent-conditioned. */
   text?: string;
   rankBy?: 'salience' | 'recency';
-  /** Bias salience via a named lens (recent/connected/durable/active). */
-  lens?: SalienceLens;
+  /** Bias salience via a named lens — compiled (recent/connected/durable/
+   *  active) or slice-declared (`_config/lenses`, ADR-0078). Unknown ⇒ ignored. */
+  lens?: SalienceLens | (string & {});
   /** Precise per-call salience override (merges over the lens + defaults). */
   salience?: Partial<SalienceOptions>;
   limit?: number;
@@ -313,9 +317,122 @@ export interface AttentionInput {
   includeSystem?: boolean;
 }
 
-/** The read/query/recall + attention/changes/tending command handlers (ADR-0044 Inc 5). */
-export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'recall' | 'peek' | 'query' | 'changes' | 'attention' | 'tend'> {
-  return {
+// ── ADR-0071 (C2): the one read, by candidate source ─────────────────────
+
+export type ReadSource = 'slice' | 'store' | 'vector' | 'key' | 'changes';
+
+/** One entry's periphery: a one-hop neighbour at the refs tier — key, rel,
+ *  direction, neighbour type, derived flag. No values: the periphery is a hint,
+ *  never a second read (ADR-0071, owner direction: perception has a periphery). */
+export interface ContextRef {
+  key: string;
+  rel: string;
+  dir: 'in' | 'out';
+  type?: string | null;
+  derived?: boolean;
+}
+
+export interface ComposedReadInput extends RecallInput, Omit<QueryInput, 'shape' | 'lens' | 'salience' | 'explain'>, Partial<Pick<PeekInput, 'key' | 'owner'>>, ChangesInput {
+  /** Where candidates come from. Inferred when omitted: `key` → key; trajectory
+   *  args → changes; structural filters → store; bare `text` → vector (semantic,
+   *  salience-aware — the fixed form of the deprecated `search`); else slice. */
+  source?: ReadSource;
+  /** Secondary context (ADR-0071): `'refs'` folds each result's one-hop
+   *  neighbourhood (elided tier — no values) into `_context`. Default `'none'`,
+   *  so parity with the presets holds. Applies to key/store/vector reads and the
+   *  slice FULL view; the overview and the changes feed skip it. */
+  context?: 'none' | 'refs';
+  /** Cap on `_context` refs per entry (default 8, max 24). */
+  contextLimit?: number;
+}
+
+export type ComposedReadResult = ReadResult | RecallOverview | QueryResult | Entry | ChangesWithEntries | null;
+
+// ADR-0078 resolved ADR-0074's open question 4: lens names are open vocabulary
+// end-to-end. A posture's lens passes through verbatim — resolution happens in
+// the state layer (compiled floor ← `_config/lenses` declared presets), and an
+// unknown name is ignored there, never fatal.
+
+/**
+ * The PRINCIPAL layer of the defaults merge (ADR-0074, live):
+ * `defaults ← config ← PRINCIPAL ← lens ← override`. A principal that has
+ * ADOPTED a posture (`auth.adoptGoal` — a goal, a lens, a salience bias) gets
+ * it applied to every composed read without per-call plumbing. The posture
+ * rides the validated token into `ctx.identity`; this maps it to read terms.
+ * `goal` stays unresolved here — a `goal/<id>` fact reference is resolved by
+ * `read()` against the caller's own slice (title/detail → relevance text).
+ * No posture ⇒ null ⇒ reads are byte-identical to before.
+ */
+export function principalPosture(
+  identity: unknown,
+): { goal?: string; lens?: SalienceLens; salience?: Partial<SalienceOptions> } | null {
+  const posture = (identity as { posture?: { goal?: string; lens?: string; salience?: Record<string, number> } } | undefined)
+    ?.posture;
+  if (!posture) return null;
+  const lens = typeof posture.lens === 'string' && posture.lens.trim() ? (posture.lens as SalienceLens) : undefined;
+  const salience =
+    posture.salience && Object.keys(posture.salience).length ? (posture.salience as Partial<SalienceOptions>) : undefined;
+  const goal = typeof posture.goal === 'string' && posture.goal.trim() ? posture.goal.trim() : undefined;
+  if (!goal && !lens && !salience) return null;
+  return { ...(goal ? { goal } : {}), ...(lens ? { lens } : {}), ...(salience ? { salience } : {}) };
+}
+
+/** Derive relevance text from a referenced goal fact's value — the
+ *  `@c15r/tasks` shape (`title`/`detail`) first, generic text fields after. */
+export function goalTextOf(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const str = (x: unknown): string | undefined => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+  const head = str(v.title) ?? str(v.name);
+  const body = str(v.detail) ?? str(v.content) ?? str(v.text);
+  return head && body ? `${head} — ${body}` : (head ?? body ?? null);
+}
+
+/** Infer the candidate source from the arguments (explicit `source` wins).
+ *  An explicit `view` names the assembled slice view even when `text` is also
+ *  present — `read({view:'full', text})` is a goal-conditioned recall
+ *  (ADR-0051), not a vector search. */
+export function inferSource(input?: ComposedReadInput): ReadSource {
+  if (input?.source) return input.source;
+  if (input?.key) return 'key';
+  if (input?.sinceSeq !== undefined || input?.last !== undefined || input?.include !== undefined) return 'changes';
+  if (input?.type || input?.tag || input?.prefix || input?.contains || input?.cursor || input?.rankBy) return 'store';
+  if (input?.view) return 'slice';
+  if (typeof input?.text === 'string' && input.text.trim()) return 'vector';
+  return 'slice';
+}
+
+/** The read/query/recall + attention/changes/tending command handlers (ADR-0044
+ *  Inc 5) + the composed `read` (ADR-0071). */
+export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'recall' | 'peek' | 'query' | 'changes' | 'attention' | 'tend' | 'read'> {
+  /** One shared periphery pass: index the Reference projection by endpoint once,
+   *  then hand each result key its capped, refs-tier neighbourhood. */
+  async function peripheryFor(ctx: Parameters<DepsBuilder>[0], keys: string[], cap: number): Promise<Record<string, ContextRef[]>> {
+    const scope = requireUser(ctx.identity);
+    const { state, store } = build(ctx);
+    const g = await state.graph(scope, { typeRules: await typeRulesFor(ctx) });
+    const typeByKey = store ? new Map((await store.list(scope)).map((r) => [r.key, r.type])) : new Map<string, string | null>();
+    const byEnd = new Map<string, ContextRef[]>();
+    const push = (k: string, ref: ContextRef) => {
+      const arr = byEnd.get(k) ?? [];
+      if (arr.length < cap) arr.push(ref);
+      byEnd.set(k, arr);
+    };
+    for (const e of g.edges) {
+      const derived = (e as { derived?: boolean }).derived ? { derived: true } : {};
+      push(e.from, { key: e.to, rel: e.rel, dir: 'out', ...(typeByKey.has(e.to) ? { type: typeByKey.get(e.to) } : {}), ...derived });
+      push(e.to, { key: e.from, rel: e.rel, dir: 'in', ...(typeByKey.has(e.from) ? { type: typeByKey.get(e.from) } : {}), ...derived });
+    }
+    const out: Record<string, ContextRef[]> = {};
+    for (const k of keys) {
+      const refs = byEnd.get(k);
+      if (refs?.length) out[k] = refs;
+    }
+    return out;
+  }
+
+  const cmds: Pick<WorkspaceCommands, 'recall' | 'peek' | 'query' | 'changes' | 'attention' | 'tend' | 'read'> = {
     async recall(input, ctx) {
       const viewer = requireUser(ctx.identity);
       const { state, grants, vectors, store } = build(ctx);
@@ -357,11 +474,15 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // slices are scored under the viewer's policy, not each owner's. Precedence:
       // instance defaults ← viewer config ← lens ← per-call `salience` override.
       const salienceConfig = await state.salienceConfig(viewer);
+      // Declared lens presets (ADR-0078) resolve under the VIEWER's config,
+      // exactly like the salience policy — granted slices are read through
+      // the reader's lenses, never the owner's.
+      const lensesConfig = await state.lensesConfig(viewer);
       const typeRules = await typeRulesFor(ctx);
       const relevance = text ? await relevanceFor(vectors, viewer, text) : undefined;
       const own = await state.read(
         viewer,
-        { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance },
+        { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, lensesConfig, typeRules, relevance },
         ctx.identity,
       );
       const merged: Record<string, Entry> = { ...own.entries };
@@ -376,7 +497,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           const gRelevance = text ? await relevanceFor(vectors, g.owner, text) : undefined;
           const slice = await state.read(
             g.owner,
-            { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, typeRules, relevance: gRelevance },
+            { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, lensesConfig, typeRules, relevance: gRelevance },
             ctx.identity,
           );
           const prefix = g.key === WHOLE_SLICE ? '' : g.key.slice(0, -1);
@@ -390,7 +511,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       }
 
       // Shape the whole assembled view once (lens echoes into _shaping).
-      const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig });
+      const shaped = state.shape(merged, { elision: input?.elision, expand: input?.expand, lens, salience, salienceConfig, lensesConfig });
       const decls = await typeDeclsFor(ctx);
 
       // ADR-0033: progressive disclosure by default. A *bare* recall (the context-less
@@ -529,5 +650,99 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       const { state, store } = build(ctx);
       return runTend(state, scope, ctx, 'manual', ctx.identity, store);
     },
+
+    // ADR-0071 (C2): one read, parameterized by candidate source + shape. A pure
+    // dispatch over the presets (behaviour-preserving by construction, the C1/C3
+    // pattern) plus the two enrichments: `context:'refs'` periphery, and the
+    // reserved principal layer (ADR-0074) applied between defaults and the call.
+    async read(input, ctx): Promise<ComposedReadResult> {
+      // The PRINCIPAL layer (ADR-0074, live): posture supplies what the call
+      // didn't say; anything the caller passes still wins. The SHAPE stays the
+      // caller's — the source is inferred from the caller's own args BEFORE the
+      // merge, so a standing goal *conditions* the read (recall({text})
+      // semantics, ADR-0051) but never flips an overview into a search.
+      const source = inferSource(input);
+      const merged: ComposedReadInput = { ...(input ?? {}) };
+      const posture = principalPosture(ctx.identity);
+      if (posture && ctx.identity.user) {
+        if (posture.goal && merged.text === undefined && (source === 'slice' || source === 'store' || source === 'vector')) {
+          // A `goal/<id>` posture references the goal graph: resolve the fact
+          // (touch-free, own slice) to its title/detail; free text passes as-is.
+          let text: string | null = posture.goal;
+          if (posture.goal.includes('/')) {
+            const { store } = build(ctx);
+            const rec = store ? await store.get(ctx.identity.user, posture.goal).catch(() => null) : null;
+            if (rec && !rec.superseded) text = goalTextOf(rec.value) ?? posture.goal;
+          }
+          if (text) merged.text = text;
+        }
+        if (posture.lens && merged.lens === undefined) merged.lens = posture.lens;
+        if (posture.salience) merged.salience = { ...posture.salience, ...merged.salience };
+      }
+      const cap = Math.min(Math.max(merged.contextLimit ?? 8, 1), 24);
+      const wantContext = merged.context === 'refs';
+
+      if (source === 'key') {
+        const entry = await cmds.peek({ key: merged.key!, owner: merged.owner }, ctx);
+        if (!wantContext || !entry) return entry;
+        const p = await peripheryFor(ctx, [merged.key!], cap);
+        return p[merged.key!] ? ({ ...entry, _context: p[merged.key!] } as Entry & { _context: ContextRef[] }) : entry;
+      }
+
+      if (source === 'changes') {
+        // The trajectory is events, not facts — the periphery doesn't apply.
+        return cmds.changes(
+          { sinceSeq: merged.sinceSeq, limit: merged.limit, last: merged.last, scope: merged.scope, include: merged.include },
+          ctx,
+        );
+      }
+
+      if (source === 'store' || source === 'vector') {
+        const result = await cmds.query(
+          {
+            type: merged.type,
+            tag: merged.tag,
+            prefix: merged.prefix,
+            text: merged.text,
+            rankBy: merged.rankBy,
+            lens: merged.lens,
+            salience: merged.salience,
+            limit: merged.limit,
+            cursor: merged.cursor,
+            includeSuperseded: merged.includeSuperseded,
+            contains: merged.contains,
+            explain: merged.explain,
+            shape: merged.shape,
+          },
+          ctx,
+        );
+        if (!wantContext) return result;
+        const p = await peripheryFor(ctx, result.entries.map((e) => e.key), cap);
+        return { ...result, entries: result.entries.map((e) => (p[e.key] ? { ...e, _context: p[e.key] } : e)) };
+      }
+
+      // slice — the assembled view (overview by default, exactly as recall).
+      const result = await cmds.recall(
+        {
+          view: merged.view,
+          text: merged.text,
+          elision: merged.elision,
+          expand: merged.expand,
+          includeSuperseded: merged.includeSuperseded,
+          lens: merged.lens,
+          salience: merged.salience,
+          explain: merged.explain,
+          shape: merged.shape,
+        },
+        ctx,
+      );
+      if (!wantContext || !('entries' in result)) return result; // overview skips the periphery
+      const keys = Object.keys(result.entries);
+      const p = await peripheryFor(ctx, keys, cap);
+      const entries: ReadResult['entries'] = {};
+      for (const k of keys) entries[k] = p[k] ? ({ ...result.entries[k], _context: p[k] } as Entry) : result.entries[k];
+      return { ...result, entries };
+    },
   };
+  return cmds;
 }

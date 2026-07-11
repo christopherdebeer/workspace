@@ -11,6 +11,8 @@
   durable, automatically-redeemed refresh path.
 - **Depends on:** ADR-0007 (Grant axis — the grant is the authority of record; the session is a
   redemption of it).
+- **Refined by:** ADR-0080 (stable refresh credential — the single-use rotation this ADR's refresh
+  path used was unsound with two holders of the same refresh token; refresh no longer rotates).
 
 ---
 

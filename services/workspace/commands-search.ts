@@ -26,6 +26,7 @@ import {
   SIMILAR_REL,
   SIMILAR_WRITER,
   projectionFact,
+  contentHash,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { shapeEntryList, type ReadShape } from './shape';
@@ -44,7 +45,51 @@ import type { WorkspaceCommands } from './handlers';
 /** High-volume runtime/machine fact types that cluster by *format* rather than meaning
  *  (ADR-0032) — excluded from `suggestions` by default so the candidate list stays
  *  curatable; `includeRuntime: true` surfaces them. */
-const SUGGESTION_RUNTIME_TYPES = new Set(['transcript', 'agent-run', 'cell', 'reindex-status', 'audit', 'claim', 'canvas-element']);
+const SUGGESTION_RUNTIME_TYPES = new Set([
+  'transcript',
+  'agent-run',
+  'cell',
+  'reindex-status',
+  'audit',
+  'claim',
+  'canvas-element',
+  // The machine vocabulary (ADR-0072 live finding): run/trigger/node facts of the
+  // same machine cluster at cosine ≈0.9999 by format — the first live `contested`
+  // read was 90% these pairs. Plumbing, not meaning; `includeRuntime` re-admits.
+  'machine-run',
+  'machine-trigger',
+  'machine-node',
+  'machine-rail',
+  'trigger',
+]);
+
+/** Reserved key for a scope's suggestion/contested noise policy. The built-in set
+ *  above is only the FALLBACK FLOOR — vocabulary is the protocol, and which types
+ *  are format-clustered plumbing is a property of a slice's own vocabulary, not of
+ *  the platform. A fact here (`{ noiseTypes?: string[], admitTypes?: string[] }`)
+ *  extends the floor (`noiseTypes`) and/or re-admits floor entries (`admitTypes`)
+ *  — open-ended, per-slice, no redeploy. */
+export const SUGGESTIONS_CONFIG_KEY = '_config/suggestions';
+
+/** Resolve the effective noise-type set from the slice's declared config over the
+ *  built-in floor (defensive: unknown shapes are ignored, never fatal). */
+function noiseTypesFor(records: Array<{ key: string; superseded: boolean; value: unknown }>): Set<string> {
+  const out = new Set(SUGGESTION_RUNTIME_TYPES);
+  const cfg = records.find((r) => r.key === SUGGESTIONS_CONFIG_KEY && !r.superseded)?.value as
+    | { noiseTypes?: unknown; admitTypes?: unknown }
+    | undefined;
+  if (Array.isArray(cfg?.noiseTypes)) for (const t of cfg.noiseTypes) if (typeof t === 'string') out.add(t);
+  if (Array.isArray(cfg?.admitTypes)) for (const t of cfg.admitTypes) if (typeof t === 'string') out.delete(t);
+  return out;
+}
+
+/** How an adjudicator writes a contested verdict back — existing verbs only (ADR-0072). */
+const CONTESTED_HINT =
+  'Adjudicate each pair (verdict: contradict | subsumes | duplicate | independent). ' +
+  'contradict → remember `contested/<hash>` {a, b, why, verdict} + link a --contradicts--> b. ' +
+  'duplicate → consider supersede; subsumes → consider a refines edge. ' +
+  'ALWAYS remember `checked/<hash>` {a, b, verdict, versions} (echo this candidate’s `versions`) — ' +
+  'the pair then stays out of this read until either fact’s version drifts.';
 
 /** A short human label for a fact, for surfaces that show a key without its full value
  *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
@@ -135,13 +180,52 @@ export interface RatifyResult {
   ratified: true;
 }
 
+// ── ADR-0072 (C7): the contested read — Stage A of the contradiction detector ──
+
+export interface ContestedInput {
+  /** Cap on candidates returned (1–50, default 10) — Stage B adjudication is metered. */
+  limit?: number;
+  /** Cosine floor (default 0.5): contradiction candidates should be CLOSE, not merely related. */
+  minScore?: number;
+  /** Include high-volume runtime/machine fact types (filtered as format-clustered noise by default). */
+  includeRuntime?: boolean;
+}
+/** One adjudication candidate: a semantically-near, structurally-unconnected pair that
+ *  shares a type or tag — worth checking for divergent claims. Carries everything the
+ *  adjudicator needs to write its verdict back with existing verbs. */
+export interface ContestedCandidate {
+  a: string;
+  b: string;
+  /** Cosine similarity between the pair (from the inferred kinship edge). */
+  score: number | null;
+  aLabel: string;
+  bLabel: string;
+  aType: string | null;
+  bType: string | null;
+  sharedTags: string[];
+  /** Unordered pair hash — the `checked/<hash>` / `contested/<hash>` key suffix. */
+  hash: string;
+  /** Each fact's current content-hash version — store these on the `checked/<hash>`
+   *  marker so the pair is re-adjudicated only when either fact actually changes. */
+  versions: { a: string; b: string };
+}
+export interface ContestedResult {
+  candidates: ContestedCandidate[];
+  /** Candidates before the limit cap (so a caller knows there are more). */
+  total: number;
+  /** Pairs skipped because a current `checked/<hash>` marker already adjudicated them. */
+  checked: number;
+  /** How to write a verdict back (existing verbs only — no new write surface). */
+  hint: string;
+}
+
 /** The search/vectors command handlers (ADR-0044 Inc 5). */
 /** Where the 2D semantic layout is stored (ADR-0047 stage 2): a single owner
  *  fact the home graph peeks to place nodes in meaning-space. `_home/*` is
  *  plumbing (owner-only, filtered out of the node band itself). */
 export const LAYOUT_KEY = '_home/embed2d';
 
-export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'search' | 'reindex' | 'project' | 'pruneSimilar' | 'suggestions' | 'ratify'> {
+export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'search' | 'reindex' | 'project' | 'pruneSimilar' | 'suggestions' | 'ratify' | 'contested'> {
   return {
     async search(input, ctx) {
       const viewer = requireUser(ctx.identity);
@@ -303,8 +387,9 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
       const typeByKey = new Map(records.map((r) => [r.key, r.type]));
       const labelByKey = new Map(records.map((r) => [r.key, labelForRecord(r.key, r.value)]));
+      const noiseTypes = noiseTypesFor(records); // slice-declared over the floor
       const isNoise = (k: string): boolean =>
-        k.startsWith('_') || SUGGESTION_RUNTIME_TYPES.has(typeByKey.get(k) ?? '');
+        k.startsWith('_') || noiseTypes.has(typeByKey.get(k) ?? '');
       let candidates = suggestionCandidates(edges); // already score-desc
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
       const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => ({
@@ -315,6 +400,77 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         toLabel: labelByKey.get(c.to) ?? c.to,
       }));
       return { suggestions, vocab: RATIFY_LINK_TYPES, total: candidates.length };
+    },
+
+    // ADR-0072 (C7) Stage A: the contradiction-candidate read. Semantic debt, as a
+    // derived read — semantically-near pairs (the inferred `similarTo` kinship) that no
+    // authored edge connects, sharing a type or tag, not yet adjudicated. Stage B (any
+    // agent — a models.agent pass, the consolidation organ, a person) reads this,
+    // judges each pair, and writes the verdict back with EXISTING verbs:
+    //   contradict → remember `contested/<hash>` {a,b,why} + link a --contradicts--> b
+    //   duplicate  → a supersede candidate · subsumes → propose a refines edge
+    //   ALWAYS     → remember `checked/<hash>` {a,b,verdict,versions} — the idempotence
+    //                marker; the pair only re-surfaces when either fact's version drifts.
+    async contested(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      const { store } = build(ctx);
+      if (!store) return { candidates: [], total: 0, checked: 0, hint: CONTESTED_HINT };
+      const limit = Math.min(Math.max(input?.limit ?? 10, 1), 50);
+      const minScore = input?.minScore ?? 0.5;
+      const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
+      const byKey = new Map(records.map((r) => [r.key, r]));
+      const noiseTypes = noiseTypesFor(records); // slice-declared over the floor
+      const isNoise = (k: string): boolean =>
+        k.startsWith('_') || noiseTypes.has(byKey.get(k)?.type ?? '');
+      // A current adjudication: a live `checked/<hash>` marker whose stored versions
+      // still match both facts — version drift re-opens the pair (ADR-0066 hashes).
+      const markers = new Map<string, { a?: string; b?: string; versions?: Record<string, string> }>();
+      for (const r of records) {
+        if (r.key.startsWith('checked/') && !r.superseded) {
+          markers.set(r.key.slice('checked/'.length), (r.value ?? {}) as { versions?: Record<string, string> });
+        }
+      }
+      const versionOf = (k: string): string => {
+        const r = byKey.get(k);
+        return r?.version || contentHash(r?.value ?? null);
+      };
+      const authored = authoredPairs(edges);
+      let checkedCount = 0;
+      const out: ContestedCandidate[] = [];
+      for (const c of suggestionCandidates(edges)) {
+        const a = byKey.get(c.from);
+        const b = byKey.get(c.to);
+        if (!a || !b || a.superseded || b.superseded) continue;
+        if ((c.score ?? 0) < minScore) continue;
+        if (!input?.includeRuntime && (isNoise(c.from) || isNoise(c.to))) continue;
+        // "No authored edge" is Stage A's precondition — normally guaranteed at
+        // similarTo write time, but assert it here so a hand-written edge can't slip a
+        // connected pair back into adjudication.
+        if (authored.has(pairKey(c.from, c.to))) continue;
+        const sharedTags = a.tags.filter((t) => b.tags.includes(t));
+        const sameType = !!a.type && a.type === b.type;
+        if (!sameType && sharedTags.length === 0) continue; // divergence needs common ground
+        const hash = contentHash(pairKey(c.from, c.to));
+        const [vA, vB] = [versionOf(c.from), versionOf(c.to)];
+        const marker = markers.get(hash);
+        if (marker?.versions && marker.versions[c.from] === vA && marker.versions[c.to] === vB) {
+          checkedCount++;
+          continue; // adjudicated and unchanged since — idempotent skip
+        }
+        out.push({
+          a: c.from,
+          b: c.to,
+          score: c.score,
+          aLabel: labelForRecord(c.from, a.value),
+          bLabel: labelForRecord(c.to, b.value),
+          aType: a.type,
+          bType: b.type,
+          sharedTags,
+          hash,
+          versions: { a: vA, b: vB },
+        });
+      }
+      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, hint: CONTESTED_HINT };
     },
 
     async ratify(input, ctx) {

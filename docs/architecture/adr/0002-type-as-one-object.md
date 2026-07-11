@@ -1,6 +1,8 @@
 # ADR-0002 — Type as one object (facets)
 
-- **Status:** Proposed
+- **Status:** Accepted — the `Type` object + `resolveType` landed 2026-06-19 (see the log)
+  and are the live `$types` spine (per-type handlers/keyPattern/manager, consumed from the
+  gateway to the organ’s typing backfill, ADR-0077). Reconciled by the 2026-07-09 ledger scan.
 - **Date:** 2026-06-19
 - **Context:** [`breathe.md`](../breathe.md) Wave 2 (the contraction) + Wave 9 (the
   shape/keyPattern facets feed the Reference grammar).

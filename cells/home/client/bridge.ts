@@ -22,6 +22,9 @@ export interface KernelBridge {
   authFetch(path: string, init?: RequestInit): Promise<Response>;
   isAuthed(): boolean;
   cellUrl(owner: string, name: string, rest?: string): string;
+  /** Keep the host-only `parc_session` cookie as fresh as the client token, so
+   *  the next navigation's SSR resolves authed (see client/auth.ts). */
+  refreshSessionCookie(): void;
 }
 
 const notInstalled = (): never => {
@@ -37,6 +40,7 @@ let impl: KernelBridge = {
   completeLoginIfReturning: async () => false,
   authFetch: async () => notInstalled(),
   isAuthed: () => false,
+  refreshSessionCookie: () => {},
   // Apex-form path by default; the server install overrides with the request
   // host, the client install with the kernel's `cellUrl`.
   cellUrl: (owner: string, name: string, rest = '') => `/@${owner}/${name}${rest}`,
@@ -52,4 +56,5 @@ export const logout = (): Promise<void> => impl.logout();
 export const completeLoginIfReturning = (): Promise<boolean> => impl.completeLoginIfReturning();
 export const authFetch = (path: string, init?: RequestInit): Promise<Response> => impl.authFetch(path, init);
 export const isAuthed = (): boolean => impl.isAuthed();
+export const refreshSessionCookie = (): void => impl.refreshSessionCookie();
 export const cellUrl = (owner: string, name: string, rest = ''): string => impl.cellUrl(owner, name, rest);

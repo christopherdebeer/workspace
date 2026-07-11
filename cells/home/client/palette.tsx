@@ -1,31 +1,34 @@
 /**
  * Palette (ADR-0047, v2) — the field computer wearing the canvas palette's shell.
  *
- * A fixed bottom-center floating bar over the graph (no scrim — the graph stays
- * live). Collapsed = one pill; ⌘K opens the detented sheet holding the Console
- * (the engine, reused whole); Esc closes. Positionable on desktop (drag the
- * handle; double-tap re-docks); a full-width bottom sheet on small screens.
+ * A fixed bottom-center instrument over the graph (no scrim — the graph stays
+ * live). The SEARCH INPUT is the always-visible bottom bar; the results sheet
+ * expands above it and collapses without losing the query, the matches, or the
+ * graph highlights (Console stays mounted). ⌘K expands; Esc collapses.
  *
- * v2 (use feedback): the CONTEXT ROW grew into a context PANEL — selecting a
- * graph node peeks the fact and shows its CONTENT (FactBody, the shared render
- * floor) plus its NEIGHBOURHOOD as chips; tapping a neighbour chip changes the
- * selection, which pans the graph (App owns `selectedKey`; the graph eases its
- * camera to any external selection). Peek still opens the full progressive
- * detail modal; open follows the type's declared surface.
+ * v3 (use feedback): the context panel's EXPAND is the one fact detail —
+ * tapping the title unfolds FactDetail (provenance, full body, edit/open)
+ * in place; the separate peek sheet was a second, differently-styled copy of
+ * the same content and is gone from this flow. Neighbour chips change the
+ * selection, which pans the graph (App owns `selectedKey`); `open ↗` escalates
+ * to the type's declared surface.
  */
 import * as React from 'react';
 import { Console } from './console';
-import { openFact, typeIcon, factTitle, factHref, FactBody, type ListEntry } from './facts';
+import { typeIcon, factTitle, factHref, factEdit, FactDetail, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
+import { ink } from './ink';
 
-const { useState, useEffect, useRef, useCallback } = React;
-
-const ink = { bg: '#181511', panel: '#221d16', line: '#3d362b', text: '#efe9dc', dim: '#9a917f', accent: '#f5c453', mono: 'ui-monospace, SFMono-Regular, Menlo, monospace' };
+const { useState, useEffect, useCallback } = React;
 
 const chip: React.CSSProperties = {
   background: 'none', border: `1px solid ${ink.line}`, color: ink.text, borderRadius: 999,
-  fontSize: '0.72rem', fontFamily: ink.mono, padding: '0.15rem 0.6rem', cursor: 'pointer', textDecoration: 'none',
+  fontSize: '0.72rem', fontFamily: ink.mono, padding: '0.28rem 0.65rem', cursor: 'pointer', textDecoration: 'none',
   maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  // In a scrolling row a flex child SHRINKS by default — chips were crushing
+  // each other down to an icon and an ellipsis instead of scrolling (the
+  // density noise in the owner's screenshot). They keep their size; the row scrolls.
+  flexShrink: 0,
 };
 
 interface NeighborRef { key: string; rel: string; entry: ListEntry }
@@ -38,6 +41,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
   const [showBody, setShowBody] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -45,6 +49,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
     setNeighbors([]);
     setVerbs([]);
     setShowBody(false);
+    setEditing(false);
     // The contextual capability menu — what can ACT on this fact, inferred
     // from its type signals (ADR-0049). Type-specific tools lead; the
     // always-applicable workspace verbs stay in the console's full list.
@@ -87,8 +92,13 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
 
   const e = entry ?? ({ key: factKey } as ListEntry);
   const href = factHref(e);
+  const editHref = entry ? factEdit(e) : null;
+  const canEditInline = !!entry && !editHref && !factKey.startsWith('_');
+  // A chip whose label is an icon and an ellipsis says nothing — only
+  // neighbours with a resolvable TITLE earn a chip.
+  const namedNeighbors = neighbors.filter((n) => !!factTitle(n.entry));
   return (
-    <div style={{ display: 'grid', gap: '0.35rem', padding: '0.45rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
+    <div style={{ display: 'grid', gap: '0.4rem', padding: '0.55rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
         <span aria-hidden>{typeIcon(e)}</span>
         <button
@@ -98,32 +108,70 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
         >
           {entry ? factTitle(e) : factKey} <span style={{ color: ink.dim }}>{showBody ? '▾' : '▸'}</span>
         </button>
-        <button style={chip} onClick={() => openFact({ key: factKey } as ListEntry)}>peek</button>
+        {/* Actions live on the panel FRAME (where peek used to be), not inside
+            the scrolling body — owner feedback. */}
+        {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
+        {canEditInline ? (
+          <button
+            style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
+            onClick={() => {
+              setEditing((v) => !v);
+              setShowBody(true);
+            }}
+          >
+            edit
+          </button>
+        ) : null}
         {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
         <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none' }} onClick={onClear} aria-label="clear selection">×</button>
       </div>
       {showBody && entry ? (
-        <div style={{ maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.82rem' }}>
-          <FactBody e={entry} full />
+        <div style={{ maxHeight: 'min(42dvh, 340px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.6rem 0.7rem', fontSize: '0.82rem' }}>
+          {editing ? (
+            <InlineFactEditor
+              e={entry}
+              onCancel={() => setEditing(false)}
+              onSaved={(v) => {
+                setEntry({ ...entry, value: v });
+                setEditing(false);
+              }}
+            />
+          ) : (
+            <FactDetail e={entry} compact />
+          )}
         </div>
       ) : null}
-      {verbs.length ? (
-        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2 }}>
-          {verbs.map((v) => (
-            <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent }} title={v.target} onClick={() => onCommand(v.target)}>
-              ⚡ {v.target.slice(v.target.lastIndexOf('.') + 1)}
+      {/* ONE row of context, not three (the stacked verb + icon-chip rows read
+          as dense noise on a phone — owner feedback): a few readable verbs,
+          then the neighbours that actually HAVE a name. Horizontal scroll. */}
+      {verbs.length || namedNeighbors.length ? (
+        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2, alignItems: 'center' }}>
+          {verbs.slice(0, 3).map((v) => (
+            <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent, maxWidth: 220 }} title={v.target} onClick={() => onCommand(v.target)}>
+              {v.target.slice(v.target.lastIndexOf('.') + 1)}
             </button>
           ))}
-        </div>
-      ) : null}
-      {neighbors.length ? (
-        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2 }}>
-          {neighbors.map((n) => (
-            <button key={`${n.rel}:${n.key}`} style={chip} title={`${n.rel} · ${n.key}`} onClick={() => onSelectKey(n.key)}>
-              {typeIcon(n.entry)} {factTitle(n.entry) || n.key}
-              <span style={{ color: ink.dim }}> · {n.rel.replace('← ', '⭠')}</span>
-            </button>
-          ))}
+          {verbs.length && namedNeighbors.length ? <span aria-hidden style={{ color: ink.line, flexShrink: 0 }}>·</span> : null}
+          {namedNeighbors.slice(0, 8).map((n) => {
+            // The REL and DIRECTION are what make a neighbour chip mean
+            // something ("what even is this?") — kept secondary: dim, after
+            // the title. `rel ›` points out of this fact; `‹ rel` into it.
+            // The rel NEVER truncates (flexShrink 0) — the title ellipsizes.
+            const inbound = n.rel.startsWith('← ');
+            const rel = n.rel.replace('← ', '');
+            return (
+              <button
+                key={`${n.rel}:${n.key}`}
+                style={{ ...chip, maxWidth: 250, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                title={`${inbound ? `${rel} from` : `${rel} to`} ${n.key}`}
+                onClick={() => onSelectKey(n.key)}
+              >
+                <span aria-hidden style={{ flexShrink: 0 }}>{typeIcon(n.entry)}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{factTitle(n.entry)}</span>
+                <span style={{ color: ink.dim, flexShrink: 0 }}>{inbound ? `‹ ${rel}` : `${rel} ›`}</span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -131,8 +179,11 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
 }
 
 export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
+  // `open` = the results sheet is expanded. The SEARCH INPUT is always visible
+  // (it IS the bottom bar now — owner feedback: fix the input to the bottom and
+  // let the sheet collapse while the query, selection, and graph highlights
+  // persist, so a phone can see what a search lit up).
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   // ADR-0049: a context-panel verb chip opens the console pre-searched to that
   // target (nonce so the same chip re-seeds after manual edits).
   const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
@@ -140,7 +191,6 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     setSeed((s) => ({ q: target, n: (s?.n ?? 0) + 1 }));
     setOpen(true);
   }, []);
-  const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -155,25 +205,14 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const onHandleDown = useCallback((e: React.PointerEvent) => {
-    if (window.innerWidth < 700) return;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    drag.current = { px: e.clientX, py: e.clientY, x: pos?.x ?? 0, y: pos?.y ?? 0 };
-  }, [pos]);
-  const onHandleMove = useCallback((e: React.PointerEvent) => {
-    const d = drag.current;
-    if (!d) return;
-    setPos({ x: d.x + (e.clientX - d.px), y: Math.min(0, d.y + (e.clientY - d.py)) });
-  }, []);
-  const onHandleUp = useCallback(() => { drag.current = null; }, []);
-
   return (
     <div
       style={{
         position: 'fixed',
-        left: '50%',
-        bottom: 10,
-        transform: pos ? `translate(calc(-50% + ${pos.x}px), ${pos.y}px)` : 'translateX(-50%)',
+        left: 0,
+        right: 0,
+        marginInline: 'auto',
+        bottom: 'max(10px, env(safe-area-inset-bottom))',
         width: 'min(720px, calc(100vw - 12px))',
         zIndex: 40,
         display: 'grid',
@@ -186,30 +225,18 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
       }}
     >
       {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
-      {open ? (
-        <div style={{ maxHeight: '56vh', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel }}>
-          {/* Tapping a semantic match selects it (pans/fits the graph) and closes
-              the sheet so the focus is visible. */}
-          <Console authed={authed} seed={seed} onSelectKey={(k) => { onSelectKey(k); setOpen(false); }} />
-        </div>
-      ) : null}
-      <div
-        onPointerDown={onHandleDown}
-        onPointerMove={onHandleMove}
-        onPointerUp={onHandleUp}
-        onDoubleClick={() => setPos(null)}
-        style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.45rem 0.8rem', cursor: 'grab', userSelect: 'none', touchAction: 'none' }}
-      >
-        <button
-          onClick={() => setOpen((o) => !o)}
-          style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.85rem', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, textAlign: 'left' }}
-        >
-          <span style={{ color: ink.accent }}>{open ? '▾' : '▴'}</span>
-          field computer
-          <span style={{ color: ink.dim, fontSize: '0.72rem' }}>{open ? 'esc to close' : 'search or run a capability'}</span>
-        </button>
-        <kbd style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.7rem', border: `1px solid ${ink.line}`, borderRadius: 5, padding: '0.05rem 0.35rem' }}>⌘K</kbd>
-      </div>
+      {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
+          must not cost the query, the matches, or the graph highlights. */}
+      <Console
+        authed={authed}
+        seed={seed}
+        collapsed={!open}
+        onCollapse={(c) => setOpen(!c)}
+        onSelectKey={(k) => {
+          onSelectKey(k);
+          setOpen(false); // reveal the graph focus the selection just drove
+        }}
+      />
     </div>
   );
 }

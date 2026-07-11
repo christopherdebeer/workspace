@@ -13,6 +13,7 @@ import {
   MintTokenParams,
   MintedToken,
   TokenInfo,
+  TokenPosture,
   TokenSummary,
   RefreshResult,
   DeviceCode,
@@ -37,6 +38,7 @@ interface TokenRow {
   mintedBy: string;
   scope: string;
   effectiveScope?: string | null;
+  posture?: TokenPosture | null;
   label: string | null;
   clientId: string | null;
   revoked: boolean;
@@ -211,6 +213,7 @@ export function createMemoryStore(): AuthStore {
         mintedBy: t.mintedBy,
         scope: t.scope,
         effectiveScope: t.effectiveScope ?? null,
+        posture: t.posture ?? null,
         label: t.label,
         clientId: t.clientId,
         expiresAt: t.expiresAt,
@@ -221,6 +224,15 @@ export function createMemoryStore(): AuthStore {
       for (const t of tokens.values()) {
         if (t.id === tokenId && t.mintedBy === userId) {
           t.effectiveScope = effectiveScope;
+          return true;
+        }
+      }
+      return false;
+    },
+    async setPosture(tokenId, userId, posture): Promise<boolean> {
+      for (const t of tokens.values()) {
+        if (t.id === tokenId && t.mintedBy === userId) {
+          t.posture = posture;
           return true;
         }
       }
@@ -249,18 +261,22 @@ export function createMemoryStore(): AuthStore {
       // token's, which is expected to be expired/gone when refreshing.
       const ref = refreshRows.get(oldRefreshHash);
       if (!ref || isExpired(ref.expiresAt)) return null;
-      const old = tokens.get(ref.tokenHash);
-      if (old) old.revoked = true;
-      refreshRows.delete(oldRefreshHash); // rotate: consume the old refresh
+      // STABLE refresh credential (ADR-0080) — mirrors dynamo-store: mint a fresh
+      // access token, keep the refresh row (repointed + slid), and let the old
+      // access token reach its natural expiry instead of revoking it.
       const minted = await this.mintToken({
         userId: ref.mintedBy,
         scope: ref.scope,
         clientId: ref.clientId ?? undefined,
         expiresInSec: newExpiresInSec,
-        withRefresh: true,
-        refreshExpiresInSec: newRefreshExpiresInSec,
       });
-      return { id: minted.id, token: minted.token, refreshToken: minted.refreshToken!, expiresAt: minted.expiresAt! };
+      const newHash = sha256(minted.token);
+      const t = tokens.get(newHash);
+      if (t) t.refreshHash = oldRefreshHash;
+      ref.tokenId = minted.id;
+      ref.tokenHash = newHash;
+      ref.expiresAt = isoIn((newRefreshExpiresInSec ?? REFRESH_TTL_MS / 1000) * 1000);
+      return { id: minted.id, token: minted.token, expiresAt: minted.expiresAt! };
     },
     async revokeToken(tokenId, userId): Promise<boolean> {
       for (const t of tokens.values()) {

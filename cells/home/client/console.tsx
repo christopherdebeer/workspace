@@ -1,48 +1,112 @@
 /**
- * ADR-0044 Inc 5: the field computer, split from app.tsx (moved verbatim) —
- * the command palette console over $catalog, arg entry (schema form /
- * federated form / raw JSON), the output stack, and the machine housing.
+ * The field computer's engine room — the command console over $catalog: one
+ * search-first list (workspace matches + capabilities, one keyboard model),
+ * arg entry (schema form / federated form / raw JSON), and the result tape.
+ *
+ * Refinement pass (owner direction 2026-07-10): ONE material. The console
+ * previously wore its own green "machine" palette inside the palette's warm
+ * ink shell — two design languages in a single instrument. It now speaks ink
+ * throughout; what remains semantic is colour with a JOB: amber = interactive/
+ * selected/mutating (`act`), green = a run that succeeded, red = one that
+ * failed. Content (fact titles) keeps the park's serif voice — the machine is
+ * mono, the things it retrieves are not.
+ *
+ * Progressive disclosure, top to bottom:
+ *   bar → sheet: type; workspace matches + commands in one arrow-key list.
+ *   Enter on a read with no REQUIRED args just RUNS it (the bare call is the
+ *   designed default of recall/attention/query…); the arg form is reached via
+ *   the row's `args` chip, and is mandatory only for `act`s (an explicit run
+ *   button = the confirmation) and required/custom-form args.
+ *   The form itself leads with the required (or first few) fields; the rest
+ *   wait under "more options". Empty-string/empty-object args are pruned at
+ *   run time — an untouched field means "not this filter", not `type:""`.
+ *   The tape shows the LATEST result; older runs collapse under "history".
  */
 import * as React from 'react';
 import { theme, SchemaForm, isFormable, type FormFieldSchema, type FormPalette } from '@parc/ui';
 import { authFetch } from './bridge';
-import { getJson, mcpCall, computerUrl } from './lib';
+import { getJson, mcpCall } from './lib';
 import { FederatedRendererFrame, FederatedFormFrame } from './federated';
 import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
 import { CONSOLE_RESULT_EVENT } from './graph';
+import { ink } from './ink';
+// Matching/ranking, MRU recents, and selection stepping come from the kernel's
+// headless command-surface engine — shared with the canvas cmd-palette.
+// Materialized at push time as vendor/command-core.js (ADR-0076 overlay).
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — plain-JS kernel SDK module (JSDoc-typed).
+import { rankItems, createRecents, stepSelection } from '../vendor/command-core.js';
 
 const { useState, useEffect } = React;
 
-// ─── the field computer (the console, housed) ──────────────────────
-//
-// The one deliberately-technical object in the warm room: the raw read/act
-// console, OAuth discovery, and the resource probe live inside a dark
-// machine housing — green phosphor on deep pine, like the radio at the
-// ranger station. Power users open the lid; everyone else never needs to.
+// ─── the console's ink dialect ──────────────────────────────────────
+// Surfaces: the sheet is ink.panel (the palette provides it); anything inset —
+// inputs, result screens — drops to ink.bg behind an ink.line hairline.
+const okGreen = '#8fbf8f';
 
-const machine = {
-  housing: '#13241f',
-  bezel: '#0b1a16',
-  screen: '#0a1f1a',
-  text: '#cfe3c0',
-  dim: '#7f9a82',
-  green: '#7fc97f',
-  border: '#2c4a3c',
-} as const;
-
-/** The schema-form floor (ADR-0041 Inc 2), in the machine's own dark palette —
- *  so a generated form looks native inside the housing, not pasted from the
- *  light park theme the rest of home uses. */
-const machineFormPalette: FormPalette = {
-  text: machine.text,
-  dim: machine.dim,
-  border: machine.border,
-  inputBg: machine.screen,
-  accent: machine.green,
-  danger: '#e08c7a',
-  mono: theme.mono,
-  sans: theme.mono, // the machine's voice stays monospace even for prose fields
+const inkFormPalette: FormPalette = {
+  text: ink.text,
+  dim: ink.dim,
+  border: ink.line,
+  inputBg: ink.bg,
+  accent: ink.accent,
+  danger: ink.danger,
+  mono: ink.mono,
+  sans: ink.mono, // the machine's voice stays monospace even for prose fields
 };
+
+/** The one caption style — every section header in the sheet uses this. */
+const CAPTION: React.CSSProperties = {
+  color: ink.dim,
+  fontFamily: ink.mono,
+  fontSize: '0.68rem',
+  textTransform: 'uppercase',
+  letterSpacing: '0.07em',
+};
+
+/** An inset "screen" surface (inputs, result panes). */
+const inset: React.CSSProperties = {
+  background: ink.bg,
+  border: `1px solid ${ink.line}`,
+  borderRadius: 8,
+};
+
+/** A small outlined tag: `act` earns the accent (it mutates), the rest stay dim. */
+function Pill({ children, tone = 'dim' }: { children: React.ReactNode; tone?: 'dim' | 'act' }): React.JSX.Element {
+  const color = tone === 'act' ? ink.accent : ink.dim;
+  return (
+    <span style={{ color, fontFamily: ink.mono, fontSize: '0.66rem', border: `1px solid ${tone === 'act' ? ink.accent : ink.line}`, borderRadius: 999, padding: '0 0.45rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+      {children}
+    </span>
+  );
+}
+
+/** The one list-row shell: fixed-height touch target, never wraps, active =
+ *  a quiet accent tint. Matches, commands, and recents all wear this. */
+function Row({ active, onClick, onHover, children }: { active: boolean; onClick: () => void; onHover: () => void; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={onHover}
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.5rem',
+        minHeight: 40,
+        padding: '0.3rem 0.55rem',
+        borderRadius: 8,
+        border: `1px solid ${active ? ink.line : 'transparent'}`,
+        background: active ? 'rgba(245,196,83,0.07)' : 'transparent',
+        cursor: 'pointer',
+        minWidth: 0,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 interface Capability {
   target: string;
@@ -54,27 +118,54 @@ interface Capability {
   ui?: { form?: string; as?: string };
 }
 
-/** A starter argument object from a capability's input schema — required keys
- *  (or, lacking any, every declared key) pre-seeded with a type-appropriate
- *  empty value. Shared by the JSON-textarea view (stringified) and the
- *  schema-form view (used as-is); both views edit the SAME underlying shape. */
+/** Starter args: the REQUIRED keys only, seeded with type-appropriate empties.
+ *  (Seeding every declared key sent `{type:"", tag:"", …}` — which read as
+ *  filters and matched nothing. An untouched optional field stays absent.) */
 function argSkeletonObject(schema?: Capability['inputSchema']): Record<string, unknown> {
   const props = schema?.properties ?? {};
-  const keys = schema?.required?.length ? schema.required : Object.keys(props);
   const obj: Record<string, unknown> = {};
-  for (const k of keys) {
+  for (const k of schema?.required ?? []) {
     const t = props[k]?.type;
     obj[k] = t === 'number' ? 0 : t === 'boolean' ? false : t === 'array' ? [] : t === 'object' ? {} : '';
   }
   return obj;
 }
-/** A starter JSON argument object from a capability's input schema. */
-function argSkeleton(schema?: Capability['inputSchema']): string {
-  return JSON.stringify(argSkeletonObject(schema), null, 2);
+
+/** Drop the args a user never touched: empty strings, empty arrays/objects,
+ *  null/undefined. What remains is what they actually asked for. */
+function pruneArgs(v: unknown): unknown {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val === '' || val == null) continue;
+    if (Array.isArray(val) && val.length === 0) continue;
+    if (typeof val === 'object' && !Array.isArray(val) && Object.keys(val as object).length === 0) continue;
+    out[k] = val;
+  }
+  return out;
+}
+
+/** Split a schema for progressive disclosure: the required fields (or, lacking
+ *  any, the first three declared) lead; everything else waits under "more
+ *  options". Both halves edit the same value. */
+function splitSchema(schema?: Capability['inputSchema']): { primary: FormFieldSchema | undefined; advanced: FormFieldSchema | undefined } {
+  const props = schema?.properties;
+  if (!props) return { primary: schema, advanced: undefined };
+  const keys = Object.keys(props);
+  const req = (schema?.required ?? []).filter((k) => k in props);
+  const lead = req.length ? req : keys.slice(0, 3);
+  const rest = keys.filter((k) => !lead.includes(k));
+  if (!rest.length) return { primary: schema, advanced: undefined };
+  const pick = (ks: string[]): FormFieldSchema => ({
+    ...schema,
+    properties: Object.fromEntries(ks.map((k) => [k, props[k]])),
+    required: (schema?.required ?? []).filter((k) => ks.includes(k)),
+  }) as FormFieldSchema;
+  return { primary: pick(lead), advanced: pick(rest) };
 }
 
 // A unified palette command: every capability from $catalog plus a couple of
-// built-in probes (whoami, oauth discovery). One model, one output stack.
+// built-in probes (whoami, oauth discovery). One model, one tape.
 interface Cmd {
   id: string;
   ns: string;
@@ -84,7 +175,6 @@ interface Cmd {
   scope: string | null;
   description: string;
   schema?: Capability['inputSchema'];
-  /** ADR-0041 Inc 3: a cell-authored argument form, if this capability declares one. */
   ui?: Capability['ui'];
   needsArgs: boolean;
   run: (input: unknown) => Promise<{ ok: boolean; value: unknown }>;
@@ -99,20 +189,8 @@ interface Output {
   value: unknown;
   at: number;
   /** The `key` arg the command was called with, if any — a fallback identity for
-   *  a fact-shaped result whose value omits its own key (e.g. `workspace.peek`
-   *  returns `{value,_meta}` only; the caller already knows the key it asked for). */
+   *  a fact-shaped result whose value omits its own key. */
   argsKey?: string;
-}
-
-/** Subsequence fuzzy match (canvas palette's model): all query chars in order. */
-function fuzzy(text: string, q: string): boolean {
-  let ti = 0;
-  let qi = 0;
-  while (ti < text.length && qi < q.length) {
-    if (text[ti] === q[qi]) qi++;
-    ti++;
-  }
-  return qi === q.length;
 }
 
 const PROBE_CMDS: Cmd[] = [
@@ -127,8 +205,6 @@ const PROBE_CMDS: Cmd[] = [
     needsArgs: false,
     search: 'probe whoami identity who am i',
     run: async () => {
-      // `/mcp/whoami` requires the session bearer — use authFetch (not the bare
-      // getJson the public oauth probe uses), or the gateway returns invalid_token.
       const res = await authFetch('/mcp/whoami');
       let body: unknown;
       try { body = await res.json(); } catch { body = await res.text(); }
@@ -160,10 +236,6 @@ function capToCmd(cap: Capability): Cmd {
   const dot = cap.target.lastIndexOf('.');
   const ns = dot > 0 ? cap.target.slice(0, dot) : cap.target;
   const verb = cap.target.slice(dot + 1);
-  // A bespoke form (ADR-0041 Inc 3) may cover args the declared schema doesn't
-  // even list (a minimal/empty inputSchema, fully driven by the custom UI) —
-  // such a target still needs the focused arg-entry view, not an immediate
-  // zero-arg call.
   const needsArgs = Object.keys(cap.inputSchema?.properties ?? {}).length > 0 || !!cap.ui?.form;
   return {
     id: cap.target,
@@ -181,25 +253,29 @@ function capToCmd(cap: Capability): Cmd {
   };
 }
 
-const kindColor = (k: Cmd['kind']): string => (k === 'act' ? machine.green : machine.dim);
-
-/** A pill in the machine's voice (kind / scope / namespace). */
-function MonoPill({ children, color }: { children: React.ReactNode; color?: string }): React.JSX.Element {
-  return (
-    <span style={{ color: color ?? machine.dim, fontFamily: theme.mono, fontSize: '0.7rem', border: `1px solid ${machine.border}`, borderRadius: 999, padding: '0 0.45rem', whiteSpace: 'nowrap' }}>
-      {children}
-    </span>
-  );
+/** Enter (or a row tap) RUNS a read/probe outright unless something genuinely
+ *  needs the form first: a required arg, a cell-authored form, or an `act`
+ *  (whose run button is the explicit confirmation a mutation deserves). */
+function runsDirectly(c: Cmd): boolean {
+  if (!c.needsArgs) return true;
+  if (c.kind === 'act' || c.ui?.form) return false;
+  return (c.schema?.required ?? []).length === 0;
 }
 
-/**
- * The console as a command palette (interaction modelled on @c15r/canvas):
- * type to fuzzy-filter every capability; empty shows recents + namespace
- * chips for progressive disclosure; pick a command to reveal its args (or run
- * straight away); results stack below, newest first. The human drives the same
- * read/act wire an agent does.
- */
-export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?: { q: string; n: number } | null; onSelectKey?: (k: string) => void }): React.JSX.Element {
+/** One list, two sources: workspace matches lead, capabilities follow — a
+ *  single arrow-key order (the old split made matches mouse-only). */
+type Item = { kind: 'fact'; e: ListEntry } | { kind: 'cmd'; c: Cmd };
+
+export function Console({ authed, seed, onSelectKey, collapsed = false, onCollapse }: {
+  authed: boolean;
+  seed?: { q: string; n: number } | null;
+  onSelectKey?: (k: string) => void;
+  /** Collapsed = the sheet (results/commands/tape) hides but the INPUT stays —
+   *  and so does every piece of state: the query, the semantic matches, the
+   *  graph highlights. On a phone that's how you see what a search lit up. */
+  collapsed?: boolean;
+  onCollapse?: (collapsed: boolean) => void;
+}): React.JSX.Element {
   const [cmds, setCmds] = useState<Cmd[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -207,8 +283,6 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
   const [focused, setFocused] = useState<Cmd | null>(null);
   const [args, setArgs] = useState('{}');
   const [formValue, setFormValue] = useState<Record<string, unknown>>({});
-  // 'form' when the schema supports it (the default — ADR-0041 Inc 2); 'json' is
-  // the raw-JSON fallback/power-user escape hatch, always available via toggle.
   const [rawJson, setRawJson] = useState(false);
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
@@ -229,10 +303,8 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     if (!authed) return;
     let live = true;
     // `{detail:'full'}` returns the flat { capabilities:[…] } the console maps; a
-    // bare $catalog returns the ADR-0033 grouped summary ({ cells:[{capabilities}] })
-    // with no top-level .capabilities — which silently emptied the console. Request
-    // full, and flatten the grouped shape too so a future default change can't
-    // re-break it.
+    // bare $catalog returns the ADR-0033 grouped summary — flatten that too so a
+    // future default change can't re-break this.
     mcpCall('read', '$catalog', { detail: 'full' })
       .then((r) => {
         if (!live) return;
@@ -258,25 +330,20 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
 
   const q = query.trim().toLowerCase();
 
-  // Search-first, like the canvas palette: free text runs a SEMANTIC query over
-  // the slice (ADR-0051 `query{text}` — meaning-ranked, salience-aware). Matches
-  // surface as fact results that drive graph focus — highlight + fit the whole
-  // set here (debounced), and tapping one selects + pans to it. Skipped for
-  // capability-address-looking input (has a dot, no space), which is a command.
+  // Search-first: free text runs a SEMANTIC query over the slice (ADR-0051
+  // `query{text}` — meaning-ranked, salience-aware). Matches drive graph focus
+  // (highlight + fit, debounced). Skipped for capability-address-looking input
+  // (has a dot, no space), which is a command.
   useEffect(() => {
     if (!authed) { setResults([]); return; }
     const semantic = q.length >= 2 && (query.includes(' ') || !query.includes('.'));
     if (!semantic) { setResults([]); return; }
     let live = true;
     const t = setTimeout(() => {
-      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: 8, shape: 'card' }).then((r) => {
+      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: 6, shape: 'card' }).then((r) => {
         if (!live || !r.ok) return;
         const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
-        // Keep results to knowledge facts — drop substrate plumbing (`_home/…`,
-        // `_types/…`, placements) that isn't a graph node anyway.
-        setResults(entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, 8));
-        // Light up the matches on the graph and fit to them (the palette drives
-        // the territory) — the same seam a run result uses.
+        setResults(entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, 6));
         if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: r.value } }));
       });
     }, 300);
@@ -284,52 +351,67 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, authed]);
 
-  const filtered = React.useMemo(() => {
-    const all = cmds ?? [];
-    if (!q) return [];
-    return all
-      .filter((c) => fuzzy(c.search, q) || c.search.includes(q))
-      .sort((a, b) => {
-        const ae = a.search.includes(q);
-        const be = b.search.includes(q);
-        if (ae !== be) return ae ? -1 : 1;
-        return a.label.length - b.label.length;
-      })
-      .slice(0, 12);
-  }, [cmds, q]);
+  const filtered = React.useMemo(
+    () => (q ? (rankItems(cmds ?? [], q, { textOf: (c: Cmd) => c.search, limit: 10 }) as Cmd[]) : []),
+    [cmds, q],
+  );
 
-  // Namespaces with counts — the "what's available" overview when idle.
+  // MRU recents (command-core) — the empty-query state leads with what the
+  // hands actually reach for, resolved against the LIVE command pool.
+  const recentsRef = React.useRef(createRecents({ key: 'parc.home.recents', limit: 6 }));
+  const [recentsV, setRecentsV] = useState(0);
+  const recent = React.useMemo(
+    () => (q || !cmds ? [] : (recentsRef.current.resolve(cmds, (c: Cmd) => c.id) as Cmd[])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cmds, q, recentsV],
+  );
+
+  // ONE navigable list: matches then commands while typing; recents when idle.
+  const items: Item[] = React.useMemo(
+    () => (q
+      ? [...results.map((e): Item => ({ kind: 'fact', e })), ...filtered.map((c): Item => ({ kind: 'cmd', c }))]
+      : recent.map((c): Item => ({ kind: 'cmd', c }))),
+    [q, results, filtered, recent],
+  );
+  const firstCmdIdx = items.findIndex((it) => it.kind === 'cmd');
+
   const namespaces = React.useMemo(() => {
     const m = new Map<string, number>();
     for (const c of cmds ?? []) m.set(c.ns, (m.get(c.ns) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [cmds]);
 
-  const select = (cmd: Cmd): void => {
-    if (cmd.needsArgs) {
-      setFocused(cmd);
-      const skeleton = argSkeletonObject(cmd.schema);
-      setFormValue(skeleton);
-      setArgs(JSON.stringify(skeleton, null, 2));
-      // A schema the form floor can't walk at all (no object/properties — rare,
-      // but some targets accept a bare scalar or an open `additionalProperties`
-      // bag) starts in raw JSON UNLESS a cell-authored form (ADR-0041 Inc 3)
-      // covers it regardless of the declared schema's shape.
-      setRawJson(!cmd.ui?.form && !isFormable(cmd.schema));
-    } else {
-      void invoke(cmd, {});
+  const openForm = (cmd: Cmd): void => {
+    setFocused(cmd);
+    const skeleton = argSkeletonObject(cmd.schema);
+    setFormValue(skeleton);
+    setArgs(JSON.stringify(skeleton, null, 2));
+    // A schema the form floor can't walk (no object/properties) starts in raw
+    // JSON unless a cell-authored form covers it regardless of declared shape.
+    setRawJson(!cmd.ui?.form && !isFormable(cmd.schema));
+  };
+
+  const activate = (it: Item): void => {
+    if (it.kind === 'fact') {
+      onSelectKey?.(it.e.key);
+      return;
     }
+    if (runsDirectly(it.c)) void invoke(it.c, {});
+    else openForm(it.c);
   };
 
   const invoke = async (cmd: Cmd, input: unknown): Promise<void> => {
+    recentsRef.current.add(cmd.id);
+    setRecentsV((v) => v + 1);
     setBusy(true);
-    const argsKey = input && typeof input === 'object' && typeof (input as { key?: unknown }).key === 'string' ? (input as { key: string }).key : undefined;
+    const pruned = pruneArgs(input);
+    const argsKey = pruned && typeof pruned === 'object' && typeof (pruned as { key?: unknown }).key === 'string' ? (pruned as { key: string }).key : undefined;
     try {
-      const r = await cmd.run(input);
+      const r = await cmd.run(pruned);
       counter.current += 1;
       setOutputs((prev) => [{ n: counter.current, label: cmd.label, kind: cmd.kind, ok: r.ok, value: r.value, at: Date.now(), argsKey }, ...prev].slice(0, 40));
-      // ADR-0047 v2: results reach beyond the tape — the graph listens and
-      // highlights/fits whatever facts the result names.
+      // Results reach beyond the tape — the graph highlights/fits whatever
+      // facts the result names (ADR-0047 v2).
       window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: r.ok, value: r.value } }));
     } catch (e) {
       counter.current += 1;
@@ -359,9 +441,7 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     void invoke(focused, input);
   };
 
-  /** Toggle form ↔ raw-JSON, carrying the same value across (best-effort: a hand
-   *  edited JSON view that doesn't parse just stays in JSON mode rather than
-   *  losing the user's in-progress edit). */
+  /** Toggle form ↔ raw-JSON, carrying the same value across. */
   const toggleRawJson = (): void => {
     if (rawJson) {
       try {
@@ -371,7 +451,7 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
           setRawJson(false);
         }
       } catch {
-        /* invalid JSON — stay in raw mode, the textarea keeps the user's edit */
+        /* invalid JSON — stay in raw mode, keep the user's edit */
       }
     } else {
       setArgs(JSON.stringify(formValue, null, 2));
@@ -379,200 +459,152 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
     }
   };
 
-  const inputColor = machine.text;
-  const screen: React.CSSProperties = { background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, color: machine.text, fontFamily: theme.mono };
-
-  // ── focused: one command's arg entry ──
-  if (focused) {
-    return (
-      <div style={{ display: 'grid', gap: '0.8rem' }}>
-        <div style={{ display: 'grid', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setFocused(null)}
-              style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}
-            >
-              ‹ back
-            </button>
-            <code style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.9rem' }}>{focused.label}</code>
-            <MonoPill color={kindColor(focused.kind)}>{focused.kind}</MonoPill>
-            {focused.scope ? <MonoPill>{focused.scope}</MonoPill> : null}
-          </div>
-          {focused.description ? <span style={{ color: machine.dim, fontSize: '0.8rem' }}>{focused.description}</span> : null}
-          <div
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                runFocused();
-              }
-            }}
-            style={{ display: 'grid', gap: '0.5rem' }}
+  // ── focused: one command's arg entry (renders in the sheet area) ──
+  const focusedSchema = focused ? splitSchema(focused.schema) : null;
+  const advancedCount = Object.keys((focusedSchema?.advanced as { properties?: object } | undefined)?.properties ?? {}).length;
+  const focusedView = focused && focusedSchema ? (
+      <div style={{ display: 'grid', gap: '0.7rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
+          <button
+            onClick={() => setFocused(null)}
+            aria-label="back to search"
+            style={{ background: 'none', border: 'none', color: ink.dim, fontFamily: ink.mono, fontSize: '0.85rem', cursor: 'pointer', padding: '0.3rem 0.4rem 0.3rem 0', flexShrink: 0 }}
           >
-            {!rawJson && focused.ui?.form ? (
-              <FederatedFormFrame
-                uri={focused.ui.form}
-                type={focused.ui.as || focused.id}
-                schema={focused.schema}
-                initialValue={formValue}
-                onChange={setFormValue}
-                placeholder={
-                  <div style={{ ...screen, padding: '0.65rem' }}>
-                    {isFormable(focused.schema) ? (
-                      <SchemaForm schema={focused.schema} value={formValue} onChange={setFormValue} palette={machineFormPalette} />
-                    ) : (
-                      <span style={{ color: machine.dim, fontSize: '0.78rem' }}>loading form…</span>
-                    )}
-                  </div>
-                }
-              />
-            ) : !rawJson && isFormable(focused.schema) ? (
-              <div style={{ ...screen, padding: '0.65rem' }}>
-                <SchemaForm schema={focused.schema} value={formValue} onChange={setFormValue} palette={machineFormPalette} />
-              </div>
-            ) : (
-              <textarea
-                value={args}
-                onChange={(e) => setArgs(e.target.value)}
-                rows={Math.min(12, Math.max(2, args.split('\n').length))}
-                spellCheck={false}
-                autoFocus
-                style={{ ...screen, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem' }}
-              />
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-              <button
-                onClick={runFocused}
-                disabled={busy}
-                style={{ padding: '0.45rem 0.9rem', borderRadius: 6, border: `1px solid ${machine.green}`, background: 'transparent', color: machine.green, fontFamily: theme.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
-              >
-                {busy ? 'Running…' : `run · ${focused.kind}("${focused.label}")  ⌘↵`}
-              </button>
-              {focused.ui?.form || isFormable(focused.schema) ? (
-                <button
-                  onClick={toggleRawJson}
-                  style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.74rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
-                >
-                  {rawJson ? 'form' : 'raw json'}
-                </button>
-              ) : null}
-            </div>
-          </div>
+            ‹
+          </button>
+          <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{focused.label}</code>
+          <Pill tone={focused.kind === 'act' ? 'act' : 'dim'}>{focused.kind}</Pill>
         </div>
-        <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
-      </div>
-    );
-  }
-
-  // ── browse: search + (recents-less) namespace overview or filtered list ──
-  return (
-    <div style={{ display: 'grid', gap: '0.8rem' }}>
-      <div style={{ ...screen, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem' }}>
-        <span style={{ color: machine.green, fontFamily: theme.mono }}>›</span>
-        <input
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSel(0);
-          }}
+        {focused.description ? (
+          <span style={{ color: ink.dim, fontSize: '0.78rem', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as React.CSSProperties}>
+            {focused.description}
+          </span>
+        ) : null}
+        <div
           onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              setSel((s) => (filtered.length ? (s + 1) % filtered.length : 0));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setSel((s) => (filtered.length ? (s - 1 + filtered.length) % filtered.length : 0));
-            } else if (e.key === 'Enter' && filtered[sel]) {
-              e.preventDefault();
-              select(filtered[sel]);
-            } else if (e.key === 'Escape') {
-              setQuery('');
+              runFocused();
             }
           }}
-          placeholder="Search your workspace, or run a capability…"
-          spellCheck={false}
-          autoComplete="off"
-          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: inputColor, fontFamily: theme.mono, fontSize: '0.85rem' }}
-        />
-        {query ? (
-          <button onClick={() => setQuery('')} style={{ background: 'none', border: 'none', color: machine.dim, cursor: 'pointer', fontSize: '1rem' }}>
-            ×
-          </button>
-        ) : null}
+          style={{ display: 'grid', gap: '0.55rem' }}
+        >
+          {!rawJson && focused.ui?.form ? (
+            <FederatedFormFrame
+              uri={focused.ui.form}
+              type={focused.ui.as || focused.id}
+              schema={focused.schema}
+              initialValue={formValue}
+              onChange={setFormValue}
+              placeholder={
+                <div style={{ ...inset, padding: '0.65rem' }}>
+                  {isFormable(focused.schema) ? (
+                    <SchemaForm schema={focused.schema} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
+                  ) : (
+                    <span style={{ color: ink.dim, fontSize: '0.78rem' }}>loading form…</span>
+                  )}
+                </div>
+              }
+            />
+          ) : !rawJson && isFormable(focused.schema) ? (
+            <div style={{ ...inset, padding: '0.65rem', display: 'grid', gap: '0.55rem' }}>
+              <SchemaForm schema={focusedSchema.primary} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
+              {advancedCount ? (
+                <details>
+                  <summary style={{ ...CAPTION, cursor: 'pointer', listStyle: 'none' }}>▸ more options · {advancedCount}</summary>
+                  <div style={{ paddingTop: '0.55rem' }}>
+                    <SchemaForm schema={focusedSchema.advanced} value={formValue} onChange={setFormValue} palette={inkFormPalette} />
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : (
+            <textarea
+              value={args}
+              onChange={(e) => setArgs(e.target.value)}
+              rows={Math.min(12, Math.max(2, args.split('\n').length))}
+              spellCheck={false}
+              autoFocus
+              style={{ ...inset, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem', color: ink.text, fontFamily: ink.mono }}
+            />
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <button
+              onClick={runFocused}
+              disabled={busy}
+              style={{ padding: '0.5rem 1rem', minHeight: 40, borderRadius: 8, border: `1px solid ${ink.accent}`, background: 'rgba(245,196,83,0.08)', color: ink.accent, fontFamily: ink.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
+            >
+              {busy ? 'running…' : 'run ⌘↵'}
+            </button>
+            {focused.ui?.form || isFormable(focused.schema) ? (
+              <button
+                onClick={toggleRawJson}
+                style={{ background: 'none', border: 'none', color: ink.dim, fontFamily: ink.mono, fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline', padding: '0.3rem 0' }}
+              >
+                {rawJson ? 'form' : 'raw json'}
+              </button>
+            ) : null}
+          </div>
+        </div>
       </div>
+  ) : null;
 
-      {err && !cmds?.length ? <span style={{ color: '#e08c7a', fontFamily: theme.mono, fontSize: '0.8rem' }}>{err}</span> : null}
-      {!cmds && !err ? <p style={{ color: machine.dim, margin: 0 }}>Loading capabilities…</p> : null}
+  // ── the browse sheet: one navigable list (matches/commands or recents) ──
+  const browseView = (
+    <>
+      {err && !cmds?.length ? <span style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.78rem' }}>{err}</span> : null}
 
-      {/* Semantic matches lead (search-first) — tap to select + pan the graph.
-          `textSizeAdjust` pins the size so iOS doesn't auto-inflate the rows. */}
-      {results.length ? (
-        <div style={{ display: 'grid', gap: '0.1rem', WebkitTextSizeAdjust: '100%', textSizeAdjust: '100%' } as React.CSSProperties}>
-          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 0.15rem' }}>
-            matches · tap to focus
-          </span>
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 0 }}>
-            {results.map((e) => (
-              <li key={e.key}>
-                <button
-                  onClick={() => onSelectKey?.(e.key)}
-                  title={e.key}
-                  style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.3rem 0.4rem', borderRadius: 6, border: 'none', background: 'transparent', color: machine.text, cursor: 'pointer', fontFamily: theme.mono }}
-                  onMouseEnter={(ev) => (ev.currentTarget.style.background = 'rgba(127,201,127,0.08)')}
-                  onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}
-                >
-                  <span aria-hidden style={{ fontSize: '0.8rem', flexShrink: 0 }}>{typeIcon(e) || '·'}</span>
-                  <span style={{ fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{factTitle(e)}</span>
-                  {e._meta?.type ? <span style={{ color: machine.dim, fontSize: '0.6rem', flexShrink: 0 }}>{e._meta.type}</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
+      {q && items.length === 0 ? (
+        <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>No match for “{query}”.</p>
+      ) : null}
+
+      {items.length ? (
+        <div style={{ display: 'grid', gap: '0.15rem', WebkitTextSizeAdjust: '100%', textSizeAdjust: '100%' } as React.CSSProperties}>
+          {items.map((it, i) => (
+            <React.Fragment key={it.kind === 'fact' ? `f:${it.e.key}` : `c:${it.c.id}`}>
+              {/* Section captions fall where the sources meet — one list, labelled. */}
+              {i === 0 ? <span style={{ ...CAPTION, padding: '0.1rem 0.15rem' }}>{q ? (it.kind === 'fact' ? 'in your workspace' : 'commands') : 'recent'}</span> : null}
+              {q && i === firstCmdIdx && firstCmdIdx > 0 ? <span style={{ ...CAPTION, padding: '0.35rem 0.15rem 0.1rem' }}>commands</span> : null}
+              {it.kind === 'fact' ? (
+                <Row active={i === sel} onClick={() => activate(it)} onHover={() => setSel(i)}>
+                  <span aria-hidden style={{ fontSize: '0.85rem', flexShrink: 0 }}>{typeIcon(it.e) || '·'}</span>
+                  <span style={{ fontSize: '0.8rem', color: ink.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{factTitle(it.e)}</span>
+                  {it.e._meta?.type ? <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.66rem', flexShrink: 0 }}>{it.e._meta.type}</span> : null}
+                </Row>
+              ) : (
+                <Row active={i === sel} onClick={() => activate(it)} onHover={() => setSel(i)}>
+                  <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.82rem', flexShrink: 0 }}>{it.c.label}</code>
+                  <Pill tone={it.c.kind === 'act' ? 'act' : 'dim'}>{it.c.kind}</Pill>
+                  <span style={{ color: ink.dim, fontSize: '0.76rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                    {it.c.description}
+                  </span>
+                  {it.c.needsArgs ? (
+                    <span
+                      role="button"
+                      tabIndex={-1}
+                      title="set arguments first"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        openForm(it.c);
+                      }}
+                      style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.66rem', border: `1px solid ${ink.line}`, borderRadius: 999, padding: '0.1rem 0.5rem', flexShrink: 0, cursor: 'pointer' }}
+                    >
+                      args…
+                    </span>
+                  ) : null}
+                </Row>
+              )}
+            </React.Fragment>
+          ))}
         </div>
       ) : null}
 
-      {q ? (
-        filtered.length === 0 ? (
-          results.length ? null : <p style={{ color: machine.dim, margin: 0, fontSize: '0.82rem' }}>No match for “{query}”.</p>
-        ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.15rem' }}>
-            {filtered.map((c, i) => (
-              <li key={c.id}>
-                <button
-                  onClick={() => select(c)}
-                  onMouseEnter={() => setSel(i)}
-                  style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    flexWrap: 'wrap',
-                    padding: '0.4rem 0.55rem',
-                    borderRadius: 6,
-                    border: '1px solid transparent',
-                    background: i === sel ? 'rgba(127,201,127,0.10)' : 'transparent',
-                    borderColor: i === sel ? machine.border : 'transparent',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <code style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.82rem' }}>{c.label}</code>
-                  <MonoPill color={kindColor(c.kind)}>{c.kind}</MonoPill>
-                  {c.needsArgs ? <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem' }}>args</span> : null}
-                  <span style={{ color: machine.dim, fontSize: '0.76rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
-                    {c.description}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )
-      ) : (
-        // idle: the overview — namespaces as chips (progressive disclosure)
-        <div style={{ display: 'grid', gap: '0.5rem' }}>
-          <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            {cmds ? `${cmds.length} commands` : '…'}
-          </span>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+      {!q && cmds ? (
+        // Idle, below recents: the vocabulary waits behind one quiet line —
+        // commands shouldn't dominate the opening view (owner feedback).
+        <details style={{ marginTop: recent.length ? '0.2rem' : 0 }}>
+          <summary style={{ ...CAPTION, cursor: 'pointer', listStyle: 'none', padding: '0.2rem 0.15rem' }}>▸ {cmds.length} commands</summary>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', paddingTop: '0.35rem' }}>
             {namespaces.map(([ns, n]) => (
               <button
                 key={ns}
@@ -580,17 +612,83 @@ export function Console({ authed, seed, onSelectKey }: { authed: boolean; seed?:
                   setQuery(ns + '.');
                   setSel(0);
                 }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.6rem', borderRadius: 999, border: `1px solid ${machine.border}`, background: 'transparent', color: machine.text, fontFamily: theme.mono, fontSize: '0.78rem', cursor: 'pointer' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.28rem 0.65rem', borderRadius: 999, border: `1px solid ${ink.line}`, background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '0.76rem', cursor: 'pointer' }}
               >
                 {ns}
-                <span style={{ color: machine.dim }}>{n}</span>
+                <span style={{ color: ink.dim }}>{n}</span>
               </button>
             ))}
           </div>
-        </div>
-      )}
+        </details>
+      ) : null}
+      {!cmds && !err ? <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>Loading capabilities…</p> : null}
+    </>
+  );
 
-      <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
+  // ── the shell: a collapsible sheet ABOVE a persistent input row. Collapsing
+  // hides the sheet but unmounts NOTHING — query, matches, selection, and the
+  // graph highlights all survive, which is how a phone reviews what a search
+  // lit up behind the palette. ──
+  return (
+    <div style={{ display: 'grid' }}>
+      {!collapsed ? (
+        <div style={{ background: ink.panel, maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem', display: 'grid', gap: '0.6rem', borderBottom: `1px solid ${ink.line}`, alignContent: 'start' }}>
+          {focusedView ?? browseView}
+          <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem', minHeight: 50 }}>
+        <span aria-hidden style={{ color: ink.accent, fontFamily: ink.mono }}>›</span>
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSel(0);
+            setFocused(null);
+            onCollapse?.(false); // typing re-opens the sheet
+          }}
+          onFocus={() => onCollapse?.(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              onCollapse?.(false);
+              setSel((s) => Math.max(0, stepSelection(s, 1, items.length)));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              onCollapse?.(false);
+              setSel((s) => Math.max(0, stepSelection(s, -1, items.length)));
+            } else if (e.key === 'Enter' && items[sel]) {
+              e.preventDefault();
+              if (collapsed) {
+                onCollapse?.(false);
+                return;
+              }
+              activate(items[sel]);
+            } else if (e.key === 'Escape' && query) {
+              // With a query: Esc clears it and STOPS there; the palette's own
+              // Esc (collapse the sheet) takes over only on an empty box.
+              e.stopPropagation();
+              setQuery('');
+            }
+          }}
+          placeholder="Search your workspace, or run a capability…"
+          spellCheck={false}
+          autoComplete="off"
+          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '0.9rem', minWidth: 0, minHeight: 34 }}
+        />
+        {query ? (
+          <button onClick={() => setQuery('')} aria-label="clear search" style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1rem', padding: '0.3rem 0.4rem' }}>
+            ×
+          </button>
+        ) : null}
+        <button
+          onClick={() => onCollapse?.(!collapsed)}
+          aria-label={collapsed ? 'expand the console' : 'collapse the console'}
+          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.85rem', padding: '0.3rem 0.45rem' }}
+        >
+          {collapsed ? '▴' : '▾'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -614,23 +712,22 @@ function entriesOf(v: unknown): ListEntry[] {
 }
 
 /**
- * A tool result rendered by what it IS — a federated `ui://` renderer (a tool's
- * `_render` directive), a single typed fact, or a list of typed facts — instead
- * of always `JSON.stringify` (ADR-0041 Inc 1: the field computer joins the
- * federated render surface the conversation card already uses, ADR-0039).
- * Errors and the two HTTP probes (raw JSON, not substrate facts) keep the JSON
- * view; any shape this doesn't recognise falls back to it too.
+ * A tool result rendered by what it IS — a federated `ui://` renderer, a single
+ * typed fact, or a list of typed facts — instead of always `JSON.stringify`
+ * (ADR-0041 Inc 1). Errors and the HTTP probes keep the JSON view; unknown
+ * shapes fall back to it too. Fact TITLES speak the park's serif — content is
+ * not machinery.
  */
 function ResultBody({ o }: { o: Output }): React.JSX.Element {
   const fallback = (
-    <pre style={{ background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.55rem', margin: 0, overflowX: 'auto', fontFamily: theme.mono, fontSize: '0.76rem', color: o.ok ? machine.text : '#e08c7a', maxHeight: 320 }}>
+    <pre style={{ ...inset, padding: '0.55rem', margin: 0, overflowX: 'auto', fontFamily: ink.mono, fontSize: '0.76rem', color: o.ok ? ink.text : ink.danger, maxHeight: 320 }}>
       <code>{typeof o.value === 'string' ? o.value : JSON.stringify(o.value, null, 2)}</code>
     </pre>
   );
   if (!o.ok || o.kind === 'probe') return fallback;
   const rd = renderDirective(o.value);
   if (rd) return <FederatedRendererFrame uri={rd.renderer} type={rd.as} value={o.value} factKey={o.argsKey} placeholder={fallback} />;
-  const screen = { background: machine.screen, border: `1px solid ${machine.border}`, borderRadius: 6, padding: '0.55rem', color: machine.text } as const;
+  const screen = { ...inset, padding: '0.55rem', color: ink.text } as const;
   if (isFactShaped(o.value)) {
     const e: ListEntry = { key: (o.value as { key?: string }).key || o.argsKey || '', value: (o.value as { value: unknown }).value, _meta: (o.value as { _meta?: ListEntry['_meta'] })._meta };
     const to = factHref(e);
@@ -638,8 +735,8 @@ function ResultBody({ o }: { o: Output }): React.JSX.Element {
     return (
       <div style={{ ...screen, display: 'grid', gap: '0.3rem' }}>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
-          {to ? <a href={to} style={{ color: machine.green, fontFamily: theme.serif, fontWeight: 600, textDecoration: 'none' }}>{title}</a> : <strong style={{ fontFamily: theme.serif }}>{title}</strong>}
-          {e.key ? <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem' }}>{e.key}</span> : null}
+          {to ? <a href={to} style={{ color: ink.accent, fontFamily: theme.serif, fontWeight: 600, textDecoration: 'none' }}>{title}</a> : <strong style={{ fontFamily: theme.serif }}>{title}</strong>}
+          {e.key ? <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.68rem' }}>{e.key}</span> : null}
         </div>
         <FactBody e={e} full />
       </div>
@@ -648,106 +745,67 @@ function ResultBody({ o }: { o: Output }): React.JSX.Element {
   const list = entriesOf(o.value);
   if (list.length) {
     return (
-      <div style={{ ...screen, display: 'grid', gap: '0.4rem', maxHeight: 420, overflowY: 'auto' }}>
+      <div style={{ ...screen, display: 'grid', gap: '0.4rem', maxHeight: 420, overflowY: 'auto', overscrollBehavior: 'contain' }}>
         {list.slice(0, 12).map((e) => {
           const to = factHref(e);
           const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
           return (
-            <div key={e.key} style={{ display: 'grid', gap: '0.15rem', paddingBottom: '0.4rem', borderBottom: `1px solid ${machine.border}` }}>
+            <div key={e.key} style={{ display: 'grid', gap: '0.15rem', paddingBottom: '0.4rem', borderBottom: `1px solid ${ink.line}` }}>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                {to ? <a href={to} style={{ color: machine.green, textDecoration: 'none', fontWeight: 600, fontSize: '0.82rem' }}>{title}</a> : <span style={{ fontSize: '0.82rem' }}>{title}</span>}
-                <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.65rem' }}>{e.key}</span>
+                {to ? <a href={to} style={{ color: ink.accent, textDecoration: 'none', fontWeight: 600, fontSize: '0.82rem', fontFamily: theme.serif }}>{title}</a> : <span style={{ fontSize: '0.82rem', fontFamily: theme.serif }}>{title}</span>}
+                <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.65rem' }}>{e.key}</span>
               </div>
               <FactBody e={e} />
             </div>
           );
         })}
-        {list.length > 12 ? <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.7rem' }}>+{list.length - 12} more</span> : null}
+        {list.length > 12 ? <span style={{ ...CAPTION }}>+{list.length - 12} more</span> : null}
       </div>
     );
   }
   return fallback;
 }
 
-/** Results stack, newest first — the machine's running tape. */
-function OutputStack({ outputs, onClear }: { outputs: Output[]; onClear: () => void }): React.JSX.Element | null {
-  if (outputs.length === 0) return null;
+/** One run on the tape: ✓/✕, target, time — then its rendered result. */
+function OutputRun({ o }: { o: Output }): React.JSX.Element {
   return (
-    <div style={{ display: 'grid', gap: '0.5rem', borderTop: `1px solid ${machine.border}`, paddingTop: '0.8rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          output · newest first
+    <div style={{ display: 'grid', gap: '0.25rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+        <span style={{ color: o.ok ? okGreen : ink.danger, fontFamily: ink.mono, fontSize: '0.75rem', flexShrink: 0 }}>{o.ok ? '✓' : '✕'}</span>
+        <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.label}</code>
+        <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.66rem', flexShrink: 0, marginLeft: 'auto' }}>
+          {new Date(o.at).toLocaleTimeString()}
         </span>
-        <button onClick={onClear} style={{ background: 'none', border: 'none', color: machine.dim, fontFamily: theme.mono, fontSize: '0.72rem', cursor: 'pointer' }}>
-          clear
-        </button>
       </div>
-      {outputs.map((o) => (
-        <div key={o.n} style={{ display: 'grid', gap: '0.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ color: o.ok ? machine.green : '#e08c7a', fontFamily: theme.mono, fontSize: '0.72rem' }}>{o.ok ? '✓' : '✕'}</span>
-            <code style={{ color: machine.text, fontFamily: theme.mono, fontSize: '0.78rem' }}>{o.label}</code>
-            <span style={{ color: machine.dim, fontFamily: theme.mono, fontSize: '0.68rem' }}>
-              {new Date(o.at).toLocaleTimeString()}
-            </span>
-          </div>
-          <ResultBody o={o} />
-        </div>
-      ))}
+      <ResultBody o={o} />
     </div>
   );
 }
 
-/** The housing: a collapsed machine that opens into the command palette. */
-export function FieldComputer({ authed }: { authed: boolean }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+/** The tape: the LATEST result in full; earlier runs wait under "history" —
+ *  the common case is "what did that just return", not an archaeology dig. */
+function OutputStack({ outputs, onClear }: { outputs: Output[]; onClear: () => void }): React.JSX.Element | null {
+  if (outputs.length === 0) return null;
+  const [latest, ...rest] = outputs;
   return (
-    <section
-      style={{
-        background: machine.housing,
-        border: `1px solid ${machine.border}`,
-        borderRadius: theme.radius,
-        boxShadow: theme.shadow,
-        overflow: 'hidden',
-      }}
-    >
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '0.6rem',
-          padding: '0.9rem 1.1rem',
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <span style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
-          <img src={computerUrl} alt="" aria-hidden style={{ width: 54, height: 'auto', flexShrink: 0 }} />
-          <span style={{ display: 'grid', gap: '0.1rem' }}>
-            <span style={{ color: machine.green, fontFamily: theme.mono, fontSize: '0.9rem', letterSpacing: '0.08em' }}>
-              ▮ FIELD COMPUTER
-            </span>
-            <span style={{ color: machine.dim, fontSize: '0.78rem' }}>
-              The raw read/act console — every capability, the same wire an agent uses.
-            </span>
-          </span>
-        </span>
-        <span style={{ color: machine.dim, fontFamily: theme.mono }}>{open ? '–' : '+'}</span>
-      </button>
-      {open ? (
-        <div style={{ padding: '0 1.1rem 1.1rem', display: 'grid', gap: '1rem', borderTop: `1px solid ${machine.border}`, paddingTop: '1rem' }}>
-          <Console authed={authed} />
-          <p style={{ color: machine.dim, fontSize: '0.75rem', margin: 0 }}>
-            Tokens come from OAuth: clients register (DCR), redirect to /oauth/authorize, you approve
-            with a passkey. Agents connect at parc.land/mcp — whoami · read · act.
-          </p>
-        </div>
+    <div style={{ display: 'grid', gap: '0.4rem', borderTop: `1px solid ${ink.line}`, paddingTop: '0.6rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={CAPTION}>output</span>
+        <button onClick={onClear} style={{ background: 'none', border: 'none', color: ink.dim, fontFamily: ink.mono, fontSize: '0.7rem', cursor: 'pointer', padding: '0.2rem 0' }}>
+          clear
+        </button>
+      </div>
+      <OutputRun o={latest} />
+      {rest.length ? (
+        <details>
+          <summary style={{ ...CAPTION, cursor: 'pointer', listStyle: 'none' }}>▸ history · {rest.length}</summary>
+          <div style={{ display: 'grid', gap: '0.5rem', paddingTop: '0.5rem' }}>
+            {rest.map((o) => (
+              <OutputRun key={o.n} o={o} />
+            ))}
+          </div>
+        </details>
       ) : null}
-    </section>
+    </div>
   );
 }

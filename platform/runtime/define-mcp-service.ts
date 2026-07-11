@@ -353,6 +353,17 @@ export function defineMcpService(def: McpServiceDefinition) {
     const cors = corsHeaders(req);
     const withCors = (r: ServiceHttpResponse): ServiceHttpResponse => ({ ...r, headers: { ...(r.headers ?? {}), ...cors } });
     if (requireAuth && !ctx.identity.user) {
+      // Anonymous because auth ERRORED ≠ anonymous because the token is bad.
+      // A 401 invalid_token makes clients discard a credential that was never
+      // checked; answer retryable 503 auth_unavailable instead.
+      if (ctx.identity.degraded) {
+        console.warn('[mcp] 503 auth_unavailable (identity resolution errored)', { path: req.path });
+        return withCors({
+          statusCode: 503,
+          headers: { ...NO_STORE, 'retry-after': '2' },
+          body: { error: 'auth_unavailable', error_description: 'Identity could not be verified (auth service unavailable) — retry.' },
+        });
+      }
       const authz = req.headers['authorization'] ?? req.headers['Authorization'] ?? '';
       const fwd = req.headers['x-forwarded-authorization'] ?? '';
       console.warn('[mcp] 401 unauthorized', {

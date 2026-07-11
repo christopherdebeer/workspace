@@ -48,8 +48,10 @@ import {
   type ChangesInput,
   type ChangesWithEntries,
   type AttentionInput,
+  type ComposedReadInput,
+  type ComposedReadResult,
 } from './commands-read';
-import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput } from './commands-graph';
+import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput, type EdgesInput, type WalkResult } from './commands-graph';
 import { type EdgeScopeInput } from './shape';
 import {
   createSearchCommands,
@@ -61,6 +63,8 @@ import {
   type SuggestionsResult,
   type RatifyInput,
   type RatifyResult,
+  type ContestedInput,
+  type ContestedResult,
 } from './commands-search';
 import {
   createDeclaredCommands,
@@ -72,6 +76,10 @@ import {
   type DeleteViewInput,
   type RegisterSubscriptionInput,
   type DeleteSubscriptionInput,
+  type DeclareInput,
+  type DeclarationsInput,
+  type UndeclareInput,
+  type EvaluateInput,
 } from './commands-declared';
 import {
   createSharingCommands,
@@ -111,18 +119,26 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   recall: CommandHandler<RecallInput | undefined, ReadResult | RecallOverview>;
   peek: CommandHandler<PeekInput, Entry | null>;
   query: CommandHandler<QueryInput | undefined, QueryResult>;
+  // ADR-0071 (C2): the one read by candidate source (recall/query/peek/changes
+  // remain as ergonomic presets; `search` retires into read({source:'vector'})).
+  read: CommandHandler<ComposedReadInput | undefined, ComposedReadResult>;
   search: CommandHandler<SearchInput, SearchResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
   project: CommandHandler<undefined, { status: string; count?: number; method?: string; key?: string; hint?: string }>;
   pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
   suggestions: CommandHandler<SuggestionsInput | undefined, SuggestionsResult>;
   ratify: CommandHandler<RatifyInput, RatifyResult>;
+  // ADR-0072 (C7): the contradiction-candidate read (Stage A of the contested view).
+  contested: CommandHandler<ContestedInput | undefined, ContestedResult>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
   links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[]; total: number }>;
   graph: CommandHandler<EdgeScopeInput | undefined, { edges: EdgeRecord[]; total: number }>;
   members: CommandHandler<MembersInput, MembersResult>;
+  // ADR-0069 (C3): the one edge query (neighbors/links/graph/members are aliases).
+  // ADR-0075 (C4): `{around, depth ≥ 2, direction}` adds the directional walk.
+  edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: EdgeRecord[]; total: number } | WalkResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesWithEntries>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
@@ -137,6 +153,11 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   registerSubscription: CommandHandler<RegisterSubscriptionInput, SubscriptionDefinition>;
   subscriptions: CommandHandler<undefined, { subscriptions: SubscriptionDefinition[] }>;
   deleteSubscription: CommandHandler<DeleteSubscriptionInput, { ok: true }>;
+  // ADR-0068 (C1): the one declaration surface (legacy verbs above are aliases).
+  declare: CommandHandler<DeclareInput, RegisterResult | ViewDefinition | SubscriptionDefinition>;
+  declarations: CommandHandler<DeclarationsInput | undefined, { declarations: unknown[] }>;
+  undeclare: CommandHandler<UndeclareInput, { ok: true }>;
+  evaluate: CommandHandler<EvaluateInput, InvokeResult | ViewResult>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
