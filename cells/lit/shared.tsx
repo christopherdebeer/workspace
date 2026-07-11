@@ -152,30 +152,12 @@ export function renderMarkdown(md: string): string {
  * cell that accretes following prose; a fenced code block is its own cell.
  * Each cell keeps its own source (incl. the fence info-string), so a cell is
  * the unit of authoring, execution, linking, and reuse — and the SAME cell-fact
- * can appear in many documents/boards via per-surface ordering decorations. */
-export function splitCells(md: string): string[] {
-  const toks = (marked.lexer(md || '') as Array<{ type: string; raw: string }>);
-  const cells: string[] = [];
-  let cur = '';
-  const flush = (): void => { const s = cur.replace(/\s+$/, ''); if (s.trim()) cells.push(s); cur = ''; };
-  for (const t of toks) {
-    if (t.type === 'heading') { flush(); cur = t.raw; }
-    else if (t.type === 'code') { flush(); const s = t.raw.replace(/\s+$/, ''); if (s.trim()) cells.push(s); }
-    else cur += t.raw;
-  }
-  flush();
-  return cells;
-}
-
-/** Fractional ordering — placing a split-off fragment or moving a cell is a
- *  single decoration write (no renumbering). Identity is inherent: you edit a
- *  known cell-fact; only `splitCells` on its own new source can mint new cells. */
-export function seqBetween(a: number | null, b: number | null): number {
-  if (a == null && b == null) return 1;
-  if (a == null) return (b as number) - 1;
-  if (b == null) return (a as number) + 1;
-  return (a + b) / 2;
-}
+ * can appear in many documents/boards via per-surface ordering decorations.
+ * The functions themselves live in `./blocks` (no DOM/JSX) so server-side
+ * code (decompose.ts) and jest can import them without a JSX bundler;
+ * re-exported here so existing `from '../shared'` imports (main.tsx) don't
+ * need to change. */
+export { splitCells, seqBetween } from './blocks';
 
 /* ── presentational components (read-only first paint) ─────────────────── */
 

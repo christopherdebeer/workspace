@@ -427,10 +427,13 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // the rail's key-patterns cell-side.
         let deliverParams = params;
         const grants = (params as Record<string, unknown>).grants as { read?: unknown; write?: unknown } | undefined;
-        // Mint a per-run token for a models AGENT (work/decide) or a run CODE step
-        // (ADR-0026 work-code rail) — both call REAL tools as the owner, scoped to
-        // the rail's grants. The token rides in as `token` (models.agent / run.exec).
-        if (grants && (target.name === 'models' || target.name === 'run')) {
+        // Mint a per-run token for a models AGENT (work/decide), a run CODE step
+        // (ADR-0026 work-code rail), or a type-manager REACTION (ADR-0081 —
+        // e.g. @c15r/lit's decomposeMarkdown, delivered a scoped principal so
+        // it can write doc/doc-block facts + edges back through the gateway
+        // instead of needing direct substrate write IAM). The token rides in
+        // as `token`.
+        if (grants && (target.name === 'models' || target.name === 'run' || target.name === 'lit')) {
           const scopes: string[] = [];
           if (grants.read) scopes.push('workspace:read');
           if (grants.write) scopes.push('workspace:write');
