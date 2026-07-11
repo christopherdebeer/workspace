@@ -84,11 +84,14 @@ for (const name of names) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
   page.on('pageerror', (e) => errors.push('pageerror: ' + String(e).slice(0, 200)));
   try {
-    await page.goto(URL_ARG, { waitUntil: 'networkidle', timeout: 60000 });
+    // 'load', not 'networkidle': the home scene keeps trickling requests by
+    // design (parallel view evaluations, troika's lazy emoji/greek fallback
+    // glyph fetches as labels appear) — network silence never comes.
+    await page.goto(URL_ARG, { waitUntil: 'load', timeout: 60000 });
   } catch (e) {
     errors.push('goto: ' + e.message.split('\n')[0]);
   }
-  await page.waitForTimeout(6000); // live data fetch + scene settle
+  await page.waitForTimeout(9000); // live data fetch + scene settle
   const file = `${OUT}/${host.replace(/[^\w.-]/g, '_')}-${name}.png`;
   await page.screenshot({ path: file });
   if (errors.length) failures++;
