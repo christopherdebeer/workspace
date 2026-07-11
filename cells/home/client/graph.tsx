@@ -112,6 +112,12 @@ const TUNE_DEFAULTS = {
   // in-scene label furniture: the black pill behind SDF text (owner: always
   // on, opacity is the dial) and the outline halo width (em fraction).
   pillAlpha: 1, labelOutline: 0.2,
+  // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
+  // label that flies close now carries an OPAQUE pill, and unbounded it
+  // becomes a viewport-eating billboard (the mis-step). Far labels still
+  // shrink honestly; only the near extreme compresses toward this cap.
+  // 0 = uncapped (the old behaviour).
+  labelMaxPx: 24,
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -713,6 +719,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
          *  only starts dying past a grace threshold, so admission churn at
          *  the beam edge / collision boundaries stops popping labels. */
         miss: number;
+        /** Smoothed near-field compression (1 = depth-true). */
+        scl: number;
         ox: number; oy: number; cox: number; coy: number; mult: number;
         fit: () => void;
       }
@@ -785,7 +793,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         grp.add(leader);
         const st: LabelState = {
           grp, inner, text, pill, leader,
-          cur: 0, role, dying: false, miss: 0, ox: 0, oy: 0, cox: 0, coy: 0, mult: roleMult(role),
+          cur: 0, role, dying: false, miss: 0, scl: 1, ox: 0, oy: 0, cox: 0, coy: 0, mult: roleMult(role),
           fit: () => {
             const b = text.textRenderInfo?.blockBounds;
             if (!b) return;
@@ -953,7 +961,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const n = nodeById.get(id);
           if (!n) continue;
           const camD = camPos.distanceTo(st.grp.position) || 1;
-          const pxPer = (H / 2) / camD; // screen px per world unit at this depth
+          // Screen px per world unit at this depth × the near-field compression.
+          const pxPer = ((H / 2) / camD) * (st.scl || 1);
           const b = st.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const fs = st.text.fontSize * pxPer;
           const [sx, sy] = screenXY(n);
@@ -1321,7 +1330,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           constV.set(c.x, c.y, c.z).project(camera);
           if (constV.z > 1) continue;
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
-          const pxPer = (H / 2) / camD;
+          const pxPer = ((H / 2) / camD) * (c.grp.scale?.x || 1);
           const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const w = Math.max(44, (b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer) + 10);
           const h = Math.max(28, (b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer) + 10);
@@ -1371,6 +1380,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           }
           c.cur += (target - c.cur) * k;
           c.grp.quaternion.copy(camera.quaternion); // billboard
+          // Captions take the same near-field ceiling (a bit more headroom).
+          if (TUNE.labelMaxPx > 0) {
+            const camD2 = camPos.distanceTo(constV.set(c.x, c.y, c.z)) || 1;
+            const px = c.fs * (H / 2) / camD2;
+            const capPx = TUNE.labelMaxPx * 1.2;
+            c.grp.scale.setScalar(px > capPx ? capPx / px : 1);
+          } else c.grp.scale.setScalar(1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
           c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
@@ -1614,6 +1630,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           // The pill rides the label's own opacity — visible whenever the
           // text is (owner direction; pillAlpha is the one dial).
           st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * st.cur;
+          // Near-field ceiling: compress (smoothly) once the projected size
+          // exceeds the cap — sel/hit earn a third more headroom. Far labels
+          // are untouched; depth-truth is only bounded at the near extreme.
+          const fsPx = st.text.fontSize * (H / 2) / camD;
+          const capPx = TUNE.labelMaxPx * (st.role === 'sel' || st.role === 'hit' ? 1.35 : 1);
+          const sTarget = TUNE.labelMaxPx > 0 && fsPx > capPx ? capPx / fsPx : 1;
+          st.scl += (sTarget - st.scl) * k;
+          st.inner.scale.setScalar(st.scl);
         }
       };
 
@@ -1726,6 +1750,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(labelsF, 'labelFade', 1, 20, 0.5);
           add(labelsF, 'pillAlpha', 0, 1, 0.01);
           add(labelsF, 'labelOutline', 0, 0.35, 0.005);
+          add(labelsF, 'labelMaxPx', 0, 80, 1); // 0 = uncapped (depth-true everywhere)
           const nodesF = gui.addFolder('nodes');
           add(nodesF, 'nodeDim', 0.2, 1.5);
           add(nodesF, 'nbrBoost', 0, 1);
