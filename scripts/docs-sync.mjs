@@ -12,6 +12,10 @@
  *   node scripts/docs-sync.mjs                 dry run — print the plan, write nothing
  *   node scripts/docs-sync.mjs --commit        ingest the facts + share public
  *   node scripts/docs-sync.mjs --commit --no-share   ingest only (skip the public share)
+ *   node scripts/docs-sync.mjs --commit --force      ingest every doc regardless of sha
+ *                                                     (re-fires the type:'markdown' reaction —
+ *                                                     e.g. after re-registering a dropped
+ *                                                     subscription, ADR-0081)
  *
  * Auth (only needed with --commit): PARC_TOKEN env, or a device-flow token JSON
  * at /tmp/parc-token.json (same convention as cell-sync.mjs). Re-runnable: keys
@@ -31,6 +35,7 @@ const BATCH_BYTES = 80 * 1024; // …or until this much inline content, whicheve
 const flags = process.argv.slice(2);
 const COMMIT = flags.includes('--commit');
 const SHARE = !flags.includes('--no-share');
+const FORCE = flags.includes('--force');
 
 function tokenFile() {
   try {
@@ -145,7 +150,7 @@ async function liveShas() {
 }
 
 let facts = allFacts;
-if (COMMIT) {
+if (COMMIT && !FORCE) {
   const live = await liveShas();
   if (live) facts = allFacts.filter((f) => live.get(f.key) !== f.value.sha);
 }
