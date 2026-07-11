@@ -211,3 +211,47 @@ if (SHARE) {
   console.log(`✓ shared ${KEY_PREFIX}* → public (read-only)`);
 }
 console.log(`✓ docs corpus: ${ingested}/${facts.length} file facts upserted${failedKeys.length ? ` (${failedKeys.length} to retry)` : ''}`);
+
+// ADR-0081: `workspace.ingest` deliberately does NOT emit a per-fact
+// `workspace.fact.written` event (just one aggregate `workspace.ingested`,
+// "intake should not storm the bus") — so the `type:'markdown'` reaction
+// subscription never fires for a bulk sync. docs-sync triggers
+// @c15r/lit.decomposeMarkdown directly for what it just ingested instead;
+// the subscription still covers single-fact writes elsewhere (workspace.
+// remember, a future workspace.putFile). Bounded concurrency — each call can
+// take tens of seconds for a large doc (lit's own sequential
+// workspace.ingest writes dominate its latency), so unbounded parallelism
+// would just queue against the same gateway.
+const DECOMPOSE_CONCURRENCY = 4;
+async function decomposeAll(list) {
+  let i = 0;
+  let done = 0;
+  const errors = [];
+  async function worker() {
+    for (;;) {
+      const idx = i++;
+      if (idx >= list.length) return;
+      const f = list[idx];
+      try {
+        await call('act', '@c15r/lit.decomposeMarkdown', { path: f.value.path, content: f.value.content, token: token() });
+      } catch (err) {
+        errors.push({ key: f.key, error: (err && err.message) || String(err) });
+      }
+      done++;
+      process.stdout.write(`\rdecomposed ${done}/${list.length}`);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(DECOMPOSE_CONCURRENCY, list.length) }, worker));
+  return errors;
+}
+if (facts.length) {
+  console.log(`\ndecomposing ${facts.length} doc(s) into doc/doc-block structure…`);
+  const decomposeErrors = await decomposeAll(facts);
+  console.log();
+  if (decomposeErrors.length) {
+    console.error(`${decomposeErrors.length} doc(s) failed to decompose — re-run with --force to retry:`);
+    for (const e of decomposeErrors) console.error(`  ${e.key}: ${e.error}`);
+  } else {
+    console.log(`✓ ${facts.length}/${facts.length} doc(s) decomposed`);
+  }
+}
