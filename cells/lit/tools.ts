@@ -136,25 +136,34 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   ];
   await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts, edges: plan.edges });
 
-  // Retire blocks/order-decorations this version no longer produces.
-  for (const key of retiredKeys) {
-    await gw(token, 'workspace.supersede', { key }).catch(() => undefined);
-    await gw(token, 'workspace.supersede', { key: `${orderPrefix}${key}` }).catch(() => undefined);
-  }
+  // Retire blocks/order-decorations this version no longer produces, in
+  // parallel — a live run hit the cell's 10s Lambda timeout doing this (and
+  // the edge reconciliation below) sequentially even for a 2-block doc, since
+  // `workspace.ingest`'s own per-fact writes already spend most of that
+  // budget. Both loops below are independent per-key, so Promise.all is safe.
+  await Promise.all(retiredKeys.flatMap((key) => [
+    gw(token, 'workspace.supersede', { key }).catch(() => undefined),
+    gw(token, 'workspace.supersede', { key: `${orderPrefix}${key}` }).catch(() => undefined),
+  ]));
 
   // Reconcile edges per block (mirrors syncCellLinks, client/main.tsx): unlink
-  // whatever a prior decomposition authored that this version no longer wants.
+  // whatever a prior decomposition authored that this version no longer
+  // wants. Skipped entirely on a FRESH decompose (no pre-existing order
+  // decorations) — there is nothing to reconcile against, so the read+diff
+  // round trips would be pure overhead (and budget the ingest step already
+  // spent most of the timeout on).
   let edgesAdded = 0, edgesRemoved = 0;
-  for (const b of plan.blocks) {
-    const wanted: EdgeRef[] = plan.edges.filter((e) => e.from === b.key).map((e) => ({ to: e.to, rel: e.rel }));
-    const nb = (await gw(token, 'workspace.neighbors', { key: b.key }).catch(() => null)) as NeighborsResult | null;
-    const existing = (nb?.outbound ?? []).filter((e) => e.rel === 'related' || e.rel === 'references');
-    const { toAdd, toRemove } = diffEdges(existing, wanted);
-    edgesAdded += toAdd.length;
-    for (const e of toRemove) {
-      await gw(token, 'workspace.unlink', { from: b.key, to: e.to, rel: e.rel }).catch(() => undefined);
-      edgesRemoved++;
-    }
+  if (existingOrder.length > 0) {
+    const results = await Promise.all(plan.blocks.map(async (b) => {
+      const wanted: EdgeRef[] = plan.edges.filter((e) => e.from === b.key).map((e) => ({ to: e.to, rel: e.rel }));
+      const nb = (await gw(token, 'workspace.neighbors', { key: b.key }).catch(() => null)) as NeighborsResult | null;
+      const existing = (nb?.outbound ?? []).filter((e) => e.rel === 'related' || e.rel === 'references');
+      const { toAdd, toRemove } = diffEdges(existing, wanted);
+      await Promise.all(toRemove.map((e) => gw(token, 'workspace.unlink', { from: b.key, to: e.to, rel: e.rel }).catch(() => undefined)));
+      return { added: toAdd.length, removed: toRemove.length };
+    }));
+    edgesAdded = results.reduce((n, r) => n + r.added, 0);
+    edgesRemoved = results.reduce((n, r) => n + r.removed, 0);
   }
 
   return { docKey: plan.docKey, blocks: plan.blocks.length, edgesAdded, edgesRemoved, blocksRetired: retiredKeys.length };
