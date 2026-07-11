@@ -111,7 +111,11 @@ const TUNE_DEFAULTS = {
   anchorCap: 16, anchorOpacity: 1, anchorSizeMult: 0.3,
   // in-scene label furniture: the black pill behind SDF text (owner: always
   // on, opacity is the dial) and the outline halo width (em fraction).
-  pillAlpha: 1, labelOutline: 0.2,
+  // pillFeather: 0 = hard rounded CHIP (reads as UI sitting on the map);
+  // toward 1 the pill becomes a wide soft-edged KNOCKOUT — the field quiets
+  // under the text with no visible container (print cartography's halo,
+  // scaled up). The hard edge, not the darkening, was what felt wrong.
+  pillAlpha: 1, pillFeather: 0.65, labelOutline: 0.2,
   // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
   // label that flies close now carries an OPAQUE pill, and unbounded it
   // becomes a viewport-eating billboard (the mis-step). Far labels still
@@ -744,18 +748,47 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // corners, faded-out labels) discard, so an invisible pill never blocks.
       const mkPillMat = (): any =>
         new THREE.ShaderMaterial({
-          uniforms: { uAlpha: { value: 0 }, uSize: { value: new THREE.Vector2(1, 1) } },
+          uniforms: {
+            uAlpha: { value: 0 },
+            uSize: { value: new THREE.Vector2(1, 1) },
+            // The TEXT box as a fraction of the (feather-padded) quad.
+            uInner: { value: new THREE.Vector2(1, 1) },
+            uFeather: { value: 0 },
+          },
           vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
           fragmentShader:
-            'uniform float uAlpha; uniform vec2 uSize; varying vec2 vUv;' +
-            'void main(){ vec2 p = (vUv - 0.5) * uSize; float r = uSize.y * 0.32;' +
-            ' vec2 b = uSize * 0.5 - vec2(r); float d = length(max(abs(p) - b, 0.0)) - r;' +
-            ' float a = uAlpha * (1.0 - smoothstep(-uSize.y * 0.06, 0.0, d));' +
-            ' if (a < 0.04) discard;' +
+            'uniform float uAlpha; uniform vec2 uSize; uniform vec2 uInner; uniform float uFeather; varying vec2 vUv;' +
+            'void main(){ vec2 p = (vUv - 0.5) * uSize;' +
+            ' vec2 ib = uSize * 0.5 * uInner; float r = ib.y * 0.6;' +
+            ' vec2 b = max(ib - vec2(r), vec2(0.0));' +
+            ' float d = length(max(abs(p) - b, 0.0)) - r;' +
+            // feather 0: crisp chip edge; feather 1: the darkening exhales
+            // ~1.6 text-heights past the glyphs with no perceptible boundary.
+            ' float soft = ib.y * (0.12 + 3.2 * uFeather);' +
+            ' float a = uAlpha * (1.0 - smoothstep(-ib.y * 0.1, soft, d));' +
+            ' if (a < 0.03) discard;' +
             ' gl_FragColor = vec4(0.0, 0.0, 0.0, a); }',
           transparent: true,
           depthWrite: true,
         });
+      /** Size a pill quad around its text's layout bounds, leaving room for
+       *  the feather to breathe (shared by labels and captions). */
+      const fitPillTo = (text: any, pill: any, centerY: number): void => {
+        const b = text.textRenderInfo?.blockBounds;
+        if (!b) return;
+        const h = b[3] - b[1];
+        const tw = (b[2] - b[0]) + h;   // ~0.5em side padding
+        const th = h * 1.55;            // vertical padding
+        const grow = 1 + 2.4 * TUNE.pillFeather; // feather headroom
+        const qw = tw * ((tw < th * 2 ? grow : 1 + (grow - 1) * 0.6)); // long strips grow less in x
+        const qh = th * grow;
+        pill.scale.set(qw, qh, 1);
+        pill.material.uniforms.uSize.value.set(qw, qh);
+        pill.material.uniforms.uInner.value.set(tw / qw, th / qh);
+        pill.material.uniforms.uFeather.value = TUNE.pillFeather;
+        pill.position.set((b[0] + b[2]) / 2, centerY + (b[1] + b[3]) / 2, -1.5);
+        pill.visible = true;
+      };
       const makeLabel = (n: any, role: LabelRole): LabelState => {
         const grp = new THREE.Group();
         grp.position.set(n.x, n.y, n.z);
@@ -794,17 +827,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const st: LabelState = {
           grp, inner, text, pill, leader,
           cur: 0, role, dying: false, miss: 0, scl: 1, ox: 0, oy: 0, cox: 0, coy: 0, mult: roleMult(role),
-          fit: () => {
-            const b = text.textRenderInfo?.blockBounds;
-            if (!b) return;
-            const h = b[3] - b[1];
-            const w = (b[2] - b[0]) + h;      // ~0.5em side padding
-            const hh = h * 1.55;              // vertical padding
-            pill.scale.set(w, hh, 1);
-            pill.material.uniforms.uSize.value.set(w, hh);
-            pill.position.set((b[0] + b[2]) / 2, text.position.y + (b[1] + b[3]) / 2, -1.5);
-            pill.visible = true;
-          },
+          fit: () => fitPillTo(text, pill, text.position.y),
         };
         text.sync(st.fit);
         scene.add(grp);
@@ -1194,17 +1217,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         grp.add(pill);
         grp.add(text);
         const st: Constellation = { name, x: cx, y: cy, z: cz, r: cr, authored, grp, text, pill, fs: cr * 0.055, cur: 0 };
-        text.sync(() => {
-          const b = text.textRenderInfo?.blockBounds;
-          if (!b) return;
-          const h = b[3] - b[1];
-          const w = (b[2] - b[0]) + h;
-          const hh = h * 1.6;
-          pill.scale.set(w, hh, 1);
-          pill.material.uniforms.uSize.value.set(w, hh);
-          pill.position.set((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, -1.5);
-          pill.visible = true;
-        });
+        text.sync(() => fitPillTo(text, pill, 0));
         scene.add(grp);
         constellations.push(st);
       };
@@ -1719,6 +1732,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               st.text.outlineWidth = `${Math.round(TUNE.labelOutline * 100)}%`;
               st.text.sync(st.fit);
             }
+            // Captions refit too (pillFeather changes their quad padding).
+            for (const c of constellations) c.text.sync(() => fitPillTo(c.text, c.pill, 0));
             persist();
           };
           const add = (folder: any, key: keyof typeof TUNE, min: number, max: number, step = 0.01): void => {
@@ -1749,6 +1764,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(labelsF, 'nbrOpNear', 0.3, 1);
           add(labelsF, 'labelFade', 1, 20, 0.5);
           add(labelsF, 'pillAlpha', 0, 1, 0.01);
+          add(labelsF, 'pillFeather', 0, 1, 0.01); // 0 = chip, 1 = soft knockout
           add(labelsF, 'labelOutline', 0, 0.35, 0.005);
           add(labelsF, 'labelMaxPx', 0, 80, 1); // 0 = uncapped (depth-true everywhere)
           const nodesF = gui.addFolder('nodes');
