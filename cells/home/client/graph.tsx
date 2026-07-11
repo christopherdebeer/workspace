@@ -78,45 +78,43 @@ const TUNE_DEFAULTS = {
   labelConeIn: 0.14, labelConeOut: 0.42,
   beamOn: 0.85, beamOff: 0.2, beamCapFocus: 5, labelCap: 0, // labelCap 0 = viewport default (12/22)
   beamOpacity: 0.57, beamSizeMult: 0.39,
-  // focus labels — annotation, not headline: the geometry (amber fan, boosted
-  // points, bloom) carries structure; text names things.
-  selSizeMult: 0.8, hitSizeMult: 0.8, nbrSizeMult: 0.74, nbrOpFar: 0.38, nbrOpNear: 1.0,
-  labelFade: 4, // lerp rate: higher = snappier
-  // nodes — hot going in, compressed by tone mapping (film grading).
-  // boostSizeGain > 1: a focused node more than doubles — selection reads as
-  // an OBJECT in the scene, not a brighter dot.
-  nodeDim: 1.5, nbrBoost: 1.0, boostSizeGain: 1.12,
-  // edges — membership-forward at rest: the container lattice (member 0.35)
-  // is the visible structure, similar kinship a quiet field (0.14), authored
-  // statements pulled back to parity (0.17) — they get their moment as the
-  // full-alpha amber fan when a node is selected, not as resting clutter.
-  edgeSimilar: 0.14, edgeMember: 0.35, edgeDerived: 0.135, edgeAuthored: 0.17,
+  // focus labels (owner grade 2026-07-11 #4): hits headline (1.17), the
+  // selection stays measured, neighbours recede — and slow soft fades.
+  selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 0.41, nbrOpNear: 0.81,
+  labelFade: 1, // lerp rate: higher = snappier (owner likes it SLOW)
+  // nodes — neighbours barely lift (0.2): selection lights the ANCHOR, the
+  // neighbourhood whispers; the fan edges carry the structure.
+  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1.0,
+  // edges — the resting lattice all but erased (owner: strip the field).
+  // Structure at rest is carried by placement + captions; lines earn ink
+  // only under focus (the full-alpha fan).
+  edgeSimilar: 0.01, edgeMember: 0.035, edgeDerived: 0.04, edgeAuthored: 0.035,
   focusEdgeAlpha: 1.0, atmosphereDim: 0.45,
-  // bloom / exposure — selective accent, not wash: higher threshold (0.6) so
-  // only genuinely hot pixels bloom (boosted focus, cluster cores), tight
-  // radius, over a brighter ACES base (exposure 0.74). Forced ON everywhere —
-  // mobile is correct since the composer pixel-ratio fix, and the owner graded
-  // with it on.
-  bloomStrength: 0.78, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.74,
+  // bloom — threshold ~0: EVERYTHING blooms. Each point wears a soft halo:
+  // the cloud reads as a star field, not instrument dots (with the edges
+  // stripped, this is what carries the atmosphere now).
+  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.05, exposure: 0.7,
   bloomMode: 'on' as 'auto' | 'on' | 'off',
+  // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
+  starSpike: 0.55,
+  // scene mode: 'dusk' = the luminous dark field; 'paper' = a cartographic
+  // star ATLAS — ink stars and fine linework on warm paper, bloom off.
+  sceneMode: 'dusk' as 'dusk' | 'paper',
   // places (cartography): constellation captions — COMPUTED from salience
   // hubs + dominant types, with registered VIEWS as the authored layer — and
   // resting orientation anchors (top-salience node per screen region).
   // constNear/Far: approach-fade band as multiples of a cluster's radius —
   // captions read from afar and hand off to fact labels as you arrive.
-  // places (owner grade 2026-07-11): captions in a TIGHT approach band
-  // (visible just outside a region, gone inside), anchors as a dense
-  // small-print fact layer (cap 16, tiny, full opacity).
-  constCap: 16, constOpacity: 0.6, constNear: 0.5, constFar: 1.2,
-  anchorCap: 16, anchorOpacity: 1, anchorSizeMult: 0.3,
-  // in-scene label furniture. pillAlpha 0 = OFF (owner preference — text
-  // stands on its outline halo alone). The dial is a real continuum now:
-  // below ~0.95 the pill is a translucent VEIL rendered over the cloud
-  // (genuine alpha gradient — dims what's behind); at ~1 it flips to the
-  // depth-writing OCCLUDER (fully culls what's behind). The old always-
-  // occluder path made the dial binary: its alpha blended against the
-  // near-black background while the depth test removed content outright.
-  pillAlpha: 0, pillFeather: 0.65, labelOutline: 0.2,
+  // places (owner grade #4): captions many and STRONG (a star atlas names
+  // its constellations), tight approach band; anchors as micro-print star
+  // names — many, tiny, full-opacity (celestial-chart typography).
+  constCap: 32, constOpacity: 1, constNear: 0.5, constFar: 1.2,
+  anchorCap: 32, anchorOpacity: 1, anchorSizeMult: 0.1,
+  // in-scene label furniture. The dial is a real continuum: below ~0.95 the
+  // pill is a translucent VEIL rendered over the cloud (genuine gradient —
+  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER.
+  // Owner grade: a gentle veil (0.39) with the soft feather.
+  pillAlpha: 0.39, pillFeather: 0.65, labelOutline: 0.33,
   // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
   // label that flies close now carries an OPAQUE pill, and unbounded it
   // becomes a viewport-eating billboard (the mis-step). Far labels still
@@ -374,18 +372,40 @@ function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
-/** A soft round sprite (radial alpha falloff) for the additive point cloud. */
-function makeDiscTexture(THREE: any): any {
-  const s = 64;
+/** The point sprite: a STAR — tight bright core, steep falloff, and four
+ *  diffraction spikes whose strength rides `spike` (0 = the old soft disc).
+ *  Bloom (threshold ~0 in the owner's grade) supplies the halo. */
+function makeStarTexture(THREE: any, spike: number): any {
+  const s = 96;
   const cv = document.createElement('canvas');
   cv.width = cv.height = s;
   const g = cv.getContext('2d')!;
-  const grad = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  grad.addColorStop(0, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.35, 'rgba(255,255,255,0.82)');
-  grad.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = grad;
+  const c = s / 2;
+  // Core: hotter and tighter than the old disc — a star, not a blob.
+  const core = g.createRadialGradient(c, c, 0, c, c, c);
+  core.addColorStop(0, 'rgba(255,255,255,1)');
+  core.addColorStop(0.18, 'rgba(255,255,255,0.9)');
+  core.addColorStop(0.42, `rgba(255,255,255,${0.35 - 0.15 * spike})`);
+  core.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = core;
   g.fillRect(0, 0, s, s);
+  if (spike > 0.01) {
+    // Four diffraction spikes: thin gradients along the axes.
+    const a = 0.85 * spike;
+    for (const rot of [0, Math.PI / 2]) {
+      g.save();
+      g.translate(c, c);
+      g.rotate(rot);
+      const lg = g.createLinearGradient(-c, 0, c, 0);
+      lg.addColorStop(0, 'rgba(255,255,255,0)');
+      lg.addColorStop(0.5, `rgba(255,255,255,${a})`);
+      lg.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = lg;
+      const th = 1.6 + 1.4 * spike; // spike thickness
+      g.fillRect(-c, -th / 2, s, th);
+      g.restore();
+    }
+  }
   const tex = new THREE.CanvasTexture(cv);
   tex.needsUpdate = true;
   return tex;
@@ -469,16 +489,33 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         return s;
       };
 
+      // ── scene-mode palette (dusk = luminous dark field; paper = ink on a
+      // warm chart). Everything colour-like routes through PAL so the mode
+      // toggle can restyle the live scene without a rebuild. ──
+      const paletteFor = (m: string): Record<string, any> =>
+        m === 'paper'
+          ? { bg: '#ece2cb', text: '#2b2318', accent: '#8a6410', dim: '#6c614e', outline: '#f0e8d4', pill: [0.937, 0.902, 0.812], capAuth: '#7a5c1a', capComp: '#5b5344', rel: '#6c614e' }
+          : { bg: ink.sceneBg, text: ink.text, accent: ink.accent, dim: ink.dim, outline: '#0a0805', pill: [0, 0, 0], capAuth: '#e3c987', capComp: '#b7ad99', rel: '#a89e8a' };
+      let PAL = paletteFor(TUNE.sceneMode);
+      const isPaper = (): boolean => TUNE.sceneMode === 'paper';
+
       // ── node colour / size / alpha buffers ──
       const colBuf = new Float32Array(N * 3);
       const sizeBuf = new Float32Array(N);
       const alphaBuf = new Float32Array(N);
-      for (let i = 0; i < N; i++) {
-        const n = nodes[i];
-        const [r, g, b] = n.type ? hslToRgb(hueOf(n.type), 0.5, 0.62) : [0.62, 0.6, 0.55];
-        colBuf[i * 3] = r; colBuf[i * 3 + 1] = g; colBuf[i * 3 + 2] = b;
-        sizeBuf[i] = rad(n) * 2.4;
-      }
+      const applyNodeColors = (): void => {
+        for (let i = 0; i < N; i++) {
+          const n = nodes[i];
+          // Dusk: luminous pastels (additive). Paper: the same hue coding as
+          // dark chart INK (normal blending over the warm ground).
+          const [r, g, b] = isPaper()
+            ? (n.type ? hslToRgb(hueOf(n.type), 0.55, 0.3) : [0.27, 0.24, 0.19])
+            : (n.type ? hslToRgb(hueOf(n.type), 0.5, 0.62) : [0.62, 0.6, 0.55]);
+          colBuf[i * 3] = r; colBuf[i * 3 + 1] = g; colBuf[i * 3 + 2] = b;
+        }
+      };
+      applyNodeColors();
+      for (let i = 0; i < N; i++) sizeBuf[i] = rad(nodes[i]) * 2.4;
       // Stable DOI (salience + graph-focus) baked into the buffer; the shader
       // multiplies the SPATIAL focal falloff on top each frame.
       const nodeAlphaOf = (i: number): number => {
@@ -492,7 +529,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // ── renderer / scene / camera ──
       let W = el.clientWidth || window.innerWidth, H = el.clientHeight || window.innerHeight;
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(ink.sceneBg);
+      scene.background = new THREE.Color(PAL.bg);
       const camera = new THREE.PerspectiveCamera(55, W / H, 1, 8000);
       camera.position.set(0, 0, SPREAD * 2.15);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -510,7 +547,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       el.appendChild(labelRenderer.domElement);
 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
-      const disc = makeDiscTexture(THREE);
+      let disc = makeStarTexture(THREE, TUNE.starSpike);
       const geo = new THREE.BufferGeometry();
       // `boost` lets a FOCUS point (selection / neighbour / search hit) bypass
       // the torch: without it, a match off the beam axis multiplied down to the
@@ -564,7 +601,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
         ' return max(uFloor, ang * dep); }';
       const ptMat = new THREE.ShaderMaterial({
-        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, ...torchUniforms },
+        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
         vertexShader:
           'attribute float size; attribute float alpha; attribute vec3 color; attribute float boost;' +
           'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost;' +
@@ -575,11 +612,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           'vAlpha = alpha * max(torch(position), boost); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
-          'uniform sampler2D uTex; varying float vAlpha; varying vec3 vColor;' +
-          'void main(){ float m = texture2D(uTex, gl_PointCoord).a; gl_FragColor = vec4(vColor * vAlpha * m, 1.0); }',
+          'uniform sampler2D uTex; uniform float uPaper; varying float vAlpha; varying vec3 vColor;' +
+          'void main(){ float m = texture2D(uTex, gl_PointCoord).a;' +
+          // paper: ink stars, normal blending (colour + real alpha); dusk:
+          // premultiplied additive glow (the original path, byte-identical).
+          ' if (uPaper > 0.5) { gl_FragColor = vec4(vColor, min(vAlpha * m, 1.0)); }' +
+          ' else { gl_FragColor = vec4(vColor * vAlpha * m, 1.0); } }',
         transparent: true,
         depthWrite: false,
-        blending: THREE.CustomBlending,
+        blending: isPaper() ? THREE.NormalBlending : THREE.CustomBlending,
         blendEquation: THREE.AddEquation,
         blendSrc: THREE.OneFactor,
         blendDst: THREE.OneFactor,
@@ -649,6 +690,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const ACCENT_RGB = hexToRgb(ink.accent);
       const applyEdgeColor = (): void => {
         const focusActive = !!(selKey || hiSet);
+        const paper = isPaper();
         for (let i = 0; i < E; i++) {
           const bo = edgeBoostOf(links[i]);
           let r: number, g: number, b: number, al: number;
@@ -658,6 +700,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           } else {
             [r, g, b] = edgeRGB[i];
             al = edgeAlphaOf(links[i]) * (focusActive ? TUNE.atmosphereDim : 1);
+          }
+          if (paper) {
+            // The buffer carries ALPHA for the paper shader (grayscale);
+            // colour is the fixed edge ink there.
+            r = al; g = al; b = al;
+            al = 1;
           }
           ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
           ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
@@ -675,15 +723,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // the atmosphere. Per-vertex colour already carries the focus/selection
       // alpha (premultiplied); the shader multiplies in the distance falloff.
       const eMat = new THREE.ShaderMaterial({
-        uniforms: torchUniforms,
+        uniforms: { ...torchUniforms, uPaper: { value: isPaper() ? 1 : 0 }, uInk: { value: new THREE.Vector3(0.353, 0.31, 0.228) } },
         vertexShader:
           'attribute vec3 color; attribute float boost; varying vec3 vColor;' +
           TORCH_GLSL +
           'void main(){ vColor = color * max(torch(position), boost); vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
-        fragmentShader: 'varying vec3 vColor; void main(){ gl_FragColor = vec4(vColor, 1.0); }',
+        fragmentShader:
+          'uniform float uPaper; uniform vec3 uInk; varying vec3 vColor;' +
+          // paper: fixed ink colour, the buffer carries ALPHA (applyEdgeColor
+          // writes grayscale there in paper mode), gained ×2.5 so hairlines
+          // survive on the ground; dusk: premultiplied additive (original).
+          'void main(){ if (uPaper > 0.5) gl_FragColor = vec4(uInk, min(vColor.r * 2.5, 1.0));' +
+          ' else gl_FragColor = vec4(vColor, 1.0); }',
         transparent: true,
         depthWrite: false,
-        blending: THREE.CustomBlending,
+        blending: isPaper() ? THREE.NormalBlending : THREE.CustomBlending,
         blendEquation: THREE.AddEquation,
         blendSrc: THREE.OneFactor,
         blendDst: THREE.OneFactor,
@@ -755,10 +809,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             // The TEXT box as a fraction of the (feather-padded) quad.
             uInner: { value: new THREE.Vector2(1, 1) },
             uFeather: { value: 0 },
+            // Veil colour: black over the dusk field, paper over the chart.
+            uCol: { value: new THREE.Vector3(PAL.pill[0], PAL.pill[1], PAL.pill[2]) },
           },
           vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
           fragmentShader:
-            'uniform float uAlpha; uniform vec2 uSize; uniform vec2 uInner; uniform float uFeather; varying vec2 vUv;' +
+            'uniform float uAlpha; uniform vec2 uSize; uniform vec2 uInner; uniform float uFeather; uniform vec3 uCol; varying vec2 vUv;' +
             'void main(){ vec2 p = (vUv - 0.5) * uSize;' +
             ' vec2 ib = uSize * 0.5 * uInner; float r = ib.y * 0.6;' +
             ' vec2 b = max(ib - vec2(r), vec2(0.0));' +
@@ -768,7 +824,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             ' float soft = ib.y * (0.12 + 3.2 * uFeather);' +
             ' float a = uAlpha * (1.0 - smoothstep(-ib.y * 0.1, soft, d));' +
             ' if (a < 0.03) discard;' +
-            ' gl_FragColor = vec4(0.0, 0.0, 0.0, a); }',
+            ' gl_FragColor = vec4(uCol, a); }',
           transparent: true,
           depthWrite: true,
         });
@@ -807,8 +863,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         text.lineHeight = 1.15;
         text.textAlign = 'center';
         text.position.y = -rad(n) * 1.15; // hang below the dot
-        text.color = ink.text;
-        text.outlineColor = '#0a0805';
+        text.color = PAL.text;
+        text.outlineColor = PAL.outline;
         text.outlineWidth = `${Math.round(TUNE.labelOutline * 100)}%`;
         text.fillOpacity = 0;
         text.outlineOpacity = 0;
@@ -880,7 +936,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // Bloom is a TOGGLE now (tuner: auto/on/off — 'on' lets a phone try it),
       // so the composer builds lazily the first frame it's wanted and the tick
       // simply routes around it when it isn't.
-      const useBloom = (): boolean => TUNE.bloomMode === 'on' || (TUNE.bloomMode === 'auto' && bigScreen);
+      // Paper mode never blooms — ink doesn't glow.
+      const useBloom = (): boolean => !isPaper() && (TUNE.bloomMode === 'on' || (TUNE.bloomMode === 'auto' && bigScreen));
       const ensureComposer = (): void => {
         if (composer) return;
         composer = new EffectComposer(renderer);
@@ -1163,7 +1220,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const l = links[i];
           const div = document.createElement('div');
           div.textContent = l.rel;
-          div.style.cssText = 'font:500 8.5px ui-monospace,monospace;color:#a89e8a;text-shadow:0 1px 3px #000;white-space:nowrap;pointer-events:none;user-select:none;opacity:0.85';
+          div.style.cssText = `font:500 8.5px ui-monospace,monospace;color:${PAL.rel};white-space:nowrap;pointer-events:none;user-select:none;opacity:0.85`;
           const obj = new CSS2DObject(div);
           const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
           obj.position.set((aN.x + bN.x) / 2, (aN.y + bN.y) / 2, (aN.z + bN.z) / 2);
@@ -1206,8 +1263,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         text.anchorX = 'center';
         text.anchorY = 'middle';
         // Authored places carry a whisper of the accent — a view is intent.
-        text.color = authored ? '#e3c987' : '#b7ad99';
-        text.outlineColor = '#0a0805';
+        text.color = authored ? PAL.capAuth : PAL.capComp;
+        text.outlineColor = PAL.outline;
         text.outlineWidth = '4%';
         text.fillOpacity = 0;
         text.outlineOpacity = 0;
@@ -1412,8 +1469,36 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // Breadcrumb — "where am I": selecting a fact names its neighbourhood in
       // a transient caption at the top of the scene, then gets out of the way.
       const crumb = document.createElement('div');
-      crumb.style.cssText = `position:absolute;top:calc(env(safe-area-inset-top, 0px) + 10px);left:50%;transform:translateX(-50%);z-index:5;pointer-events:none;font-family:${TYPE_SERIF};font-size:11px;font-weight:400;letter-spacing:0.22em;text-transform:uppercase;color:#b7ad99;opacity:0;transition:opacity 0.7s;${LABEL_HALO}`;
+      crumb.style.cssText = `position:absolute;top:calc(env(safe-area-inset-top, 0px) + 10px);left:50%;transform:translateX(-50%);z-index:5;pointer-events:none;font-family:${TYPE_SERIF};font-size:11px;font-weight:400;letter-spacing:0.22em;text-transform:uppercase;color:${PAL.capComp};opacity:0;transition:opacity 0.7s;${LABEL_HALO}`;
       el.appendChild(crumb);
+
+      // ── scene-mode switch: restyle the LIVE scene (no rebuild). Dusk is
+      // the luminous field; paper is the same map printed as a star atlas —
+      // ink on warm ground, normal blending, no bloom. ──
+      const applyMode = (): void => {
+        PAL = paletteFor(TUNE.sceneMode);
+        const paper = isPaper();
+        scene.background = new THREE.Color(PAL.bg);
+        ptMat.uniforms.uPaper.value = paper ? 1 : 0;
+        ptMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
+        eMat.uniforms.uPaper.value = paper ? 1 : 0;
+        eMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
+        applyNodeColors();
+        (geo.attributes.color as any).needsUpdate = true;
+        applyEdgeColor();
+        ringMat.color = new THREE.Color(PAL.accent);
+        for (const [, st] of labelObjs) {
+          st.text.outlineColor = PAL.outline;
+          st.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
+        }
+        for (const c of constellations) {
+          c.text.color = c.authored ? PAL.capAuth : PAL.capComp;
+          c.text.outlineColor = PAL.outline;
+          c.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
+        }
+        for (const [, o] of edgeLabelObjs) (o.element as HTMLElement).style.color = PAL.rel;
+        crumb.style.color = PAL.capComp;
+      };
       let crumbTimer: ReturnType<typeof setTimeout> | null = null;
       const showCrumb = (key: string | null): void => {
         const n = key ? nodeById.get(key) : null;
@@ -1597,11 +1682,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
           const torch = labelTorchAt(st.grp.position);
           let target: number;
-          let color = ink.text;
+          let color = PAL.text;
           const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           if (st.role === 'sel') {
             target = 1;
-            color = ink.accent;
+            color = PAL.accent;
           } else if (st.role === 'hit') {
             target = 1;
           } else if (st.role === 'nbr') {
@@ -1610,7 +1695,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             // Orientation anchors: quieter than a beam catch in colour but
             // steadier in presence — the resting wayfinding layer.
             target = TUNE.anchorOpacity;
-            color = ink.dim;
+            color = PAL.dim;
           } else {
             // The beam's GENTLE slope: opacity rises smoothly from ~0 at the
             // admission boundary to its ceiling as the beam centres a node —
@@ -1713,7 +1798,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           gui = new GUI({ title: 'graph tune' });
           gui.domElement.style.cssText = 'position:fixed;top:64px;right:8px;z-index:60;max-height:70dvh;overflow-y:auto';
           const persist = (): void => { try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ } };
+          let lastSpike = TUNE.starSpike;
           const refresh = (): void => {
+            if (TUNE.starSpike !== lastSpike) {
+              lastSpike = TUNE.starSpike;
+              const t = makeStarTexture(THREE, TUNE.starSpike);
+              disc.dispose?.();
+              disc = t;
+              ptMat.uniforms.uTex.value = t;
+            }
             torchUniforms.uConeIn.value = TUNE.coneIn;
             torchUniforms.uConeOut.value = TUNE.coneOut;
             torchUniforms.uDepthIn.value = SPREAD * TUNE.depthIn;
@@ -1747,6 +1840,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const add = (folder: any, key: keyof typeof TUNE, min: number, max: number, step = 0.01): void => {
             folder.add(TUNE, key, min, max, step).onChange(refresh);
           };
+          gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
           const torchF = gui.addFolder('torch');
           // Mins go to TRUE zero — the owner's grade railed the old bottom stops
           // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
@@ -1779,6 +1873,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(nodesF, 'nodeDim', 0.2, 1.5);
           add(nodesF, 'nbrBoost', 0, 1);
           add(nodesF, 'boostSizeGain', 0, 1.5);
+          add(nodesF, 'starSpike', 0, 1, 0.01); // 0 = soft disc, 1 = full diffraction star
           const edgesF = gui.addFolder('edges');
           add(edgesF, 'edgeSimilar', 0, 0.3, 0.005);
           add(edgesF, 'edgeMember', 0, 0.5, 0.005);
@@ -1815,8 +1910,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               const v = obj[k];
               if (v === undefined || typeof v !== typeof TUNE_DEFAULTS[k]) continue;
               if (k === 'bloomMode' && !['auto', 'on', 'off'].includes(v as string)) continue;
+              if (k === 'sceneMode' && !['dusk', 'paper'].includes(v as string)) continue;
               (TUNE as any)[k] = v;
             }
+            applyMode();
             refresh(); // also persists
             gui.controllersRecursive().forEach((c: any) => c.updateDisplay());
           };
@@ -1835,6 +1932,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             reset: () => {
               Object.assign(TUNE, TUNE_DEFAULTS);
               try { localStorage.removeItem(TUNE_LS); } catch { /* */ }
+              applyMode();
               refresh();
               gui.controllersRecursive().forEach((c: any) => c.updateDisplay());
             },
