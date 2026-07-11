@@ -293,5 +293,5 @@ function logEdgeRead(
 function edgeScope(input?: EdgesInput): EdgeScopeInput {
   if (!input) return {};
   const rels = input.rel ? [...(input.rels ?? []), input.rel] : input.rels;
-  return { keys: input.keys, rels, limit: input.limit, cursor: input.cursor };
+  return { keys: input.keys, rels, limit: input.limit, cursor: input.cursor, edgeShape: input.edgeShape };
 }

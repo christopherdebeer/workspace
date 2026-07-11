@@ -64,3 +64,43 @@ describe('scopeEdges: cursor paging', () => {
     expect(page.nextCursor).toBe('0');
   });
 });
+
+describe('scopeEdges: edgeShape thin trimming (2026-07-11, home-graph leanness)', () => {
+  const richEdge = (i: number, derived?: boolean) => ({
+    scope: 'c15r',
+    from: `a${i}`,
+    rel: 'related',
+    to: `b${i}`,
+    strength: 0.5,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    writer: 'c15r',
+    score: 0.9,
+    ...(derived !== undefined ? { derived } : {}),
+  });
+
+  it('trims to {from,rel,to,derived?} when edgeShape is "thin"', () => {
+    const all = [richEdge(0), richEdge(1, true)];
+    const page = scopeEdges(all, { edgeShape: 'thin' });
+    expect(page.edges).toEqual([
+      { from: 'a0', rel: 'related', to: 'b0' },
+      { from: 'a1', rel: 'related', to: 'b1', derived: true },
+    ]);
+  });
+
+  it('defaults to full shape, unchanged, when edgeShape is absent', () => {
+    const all = [richEdge(0)];
+    const page = scopeEdges(all, {});
+    expect(page.edges).toEqual(all);
+  });
+
+  it('thins AFTER paging, not before — total/cursor unaffected', () => {
+    const all = Array.from({ length: 5 }, (_, i) => richEdge(i));
+    const page = scopeEdges(all, { edgeShape: 'thin', limit: 2 });
+    expect(page.total).toBe(5);
+    expect(page.nextCursor).toBe('2');
+    expect(page.edges).toEqual([
+      { from: 'a0', rel: 'related', to: 'b0' },
+      { from: 'a1', rel: 'related', to: 'b1' },
+    ]);
+  });
+});

@@ -262,19 +262,50 @@ interface GraphModel {
 // it the same way) — page through instead of one all-at-once request. The
 // page size is arbitrary; large enough to keep round trips few, small enough
 // to stay well under the timeout that bit the unbounded form.
-const QUERY_PAGE_SIZE = 300;
-async function fetchAllEntries(): Promise<ListEntry[]> {
-  const out: ListEntry[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const res = await mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card', limit: QUERY_PAGE_SIZE, ...(cursor ? { cursor } : {}) });
-    if (!res.ok) break; // best-effort: render whatever pages already landed rather than fail the whole graph
-    const page = res.value as { entries?: ListEntry[]; nextCursor?: string } | null;
-    out.push(...(page?.entries ?? []));
-    if (!page?.nextCursor) break;
-    cursor = page.nextCursor;
+//
+// Every paged read's FIRST page already reports `total` — once known, every
+// remaining page's offset is knowable up front (both `workspace.query` and
+// `workspace.graph` use a plain numeric-offset cursor), so the rest fetch
+// CONCURRENTLY (bounded) instead of one round trip at a time (2026-07-11
+// follow-up: this is what "more parallelism" meant for the fetch side).
+// `fastOnly` stops after page 1 — enough for an immediate first paint
+// (rankBy:'salience' means page 1 IS the most important facts already).
+const PAGE_CONCURRENCY = 4;
+async function pagedFetch<T>(
+  page: (cursor?: string) => Promise<{ ok: boolean; value: unknown }>,
+  pick: (v: unknown) => { items: T[]; total?: number; nextCursor?: string },
+  opts?: { fastOnly?: boolean },
+): Promise<T[]> {
+  const res = await page();
+  if (!res.ok) return []; // best-effort: render whatever pages already landed rather than fail the whole graph
+  const first = pick(res.value);
+  const out = [...first.items];
+  if (opts?.fastOnly || !first.nextCursor || !first.total || !first.items.length) return out;
+  const pageSize = first.items.length;
+  const offsets: number[] = [];
+  for (let o = pageSize; o < first.total; o += pageSize) offsets.push(o);
+  let idx = 0;
+  async function worker(): Promise<void> {
+    while (idx < offsets.length) {
+      const cursor = String(offsets[idx++]);
+      const r = await page(cursor);
+      if (r.ok) out.push(...pick(r.value).items);
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, offsets.length) }, worker));
   return out;
+}
+
+const QUERY_PAGE_SIZE = 300;
+async function fetchAllEntries(opts?: { fastOnly?: boolean }): Promise<ListEntry[]> {
+  return pagedFetch<ListEntry>(
+    (cursor) => mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card', limit: QUERY_PAGE_SIZE, ...(cursor ? { cursor } : {}) }),
+    (v) => {
+      const p = v as { entries?: ListEntry[]; total?: number; nextCursor?: string } | null;
+      return { items: p?.entries ?? [], total: p?.total, nextCursor: p?.nextCursor };
+    },
+    opts,
+  );
 }
 
 // workspace.graph/edges has the same shape of problem as the query above, one
@@ -284,28 +315,31 @@ async function fetchAllEntries(): Promise<ListEntry[]> {
 // scopeEdges (services/workspace/shape.ts) now supports the same offset
 // cursor as query — CloudFront's ~30s default origin timeout means a bigger
 // per-call `limit` isn't free either, so this stays a real page size, not a
-// token gesture.
+// token gesture. `edgeShape:'thin'` (2026-07-11) drops the fields this
+// renderer never reads (`scope`/`strength`/`createdAt`/`writer`/`score`/
+// `source`) — GEdge only ever used `{from,rel,to,derived}`, so every edge was
+// carrying ~2-3x the bytes it needed to.
 const EDGES_PAGE_SIZE = 2000;
-async function fetchAllEdges(): Promise<GEdge[]> {
-  const out: GEdge[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const res = await mcpCall('read', 'workspace.graph', { limit: EDGES_PAGE_SIZE, ...(cursor ? { cursor } : {}) });
-    if (!res.ok) break; // best-effort: a partial edge set still renders a graph; no edges at all would not
-    const page = res.value as { edges?: GEdge[]; nextCursor?: string } | null;
-    out.push(...(page?.edges ?? []));
-    if (!page?.nextCursor) break;
-    cursor = page.nextCursor;
-  }
-  return out;
+async function fetchAllEdges(opts?: { fastOnly?: boolean }): Promise<GEdge[]> {
+  return pagedFetch<GEdge>(
+    (cursor) => mcpCall('read', 'workspace.graph', { limit: EDGES_PAGE_SIZE, edgeShape: 'thin', ...(cursor ? { cursor } : {}) }),
+    (v) => {
+      const p = v as { edges?: GEdge[]; total?: number; nextCursor?: string } | null;
+      return { items: p?.edges ?? [], total: p?.total, nextCursor: p?.nextCursor };
+    },
+    opts,
+  );
 }
 
 /** Load the whole slice + projection into a render-ready model: nodes, edges,
- *  the focus band, and the semantic coordinates. */
-async function fetchGraphModel(): Promise<GraphModel> {
+ *  the focus band, and the semantic coordinates. `fastOnly` (2026-07-11)
+ *  returns after just page 1 of entries/edges — a fast, mostly-correct first
+ *  paint the caller mounts immediately, while a second, un-fastOnly call
+ *  fetches the complete model in the background for a follow-up mount. */
+async function fetchGraphModel(opts?: { fastOnly?: boolean }): Promise<GraphModel> {
   const [allEntries, rawEdges, cfgRes, layoutRes, typoRes] = await Promise.all([
-    fetchAllEntries(),
-    fetchAllEdges(),
+    fetchAllEntries(opts),
+    fetchAllEdges(opts),
     mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
     // The precomputed SEMANTIC layout (workspace.project → `_home/embed2d`, [x,y,z]).
     mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
@@ -476,6 +510,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
   selectRef.current = onSelect;
   const api = useRef<{ select: (key: string | null, fly?: boolean) => void; setVisible: (f: number) => void } | null>(null);
   const lastExternal = useRef<string | null>(null);
+  // Loading UX (2026-07-11): 'fast' = fetching the first-page model for the
+  // initial paint, 'full' = that's mounted, now paging in the rest of the
+  // slice in the background, 'done' = the complete model is mounted (or
+  // load failed — either way there's nothing left to wait for).
+  const [loadState, setLoadState] = useState<'fast' | 'full' | 'done'>('fast');
 
   useEffect(() => {
     const el = host.current;
@@ -486,9 +525,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
     let onResult: ((ev: Event) => void) | null = null;
     let cleanup: (() => void) | null = null;
 
-    (async () => {
-      const [model, THREE, addons] = await Promise.all([fetchGraphModel(), loadThree(), loadThreeAddons()]);
+    // Progressive mount (2026-07-11 follow-up to the query/edges pagination
+    // fix): called TWICE — once with a "fast" model (page 1 of entries+edges,
+    // already the most salient facts since the query ranks by salience) for
+    // an immediate first paint, then again with the complete model once the
+    // rest of the slice has paged in. Each call tears down whatever's
+    // currently mounted first, so the second call is a clean rebuild, not an
+    // append — the render pipeline below is untouched either way.
+    async function mountScene(model: GraphModel, THREE: any, addons: any): Promise<void> {
       if (disposed) return;
+      cleanup?.();
+      cleanup = null;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      ro?.disconnect();
+      ro = null;
+      if (onResult) { window.removeEventListener(CONSOLE_RESULT_EVENT, onResult); onResult = null; }
       if (!THREE || !addons) {
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
         return;
@@ -2011,12 +2062,36 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
         disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
+    }
+
+    (async () => {
+      const [THREE, addons] = await Promise.all([loadThree(), loadThreeAddons()]);
+      if (disposed) return;
+      // Fast first paint: mount with just page 1 of entries+edges (the fetch
+      // functions already page-ahead in parallel for the REST, but the first
+      // page alone is enough to put a usable, mostly-correct scene up fast —
+      // rankBy:'salience' means it's already the most important facts).
+      setLoadState('fast');
+      const fastModel = await fetchGraphModel({ fastOnly: true });
+      if (disposed) return;
+      await mountScene(fastModel, THREE, addons);
+      if (disposed) return;
+      // Background: keep paging until the whole slice has landed, then
+      // upgrade to the complete model — THREE/addons are already cached
+      // module promises, so this second mount is cheap relative to the fetch.
+      setLoadState('full');
+      const fullModel = await fetchGraphModel();
+      if (disposed) return;
+      await mountScene(fullModel, THREE, addons);
+      if (disposed) return;
+      setLoadState('done');
     })().catch((err) => {
       (window.reportError ?? console.error)(err);
       // A rejected fetch/setup left the scene host empty — a blank page reads as
       // "broken", not "recoverable". Match the loadThree()/loadThreeAddons()
       // failure fallback above (line ~471) so any init failure degrades to a
       // legible message instead of silence.
+      setLoadState('done');
       if (!disposed && el) {
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace;text-align:center;padding:2rem">graph failed to load — check the console, or reload</div>';
       }
@@ -2041,7 +2116,39 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
   useEffect(() => { api.current?.setVisible(visible); }, [visible]);
 
-  return <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />;
+  return (
+    <>
+      {/* `host` is imperative-only territory below (innerHTML/appendChild
+          straight to the DOM node for the three.js canvas + CSS2D labels) —
+          React must never render children into it, or the two reconcilers
+          fight over the same subtree. The loading pill lives in a SIBLING
+          node instead, fully React-owned. */}
+      <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />
+      {loadState !== 'done' && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed', left: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20,
+            fontFamily: ink.mono, fontSize: '0.72rem', color: ink.text,
+            background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
+            borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
+            display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.8rem',
+            pointerEvents: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: 8, height: 8, borderRadius: '50%', background: ink.accent,
+              animation: 'parc-pulse 1.1s ease-in-out infinite',
+            }}
+          />
+          <span>{loadState === 'fast' ? 'loading graph…' : 'loading the rest of the slice…'}</span>
+          <style>{'@keyframes parc-pulse{0%,100%{opacity:.3}50%{opacity:1}}'}</style>
+        </div>
+      )}
+    </>
+  );
 }
 
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
