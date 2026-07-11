@@ -277,11 +277,35 @@ async function fetchAllEntries(): Promise<ListEntry[]> {
   return out;
 }
 
+// workspace.graph/edges has the same shape of problem as the query above, one
+// step worse: it isn't just slow at full-slice size, its response can exceed
+// the Lambda platform's hard 6MB payload ceiling outright (confirmed live,
+// 2026-07-11 — a 502 with no retry-shaped error, distinct from a timeout).
+// scopeEdges (services/workspace/shape.ts) now supports the same offset
+// cursor as query — CloudFront's ~30s default origin timeout means a bigger
+// per-call `limit` isn't free either, so this stays a real page size, not a
+// token gesture.
+const EDGES_PAGE_SIZE = 2000;
+async function fetchAllEdges(): Promise<GEdge[]> {
+  const out: GEdge[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const res = await mcpCall('read', 'workspace.graph', { limit: EDGES_PAGE_SIZE, ...(cursor ? { cursor } : {}) });
+    if (!res.ok) break; // best-effort: a partial edge set still renders a graph; no edges at all would not
+    const page = res.value as { edges?: GEdge[]; nextCursor?: string } | null;
+    out.push(...(page?.edges ?? []));
+    if (!page?.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return out;
+}
+
 /** Load the whole slice + projection into a render-ready model: nodes, edges,
  *  the focus band, and the semantic coordinates. */
 async function fetchGraphModel(): Promise<GraphModel> {
-  const [allEntries, cfgRes, layoutRes, typoRes] = await Promise.all([
+  const [allEntries, rawEdges, cfgRes, layoutRes, typoRes] = await Promise.all([
     fetchAllEntries(),
+    fetchAllEdges(),
     mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
     // The precomputed SEMANTIC layout (workspace.project → `_home/embed2d`, [x,y,z]).
     mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
@@ -295,8 +319,6 @@ async function fetchGraphModel(): Promise<GraphModel> {
   const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
   const entries = allEntries.filter((e) => !isPlumbing(e));
   const byKey = new Map(entries.map((e) => [e.key, e]));
-  const edgesRes = await mcpCall('read', 'workspace.graph', {});
-  const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
   const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
   const deg = new Map<string, number>();
   for (const e of edges) {

@@ -258,5 +258,5 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
 function edgeScope(input?: EdgesInput): EdgeScopeInput {
   if (!input) return {};
   const rels = input.rel ? [...(input.rels ?? []), input.rel] : input.rels;
-  return { keys: input.keys, rels, limit: input.limit };
+  return { keys: input.keys, rels, limit: input.limit, cursor: input.cursor };
 }
