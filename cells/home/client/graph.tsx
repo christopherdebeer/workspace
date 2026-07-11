@@ -104,11 +104,14 @@ const TUNE_DEFAULTS = {
   // resting orientation anchors (top-salience node per screen region).
   // constNear/Far: approach-fade band as multiples of a cluster's radius —
   // captions read from afar and hand off to fact labels as you arrive.
-  constCap: 8, constOpacity: 0.6, constNear: 1.15, constFar: 2.4,
-  anchorCap: 8, anchorOpacity: 0.5, anchorSizeMult: 0.62,
-  // in-scene label furniture: the dark pill behind SDF text (legibility over
-  // the additive cloud at depth) and the outline halo width (em fraction).
-  pillAlpha: 0.34, labelOutline: 0.06,
+  // places (owner grade 2026-07-11): captions in a TIGHT approach band
+  // (visible just outside a region, gone inside), anchors as a dense
+  // small-print fact layer (cap 16, tiny, full opacity).
+  constCap: 16, constOpacity: 0.6, constNear: 0.5, constFar: 1.2,
+  anchorCap: 16, anchorOpacity: 1, anchorSizeMult: 0.3,
+  // in-scene label furniture: the black pill behind SDF text (owner: always
+  // on, opacity is the dial) and the outline halo width (em fraction).
+  pillAlpha: 1, labelOutline: 0.2,
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -724,9 +727,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // so the owner's size mults keep their meaning exactly.
       const fontWorld = (n: any, mult: number): number => rad(n) * 2.4 * 0.85 * mult;
       const pillGeo = new THREE.PlaneGeometry(1, 1);
-      // Rounded-rect SDF pill — a normal-blended dark quad that sits between
-      // the additive cloud and the glyphs. uSize tracks the quad's world size
-      // so the corner radius stays round at any scale.
+      // Rounded-rect SDF pill — pure black (owner direction; pillAlpha is the
+      // dial). Pills are REAL OCCLUDERS: they render FIRST (renderOrder −1)
+      // and WRITE DEPTH, so the additive cloud's points and edges behind a
+      // pill are culled by the depth test instead of shining through — while
+      // anything NEARER than the pill still passes in front, and overlapping
+      // labels resolve by true depth. Fully transparent fragments (rounded
+      // corners, faded-out labels) discard, so an invisible pill never blocks.
       const mkPillMat = (): any =>
         new THREE.ShaderMaterial({
           uniforms: { uAlpha: { value: 0 }, uSize: { value: new THREE.Vector2(1, 1) } },
@@ -736,10 +743,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             'void main(){ vec2 p = (vUv - 0.5) * uSize; float r = uSize.y * 0.32;' +
             ' vec2 b = uSize * 0.5 - vec2(r); float d = length(max(abs(p) - b, 0.0)) - r;' +
             ' float a = uAlpha * (1.0 - smoothstep(-uSize.y * 0.06, 0.0, d));' +
-            // Pure black (owner direction) — opacity is the only dial (pillAlpha).
+            ' if (a < 0.04) discard;' +
             ' gl_FragColor = vec4(0.0, 0.0, 0.0, a); }',
           transparent: true,
-          depthWrite: false,
+          depthWrite: true,
         });
       const makeLabel = (n: any, role: LabelRole): LabelState => {
         const grp = new THREE.Group();
@@ -766,7 +773,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         text.renderOrder = 9;
         const pill = new THREE.Mesh(pillGeo, mkPillMat());
         pill.visible = false;
-        pill.renderOrder = 8;
+        pill.renderOrder = -1; // depth-writing occluder — draws before the cloud
         inner.add(pill);
         inner.add(text);
         const leader = new THREE.Line(
@@ -953,11 +960,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const cxc = sx + st.cox; // label centre column (with displacement)
           if (b) {
             // Block bounds are text-local (anchor top-centre at y=0), hung at
-            // text.position.y below the node; world +y is screen −y.
-            const top = sy + st.coy - (st.text.position.y + b[3]) * pxPer;
-            const bot = sy + st.coy - (st.text.position.y + b[1]) * pxPer;
-            const w = Math.max(44, (b[2] - b[0]) * pxPer + 8);
-            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= top - 4 && cy <= bot + 4) return id;
+            // text.position.y below the node; world +y is screen −y. Pad the
+            // rect to a finger-sized minimum (44×28) — small deep labels are
+            // legitimate tap targets too.
+            let top = sy + st.coy - (st.text.position.y + b[3]) * pxPer;
+            let bot = sy + st.coy - (st.text.position.y + b[1]) * pxPer;
+            const vPad = Math.max(4, (28 - (bot - top)) / 2);
+            top -= vPad; bot += vPad;
+            const w = Math.max(44, (b[2] - b[0]) * pxPer + 10);
+            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= top && cy <= bot) return id;
           } else {
             const w = Math.max(44, String(n.label).length * fs * 0.62);
             const ly = sy + st.coy + rad(n) * 1.15 * pxPer;
@@ -966,8 +977,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         }
         return null;
       };
-      const onDown = (e: PointerEvent): void => { downX = e.clientX; downY = e.clientY; moved = false; };
-      const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 6) moved = true; };
+      // A finger tap wobbles 8–12px on a phone — the old 6px "it's a drag"
+      // threshold was eating most label taps on touch (they registered as
+      // micro-orbits, so nothing ever selected).
+      let dragThreshold = 6;
+      const onDown = (e: PointerEvent): void => {
+        downX = e.clientX; downY = e.clientY; moved = false;
+        dragThreshold = e.pointerType === 'touch' ? 14 : 6;
+      };
+      const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) moved = true; };
       const onUp = (e: PointerEvent): void => {
         if (moved) return;
         const lid = labelAt(e.clientX, e.clientY);
@@ -1135,20 +1153,51 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // centroid — legible from afar, handing off to fact labels as the
       // camera arrives. The approach fade IS the semantic zoom: continuous,
       // per-region, no tier boundaries to flicker across.
-      interface Constellation { name: string; x: number; y: number; z: number; r: number; authored: boolean; obj: any; cur: number }
+      interface Constellation { name: string; x: number; y: number; z: number; r: number; authored: boolean; grp: any; text: any; pill: any; fs: number; cur: number }
       const constellations: Constellation[] = [];
       const addConstellation = (name: string, cx: number, cy: number, cz: number, cr: number, authored: boolean): void => {
         // One caption per name — a view and its placement container (inView
         // edges) are the same place arriving by two routes.
         if (constellations.some((c) => c.name === name)) return;
-        const div = document.createElement('div');
-        div.textContent = name;
+        // Captions live IN the scene too (owner: pills + occlusion for these
+        // as well): billboarded troika text over the same depth-writing pill
+        // the labels use. World font size is REGION-proportional — perspective
+        // then makes big places read big.
+        const grp = new THREE.Group();
+        grp.position.set(cx, cy, cz);
+        const text = new TroikaText();
+        text.text = name.toUpperCase();
+        text.font = FONT_BY_GROUP.kb; // the serif face
+        text.fontSize = cr * 0.055;
+        text.letterSpacing = 0.18;
+        text.anchorX = 'center';
+        text.anchorY = 'middle';
         // Authored places carry a whisper of the accent — a view is intent.
-        div.style.cssText = `font-family:${TYPE_SERIF};font-weight:400;letter-spacing:0.22em;text-transform:uppercase;white-space:nowrap;pointer-events:none;user-select:none;-webkit-user-select:none;opacity:0;${LABEL_HALO};color:${authored ? '#e3c987' : '#b7ad99'}`;
-        const obj = new CSS2DObject(div);
-        obj.position.set(cx, cy, cz);
-        scene.add(obj);
-        constellations.push({ name, x: cx, y: cy, z: cz, r: cr, authored, obj, cur: 0 });
+        text.color = authored ? '#e3c987' : '#b7ad99';
+        text.outlineColor = '#0a0805';
+        text.outlineWidth = '4%';
+        text.fillOpacity = 0;
+        text.outlineOpacity = 0;
+        text.renderOrder = 9;
+        const pill = new THREE.Mesh(pillGeo, mkPillMat());
+        pill.visible = false;
+        pill.renderOrder = -1;
+        grp.add(pill);
+        grp.add(text);
+        const st: Constellation = { name, x: cx, y: cy, z: cz, r: cr, authored, grp, text, pill, fs: cr * 0.055, cur: 0 };
+        text.sync(() => {
+          const b = text.textRenderInfo?.blockBounds;
+          if (!b) return;
+          const h = b[3] - b[1];
+          const w = (b[2] - b[0]) + h;
+          const hh = h * 1.6;
+          pill.scale.set(w, hh, 1);
+          pill.material.uniforms.uSize.value.set(w, hh);
+          pill.position.set((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, -1.5);
+          pill.visible = true;
+        });
+        scene.add(grp);
+        constellations.push(st);
       };
       {
         // Computed pass: greedy salience hubs with an exclusion radius, then a
@@ -1263,17 +1312,20 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         } catch { /* views are optional */ }
       })();
       const constV = new THREE.Vector3();
-      // Tap target: a visible caption's projected rect. Captions are
-      // pointer-events:none DOM, so taps arrive via the canvas handler.
+      // Tap target: a visible caption's projected rect (troika's real layout
+      // bounds, finger-padded).
       const constellationAt = (cx: number, cy: number): Constellation | null => {
         for (const c of constellations) {
           if (c.cur < 0.15) continue;
+          const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z)) || 1;
           constV.set(c.x, c.y, c.z).project(camera);
           if (constV.z > 1) continue;
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
-          const fontPx = parseFloat((c.obj.element as HTMLElement).style.fontSize) || 12;
-          const w = c.name.length * fontPx * 0.95;
-          if (Math.abs(cx - sx) < w / 2 + 6 && Math.abs(cy - sy) < fontPx * 1.1 + 6) return c;
+          const pxPer = (H / 2) / camD;
+          const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
+          const w = Math.max(44, (b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer) + 10);
+          const h = Math.max(28, (b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer) + 10);
+          if (Math.abs(cx - sx) < w / 2 && Math.abs(cy - sy) < h / 2) return c;
         }
         return null;
       };
@@ -1294,7 +1346,6 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const placedCaps: Array<[number, number, number]> = [];
         for (const c of constOrdered()) {
           let target = 0;
-          let fontPx = 0;
           if (shown < capTotal) {
             const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z));
             // Approach fade: a caption reads from OUTSIDE its region and
@@ -1302,15 +1353,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
             if (focusActive) target *= 0.3; // atmosphere under focus
             if (target > 0.02) {
-              // Caption size tracks the REGION's on-screen size, not the
-              // camera depth of a point — big places read big, from anywhere.
-              const px = (c.r * (H / 2)) / Math.max(camD, 1);
-              fontPx = Math.max(9, Math.min(22, px * 0.13));
+              // World-proportional caption (fs = f(region radius)) — the
+              // declutter box uses its actual projected size.
+              const fontPx = c.fs * (H / 2) / Math.max(camD, 1);
               constV.set(c.x, c.y, c.z).project(camera);
               if (constV.z > 1) target = 0;
               else {
                 const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
-                const w = c.name.length * fontPx * 0.95; // caps + 0.22em tracking
+                const w = c.name.length * fontPx * 0.85; // caps + tracking
                 if (placedCaps.some(([px2, py2, pw2]) => Math.abs(px2 - sx) < (pw2 + w) / 2 && Math.abs(py2 - sy) < fontPx * 2.2)) target = 0;
                 else {
                   placedCaps.push([sx, sy, w]);
@@ -1320,10 +1370,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             }
           }
           c.cur += (target - c.cur) * k;
-          const div = c.obj.element as HTMLElement;
-          if (c.cur < 0.01) { div.style.opacity = '0'; continue; }
-          if (fontPx > 0) div.style.fontSize = fontPx.toFixed(1) + 'px';
-          div.style.opacity = c.cur.toFixed(3);
+          c.grp.quaternion.copy(camera.quaternion); // billboard
+          c.text.fillOpacity = c.cur;
+          c.text.outlineOpacity = c.cur;
+          c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
         }
       };
       // Breadcrumb — "where am I": selecting a fact names its neighbourhood in
@@ -1675,7 +1725,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(labelsF, 'nbrOpNear', 0.3, 1);
           add(labelsF, 'labelFade', 1, 20, 0.5);
           add(labelsF, 'pillAlpha', 0, 1, 0.01);
-          add(labelsF, 'labelOutline', 0, 0.2, 0.005);
+          add(labelsF, 'labelOutline', 0, 0.35, 0.005);
           const nodesF = gui.addFolder('nodes');
           add(nodesF, 'nodeDim', 0.2, 1.5);
           add(nodesF, 'nbrBoost', 0, 1);
@@ -1687,14 +1737,16 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(edgesF, 'edgeAuthored', 0, 1, 0.005);
           add(edgesF, 'focusEdgeAlpha', 0, 1);
           add(edgesF, 'atmosphereDim', 0, 1);
+          // Ranges widened where the owner's grade railed the old stops
+          // (constCap/anchorCap max, anchorSizeMult min, labelOutline max).
           const placesF = gui.addFolder('places');
-          add(placesF, 'constCap', 0, 16, 1);
+          add(placesF, 'constCap', 0, 32, 1);
           add(placesF, 'constOpacity', 0, 1);
-          add(placesF, 'constNear', 0.5, 2.5);
-          add(placesF, 'constFar', 1.2, 5);
-          add(placesF, 'anchorCap', 0, 16, 1);
+          add(placesF, 'constNear', 0.2, 2.5);
+          add(placesF, 'constFar', 0.6, 5);
+          add(placesF, 'anchorCap', 0, 32, 1);
           add(placesF, 'anchorOpacity', 0, 1);
-          add(placesF, 'anchorSizeMult', 0.3, 1.5);
+          add(placesF, 'anchorSizeMult', 0.1, 1.5);
           const postF = gui.addFolder('bloom');
           postF.add(TUNE, 'bloomMode', ['auto', 'on', 'off']).onChange(refresh);
           add(postF, 'bloomStrength', 0, 2);
@@ -1751,7 +1803,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); }
         pillGeo.dispose();
         for (const [, o] of edgeLabelObjs) o.element.remove?.();
-        for (const c of constellations) c.obj.element.remove?.();
+        for (const c of constellations) { c.text.dispose?.(); c.pill.material.dispose?.(); }
         if (crumbTimer) clearTimeout(crumbTimer);
         crumb.remove();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
