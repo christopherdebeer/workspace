@@ -5,7 +5,7 @@
  * Pure + deterministic: same vectors → same coords. Backed by the in-memory vector
  * store so it runs without AWS.
  */
-import { pca2d, normalizeCoords, projectionFact, MemoryVectorStore } from '../platform/runtime';
+import { pca2d, normalizeCoords, projectionFact, projectVector, MemoryVectorStore } from '../platform/runtime';
 
 describe('pca2d', () => {
   it('separates two clusters along the dominant axis', () => {
@@ -82,6 +82,41 @@ describe('projectionFact', () => {
         expect(Math.abs(v)).toBeLessThanOrEqual(1.3);
       }
     }
+  });
+});
+
+describe('projectionFact: persisted basis + projectVector (ADR-0047 stage 3)', () => {
+  it('persists a basis that reproduces the batch coords for an already-known key', () => {
+    const vecs = Array.from({ length: 10 }, (_, i) => [Math.sin(i), Math.cos(i * 1.7), i * 0.3, -i]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const fact = projectionFact(vecs, keys, 4, '2026-01-01T00:00:00.000Z');
+    expect(fact.basis).toBeDefined();
+    expect(fact.norm).toBeDefined();
+    // Re-projecting an EXISTING vector through the persisted basis reproduces
+    // the exact coord the batch run stored for it (same map, same math).
+    for (let i = 0; i < keys.length; i++) {
+      const viaVector = projectVector(vecs[i], fact.basis!, fact.norm!);
+      expect(viaVector).toEqual(fact.coords[keys[i]]);
+    }
+  });
+
+  it('places a NEW vector near its closest neighbor on the existing map, without re-running PCA', () => {
+    // Two far-apart clusters, as in the pca2d test above.
+    const vecs: number[][] = [];
+    const keys: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const near = i < 10;
+      vecs.push([near ? 0 : 10, (i % 3) * 0.01, (i % 2) * 0.01]);
+      keys.push(`k${i}`);
+    }
+    const fact = projectionFact(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    // A brand-new vector close to cluster B (x≈10) should land near cluster B's
+    // existing points on the x axis, not cluster A's.
+    const newVec = [10, 0.005, 0.005];
+    const [x] = projectVector(newVec, fact.basis!, fact.norm!);
+    const clusterAX = fact.coords['k0'][0];
+    const clusterBX = fact.coords['k10'][0];
+    expect(Math.abs(x - clusterBX)).toBeLessThan(Math.abs(x - clusterAX));
   });
 });
 

@@ -18,8 +18,12 @@ import {
   similarConfig,
   refreshSimilarEdges,
   dropSimilarEdges,
+  createObservedState,
+  projectVector,
+  LAYOUT_KEY,
   type VectorRecord,
   type StateStore,
+  type ProjectionFact,
 } from '../../platform/runtime';
 import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
 import { createDynamoStateStoreV3 as createDynamoStateStore } from '../../platform/runtime/dynamo-state-store-v3';
@@ -132,5 +136,60 @@ export async function handler(event: StreamEvent): Promise<void> {
         console.warn('vector-indexer similarTo edge pass failed (vectors indexed)', { scope, error: (err as Error).message });
       }
     }
+
+    // Keep the semantic-layout fact (`_home/embed2d`) fresh incrementally (ADR-0047
+    // stage 3): once a batch `workspace.project` has run and persisted its basis,
+    // placing ONE MORE vector on that same map is a few dot products
+    // (projectVector) — no full-index re-read, no PCA. Best-effort + CAS'd: a
+    // concurrent stream batch racing the same fact just skips this patch (the
+    // next write, or the next full `project()`, catches it up); a missing/basis-
+    // less fact (project() never run yet) is silently skipped — there is no map
+    // to place a point on until the first batch run creates one.
+    if (edgeStore && (puts.length || removes.size)) {
+      try {
+        await patchProjection(edgeStore, scope, puts.map((p, i) => ({ key: p.key, vector: putVecs[i] })), [...removes]);
+      } catch (err) {
+        console.warn('vector-indexer projection patch failed (vectors indexed)', { scope, error: (err as Error).message });
+      }
+    }
   }
+}
+
+/** Read-patch-write `_home/embed2d`'s coords for the keys this batch touched,
+ *  using its persisted PCA basis. CAS'd on the read version so a losing race
+ *  is a silent no-op rather than a lost update — see the call site above.
+ *  Exported (like {@link planStreamWork}) so the incremental-projection logic
+ *  is unit-testable against a plain `StateStore`, without AWS. */
+export async function patchProjection(
+  store: StateStore,
+  scope: string,
+  puts: Array<{ key: string; vector: number[] }>,
+  removes: string[],
+): Promise<void> {
+  const state = createObservedState(store);
+  const entry = await state.get(scope, LAYOUT_KEY);
+  if (!entry) return; // no map yet — the first `workspace.project` creates one
+  const fact = entry.value as ProjectionFact;
+  if (!fact?.basis || !fact?.norm) return; // pre-basis projection — needs a fresh `project()` first
+  let changed = false;
+  const coords = { ...fact.coords };
+  for (const { key, vector } of puts) {
+    coords[key] = projectVector(vector, fact.basis, fact.norm);
+    changed = true;
+  }
+  for (const key of removes) {
+    if (key in coords) {
+      delete coords[key];
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  await state.put({
+    scope,
+    key: LAYOUT_KEY,
+    value: { ...fact, coords, count: Object.keys(coords).length },
+    via: 'vector-indexer',
+    type: 'graph-layout',
+    ifVersion: entry._meta.version,
+  });
 }

@@ -24,10 +24,13 @@ import {
   suggestionCandidates,
   dropSimilarPair,
   createMemoryStateStore,
+  createObservedState,
+  projectionFact,
   SIMILAR_REL,
   SIMILAR_WRITER,
+  LAYOUT_KEY,
 } from '../platform/runtime';
-import { planStreamWork } from '../services/vector-indexer/handler';
+import { planStreamWork, patchProjection } from '../services/vector-indexer/handler';
 
 const M2 = (k: string, s: number) => ({ key: k, score: s, distance: 1 - s });
 
@@ -254,6 +257,72 @@ describe('MemoryVectorStore (brute-force k-NN reference)', () => {
     await store.remove('slice-y', ['k']);
     expect(await store.query('slice-y', v, { topK: 5 })).toEqual([]);
     expect(await store.query('slice-missing', v, { topK: 5 })).toEqual([]);
+  });
+});
+
+describe('patchProjection (ADR-0047 stage 3 — incremental per-fact layout update)', () => {
+  it('is a silent no-op when no projection fact exists yet (project() never run)', async () => {
+    const store = createMemoryStateStore();
+    await expect(patchProjection(store, 'alice', [{ key: 'k1', vector: [1, 0, 0] }], [])).resolves.toBeUndefined();
+    expect(await store.get('alice', LAYOUT_KEY)).toBeNull();
+  });
+
+  it('is a silent no-op against a pre-basis projection fact (written before this field existed)', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: { method: 'pca', dim: 3, count: 1, generatedAt: 't', coords: { k0: [0, 0, 0] } }, type: 'graph-layout' });
+    await patchProjection(store, 'alice', [{ key: 'k1', vector: [1, 0, 0] }], []);
+    const after = await state.get('alice', LAYOUT_KEY);
+    expect((after!.value as { coords: Record<string, unknown> }).coords).toEqual({ k0: [0, 0, 0] }); // unpatched
+  });
+
+  it('places a new key on the existing map via the persisted basis, without touching the vector index', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 10 }, (_, i) => [Math.sin(i), Math.cos(i * 1.7), i * 0.3]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const fact = projectionFact(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+
+    const newVec = [Math.sin(10), Math.cos(10 * 1.7), 10 * 0.3]; // "k10", continuing the same sequence
+    await patchProjection(store, 'alice', [{ key: 'k10', vector: newVec }], []);
+
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, [number, number, number]> }).coords;
+    expect(coords['k10']).toBeDefined();
+    expect(coords['k0']).toEqual(fact.coords['k0']); // existing keys untouched
+    expect((after!.value as { count: number }).count).toBe(11);
+  });
+
+  it('removes a retired key from coords', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 5 }, (_, i) => [Math.sin(i), Math.cos(i), i]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const fact = projectionFact(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+
+    await patchProjection(store, 'alice', [], ['k2']);
+
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect('k2' in coords).toBe(false);
+    expect(Object.keys(coords)).toHaveLength(4);
+  });
+
+  it('successive patches each read-modify-write fresh, CAS guarded on the version each call itself reads', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 3 }, (_, i) => [i, i, i]);
+    const fact = projectionFact(vecs, ['k0', 'k1', 'k2'], 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+
+    await patchProjection(store, 'alice', [{ key: 'k3', vector: [3, 3, 3] }], []);
+    await patchProjection(store, 'alice', [{ key: 'k4', vector: [4, 4, 4] }], []);
+
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect(Object.keys(coords).sort()).toEqual(['k0', 'k1', 'k2', 'k3', 'k4']);
   });
 });
 

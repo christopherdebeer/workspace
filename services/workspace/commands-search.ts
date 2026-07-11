@@ -26,6 +26,7 @@ import {
   SIMILAR_REL,
   SIMILAR_WRITER,
   projectionFact,
+  LAYOUT_KEY,
   contentHash,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
@@ -219,11 +220,10 @@ export interface ContestedResult {
   hint: string;
 }
 
-/** The search/vectors command handlers (ADR-0044 Inc 5). */
-/** Where the 2D semantic layout is stored (ADR-0047 stage 2): a single owner
- *  fact the home graph peeks to place nodes in meaning-space. `_home/*` is
- *  plumbing (owner-only, filtered out of the node band itself). */
-export const LAYOUT_KEY = '_home/embed2d';
+/** The search/vectors command handlers (ADR-0044 Inc 5). LAYOUT_KEY re-exported
+ *  for existing importers — it now lives in platform/runtime/projection.ts so
+ *  the live vector-indexer can read/patch it too. */
+export { LAYOUT_KEY };
 
 export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'search' | 'reindex' | 'project' | 'pruneSimilar' | 'suggestions' | 'ratify' | 'contested'> {
   return {
