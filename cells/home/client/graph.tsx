@@ -254,11 +254,34 @@ interface GraphModel {
   focusKeys: Set<string>;
 }
 
+// The slice has grown past what one unbounded workspace.query can return
+// inside the Lambda's own execution window (2026-07-11: an unbounded call
+// started 502ing once the corpus crossed a few thousand facts — the query
+// itself is fine, the single round trip just no longer fits). `workspace.
+// query` already supports cursor paging (docs-sync.mjs's own liveShas() uses
+// it the same way) — page through instead of one all-at-once request. The
+// page size is arbitrary; large enough to keep round trips few, small enough
+// to stay well under the timeout that bit the unbounded form.
+const QUERY_PAGE_SIZE = 300;
+async function fetchAllEntries(): Promise<ListEntry[]> {
+  const out: ListEntry[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const res = await mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card', limit: QUERY_PAGE_SIZE, ...(cursor ? { cursor } : {}) });
+    if (!res.ok) break; // best-effort: render whatever pages already landed rather than fail the whole graph
+    const page = res.value as { entries?: ListEntry[]; nextCursor?: string } | null;
+    out.push(...(page?.entries ?? []));
+    if (!page?.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return out;
+}
+
 /** Load the whole slice + projection into a render-ready model: nodes, edges,
  *  the focus band, and the semantic coordinates. */
 async function fetchGraphModel(): Promise<GraphModel> {
-  const [nodesRes, cfgRes, layoutRes, typoRes] = await Promise.all([
-    mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
+  const [allEntries, cfgRes, layoutRes, typoRes] = await Promise.all([
+    fetchAllEntries(),
     mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
     // The precomputed SEMANTIC layout (workspace.project → `_home/embed2d`, [x,y,z]).
     mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
@@ -270,7 +293,6 @@ async function fetchGraphModel(): Promise<GraphModel> {
   const cfgVal = (cfgRes && cfgRes.ok ? (cfgRes.value as { value?: { focusThreshold?: unknown } } | null)?.value : null) ?? null;
   const ftRaw = Number(cfgVal?.focusThreshold);
   const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
-  const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
   const entries = allEntries.filter((e) => !isPlumbing(e));
   const byKey = new Map(entries.map((e) => [e.key, e]));
   const edgesRes = await mcpCall('read', 'workspace.graph', {});
