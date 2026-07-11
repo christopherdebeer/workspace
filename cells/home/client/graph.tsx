@@ -1989,7 +1989,16 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
         disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
-    })().catch((err) => (window.reportError ?? console.error)(err));
+    })().catch((err) => {
+      (window.reportError ?? console.error)(err);
+      // A rejected fetch/setup left the scene host empty — a blank page reads as
+      // "broken", not "recoverable". Match the loadThree()/loadThreeAddons()
+      // failure fallback above (line ~471) so any init failure degrades to a
+      // legible message instead of silence.
+      if (!disposed && el) {
+        el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace;text-align:center;padding:2rem">graph failed to load — check the console, or reload</div>';
+      }
+    });
 
     return () => {
       disposed = true;
