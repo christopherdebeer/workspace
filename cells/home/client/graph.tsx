@@ -464,6 +464,30 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   };
   return s === 0 ? [l, l, l] : [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)];
 }
+/** PAPER'S INK SET (2026-07-12, owner: "paper palette still very shallow").
+ *  The old formula — hsl(typeHue, 55%, 30%) — collapses every hue into the
+ *  same dark mud at 30% lightness on cream: a wall of maroon with stray
+ *  blue. Engraved atlases didn't mix continuous colour; they printed from a
+ *  SMALL set of distinguishable inks. Type hue now quantizes to the nearest
+ *  of seven period inks — related hues stay related across modes (the same
+ *  type keeps its dusk hue FAMILY), but on paper each family is a genuinely
+ *  separate, legible ink. */
+const PAPER_INKS: Array<{ upTo: number; rgb: [number, number, number] }> = [
+  { upTo: 25, rgb: hexToRgb01('#8f3b2c') },   // madder red
+  { upTo: 70, rgb: hexToRgb01('#a0662a') },   // raw sienna / ochre
+  { upTo: 160, rgb: hexToRgb01('#4a6135') },  // sap green
+  { upTo: 205, rgb: hexToRgb01('#2f5d58') },  // slate teal
+  { upTo: 262, rgb: hexToRgb01('#2e4a66') },  // prussian blue
+  { upTo: 320, rgb: hexToRgb01('#5d4064') },  // plum violet
+  { upTo: 360, rgb: hexToRgb01('#8f3b2c') },  // magenta wraps to madder
+];
+function hexToRgb01(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+const paperInkFor = (hue: number): [number, number, number] =>
+  (PAPER_INKS.find((i) => hue < i.upTo) ?? PAPER_INKS[0]).rgb;
+
 /** '#rrggbb' → [r,g,b] in [0,1]. */
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
@@ -508,25 +532,38 @@ function makeStarTexture(THREE: any, spike: number): any {
   tex.needsUpdate = true;
   return tex;
 }
-/** The PAPER point sprite: a crisp engraved stipple dot — hard edge, tiny AA
- *  ramp, no glow fringe, no spikes. The star texture above is designed to be
- *  summed additively and bloomed; under paper's normal blending its soft
- *  gradient reads as an out-of-focus watercolor blot (the 2026-07-12 "lacks
- *  legibility/refinement" screenshots ARE that texture on cream). Print wants
- *  ink dots, not glow — a different primitive, not a different palette. */
-function makeStippleTexture(THREE: any): any {
-  const s = 64;
+/** The PAPER point sprite: a crisp INK STAR — a filled four-pointed star
+ *  (solid core, hard tapered rays, no gradient, no glow fringe), the way old
+ *  celestial atlases actually stamp stars. First cut was a plain stipple
+ *  disc; owner correction 2026-07-12: "dots should still be stars, just no
+ *  gradient/bloom" — the star SHAPE carries the atlas idiom, only the soft
+ *  falloff belonged to dusk. `spike` still grades ray length, same dial as
+ *  the dusk sprite. Canvas AA gives the 1px edge softening; everything else
+ *  is solid ink. */
+function makeStippleTexture(THREE: any, spike: number): any {
+  const s = 96;
   const cv = document.createElement('canvas');
   cv.width = cv.height = s;
   const g = cv.getContext('2d')!;
   const c = s / 2;
-  const grad = g.createRadialGradient(c, c, 0, c, c, c);
-  grad.addColorStop(0, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.66, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.74, 'rgba(255,255,255,0)'); // 2-3px AA ramp, then nothing
-  grad.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, s, s);
+  const R = c * (0.5 + 0.48 * spike); // ray reach rides the spike dial
+  const r = c * 0.3;                  // waist between rays (also the core disc)
+  g.fillStyle = 'rgba(255,255,255,1)';
+  // Four-pointed concave star: alternate outer ray tips and inner waist
+  // points every 45°.
+  g.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const ang = (i * Math.PI) / 4 - Math.PI / 2;
+    const rad2 = i % 2 === 0 ? R : r;
+    const x = c + Math.cos(ang) * rad2, y = c + Math.sin(ang) * rad2;
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.closePath();
+  g.fill();
+  // Round core so the body reads as a star with a heart, not a sharp jack.
+  g.beginPath();
+  g.arc(c, c, r * 1.05, 0, Math.PI * 2);
+  g.fill();
   const tex = new THREE.CanvasTexture(cv);
   tex.needsUpdate = true;
   return tex;
@@ -670,7 +707,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           // Dusk: luminous pastels (additive). Paper: the same hue coding as
           // dark chart INK (normal blending over the warm ground).
           const [r, g, b] = isPaper()
-            ? (n.type ? hslToRgb(hueOf(n.type), 0.55, 0.3) : [0.27, 0.24, 0.19])
+            ? (n.type ? paperInkFor(hueOf(n.type)) : [0.27, 0.24, 0.19])
             : (n.type ? hslToRgb(hueOf(n.type), 0.5, 0.62) : [0.62, 0.6, 0.55]);
           colBuf[i * 3] = r; colBuf[i * 3 + 1] = g; colBuf[i * 3 + 2] = b;
         }
@@ -714,7 +751,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
       let disc = makeStarTexture(THREE, TUNE.starSpike);
-      const stipple = makeStippleTexture(THREE); // paper's crisp ink dot (mode-swapped in applyMode)
+      let stipple = makeStippleTexture(THREE, TUNE.starSpike); // paper's crisp ink star (mode-swapped in applyMode)
       const geo = new THREE.BufferGeometry();
       // `boost` lets a FOCUS point (selection / neighbour / search hit) bypass
       // the torch: without it, a match off the beam axis multiplied down to the
@@ -1805,6 +1842,23 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           }
         }
         if (selKey && nbr) {
+          // INCUMBENCY FIRST (2026-07-12 "labels jump and pop while orbiting
+          // a selection"): a neighbour label that's already up KEEPS its slot
+          // and its displacement while the selection holds. Re-running the
+          // screen-space contest every 5 frames with fresh camera coords was
+          // evicting, re-admitting, and re-displacing labels mid-orbit — the
+          // set must be stable while the QUESTION (the selection) is stable;
+          // only the camera moved. Incumbents still register their rects so
+          // newcomers avoid them; transient overlap between incumbents during
+          // a big orbit is the cheaper artefact.
+          for (const [id, st] of labelObjs) {
+            if (st.role !== 'nbr' || st.dying || !nbr.has(id) || want.has(id)) continue;
+            const n = nodeById.get(id);
+            if (!n || !isVis(n)) continue;
+            const [sx, sy] = screenXY(n);
+            placed.push([sx + st.ox, sy + st.oy, boxOf(n), hOf(n)]);
+            want.set(id, { role: 'nbr', ox: st.ox, oy: st.oy });
+          }
           // EVERY neighbour that wins a collision slot gets a label — at its
           // depth-proportional size. No readable() admission gate: a far
           // neighbour is a tiny label, not a missing one. A colliding
@@ -1815,7 +1869,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             .map((id) => nodeById.get(id))
             .filter((n) => n && isVis(n) && !want.has(n.id))
             .sort((a, b) => (a.rank ?? N) - (b.rank ?? N));
-          let added = 0;
+          let added = [...want.values()].filter((w) => w.role === 'nbr').length;
           for (const n of cands) {
             if (added >= labelCap()) break;
             const [sx, sy] = screenXY(n);
@@ -1874,12 +1928,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           }
         }
 
-        // THE BEAM SUGGESTS — in both modes, but as the secondary voice: a
-        // smaller allowance under focus, collision priority already ceded to
-        // the focus labels above, and a candidate must hold the beam across
-        // consecutive syncs before it fades in (the camera drifting past
-        // something no longer pops a label).
-        const beamCap = focusActive ? TUNE.beamCapFocus : labelCap();
+        // THE BEAM SUGGESTS — but only AT REST. Under focus it is now silent
+        // (2026-07-12: with a selection held, orbiting churned the
+        // beamCapFocus slots by camera-relative torch rank — labels popping
+        // in/out behind the answer the user was actually reading). While a
+        // selection/highlight is active, the label set belongs to the
+        // question, not the camera.
+        const beamCap = focusActive ? 0 : labelCap();
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id)) continue;
@@ -2056,10 +2111,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               const t = makeStarTexture(THREE, TUNE.starSpike);
               disc.dispose?.();
               disc = t;
-              // Paper renders the stipple texture, not the star — don't let a
-              // spike-slider tweak swap it back mid-mode (applyMode restores
-              // the right one on the next mode change either way).
-              if (!isPaper()) ptMat.uniforms.uTex.value = t;
+              const st2 = makeStippleTexture(THREE, TUNE.starSpike);
+              stipple.dispose?.();
+              stipple = st2;
+              // Each mode keeps ITS OWN texture current under the spike dial —
+              // dusk the soft bloomable star, paper the crisp ink star.
+              ptMat.uniforms.uTex.value = isPaper() ? st2 : t;
             }
             torchUniforms.uConeIn.value = TUNE.coneIn;
             torchUniforms.uConeOut.value = TUNE.coneOut;
@@ -2118,7 +2175,6 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(beamF, 'beamOff', 0.02, 0.8);
           add(beamF, 'beamOpacity', 0, 1);
           add(beamF, 'beamSizeMult', 0.3, 1.5);
-          add(beamF, 'beamCapFocus', 0, 20, 1);
           add(beamF, 'labelCap', 0, 40, 1);
           const labelsF = gui.addFolder('labels');
           add(labelsF, 'selSizeMult', 0.8, 2.5);
