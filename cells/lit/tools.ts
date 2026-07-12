@@ -137,7 +137,18 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
     // own `[^/]+`-per-segment regex can't bind a nested slug (2026-07-12).
     ...plan.blocks.map((b) => ({ key: `${orderPrefix}${b.key}`, type: 'doc-order', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { seq: b.seq, doc: plan.slug, block: b.key } })),
   ];
-  await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts, edges: plan.edges });
+  // workspace.ingest caps at 100 facts/call — a doc with ~34+ blocks produces
+  // doc(1) + blocks(n) + orders(n) = 2n+1 facts and can exceed that on its
+  // own (confirmed live 2026-07-12: 5 large docs failed decompose entirely
+  // with "ingest is capped at 100 facts per call", never writing ANYTHING —
+  // not even a partial result). Chunk; edges only need to ride the FIRST
+  // batch (workspace.ingest's edges aren't per-fact-batched, one pass over
+  // plan.edges is enough regardless of how many fact batches it takes).
+  const INGEST_CHUNK = 100;
+  for (let i = 0; i < facts.length; i += INGEST_CHUNK) {
+    const batch = facts.slice(i, i + INGEST_CHUNK);
+    await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts: batch, ...(i === 0 ? { edges: plan.edges } : {}) });
+  }
 
   // Retire blocks/order-decorations this version no longer produces, in
   // parallel — a live run hit the cell's 10s Lambda timeout doing this (and
