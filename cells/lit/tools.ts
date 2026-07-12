@@ -141,10 +141,20 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   // doc(1) + blocks(n) + orders(n) = 2n+1 facts and can exceed that on its
   // own (confirmed live 2026-07-12: 5 large docs failed decompose entirely
   // with "ingest is capped at 100 facts per call", never writing ANYTHING —
-  // not even a partial result). Chunk; edges only need to ride the FIRST
-  // batch (workspace.ingest's edges aren't per-fact-batched, one pass over
-  // plan.edges is enough regardless of how many fact batches it takes).
-  const INGEST_CHUNK = 100;
+  // not even a partial result). Chunking to 100 wasn't enough on its own,
+  // though: `gw()` (every call this reaction makes, including each ingest
+  // chunk) crosses the SAME CloudFront-fronted /mcp gateway as everything
+  // else in this codebase, with the same ~30s default origin timeout —
+  // independent of any Lambda-side timeoutSeconds bump. workspace.ingest
+  // writes facts SEQUENTIALLY (~0.85s/fact observed), so a 100-fact chunk
+  // is ~85s of server-side work: the inner gw() call itself times out past
+  // 30s and throws, uncaught, aborting the whole decompose (confirmed live
+  // 2026-07-12: docs with ~90+ blocks got ZERO order decorations even after
+  // a 300s Lambda timeout bump — the outer Lambda had headroom, the INNER
+  // gateway call to workspace.ingest never got the chance to use it). 30
+  // facts/chunk (~25s at the observed per-fact rate) stays under that
+  // ceiling with margin.
+  const INGEST_CHUNK = 30;
   for (let i = 0; i < facts.length; i += INGEST_CHUNK) {
     const batch = facts.slice(i, i + INGEST_CHUNK);
     await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts: batch, ...(i === 0 ? { edges: plan.edges } : {}) });
