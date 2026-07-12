@@ -4,11 +4,19 @@
   **no direction chosen yet**. This is a request for comments, not a design ready to build.)
 - **Depends on:** ADR-0047 (home is the graph; "stage 2" introduced the PCA 2D/3D layout — never
   itself written back into ADR-0047's text, only in code comments), ADR-0030/0031 (the vector index
-  + inferred edges this shares infrastructure with), ADR-0081 (typed file ingestion — the corpus-growth
-  driver that surfaced this).
+  + inferred edges this shares infrastructure with — **and** the reactive embed-on-write mechanism this
+  RFC's layout piggybacks on, see Finding 6), ADR-0081 (typed file ingestion — the corpus-growth
+  driver that surfaced this), ADR-0040/0045 (the wiki-compile loop — a precedent for *not* feeding
+  everything into expensive derived structure, see Finding 7), ADR-0073 (the consolidation organ — an
+  active counter-force on corpus size, see Finding 8).
 - **Owner direction (verbatim intent):** log an RFC for decomposed embedding such that each fact can
   own its own [layout data], instead of a monolith fact of all embeddings. The general area, not yet a
   committed ask — explore options and trade-offs.
+- **Owner feedback (2026-07-12, incorporated below):** pull in the context of the platform's existing
+  embed-on-creation mechanism, the existing doc-ingest path, and the nascent LLM-wiki "compile" and
+  "consolidate" organs — not a direction statement, but the problem space needs to be understood against
+  what already exists before a solution is chosen. Findings 6–8 below are the result; the Options and
+  Open questions are otherwise unchanged.
 
 ## The question
 
@@ -50,6 +58,36 @@ a single fact aggregating the whole corpus?
    only place per-key data already lives. Any "decompose per fact" design has a natural home to
    consider: extend the *existing* per-key vector record's `metadata`, rather than inventing a new
    per-key substrate fact.
+6. **Embedding is already fully decomposed and reactive — this RFC is about placement, not embedding.**
+   ADR-0030's DynamoDB-stream-driven `vector-indexer` (`services/vector-indexer/handler.ts`) embeds
+   *every* live fact individually the moment it's written or changed — no batch step, no monolith, one
+   `VectorRecord` per key. That per-fact raw material (the 1024-dim vector) already exists for free by
+   the time `workspace.project` runs. What this RFC is actually asking is narrower than "decompose the
+   embedding": it's "decompose the *derived 2D/3D placement*" — a PCA projection *of* those
+   already-per-fact vectors, computed against the whole corpus's covariance structure (Finding 2, why it
+   can't itself be per-fact) and currently written back as one aggregate fact. Worth stating precisely so
+   the options aren't solving a problem ("embedding isn't decomposed") that doesn't exist.
+7. **The substrate has a live precedent for deliberately NOT feeding everything into expensive derived
+   structure — the "wiki compile" loop.** ADR-0040 wires a `_subscriptions/wiki.compile[.source]`
+   reaction that spawns an LLM agent (`@c15r/models.agent`) to synthesize + cross-link newly-captured
+   `source`/`reading` facts into the `kb/*` wiki. ADR-0045 made a deliberate, explicit exclusion: **the
+   `file`/docs corpus never triggers compile** — "the docs corpus is reference material, not captured
+   sources — auto-compiling ~90 docs would flood `kb/` with synthesis spam" (ADR-0045 §2). That is the
+   same *shape* of question Option D raises for `workspace.project` (should everything really get the
+   expensive treatment, or does the corpus already draw a line between "core content" and "reference
+   material" that a projection should respect too?) — already answered once, for a different expensive
+   reactive pipeline, in the same direction. It doesn't decide D, but it means D isn't a novel departure
+   from platform norms; it has a working precedent to model the cutoff policy on (by fact origin/type,
+   not just salience/recency).
+8. **The corpus isn't monotonically growing — the consolidation organ is an active counter-force.**
+   ADR-0073's `@c15r/consolidate` cell supersedes duplicate/low-standing facts each cycle
+   (`delta = backlogₜ₋₁ − backlogₜ`; live prod: backlog 1025 → 1014, delta +11 on its first two cycles).
+   A superseded fact drops out of the live vector index (the same stream indexer removes it, symmetric
+   with Finding 6's embed-on-write) and out of any subsequent `workspace.project` scan. So the growth
+   trajectory Finding 1's "~6,000-key wall" timeline assumes isn't pure ingest — it's ingest (ADR-0081,
+   adding) net consolidation (ADR-0073, removing, currently small relative to the ~1,251-decoration
+   ADR-0081 corpus but structurally aimed at exactly this kind of debt). Any future timeline estimate for
+   when the wall is actually hit should model both rates, not extrapolate ingest alone.
 
 ## Options (unranked — this RFC does not recommend one)
 
@@ -121,3 +159,11 @@ no per-fact records, no vector-metadata seam.
   single-fact-per-scope layout design stops making sense, regardless of sharding — i.e., should the
   answer instead be "the graph doesn't show everything past size X," reframing D from "stopgap" to
   "the actual long-term answer," with A/B/C solving a problem that reframing dissolves?
+- Finding 7's wiki-compile precedent excludes by *origin* (docs corpus vs. captured sources), not
+  salience/recency — does Option D's cutoff want the same axis (e.g. exclude `_`-prefixed plumbing and
+  maybe bulk-ingested `doc-block`s from the map by default, distinct from "top-N by score")? Worth
+  deciding whether D's policy should mirror ADR-0045's origin-based line or invent a new one.
+- If B ships (per-fact `_layout/<key>` sibling facts): who retires a layout point when its parent fact
+  is superseded — e.g. by ADR-0073's consolidation organ (Finding 8)? The vector-indexer already handles
+  this symmetrically for the embedding itself (REMOVE on supersede); a decomposed layout would need the
+  same discipline, or stale points accumulate as consolidate does its job.
