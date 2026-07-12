@@ -101,10 +101,17 @@ const TUNE_DEFAULTS = {
   // "lines earn ink only under focus" — movement is the same kind of ink).
   // Dusk only: paper's printed-map metaphor has no motion to carry.
   edgeFlowSpeed: 0.5, edgeFlowWidth: 0.35, edgeFlowGain: 1.4, edgeFlowCycles: 3,
-  // bloom — threshold ~0: EVERYTHING blooms. Each point wears a soft halo:
-  // the cloud reads as a star field, not instrument dots (with the edges
-  // stripped, this is what carries the atmosphere now).
-  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.05, exposure: 0.7,
+  // bloom — threshold restored to 0.6 (2026-07-12 regression fix): the
+  // 2026-07-12 owner re-grade set this to 0.05, which — combined with
+  // edgeAuthored's own bump to 0.24 that same pass and the corpus having
+  // grown substantially since (ADR-0081's backfill) — reintroduced the
+  // EXACT failure ensureComposer()'s own comment already documents: at a
+  // threshold this low, the dense core's additive edge/point SUM blooms in
+  // its entirety and clips to a white blob that swallows every label in it
+  // (confirmed live: the "dusk regression" screenshots this session). 0.6
+  // is the value that fixed it the first time — only genuinely bright
+  // points/edges bloom, not the whole resting wash.
+  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.7,
   bloomMode: 'on' as 'auto' | 'on' | 'off',
   // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
   starSpike: 0.55,
@@ -613,7 +620,19 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         m === 'paper'
           // outline == bg: the halo's job is to BE the ground (knock out
           // linework behind glyphs), not to add a milky edge around them.
-          ? { bg: '#ece2cb', text: '#2b2318', accent: '#8a6410', dim: '#6c614e', outline: '#ece2cb', pill: [0.925, 0.886, 0.796], capAuth: '#7a5c1a', capComp: '#5b5344', rel: '#6c614e' }
+          // Re-graded 2026-07-12 (owner report: "everything the same ink
+          // colour, no complementary typography treatment") — the old set
+          // (text/accent/dim/capAuth/capComp) were five shades of the same
+          // muted olive-brown, indistinguishable at a glance. THREE families
+          // now, a cartographic convention (warm=asserted, cool=inferred):
+          // near-black ink for base content (unchanged, still dominant),
+          // a venetian-red accent for selection ("you are here" — genuinely
+          // apart from the browns, not just a lighter/darker one), a rust
+          // sienna for AUTHORED places (a human named this), and a cool
+          // slate for anything the system inferred rather than asserted —
+          // computed constellations AND relation labels share it, tying
+          // "the system's own reading of the graph" to one visual language.
+          ? { bg: '#ece2cb', text: '#2b2318', accent: '#9c3a24', dim: '#8f8470', outline: '#ece2cb', pill: [0.925, 0.886, 0.796], capAuth: '#7a4a1f', capComp: '#5a6875', rel: '#5a6875' }
           : { bg: ink.sceneBg, text: ink.text, accent: ink.accent, dim: ink.dim, outline: '#0a0805', pill: [0, 0, 0], capAuth: '#e3c987', capComp: '#b7ad99', rel: '#a89e8a' };
       let PAL = paletteFor(TUNE.sceneMode);
       const isPaper = (): boolean => TUNE.sceneMode === 'paper';
