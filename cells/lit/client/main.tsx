@@ -173,7 +173,12 @@ async function syncCellLinks(cellKey: string, content: string): Promise<void> {
   } catch { /* links are best-effort, never block the save */ }
 }
 async function writeOrder(docId: string, key: string, seq: number, fold: boolean): Promise<void> {
-  outbox.stage(`_doc/${docId}/${key}`, { seq, fold }, { type: 'doc-order', tags: [`doc:${docId}`] });
+  // `doc`/`block` ride along explicitly, not just encoded in the key — a
+  // nested-slug docId (`docs/architecture/adr/x`) breaks the key-pattern's
+  // per-segment regex when deriving the `inDoc` membership edge back out of
+  // `_doc/<doc>/<block>` (2026-07-12 lit-doc-empties incident); the value
+  // fields are the fallback deriveBackboneEdges now reads.
+  outbox.stage(`_doc/${docId}/${key}`, { seq, fold, doc: docId, block: key }, { type: 'doc-order', tags: [`doc:${docId}`] });
 }
 async function saveDocMeta(docId: string, meta: DocValue): Promise<void> {
   outbox.stage(`doc:${docId}`, meta as unknown as Record<string, unknown>, { type: 'doc', tags: ['doc'] });

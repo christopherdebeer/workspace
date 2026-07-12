@@ -132,7 +132,10 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   const facts = [
     { key: plan.docKey, type: 'doc', tags: ['doc'], via: 'lit.decomposeMarkdown', value: { title: plan.title, summary: plan.summary } },
     ...plan.blocks.map((b) => ({ key: b.key, type: 'doc-block', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { content: b.content } })),
-    ...plan.blocks.map((b) => ({ key: `${orderPrefix}${b.key}`, type: 'doc-order', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { seq: b.seq } })),
+    // `doc`/`block` ride along explicitly (not just encoded in the key) —
+    // deriveBackboneEdges' key-encoded rule falls back to these when the key's
+    // own `[^/]+`-per-segment regex can't bind a nested slug (2026-07-12).
+    ...plan.blocks.map((b) => ({ key: `${orderPrefix}${b.key}`, type: 'doc-order', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { seq: b.seq, doc: plan.slug, block: b.key } })),
   ];
   await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts, edges: plan.edges });
 

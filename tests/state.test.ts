@@ -644,6 +644,53 @@ describe('derived structural backbone', () => {
     expect(has(edges, 'cell:x', 'inDoc', 'doc:demo')).toBe(true);
   });
 
+  it('key-encoded rule: falls back to same-named VALUE fields when a placeholder spans multiple path segments (2026-07-12 lit-doc-empties incident)', () => {
+    // A nested doc slug (ADR-0081's path-rooted, collision-proof convention)
+    // makes the key regex fail to match at all — `{doc}` would need to
+    // capture "docs/architecture/adr/x", but compileKeyPattern's per-segment
+    // `[^/]+` can only ever bind one path component. The order decoration's
+    // own value now carries `doc`/`block` explicitly for exactly this case.
+    const docSlug = 'docs/architecture/adr/0069-one-edge-query';
+    const blockKey = `doc-block:${docSlug}/0`;
+    const records = [
+      rec(`_doc/${docSlug}/${blockKey}`, 'doc-order', { seq: 0, doc: docSlug, block: blockKey }),
+      rec(`doc:${docSlug}`, 'doc', { title: 'ADR-0069' }),
+      rec(blockKey, 'doc-block', { content: 'hi' }),
+    ];
+    const rules = {
+      'doc-order': { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: 'doc:{doc}' }] },
+    };
+    const edges = deriveBackboneEdges(records, rules);
+    expect(has(edges, blockKey, 'inDoc', `doc:${docSlug}`)).toBe(true);
+  });
+
+  it('key-encoded rule: the key match still wins when it DOES parse (value fields are a fallback, not an override)', () => {
+    const records = [
+      rec('_doc/doc:demo/cell:x', 'doc-order', { seq: 1, doc: 'doc:wrong', block: 'cell:wrong' }),
+      rec('doc:demo', 'doc', { title: 'Demo' }),
+      rec('cell:x', 'doc-block', { content: 'hi' }),
+    ];
+    const rules = {
+      'doc-order': { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: '{doc}' }] },
+    };
+    const edges = deriveBackboneEdges(records, rules);
+    expect(has(edges, 'cell:x', 'inDoc', 'doc:demo')).toBe(true);
+    expect(edges.some((e) => e.from === 'cell:wrong' || e.to === 'doc:wrong')).toBe(false);
+  });
+
+  it('key-encoded rule: no edge (not a throw) when a placeholder is unbound by BOTH key and value', () => {
+    const docSlug = 'docs/nested/path';
+    const blockKey = `doc-block:${docSlug}/0`;
+    // No `doc`/`block` fields on the value this time — the key can't parse
+    // (nested slug) and there's nothing to fall back to.
+    const records = [rec(`_doc/${docSlug}/${blockKey}`, 'doc-order', { seq: 0 })];
+    const rules = {
+      'doc-order': { keyPattern: '_doc/{doc}/{block}', keyEdges: [{ from: '{block}', rel: 'inDoc', to: 'doc:{doc}' }] },
+    };
+    expect(() => deriveBackboneEdges(records, rules)).not.toThrow();
+    expect(deriveBackboneEdges(records, rules).some((e) => e.rel === 'inDoc')).toBe(false);
+  });
+
   it('slice-declared refs apply too: a _types/<type> fact with a ref field drives the rule', () => {
     // claim is slice-declared (not canonical); its ref must still be picked up.
     const records = [

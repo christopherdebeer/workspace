@@ -1080,16 +1080,34 @@ export function deriveBackboneEdges(
         const keys = ref.list ? (Array.isArray(raw) ? raw : []) : raw != null ? [raw] : [];
         for (const k of keys) if (typeof k === 'string') push(r.key, ref.rel ?? ref.name, k, true, EMBEDDED_STRENGTH);
       }
-      // key-encoded: parse this fact's key, emit the declared edge(s)
+      // key-encoded: parse this fact's key, emit the declared edge(s). A
+      // placeholder's per-segment key regex (`[^/]+`, compileKeyPattern) can't
+      // capture a group that itself spans multiple `/`-separated path
+      // components — e.g. `_doc/{doc}/{block}` breaks the moment `doc` is a
+      // nested path slug (`docs/architecture/adr/x`), which is now the norm
+      // for ADR-0081-synced docs (2026-07-12 lit-doc-empties incident: the key
+      // regex silently matched nothing, so EVERY such doc's membership derived
+      // to zero). There's no way to disambiguate that generically from the key
+      // alone (the doc slug is embedded twice with no distinguishing
+      // delimiter), so a placeholder the key couldn't bind falls back to a
+      // same-named field on the fact's own VALUE — the source of truth moves
+      // from "parse it back out of the key" to "the writer already told us."
       if (rules.keyPattern && rules.keyEdges?.length) {
         const compiled = compileKeyPattern(rules.keyPattern);
-        const groups = compiled?.rx.exec(r.key);
-        if (compiled && groups) {
+        if (compiled) {
+          const groups = compiled.rx.exec(r.key);
           const g: Record<string, string> = {};
-          compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
-          // `source: r.key` = the decoration that ordered/placed the member, so
-          // extensional membership can recover its narrative `seq` (ADR-0005).
-          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, MEMBERSHIP_STRENGTH, r.key);
+          if (groups) compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
+          for (const n of compiled.names) {
+            if (g[n] !== undefined) continue;
+            const v = value[n];
+            if (typeof v === 'string' && v) g[n] = v;
+          }
+          if (compiled.names.every((n) => g[n] !== undefined)) {
+            // `source: r.key` = the decoration that ordered/placed the member, so
+            // extensional membership can recover its narrative `seq` (ADR-0005).
+            for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, MEMBERSHIP_STRENGTH, r.key);
+          }
         }
       }
     }
