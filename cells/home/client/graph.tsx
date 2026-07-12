@@ -94,6 +94,13 @@ const TUNE_DEFAULTS = {
   // since the resting mat itself now carries more of the structure).
   edgeSimilar: 0.035, edgeMember: 0.06, edgeDerived: 0.06, edgeAuthored: 0.24,
   focusEdgeAlpha: 0.76, atmosphereDim: 0.49,
+  // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
+  // already fanning from a selection/hit) — direction is source→target, so
+  // the animation reads as energy moving the way the edge actually points.
+  // Resting edges stay static on purpose (the file's own standing rule:
+  // "lines earn ink only under focus" — movement is the same kind of ink).
+  // Dusk only: paper's printed-map metaphor has no motion to carry.
+  edgeFlowSpeed: 0.5, edgeFlowWidth: 0.35, edgeFlowGain: 1.4, edgeFlowCycles: 3,
   // bloom — threshold ~0: EVERYTHING blooms. Each point wears a soft halo:
   // the cloud reads as a star field, not instrument dots (with the edges
   // stripped, this is what carries the atmosphere now).
@@ -762,12 +769,16 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const E = links.length;
       const eposBuf = new Float32Array(E * 6);
       const ecolBuf = new Float32Array(E * 6);
+      // Direction, source(0)→target(1) — the flow pulse (below) travels along
+      // increasing t, so a fan edge visibly moves the way it actually points.
+      const eflowBuf = new Float32Array(E * 2);
       const edgeRGB: Array<[number, number, number]> = links.map((l: any) => hexToRgb(edgeStyle(l).stroke));
       for (let i = 0; i < E; i++) {
         const l = links[i];
         const ai = idx.get(idOf(l.source)) ?? 0, bi = idx.get(idOf(l.target)) ?? 0;
         eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
         eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
+        eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1;
       }
       // Lower than the 2D strokes: additive One/One means overlapping edges SUM,
       // so hubs would otherwise clip to a white hairball. Depth-fade (in the
@@ -830,23 +841,48 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
       egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
       egeo.setAttribute('boost', new THREE.BufferAttribute(eboostBuf, 1));
+      egeo.setAttribute('flow', new THREE.BufferAttribute(eflowBuf, 1));
       // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
       // point cloud — otherwise they stay full-bright at every depth and flatten
       // the atmosphere. Per-vertex colour already carries the focus/selection
       // alpha (premultiplied); the shader multiplies in the distance falloff.
       const eMat = new THREE.ShaderMaterial({
-        uniforms: { ...torchUniforms, uPaper: { value: isPaper() ? 1 : 0 }, uInk: { value: new THREE.Vector3(0.353, 0.31, 0.228) } },
+        uniforms: {
+          ...torchUniforms,
+          uPaper: { value: isPaper() ? 1 : 0 },
+          uInk: { value: new THREE.Vector3(0.353, 0.31, 0.228) },
+          uTime: { value: 0 },
+          uFlowSpeed: { value: TUNE.edgeFlowSpeed },
+          uFlowWidth: { value: TUNE.edgeFlowWidth },
+          uFlowGain: { value: TUNE.edgeFlowGain },
+          uFlowCycles: { value: TUNE.edgeFlowCycles },
+        },
         vertexShader:
-          'attribute vec3 color; attribute float boost; varying vec3 vColor;' +
+          'attribute vec3 color; attribute float boost; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow;' +
           TORCH_GLSL +
-          'void main(){ vColor = color * max(torch(position), boost); vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          'void main(){ vColor = color * max(torch(position), boost); vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader:
-          'uniform float uPaper; uniform vec3 uInk; varying vec3 vColor;' +
+          'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
+          // Flow: a soft travelling pulse along FOCUS edges only (vBoost>0 —
+          // the ones already fanning from a selection/hit), source(flow=0)→
+          // target(flow=1), so the animation reads as energy moving the way
+          // the edge actually points. Dusk only — paper's printed-map
+          // metaphor has no motion to carry (matches applyMode's own dusk/
+          // paper split for everything else in this shader).
+          'void main(){' +
+          ' vec3 col = vColor;' +
+          ' if (uPaper < 0.5 && vBoost > 0.5) {' +
+          '   float p = fract(vFlow * uFlowCycles - uTime * uFlowSpeed);' +
+          '   float pulse = smoothstep(0.0, uFlowWidth, p) * smoothstep(1.0, 1.0 - uFlowWidth, p);' +
+          '   col += vColor * pulse * uFlowGain;' +
+          ' }' +
+          ' if (uPaper > 0.5) gl_FragColor = vec4(uInk, min(vColor.r * 2.5, 1.0));' +
           // paper: fixed ink colour, the buffer carries ALPHA (applyEdgeColor
           // writes grayscale there in paper mode), gained ×2.5 so hairlines
-          // survive on the ground; dusk: premultiplied additive (original).
-          'void main(){ if (uPaper > 0.5) gl_FragColor = vec4(uInk, min(vColor.r * 2.5, 1.0));' +
-          ' else gl_FragColor = vec4(vColor, 1.0); }',
+          // survive on the ground; dusk: premultiplied additive (original),
+          // plus the flow pulse added above.
+          ' else gl_FragColor = vec4(col, 1.0); }',
         transparent: true,
         depthWrite: false,
         blending: isPaper() ? THREE.NormalBlending : THREE.CustomBlending,
@@ -1823,6 +1859,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             // no cliff where labels used to pop.
             target = TUNE.beamOpacity * smoothstep(TUNE.beamOff, 0.95, torch);
           }
+          // Paper mode has no additive glow to carry a fractional alpha — the
+          // SAME 0.57 ceiling that reads as a soft dusk glow reads as flat gray
+          // ink on paper (2026-07-12 owner report: "muddy grey" labels, edges
+          // already had this exact compensation via eMat's `min(x*2.5,1)` gain,
+          // labels never did). Gains toward full ink as admission approaches
+          // its own ceiling, instead of capping at a fraction of it.
+          if (isPaper()) target = Math.min(target * 2.5, 1);
           if (st.dying) target = 0;
           st.cur += (target - st.cur) * k;
           if (st.dying && st.cur < 0.03) {
@@ -1882,6 +1925,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         camera.getWorldPosition(camPos);
         torchUniforms.uFocus.value.copy(focusVec);
         torchUniforms.uCam.value.copy(camPos);
+        eMat.uniforms.uTime.value = clock.elapsedTime;
         // Re-pick the beam-lit label set a few times a second (DOM churn is the
         // cost; the beam moves slowly), then size/opacity every frame.
         if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
@@ -1934,6 +1978,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             torchUniforms.uDepthOut.value = SPREAD * TUNE.depthOut;
             torchUniforms.uFloor.value = TUNE.torchFloor;
             torchUniforms.uSizeBoost.value = TUNE.boostSizeGain;
+            eMat.uniforms.uFlowSpeed.value = TUNE.edgeFlowSpeed;
+            eMat.uniforms.uFlowWidth.value = TUNE.edgeFlowWidth;
+            eMat.uniforms.uFlowGain.value = TUNE.edgeFlowGain;
+            eMat.uniforms.uFlowCycles.value = TUNE.edgeFlowCycles;
             if (useBloom()) ensureComposer();
             if (bloomPass) {
               bloomPass.strength = TUNE.bloomStrength;
@@ -2002,6 +2050,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(edgesF, 'edgeAuthored', 0, 1, 0.005);
           add(edgesF, 'focusEdgeAlpha', 0, 1);
           add(edgesF, 'atmosphereDim', 0, 1);
+          add(edgesF, 'edgeFlowSpeed', 0, 2, 0.05); // cycles/sec along the edge
+          add(edgesF, 'edgeFlowWidth', 0.05, 0.5, 0.01); // pulse width (0..1 of the edge)
+          add(edgesF, 'edgeFlowGain', 0, 3, 0.05); // brightness added at the pulse's peak
+          add(edgesF, 'edgeFlowCycles', 1, 8, 1); // pulses per edge, source→target
           // Ranges widened where the owner's grade railed the old stops
           // (constCap/anchorCap max, anchorSizeMult min, labelOutline max).
           const placesF = gui.addFolder('places');
