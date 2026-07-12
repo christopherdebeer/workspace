@@ -1094,11 +1094,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const fitPillTo = (text: any, pill: any, centerY: number): void => {
         const b = text.textRenderInfo?.blockBounds;
         if (!b) return;
-        // Paper clamps the feather: dusk's fully-exhaled veil (feather 1) is
-        // atmosphere against a dark additive field, but on cream it spreads
-        // the mask into a wash that stops nothing — print label halos are
-        // crisp WINDOWS cut into the linework, not gradients.
-        const feather = isPaper() ? Math.min(TUNE.pillFeather, 0.3) : TUNE.pillFeather;
+        // Dial authority (2026-07-12 owner report: caption pills ignored the
+        // tuner in paper mode): the feather slider governs BOTH modes — the
+        // earlier paper-side clamp was a hardcoded judgment call sitting on
+        // top of the instrument the owner actually tunes with.
+        const feather = TUNE.pillFeather;
         const h = b[3] - b[1];
         const tw = (b[2] - b[0]) + h;   // ~0.5em side padding
         const th = h * 1.55;            // vertical padding
@@ -1304,7 +1304,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // inset:0, so client px == canvas px).
       const labelAt = (cx: number, cy: number): string | null => {
         for (const [id, st] of labelObjs) {
-          if (st.cur < 0.25) continue; // a barely-there label shouldn't catch taps
+          if (st.cur < 0.2) continue; // a barely-there label shouldn't catch taps
           const n = nodeById.get(id);
           if (!n) continue;
           const camD = camPos.distanceTo(st.grp.position) || 1;
@@ -1316,19 +1316,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const cxc = sx + st.cox; // label centre column (with displacement)
           if (b) {
             // Block bounds are text-local (anchor top-centre at y=0), hung at
-            // text.position.y below the node; world +y is screen −y. Pad the
-            // rect to a finger-sized minimum (44×28) — small deep labels are
-            // legitimate tap targets too.
+            // text.position.y below the node; world +y is screen −y. The tap
+            // rect must cover what the finger SEES — the PILL, which grows
+            // well past the text (up to ~3.4× the text box at feather 1), not
+            // just the glyph bounds (2026-07-12 owner report: taps on a
+            // label's visible pill fell through to the node raycast). Pad
+            // horizontally with the pill's feather headroom and floor the
+            // rect at a real finger size (56×36).
             let top = sy + st.coy - (st.text.position.y + b[3]) * pxPer;
             let bot = sy + st.coy - (st.text.position.y + b[1]) * pxPer;
-            const vPad = Math.max(4, (28 - (bot - top)) / 2);
+            const pillPad = (bot - top) * 1.2 * TUNE.pillFeather; // feather headroom, both axes
+            const vPad = Math.max(8, (36 - (bot - top)) / 2, pillPad / 2);
             top -= vPad; bot += vPad;
-            const w = Math.max(44, (b[2] - b[0]) * pxPer + 10);
+            const w = Math.max(56, (b[2] - b[0]) * pxPer + 24 + pillPad);
             if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= top && cy <= bot) return id;
           } else {
-            const w = Math.max(44, String(n.label).length * fs * 0.62);
+            const w = Math.max(56, String(n.label).length * fs * 0.62);
             const ly = sy + st.coy + rad(n) * 1.15 * pxPer;
-            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= ly - 3 && cy <= ly + fs * 1.6) return id;
+            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= ly - 8 && cy <= ly + fs * 1.6 + 8) return id;
           }
         }
         return null;
@@ -1688,8 +1693,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
           const pxPer = ((H / 2) / camD) * (c.grp.scale?.x || 1);
           const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
-          const w = Math.max(44, (b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer) + 10);
-          const h = Math.max(28, (b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer) + 10);
+          // Same pill-aware slop as labelAt: the tappable thing is the pill
+          // window the eye sees, not the glyph box (2026-07-12).
+          const rawH = b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer;
+          const pillPad = rawH * 1.2 * TUNE.pillFeather;
+          const w = Math.max(56, (b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer) + 24 + pillPad);
+          const h = Math.max(36, rawH + 16 + pillPad);
           if (Math.abs(cx - sx) < w / 2 && Math.abs(cy - sy) < h / 2) return c;
         }
         return null;
@@ -1745,10 +1754,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           } else c.grp.scale.setScalar(1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
-          // Paper floors the caption mask at 0.88: a caption OVERPRINTS the
-          // densest ink in the scene (it sits at its cluster's centroid by
-          // construction), so its window has to actually block linework.
-          c.pill.material.uniforms.uAlpha.value = (isPaper() ? Math.max(TUNE.pillAlpha, 0.88) : TUNE.pillAlpha) * c.cur;
+          // Dial authority: pillAlpha governs captions exactly like labels,
+          // in both modes (an earlier paper-side 0.88 floor overrode the
+          // tuner — owner report 2026-07-12).
+          c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
           const cOccl = TUNE.pillAlpha > 0.95;
           c.pill.renderOrder = cOccl ? -1 : 8;
           c.pill.material.depthWrite = cOccl;
