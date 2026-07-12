@@ -66,30 +66,34 @@ interface GEdge {
 // to localStorage, and pokes the refresh hooks — so feel can be dialled on a
 // PHONE against live data, then the winning values sent back to be hard-coded.
 const TUNE_DEFAULTS = {
-  // torch (the scene LIGHTING — owner re-grade 2026-07-10 #2: a graded VIGNETTE,
-  // not a flood. coneIn/depthIn at ~0 mean there is no full-brightness plateau
-  // at all — light falls continuously from the focal point outward in angle AND
-  // depth, down to the 0.2 floor. Shape over flatness; brightness is bought
-  // back with exposure, not with a wider hot zone.)
-  coneIn: 0.02, coneOut: 1.2, depthIn: 0.05, depthOut: 4, torchFloor: 0.2,
+  // torch (the scene LIGHTING — owner re-grade 2026-07-12: coneIn/depthIn at 0
+  // means the full-brightness plateau starts AT the focal point itself — no
+  // graded falloff onset, angle/depth attenuation begin immediately. Floor
+  // lowered to 0.09 (was 0.2): the periphery goes darker before the torch
+  // picks it up, sharpening the beam's contrast against the rest.)
+  coneIn: 0, coneOut: 1.2, depthIn: 0, depthOut: 4, torchFloor: 0.09,
   // label admission (the SELECTOR) — decoupled from the lighting: labels need
   // a sharp instrument even when the light is flat, so admission ranks by its
-  // own narrow cone. beamOn 0.85 / beamOff 0.2 = admit dead-centre, linger.
-  labelConeIn: 0.14, labelConeOut: 0.42,
+  // own narrow cone. Owner re-grade 2026-07-12: labelConeOut widened to 1.2
+  // (was 0.42) — admission now spans nearly the whole torch cone, not just
+  // its dead-centre.
+  labelConeIn: 0.02, labelConeOut: 1.2,
   beamOn: 0.85, beamOff: 0.2, beamCapFocus: 5, labelCap: 0, // labelCap 0 = viewport default (12/22)
-  beamOpacity: 0.57, beamSizeMult: 0.39,
-  // focus labels (owner grade 2026-07-11 #4): hits headline (1.17), the
-  // selection stays measured, neighbours recede — and slow soft fades.
-  selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 0.41, nbrOpNear: 0.81,
-  labelFade: 1, // lerp rate: higher = snappier (owner likes it SLOW)
+  beamOpacity: 0.57, beamSizeMult: 0.3,
+  // focus labels (owner re-grade 2026-07-12): hits headline (1.17), and
+  // neighbours now hold FULL opacity near and far (1/1, was 0.41/0.81) —
+  // size still grades the role, opacity no longer does.
+  selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 1, nbrOpNear: 1,
+  labelFade: 4, // lerp rate: higher = snappier (owner re-grade 2026-07-12: was 1/SLOW, now snappy)
   // nodes — neighbours barely lift (0.2): selection lights the ANCHOR, the
   // neighbourhood whispers; the fan edges carry the structure.
-  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1.0,
-  // edges — the resting lattice all but erased (owner: strip the field).
-  // Structure at rest is carried by placement + captions; lines earn ink
-  // only under focus (the full-alpha fan).
-  edgeSimilar: 0.01, edgeMember: 0.035, edgeDerived: 0.04, edgeAuthored: 0.035,
-  focusEdgeAlpha: 1.0, atmosphereDim: 0.45,
+  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1,
+  // edges (owner re-grade 2026-07-12: brought back up from "all but erased" —
+  // the resting lattice now reads at rest, authored edges especially (0.24,
+  // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
+  // since the resting mat itself now carries more of the structure).
+  edgeSimilar: 0.035, edgeMember: 0.06, edgeDerived: 0.06, edgeAuthored: 0.24,
+  focusEdgeAlpha: 0.76, atmosphereDim: 0.49,
   // bloom — threshold ~0: EVERYTHING blooms. Each point wears a soft halo:
   // the cloud reads as a star field, not instrument dots (with the edges
   // stripped, this is what carries the atmosphere now).
@@ -112,15 +116,17 @@ const TUNE_DEFAULTS = {
   anchorCap: 32, anchorOpacity: 1, anchorSizeMult: 0.1,
   // in-scene label furniture. The dial is a real continuum: below ~0.95 the
   // pill is a translucent VEIL rendered over the cloud (genuine gradient —
-  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER.
-  // Owner grade: a gentle veil (0.39) with the soft feather.
-  pillAlpha: 0.39, pillFeather: 0.65, labelOutline: 0.33,
+  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER. Owner
+  // re-grade 2026-07-12: pillAlpha up to 0.61 (was 0.39) and pillFeather to
+  // the max 1 (was 0.65) — a heavier, more diffuse veil.
+  pillAlpha: 0.61, pillFeather: 1, labelOutline: 0.35,
   // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
   // label that flies close now carries an OPAQUE pill, and unbounded it
   // becomes a viewport-eating billboard (the mis-step). Far labels still
   // shrink honestly; only the near extreme compresses toward this cap.
-  // 0 = uncapped (the old behaviour).
-  labelMaxPx: 24,
+  // 0 = uncapped (the old behaviour). Owner re-grade 2026-07-12: tightened
+  // to 8px (was 24) — near labels compress much harder now.
+  labelMaxPx: 8,
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
