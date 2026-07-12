@@ -508,6 +508,29 @@ function makeStarTexture(THREE: any, spike: number): any {
   tex.needsUpdate = true;
   return tex;
 }
+/** The PAPER point sprite: a crisp engraved stipple dot — hard edge, tiny AA
+ *  ramp, no glow fringe, no spikes. The star texture above is designed to be
+ *  summed additively and bloomed; under paper's normal blending its soft
+ *  gradient reads as an out-of-focus watercolor blot (the 2026-07-12 "lacks
+ *  legibility/refinement" screenshots ARE that texture on cream). Print wants
+ *  ink dots, not glow — a different primitive, not a different palette. */
+function makeStippleTexture(THREE: any): any {
+  const s = 64;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d')!;
+  const c = s / 2;
+  const grad = g.createRadialGradient(c, c, 0, c, c, c);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.66, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.74, 'rgba(255,255,255,0)'); // 2-3px AA ramp, then nothing
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, s, s);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
+}
 /** A hollow ring sprite — the selection highlight around the chosen node. */
 function makeRingTexture(THREE: any): any {
   const s = 128;
@@ -691,6 +714,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
       let disc = makeStarTexture(THREE, TUNE.starSpike);
+      const stipple = makeStippleTexture(THREE); // paper's crisp ink dot (mode-swapped in applyMode)
       const geo = new THREE.BufferGeometry();
       // `boost` lets a FOCUS point (selection / neighbour / search hit) bypass
       // the torch: without it, a match off the beam axis multiplied down to the
@@ -744,22 +768,29 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
         ' return max(uFloor, ang * dep); }';
       const ptMat = new THREE.ShaderMaterial({
-        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
+        uniforms: { uTex: { value: isPaper() ? stipple : disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
         vertexShader:
           'attribute float size; attribute float alpha; attribute vec3 color; attribute float boost;' +
-          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost;' +
+          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost; uniform float uPaper;' +
           TORCH_GLSL +
           'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
           // Focus points also grow a little — brightness alone undersold a
           // small match dot; size makes the hit read as an OBJECT.
-          'vAlpha = alpha * max(torch(position), boost); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uScale / max(vd, 1.0));' +
+          // PAPER: no torch — print has uniform lighting; ink weight comes
+          // from salience (the DOI already baked into `alpha`), never from
+          // where the camera happens to aim. And print dots are SMALL —
+          // engraved stipple, not glow discs (×0.6).
+          'float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost);' +
+          'vAlpha = alpha * lit; gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; uniform float uPaper; varying float vAlpha; varying vec3 vColor;' +
           'void main(){ float m = texture2D(uTex, gl_PointCoord).a;' +
-          // paper: ink stars, normal blending (colour + real alpha); dusk:
-          // premultiplied additive glow (the original path, byte-identical).
-          ' if (uPaper > 0.5) { gl_FragColor = vec4(vColor, min(vAlpha * m, 1.0)); }' +
+          // paper: crisp stipple ink (the ×1.5 gain lifts mid-salience dots
+          // from tint to ink — resting DOI alphas were graded for additive
+          // glow, a touch thin as literal coverage); dusk: premultiplied
+          // additive glow (the original path, byte-identical).
+          ' if (uPaper > 0.5) { gl_FragColor = vec4(vColor, min(vAlpha * m * 1.5, 1.0)); }' +
           ' else { gl_FragColor = vec4(vColor * vAlpha * m, 1.0); } }',
         transparent: true,
         depthWrite: false,
@@ -882,9 +913,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           uFlowCycles: { value: TUNE.edgeFlowCycles },
         },
         vertexShader:
-          'attribute vec3 color; attribute float boost; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow;' +
+          'attribute vec3 color; attribute float boost; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper;' +
           TORCH_GLSL +
-          'void main(){ vColor = color * max(torch(position), boost); vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          // Paper skips the torch, same as the points: linework on a printed
+          // map doesn't dim by camera aim — its weight hierarchy is carried
+          // entirely by the per-rel alphas applyEdgeColor already grades.
+          'void main(){ float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
           'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
@@ -1005,16 +1039,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const fitPillTo = (text: any, pill: any, centerY: number): void => {
         const b = text.textRenderInfo?.blockBounds;
         if (!b) return;
+        // Paper clamps the feather: dusk's fully-exhaled veil (feather 1) is
+        // atmosphere against a dark additive field, but on cream it spreads
+        // the mask into a wash that stops nothing — print label halos are
+        // crisp WINDOWS cut into the linework, not gradients.
+        const feather = isPaper() ? Math.min(TUNE.pillFeather, 0.3) : TUNE.pillFeather;
         const h = b[3] - b[1];
         const tw = (b[2] - b[0]) + h;   // ~0.5em side padding
         const th = h * 1.55;            // vertical padding
-        const grow = 1 + 2.4 * TUNE.pillFeather; // feather headroom
+        const grow = 1 + 2.4 * feather; // feather headroom
         const qw = tw * ((tw < th * 2 ? grow : 1 + (grow - 1) * 0.6)); // long strips grow less in x
         const qh = th * grow;
         pill.scale.set(qw, qh, 1);
         pill.material.uniforms.uSize.value.set(qw, qh);
         pill.material.uniforms.uInner.value.set(tw / qw, th / qh);
-        pill.material.uniforms.uFeather.value = TUNE.pillFeather;
+        pill.material.uniforms.uFeather.value = feather;
         pill.position.set((b[0] + b[2]) / 2, centerY + (b[1] + b[3]) / 2, -1.5);
         pill.visible = true;
       };
@@ -1252,17 +1291,23 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (moved) return;
         const lid = labelAt(e.clientX, e.clientY);
         if (lid) { api.current?.select(lid, true); return; }
-        const n = pickAt(e.clientX, e.clientY);
-        if (n) { api.current?.select(n.id); return; }
         // A caption is a DOOR: an AUTHORED place selects its container fact
         // (context panel: members as neighbours, open ↗ to the board/doc);
-        // a computed place just flies to frame its region.
+        // a computed place just flies to frame its region. Captions are
+        // tested BEFORE the raw point pick (2026-07-12 "captions are not
+        // selectable" report): they sit at cluster centroids — the densest
+        // regions of the cloud — so with the point raycast first, some stray
+        // 3px dot always won the tap and the caption test never ran. A
+        // deliberate typographic target outranks ambient points, same as the
+        // fact labels above.
         const c = constellationAt(e.clientX, e.clientY);
         if (c) {
           if (c.key && nodeById.has(c.key)) api.current?.select(c.key, true);
           else frame(c.x, c.y, c.z, c.r * 1.5);
           return;
         }
+        const n = pickAt(e.clientX, e.clientY);
+        if (n) { api.current?.select(n.id); return; }
         api.current?.select(null);
       };
       renderer.domElement.addEventListener('pointerdown', onDown);
@@ -1442,7 +1487,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // Authored places carry a whisper of the accent — a view is intent.
         text.color = authored ? PAL.capAuth : PAL.capComp;
         text.outlineColor = PAL.outline;
-        text.outlineWidth = '4%';
+        // Dusk: hairline (the black pill veil does the masking there). Paper:
+        // a REAL knockout — 4% left the caps to be chewed by the tangle
+        // (2026-07-12 "captions disappear into the tangle" report; fact
+        // labels never had this problem because they get TUNE.labelOutline's
+        // 35%). Cartographic convention: area labels overprint detail, but
+        // always behind a halo of ground.
+        text.outlineWidth = isPaper() ? '14%' : '4%';
         text.fillOpacity = 0;
         text.outlineOpacity = 0;
         text.renderOrder = 9;
@@ -1639,7 +1690,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           } else c.grp.scale.setScalar(1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
-          c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
+          // Paper floors the caption mask at 0.88: a caption OVERPRINTS the
+          // densest ink in the scene (it sits at its cluster's centroid by
+          // construction), so its window has to actually block linework.
+          c.pill.material.uniforms.uAlpha.value = (isPaper() ? Math.max(TUNE.pillAlpha, 0.88) : TUNE.pillAlpha) * c.cur;
           const cOccl = TUNE.pillAlpha > 0.95;
           c.pill.renderOrder = cOccl ? -1 : 8;
           c.pill.material.depthWrite = cOccl;
@@ -1664,6 +1718,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         scene.background = new THREE.Color(PAL.bg);
         ptMat.uniforms.uPaper.value = paper ? 1 : 0;
         ptMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
+        // Different PRIMITIVE per mode, not just different constants: paper
+        // renders crisp engraved stipple dots, dusk the soft bloomable star.
+        ptMat.uniforms.uTex.value = paper ? stipple : disc;
         eMat.uniforms.uPaper.value = paper ? 1 : 0;
         eMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
         applyNodeColors();
@@ -1677,6 +1734,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const c of constellations) {
           c.text.color = c.authored ? PAL.capAuth : PAL.capComp;
           c.text.outlineColor = PAL.outline;
+          c.text.outlineWidth = paper ? '14%' : '4%'; // see addConstellation
           c.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
         }
         for (const [, o] of edgeLabelObjs) (o.element as HTMLElement).style.color = PAL.rel;
@@ -1998,7 +2056,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               const t = makeStarTexture(THREE, TUNE.starSpike);
               disc.dispose?.();
               disc = t;
-              ptMat.uniforms.uTex.value = t;
+              // Paper renders the stipple texture, not the star — don't let a
+              // spike-slider tweak swap it back mid-mode (applyMode restores
+              // the right one on the next mode change either way).
+              if (!isPaper()) ptMat.uniforms.uTex.value = t;
             }
             torchUniforms.uConeIn.value = TUNE.coneIn;
             torchUniforms.uConeOut.value = TUNE.coneOut;
@@ -2159,7 +2220,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (crumbTimer) clearTimeout(crumbTimer);
         crumb.remove();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
-        disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
+        disc.dispose?.(); stipple.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
     }
 
