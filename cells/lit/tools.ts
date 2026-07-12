@@ -107,7 +107,7 @@ async function ensureBootstrap(): Promise<void> {
 interface QueryEntry { key: string; value?: unknown }
 interface NeighborsResult { outbound?: Array<{ to: string; rel: string }> }
 
-async function decomposeMarkdown(args: { path?: unknown; content?: unknown; token?: unknown }): Promise<{ docKey: string; blocks: number; edgesAdded: number; edgesRemoved: number; blocksRetired: number }> {
+async function decomposeMarkdown(args: { path?: unknown; content?: unknown; token?: unknown }): Promise<{ docKey: string; blocks: number; edgesAdded: number; edgesRemoved: number; blocksRetired: number; chunksFailed?: number }> {
   const path = typeof args.path === 'string' ? args.path : '';
   const content = typeof args.content === 'string' ? args.content : '';
   const token = typeof args.token === 'string' ? args.token : '';
@@ -128,36 +128,45 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   const wantedBlockKeys = plan.blocks.map((b) => b.key);
   const retiredKeys = staleKeys(existingBlockKeys, wantedBlockKeys);
 
-  // Facts: the doc meta, every block, every order decoration — one bulk ingest.
+  // Facts, INTERLEAVED (2026-07-12 #2): doc first, then each block IMMEDIATELY
+  // followed by its own order decoration. The old ordering (all blocks, then
+  // all orders) put every membership decoration in the LAST chunks — so any
+  // mid-run failure left blocks-without-orders: content written, doc empty
+  // (the agency-and-identity/sigma-calculus pattern: 99 blocks, 0 orders,
+  // across three separate runs). With pairs interleaved, every completed
+  // chunk leaves a cleanly READABLE PREFIX of the doc; a partial run is a
+  // shorter doc, not a broken one, and an idempotent re-run extends it.
   const facts = [
     { key: plan.docKey, type: 'doc', tags: ['doc'], via: 'lit.decomposeMarkdown', value: { title: plan.title, summary: plan.summary } },
-    ...plan.blocks.map((b) => ({ key: b.key, type: 'doc-block', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { content: b.content } })),
-    // `doc`/`block` ride along explicitly (not just encoded in the key) —
-    // deriveBackboneEdges' key-encoded rule falls back to these when the key's
-    // own `[^/]+`-per-segment regex can't bind a nested slug (2026-07-12).
-    ...plan.blocks.map((b) => ({ key: `${orderPrefix}${b.key}`, type: 'doc-order', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { seq: b.seq, doc: plan.slug, block: b.key } })),
+    ...plan.blocks.flatMap((b) => [
+      { key: b.key, type: 'doc-block', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { content: b.content } },
+      // `doc`/`block` ride along explicitly (not just encoded in the key) —
+      // deriveBackboneEdges' key-encoded rule falls back to these when the
+      // key's own `[^/]+`-per-segment regex can't bind a nested slug.
+      { key: `${orderPrefix}${b.key}`, type: 'doc-order', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { seq: b.seq, doc: plan.slug, block: b.key } },
+    ]),
   ];
-  // workspace.ingest caps at 100 facts/call — a doc with ~34+ blocks produces
-  // doc(1) + blocks(n) + orders(n) = 2n+1 facts and can exceed that on its
-  // own (confirmed live 2026-07-12: 5 large docs failed decompose entirely
-  // with "ingest is capped at 100 facts per call", never writing ANYTHING —
-  // not even a partial result). Chunking to 100 wasn't enough on its own,
-  // though: `gw()` (every call this reaction makes, including each ingest
-  // chunk) crosses the SAME CloudFront-fronted /mcp gateway as everything
-  // else in this codebase, with the same ~30s default origin timeout —
-  // independent of any Lambda-side timeoutSeconds bump. workspace.ingest
-  // writes facts SEQUENTIALLY (~0.85s/fact observed), so a 100-fact chunk
-  // is ~85s of server-side work: the inner gw() call itself times out past
-  // 30s and throws, uncaught, aborting the whole decompose (confirmed live
-  // 2026-07-12: docs with ~90+ blocks got ZERO order decorations even after
-  // a 300s Lambda timeout bump — the outer Lambda had headroom, the INNER
-  // gateway call to workspace.ingest never got the chance to use it). 30
-  // facts/chunk (~25s at the observed per-fact rate) stays under that
-  // ceiling with margin.
-  const INGEST_CHUNK = 30;
+  // workspace.ingest caps at 100 facts/call AND every gw() call crosses the
+  // CloudFront-fronted /mcp gateway with its ~30s origin timeout, while
+  // ingest writes facts sequentially at ~0.85s each. 20/chunk (~17s) leaves
+  // real headroom — 30/chunk (~25.5s + overhead) ran RIGHT AT the ceiling
+  // and slow chunks still 504'd (2026-07-12, third live iteration on this).
+  // And a chunk's 504 no longer aborts the run: CloudFront killing the
+  // RESPONSE doesn't kill the workspace Lambda's writes (they complete
+  // server-side), so the loop logs and continues — combined with the
+  // interleaving above, the worst case converges over idempotent re-runs
+  // instead of permanently starving the tail chunks. The real fix — async
+  // chunk-per-invocation, status-fact chained — is ADR-0083; this makes the
+  // synchronous tool CONVERGENT until that lands.
+  const INGEST_CHUNK = 20;
+  let chunksFailed = 0;
   for (let i = 0; i < facts.length; i += INGEST_CHUNK) {
     const batch = facts.slice(i, i + INGEST_CHUNK);
-    await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts: batch, ...(i === 0 ? { edges: plan.edges } : {}) });
+    try {
+      await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts: batch, ...(i === 0 ? { edges: plan.edges } : {}) });
+    } catch {
+      chunksFailed++;
+    }
   }
 
   // Retire blocks/order-decorations this version no longer produces, in
@@ -190,7 +199,7 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
     edgesRemoved = results.reduce((n, r) => n + r.removed, 0);
   }
 
-  return { docKey: plan.docKey, blocks: plan.blocks.length, edgesAdded, edgesRemoved, blocksRetired: retiredKeys.length };
+  return { docKey: plan.docKey, blocks: plan.blocks.length, edgesAdded, edgesRemoved, blocksRetired: retiredKeys.length, ...(chunksFailed ? { chunksFailed } : {}) };
 }
 
 export async function toolCall(name: string, args: Record<string, unknown>): Promise<unknown> {

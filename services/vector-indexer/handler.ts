@@ -21,10 +21,14 @@ import {
   createObservedState,
   projectVector,
   LAYOUT_KEY,
+  layoutShardKey,
+  layoutShardOf,
   StatePreconditionError,
   type VectorRecord,
   type StateStore,
   type ProjectionFact,
+  type LayoutManifest,
+  type LayoutShard,
 } from '../../platform/runtime';
 import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
 import { createDynamoStateStoreV3 as createDynamoStateStore } from '../../platform/runtime/dynamo-state-store-v3';
@@ -177,11 +181,34 @@ export async function patchProjection(
   removes: string[],
 ): Promise<void> {
   const state = createObservedState(store);
+  const entry = await state.get(scope, LAYOUT_KEY);
+  if (!entry) return; // no map yet — the first `workspace.project` creates one
+  const mv = entry.value as Partial<LayoutManifest> & Partial<ProjectionFact>;
+  if (!mv?.basis || !mv?.norm) return; // pre-basis projection — needs a fresh `project()` first
+  const basis = mv.basis, norm = mv.norm;
+
+  // Sharded atlas (ADR-0082): group this batch's deltas by shard and patch
+  // each shard independently — contention and payload both divide by the
+  // shard count vs the old whole-monolith read-modify-write.
+  if (typeof mv.shards === 'number' && mv.shards > 0) {
+    const byShard = new Map<number, { puts: Array<{ key: string; xyz: [number, number, number] }>; removes: string[] }>();
+    const bucket = (i: number) => {
+      let b = byShard.get(i);
+      if (!b) byShard.set(i, (b = { puts: [], removes: [] }));
+      return b;
+    };
+    for (const { key, vector } of puts) bucket(layoutShardOf(key, mv.shards)).puts.push({ key, xyz: projectVector(vector, basis, norm) });
+    for (const key of removes) bucket(layoutShardOf(key, mv.shards)).removes.push(key);
+    for (const [i, delta] of byShard) await patchShard(state, scope, layoutShardKey(i), delta);
+    return;
+  }
+
+  // Legacy monolith (pre-migration window): the original whole-fact CAS+retry.
   for (let attempt = 0; attempt < PATCH_ATTEMPTS; attempt++) {
-    const entry = await state.get(scope, LAYOUT_KEY);
-    if (!entry) return; // no map yet — the first `workspace.project` creates one
-    const fact = entry.value as ProjectionFact;
-    if (!fact?.basis || !fact?.norm) return; // pre-basis projection — needs a fresh `project()` first
+    const cur = attempt === 0 ? entry : await state.get(scope, LAYOUT_KEY);
+    if (!cur) return;
+    const fact = cur.value as ProjectionFact;
+    if (!fact?.basis || !fact?.norm) return;
     let changed = false;
     const coords = { ...fact.coords };
     for (const { key, vector } of puts) {
@@ -202,7 +229,7 @@ export async function patchProjection(
         value: { ...fact, coords, count: Object.keys(coords).length },
         via: 'vector-indexer',
         type: 'graph-layout',
-        ifVersion: entry._meta.version,
+        ifVersion: cur._meta.version,
       });
       return;
     } catch (err) {
@@ -211,6 +238,46 @@ export async function patchProjection(
       // dropped patch should be VISIBLE in the logs now, not silent.
       if (!(err instanceof StatePreconditionError) || attempt === PATCH_ATTEMPTS - 1) throw err;
       // Small jitter so N stream batches don't re-collide in lockstep.
+      await new Promise((r) => setTimeout(r, 40 + Math.random() * 160));
+    }
+  }
+}
+
+/** CAS+retry read-modify-write of ONE coord shard. A shard that doesn't
+ *  exist yet (created between full project() runs) starts empty. */
+async function patchShard(
+  state: ReturnType<typeof createObservedState>,
+  scope: string,
+  shardKey: string,
+  delta: { puts: Array<{ key: string; xyz: [number, number, number] }>; removes: string[] },
+): Promise<void> {
+  for (let attempt = 0; attempt < PATCH_ATTEMPTS; attempt++) {
+    const cur = await state.get(scope, shardKey);
+    const coords: Record<string, [number, number, number]> = { ...((cur?.value as LayoutShard | undefined)?.coords ?? {}) };
+    let changed = false;
+    for (const p of delta.puts) {
+      coords[p.key] = p.xyz;
+      changed = true;
+    }
+    for (const key of delta.removes) {
+      if (key in coords) {
+        delete coords[key];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    try {
+      await state.put({
+        scope,
+        key: shardKey,
+        value: { coords },
+        via: 'vector-indexer',
+        type: 'graph-layout-shard',
+        ...(cur ? { ifVersion: cur._meta.version } : { ifAbsent: true }),
+      });
+      return;
+    } catch (err) {
+      if (!(err instanceof StatePreconditionError) || attempt === PATCH_ATTEMPTS - 1) throw err;
       await new Promise((r) => setTimeout(r, 40 + Math.random() * 160));
     }
   }

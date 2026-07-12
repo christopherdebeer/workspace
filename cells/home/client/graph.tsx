@@ -386,8 +386,26 @@ async function fetchGraphModel(opts?: { fastOnly?: boolean }): Promise<GraphMode
     label: shortLabel(factTitle(e)),
     deg: deg.get(e.key) ?? 0,
   }));
-  const layoutV = (layoutRes && layoutRes.ok ? (layoutRes.value as { value?: { coords?: Record<string, number[]> } } | null)?.value : null) ?? null;
-  const coordMap = layoutV?.coords && typeof layoutV.coords === 'object' ? (layoutV.coords as Record<string, number[]>) : null;
+  const layoutV = (layoutRes && layoutRes.ok
+    ? (layoutRes.value as { value?: { coords?: Record<string, number[]>; shards?: number } } | null)?.value
+    : null) ?? null;
+  // The sharded atlas (ADR-0082): a manifest with `shards` means coords live
+  // in `_home/embed2d/s<i>` sibling facts — fetch all in parallel and merge
+  // (each is small; 16 concurrent peeks beat one near-400KB monolith). A
+  // value with inline `coords` is the legacy monolith, still honored.
+  let coordMap: Record<string, number[]> | null = null;
+  if (layoutV && typeof layoutV.shards === 'number' && layoutV.shards > 0) {
+    const shardRes = await Promise.all(Array.from({ length: layoutV.shards }, (_, i) =>
+      mcpCall('read', 'workspace.peek', { key: `_home/embed2d/s${i}` }).catch(() => null)));
+    coordMap = {};
+    for (const r of shardRes) {
+      const sc = (r && r.ok ? (r.value as { value?: { coords?: Record<string, number[]> } } | null)?.value?.coords : null) ?? null;
+      if (sc) Object.assign(coordMap, sc);
+    }
+    if (!Object.keys(coordMap).length) coordMap = null;
+  } else if (layoutV?.coords && typeof layoutV.coords === 'object') {
+    coordMap = layoutV.coords as Record<string, number[]>;
+  }
   // The focus band: the salience focus tier (score ≥ threshold), WIDENED to at
   // least the top ~12% (and ≥12) by score so a flat slice still reads as a band.
   const byScore = [...nodes].sort((a, b) => b.score - a.score);

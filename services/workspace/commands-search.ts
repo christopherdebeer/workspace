@@ -25,7 +25,8 @@ import {
   type SuggestionCandidate,
   SIMILAR_REL,
   SIMILAR_WRITER,
-  projectionFact,
+  projectionArtifacts,
+  layoutShardKey,
   LAYOUT_KEY,
   contentHash,
 } from '../../platform/runtime';
@@ -339,10 +340,15 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       if (records.length < 3) {
         return { status: 'empty', count: records.length, hint: 'too few indexed vectors to project — run reindex first' };
       }
-      const fact = projectionFact(records.map((r) => r.vector), records.map((r) => r.key), dim, new Date().toISOString());
-      await state.put({ scope, key: LAYOUT_KEY, value: fact, via: 'project', type: 'graph-layout' }, ctx.identity);
-      ctx.logger.info('semantic projection written', { scope, count: fact.count, method: fact.method });
-      return { status: 'ok', count: fact.count, method: fact.method, key: LAYOUT_KEY };
+      // The sharded atlas (ADR-0082): coords split across hash-bucketed shard
+      // facts; the manifest (basis/norm/meta, stable ~40KB) writes LAST so a
+      // reader never sees a sharded manifest whose shards aren't there yet.
+      const { manifest, shards } = projectionArtifacts(records.map((r) => r.vector), records.map((r) => r.key), dim, new Date().toISOString());
+      await Promise.all(shards.map((s, i) =>
+        state.put({ scope, key: layoutShardKey(i), value: s, via: 'project', type: 'graph-layout-shard' }, ctx.identity)));
+      await state.put({ scope, key: LAYOUT_KEY, value: manifest, via: 'project', type: 'graph-layout' }, ctx.identity);
+      ctx.logger.info('semantic projection written', { scope, count: manifest.count, method: manifest.method, shards: manifest.shards });
+      return { status: 'ok', count: manifest.count, method: manifest.method, key: LAYOUT_KEY };
     },
 
     async pruneSimilar(input, ctx) {

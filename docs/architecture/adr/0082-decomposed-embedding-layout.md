@@ -1,7 +1,25 @@
-# ADR-0082 — RFC: decomposed semantic layout (each fact owns its own coord, not one monolith fact)
+# ADR-0082 — Decomposed semantic layout: the sharded atlas
 
-- **Status:** Proposed 2026-07-11 (buffer — problem framed and grounded, options sketched below,
-  **no direction chosen yet**. This is a request for comments, not a design ready to build.)
+- **Status:** **Decided + built 2026-07-12** — owner delegated direction ("proceed with long term
+  architectural fixes"); Option A-refined ("the sharded atlas") implemented: a coord-free MANIFEST at
+  `_home/embed2d` ({method, dim, count, generatedAt, basis, norm, shards}) plus `LAYOUT_SHARDS = 16`
+  hash-bucketed coord shard facts (`_home/embed2d/s<i>`, djb2 over the fact key). `workspace.project`
+  writes shards in parallel then the manifest LAST (readers never see a sharded manifest without its
+  shards); the vector-indexer's incremental patcher groups each stream batch's deltas per shard and
+  CAS+retries each shard independently; the home graph merges 16 parallel shard peeks. Legacy
+  monolith values (inline `coords`, no `shards`) stay readable/patchable through the migration
+  window — migration is one `project()` run.
+  **Why A-refined over B (per-fact `_layout/<key>` siblings), the literal reading of the RFC's
+  title:** two live incidents sharpened the criteria after this RFC was drafted. (1) The bulk-backfill
+  CAS storm (the "cylinder halo" incident: ~800 coordinate patches silently shed racing ONE fact)
+  showed contention, not just size, is the binding constraint — shards divide both contention and
+  patch payload by 16. (2) The owner's stated goal for this pass was *reducing incidental
+  complexity*: B would add one fact per renderable fact (~3,700 immediately, growing forever),
+  pollute changes-feeds and the consolidation organ's debt accounting, and require a
+  supersede-reconciliation discipline nothing else needs; A-refined adds 17 plumbing facts total,
+  keeps every existing seam's shape, and moves the 400KB wall to ~6k keys PER SHARD (~100k total).
+  Options B/C/D below preserved as considered alternatives.
+- **Previously:** Proposed 2026-07-11 (buffer — problem framed and grounded, options sketched below).
 - **Depends on:** ADR-0047 (home is the graph; "stage 2" introduced the PCA 2D/3D layout — never
   itself written back into ADR-0047's text, only in code comments), ADR-0030/0031 (the vector index
   + inferred edges this shares infrastructure with — **and** the reactive embed-on-write mechanism this

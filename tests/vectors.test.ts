@@ -26,6 +26,9 @@ import {
   createMemoryStateStore,
   createObservedState,
   projectionFact,
+  projectionArtifacts,
+  layoutShardKey,
+  layoutShardOf,
   SIMILAR_REL,
   SIMILAR_WRITER,
   LAYOUT_KEY,
@@ -359,6 +362,48 @@ describe('patchProjection (ADR-0047 stage 3 — incremental per-fact layout upda
     };
     await expect(patchProjection(store, 'alice', [{ key: 'k-never', vector: [9, 9, 9] }], [])).rejects.toThrow();
   }, 10000);
+
+  it('sharded atlas (ADR-0082): a patch lands in the RIGHT shard, removes clear it, other shards untouched', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 12 }, (_, i) => [Math.sin(i), Math.cos(i * 1.7), i * 0.3]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const { manifest, shards } = projectionArtifacts(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    await Promise.all(shards.map((s, i) => state.put({ scope: 'alice', key: layoutShardKey(i), value: s, type: 'graph-layout-shard' })));
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: manifest, type: 'graph-layout' });
+
+    const newKey = 'doc-block:new/thing/7';
+    const shardIdx = layoutShardOf(newKey);
+    const before = await state.get('alice', layoutShardKey(shardIdx));
+    await patchProjection(store, 'alice', [{ key: newKey, vector: [9, 9, 9] }], ['k3']);
+
+    const after = await state.get('alice', layoutShardKey(shardIdx));
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect(coords[newKey]).toBeDefined(); // landed in its hash shard
+    // The manifest itself was NOT rewritten (the whole point: no monolith rmw).
+    const man = await state.get('alice', LAYOUT_KEY);
+    expect(man!._meta.revision).toBe(1);
+    // k3's shard no longer carries it.
+    const k3After = await state.get('alice', layoutShardKey(layoutShardOf('k3')));
+    expect(((k3After!.value as { coords: Record<string, unknown> }).coords)['k3']).toBeUndefined();
+    // A shard untouched by this delta kept its revision (unless it hosts both keys).
+    if (layoutShardOf('k5') !== shardIdx && layoutShardOf('k5') !== layoutShardOf('k3')) {
+      const other = await state.get('alice', layoutShardKey(layoutShardOf('k5')));
+      expect(other!._meta.revision).toBe(1);
+    }
+    expect(before).toBeTruthy(); // sanity: the shard existed pre-patch
+  });
+
+  it('sharded atlas: patching a key whose shard fact is MISSING creates it (ifAbsent), instead of dropping the point', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const { manifest } = projectionArtifacts([[1, 0, 0], [0, 1, 0], [0, 0, 1]], ['a', 'b', 'c'], 3, '2026-01-01T00:00:00.000Z');
+    // Manifest exists but NO shard facts do (e.g. a wiped/partial migration).
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: manifest, type: 'graph-layout' });
+    await patchProjection(store, 'alice', [{ key: 'fresh:1', vector: [2, 2, 2] }], []);
+    const shard = await state.get('alice', layoutShardKey(layoutShardOf('fresh:1')));
+    expect(((shard!.value as { coords: Record<string, unknown> }).coords)['fresh:1']).toBeDefined();
+  });
 
   it('successive patches each read-modify-write fresh, CAS guarded on the version each call itself reads', async () => {
     const store = createMemoryStateStore();

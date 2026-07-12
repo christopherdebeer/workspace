@@ -242,3 +242,67 @@ function round4(v: number): number {
 function round6(v: number): number {
   return Math.round(v * 1e6) / 1e6;
 }
+
+// ── the sharded atlas (ADR-0082, decided 2026-07-12) ────────────────────────
+// The monolithic `_home/embed2d` fact was both the capacity risk (287KB at
+// 3,681 keys against DynamoDB's hard 400KB item cap) and the contention
+// bottleneck (every stream batch read-modify-writes the whole thing — the
+// bulk-backfill CAS storm shed ~800 patches). Coords now split into
+// LAYOUT_SHARDS hash-bucketed shard facts under a small, stable MANIFEST that
+// carries only the basis/norm/meta: patch payload and write contention both
+// divide by the shard count, and the per-item ceiling moves from ~6k keys to
+// ~6k keys PER SHARD (~100k total at 16).
+
+export const LAYOUT_SHARDS = 16;
+export const layoutShardKey = (i: number): string => `${LAYOUT_KEY}/s${i}`;
+
+/** Stable, dependency-free bucket for a fact key (djb2-xor). Writer-side
+ *  only — readers just merge every shard. */
+export function layoutShardOf(key: string, shards = LAYOUT_SHARDS): number {
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
+  return h % shards;
+}
+
+/** `_home/embed2d`'s value in the sharded shape: everything EXCEPT coords —
+ *  those live in `shards` sibling facts (`_home/embed2d/s<i>`). A value with
+ *  `coords` and no `shards` is the legacy monolith; readers and the
+ *  incremental patcher handle both during the migration window. */
+export interface LayoutManifest {
+  method: 'pca';
+  dim: number;
+  count: number;
+  generatedAt: string;
+  basis: PcaBasis;
+  norm: NormParams;
+  shards: number;
+}
+export interface LayoutShard {
+  coords: Record<string, [number, number, number]>;
+}
+
+/** The sharded-atlas equivalent of {@link projectionFact}: same PCA, same
+ *  rounding, coords bucketed into `shards` shard values plus a coord-free
+ *  manifest. */
+export function projectionArtifacts(
+  vectors: number[][],
+  keys: string[],
+  dim: number,
+  generatedAt: string,
+): { manifest: LayoutManifest; shards: LayoutShard[] } {
+  const fact = projectionFact(vectors, keys, dim, generatedAt);
+  const shards: LayoutShard[] = Array.from({ length: LAYOUT_SHARDS }, () => ({ coords: {} }));
+  for (const [k, xyz] of Object.entries(fact.coords)) shards[layoutShardOf(k)].coords[k] = xyz;
+  return {
+    manifest: {
+      method: 'pca',
+      dim,
+      count: fact.count,
+      generatedAt,
+      basis: fact.basis!,
+      norm: fact.norm!,
+      shards: LAYOUT_SHARDS,
+    },
+    shards,
+  };
+}

@@ -5,7 +5,7 @@
  * Pure + deterministic: same vectors → same coords. Backed by the in-memory vector
  * store so it runs without AWS.
  */
-import { pca2d, normalizeCoords, projectionFact, projectVector, MemoryVectorStore } from '../platform/runtime';
+import { pca2d, normalizeCoords, projectionFact, projectVector, projectionArtifacts, layoutShardOf, LAYOUT_SHARDS, MemoryVectorStore } from '../platform/runtime';
 
 describe('pca2d', () => {
   it('separates two clusters along the dominant axis', () => {
@@ -119,6 +119,35 @@ describe('projectionFact: persisted basis + projectVector (ADR-0047 stage 3)', (
     const clusterAX = fact.coords['k0'][0];
     const clusterBX = fact.coords['k10'][0];
     expect(Math.abs(x - clusterBX)).toBeLessThan(Math.abs(x - clusterAX));
+  });
+});
+
+describe('projectionArtifacts: the sharded atlas (ADR-0082)', () => {
+  const vecs = Array.from({ length: 40 }, (_, i) => [Math.sin(i), Math.cos(i * 1.7), i * 0.3]);
+  const keys = vecs.map((_, i) => `fam${i % 5}:key/${i}`);
+
+  it('shard union equals the monolith coords exactly; manifest carries no coords', () => {
+    const mono = projectionFact(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    const { manifest, shards } = projectionArtifacts(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    expect(shards).toHaveLength(LAYOUT_SHARDS);
+    expect(manifest.shards).toBe(LAYOUT_SHARDS);
+    expect((manifest as unknown as { coords?: unknown }).coords).toBeUndefined();
+    expect(manifest.basis).toEqual(mono.basis);
+    expect(manifest.norm).toEqual(mono.norm);
+    const merged: Record<string, unknown> = {};
+    for (const s of shards) Object.assign(merged, s.coords);
+    expect(merged).toEqual(mono.coords);
+  });
+
+  it('each key lands in ITS hash shard, and the hash is stable + in range', () => {
+    const { shards } = projectionArtifacts(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    for (const k of keys) {
+      const i = layoutShardOf(k);
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(i).toBeLessThan(LAYOUT_SHARDS);
+      expect(layoutShardOf(k)).toBe(i); // deterministic
+      expect(shards[i].coords[k]).toBeDefined();
+    }
   });
 });
 
