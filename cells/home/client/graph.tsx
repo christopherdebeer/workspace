@@ -654,8 +654,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
       renderer.setSize(W, H);
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = TUNE.exposure;
+      // ACES Filmic is calibrated for dusk's HDR-ish additive glow — applied to
+      // paper's flat, normal-blended ink/cream palette it desaturates toward
+      // grey (2026-07-12 owner report: labels/pills read as "grey, not paper").
+      // Paper wants its hex colours literal, so it gets no tone-mapping curve
+      // at all. Kept in sync with isPaper() in applyMode() for live toggling.
+      renderer.toneMapping = isPaper() ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = isPaper() ? 1 : TUNE.exposure;
       renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
       el.innerHTML = '';
       el.appendChild(renderer.domElement);
@@ -1633,6 +1638,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const applyMode = (): void => {
         PAL = paletteFor(TUNE.sceneMode);
         const paper = isPaper();
+        // See the construction-time comment above: paper's flat colours want
+        // no filmic curve, or they desaturate toward grey.
+        renderer.toneMapping = paper ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = paper ? 1 : TUNE.exposure;
         scene.background = new THREE.Color(PAL.bg);
         ptMat.uniforms.uPaper.value = paper ? 1 : 0;
         ptMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
@@ -1988,7 +1997,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               bloomPass.radius = TUNE.bloomRadius;
               bloomPass.threshold = TUNE.bloomThreshold;
             }
-            renderer.toneMappingExposure = TUNE.exposure;
+            // Paper stays untone-mapped regardless of the exposure knob — see
+            // applyMode()'s comment. Every OTHER slider change routes through
+            // this same refresh(), so it has to hold that line too, not just
+            // the sceneMode toggle.
+            renderer.toneMappingExposure = isPaper() ? 1 : TUNE.exposure;
             applyNodeAlpha();
             applyEdgeColor();
             // Re-grade the live SDF labels (size mults / outline are layout
