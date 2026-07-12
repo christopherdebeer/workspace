@@ -1135,22 +1135,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const w = want.get(id);
           if (w) {
             st.role = w.role;
-            st.ox = w.ox ?? 0;
-            st.oy = w.oy ?? 0;
             st.dying = false;
             st.miss = 0;
-            // A role change can change the SIZE tier — troika relayouts async,
-            // so only touch fontSize when it actually moved (sync is not free).
-            const m = roleMult(w.role);
-            if (m !== st.mult) {
-              st.mult = m;
-              const n = nodeById.get(id);
-              if (n) {
-                st.text.fontSize = fontWorld(n, m);
-                st.text.maxWidth = st.text.fontSize * 10;
-                st.text.sync(st.fit);
-              }
-            }
+            // Size tier and displacement are BIRTH-TIME properties (owner,
+            // 2026-07-12: selecting a node made its and its neighbours'
+            // standing labels resize and slide — jarring). An incumbent label
+            // only re-targets opacity/colour on a role change; a fresh label
+            // is born at its role's size and offset and FADES in. The cost —
+            // a beam label promoted to 'sel' keeps its smaller size — is
+            // carried by the accent colour and the selection ring instead.
           } else if (++st.miss > LABEL_GRACE) st.dying = true;
         }
         for (const [id, w] of want) {
@@ -1277,7 +1270,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // scene objects, so the rect is reconstructed from troika's OWN layout
       // bounds (blockBounds), padded a little for fingers (host is fixed
       // inset:0, so client px == canvas px).
-      const labelAt = (cx: number, cy: number): string | null => {
+      // Two-tier hit rects (2026-07-12 "nodes are impossible to select"): the
+      // first pill-slop cut floored EVERY label's rect at 56×36 plus feather
+      // headroom and tested labels before the node raycast — dozens of beam/
+      // anchor labels tiled the screen with invisible tap-catchers, so taps
+      // aimed at bare nodes kept landing in some label's slop. TIGHT rects
+      // (the visible chip: glyphs + the pill's text padding) outrank nodes;
+      // the padded finger-slop rects only catch taps that hit nothing else
+      // (see onUp's ordering below).
+      const labelAt = (cx: number, cy: number, slop: boolean): string | null => {
         for (const [id, st] of labelObjs) {
           if (st.cur < 0.2) continue; // a barely-there label shouldn't catch taps
           const n = nodeById.get(id);
@@ -1291,21 +1292,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const cxc = sx + st.cox; // label centre column (with displacement)
           if (b) {
             // Block bounds are text-local (anchor top-centre at y=0), hung at
-            // text.position.y below the node; world +y is screen −y. The tap
-            // rect must cover what the finger SEES — the PILL, which grows
-            // well past the text (up to ~3.4× the text box at feather 1), not
-            // just the glyph bounds (2026-07-12 owner report: taps on a
-            // label's visible pill fell through to the node raycast). Pad
-            // horizontally with the pill's feather headroom and floor the
-            // rect at a real finger size (56×36).
+            // text.position.y below the node; world +y is screen −y.
             let top = sy + st.coy - (st.text.position.y + b[3]) * pxPer;
             let bot = sy + st.coy - (st.text.position.y + b[1]) * pxPer;
-            const pillPad = (bot - top) * 1.2 * TUNE.pillFeather; // feather headroom, both axes
-            const vPad = Math.max(8, (36 - (bot - top)) / 2, pillPad / 2);
-            top -= vPad; bot += vPad;
-            const w = Math.max(56, (b[2] - b[0]) * pxPer + 24 + pillPad);
+            const textH = bot - top;
+            let w: number;
+            if (slop) {
+              const pillPad = textH * 1.2 * TUNE.pillFeather; // feather headroom, both axes
+              const vPad = Math.max(8, (36 - textH) / 2, pillPad / 2);
+              top -= vPad; bot += vPad;
+              w = Math.max(56, (b[2] - b[0]) * pxPer + 24 + pillPad);
+            } else {
+              // The visible chip: fitPillTo's text box (~0.5em side pad,
+              // ×1.55 height) — what the finger actually SEES as the label.
+              top -= textH * 0.28; bot += textH * 0.28;
+              w = (b[2] - b[0]) * pxPer + textH;
+            }
             if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= top && cy <= bot) return id;
-          } else {
+          } else if (slop) {
             const w = Math.max(56, String(n.label).length * fs * 0.62);
             const ly = sy + st.coy + rad(n) * 1.15 * pxPer;
             if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= ly - 8 && cy <= ly + fs * 1.6 + 8) return id;
@@ -1324,25 +1328,29 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) moved = true; };
       const onUp = (e: PointerEvent): void => {
         if (moved) return;
-        const lid = labelAt(e.clientX, e.clientY);
-        if (lid) { api.current?.select(lid, true); return; }
-        // A caption is a DOOR: an AUTHORED place selects its container fact
-        // (context panel: members as neighbours, open ↗ to the board/doc);
-        // a computed place just flies to frame its region. Captions are
-        // tested BEFORE the raw point pick (2026-07-12 "captions are not
-        // selectable" report): they sit at cluster centroids — the densest
-        // regions of the cloud — so with the point raycast first, some stray
-        // 3px dot always won the tap and the caption test never ran. A
-        // deliberate typographic target outranks ambient points, same as the
-        // fact labels above.
-        const c = constellationAt(e.clientX, e.clientY);
-        if (c) {
+        const openConst = (c: Constellation): void => {
+          // A caption is a DOOR: an AUTHORED place selects its container fact
+          // (context panel: members as neighbours, open ↗ to the board/doc);
+          // a computed place just flies to frame its region.
           if (c.key && nodeById.has(c.key)) api.current?.select(c.key, true);
           else frame(c.x, c.y, c.z, c.r * 1.5);
-          return;
-        }
+        };
+        // Precedence, refined twice on live reports (2026-07-12): a tap on a
+        // VISIBLE chip (label/caption) beats the point raycast — a deliberate
+        // typographic target outranks ambient 3px dots. But the padded
+        // finger-slop rects must NOT: with them first, every tap near any of
+        // the dozens of standing labels selected that label's node and bare
+        // nodes became unselectable. Tight chip → node pick → forgiving slop.
+        const lidT = labelAt(e.clientX, e.clientY, false);
+        if (lidT) { api.current?.select(lidT, true); return; }
+        const cT = constellationAt(e.clientX, e.clientY, false);
+        if (cT) { openConst(cT); return; }
         const n = pickAt(e.clientX, e.clientY);
         if (n) { api.current?.select(n.id); return; }
+        const lid = labelAt(e.clientX, e.clientY, true);
+        if (lid) { api.current?.select(lid, true); return; }
+        const c = constellationAt(e.clientX, e.clientY, true);
+        if (c) { openConst(c); return; }
         api.current?.select(null);
       };
       renderer.domElement.addEventListener('pointerdown', onDown);
@@ -1681,7 +1689,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const constV = new THREE.Vector3();
       // Tap target: a visible caption's projected rect (troika's real layout
       // bounds, finger-padded).
-      const constellationAt = (cx: number, cy: number): Constellation | null => {
+      // Same two-tier rects as labelAt: tight = the visible caption box,
+      // slop = the padded finger fallback (see onUp's precedence comment).
+      const constellationAt = (cx: number, cy: number, slop: boolean): Constellation | null => {
         for (const c of constellations) {
           if (c.cur < 0.15) continue;
           const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z)) || 1;
@@ -1690,12 +1700,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
           const pxPer = ((H / 2) / camD) * (c.grp.scale?.x || 1);
           const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
-          // Same pill-aware slop as labelAt: the tappable thing is the pill
-          // window the eye sees, not the glyph box (2026-07-12).
           const rawH = b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer;
-          const pillPad = rawH * 1.2 * TUNE.pillFeather;
-          const w = Math.max(56, (b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer) + 24 + pillPad);
-          const h = Math.max(36, rawH + 16 + pillPad);
+          const rawW = b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer;
+          const pillPad = slop ? rawH * 1.2 * TUNE.pillFeather : 0;
+          const w = slop ? Math.max(56, rawW + 24 + pillPad) : rawW + rawH;
+          const h = slop ? Math.max(36, rawH + 16 + pillPad) : rawH * 1.55;
           if (Math.abs(cx - sx) < w / 2 && Math.abs(cy - sy) < h / 2) return c;
         }
         return null;
