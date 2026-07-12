@@ -310,6 +310,56 @@ describe('patchProjection (ADR-0047 stage 3 — incremental per-fact layout upda
     expect(Object.keys(coords)).toHaveLength(4);
   });
 
+  it('retries a lost CAS race, re-applying its delta on top of the winner (2026-07-12 bulk-backfill storm fix)', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 4 }, (_, i) => [i, 1, 0]);
+    const fact = projectionFact(vecs, ['k0', 'k1', 'k2', 'k3'], 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+    // Interleave a concurrent winner between patchProjection's read and its
+    // write: the first indexer-tagged put triggers a sibling batch's update
+    // first, so the original's stale version guard fails NATURALLY (the real
+    // store-level CAS path, not an injected error).
+    const rawPut = store.put.bind(store);
+    let raced = false;
+    (store as { put: typeof store.put }).put = async (record, guard) => {
+      if (!raced && record.key === LAYOUT_KEY && record.via === 'vector-indexer') {
+        raced = true;
+        const cur = await state.get('alice', LAYOUT_KEY);
+        const cv = cur!.value as { coords: Record<string, unknown> };
+        await state.put({
+          scope: 'alice',
+          key: LAYOUT_KEY,
+          value: { ...cv, coords: { ...cv.coords, 'k-winner': [0.1, 0.1, 0.1] }, count: Object.keys(cv.coords).length + 1 },
+          type: 'graph-layout',
+        });
+      }
+      return rawPut(record, guard);
+    };
+    await patchProjection(store, 'alice', [{ key: 'k-loser', vector: [9, 9, 9] }], []);
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect(coords['k-winner']).toBeDefined(); // the winner's delta survived the retry
+    expect(coords['k-loser']).toBeDefined(); // and ours re-applied on top of it
+  });
+
+  it('an exhausted retry budget PROPAGATES (a dropped patch must be visible in logs, never silent)', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const fact = projectionFact([[1, 0, 0], [0, 1, 0], [0, 0, 1]], ['k0', 'k1', 'k2'], 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+    // Every attempt loses: a fresh conflicting write lands before each put.
+    const rawPut = store.put.bind(store);
+    (store as { put: typeof store.put }).put = async (record, guard) => {
+      if (record.key === LAYOUT_KEY && record.via === 'vector-indexer') {
+        const cur = await state.get('alice', LAYOUT_KEY);
+        await state.put({ scope: 'alice', key: LAYOUT_KEY, value: cur!.value as Record<string, unknown>, type: 'graph-layout' });
+      }
+      return rawPut(record, guard);
+    };
+    await expect(patchProjection(store, 'alice', [{ key: 'k-never', vector: [9, 9, 9] }], [])).rejects.toThrow();
+  }, 10000);
+
   it('successive patches each read-modify-write fresh, CAS guarded on the version each call itself reads', async () => {
     const store = createMemoryStateStore();
     const state = createObservedState(store);

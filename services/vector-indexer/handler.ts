@@ -21,6 +21,7 @@ import {
   createObservedState,
   projectVector,
   LAYOUT_KEY,
+  StatePreconditionError,
   type VectorRecord,
   type StateStore,
   type ProjectionFact,
@@ -156,10 +157,19 @@ export async function handler(event: StreamEvent): Promise<void> {
 }
 
 /** Read-patch-write `_home/embed2d`'s coords for the keys this batch touched,
- *  using its persisted PCA basis. CAS'd on the read version so a losing race
- *  is a silent no-op rather than a lost update — see the call site above.
- *  Exported (like {@link planStreamWork}) so the incremental-projection logic
- *  is unit-testable against a plain `StateStore`, without AWS. */
+ *  using its persisted PCA basis. CAS'd on the read version, and RETRIED on a
+ *  lost race (re-read fresh, re-apply this batch's delta, up to
+ *  {@link PATCH_ATTEMPTS}) — the original silent-no-op-on-conflict design
+ *  converged for a trickle of writes but diverged under exactly the load that
+ *  matters: the 2026-07-12 ADR-0081 bulk backfill (155 docs × 4 concurrent
+ *  workers → hundreds of stream batches racing this one fact) lost nearly
+ *  every patch, and ~800+ renderable facts silently accumulated with no
+ *  coordinate — rendering as the fixed-radius fallback ring in the home
+ *  graph (the "cylinder halo" incident). Optimistic-concurrency retry makes
+ *  a storm converge: each loser re-reads the winner's fact and reapplies
+ *  only its own delta on top. Exported (like {@link planStreamWork}) so the
+ *  logic is unit-testable against a plain `StateStore`, without AWS. */
+const PATCH_ATTEMPTS = 4;
 export async function patchProjection(
   store: StateStore,
   scope: string,
@@ -167,29 +177,41 @@ export async function patchProjection(
   removes: string[],
 ): Promise<void> {
   const state = createObservedState(store);
-  const entry = await state.get(scope, LAYOUT_KEY);
-  if (!entry) return; // no map yet — the first `workspace.project` creates one
-  const fact = entry.value as ProjectionFact;
-  if (!fact?.basis || !fact?.norm) return; // pre-basis projection — needs a fresh `project()` first
-  let changed = false;
-  const coords = { ...fact.coords };
-  for (const { key, vector } of puts) {
-    coords[key] = projectVector(vector, fact.basis, fact.norm);
-    changed = true;
-  }
-  for (const key of removes) {
-    if (key in coords) {
-      delete coords[key];
+  for (let attempt = 0; attempt < PATCH_ATTEMPTS; attempt++) {
+    const entry = await state.get(scope, LAYOUT_KEY);
+    if (!entry) return; // no map yet — the first `workspace.project` creates one
+    const fact = entry.value as ProjectionFact;
+    if (!fact?.basis || !fact?.norm) return; // pre-basis projection — needs a fresh `project()` first
+    let changed = false;
+    const coords = { ...fact.coords };
+    for (const { key, vector } of puts) {
+      coords[key] = projectVector(vector, fact.basis, fact.norm);
       changed = true;
     }
+    for (const key of removes) {
+      if (key in coords) {
+        delete coords[key];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    try {
+      await state.put({
+        scope,
+        key: LAYOUT_KEY,
+        value: { ...fact, coords, count: Object.keys(coords).length },
+        via: 'vector-indexer',
+        type: 'graph-layout',
+        ifVersion: entry._meta.version,
+      });
+      return;
+    } catch (err) {
+      // Only a lost CAS race earns a retry; anything else propagates to the
+      // caller's best-effort warn. The final lost race propagates too — a
+      // dropped patch should be VISIBLE in the logs now, not silent.
+      if (!(err instanceof StatePreconditionError) || attempt === PATCH_ATTEMPTS - 1) throw err;
+      // Small jitter so N stream batches don't re-collide in lockstep.
+      await new Promise((r) => setTimeout(r, 40 + Math.random() * 160));
+    }
   }
-  if (!changed) return;
-  await state.put({
-    scope,
-    key: LAYOUT_KEY,
-    value: { ...fact, coords, count: Object.keys(coords).length },
-    via: 'vector-indexer',
-    type: 'graph-layout',
-    ifVersion: entry._meta.version,
-  });
 }
