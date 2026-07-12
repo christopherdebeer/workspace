@@ -123,7 +123,11 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   const orderPrefix = `_doc/${plan.slug}/`;
 
   // Existing membership decorations for this slug — the stale-block signal.
-  const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 100 }) as { entries?: QueryEntry[] })?.entries ?? [];
+  // The limit must exceed any real doc's decoration count INCLUDING residue
+  // from prior partial runs: at 100, a doc that had accumulated 134 stale+live
+  // decorations only ever showed the first 100 to the retirement diff, so the
+  // tail residue survived every convergent re-run (2026-07-12, live).
+  const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 500 }) as { entries?: QueryEntry[] })?.entries ?? [];
   const existingBlockKeys = existingOrder.map((e) => e.key.slice(orderPrefix.length));
   const wantedBlockKeys = plan.blocks.map((b) => b.key);
   const retiredKeys = staleKeys(existingBlockKeys, wantedBlockKeys);
