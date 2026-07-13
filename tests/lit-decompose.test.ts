@@ -5,7 +5,7 @@
  * orchestration layer (cells/lit/index.ts's `/_tools/decomposeMarkdown`)
  * uses to reconcile a re-decompose.
  */
-import { slugFromPath, extractRelativeMdLinks, planDecomposition, staleKeys, diffEdges } from '../cells/lit/decompose';
+import { slugFromPath, extractRelativeMdLinks, planDecomposition, factsFor, staleKeys, diffEdges } from '../cells/lit/decompose';
 import { extractWikiTargets } from '../platform/ui/wiki-link';
 
 describe('slugFromPath', () => {
@@ -103,5 +103,28 @@ describe('diffEdges', () => {
     const { toAdd, toRemove } = diffEdges(existing, wanted);
     expect(toAdd).toEqual([{ to: 'doc:a', rel: 'references' }]);
     expect(toRemove).toEqual([{ to: 'doc:a', rel: 'related' }]);
+  });
+});
+
+describe('factsFor: the interleaved fact list (ADR-0083 chunk substrate)', () => {
+  const noWiki = (): string[] => [];
+  const plan = planDecomposition('docs/x/y.md', '# T\n\nintro\n\nsecond\n\nthird', noWiki);
+
+  it('interleaves: doc first, then each block immediately followed by its order decoration', () => {
+    const facts = factsFor(plan);
+    expect(facts[0].key).toBe(plan.docKey);
+    for (let i = 0; i < plan.blocks.length; i++) {
+      const b = plan.blocks[i];
+      expect(facts[1 + i * 2].key).toBe(b.key);
+      expect(facts[2 + i * 2].key).toBe(`_doc/${plan.slug}/${b.key}`);
+    }
+    expect(facts).toHaveLength(1 + plan.blocks.length * 2);
+  });
+
+  it('is deterministic across re-plans — chunk N of a later step slices the same list', () => {
+    const again = factsFor(planDecomposition('docs/x/y.md', '# T\n\nintro\n\nsecond\n\nthird', noWiki));
+    expect(again).toEqual(factsFor(plan));
+    // A mid-list slice (an async chunk step) therefore lands identical facts.
+    expect(again.slice(2, 4)).toEqual(factsFor(plan).slice(2, 4));
   });
 });

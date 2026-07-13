@@ -26,7 +26,7 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { extractWikiTargets } from '@parc/ui';
 import { gwCall } from './vendor/gateway-client.js';
-import { planDecomposition, staleKeys, diffEdges, type EdgeRef } from './decompose';
+import { planDecomposition, factsFor, staleKeys, diffEdges, type EdgeRef } from './decompose';
 
 const GATEWAY_MCP = process.env.GATEWAY_MCP_URL || 'https://parc.land/mcp';
 async function gw(token: string, target: string, input?: unknown): Promise<unknown> {
@@ -55,9 +55,24 @@ export const TOOLS = [
     ),
   },
   {
+    name: 'decomposeChunk',
+    kind: 'act',
+    description:
+      'ADR-0083: one bounded continuation step of an async decomposition. Ingests ONE fact chunk (or, past the last chunk, runs the finish phase: retirement + edge reconciliation), updates the _decompose/<slug> status fact, and chains the next step by writing the next decompose-run fact. Invoked by the lit-decompose-chunk subscription, never directly.',
+    inputSchema: obj(
+      {
+        path: { type: 'string' },
+        content: { type: 'string' },
+        cursor: { type: 'number', description: 'Fact-list offset this step ingests from (>= total facts = the finish phase)' },
+        token: { type: 'string' },
+      },
+      ['path', 'content', 'cursor', 'token'],
+    ),
+  },
+  {
     name: 'bootstrap',
     kind: 'act',
-    description: "Seed this cell's required facts. Idempotent: re-writes _subscriptions/lit-decompose-markdown (ADR-0081, the markdown-write reaction). Cell-required infrastructure — versioned with the cell, distinct from organic knowledge.",
+    description: "Seed this cell's required facts. Idempotent: re-writes _subscriptions/lit-decompose-markdown (ADR-0081, the markdown-write reaction) and _subscriptions/lit-decompose-chunk (ADR-0083, the async continuation chain). Cell-required infrastructure — versioned with the cell, distinct from organic knowledge.",
     inputSchema: obj({}),
   },
 ];
@@ -93,6 +108,30 @@ const LIT_SUBSCRIPTION = {
   },
 };
 
+/** ADR-0083: the continuation chain's own reaction — each `decompose-run/*`
+ *  fact write delivers ONE bounded chunk step back to this cell. Chaining
+ *  happens through the substrate (chunk N writes the fact that triggers
+ *  chunk N+1), so no invocation ever exceeds one chunk of work and the
+ *  ~30s gateway ceiling stops mattering — the same shape workspace.reindex
+ *  already uses tier-1, expressed with the cell-side primitives lit has. */
+const LIT_CHUNK_SUBSCRIPTION = {
+  id: 'lit-decompose-chunk',
+  label: 'ADR-0083: one bounded continuation step of an async markdown decomposition',
+  match: { type: 'decompose-run' },
+  deliver: '@c15r/lit.decomposeChunk',
+  // Fresh run facts are written per step at distinct keys (decompose-run/
+  // <slug>/<cursor>), each starting at revision 1 — a doc re-synced for
+  // years never walks into the depth cap the way a single rev-bumped key
+  // would. 50 is then pure runaway insurance.
+  maxDepth: 50,
+  params: {
+    path: '${value.path}',
+    content: '${value.content}',
+    cursor: '${value.cursor}',
+    grants: { read: true, write: true },
+  },
+};
+
 /** Idempotent: an organ-path write with the same key just bumps a revision. */
 async function ensureBootstrap(): Promise<void> {
   await emit({
@@ -102,26 +141,32 @@ async function ensureBootstrap(): Promise<void> {
     tags: ['cell-required', 'lit'],
     via: 'lit.bootstrap',
   });
+  await emit({
+    key: `_subscriptions/${LIT_CHUNK_SUBSCRIPTION.id}`,
+    value: LIT_CHUNK_SUBSCRIPTION,
+    type: 'subscription',
+    tags: ['cell-required', 'lit'],
+    via: 'lit.bootstrap',
+  });
 }
 
 interface QueryEntry { key: string; value?: unknown }
 interface NeighborsResult { outbound?: Array<{ to: string; rel: string }> }
 
-async function decomposeMarkdown(args: { path?: unknown; content?: unknown; token?: unknown }): Promise<{ docKey: string; blocks: number; edgesAdded: number; edgesRemoved: number; blocksRetired: number; chunksFailed?: number }> {
-  const path = typeof args.path === 'string' ? args.path : '';
-  const content = typeof args.content === 'string' ? args.content : '';
-  const token = typeof args.token === 'string' ? args.token : '';
-  if (!path || !token) throw new Error('path and token are required');
+// workspace.ingest caps at 100 facts/call AND every gw() call crosses the
+// CloudFront-fronted /mcp gateway with its ~30s origin timeout, while
+// ingest writes facts sequentially at ~0.85s each. 20/chunk (~17s) leaves
+// real headroom — 30/chunk (~25.5s + overhead) ran RIGHT AT the ceiling
+// and slow chunks still 504'd (2026-07-12, third live iteration on this).
+const INGEST_CHUNK = 20;
 
-  // Self-healing: this reaction's own subscription must exist for it to have
-  // fired at all, but re-ensuring costs one cheap idempotent organ write and
-  // means the wiring survives a dropped/edited subscription without an
-  // out-of-band fix. Best-effort — never blocks the decomposition itself.
-  await ensureBootstrap().catch(() => undefined);
-
-  const plan = planDecomposition(path, content, extractWikiTargets);
+/** The FINISH phase: retire whatever a prior decomposition wrote that this
+ *  version no longer wants (blocks + order decorations), then reconcile each
+ *  block's authored edges. Bounded work — one query, then parallel per-key
+ *  calls — so it fits one invocation on its own (ADR-0083 runs it as the
+ *  chain's dedicated last step). */
+async function finishDecompose(token: string, plan: ReturnType<typeof planDecomposition>): Promise<{ edgesAdded: number; edgesRemoved: number; blocksRetired: number }> {
   const orderPrefix = `_doc/${plan.slug}/`;
-
   // Existing membership decorations for this slug — the stale-block signal.
   // The limit must exceed any real doc's decoration count INCLUDING residue
   // from prior partial runs: at 100, a doc that had accumulated 134 stale+live
@@ -129,55 +174,10 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   // tail residue survived every convergent re-run (2026-07-12, live).
   const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 500 }) as { entries?: QueryEntry[] })?.entries ?? [];
   const existingBlockKeys = existingOrder.map((e) => e.key.slice(orderPrefix.length));
-  const wantedBlockKeys = plan.blocks.map((b) => b.key);
-  const retiredKeys = staleKeys(existingBlockKeys, wantedBlockKeys);
+  const retiredKeys = staleKeys(existingBlockKeys, plan.blocks.map((b) => b.key));
 
-  // Facts, INTERLEAVED (2026-07-12 #2): doc first, then each block IMMEDIATELY
-  // followed by its own order decoration. The old ordering (all blocks, then
-  // all orders) put every membership decoration in the LAST chunks — so any
-  // mid-run failure left blocks-without-orders: content written, doc empty
-  // (the agency-and-identity/sigma-calculus pattern: 99 blocks, 0 orders,
-  // across three separate runs). With pairs interleaved, every completed
-  // chunk leaves a cleanly READABLE PREFIX of the doc; a partial run is a
-  // shorter doc, not a broken one, and an idempotent re-run extends it.
-  const facts = [
-    { key: plan.docKey, type: 'doc', tags: ['doc'], via: 'lit.decomposeMarkdown', value: { title: plan.title, summary: plan.summary } },
-    ...plan.blocks.flatMap((b) => [
-      { key: b.key, type: 'doc-block', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { content: b.content } },
-      // `doc`/`block` ride along explicitly (not just encoded in the key) —
-      // deriveBackboneEdges' key-encoded rule falls back to these when the
-      // key's own `[^/]+`-per-segment regex can't bind a nested slug.
-      { key: `${orderPrefix}${b.key}`, type: 'doc-order', tags: [plan.docKey], via: 'lit.decomposeMarkdown', value: { seq: b.seq, doc: plan.slug, block: b.key } },
-    ]),
-  ];
-  // workspace.ingest caps at 100 facts/call AND every gw() call crosses the
-  // CloudFront-fronted /mcp gateway with its ~30s origin timeout, while
-  // ingest writes facts sequentially at ~0.85s each. 20/chunk (~17s) leaves
-  // real headroom — 30/chunk (~25.5s + overhead) ran RIGHT AT the ceiling
-  // and slow chunks still 504'd (2026-07-12, third live iteration on this).
-  // And a chunk's 504 no longer aborts the run: CloudFront killing the
-  // RESPONSE doesn't kill the workspace Lambda's writes (they complete
-  // server-side), so the loop logs and continues — combined with the
-  // interleaving above, the worst case converges over idempotent re-runs
-  // instead of permanently starving the tail chunks. The real fix — async
-  // chunk-per-invocation, status-fact chained — is ADR-0083; this makes the
-  // synchronous tool CONVERGENT until that lands.
-  const INGEST_CHUNK = 20;
-  let chunksFailed = 0;
-  for (let i = 0; i < facts.length; i += INGEST_CHUNK) {
-    const batch = facts.slice(i, i + INGEST_CHUNK);
-    try {
-      await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts: batch, ...(i === 0 ? { edges: plan.edges } : {}) });
-    } catch {
-      chunksFailed++;
-    }
-  }
-
-  // Retire blocks/order-decorations this version no longer produces, in
-  // parallel — a live run hit the cell's 10s Lambda timeout doing this (and
-  // the edge reconciliation below) sequentially even for a 2-block doc, since
-  // `workspace.ingest`'s own per-fact writes already spend most of that
-  // budget. Both loops below are independent per-key, so Promise.all is safe.
+  // Retire in parallel — a live run hit the cell Lambda's timeout doing this
+  // sequentially. Independent per-key, so Promise.all is safe.
   await Promise.all(retiredKeys.flatMap((key) => [
     gw(token, 'workspace.supersede', { key }).catch(() => undefined),
     gw(token, 'workspace.supersede', { key: `${orderPrefix}${key}` }).catch(() => undefined),
@@ -186,9 +186,7 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
   // Reconcile edges per block (mirrors syncCellLinks, client/main.tsx): unlink
   // whatever a prior decomposition authored that this version no longer
   // wants. Skipped entirely on a FRESH decompose (no pre-existing order
-  // decorations) — there is nothing to reconcile against, so the read+diff
-  // round trips would be pure overhead (and budget the ingest step already
-  // spent most of the timeout on).
+  // decorations) — there is nothing to reconcile against.
   let edgesAdded = 0, edgesRemoved = 0;
   if (existingOrder.length > 0) {
     const results = await Promise.all(plan.blocks.map(async (b) => {
@@ -202,15 +200,103 @@ async function decomposeMarkdown(args: { path?: unknown; content?: unknown; toke
     edgesAdded = results.reduce((n, r) => n + r.added, 0);
     edgesRemoved = results.reduce((n, r) => n + r.removed, 0);
   }
+  return { edgesAdded, edgesRemoved, blocksRetired: retiredKeys.length };
+}
 
-  return { docKey: plan.docKey, blocks: plan.blocks.length, edgesAdded, edgesRemoved, blocksRetired: retiredKeys.length, ...(chunksFailed ? { chunksFailed } : {}) };
+/** Organ-path status update — `_decompose/<slug>` is `_`-prefixed, so the
+ *  reactor never fires on it (no loop) and the graph never shows it. */
+async function putStatus(slug: string, value: Record<string, unknown>): Promise<void> {
+  await emit({ key: `_decompose/${slug}`, value, type: 'decompose-status', tags: ['lit'], via: 'lit.decompose' });
+}
+
+/** Chain the next continuation step: a FRESH `decompose-run/<slug>/<cursor>`
+ *  fact per step (each starts at revision 1, so the subscription's depth cap
+ *  never accumulates across a doc's lifetime of re-syncs). The reaction on
+ *  `type: decompose-run` delivers it back to decomposeChunk with a scoped
+ *  per-run token — chaining THROUGH the substrate, the reindex shape. */
+async function emitRunStep(slug: string, path: string, content: string, cursor: number, total: number): Promise<void> {
+  await emit({
+    key: `decompose-run/${slug}/${cursor}`,
+    value: { path, content, cursor, total },
+    type: 'decompose-run',
+    tags: ['lit', 'decompose-run'],
+    via: 'lit.decompose',
+  });
+}
+
+async function decomposeMarkdown(args: { path?: unknown; content?: unknown; token?: unknown }): Promise<Record<string, unknown>> {
+  const path = typeof args.path === 'string' ? args.path : '';
+  const content = typeof args.content === 'string' ? args.content : '';
+  const token = typeof args.token === 'string' ? args.token : '';
+  if (!path || !token) throw new Error('path and token are required');
+
+  // Self-healing: this reaction's own subscription must exist for it to have
+  // fired at all, but re-ensuring costs one cheap idempotent organ write and
+  // means the wiring survives a dropped/edited subscription without an
+  // out-of-band fix. Best-effort — never blocks the decomposition itself.
+  await ensureBootstrap().catch(() => undefined);
+
+  const plan = planDecomposition(path, content, extractWikiTargets);
+  const facts = factsFor(plan);
+
+  // ADR-0083: a doc that fits ONE ingest chunk (~17s) stays fully
+  // synchronous — the overwhelming majority of the corpus, and callers keep
+  // the simple call-and-done contract. Anything larger becomes an async
+  // chain: no single invocation ever does more than one bounded chunk, so
+  // the ~30s gateway ceiling that partial-failed the big docs (99/92/61
+  // blocks, three separate mitigation rounds, 2026-07-12) stops mattering.
+  if (facts.length <= INGEST_CHUNK) {
+    await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts, edges: plan.edges });
+    const fin = await finishDecompose(token, plan);
+    return { docKey: plan.docKey, blocks: plan.blocks.length, ...fin };
+  }
+
+  await putStatus(plan.slug, { status: 'running', phase: 'facts', done: 0, total: facts.length, startedAt: new Date().toISOString() });
+  await emitRunStep(plan.slug, path, content, 0, facts.length);
+  return { docKey: plan.docKey, blocks: plan.blocks.length, status: 'started', poll: `_decompose/${plan.slug}` };
+}
+
+async function decomposeChunk(args: { path?: unknown; content?: unknown; cursor?: unknown; token?: unknown }): Promise<Record<string, unknown>> {
+  const path = typeof args.path === 'string' ? args.path : '';
+  const content = typeof args.content === 'string' ? args.content : '';
+  const cursor = typeof args.cursor === 'number' && Number.isFinite(args.cursor) ? args.cursor : NaN;
+  const token = typeof args.token === 'string' ? args.token : '';
+  if (!path || !token || Number.isNaN(cursor) || cursor < 0) throw new Error('path, token and a non-negative cursor are required');
+
+  // Deterministic re-plan from the SAME content the dispatch saw (carried on
+  // the run fact) — every step of one chain works off one consistent plan.
+  const plan = planDecomposition(path, content, extractWikiTargets);
+  const facts = factsFor(plan);
+  const runKey = `decompose-run/${plan.slug}/${cursor}`;
+
+  if (cursor >= facts.length) {
+    // The dedicated FINISH step: retirement + edge reconciliation, then done.
+    const fin = await finishDecompose(token, plan);
+    await putStatus(plan.slug, { status: 'done', phase: 'done', done: facts.length, total: facts.length, ...fin, finishedAt: new Date().toISOString() });
+    await emit({ op: 'supersede', key: runKey });
+    return { docKey: plan.docKey, ...fin, status: 'done' };
+  }
+
+  const batch = facts.slice(cursor, cursor + INGEST_CHUNK);
+  // Edges ride the FIRST chunk only, same as the old synchronous loop.
+  await gw(token, 'workspace.ingest', { via: 'lit.decomposeMarkdown', facts: batch, ...(cursor === 0 ? { edges: plan.edges } : {}) });
+
+  const next = cursor + INGEST_CHUNK;
+  await putStatus(plan.slug, { status: 'running', phase: next < facts.length ? 'facts' : 'finish', done: Math.min(next, facts.length), total: facts.length });
+  // Chain BEFORE retiring this step's own run fact: if the process dies
+  // between the two, the worst case is a leftover (superseded-later) run
+  // fact, never a dropped chain.
+  await emitRunStep(plan.slug, path, content, next, facts.length);
+  await emit({ op: 'supersede', key: runKey });
+  return { docKey: plan.docKey, cursor, ingested: batch.length, next };
 }
 
 export async function toolCall(name: string, args: Record<string, unknown>): Promise<unknown> {
   if (name === 'decomposeMarkdown') return decomposeMarkdown(args);
+  if (name === 'decomposeChunk') return decomposeChunk(args);
   if (name === 'bootstrap') {
     await ensureBootstrap();
-    return { bootstrapped: true, subscriptions: [`_subscriptions/${LIT_SUBSCRIPTION.id}`] };
+    return { bootstrapped: true, subscriptions: [`_subscriptions/${LIT_SUBSCRIPTION.id}`, `_subscriptions/${LIT_CHUNK_SUBSCRIPTION.id}`] };
   }
   throw new Error(`unknown tool "${name}"`);
 }
