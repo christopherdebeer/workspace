@@ -1251,20 +1251,28 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       controls.addEventListener('controlend', () => { interacting = false; lastInput = performance.now(); });
       const focusVec = new THREE.Vector3();
 
-      // ── picking: a tap (not a drag) raycasts the point cloud ──
-      const raycaster = new THREE.Raycaster();
-      (raycaster.params as any).Points = { threshold: 9 };
-      const ndc = new THREE.Vector2();
+      // ── picking: a tap (not a drag) selects the nearest node ON SCREEN ──
+      // The raycaster is gone (2026-07-13 owner report: "really hard to select
+      // nodes"): its 9-WORLD-UNIT cylinder around the pick ray shrinks to a
+      // couple of screen px once the camera pulls back, so most taps missed
+      // every node and fell through to the forgiving label slop — which then
+      // selected some standing label's node instead, reading as "selection is
+      // broken". A tap is a SCREEN gesture, so pick in screen space: project
+      // every visible node once and take the closest within a finger-sized
+      // px threshold. O(N) over a few thousand nodes is nothing per tap, and
+      // the threshold is honest — it never silently changes with dolly depth.
       let downX = 0, downY = 0, moved = false;
-      const pickAt = (cx: number, cy: number): any => {
-        const rect = renderer.domElement.getBoundingClientRect();
-        ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
-        raycaster.setFromCamera(ndc, camera);
-        const hits = raycaster.intersectObject(points);
-        if (!hits.length) return null;
-        let best = hits[0];
-        for (const h of hits) if ((h.distanceToRay ?? 1e9) < (best.distanceToRay ?? 1e9)) best = h;
-        return best.index != null ? nodes[best.index] : null;
+      const nearestNodeAt = (cx: number, cy: number, maxPx: number): any => {
+        let best: any = null;
+        let bestD = maxPx;
+        for (const n of nodes) {
+          if (!isVis(n)) continue;
+          const [sx, sy, sz] = screenXY(n);
+          if (sz > 1) continue; // behind the camera
+          const d = Math.hypot(sx - cx, sy - cy);
+          if (d < bestD) { bestD = d; best = n; }
+        }
+        return best;
       };
       // A tap over a label's projected rect selects that node — SDF labels are
       // scene objects, so the rect is reconstructed from troika's OWN layout
@@ -1335,17 +1343,17 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           if (c.key && nodeById.has(c.key)) api.current?.select(c.key, true);
           else frame(c.x, c.y, c.z, c.r * 1.5);
         };
-        // Precedence, refined twice on live reports (2026-07-12): a tap on a
-        // VISIBLE chip (label/caption) beats the point raycast — a deliberate
-        // typographic target outranks ambient 3px dots. But the padded
-        // finger-slop rects must NOT: with them first, every tap near any of
-        // the dozens of standing labels selected that label's node and bare
-        // nodes became unselectable. Tight chip → node pick → forgiving slop.
+        // Precedence, refined across three live reports (2026-07-12/13): a tap
+        // on a VISIBLE chip (label/caption) wins — a deliberate typographic
+        // target outranks ambient dots. Otherwise the NEAREST on-screen node
+        // within a finger-sized threshold wins (screen-space, depth-honest —
+        // see nearestNodeAt above). Only a tap that hits neither falls to the
+        // labels' padded slop rects; and only then, empty space deselects.
         const lidT = labelAt(e.clientX, e.clientY, false);
         if (lidT) { api.current?.select(lidT, true); return; }
         const cT = constellationAt(e.clientX, e.clientY, false);
         if (cT) { openConst(cT); return; }
-        const n = pickAt(e.clientX, e.clientY);
+        const n = nearestNodeAt(e.clientX, e.clientY, e.pointerType === 'touch' ? 36 : 24);
         if (n) { api.current?.select(n.id); return; }
         const lid = labelAt(e.clientX, e.clientY, true);
         if (lid) { api.current?.select(lid, true); return; }
