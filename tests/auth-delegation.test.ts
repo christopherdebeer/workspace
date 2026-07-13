@@ -119,6 +119,31 @@ describe('auth.exchangeToken (ADR-0024)', () => {
   });
 });
 
+describe('mintTokenFor names the spawned agent as the delegation actor (ADR-0024)', () => {
+  it('a named actor yields a depth-1 chain: writes stamp the agent, authorization anchors to the owner', async () => {
+    // The reactor's rail-spawn mint (services/workspace/event-handlers.ts):
+    // no parent token exists on the path, so the chain STARTS here at depth 1.
+    const minted = await cmd<Minted>('mintTokenFor', {
+      owner: 'alice',
+      scope: 'workspace:read workspace:write',
+      actor: 'agent:lit.decomposeMarkdown',
+    });
+    expect(minted.act).toEqual({ sub: 'agent:lit.decomposeMarkdown' });
+
+    const v = await cmd<Validated>('validateToken', { token: minted.token });
+    expect(v.userId).toBe('alice'); // the subject — every scope check unchanged
+    expect(v.act).toEqual({ sub: 'agent:lit.decomposeMarkdown' });
+    expect(leafActOf(v)).toBe('agent:lit.decomposeMarkdown'); // what the writer stamp will read
+  });
+
+  it('without an actor — or a self-named one — the mint stays a root credential', async () => {
+    const plain = await cmd<Minted>('mintTokenFor', { owner: 'alice', scope: 'workspace:read' });
+    expect(plain.act).toBeUndefined();
+    const selfNamed = await cmd<Minted>('mintTokenFor', { owner: 'alice', scope: 'workspace:read', actor: 'alice' });
+    expect(selfNamed.act).toBeUndefined();
+  });
+});
+
 describe('writer stamp reads the leaf act (ADR-0024 §3)', () => {
   it('a chained identity stamps the leaf actor; a root identity stamps the user', async () => {
     const state = createObservedState(createMemoryStateStore());

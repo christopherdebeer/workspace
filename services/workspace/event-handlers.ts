@@ -439,7 +439,17 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
           if (grants.write) scopes.push('workspace:write');
           if (scopes.length) {
             try {
-              const minted = await ctx.serviceClient('auth').command<{ token?: string }>('mintTokenFor', { owner: scope, scope: scopes.join(' '), expiresInSec: 900 });
+              // ADR-0024: name the spawned agent as the delegation actor, so the
+              // facts it writes stamp `agent:<cell>.<tool>` as writer (leaf act)
+              // instead of re-flattening to the owner.
+              const minted = await ctx
+                .serviceClient('auth')
+                .command<{ token?: string }>('mintTokenFor', {
+                  owner: scope,
+                  scope: scopes.join(' '),
+                  expiresInSec: 900,
+                  actor: `agent:${target.name}.${target.tool}`,
+                });
               if (minted?.token) deliverParams = { ...params, token: minted.token };
             } catch (err) {
               ctx.logger.warn('per-run agent token mint failed; agent runs substrate-only', { scope, subscription: sub.id, error: (err as Error).message });

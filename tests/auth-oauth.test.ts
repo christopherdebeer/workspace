@@ -4,6 +4,7 @@ import {
   handleDCR,
   handleConsent,
   handleToken,
+  handleASMetadata,
   handleRevoke,
   handleDeviceInit,
   handleDeviceInfo,
@@ -560,5 +561,128 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
     );
     const scope = (tokenRes.body as { scope: string }).scope.split(' ').sort();
     expect(scope).toEqual(['write:type:note']); // granted the type-scope, dropped platform:*
+  });
+});
+
+describe('RFC 8693 token exchange on /oauth/token (ADR-0024 delegation)', () => {
+  const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+
+  async function mintParent(store: ReturnType<typeof createMemoryStore>, scope = 'workspace:read workspace:write') {
+    await store.createUser('u1', 'alice');
+    return store.mintToken({ userId: 'u1', scope, label: 'parent' });
+  }
+
+  it('is advertised in AS metadata', () => {
+    const res = handleASMetadata(makeReq({ method: 'GET', path: '/.well-known/oauth-authorization-server' }), CONFIG);
+    expect((res.body as { grant_types_supported: string[] }).grant_types_supported).toContain(GRANT_TYPE);
+  });
+
+  it('exchanges a parent for an attenuated, chain-carrying child (RFC response shape)', async () => {
+    const store = createMemoryStore();
+    const parent = await mintParent(store);
+    const res = await handleToken(
+      makeReq({
+        path: '/oauth/token',
+        body: {
+          grant_type: GRANT_TYPE,
+          subject_token: parent.token,
+          subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+          scope: 'workspace:read cells:create', // cells:create is outside the ceiling — clamped away
+          actor: 'agent:researcher',
+        },
+      }),
+      store,
+      CONFIG,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = res.body as { access_token: string; issued_token_type: string; token_type: string; scope: string; act: { sub: string } };
+    expect(body.issued_token_type).toBe('urn:ietf:params:oauth:token-type:access_token');
+    expect(body.token_type).toBe('Bearer');
+    expect(body.scope).toBe('workspace:read'); // min(requested, parent grant)
+    expect(body.act).toEqual({ sub: 'agent:researcher' });
+
+    // The child validates like any bearer: subject stays the human, chain rides along.
+    const v = await validateBearer(body.access_token, store);
+    expect(v).toMatchObject({ userId: 'alice', scope: 'workspace:read', act: { sub: 'agent:researcher' } });
+  });
+
+  it('chains: exchanging a child nests the parent chain under the new actor', async () => {
+    const store = createMemoryStore();
+    const parent = await mintParent(store);
+    const hop1 = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: GRANT_TYPE, subject_token: parent.token, scope: 'workspace:read', actor: 'agent:a' } }),
+      store,
+      CONFIG,
+    );
+    const hop2 = await handleToken(
+      makeReq({
+        path: '/oauth/token',
+        body: { grant_type: GRANT_TYPE, subject_token: (hop1.body as { access_token: string }).access_token, scope: 'workspace:read', actor: 'agent:b' },
+      }),
+      store,
+      CONFIG,
+    );
+    expect((hop2.body as { act: unknown }).act).toEqual({ sub: 'agent:b', act: { sub: 'agent:a' } });
+  });
+
+  it('refuses: invalid subject_token → invalid_grant; out-of-ceiling scope → invalid_scope; loop → invalid_request', async () => {
+    const store = createMemoryStore();
+    const parent = await mintParent(store, 'workspace:read');
+
+    const bad = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: GRANT_TYPE, subject_token: 'tok_bogus', scope: 'workspace:read' } }),
+      store,
+      CONFIG,
+    );
+    expect(bad.statusCode).toBe(400);
+    expect((bad.body as { error: string }).error).toBe('invalid_grant');
+
+    const widen = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: GRANT_TYPE, subject_token: parent.token, scope: 'cells:create' } }),
+      store,
+      CONFIG,
+    );
+    expect(widen.statusCode).toBe(400);
+    expect((widen.body as { error: string }).error).toBe('invalid_scope');
+
+    const hop1 = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: GRANT_TYPE, subject_token: parent.token, scope: 'workspace:read', actor: 'agent:a' } }),
+      store,
+      CONFIG,
+    );
+    const loop = await handleToken(
+      makeReq({
+        path: '/oauth/token',
+        body: { grant_type: GRANT_TYPE, subject_token: (hop1.body as { access_token: string }).access_token, scope: 'workspace:read', actor: 'agent:a' },
+      }),
+      store,
+      CONFIG,
+    );
+    expect(loop.statusCode).toBe(400);
+    expect((loop.body as { error: string }).error).toBe('invalid_request');
+  });
+
+  it('refuses: missing scope and foreign subject_token_type are invalid_request', async () => {
+    const store = createMemoryStore();
+    const parent = await mintParent(store);
+
+    const noScope = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: GRANT_TYPE, subject_token: parent.token } }),
+      store,
+      CONFIG,
+    );
+    expect(noScope.statusCode).toBe(400);
+    expect((noScope.body as { error: string }).error).toBe('invalid_request');
+
+    const badType = await handleToken(
+      makeReq({
+        path: '/oauth/token',
+        body: { grant_type: GRANT_TYPE, subject_token: parent.token, subject_token_type: 'urn:ietf:params:oauth:token-type:jwt', scope: 'workspace:read' },
+      }),
+      store,
+      CONFIG,
+    );
+    expect(badType.statusCode).toBe(400);
+    expect((badType.body as { error: string }).error).toBe('invalid_request');
   });
 });
