@@ -876,9 +876,10 @@ export const BACKBONE_RELS = {
 } as const;
 
 /** Reference relations that express *membership in a collection* (ADR-0005): a fact
- *  `inView` a view, `inDoc` a doc. A collection's extensional members are the facts
- *  with one of these edges pointing at it. */
-export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc', 'onBoard']);
+ *  `inView` a view, `inDoc` a doc, `onBoard` a board — and, generically (ADR-0057,
+ *  the one collections family), `memberOf` a `collection:` fact. A collection's
+ *  extensional members are the facts with one of these edges pointing at it. */
+export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc', 'onBoard', 'memberOf']);
 
 /**
  * Per-rule Reference strength (ADR-0009). Derived edges carry graded weight so a
@@ -1939,6 +1940,24 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
           if (e.source) decorationOf.set(e.from, e.source);
         }
       }
+      // Declared-extensional (ADR-0057): a collection fact may NAME its members
+      // directly — `value.members: ['el:a', …]` (the group/frame shape) — instead
+      // of (or as well as) being pointed at by membership edges. Union with the
+      // edge-derived set, deduped; a declared list is an ORDERED list, so array
+      // position supplies each declared member's seq unless a placing decoration
+      // asserts one explicitly (decoration seq wins — it's the finer statement).
+      const declaredSeq = new Map<string, number>();
+      const declared = (fact?.value as { members?: unknown } | undefined)?.members;
+      if (Array.isArray(declared)) {
+        declared.forEach((k, i) => {
+          if (typeof k !== 'string' || !k) return;
+          declaredSeq.set(k, i);
+          if (!seen.has(k)) {
+            seen.add(k);
+            memberKeys.push(k);
+          }
+        });
+      }
       // Honor the scope's `_config/salience` (the intensional branch already does, via query).
       const sCall = baseSalience(await loadSalienceConfig(scope));
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
@@ -1959,6 +1978,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
             placement = { ...(seq !== undefined ? { seq } : {}), ...(typeof dv.fold === 'boolean' ? { fold: dv.fold } : {}) };
           }
         }
+        // A declared member's array position orders it when no decoration spoke.
+        if (!seqOf.has(k) && declaredSeq.has(k)) seqOf.set(k, declaredSeq.get(k)!);
         members.push({ key: k, ...(await wrap(rec, nowMs, signals, sCall)), ...(placement ? { placement } : {}) });
       }
       // Narrative order when any member is placed by a `seq` decoration; the rest

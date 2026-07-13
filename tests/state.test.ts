@@ -775,6 +775,79 @@ describe('collections: members (ADR-0005)', () => {
   });
 });
 
+describe('collections: the one family (ADR-0057)', () => {
+  const COLLECTION_MEMBERSHIP_DECL = {
+    keyPattern: '_collection/{coll}/{member}',
+    keyEdges: [{ from: '{member}', rel: 'memberOf', to: 'collection:{coll}' }],
+  };
+
+  it('declared-extensional — value.members[] ARE the members, in array order', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: 'el:b', value: { text: 'second written' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'el:a', value: { text: 'last written, listed first' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'collection:g1', value: { label: 'Group', members: ['el:b', 'el:a'], facets: { group: { transform: true } } }, type: 'collection' }, alice);
+
+    const res = await state.members('r', 'collection:g1');
+    expect(res.membership).toBe('extensional');
+    // A declared list is an ORDERED list — array position is the seq.
+    expect(res.order).toBe('seq');
+    expect(res.members.map((m) => m.key)).toEqual(['el:b', 'el:a']);
+  });
+
+  it('union — value.members[] ∪ inbound memberOf edges, deduped', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: '_types/collection-membership', value: COLLECTION_MEMBERSHIP_DECL, type: 'type-decl' }, alice);
+    await state.put({ scope: 'r', key: 'el:a', value: { text: 'declared' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'el:b', value: { text: 'edge-placed' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'el:c', value: { text: 'both' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'collection:g2', value: { members: ['el:a', 'el:c'] }, type: 'collection' }, alice);
+    await state.put({ scope: 'r', key: '_collection/g2/el:b', value: { seq: 9 }, type: 'collection-membership' }, alice);
+    await state.put({ scope: 'r', key: '_collection/g2/el:c', value: { seq: 5 }, type: 'collection-membership' }, alice);
+
+    const res = await state.members('r', 'collection:g2');
+    expect(res.members.map((m) => m.key).sort()).toEqual(['el:a', 'el:b', 'el:c']);
+    // el:c appears once (deduped), and its DECORATION seq (5) outranks its
+    // declared array position (1) — the finer statement wins.
+    const c = res.members.find((m) => m.key === 'el:c');
+    expect(c?.placement?.seq).toBe(5);
+  });
+
+  it('the _collection/{coll}/{member} key rule projects memberOf into the graph', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: '_types/collection-membership', value: COLLECTION_MEMBERSHIP_DECL, type: 'type-decl' }, alice);
+    await state.put({ scope: 'r', key: 'el:x', value: { text: 'member' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'collection:folder', value: { label: 'Folder' }, type: 'collection' }, alice);
+    await state.put({ scope: 'r', key: '_collection/folder/el:x', value: { seq: 0 }, type: 'collection-membership' }, alice);
+
+    const { edges } = await state.graph('r');
+    const hit = edges.find((e) => e.from === 'el:x' && e.rel === 'memberOf' && e.to === 'collection:folder');
+    expect(hit).toBeDefined();
+    expect(hit?.derived).toBe(true);
+
+    const res = await state.members('r', 'collection:folder');
+    expect(res.members.map((m) => m.key)).toEqual(['el:x']);
+  });
+
+  it('a query on the collection fact still wins — intensional beats extensional', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: 't1', value: { text: 'a' }, type: 'todo' }, alice);
+    await state.put({ scope: 'r', key: 'collection:todos', value: { query: { type: 'todo' }, members: ['t-ignored'] }, type: 'collection' }, alice);
+
+    const res = await state.members('r', 'collection:todos');
+    expect(res.membership).toBe('intensional');
+    expect(res.members.map((m) => m.key)).toEqual(['t1']);
+  });
+
+  it('declared members that do not exist (yet) are skipped, not fabricated', async () => {
+    const state = createObservedState(createMemoryStateStore());
+    await state.put({ scope: 'r', key: 'el:real', value: { text: 'x' }, type: 'note' }, alice);
+    await state.put({ scope: 'r', key: 'collection:g3', value: { members: ['el:ghost', 'el:real'] }, type: 'collection' }, alice);
+
+    const res = await state.members('r', 'collection:g3');
+    expect(res.members.map((m) => m.key)).toEqual(['el:real']);
+  });
+});
+
 describe('salience: explain breakdown (ADR-0006)', () => {
   it('omits the breakdown by default and attaches it under explain', async () => {
     const state = createObservedState(createMemoryStateStore());
