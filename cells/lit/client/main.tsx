@@ -20,7 +20,7 @@ import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
 import { outbox } from './lib/outbox.ts';
-import { mountSandboxedRenderer, SANDBOX_HOST_HTML, bodyText, fieldsToHtml } from '@parc/ui';
+import { attachSandboxedRenderer, bodyText, fieldsToHtml } from '@parc/ui';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
   parseFenceMeta, fenceTagsOf, type FenceMeta,
@@ -678,18 +678,19 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
         // this iframe's contentWindow — matching the fence-enhancement model.)
         const frame = document.createElement('iframe');
         frame.setAttribute('sandbox', 'allow-scripts');
-        frame.srcdoc = SANDBOX_HOST_HTML;
         frame.title = `board ${arg}`;
         frame.style.cssText = 'width:100%;height:280px;border:0;display:block;background:#fff';
-        frame.addEventListener('load', () => {
-          const handle = mountSandboxedRenderer(frame, {
-            call: (kind, target, input) => (kind === 'read' ? read(target, input) : act(target, input)),
-            onResize: (h) => { frame.style.height = `${Math.max(120, Math.min(520, h))}px`; },
-            onSettled: (ok) => { if (!ok) frame.replaceWith(el('div', 'embed-view', `board ${arg}: renderer unavailable`)); },
-          });
-          void mcpResourceRead(`ui://@${cellOwner()}/canvas/renderers/board.js`).then((src) => {
-            handle.render(src, 'canvas', { viewId: arg }, arg);
-          });
+        // The shared embed-host sequence (ADR-0044 Inc 4) — same helper as
+        // home's React frame; this fence is just its imperative shell.
+        attachSandboxedRenderer(frame, {
+          call: (kind, target, input) => (kind === 'read' ? read(target, input) : act(target, input)),
+          fetchSource: mcpResourceRead,
+          uri: `ui://@${cellOwner()}/canvas/renderers/board.js`,
+          type: 'canvas',
+          value: { viewId: arg },
+          key: arg,
+          onResize: (h) => { frame.style.height = `${Math.max(120, Math.min(520, h))}px`; },
+          onSettled: (ok) => { if (!ok) frame.replaceWith(el('div', 'embed-view', `board ${arg}: renderer unavailable`)); },
         });
         wrap.appendChild(frame);
       } else {

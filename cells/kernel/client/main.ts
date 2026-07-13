@@ -10,6 +10,7 @@
  * Served as an ESM module at /@c15r/kernel/app.js; cells import the URL.
  * Git truth: cells/kernel/client/main.ts in the platform repo.
  */
+import { resolve as resolveIntent } from '@parc/ui';
 
 /* ── session (shared across the origin) ─────────────────────────── */
 
@@ -464,33 +465,28 @@ export function hrefOf(e: FactEntry): string | null {
     .replace(/\$\{key\}/g, encodeURIComponent(e.key))
     .replace(/\$\{id\}/g, encodeURIComponent(id))
     .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
-  if (decl?.href) return fill(decl.href);
-  // A type's declared `open` handler (ADR-0049, served in $types) is its
-  // canonical route — it was IGNORED here, so typed facts with real routes
-  // (machines: /m/${id} on @c15r/machine) fell through to the convention
-  // fallbacks, most degenerately "the board it's tagged onto".
-  const open = decl?.handlers?.open?.find((h) => h && (h.href || h.path));
-  if (open) {
-    if (open.href) return fill(open.href);
-    const m = /^@([^/]+)\/(.+)$/.exec(decl?.manager ?? '');
-    if (m && open.path) return cellUrl(m[1], m[2], fill(open.path));
-  }
-  // Convention fallbacks (the pre-_types routing). Origin-aware via cellUrl.
-  const t = e._meta?.type ?? null;
+  if (decl?.href) return fill(decl.href); // legacy flat template — a slice override may still carry one
+  // ADR-0044 Inc 4 (closing ADR-0042's routing fork): the ONE shared resolver
+  // (platform/ui/vocab `resolve`) replaces both the local handlers.open scan
+  // and the hardcoded lit/input/canvas convention fallbacks that used to sit
+  // here. Type SIGNALS cover the declared type, the key's prefix, and every
+  // tag's prefix — so a `canvas:X` tag routes through canvas's own declared
+  // open (`?canvas=${match}`), a `doc:` key or tag through lit's
+  // (`/r/doc:${match}`), and a capture through input's declared alternatives
+  // (`/r/log:${value.captured}`, else the input surface) — all data in each
+  // cell's types.json, no per-cell code in the kernel.
+  const h = resolveIntent(
+    { key: e.key, value: e.value, _meta: { type: e._meta?.type ?? null, tags: e._meta?.tags } },
+    'open',
+    (typeDecls ?? {}) as Parameters<typeof resolveIntent>[2],
+  );
+  if (h?.cellRef) return cellUrl(h.cellRef.owner || (cellAddress()?.owner ?? 'c15r'), h.cellRef.name, h.path ?? '');
+  if (h?.surface) return h.surface;
+  // The one convention with no declaration to live in yet: a `cell` fact's
+  // address IS its surface, and the cells service (tier-1, no types.json)
+  // owns that type. Folds away when the service federates a declaration.
   const v = (e.value ?? {}) as Record<string, unknown>;
-  const tags = e._meta?.tags ?? [];
-  const owner = cellAddress()?.owner ?? 'c15r';
-  if (e.key.startsWith('doc:')) return cellUrl(owner, 'lit', `/r/${encodeURIComponent(e.key).replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
-  if (t === 'capture' || e.key.startsWith('inbox/')) {
-    return typeof v.captured === 'string'
-      ? cellUrl(owner, 'lit', `/r/log:${encodeURIComponent(v.captured)}`)
-      : cellUrl(owner, 'input');
-  }
-  if (t === 'cell' && typeof v.address === 'string') return v.address;
-  const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return cellUrl(owner, 'lit', `/r/${encodeURIComponent(docTag).replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
-  const boardTag = tags.find((x) => x.startsWith('canvas:'));
-  if (boardTag) return cellUrl(owner, 'canvas', `?canvas=${encodeURIComponent(boardTag.slice(7))}`);
+  if ((e._meta?.type ?? null) === 'cell' && typeof v.address === 'string') return v.address;
   return null;
 }
 

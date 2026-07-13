@@ -122,6 +122,53 @@ export async function fetchAndRunRenderer(
   }
 }
 
+/**
+ * The ONE embed-host sequence every first-party surface repeats around
+ * `mountSandboxedRenderer` (ADR-0044 Inc 4 ≡ ADR-0043 Inc 3): prime the
+ * iframe with the sandbox document, wait for its load, wire the host half,
+ * fetch the renderer source, render, and dispose cleanly. home's React frame
+ * and lit's board fence both had a hand-rolled copy of exactly this — the
+ * duplication this helper removes. Dependency-free (no React) like the rest
+ * of this module; a React surface wraps it in an effect, an imperative one
+ * calls it directly. Returns the disposer.
+ */
+export function attachSandboxedRenderer(
+  iframe: HTMLIFrameElement,
+  opts: {
+    call: (kind: 'read' | 'act', target: string, input: unknown) => Promise<unknown>;
+    /** Resolve the ui:// URI to the renderer's source — the surface's own transport. */
+    fetchSource: (uri: string) => Promise<string | null>;
+    uri: string;
+    type: string;
+    value: unknown;
+    key?: string;
+    onResize?: (height: number) => void;
+    onSettled?: (ok: boolean) => void;
+  },
+): () => void {
+  let disposed = false;
+  let handle: SandboxedRendererHandle | null = null;
+  const onLoad = (): void => {
+    if (disposed) return;
+    handle = mountSandboxedRenderer(iframe, {
+      call: opts.call,
+      onResize: opts.onResize,
+      onSettled: opts.onSettled,
+    });
+    void opts.fetchSource(opts.uri).then((src) => {
+      if (!disposed) handle?.render(src, opts.type, opts.value, opts.key);
+    });
+  };
+  iframe.addEventListener('load', onLoad);
+  // Set srcdoc AFTER the load listener so a synchronously-parsed doc can't race it.
+  if (!iframe.srcdoc) iframe.srcdoc = SANDBOX_HOST_HTML;
+  return () => {
+    disposed = true;
+    iframe.removeEventListener('load', onLoad);
+    handle?.dispose();
+  };
+}
+
 // ── shape 2: a first-party caller builds its own child sandbox ────────────
 
 /**
