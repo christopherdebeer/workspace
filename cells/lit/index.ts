@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { Surface, renderMarkdown, type ViewModel, type ListItem, type BlockData, type DocValue, type LinkRef, type TypeItem } from './shared';
 import { bodyText, fieldsToHtml } from '@parc/ui';
+import { TOOLS, toolCall } from './tools';
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 const respond = (statusCode: number, contentType: string, body: string) => ({
@@ -364,9 +365,28 @@ export const handler = async (event: {
   rawQueryString?: string;
   queryStringParameters?: Record<string, string> | null;
   headers?: Record<string, string | undefined>;
+  body?: string;
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+  // ADR-0081: `/_tools/*` is the one write surface this cell exposes (a
+  // scoped-principal tool call, not a page fetch) — GET/HEAD-only applies to
+  // everything else (the SSR page routes stay strictly read-only).
+  if (path === '/_tools' && method === 'GET') return respond(200, 'application/json', JSON.stringify({ tools: TOOLS }));
+  if (path.startsWith('/_tools/') && method === 'POST') {
+    const name = path.slice('/_tools/'.length);
+    let args: Record<string, unknown> = {};
+    try {
+      args = event.body ? JSON.parse(event.body) : {};
+    } catch {
+      return respond(400, 'application/json', JSON.stringify({ error: 'invalid JSON body' }));
+    }
+    try {
+      return respond(200, 'application/json', JSON.stringify(await toolCall(name, args)));
+    } catch (err) {
+      return respond(400, 'application/json', JSON.stringify({ error: (err as Error).message }));
+    }
+  }
   if (method !== 'GET' && method !== 'HEAD') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'));

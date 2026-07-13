@@ -40,6 +40,7 @@
  * mirroring how the `auth` cell separates `AuthStore` from its backends).
  */
 import type { ActorClass, Identity } from './auth';
+import { leafActOf } from './auth';
 import { resolveType, type Type } from './type-schema';
 import { layer } from './resolution';
 import { matchesSelector } from './selector';
@@ -876,9 +877,10 @@ export const BACKBONE_RELS = {
 } as const;
 
 /** Reference relations that express *membership in a collection* (ADR-0005): a fact
- *  `inView` a view, `inDoc` a doc. A collection's extensional members are the facts
- *  with one of these edges pointing at it. */
-export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc', 'onBoard']);
+ *  `inView` a view, `inDoc` a doc, `onBoard` a board — and, generically (ADR-0057,
+ *  the one collections family), `memberOf` a `collection:` fact. A collection's
+ *  extensional members are the facts with one of these edges pointing at it. */
+export const MEMBERSHIP_RELS = new Set<string>(['inView', 'inDoc', 'onBoard', 'memberOf']);
 
 /**
  * Per-rule Reference strength (ADR-0009). Derived edges carry graded weight so a
@@ -1080,16 +1082,34 @@ export function deriveBackboneEdges(
         const keys = ref.list ? (Array.isArray(raw) ? raw : []) : raw != null ? [raw] : [];
         for (const k of keys) if (typeof k === 'string') push(r.key, ref.rel ?? ref.name, k, true, EMBEDDED_STRENGTH);
       }
-      // key-encoded: parse this fact's key, emit the declared edge(s)
+      // key-encoded: parse this fact's key, emit the declared edge(s). A
+      // placeholder's per-segment key regex (`[^/]+`, compileKeyPattern) can't
+      // capture a group that itself spans multiple `/`-separated path
+      // components — e.g. `_doc/{doc}/{block}` breaks the moment `doc` is a
+      // nested path slug (`docs/architecture/adr/x`), which is now the norm
+      // for ADR-0081-synced docs (2026-07-12 lit-doc-empties incident: the key
+      // regex silently matched nothing, so EVERY such doc's membership derived
+      // to zero). There's no way to disambiguate that generically from the key
+      // alone (the doc slug is embedded twice with no distinguishing
+      // delimiter), so a placeholder the key couldn't bind falls back to a
+      // same-named field on the fact's own VALUE — the source of truth moves
+      // from "parse it back out of the key" to "the writer already told us."
       if (rules.keyPattern && rules.keyEdges?.length) {
         const compiled = compileKeyPattern(rules.keyPattern);
-        const groups = compiled?.rx.exec(r.key);
-        if (compiled && groups) {
+        if (compiled) {
+          const groups = compiled.rx.exec(r.key);
           const g: Record<string, string> = {};
-          compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
-          // `source: r.key` = the decoration that ordered/placed the member, so
-          // extensional membership can recover its narrative `seq` (ADR-0005).
-          for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, MEMBERSHIP_STRENGTH, r.key);
+          if (groups) compiled.names.forEach((n, i) => (g[n] = groups[i + 1]));
+          for (const n of compiled.names) {
+            if (g[n] !== undefined) continue;
+            const v = value[n];
+            if (typeof v === 'string' && v) g[n] = v;
+          }
+          if (compiled.names.every((n) => g[n] !== undefined)) {
+            // `source: r.key` = the decoration that ordered/placed the member, so
+            // extensional membership can recover its narrative `seq` (ADR-0005).
+            for (const e of rules.keyEdges) push(substGroups(e.from, g), substGroups(e.rel, g), substGroups(e.to, g), true, MEMBERSHIP_STRENGTH, r.key);
+          }
         }
       }
     }
@@ -1602,7 +1622,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   const api: ObservedState = {
     async put(input: WriteInput, identity?: Identity): Promise<Entry> {
       if (!input?.scope || !input?.key) throw new Error('state.put requires `scope` and `key`');
-      const writer = identity?.user ?? null;
+      // ADR-0024 §3: a delegated credential stamps its LEAF actor — the
+      // sub-agent that actually wrote — while authorization stays anchored to
+      // identity.user (the subject). Root tokens stamp the user, unchanged.
+      const writer = leafActOf(identity) ?? identity?.user ?? null;
       const now = new Date();
       const nowMs = now.getTime();
       const nowIso = now.toISOString();
@@ -1821,7 +1844,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         to,
         strength: strength ?? null,
         createdAt: now.toISOString(),
-        writer: identity?.user ?? null,
+        writer: leafActOf(identity) ?? identity?.user ?? null,
       };
       await store.putEdge(edge);
       // Linking is attention on the source fact — both the write-ledger event
@@ -1921,6 +1944,24 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
           if (e.source) decorationOf.set(e.from, e.source);
         }
       }
+      // Declared-extensional (ADR-0057): a collection fact may NAME its members
+      // directly — `value.members: ['el:a', …]` (the group/frame shape) — instead
+      // of (or as well as) being pointed at by membership edges. Union with the
+      // edge-derived set, deduped; a declared list is an ORDERED list, so array
+      // position supplies each declared member's seq unless a placing decoration
+      // asserts one explicitly (decoration seq wins — it's the finer statement).
+      const declaredSeq = new Map<string, number>();
+      const declared = (fact?.value as { members?: unknown } | undefined)?.members;
+      if (Array.isArray(declared)) {
+        declared.forEach((k, i) => {
+          if (typeof k !== 'string' || !k) return;
+          declaredSeq.set(k, i);
+          if (!seen.has(k)) {
+            seen.add(k);
+            memberKeys.push(k);
+          }
+        });
+      }
       // Honor the scope's `_config/salience` (the intensional branch already does, via query).
       const sCall = baseSalience(await loadSalienceConfig(scope));
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
@@ -1941,6 +1982,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
             placement = { ...(seq !== undefined ? { seq } : {}), ...(typeof dv.fold === 'boolean' ? { fold: dv.fold } : {}) };
           }
         }
+        // A declared member's array position orders it when no decoration spoke.
+        if (!seqOf.has(k) && declaredSeq.has(k)) seqOf.set(k, declaredSeq.get(k)!);
         members.push({ key: k, ...(await wrap(rec, nowMs, signals, sCall)), ...(placement ? { placement } : {}) });
       }
       // Narrative order when any member is placed by a `seq` decoration; the rest
@@ -2079,7 +2122,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         ...rec,
         superseded: true,
         supersededBy: by,
-        writer: identity?.user ?? rec.writer,
+        writer: leafActOf(identity) ?? identity?.user ?? rec.writer,
         updatedAt: nowIso,
         seq,
         touches: bumpTouches(rec.touches, identity ? actorOf(identity) : actorClassOf(rec.writer), 'write'),

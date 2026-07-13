@@ -13,18 +13,75 @@
         "day": "ref? — the daily log (log:<date>) this capture is filed under"
       },
       "fields": [
-        { "name": "url", "type": "string", "required": false, "description": "the source URL" },
-        { "name": "content", "type": "string", "required": true, "description": "markdown body" },
-        { "name": "captured", "type": "string", "required": true, "description": "YYYY-MM-DD day it was captured" },
-        { "name": "title", "type": "string", "required": false, "description": "source title" },
-        { "name": "day", "type": "ref", "rel": "on", "required": false, "description": "the daily log (log:<date>) this capture is filed under" }
+        {
+          "name": "url",
+          "type": "string",
+          "required": false,
+          "description": "the source URL"
+        },
+        {
+          "name": "content",
+          "type": "string",
+          "required": true,
+          "description": "markdown body"
+        },
+        {
+          "name": "captured",
+          "type": "string",
+          "required": true,
+          "description": "YYYY-MM-DD day it was captured"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": false,
+          "description": "source title"
+        },
+        {
+          "name": "day",
+          "type": "ref",
+          "rel": "on",
+          "required": false,
+          "description": "the daily log (log:<date>) this capture is filed under"
+        }
       ],
       "handlers": {
         "open": [
-          { "cell": "/lit", "path": "/r/log:${value.captured}" },
-          { "path": "" }
+          {
+            "cell": "/lit",
+            "path": "/r/log:${value.captured}"
+          },
+          {
+            "path": ""
+          }
         ],
-        "render": [{ "hint": "markdown" }]
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
+      }
+    },
+    {
+      "type": "inbox",
+      "icon": "📥",
+      "manager": "@c15r/input",
+      "note": "Key-prefix alias for capture (ADR-0044 Inc 4): an `inbox/...` fact with no declared type still resolves open/render through these handlers via the key-prefix type signal — the routing the kernel's hardcoded fallback used to supply.",
+      "handlers": {
+        "open": [
+          {
+            "cell": "/lit",
+            "path": "/r/log:${value.captured}"
+          },
+          {
+            "path": ""
+          }
+        ],
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
       }
     }
   ]

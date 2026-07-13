@@ -24,10 +24,16 @@ import {
   suggestionCandidates,
   dropSimilarPair,
   createMemoryStateStore,
+  createObservedState,
+  projectionFact,
+  projectionArtifacts,
+  layoutShardKey,
+  layoutShardOf,
   SIMILAR_REL,
   SIMILAR_WRITER,
+  LAYOUT_KEY,
 } from '../platform/runtime';
-import { planStreamWork } from '../services/vector-indexer/handler';
+import { planStreamWork, patchProjection } from '../services/vector-indexer/handler';
 
 const M2 = (k: string, s: number) => ({ key: k, score: s, distance: 1 - s });
 
@@ -254,6 +260,164 @@ describe('MemoryVectorStore (brute-force k-NN reference)', () => {
     await store.remove('slice-y', ['k']);
     expect(await store.query('slice-y', v, { topK: 5 })).toEqual([]);
     expect(await store.query('slice-missing', v, { topK: 5 })).toEqual([]);
+  });
+});
+
+describe('patchProjection (ADR-0047 stage 3 — incremental per-fact layout update)', () => {
+  it('is a silent no-op when no projection fact exists yet (project() never run)', async () => {
+    const store = createMemoryStateStore();
+    await expect(patchProjection(store, 'alice', [{ key: 'k1', vector: [1, 0, 0] }], [])).resolves.toBeUndefined();
+    expect(await store.get('alice', LAYOUT_KEY)).toBeNull();
+  });
+
+  it('is a silent no-op against a pre-basis projection fact (written before this field existed)', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: { method: 'pca', dim: 3, count: 1, generatedAt: 't', coords: { k0: [0, 0, 0] } }, type: 'graph-layout' });
+    await patchProjection(store, 'alice', [{ key: 'k1', vector: [1, 0, 0] }], []);
+    const after = await state.get('alice', LAYOUT_KEY);
+    expect((after!.value as { coords: Record<string, unknown> }).coords).toEqual({ k0: [0, 0, 0] }); // unpatched
+  });
+
+  it('places a new key on the existing map via the persisted basis, without touching the vector index', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 10 }, (_, i) => [Math.sin(i), Math.cos(i * 1.7), i * 0.3]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const fact = projectionFact(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+
+    const newVec = [Math.sin(10), Math.cos(10 * 1.7), 10 * 0.3]; // "k10", continuing the same sequence
+    await patchProjection(store, 'alice', [{ key: 'k10', vector: newVec }], []);
+
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, [number, number, number]> }).coords;
+    expect(coords['k10']).toBeDefined();
+    expect(coords['k0']).toEqual(fact.coords['k0']); // existing keys untouched
+    expect((after!.value as { count: number }).count).toBe(11);
+  });
+
+  it('removes a retired key from coords', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 5 }, (_, i) => [Math.sin(i), Math.cos(i), i]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const fact = projectionFact(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+
+    await patchProjection(store, 'alice', [], ['k2']);
+
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect('k2' in coords).toBe(false);
+    expect(Object.keys(coords)).toHaveLength(4);
+  });
+
+  it('retries a lost CAS race, re-applying its delta on top of the winner (2026-07-12 bulk-backfill storm fix)', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 4 }, (_, i) => [i, 1, 0]);
+    const fact = projectionFact(vecs, ['k0', 'k1', 'k2', 'k3'], 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+    // Interleave a concurrent winner between patchProjection's read and its
+    // write: the first indexer-tagged put triggers a sibling batch's update
+    // first, so the original's stale version guard fails NATURALLY (the real
+    // store-level CAS path, not an injected error).
+    const rawPut = store.put.bind(store);
+    let raced = false;
+    (store as { put: typeof store.put }).put = async (record, guard) => {
+      if (!raced && record.key === LAYOUT_KEY && record.via === 'vector-indexer') {
+        raced = true;
+        const cur = await state.get('alice', LAYOUT_KEY);
+        const cv = cur!.value as { coords: Record<string, unknown> };
+        await state.put({
+          scope: 'alice',
+          key: LAYOUT_KEY,
+          value: { ...cv, coords: { ...cv.coords, 'k-winner': [0.1, 0.1, 0.1] }, count: Object.keys(cv.coords).length + 1 },
+          type: 'graph-layout',
+        });
+      }
+      return rawPut(record, guard);
+    };
+    await patchProjection(store, 'alice', [{ key: 'k-loser', vector: [9, 9, 9] }], []);
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect(coords['k-winner']).toBeDefined(); // the winner's delta survived the retry
+    expect(coords['k-loser']).toBeDefined(); // and ours re-applied on top of it
+  });
+
+  it('an exhausted retry budget PROPAGATES (a dropped patch must be visible in logs, never silent)', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const fact = projectionFact([[1, 0, 0], [0, 1, 0], [0, 0, 1]], ['k0', 'k1', 'k2'], 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+    // Every attempt loses: a fresh conflicting write lands before each put.
+    const rawPut = store.put.bind(store);
+    (store as { put: typeof store.put }).put = async (record, guard) => {
+      if (record.key === LAYOUT_KEY && record.via === 'vector-indexer') {
+        const cur = await state.get('alice', LAYOUT_KEY);
+        await state.put({ scope: 'alice', key: LAYOUT_KEY, value: cur!.value as Record<string, unknown>, type: 'graph-layout' });
+      }
+      return rawPut(record, guard);
+    };
+    await expect(patchProjection(store, 'alice', [{ key: 'k-never', vector: [9, 9, 9] }], [])).rejects.toThrow();
+  }, 10000);
+
+  it('sharded atlas (ADR-0082): a patch lands in the RIGHT shard, removes clear it, other shards untouched', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 12 }, (_, i) => [Math.sin(i), Math.cos(i * 1.7), i * 0.3]);
+    const keys = vecs.map((_, i) => `k${i}`);
+    const { manifest, shards } = projectionArtifacts(vecs, keys, 3, '2026-01-01T00:00:00.000Z');
+    await Promise.all(shards.map((s, i) => state.put({ scope: 'alice', key: layoutShardKey(i), value: s, type: 'graph-layout-shard' })));
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: manifest, type: 'graph-layout' });
+
+    const newKey = 'doc-block:new/thing/7';
+    const shardIdx = layoutShardOf(newKey);
+    const before = await state.get('alice', layoutShardKey(shardIdx));
+    await patchProjection(store, 'alice', [{ key: newKey, vector: [9, 9, 9] }], ['k3']);
+
+    const after = await state.get('alice', layoutShardKey(shardIdx));
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect(coords[newKey]).toBeDefined(); // landed in its hash shard
+    // The manifest itself was NOT rewritten (the whole point: no monolith rmw).
+    const man = await state.get('alice', LAYOUT_KEY);
+    expect(man!._meta.revision).toBe(1);
+    // k3's shard no longer carries it.
+    const k3After = await state.get('alice', layoutShardKey(layoutShardOf('k3')));
+    expect(((k3After!.value as { coords: Record<string, unknown> }).coords)['k3']).toBeUndefined();
+    // A shard untouched by this delta kept its revision (unless it hosts both keys).
+    if (layoutShardOf('k5') !== shardIdx && layoutShardOf('k5') !== layoutShardOf('k3')) {
+      const other = await state.get('alice', layoutShardKey(layoutShardOf('k5')));
+      expect(other!._meta.revision).toBe(1);
+    }
+    expect(before).toBeTruthy(); // sanity: the shard existed pre-patch
+  });
+
+  it('sharded atlas: patching a key whose shard fact is MISSING creates it (ifAbsent), instead of dropping the point', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const { manifest } = projectionArtifacts([[1, 0, 0], [0, 1, 0], [0, 0, 1]], ['a', 'b', 'c'], 3, '2026-01-01T00:00:00.000Z');
+    // Manifest exists but NO shard facts do (e.g. a wiped/partial migration).
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: manifest, type: 'graph-layout' });
+    await patchProjection(store, 'alice', [{ key: 'fresh:1', vector: [2, 2, 2] }], []);
+    const shard = await state.get('alice', layoutShardKey(layoutShardOf('fresh:1')));
+    expect(((shard!.value as { coords: Record<string, unknown> }).coords)['fresh:1']).toBeDefined();
+  });
+
+  it('successive patches each read-modify-write fresh, CAS guarded on the version each call itself reads', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const vecs = Array.from({ length: 3 }, (_, i) => [i, i, i]);
+    const fact = projectionFact(vecs, ['k0', 'k1', 'k2'], 3, '2026-01-01T00:00:00.000Z');
+    await state.put({ scope: 'alice', key: LAYOUT_KEY, value: fact, type: 'graph-layout' });
+
+    await patchProjection(store, 'alice', [{ key: 'k3', vector: [3, 3, 3] }], []);
+    await patchProjection(store, 'alice', [{ key: 'k4', vector: [4, 4, 4] }], []);
+
+    const after = await state.get('alice', LAYOUT_KEY);
+    const coords = (after!.value as { coords: Record<string, unknown> }).coords;
+    expect(Object.keys(coords).sort()).toEqual(['k0', 'k1', 'k2', 'k3', 'k4']);
   });
 });
 

@@ -240,6 +240,51 @@
           }
         ]
       }
+    },
+    {
+      "type": "collection",
+      "icon": "🗂️",
+      "manager": "@c15r/home",
+      "note": "ADR-0057: the ONE collections family — a fact that names members (value.members: [keys]) or a query (value.query, the view shape). Presentation facets (group/frame/board) say how it shows up; promotions are facet additions, never rewrites. Members resolve via workspace.members: declared members[] ∪ inbound membership edges (memberOf/inDoc/onBoard/inView), declared array order as seq.",
+      "keyPattern": "collection:{id}",
+      "schema": {
+        "label": "string? — the collection's display name",
+        "members": "string[]? — declared member fact keys, in order",
+        "query": "object? — intensional membership (the _views/ query shape)",
+        "facets": "object? — { group?, frame?, board? } presentation facets"
+      },
+      "handlers": {
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      }
+    },
+    {
+      "type": "collection-membership",
+      "icon": "📎",
+      "manager": "@c15r/home",
+      "note": "ADR-0057: an edge-with-properties placing a fact IN a collection (the same ADR-0016 shape as canvas-placement and lit's doc-order). Keyed _collection/<coll>/<memberKey>; the key rule projects `<memberKey> memberOf collection:<coll>`. seq/fold ride the membership, never the member.",
+      "keyPattern": "_collection/{coll}/{member}",
+      "keyEdges": [
+        {
+          "from": "{member}",
+          "rel": "memberOf",
+          "to": "collection:{coll}"
+        }
+      ],
+      "schema": {
+        "seq": "number? — order within the collection",
+        "fold": "boolean? — presentation fold state"
+      },
+      "handlers": {
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      }
     }
   ]
 }

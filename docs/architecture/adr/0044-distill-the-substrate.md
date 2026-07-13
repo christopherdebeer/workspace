@@ -15,10 +15,20 @@
   taken — it stays as the deliberately OWNER-ONLY plugins-as-content rung (the property `ui://`
   structurally can't express: a viewer authored as one fact, live, no deploy), with the trust hole
   closed (write-through into `_renderers/` now blocked, so a granted writer can no longer plant
-  executable code in your page; foreign code's path is `ui://`). Remaining: viewers→`ui://` on the
-  card (drop the build-time import; unify the viewer-name/type-name dispatch namespaces) and kernel
-  `hrefOf`'s hardcoded lit/input/canvas fallbacks onto declared `handlers.open` — both scoped by the
-  Inc 4 survey (2026-07-01), next session.
+  executable code in your page; foreign code's path is `ui://`). **Inc 4 ✅ (2026-07-13):**
+  viewers→`ui://` on the card — `cells/viewers` serves `/renderers.js` (a committed IIFE of the same
+  pure module, `renderers.gen.ts` via `scripts/build-viewers-renderers.mjs`, self-registering
+  `__parcRender.{json,csv,mermaid}`), the card's build-time cross-cell import + local `VIEWERS`
+  registry + `mounts` machinery are DELETED, and a declared `render.viewer` name now dispatches
+  through the SAME `fetchRenderer(ui://@c15r/viewers/renderers.js, …)` hop as any cell renderer —
+  one dispatch namespace. Kernel `hrefOf` folded onto the shared `platform/ui/vocab` `resolve()`:
+  type signals (declared type + key prefix + tag prefixes) route through each cell's declared
+  `handlers.open` (`?canvas=${match}`, `/r/doc:${match}`, input's capture alternatives; a new
+  `inbox` prefix-alias declaration covers the old untyped-inbox fallback), so the hardcoded
+  lit/input/canvas conventions are deleted — the one survivor is `cell`→`value.address` (tier-1
+  cells service declares no types.json yet). Embed-host dedup (0043 Inc 3): the load→mount→fetch→
+  render sequence is now `attachSandboxedRenderer` in `platform/ui/federated-renderer`; home's
+  React frame and lit's board fence are thin shells over it.
 - **Date:** 2026-07-01
 - **Method:** the ADR-0042 discipline at corpus scale — five parallel readers (ADRs 0001–0016, 0017–0033,
   0034–0043; tier-1 implementation; tier-2 cells), then a single synthesis. Grounded in line counts, import

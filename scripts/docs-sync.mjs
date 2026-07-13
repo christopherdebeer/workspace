@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 /**
- * docs-sync — upsert the repo's own docs into the substrate as `file` facts
- * (ADR-0027). Each `docs/**.md` becomes one `file/docs/<relpath>` fact with the
- * markdown inline (so `query { contains }` is full-text over it), then the whole
- * `file/docs/*` prefix is shared `public` (read-only) — one canonical, default-
- * visible, shared-by-all corpus.
+ * docs-sync — upsert the repo's own docs into the substrate as `markdown`
+ * facts (ADR-0027, typed per ADR-0081). Each `docs/**.md` becomes one
+ * `file/docs/<relpath>` fact with the markdown inline (so `query { contains }`
+ * is full-text over it), then the whole `file/docs/*` prefix is shared
+ * `public` (read-only) — one canonical, default-visible, shared-by-all corpus.
+ * The `markdown` type gives `@c15r/lit` (cells/lit) a manager to react on: its
+ * `decomposeMarkdown` tool turns each raw source fact into `doc`/`doc-block`
+ * structure with real links (see docs/architecture/adr/0081-typed-file-ingestion.md).
  *
  *   node scripts/docs-sync.mjs                 dry run — print the plan, write nothing
  *   node scripts/docs-sync.mjs --commit        ingest the facts + share public
  *   node scripts/docs-sync.mjs --commit --no-share   ingest only (skip the public share)
+ *   node scripts/docs-sync.mjs --commit --force      ingest every doc regardless of sha
+ *                                                     (re-fires the type:'markdown' reaction —
+ *                                                     e.g. after re-registering a dropped
+ *                                                     subscription, ADR-0081)
  *
  * Auth (only needed with --commit): PARC_TOKEN env, or a device-flow token JSON
  * at /tmp/parc-token.json (same convention as cell-sync.mjs). Re-runnable: keys
@@ -28,6 +35,7 @@ const BATCH_BYTES = 80 * 1024; // …or until this much inline content, whicheve
 const flags = process.argv.slice(2);
 const COMMIT = flags.includes('--commit');
 const SHARE = !flags.includes('--no-share');
+const FORCE = flags.includes('--force');
 
 function tokenFile() {
   try {
@@ -99,7 +107,10 @@ export function fileFactFromDoc(relPath, content) {
   const tags = ['file', 'docs', ...(adr ? ['adr'] : []), ...(traj ? ['trajectory'] : [])];
   return {
     key: `${KEY_PREFIX}${relPath.split(sep).join('/')}`,
-    type: 'file',
+    // ADR-0081: typed at the put seam — `markdown` (not the flat `file` every
+    // upload used to get) is what @c15r/lit's decompose reaction (cells/lit)
+    // matches on to turn this raw source into `doc`/`doc-block` structure.
+    type: 'markdown',
     tags,
     value: {
       path,
@@ -127,7 +138,7 @@ async function liveShas() {
   try {
     let cursor;
     do {
-      const res = await call('read', 'workspace.query', { type: 'file', prefix: KEY_PREFIX, limit: 100, ...(cursor ? { cursor } : {}) });
+      const res = await call('read', 'workspace.query', { type: 'markdown', prefix: KEY_PREFIX, limit: 100, ...(cursor ? { cursor } : {}) });
       for (const e of res.entries ?? []) if (e?.key && e.value?.sha) shas.set(e.key, e.value.sha);
       cursor = res.nextCursor;
     } while (cursor);
@@ -139,7 +150,7 @@ async function liveShas() {
 }
 
 let facts = allFacts;
-if (COMMIT) {
+if (COMMIT && !FORCE) {
   const live = await liveShas();
   if (live) facts = allFacts.filter((f) => live.get(f.key) !== f.value.sha);
 }
@@ -200,3 +211,47 @@ if (SHARE) {
   console.log(`✓ shared ${KEY_PREFIX}* → public (read-only)`);
 }
 console.log(`✓ docs corpus: ${ingested}/${facts.length} file facts upserted${failedKeys.length ? ` (${failedKeys.length} to retry)` : ''}`);
+
+// ADR-0081: `workspace.ingest` deliberately does NOT emit a per-fact
+// `workspace.fact.written` event (just one aggregate `workspace.ingested`,
+// "intake should not storm the bus") — so the `type:'markdown'` reaction
+// subscription never fires for a bulk sync. docs-sync triggers
+// @c15r/lit.decomposeMarkdown directly for what it just ingested instead;
+// the subscription still covers single-fact writes elsewhere (workspace.
+// remember, a future workspace.putFile). Bounded concurrency — each call can
+// take tens of seconds for a large doc (lit's own sequential
+// workspace.ingest writes dominate its latency), so unbounded parallelism
+// would just queue against the same gateway.
+const DECOMPOSE_CONCURRENCY = 4;
+async function decomposeAll(list) {
+  let i = 0;
+  let done = 0;
+  const errors = [];
+  async function worker() {
+    for (;;) {
+      const idx = i++;
+      if (idx >= list.length) return;
+      const f = list[idx];
+      try {
+        await call('act', '@c15r/lit.decomposeMarkdown', { path: f.value.path, content: f.value.content, token: token() });
+      } catch (err) {
+        errors.push({ key: f.key, error: (err && err.message) || String(err) });
+      }
+      done++;
+      process.stdout.write(`\rdecomposed ${done}/${list.length}`);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(DECOMPOSE_CONCURRENCY, list.length) }, worker));
+  return errors;
+}
+if (facts.length) {
+  console.log(`\ndecomposing ${facts.length} doc(s) into doc/doc-block structure…`);
+  const decomposeErrors = await decomposeAll(facts);
+  console.log();
+  if (decomposeErrors.length) {
+    console.error(`${decomposeErrors.length} doc(s) failed to decompose — re-run with --force to retry:`);
+    for (const e of decomposeErrors) console.error(`  ${e.key}: ${e.error}`);
+  } else {
+    console.log(`✓ ${facts.length}/${facts.length} doc(s) decomposed`);
+  }
+}

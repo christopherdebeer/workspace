@@ -184,19 +184,25 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
     },
 
     async links(input, ctx) {
+      const started = Date.now();
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
       const all = await state.edges(scope);
       const prefix = input?.prefix;
       const prefixed = prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all;
-      return scopeEdges(prefixed, input); // ADR-0048: keys/rels scope + limit cap; total always counts
+      const scoped = scopeEdges(prefixed, input); // ADR-0048: keys/rels scope + limit cap; total always counts
+      logEdgeRead(ctx, 'links', scope, input, scoped, started);
+      return scoped;
     },
 
     async graph(input, ctx) {
+      const started = Date.now();
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
       const result = await state.graph(scope, { typeRules: await typeRulesFor(ctx) });
-      return scopeEdges(result.edges, input); // ADR-0048: `{keys}` = "edges around these facts", not the whole projection
+      const scoped = scopeEdges(result.edges, input); // ADR-0048: `{keys}` = "edges around these facts", not the whole projection
+      logEdgeRead(ctx, 'graph', scope, input, scoped, started);
+      return scoped;
     },
 
     async members(input, ctx) {
@@ -241,16 +247,45 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       }
       // derived:false → the authored-only `links` framing (+ optional prefix).
       if (input?.derived === false) {
+        const started = Date.now();
         const all = await state.edges(scope);
         const prefix = input?.prefix;
         const prefixed = prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all;
-        return scopeEdges(prefixed, edgeScope(input));
+        const scoped = scopeEdges(prefixed, edgeScope(input));
+        logEdgeRead(ctx, 'edges(links)', scope, input, scoped, started);
+        return scoped;
       }
       // default → the full `graph` projection (authored + derived), scoped.
+      const started = Date.now();
       const result = await state.graph(scope, { typeRules: await typeRulesFor(ctx) });
-      return scopeEdges(result.edges, edgeScope(input));
+      const scoped = scopeEdges(result.edges, edgeScope(input));
+      logEdgeRead(ctx, 'edges(graph)', scope, input, scoped, started);
+      return scoped;
     },
   };
+}
+
+/** Observability (ADR-0081 home-cell incident): the unbounded `graph`/`edges`/
+ *  `links` read caused a silent CloudFront 30s timeout / Lambda 6MB payload
+ *  failure with nothing in the logs to diagnose it from. Every edge-projection
+ *  read now logs its shape and latency so a future regression is visible
+ *  without manual CloudWatch log archaeology. */
+function logEdgeRead(
+  ctx: Parameters<DepsBuilder>[0],
+  command: string,
+  scope: string,
+  input: EdgeScopeInput | undefined,
+  result: { edges: unknown[]; total: number; nextCursor?: string },
+  started: number,
+): void {
+  ctx.logger.info(`workspace.${command} complete`, {
+    scope,
+    edges: result.edges.length,
+    total: result.total,
+    cursor: !!input?.cursor,
+    nextCursor: !!result.nextCursor,
+    durationMs: Date.now() - started,
+  });
 }
 
 /** Fold a top-level `rel` into the `rels` scope filter, so `edges({ rel })` narrows
@@ -258,5 +293,5 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
 function edgeScope(input?: EdgesInput): EdgeScopeInput {
   if (!input) return {};
   const rels = input.rel ? [...(input.rels ?? []), input.rel] : input.rels;
-  return { keys: input.keys, rels, limit: input.limit };
+  return { keys: input.keys, rels, limit: input.limit, cursor: input.cursor, edgeShape: input.edgeShape };
 }

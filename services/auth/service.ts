@@ -21,7 +21,7 @@ import {
   grantScopesOf,
   hasGrantScope,
 } from '../../platform/runtime';
-import { AuthStore } from './store';
+import { AuthStore, MAX_DELEGATION_DEPTH, chainDepth, chainActors, type ActClaim } from './store';
 import { createMemoryStore } from './memory-store';
 import { createDynamoStore } from './dynamo-store';
 import {
@@ -175,6 +175,77 @@ async function mintToken(input: MintTokenInput, ctx: ServiceContext) {
   await ctx.events.emit('auth.token.minted', { userId, id: result.id, scope });
   // Echo the effective scope so the minter sees what the narrowing produced.
   return { ...result, scope };
+}
+
+interface ExchangeTokenInput {
+  /** The parent token VALUE (the credential being delegated from). */
+  from: string;
+  scope: string;
+  /** The child actor's name — what writer stamps will read (e.g. "agent:researcher").
+   *  Defaults to the label, else a token-id-derived handle. */
+  actor?: string;
+  label?: string;
+  expiresInSec?: number;
+}
+/**
+ * RFC 8693-style token exchange (ADR-0024): mint a CHILD credential from a
+ * presented parent token. The child's scope clamps to
+ * min(requested, parent's grant) — delegation only ever attenuates, reusing
+ * the same intersectScopes clamp as mintToken — and the child carries a
+ * delegation chain (`act`): its own actor name, nested over the parent's
+ * chain. Multi-hop attribution becomes a structural property of the token:
+ * every hop appends, none is erased, and the workspace writer stamp reads the
+ * LEAF (see platform/runtime/state.ts). Depth-bounded and loop-guarded — the
+ * ADR's two open questions, answered conservatively.
+ *
+ * Self-authorizing like validateToken: the presented parent token IS the
+ * credential, so an agent holding only its own token (no session identity)
+ * can spawn a scoped sub-agent.
+ */
+async function exchangeToken(input: ExchangeTokenInput, ctx: ServiceContext) {
+  if (!input?.from?.trim()) throw new Error('`from` (the parent token) is required');
+  if (!input?.scope?.trim()) throw new Error('A `scope` for the child token is required');
+  const parent = await validateBearer(input.from, store);
+  if (!parent) throw new Error('invalid_grant: the presented parent token is not valid');
+
+  const requested = input.scope.split(/[\s,]+/).filter(Boolean);
+  // The ceiling is the PARENT TOKEN's grant — not the caller's session — so a
+  // chain can only narrow hop over hop, whoever performs the exchange.
+  const ceiling = parent.scope.split(/[\s,]+/).filter(Boolean);
+  const effective = intersectScopes(requested, ceiling);
+  if (!effective.length) {
+    throw new Error(
+      `scope_denied: none of the requested scopes (${requested.join(' ')}) are within the parent token's ceiling (${ceiling.join(' ') || 'none'}). Delegation can only attenuate.`,
+    );
+  }
+
+  // The chain: the child's actor name, nested over the parent's own chain.
+  // A root parent contributes no act — the child is then depth 1 ("actor,
+  // acting for <sub>"). Names must be fresh per hop (loop guard) and the
+  // chain bounded (runaway guard).
+  const actor = input.actor?.trim() || input.label?.trim() || `delegate:${parent.tokenId.slice(0, 8)}`;
+  const parentChain = parent.act ?? undefined;
+  if (chainDepth(parentChain) + 1 > MAX_DELEGATION_DEPTH) {
+    throw new Error(`delegation_too_deep: the chain already carries ${chainDepth(parentChain)} hops (max ${MAX_DELEGATION_DEPTH})`);
+  }
+  if (chainActors(parentChain).includes(actor) || actor === parent.userId) {
+    throw new Error(`delegation_loop: "${actor}" already appears in this chain`);
+  }
+  const act: ActClaim = { sub: actor, ...(parentChain ? { act: parentChain } : {}) };
+
+  // The child's SUBJECT stays the parent's subject — authorization anchors to
+  // the original consenting principal; the chain carries the provenance.
+  const account = await store.getUserByUsername(parent.userId);
+  const result = await store.mintToken({
+    userId: account?.id ?? parent.userId,
+    scope: effective.join(' '),
+    label: input.label ?? actor,
+    expiresInSec: input.expiresInSec ?? 3600,
+    act,
+  });
+  await ctx.events.emit('auth.token.exchanged', { id: result.id, parent: parent.tokenId, actor, scope: effective.join(' '), depth: chainDepth(act) });
+  ctx.logger.info('token exchanged (delegation)', { parent: parent.tokenId, child: result.id, actor, depth: chainDepth(act) });
+  return { ...result, scope: effective.join(' '), act };
 }
 
 interface MintTokenForInput {
@@ -436,6 +507,35 @@ function describeTools() {
         },
       },
       {
+        name: 'exchangeToken',
+        description:
+          'RFC 8693 token exchange (ADR-0024): mint a CHILD credential from a parent token you hold, for a sub-agent. Scope clamps to min(requested, parent grant) — delegation only attenuates — and the child carries a delegation chain (`act`): actor, acting for …, acting for the subject. Writer stamps on facts written with the child read the LEAF actor, so multi-hop work stays attributable. Depth-bounded (8) and loop-guarded.',
+        scope: null,
+        kind: 'act' as const,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', description: 'The parent token VALUE being delegated from' },
+            scope: { type: 'string', description: 'Requested scopes (intersected with the parent grant)' },
+            actor: { type: 'string', description: 'The child actor\'s name — what writer stamps will read (e.g. "agent:researcher")' },
+            label: { type: 'string', description: 'Credential label (defaults to the actor name)' },
+            expiresInSec: { type: 'number', description: 'Lifetime in seconds (default 3600)' },
+          },
+          required: ['from', 'scope'],
+          additionalProperties: false,
+        },
+        resultSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            token: { type: 'string', description: 'The child bearer value — shown once' },
+            scope: { type: 'string', description: 'The effective (attenuated) scope' },
+            act: { type: 'object', description: 'The delegation chain the child carries ({sub, act?})' },
+            expiresAt: { type: ['string', 'null'] },
+          },
+        },
+      },
+      {
         name: 'updateToken',
         description:
           'Steward a token you own: relabel, re-scope (clamped to your own standing — narrow-only, like mintToken; re-scoping resets the token to its new grant), and/or re-horizon its expiry. The edit/upgrade half of token-as-principal — change a connected client\'s credential over its life without re-minting.',
@@ -599,6 +699,7 @@ export const handler = defineService({
     refreshSession,
     mintToken,
     mintTokenFor,
+    exchangeToken,
     listTokens,
     tokens,
     updateToken,
@@ -610,7 +711,7 @@ export const handler = defineService({
     dropGoal,
     describeTools: () => describeTools(),
   },
-  events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked', 'auth.scope.focused', 'auth.scope.requested', 'auth.goal.adopted', 'auth.goal.dropped'] },
+  events: { emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.exchanged', 'auth.token.revoked', 'auth.scope.focused', 'auth.scope.requested', 'auth.goal.adopted', 'auth.goal.dropped'] },
   http: [
     { method: 'GET', path: '/.well-known/oauth-protected-resource', handler: (req) => handlePRM(req, OAUTH_CONFIG) },
     // RFC 9728 / MCP 2025-06-18: clients construct the PRM URL by inserting the

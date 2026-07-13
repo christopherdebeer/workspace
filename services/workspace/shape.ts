@@ -92,14 +92,45 @@ export interface EdgeScopeInput {
   rels?: string[];
   /** Cap the returned edges; the response's `total` still counts every match. */
   limit?: number;
+  /** Resume token from a previous page's `nextCursor` (an opaque offset into
+   *  the post-filter edge list). CloudFront's default origin timeout caps a
+   *  synchronous call at ~30s regardless of the Lambda's own configured
+   *  timeout, so a caller whose projection is large enough to risk that (or
+   *  the 6MB Lambda response payload ceiling) must page rather than raise
+   *  `limit` — see ADR-0081's home-cell incident. */
+  cursor?: string;
+  /** `'thin'` (2026-07-11) trims each returned edge to `{from,rel,to,derived?}`
+   *  — dropping `scope`/`strength`/`createdAt`/`writer`/`score`/`source`, which
+   *  a rendering-only consumer (the home graph) never reads. Default `'full'`
+   *  (today's shape, unchanged) for callers that need provenance/strength
+   *  (e.g. an authoring UI, `pruneSimilar`'s candidate scoring). Named
+   *  `edgeShape`, not `shape` — `EdgesInput.shape` already means something
+   *  else (the hydrated-entry tier for `around`-framed reads). */
+  edgeShape?: 'thin' | 'full';
 }
 
-/** Scope an edge list by keys/rels and cap it, reporting the pre-cap total —
- *  `{limit: 0}` is the idiomatic "just count them". */
-export function scopeEdges<T extends { from: string; rel: string; to: string }>(
+/** The trimmed edge shape `scopeEdges({shape:'thin'})` returns. */
+export interface ThinEdge {
+  from: string;
+  rel: string;
+  to: string;
+  derived?: boolean;
+}
+
+function thinEdge<T extends { from: string; rel: string; to: string; derived?: boolean }>(e: T): ThinEdge {
+  return e.derived ? { from: e.from, rel: e.rel, to: e.to, derived: true } : { from: e.from, rel: e.rel, to: e.to };
+}
+
+/** Scope an edge list by keys/rels and page it, reporting the pre-page total —
+ *  `{limit: 0}` is the idiomatic "just count them". `state.graph`/`state.edges`
+ *  still compute the WHOLE projection server-side (paging happens after, over
+ *  the already-materialized array) — this bounds response SIZE, not compute
+ *  cost; a caller with a projection large enough to time out the computation
+ *  itself needs a different fix (streaming the state layer), not this. */
+export function scopeEdges<T extends { from: string; rel: string; to: string; derived?: boolean }>(
   edges: T[],
   input: EdgeScopeInput | undefined,
-): { edges: T[]; total: number } {
+): { edges: T[] | ThinEdge[]; total: number; nextCursor?: string } {
   let out = edges;
   if (input?.keys?.length) {
     const keys = new Set(input.keys);
@@ -110,6 +141,11 @@ export function scopeEdges<T extends { from: string; rel: string; to: string }>(
     out = out.filter((e) => rels.has(e.rel));
   }
   const total = out.length;
-  if (input?.limit !== undefined) out = out.slice(0, Math.max(0, input.limit));
-  return { edges: out, total };
+  const offset = Math.max(0, parseInt(input?.cursor ?? '0', 10) || 0);
+  const shape = (page: T[]): T[] | ThinEdge[] => (input?.edgeShape === 'thin' ? page.map(thinEdge) : page);
+  if (input?.limit === undefined) return { edges: shape(out.slice(offset)), total };
+  const limit = Math.max(0, input.limit);
+  const page = out.slice(offset, offset + limit);
+  const nextOffset = offset + page.length;
+  return { edges: shape(page), total, ...(nextOffset < total ? { nextCursor: String(nextOffset) } : {}) };
 }

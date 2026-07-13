@@ -51,10 +51,12 @@
       "icon": "🔢",
       "label": "value.seq",
       "manager": "@c15r/lit",
-      "note": "Ordering decoration. Key `_doc/<docId>/<blockKey>`; the key-encoded rule (ADR-0003) projects it into a `block inDoc doc:<docId>` Reference edge — doc membership as graph.",
+      "note": "Ordering decoration. Key `_doc/<docId>/<blockKey>`; the key-encoded rule (ADR-0003) projects it into a `block inDoc doc:<docId>` Reference edge — doc membership as graph. `doc`/`block` also ride in the VALUE (2026-07-12): a nested-slug docId (`docs/architecture/adr/x`) breaks the key regex's per-segment capture, so deriveBackboneEdges falls back to these value fields when the key alone can't be parsed back apart.",
       "schema": {
         "seq": "number — narrative position (fractional, e.g. 2.25, allows insertion)",
-        "fold": "boolean? — collapsed by default"
+        "fold": "boolean? — collapsed by default",
+        "doc": "string — the doc slug (matches `{doc}` in the key), the fallback source for the inDoc edge's `to`",
+        "block": "string — the member's full fact key (matches `{block}` in the key), the fallback source for the inDoc edge's `from`"
       },
       "keyPattern": "_doc/{doc}/{block}",
       "keyEdges": [

@@ -3,6 +3,15 @@
 - **Status:** Proposed 2026-07-04 (buffer — feedback welcome before build).
   Incorporates owner direction (2026-07-04): blend modes, rotation, and
   grouping are KEPT — grouping becomes first-class.
+  **Substrate family landed 2026-07-13** (the increment that unblocks
+  0062-Inc3 / 0061-pin / 0081-Inc3): `members()` is now a three-way resolver —
+  query (intensional) | declared `value.members[]` (array order = seq, a
+  placing decoration's seq wins) | inbound membership edges — `memberOf`
+  joined `MEMBERSHIP_RELS`, and `collection` + `collection-membership`
+  (`_collection/{coll}/{member}` → `{member} memberOf collection:{coll}`,
+  the ADR-0016 edge-with-properties shape) are declared types
+  (cells/home/types.json). The canvas group-facet UI (Inc 1), frame↔group
+  unification (Inc 2), and board/view facets (Inc 3-4) remain.
 - **Depends on:** ADR-0015 (frames), ADR-0046/0054 (membership by placement),
   ADR-0053 (sync seam). Consolidates `_views/`, `frame:*`, `canvas:*`, and
   the ad-hoc `group` attribute into one family.

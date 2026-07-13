@@ -52,7 +52,7 @@ import {
   type ComposedReadResult,
 } from './commands-read';
 import { createGraphCommands, type LinkInput, type UnlinkInput, type NeighborsInput, type LinksInput, type MembersInput, type EdgesInput, type WalkResult } from './commands-graph';
-import { type EdgeScopeInput } from './shape';
+import { type EdgeScopeInput, type ThinEdge } from './shape';
 import {
   createSearchCommands,
   type SearchInput,
@@ -133,12 +133,12 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
   neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
-  links: CommandHandler<LinksInput | undefined, { edges: EdgeRecord[]; total: number }>;
-  graph: CommandHandler<EdgeScopeInput | undefined, { edges: EdgeRecord[]; total: number }>;
+  links: CommandHandler<LinksInput | undefined, { edges: (EdgeRecord | ThinEdge)[]; total: number; nextCursor?: string }>;
+  graph: CommandHandler<EdgeScopeInput | undefined, { edges: (EdgeRecord | ThinEdge)[]; total: number; nextCursor?: string }>;
   members: CommandHandler<MembersInput, MembersResult>;
   // ADR-0069 (C3): the one edge query (neighbors/links/graph/members are aliases).
   // ADR-0075 (C4): `{around, depth ≥ 2, direction}` adds the directional walk.
-  edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: EdgeRecord[]; total: number } | WalkResult>;
+  edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: (EdgeRecord | ThinEdge)[]; total: number; nextCursor?: string } | WalkResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesWithEntries>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
   registerAction: CommandHandler<RegisterActionInput, RegisterResult>;

@@ -8,16 +8,16 @@
  * host honours — what we were getting wrong by hand), and the host-proxied
  * `callServerTool`/`readServerResource` bridge (under our gateway's enforceScope).
  *
- * Rendering reuses the SHARED render vocabulary (`platform/ui/render-hints` + `marked`)
- * and the `viewers` cell renderers (json/csv/mermaid) — the same modules home/canvas/lit
- * use — so a typed fact renders identically on every surface (ADR-0036).
+ * Rendering reuses the SHARED render vocabulary (`platform/ui/render-hints` + `marked`);
+ * the `viewers` cell renderers (json/csv/mermaid) arrive over the SAME ui:// federation
+ * hop as any cell-authored renderer (ADR-0044 Inc 4 — the build-time cross-cell import
+ * this bundle used to carry was the dead rung; reference, not copy, at runtime too).
  */
 import { App } from '@modelcontextprotocol/ext-apps';
 import { marked } from 'marked';
 import { hintToHtml, bodyText, resolvePath, escapeHtml } from '../../../platform/ui/render-hints';
 import { wikiLinkExtension } from '../../../platform/ui/wiki-link';
 import { fetchAndRunRenderer } from '../../../platform/ui/federated-renderer';
-import { json as vwJson, csv as vwCsv, mermaid as vwMermaid } from '../../../cells/viewers/client/main';
 
 marked.setOptions({ gfm: true, breaks: false });
 // [[wiki-links]] (ADR-0038 Inc 3, consolidated per ADR-0044 Inc 4) — the ONE
@@ -31,14 +31,13 @@ const esc = escapeHtml;
 const md = (s: string): string => marked.parse(s.replace(/\r\n/g, '\n'), { async: false }) as string;
 const hint = (h: string, v: unknown): string => hintToHtml(h, v, { md, esc });
 
-type ElView = { mount(el: { id: string; content: string }): HTMLElement };
-const VIEWERS: Record<string, ElView> = { json: vwJson as ElView, csv: vwCsv as ElView, mermaid: vwMermaid as ElView };
+// The pure viewers (json/csv/mermaid) resolve through this ui:// address — the
+// gateway's resolveCellRenderer federation hop — like every other cell renderer.
+const VIEWERS_URI = 'ui://@c15r/viewers/renderers.js';
 
 type Entry = { value?: unknown; _meta?: { type?: string | null; score?: number }; key?: string; score?: number };
 type Types = Record<string, { icon?: string; label?: string; render?: { viewer?: string }; handlers?: { render?: Array<{ hint?: string; renderer?: string }> } }>;
 
-/** Viewer mounts queued during string render, applied after innerHTML is set. */
-let mounts: Array<{ slot: string; view: ElView; content: string }> = [];
 
 function header(back: boolean): string {
   const b = back ? '<button class="mini back" data-back="1" title="back">←</button>' : '';
@@ -105,10 +104,6 @@ function renderNeighbors(d: Record<string, unknown>, types: Types): string {
   if (!h) h = '<div class="hint">No links yet — this fact has no edges.</div>';
   return h;
 }
-function viewerContent(name: string, value: unknown): string {
-  if (name === 'json') return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return bodyText(value) || (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
-}
 
 /** One fact rendered by its TYPE affordance: a viewer (json/csv/mermaid), a machine-run
  *  trace diagram, a cell-declared ui:// renderer, or the present.render hint. */
@@ -119,8 +114,12 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp 
   const rh = aff.handlers && aff.handlers.render && aff.handlers.render[0];
   const viewer = aff.render && aff.render.viewer;
   let body = '';
-  if (viewer && VIEWERS[viewer]) {
-    mounts.push({ slot, view: VIEWERS[viewer], content: viewerContent(viewer, entry.value) });
+  if (viewer) {
+    // A declared pure viewer is just a renderer at the viewers cell's ui://
+    // face — one dispatch namespace, no local registry (ADR-0044 Inc 4). The
+    // hint render below stays up if the hop can't serve it.
+    body = hint('fields', entry.value);
+    fetchRenderer(VIEWERS_URI, slot, viewer, entry.value, key);
   } else if (rh && typeof rh.renderer === 'string' && rh.renderer.indexOf('ui://') === 0) {
     // ADR-0039: a cell-authored renderer. Show the hint render immediately, then
     // swap in the cell's renderer once it loads over the host proxy (degrades to
@@ -342,10 +341,10 @@ function renderView(d: Record<string, unknown>, types: Types): string {
   if (d.description) h += `<div class="hint">${esc(d.description)}</div>`;
   if (typeof d.count === 'number') h += `<div class="hint">${esc(d.count)} items</div>`;
   const rh = d.render as { viewer?: string; hint?: string } | null;
-  if (rh && rh.viewer && VIEWERS[rh.viewer]) {
+  if (rh && rh.viewer) {
     const slot = 'v' + nextId();
-    mounts.push({ slot, view: VIEWERS[rh.viewer], content: viewerContent(rh.viewer, d.value) });
     h += `<div id="${slot}"></div>`;
+    fetchRenderer(VIEWERS_URI, slot, rh.viewer, d.value);
   } else {
     const name = (rh && rh.hint) || '';
     h += (name && hint(name, d.value)) || hint('fields', d.value) || `<pre>${esc(JSON.stringify(d.value, null, 2)).slice(0, 800)}</pre>`;
@@ -427,7 +426,6 @@ function measureClamps(): void {
 function render(data: unknown): void {
   const root = document.getElementById('root');
   if (!root) return;
-  mounts = [];
   // ADR-0039 Inc 2: a tool RESULT may carry a cell-authored renderer directive
   // (`_render`, stamped by the gateway from the tool's declared `ui`). Run it the
   // same way as a type renderer — same __parcRender consumer — handed the whole
@@ -485,10 +483,6 @@ function render(data: unknown): void {
   currentData = data;
   if (rich) {
     root.innerHTML = header(viewStack.length > 0) + b + hostBridges();
-    for (const m of mounts) {
-      const el = document.getElementById(m.slot);
-      if (el) { el.innerHTML = ''; try { el.appendChild(m.view.mount({ id: m.slot, content: m.content })); } catch { /* viewer self-reports errors */ } }
-    }
   } else {
     root.innerHTML = thinAffordance(data);
   }

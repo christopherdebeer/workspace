@@ -3,7 +3,7 @@
  * split from app.tsx (moved verbatim).
  */
 import * as React from 'react';
-import { mountSandboxedRenderer, SANDBOX_HOST_HTML } from '@parc/ui';
+import { mountSandboxedRenderer, attachSandboxedRenderer, SANDBOX_HOST_HTML } from '@parc/ui';
 import { mcpCall, mcpResourceRead } from './lib';
 
 const { useState, useEffect } = React;
@@ -36,25 +36,18 @@ export function FederatedRendererFrame({
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    let disposed = false;
-    let handle: ReturnType<typeof mountSandboxedRenderer> | null = null;
-    const onLoad = (): void => {
-      if (disposed) return;
-      handle = mountSandboxedRenderer(iframe, {
-        call: (kind, target, input) => mcpCall(kind, target, input).then((r) => (r.ok ? r.value : Promise.reject(new Error(String(r.value))))),
-        onResize: setHeight,
-        onSettled: setSettled,
-      });
-      void mcpResourceRead(uri).then((src) => {
-        if (!disposed) handle?.render(src, type, value, factKey);
-      });
-    };
-    iframe.addEventListener('load', onLoad);
-    return () => {
-      disposed = true;
-      iframe.removeEventListener('load', onLoad);
-      handle?.dispose();
-    };
+    // The shared embed-host sequence (ADR-0044 Inc 4) — this frame is just its
+    // React shell: state wiring + the placeholder/iframe swap below.
+    return attachSandboxedRenderer(iframe, {
+      call: (kind, target, input) => mcpCall(kind, target, input).then((r) => (r.ok ? r.value : Promise.reject(new Error(String(r.value))))),
+      fetchSource: mcpResourceRead,
+      uri,
+      type,
+      value,
+      key: factKey,
+      onResize: setHeight,
+      onSettled: setSettled,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uri, type, factKey]);
 

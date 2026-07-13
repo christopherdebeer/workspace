@@ -66,34 +66,52 @@ interface GEdge {
 // to localStorage, and pokes the refresh hooks — so feel can be dialled on a
 // PHONE against live data, then the winning values sent back to be hard-coded.
 const TUNE_DEFAULTS = {
-  // torch (the scene LIGHTING — owner re-grade 2026-07-10 #2: a graded VIGNETTE,
-  // not a flood. coneIn/depthIn at ~0 mean there is no full-brightness plateau
-  // at all — light falls continuously from the focal point outward in angle AND
-  // depth, down to the 0.2 floor. Shape over flatness; brightness is bought
-  // back with exposure, not with a wider hot zone.)
-  coneIn: 0.02, coneOut: 1.2, depthIn: 0.05, depthOut: 4, torchFloor: 0.2,
+  // torch (the scene LIGHTING — owner re-grade 2026-07-12: coneIn/depthIn at 0
+  // means the full-brightness plateau starts AT the focal point itself — no
+  // graded falloff onset, angle/depth attenuation begin immediately. Floor
+  // lowered to 0.09 (was 0.2): the periphery goes darker before the torch
+  // picks it up, sharpening the beam's contrast against the rest.)
+  coneIn: 0, coneOut: 1.2, depthIn: 0, depthOut: 4, torchFloor: 0.09,
   // label admission (the SELECTOR) — decoupled from the lighting: labels need
   // a sharp instrument even when the light is flat, so admission ranks by its
-  // own narrow cone. beamOn 0.85 / beamOff 0.2 = admit dead-centre, linger.
-  labelConeIn: 0.14, labelConeOut: 0.42,
+  // own narrow cone. Owner re-grade 2026-07-12: labelConeOut widened to 1.2
+  // (was 0.42) — admission now spans nearly the whole torch cone, not just
+  // its dead-centre.
+  labelConeIn: 0.02, labelConeOut: 1.2,
   beamOn: 0.85, beamOff: 0.2, beamCapFocus: 5, labelCap: 0, // labelCap 0 = viewport default (12/22)
-  beamOpacity: 0.57, beamSizeMult: 0.39,
-  // focus labels (owner grade 2026-07-11 #4): hits headline (1.17), the
-  // selection stays measured, neighbours recede — and slow soft fades.
-  selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 0.41, nbrOpNear: 0.81,
-  labelFade: 1, // lerp rate: higher = snappier (owner likes it SLOW)
+  beamOpacity: 0.57, beamSizeMult: 0.3,
+  // focus labels (owner re-grade 2026-07-12): hits headline (1.17), and
+  // neighbours now hold FULL opacity near and far (1/1, was 0.41/0.81) —
+  // size still grades the role, opacity no longer does.
+  selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 1, nbrOpNear: 1,
+  labelFade: 4, // lerp rate: higher = snappier (owner re-grade 2026-07-12: was 1/SLOW, now snappy)
   // nodes — neighbours barely lift (0.2): selection lights the ANCHOR, the
   // neighbourhood whispers; the fan edges carry the structure.
-  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1.0,
-  // edges — the resting lattice all but erased (owner: strip the field).
-  // Structure at rest is carried by placement + captions; lines earn ink
-  // only under focus (the full-alpha fan).
-  edgeSimilar: 0.01, edgeMember: 0.035, edgeDerived: 0.04, edgeAuthored: 0.035,
-  focusEdgeAlpha: 1.0, atmosphereDim: 0.45,
-  // bloom — threshold ~0: EVERYTHING blooms. Each point wears a soft halo:
-  // the cloud reads as a star field, not instrument dots (with the edges
-  // stripped, this is what carries the atmosphere now).
-  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.05, exposure: 0.7,
+  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1,
+  // edges (owner re-grade 2026-07-12: brought back up from "all but erased" —
+  // the resting lattice now reads at rest, authored edges especially (0.24,
+  // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
+  // since the resting mat itself now carries more of the structure).
+  edgeSimilar: 0.035, edgeMember: 0.06, edgeDerived: 0.06, edgeAuthored: 0.24,
+  focusEdgeAlpha: 0.76, atmosphereDim: 0.49,
+  // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
+  // already fanning from a selection/hit) — direction is source→target, so
+  // the animation reads as energy moving the way the edge actually points.
+  // Resting edges stay static on purpose (the file's own standing rule:
+  // "lines earn ink only under focus" — movement is the same kind of ink).
+  // Dusk only: paper's printed-map metaphor has no motion to carry.
+  edgeFlowSpeed: 0.5, edgeFlowWidth: 0.35, edgeFlowGain: 1.4, edgeFlowCycles: 3,
+  // bloom — threshold restored to 0.6 (2026-07-12 regression fix): the
+  // 2026-07-12 owner re-grade set this to 0.05, which — combined with
+  // edgeAuthored's own bump to 0.24 that same pass and the corpus having
+  // grown substantially since (ADR-0081's backfill) — reintroduced the
+  // EXACT failure ensureComposer()'s own comment already documents: at a
+  // threshold this low, the dense core's additive edge/point SUM blooms in
+  // its entirety and clips to a white blob that swallows every label in it
+  // (confirmed live: the "dusk regression" screenshots this session). 0.6
+  // is the value that fixed it the first time — only genuinely bright
+  // points/edges bloom, not the whole resting wash.
+  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.7,
   bloomMode: 'on' as 'auto' | 'on' | 'off',
   // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
   starSpike: 0.55,
@@ -112,15 +130,17 @@ const TUNE_DEFAULTS = {
   anchorCap: 32, anchorOpacity: 1, anchorSizeMult: 0.1,
   // in-scene label furniture. The dial is a real continuum: below ~0.95 the
   // pill is a translucent VEIL rendered over the cloud (genuine gradient —
-  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER.
-  // Owner grade: a gentle veil (0.39) with the soft feather.
-  pillAlpha: 0.39, pillFeather: 0.65, labelOutline: 0.33,
+  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER. Owner
+  // re-grade 2026-07-12: pillAlpha up to 0.61 (was 0.39) and pillFeather to
+  // the max 1 (was 0.65) — a heavier, more diffuse veil.
+  pillAlpha: 0.61, pillFeather: 1, labelOutline: 0.35,
   // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
   // label that flies close now carries an OPAQUE pill, and unbounded it
   // becomes a viewport-eating billboard (the mis-step). Far labels still
   // shrink honestly; only the near extreme compresses toward this cap.
-  // 0 = uncapped (the old behaviour).
-  labelMaxPx: 24,
+  // 0 = uncapped (the old behaviour). Owner re-grade 2026-07-12: tightened
+  // to 8px (was 24) — near labels compress much harder now.
+  labelMaxPx: 8,
 };
 const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 const TUNE_LS = 'parc.home.tune';
@@ -245,20 +265,100 @@ function guard<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
   };
 }
 
-interface GraphModel {
-  nodes: any[];
-  links: any[];
-  nodeById: Map<string, any>;
-  /** key → [x, y, z] semantic coords in ~[-1.3, 1.3], or null when unprojected. */
-  coordMap: Record<string, number[]> | null;
-  focusKeys: Set<string>;
+// The slice has grown past what one unbounded workspace.query can return
+// inside the Lambda's own execution window (2026-07-11: an unbounded call
+// started 502ing once the corpus crossed a few thousand facts — the query
+// itself is fine, the single round trip just no longer fits). `workspace.
+// query` already supports cursor paging (docs-sync.mjs's own liveShas() uses
+// it the same way) — page through instead of one all-at-once request. The
+// page size is arbitrary; large enough to keep round trips few, small enough
+// to stay well under the timeout that bit the unbounded form.
+//
+// Every paged read's FIRST page already reports `total` — once known, every
+// remaining page's offset is knowable up front (both `workspace.query` and
+// `workspace.graph` use a plain numeric-offset cursor), so the rest fetch
+// CONCURRENTLY (bounded).
+//
+// STREAMING (2026-07-12, owner: "far more incremental… instead of two
+// bangs"): `onPage(items, total)` fires for every page as it lands —
+// including the first — so the scene APPENDS continuously instead of
+// mounting twice. The promise still resolves when the whole stream is done.
+// Appearance order = fetch order = salience (the focus band materializes
+// first, the periphery fills in); a seq/trajectory-replay ordering — the map
+// drawing itself in the order the knowledge accreted — needs a one-line
+// server rankBy:'seq' and is noted as a follow-up toggle.
+const PAGE_CONCURRENCY = 4;
+async function pagedFetch<T>(
+  page: (cursor?: string) => Promise<{ ok: boolean; value: unknown }>,
+  pick: (v: unknown) => { items: T[]; total?: number; nextCursor?: string },
+  onPage: (items: T[], total: number) => void,
+): Promise<void> {
+  const res = await page();
+  if (!res.ok) { onPage([], 0); return; } // best-effort: render whatever pages already landed rather than fail the whole graph
+  const first = pick(res.value);
+  const total = first.total ?? first.items.length;
+  onPage(first.items, total);
+  if (!first.nextCursor || !total || !first.items.length) return;
+  const pageSize = first.items.length;
+  const offsets: number[] = [];
+  for (let o = pageSize; o < total; o += pageSize) offsets.push(o);
+  let idx = 0;
+  async function worker(): Promise<void> {
+    while (idx < offsets.length) {
+      const cursor = String(offsets[idx++]);
+      const r = await page(cursor);
+      if (r.ok) onPage(pick(r.value).items, total);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, offsets.length) }, worker));
+}
+
+const QUERY_PAGE_SIZE = 300;
+async function fetchAllEntries(onPage: (items: ListEntry[], total: number) => void): Promise<void> {
+  return pagedFetch<ListEntry>(
+    (cursor) => mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card', limit: QUERY_PAGE_SIZE, ...(cursor ? { cursor } : {}) }),
+    (v) => {
+      const p = v as { entries?: ListEntry[]; total?: number; nextCursor?: string } | null;
+      return { items: p?.entries ?? [], total: p?.total, nextCursor: p?.nextCursor };
+    },
+    onPage,
+  );
+}
+
+// workspace.graph/edges has the same shape of problem as the query above, one
+// step worse: it isn't just slow at full-slice size, its response can exceed
+// the Lambda platform's hard 6MB payload ceiling outright (confirmed live,
+// 2026-07-11 — a 502 with no retry-shaped error, distinct from a timeout).
+// scopeEdges (services/workspace/shape.ts) now supports the same offset
+// cursor as query — CloudFront's ~30s default origin timeout means a bigger
+// per-call `limit` isn't free either, so this stays a real page size, not a
+// token gesture. `edgeShape:'thin'` (2026-07-11) drops the fields this
+// renderer never reads (`scope`/`strength`/`createdAt`/`writer`/`score`/
+// `source`) — GEdge only ever used `{from,rel,to,derived}`, so every edge was
+// carrying ~2-3x the bytes it needed to.
+const EDGES_PAGE_SIZE = 2000;
+async function fetchAllEdges(onPage: (items: GEdge[], total: number) => void): Promise<void> {
+  return pagedFetch<GEdge>(
+    (cursor) => mcpCall('read', 'workspace.graph', { limit: EDGES_PAGE_SIZE, edgeShape: 'thin', ...(cursor ? { cursor } : {}) }),
+    (v) => {
+      const p = v as { edges?: GEdge[]; total?: number; nextCursor?: string } | null;
+      return { items: p?.edges ?? [], total: p?.total, nextCursor: p?.nextCursor };
+    },
+    onPage,
+  );
 }
 
 /** Load the whole slice + projection into a render-ready model: nodes, edges,
- *  the focus band, and the semantic coordinates. */
-async function fetchGraphModel(): Promise<GraphModel> {
-  const [nodesRes, cfgRes, layoutRes, typoRes] = await Promise.all([
-    mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card' }),
+ *  the focus band, and the semantic coordinates — REPLACED by the streaming
+ *  path (2026-07-12): fetchGraphMeta loads only what positioning needs up
+ *  front (salience config, the layout atlas, typography); entries/edges then
+ *  STREAM into the mounted scene via the append API. */
+interface GraphMeta {
+  coordMap: Record<string, number[]> | null;
+  focusThreshold: number;
+}
+async function fetchGraphMeta(): Promise<GraphMeta> {
+  const [cfgRes, layoutRes, typoRes] = await Promise.all([
     mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
     // The precomputed SEMANTIC layout (workspace.project → `_home/embed2d`, [x,y,z]).
     mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
@@ -270,36 +370,27 @@ async function fetchGraphModel(): Promise<GraphModel> {
   const cfgVal = (cfgRes && cfgRes.ok ? (cfgRes.value as { value?: { focusThreshold?: unknown } } | null)?.value : null) ?? null;
   const ftRaw = Number(cfgVal?.focusThreshold);
   const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
-  const allEntries = (nodesRes.ok ? ((nodesRes.value as { entries?: ListEntry[] })?.entries ?? []) : []) as ListEntry[];
-  const entries = allEntries.filter((e) => !isPlumbing(e));
-  const byKey = new Map(entries.map((e) => [e.key, e]));
-  const edgesRes = await mcpCall('read', 'workspace.graph', {});
-  const rawEdges = (edgesRes.ok ? ((edgesRes.value as { edges?: GEdge[] })?.edges ?? []) : []) as GEdge[];
-  const edges = rawEdges.filter((e) => byKey.has(e.from) && byKey.has(e.to));
-  const deg = new Map<string, number>();
-  for (const e of edges) {
-    deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
-    deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
+  const layoutV = (layoutRes && layoutRes.ok
+    ? (layoutRes.value as { value?: { coords?: Record<string, number[]>; shards?: number } } | null)?.value
+    : null) ?? null;
+  // The sharded atlas (ADR-0082): a manifest with `shards` means coords live
+  // in `_home/embed2d/s<i>` sibling facts — fetch all in parallel and merge
+  // (each is small; 16 concurrent peeks beat one near-400KB monolith). A
+  // value with inline `coords` is the legacy monolith, still honored.
+  let coordMap: Record<string, number[]> | null = null;
+  if (layoutV && typeof layoutV.shards === 'number' && layoutV.shards > 0) {
+    const shardRes = await Promise.all(Array.from({ length: layoutV.shards }, (_, i) =>
+      mcpCall('read', 'workspace.peek', { key: `_home/embed2d/s${i}` }).catch(() => null)));
+    coordMap = {};
+    for (const r of shardRes) {
+      const sc = (r && r.ok ? (r.value as { value?: { coords?: Record<string, number[]> } } | null)?.value?.coords : null) ?? null;
+      if (sc) Object.assign(coordMap, sc);
+    }
+    if (!Object.keys(coordMap).length) coordMap = null;
+  } else if (layoutV?.coords && typeof layoutV.coords === 'object') {
+    coordMap = layoutV.coords as Record<string, number[]>;
   }
-  const nodes: any[] = entries.map((e) => ({
-    id: e.key,
-    type: e._meta?.type ?? null,
-    score: Number(e._meta?.score) || 0,
-    label: shortLabel(factTitle(e)),
-    deg: deg.get(e.key) ?? 0,
-  }));
-  const layoutV = (layoutRes && layoutRes.ok ? (layoutRes.value as { value?: { coords?: Record<string, number[]> } } | null)?.value : null) ?? null;
-  const coordMap = layoutV?.coords && typeof layoutV.coords === 'object' ? (layoutV.coords as Record<string, number[]>) : null;
-  // The focus band: the salience focus tier (score ≥ threshold), WIDENED to at
-  // least the top ~12% (and ≥12) by score so a flat slice still reads as a band.
-  const byScore = [...nodes].sort((a, b) => b.score - a.score);
-  byScore.forEach((n, i) => { n.rank = i; }); // salience rank (0 = most salient) — drives the visibility slider
-  const tierCount = nodes.filter((n) => n.score >= focusThreshold).length;
-  const bandN = Math.min(nodes.length, Math.max(tierCount, Math.ceil(nodes.length * 0.12), 12));
-  const focusKeys = new Set<string>(byScore.slice(0, bandN).map((n) => n.id));
-  const links: any[] = edges.map((e) => ({ id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived }));
-  const nodeById = new Map<string, any>(nodes.map((n) => [n.id, n]));
-  return { nodes, links, nodeById, coordMap, focusKeys };
+  return { coordMap, focusThreshold };
 }
 
 /* ── 3D explore mode (raw three.js) ──────────────────────────────────────────
@@ -366,6 +457,30 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   };
   return s === 0 ? [l, l, l] : [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)];
 }
+/** PAPER'S INK SET (2026-07-12, owner: "paper palette still very shallow").
+ *  The old formula — hsl(typeHue, 55%, 30%) — collapses every hue into the
+ *  same dark mud at 30% lightness on cream: a wall of maroon with stray
+ *  blue. Engraved atlases didn't mix continuous colour; they printed from a
+ *  SMALL set of distinguishable inks. Type hue now quantizes to the nearest
+ *  of seven period inks — related hues stay related across modes (the same
+ *  type keeps its dusk hue FAMILY), but on paper each family is a genuinely
+ *  separate, legible ink. */
+const PAPER_INKS: Array<{ upTo: number; rgb: [number, number, number] }> = [
+  { upTo: 25, rgb: hexToRgb01('#8f3b2c') },   // madder red
+  { upTo: 70, rgb: hexToRgb01('#a0662a') },   // raw sienna / ochre
+  { upTo: 160, rgb: hexToRgb01('#4a6135') },  // sap green
+  { upTo: 205, rgb: hexToRgb01('#2f5d58') },  // slate teal
+  { upTo: 262, rgb: hexToRgb01('#2e4a66') },  // prussian blue
+  { upTo: 320, rgb: hexToRgb01('#5d4064') },  // plum violet
+  { upTo: 360, rgb: hexToRgb01('#8f3b2c') },  // magenta wraps to madder
+];
+function hexToRgb01(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+const paperInkFor = (hue: number): [number, number, number] =>
+  (PAPER_INKS.find((i) => hue < i.upTo) ?? PAPER_INKS[0]).rgb;
+
 /** '#rrggbb' → [r,g,b] in [0,1]. */
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
@@ -410,6 +525,42 @@ function makeStarTexture(THREE: any, spike: number): any {
   tex.needsUpdate = true;
   return tex;
 }
+/** The PAPER point sprite: a crisp INK STAR — a filled four-pointed star
+ *  (solid core, hard tapered rays, no gradient, no glow fringe), the way old
+ *  celestial atlases actually stamp stars. First cut was a plain stipple
+ *  disc; owner correction 2026-07-12: "dots should still be stars, just no
+ *  gradient/bloom" — the star SHAPE carries the atlas idiom, only the soft
+ *  falloff belonged to dusk. `spike` still grades ray length, same dial as
+ *  the dusk sprite. Canvas AA gives the 1px edge softening; everything else
+ *  is solid ink. */
+function makeStippleTexture(THREE: any, spike: number): any {
+  const s = 96;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d')!;
+  const c = s / 2;
+  const R = c * (0.5 + 0.48 * spike); // ray reach rides the spike dial
+  const r = c * 0.3;                  // waist between rays (also the core disc)
+  g.fillStyle = 'rgba(255,255,255,1)';
+  // Four-pointed concave star: alternate outer ray tips and inner waist
+  // points every 45°.
+  g.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const ang = (i * Math.PI) / 4 - Math.PI / 2;
+    const rad2 = i % 2 === 0 ? R : r;
+    const x = c + Math.cos(ang) * rad2, y = c + Math.sin(ang) * rad2;
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.closePath();
+  g.fill();
+  // Round core so the body reads as a star with a heart, not a sharp jack.
+  g.beginPath();
+  g.arc(c, c, r * 1.05, 0, Math.PI * 2);
+  g.fill();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
+}
 /** A hollow ring sprite — the selection highlight around the chosen node. */
 function makeRingTexture(THREE: any): any {
   const s = 128;
@@ -432,6 +583,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
   selectRef.current = onSelect;
   const api = useRef<{ select: (key: string | null, fly?: boolean) => void; setVisible: (f: number) => void } | null>(null);
   const lastExternal = useRef<string | null>(null);
+  // Loading UX: 'fast' = the first pages are still in flight, 'full' = the
+  // scene is up and pages are streaming into it, 'done' = the whole slice
+  // has landed (or load failed — either way, nothing left to wait for).
+  // `progress` feeds the pill a live count as pages append.
+  const [loadState, setLoadState] = useState<'fast' | 'full' | 'done'>('fast');
+  const [progress, setProgress] = useState<{ got: number; total: number }>({ got: 0, total: 0 });
 
   useEffect(() => {
     const el = host.current;
@@ -442,46 +599,63 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
     let onResult: ((ev: Event) => void) | null = null;
     let cleanup: (() => void) | null = null;
 
-    (async () => {
-      const [model, THREE, addons] = await Promise.all([fetchGraphModel(), loadThree(), loadThreeAddons()]);
-      if (disposed) return;
+    // Progressive mount (2026-07-11 follow-up to the query/edges pagination
+    // fix): called TWICE — once with a "fast" model (page 1 of entries+edges,
+    // already the most salient facts since the query ranks by salience) for
+    // an immediate first paint, then again with the complete model once the
+    // rest of the slice has paged in. Each call tears down whatever's
+    // currently mounted first, so the second call is a clean rebuild, not an
+    // append — the render pipeline below is untouched either way.
+    // STREAMING mount (2026-07-12, owner: "far more incremental… instead of
+    // two bangs"): mounted ONCE with buffers preallocated at the totals both
+    // first pages report, then every arriving page APPENDS into the live
+    // scene — drawRange extends, ranks/band recompute per beat, pending
+    // edges stitch in as their endpoints land. The closures below all
+    // capture nodes/links/idx/byRank BY REFERENCE, so appends grow the same
+    // objects the whole render pipeline already reads — no remount, no
+    // second bang, and selection survives loading by construction.
+    interface StreamApi {
+      appendEntries: (items: ListEntry[]) => void;
+      appendEdges: (items: GEdge[]) => void;
+      finishStream: () => void;
+    }
+    function mountScene(meta: GraphMeta, caps: { capN: number; capE: number }, THREE: any, addons: any): StreamApi | null {
+      if (disposed) return null;
+      cleanup?.();
+      cleanup = null;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      ro?.disconnect();
+      ro = null;
+      if (onResult) { window.removeEventListener(CONSOLE_RESULT_EVENT, onResult); onResult = null; }
       if (!THREE || !addons) {
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
-        return;
+        return null;
       }
       const { CameraControls, EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject, TroikaText } = addons;
       if (!ccInstalled) { CameraControls.install({ THREE }); ccInstalled = true; }
-      const { nodes, nodeById, coordMap, focusKeys } = model;
-      // Drop `similarTo`: kinship is already expressed by proximity in this
-      // layout, so only the authored edges + the derived backbone add info.
-      const links = model.links.filter((l: any) => l.rel !== 'similarTo');
+      // Live, appendable model state — grown in place by the append API.
+      const nodes: any[] = [];
+      const links: any[] = [];
+      const nodeById = new Map<string, any>();
+      const coordMap = meta.coordMap;
+      const focusKeys = new Set<string>();
       const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
       const inFocus = (n: any): boolean => !!n && focusKeys.has(n.id);
       const rad = (n: any): number => 2 + n.score * 7 + Math.min(4, Math.sqrt(n.deg) * 1.1);
-      const idx = new Map<string, number>(nodes.map((n: any, i: number) => [n.id, i]));
+      const idx = new Map<string, number>();
 
-      // ── fixed positions from the semantic [x,y,z] (scattered ring if missing) ──
       const SPREAD = 420;
-      const N = nodes.length;
-      const posBuf = new Float32Array(N * 3);
-      for (let i = 0; i < N; i++) {
-        const n = nodes[i];
-        const c = coordMap?.[n.id];
-        let x: number, y: number, z: number;
-        if (c) { x = c[0] * SPREAD; y = c[1] * SPREAD; z = (c[2] ?? 0) * SPREAD; }
-        else { const a = i * 2.3999; x = Math.cos(a) * SPREAD * 0.6; y = Math.sin(a) * SPREAD * 0.6; z = ((i % 13) - 6) * 14; }
-        n.x = x; n.y = y; n.z = z;
-        posBuf[i * 3] = x; posBuf[i * 3 + 1] = y; posBuf[i * 3 + 2] = z;
-      }
 
       // ── selection / highlight state ──
       let selKey: string | null = null;
       let nbr: Set<string> | null = null;
       let hiSet: Set<string> | null = null;
       // Salience visibility (slider): show the top `visCount` by rank; hidden
-      // nodes/edges/labels get alpha 0. Never below the focus band.
-      const minVis = focusKeys.size;
-      let visCount = N;
+      // nodes/edges/labels get alpha 0. Never below the focus band. The
+      // slider stores a FRACTION so streaming appends can keep re-deriving
+      // the count against the live total.
+      let visFrac = 1;
+      let visCount = 0;
       const isVis = (n: any): boolean => !!n && (n.rank === undefined || n.rank < visCount);
       const neighborsOf = (k: string): Set<string> => {
         const s = new Set<string>();
@@ -496,28 +670,43 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         m === 'paper'
           // outline == bg: the halo's job is to BE the ground (knock out
           // linework behind glyphs), not to add a milky edge around them.
-          ? { bg: '#ece2cb', text: '#2b2318', accent: '#8a6410', dim: '#6c614e', outline: '#ece2cb', pill: [0.925, 0.886, 0.796], capAuth: '#7a5c1a', capComp: '#5b5344', rel: '#6c614e' }
+          // Re-graded 2026-07-12 (owner report: "everything the same ink
+          // colour, no complementary typography treatment") — the old set
+          // (text/accent/dim/capAuth/capComp) were five shades of the same
+          // muted olive-brown, indistinguishable at a glance. THREE families
+          // now, a cartographic convention (warm=asserted, cool=inferred):
+          // near-black ink for base content (unchanged, still dominant),
+          // a venetian-red accent for selection ("you are here" — genuinely
+          // apart from the browns, not just a lighter/darker one), a rust
+          // sienna for AUTHORED places (a human named this), and a cool
+          // slate for anything the system inferred rather than asserted —
+          // computed constellations AND relation labels share it, tying
+          // "the system's own reading of the graph" to one visual language.
+          ? { bg: '#ece2cb', text: '#2b2318', accent: '#9c3a24', dim: '#8f8470', outline: '#ece2cb', pill: [0.925, 0.886, 0.796], capAuth: '#7a4a1f', capComp: '#5a6875', rel: '#5a6875' }
           : { bg: ink.sceneBg, text: ink.text, accent: ink.accent, dim: ink.dim, outline: '#0a0805', pill: [0, 0, 0], capAuth: '#e3c987', capComp: '#b7ad99', rel: '#a89e8a' };
       let PAL = paletteFor(TUNE.sceneMode);
       const isPaper = (): boolean => TUNE.sceneMode === 'paper';
 
-      // ── node colour / size / alpha buffers ──
-      const colBuf = new Float32Array(N * 3);
-      const sizeBuf = new Float32Array(N);
-      const alphaBuf = new Float32Array(N);
+      // ── node colour / size / alpha buffers (capacity-allocated; drawRange
+      // grows as pages stream in) ──
+      const posBuf = new Float32Array(caps.capN * 3);
+      const colBuf = new Float32Array(caps.capN * 3);
+      const sizeBuf = new Float32Array(caps.capN);
+      const alphaBuf = new Float32Array(caps.capN);
       const applyNodeColors = (): void => {
-        for (let i = 0; i < N; i++) {
+        for (let i = 0; i < nodes.length; i++) {
           const n = nodes[i];
           // Dusk: luminous pastels (additive). Paper: the same hue coding as
           // dark chart INK (normal blending over the warm ground).
           const [r, g, b] = isPaper()
-            ? (n.type ? hslToRgb(hueOf(n.type), 0.55, 0.3) : [0.27, 0.24, 0.19])
+            ? (n.type ? paperInkFor(hueOf(n.type)) : [0.27, 0.24, 0.19])
             : (n.type ? hslToRgb(hueOf(n.type), 0.5, 0.62) : [0.62, 0.6, 0.55]);
           colBuf[i * 3] = r; colBuf[i * 3 + 1] = g; colBuf[i * 3 + 2] = b;
         }
       };
-      applyNodeColors();
-      for (let i = 0; i < N; i++) sizeBuf[i] = rad(nodes[i]) * 2.4;
+      const refreshSizes = (): void => {
+        for (let i = 0; i < nodes.length; i++) sizeBuf[i] = rad(nodes[i]) * 2.4;
+      };
       // Stable DOI (salience + graph-focus) baked into the buffer; the shader
       // multiplies the SPATIAL focal falloff on top each frame.
       const nodeAlphaOf = (i: number): number => {
@@ -525,7 +714,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (!isVis(n)) return 0; // culled by the salience slider
         // Global dimmer — the additive core of a dense slice summed to white;
         // the torch supplies the contrast, points don't need to.
-        return TUNE.nodeDim * nodeDOI(n, selKey, nbr, hiSet, N);
+        return TUNE.nodeDim * nodeDOI(n, selKey, nbr, hiSet, nodes.length);
       };
 
       // ── renderer / scene / camera ──
@@ -537,8 +726,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
       renderer.setSize(W, H);
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = TUNE.exposure;
+      // ACES Filmic is calibrated for dusk's HDR-ish additive glow — applied to
+      // paper's flat, normal-blended ink/cream palette it desaturates toward
+      // grey (2026-07-12 owner report: labels/pills read as "grey, not paper").
+      // Paper wants its hex colours literal, so it gets no tone-mapping curve
+      // at all. Kept in sync with isPaper() in applyMode() for live toggling.
+      renderer.toneMapping = isPaper() ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = isPaper() ? 1 : TUNE.exposure;
       renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
       el.innerHTML = '';
       el.appendChild(renderer.domElement);
@@ -550,17 +744,19 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
       let disc = makeStarTexture(THREE, TUNE.starSpike);
+      let stipple = makeStippleTexture(THREE, TUNE.starSpike); // paper's crisp ink star (mode-swapped in applyMode)
       const geo = new THREE.BufferGeometry();
       // `boost` lets a FOCUS point (selection / neighbour / search hit) bypass
       // the torch: without it, a match off the beam axis multiplied down to the
       // 0.04 floor and "highlighting" survived only as a floating label over an
       // unlit scene (owner feedback: labels lit, nodes and edges not).
-      const boostBuf = new Float32Array(N);
+      const boostBuf = new Float32Array(caps.capN);
       geo.setAttribute('position', new THREE.BufferAttribute(posBuf, 3));
       geo.setAttribute('color', new THREE.BufferAttribute(colBuf, 3));
       geo.setAttribute('size', new THREE.BufferAttribute(sizeBuf, 1));
       geo.setAttribute('alpha', new THREE.BufferAttribute(alphaBuf, 1));
       geo.setAttribute('boost', new THREE.BufferAttribute(boostBuf, 1));
+      geo.setDrawRange(0, 0); // grows as entry pages stream in
       const nodeBoostOf = (i: number): number => {
         const n = nodes[i];
         if (!isVis(n)) return 0;
@@ -569,14 +765,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         return 0;
       };
       const applyNodeAlpha = (): void => {
-        for (let i = 0; i < N; i++) {
+        for (let i = 0; i < nodes.length; i++) {
           alphaBuf[i] = nodeAlphaOf(i);
           boostBuf[i] = nodeBoostOf(i);
         }
         (geo.attributes.alpha as any).needsUpdate = true;
         (geo.attributes.boost as any).needsUpdate = true;
       };
-      applyNodeAlpha();
       // TORCH falloff: a spotlight cone from the camera aimed at the focal point
       // (orbit target = screen centre). Brightness drops by ANGLE off the beam
       // axis (quick smoothstep between an inner and outer cone), plus a gentle
@@ -603,22 +798,29 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
         ' return max(uFloor, ang * dep); }';
       const ptMat = new THREE.ShaderMaterial({
-        uniforms: { uTex: { value: disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
+        uniforms: { uTex: { value: isPaper() ? stipple : disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
         vertexShader:
           'attribute float size; attribute float alpha; attribute vec3 color; attribute float boost;' +
-          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost;' +
+          'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost; uniform float uPaper;' +
           TORCH_GLSL +
           'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
           // Focus points also grow a little — brightness alone undersold a
           // small match dot; size makes the hit read as an OBJECT.
-          'vAlpha = alpha * max(torch(position), boost); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uScale / max(vd, 1.0));' +
+          // PAPER: no torch — print has uniform lighting; ink weight comes
+          // from salience (the DOI already baked into `alpha`), never from
+          // where the camera happens to aim. And print dots are SMALL —
+          // engraved stipple, not glow discs (×0.6).
+          'float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost);' +
+          'vAlpha = alpha * lit; gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; uniform float uPaper; varying float vAlpha; varying vec3 vColor;' +
           'void main(){ float m = texture2D(uTex, gl_PointCoord).a;' +
-          // paper: ink stars, normal blending (colour + real alpha); dusk:
-          // premultiplied additive glow (the original path, byte-identical).
-          ' if (uPaper > 0.5) { gl_FragColor = vec4(vColor, min(vAlpha * m, 1.0)); }' +
+          // paper: crisp stipple ink (the ×1.5 gain lifts mid-salience dots
+          // from tint to ink — resting DOI alphas were graded for additive
+          // glow, a touch thin as literal coverage); dusk: premultiplied
+          // additive glow (the original path, byte-identical).
+          ' if (uPaper > 0.5) { gl_FragColor = vec4(vColor, min(vAlpha * m * 1.5, 1.0)); }' +
           ' else { gl_FragColor = vec4(vColor * vAlpha * m, 1.0); } }',
         transparent: true,
         depthWrite: false,
@@ -648,17 +850,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         ring.visible = true;
       };
 
-      // ── edges: additive LineSegments (alpha premultiplied into the colours) ──
-      const E = links.length;
-      const eposBuf = new Float32Array(E * 6);
-      const ecolBuf = new Float32Array(E * 6);
-      const edgeRGB: Array<[number, number, number]> = links.map((l: any) => hexToRgb(edgeStyle(l).stroke));
-      for (let i = 0; i < E; i++) {
-        const l = links[i];
-        const ai = idx.get(idOf(l.source)) ?? 0, bi = idx.get(idOf(l.target)) ?? 0;
-        eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
-        eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
-      }
+      // ── edges: additive LineSegments (alpha premultiplied into the colours;
+      // capacity-allocated, appended as edge pages stream in) ──
+      const eposBuf = new Float32Array(caps.capE * 6);
+      const ecolBuf = new Float32Array(caps.capE * 6);
+      // Direction, source(0)→target(1) — the flow pulse (below) travels along
+      // increasing t, so a fan edge visibly moves the way it actually points.
+      const eflowBuf = new Float32Array(caps.capE * 2);
+      const edgeRGB: Array<[number, number, number]> = [];
       // Lower than the 2D strokes: additive One/One means overlapping edges SUM,
       // so hubs would otherwise clip to a white hairball. Depth-fade (in the
       // shader below) does the rest of the atmosphere.
@@ -670,14 +869,14 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const sN = nodeById.get(idOf(l.source)), tN = nodeById.get(idOf(l.target));
         if (!isVis(sN) || !isVis(tN)) return 0; // salience slider
         // As interesting as its most-interesting endpoint (DOI); shader adds focal fade.
-        const d = Math.max(nodeDOI(sN, selKey, nbr, hiSet, N), nodeDOI(tN, selKey, nbr, hiSet, N));
+        const d = Math.max(nodeDOI(sN, selKey, nbr, hiSet, nodes.length), nodeDOI(tN, selKey, nbr, hiSet, nodes.length));
         return edgeBaseAlpha(l) * (0.1 + 0.9 * d);
       };
       // An edge CARRIES the focus (and bypasses the torch) when it fans out of
       // the selected node, or joins two search hits — the structure the user
       // asked the graph about, visible even off the beam axis. A hit's whole
       // degree does NOT boost (that would re-paint the hairball).
-      const eboostBuf = new Float32Array(E * 2);
+      const eboostBuf = new Float32Array(caps.capE * 2);
       const edgeBoostOf = (l: any): number => {
         const a = idOf(l.source), b = idOf(l.target);
         if (selKey && (a === selKey || b === selKey)) return 1;
@@ -693,7 +892,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const applyEdgeColor = (): void => {
         const focusActive = !!(selKey || hiSet);
         const paper = isPaper();
-        for (let i = 0; i < E; i++) {
+        for (let i = 0; i < links.length; i++) {
           const bo = edgeBoostOf(links[i]);
           let r: number, g: number, b: number, al: number;
           if (bo > 0) {
@@ -720,23 +919,52 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
       egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
       egeo.setAttribute('boost', new THREE.BufferAttribute(eboostBuf, 1));
+      egeo.setAttribute('flow', new THREE.BufferAttribute(eflowBuf, 1));
+      egeo.setDrawRange(0, 0); // grows as edge pages stream in (2 vertices/segment)
       // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
       // point cloud — otherwise they stay full-bright at every depth and flatten
       // the atmosphere. Per-vertex colour already carries the focus/selection
       // alpha (premultiplied); the shader multiplies in the distance falloff.
       const eMat = new THREE.ShaderMaterial({
-        uniforms: { ...torchUniforms, uPaper: { value: isPaper() ? 1 : 0 }, uInk: { value: new THREE.Vector3(0.353, 0.31, 0.228) } },
+        uniforms: {
+          ...torchUniforms,
+          uPaper: { value: isPaper() ? 1 : 0 },
+          uInk: { value: new THREE.Vector3(0.353, 0.31, 0.228) },
+          uTime: { value: 0 },
+          uFlowSpeed: { value: TUNE.edgeFlowSpeed },
+          uFlowWidth: { value: TUNE.edgeFlowWidth },
+          uFlowGain: { value: TUNE.edgeFlowGain },
+          uFlowCycles: { value: TUNE.edgeFlowCycles },
+        },
         vertexShader:
-          'attribute vec3 color; attribute float boost; varying vec3 vColor;' +
+          'attribute vec3 color; attribute float boost; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper;' +
           TORCH_GLSL +
-          'void main(){ vColor = color * max(torch(position), boost); vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          // Paper skips the torch, same as the points: linework on a printed
+          // map doesn't dim by camera aim — its weight hierarchy is carried
+          // entirely by the per-rel alphas applyEdgeColor already grades.
+          'void main(){ float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader:
-          'uniform float uPaper; uniform vec3 uInk; varying vec3 vColor;' +
+          'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
+          // Flow: a soft travelling pulse along FOCUS edges only (vBoost>0 —
+          // the ones already fanning from a selection/hit), source(flow=0)→
+          // target(flow=1), so the animation reads as energy moving the way
+          // the edge actually points. Dusk only — paper's printed-map
+          // metaphor has no motion to carry (matches applyMode's own dusk/
+          // paper split for everything else in this shader).
+          'void main(){' +
+          ' vec3 col = vColor;' +
+          ' if (uPaper < 0.5 && vBoost > 0.5) {' +
+          '   float p = fract(vFlow * uFlowCycles - uTime * uFlowSpeed);' +
+          '   float pulse = smoothstep(0.0, uFlowWidth, p) * smoothstep(1.0, 1.0 - uFlowWidth, p);' +
+          '   col += vColor * pulse * uFlowGain;' +
+          ' }' +
+          ' if (uPaper > 0.5) gl_FragColor = vec4(uInk, min(vColor.r * 2.5, 1.0));' +
           // paper: fixed ink colour, the buffer carries ALPHA (applyEdgeColor
           // writes grayscale there in paper mode), gained ×2.5 so hairlines
-          // survive on the ground; dusk: premultiplied additive (original).
-          'void main(){ if (uPaper > 0.5) gl_FragColor = vec4(uInk, min(vColor.r * 2.5, 1.0));' +
-          ' else gl_FragColor = vec4(vColor, 1.0); }',
+          // survive on the ground; dusk: premultiplied additive (original),
+          // plus the flow pulse added above.
+          ' else gl_FragColor = vec4(col, 1.0); }',
         transparent: true,
         depthWrite: false,
         blending: isPaper() ? THREE.NormalBlending : THREE.CustomBlending,
@@ -835,16 +1063,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const fitPillTo = (text: any, pill: any, centerY: number): void => {
         const b = text.textRenderInfo?.blockBounds;
         if (!b) return;
+        // Dial authority (2026-07-12 owner report: caption pills ignored the
+        // tuner in paper mode): the feather slider governs BOTH modes — the
+        // earlier paper-side clamp was a hardcoded judgment call sitting on
+        // top of the instrument the owner actually tunes with.
+        const feather = TUNE.pillFeather;
         const h = b[3] - b[1];
         const tw = (b[2] - b[0]) + h;   // ~0.5em side padding
         const th = h * 1.55;            // vertical padding
-        const grow = 1 + 2.4 * TUNE.pillFeather; // feather headroom
+        const grow = 1 + 2.4 * feather; // feather headroom
         const qw = tw * ((tw < th * 2 ? grow : 1 + (grow - 1) * 0.6)); // long strips grow less in x
         const qh = th * grow;
         pill.scale.set(qw, qh, 1);
         pill.material.uniforms.uSize.value.set(qw, qh);
         pill.material.uniforms.uInner.value.set(tw / qw, th / qh);
-        pill.material.uniforms.uFeather.value = TUNE.pillFeather;
+        pill.material.uniforms.uFeather.value = feather;
         pill.position.set((b[0] + b[2]) / 2, centerY + (b[1] + b[3]) / 2, -1.5);
         pill.visible = true;
       };
@@ -902,22 +1135,15 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const w = want.get(id);
           if (w) {
             st.role = w.role;
-            st.ox = w.ox ?? 0;
-            st.oy = w.oy ?? 0;
             st.dying = false;
             st.miss = 0;
-            // A role change can change the SIZE tier — troika relayouts async,
-            // so only touch fontSize when it actually moved (sync is not free).
-            const m = roleMult(w.role);
-            if (m !== st.mult) {
-              st.mult = m;
-              const n = nodeById.get(id);
-              if (n) {
-                st.text.fontSize = fontWorld(n, m);
-                st.text.maxWidth = st.text.fontSize * 10;
-                st.text.sync(st.fit);
-              }
-            }
+            // Size tier and displacement are BIRTH-TIME properties (owner,
+            // 2026-07-12: selecting a node made its and its neighbours'
+            // standing labels resize and slide — jarring). An incumbent label
+            // only re-targets opacity/colour on a role change; a fresh label
+            // is born at its role's size and offset and FADES in. The cost —
+            // a beam label promoted to 'sel' keeps its smaller size — is
+            // carried by the accent colour and the selection ring instead.
           } else if (++st.miss > LABEL_GRACE) st.dying = true;
         }
         for (const [id, w] of want) {
@@ -978,18 +1204,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // Open FRAMING the cloud's BODY, not a fixed dolly and not its extremes:
       // centre = per-axis MEDIAN (a mean drifts toward outlier tendrils),
       // radius = the 80th-percentile distance — the far strays hang offscreen
-      // and the mass the eye reads as "the graph" fills the frame.
-      {
+      // and the mass the eye reads as "the graph" fills the frame. Streaming:
+      // called after the FIRST entries page lands (the most salient band —
+      // already the body of the map), not per append (the camera must not
+      // keep re-framing under the user).
+      let framed = false;
+      const frameBody = (): void => {
+        if (framed || !nodes.length) return;
+        framed = true;
         const med = (vals: number[]): number => { const s = [...vals].sort((a, b) => a - b); return s[s.length >> 1] ?? 0; };
         const xs: number[] = [], ys: number[] = [], zs: number[] = [];
-        for (let i = 0; i < N; i++) { xs.push(posBuf[i * 3]); ys.push(posBuf[i * 3 + 1]); zs.push(posBuf[i * 3 + 2]); }
+        for (let i = 0; i < nodes.length; i++) { xs.push(posBuf[i * 3]); ys.push(posBuf[i * 3 + 1]); zs.push(posBuf[i * 3 + 2]); }
         const c = new THREE.Vector3(med(xs), med(ys), med(zs));
         const dists: number[] = [];
-        for (let i = 0; i < N; i++) dists.push(c.distanceTo(new THREE.Vector3(posBuf[i * 3], posBuf[i * 3 + 1], posBuf[i * 3 + 2])));
+        for (let i = 0; i < nodes.length; i++) dists.push(c.distanceTo(new THREE.Vector3(posBuf[i * 3], posBuf[i * 3 + 1], posBuf[i * 3 + 2])));
         dists.sort((a, b) => a - b);
         const r = (dists[Math.floor(dists.length * 0.8)] ?? SPREAD) * 1.1;
         controls.fitToSphere(new THREE.Sphere(c, Math.max(r, SPREAD * 0.3)), false);
-      }
+      };
       // Hold SPACE: left-drag TRUCKS (pans) instead of orbiting — the design-
       // tool convention, matching mobile's two-finger drag. Temporary while
       // held; skipped when the palette (or any field) has keyboard focus.
@@ -1019,28 +1251,44 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       controls.addEventListener('controlend', () => { interacting = false; lastInput = performance.now(); });
       const focusVec = new THREE.Vector3();
 
-      // ── picking: a tap (not a drag) raycasts the point cloud ──
-      const raycaster = new THREE.Raycaster();
-      (raycaster.params as any).Points = { threshold: 9 };
-      const ndc = new THREE.Vector2();
+      // ── picking: a tap (not a drag) selects the nearest node ON SCREEN ──
+      // The raycaster is gone (2026-07-13 owner report: "really hard to select
+      // nodes"): its 9-WORLD-UNIT cylinder around the pick ray shrinks to a
+      // couple of screen px once the camera pulls back, so most taps missed
+      // every node and fell through to the forgiving label slop — which then
+      // selected some standing label's node instead, reading as "selection is
+      // broken". A tap is a SCREEN gesture, so pick in screen space: project
+      // every visible node once and take the closest within a finger-sized
+      // px threshold. O(N) over a few thousand nodes is nothing per tap, and
+      // the threshold is honest — it never silently changes with dolly depth.
       let downX = 0, downY = 0, moved = false;
-      const pickAt = (cx: number, cy: number): any => {
-        const rect = renderer.domElement.getBoundingClientRect();
-        ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
-        raycaster.setFromCamera(ndc, camera);
-        const hits = raycaster.intersectObject(points);
-        if (!hits.length) return null;
-        let best = hits[0];
-        for (const h of hits) if ((h.distanceToRay ?? 1e9) < (best.distanceToRay ?? 1e9)) best = h;
-        return best.index != null ? nodes[best.index] : null;
+      const nearestNodeAt = (cx: number, cy: number, maxPx: number): any => {
+        let best: any = null;
+        let bestD = maxPx;
+        for (const n of nodes) {
+          if (!isVis(n)) continue;
+          const [sx, sy, sz] = screenXY(n);
+          if (sz > 1) continue; // behind the camera
+          const d = Math.hypot(sx - cx, sy - cy);
+          if (d < bestD) { bestD = d; best = n; }
+        }
+        return best;
       };
       // A tap over a label's projected rect selects that node — SDF labels are
       // scene objects, so the rect is reconstructed from troika's OWN layout
       // bounds (blockBounds), padded a little for fingers (host is fixed
       // inset:0, so client px == canvas px).
-      const labelAt = (cx: number, cy: number): string | null => {
+      // Two-tier hit rects (2026-07-12 "nodes are impossible to select"): the
+      // first pill-slop cut floored EVERY label's rect at 56×36 plus feather
+      // headroom and tested labels before the node raycast — dozens of beam/
+      // anchor labels tiled the screen with invisible tap-catchers, so taps
+      // aimed at bare nodes kept landing in some label's slop. TIGHT rects
+      // (the visible chip: glyphs + the pill's text padding) outrank nodes;
+      // the padded finger-slop rects only catch taps that hit nothing else
+      // (see onUp's ordering below).
+      const labelAt = (cx: number, cy: number, slop: boolean): string | null => {
         for (const [id, st] of labelObjs) {
-          if (st.cur < 0.25) continue; // a barely-there label shouldn't catch taps
+          if (st.cur < 0.2) continue; // a barely-there label shouldn't catch taps
           const n = nodeById.get(id);
           if (!n) continue;
           const camD = camPos.distanceTo(st.grp.position) || 1;
@@ -1052,19 +1300,27 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const cxc = sx + st.cox; // label centre column (with displacement)
           if (b) {
             // Block bounds are text-local (anchor top-centre at y=0), hung at
-            // text.position.y below the node; world +y is screen −y. Pad the
-            // rect to a finger-sized minimum (44×28) — small deep labels are
-            // legitimate tap targets too.
+            // text.position.y below the node; world +y is screen −y.
             let top = sy + st.coy - (st.text.position.y + b[3]) * pxPer;
             let bot = sy + st.coy - (st.text.position.y + b[1]) * pxPer;
-            const vPad = Math.max(4, (28 - (bot - top)) / 2);
-            top -= vPad; bot += vPad;
-            const w = Math.max(44, (b[2] - b[0]) * pxPer + 10);
+            const textH = bot - top;
+            let w: number;
+            if (slop) {
+              const pillPad = textH * 1.2 * TUNE.pillFeather; // feather headroom, both axes
+              const vPad = Math.max(8, (36 - textH) / 2, pillPad / 2);
+              top -= vPad; bot += vPad;
+              w = Math.max(56, (b[2] - b[0]) * pxPer + 24 + pillPad);
+            } else {
+              // The visible chip: fitPillTo's text box (~0.5em side pad,
+              // ×1.55 height) — what the finger actually SEES as the label.
+              top -= textH * 0.28; bot += textH * 0.28;
+              w = (b[2] - b[0]) * pxPer + textH;
+            }
             if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= top && cy <= bot) return id;
-          } else {
-            const w = Math.max(44, String(n.label).length * fs * 0.62);
+          } else if (slop) {
+            const w = Math.max(56, String(n.label).length * fs * 0.62);
             const ly = sy + st.coy + rad(n) * 1.15 * pxPer;
-            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= ly - 3 && cy <= ly + fs * 1.6) return id;
+            if (cx >= cxc - w / 2 && cx <= cxc + w / 2 && cy >= ly - 8 && cy <= ly + fs * 1.6 + 8) return id;
           }
         }
         return null;
@@ -1080,19 +1336,29 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) moved = true; };
       const onUp = (e: PointerEvent): void => {
         if (moved) return;
-        const lid = labelAt(e.clientX, e.clientY);
-        if (lid) { api.current?.select(lid, true); return; }
-        const n = pickAt(e.clientX, e.clientY);
-        if (n) { api.current?.select(n.id); return; }
-        // A caption is a DOOR: an AUTHORED place selects its container fact
-        // (context panel: members as neighbours, open ↗ to the board/doc);
-        // a computed place just flies to frame its region.
-        const c = constellationAt(e.clientX, e.clientY);
-        if (c) {
+        const openConst = (c: Constellation): void => {
+          // A caption is a DOOR: an AUTHORED place selects its container fact
+          // (context panel: members as neighbours, open ↗ to the board/doc);
+          // a computed place just flies to frame its region.
           if (c.key && nodeById.has(c.key)) api.current?.select(c.key, true);
           else frame(c.x, c.y, c.z, c.r * 1.5);
-          return;
-        }
+        };
+        // Precedence, refined across three live reports (2026-07-12/13): a tap
+        // on a VISIBLE chip (label/caption) wins — a deliberate typographic
+        // target outranks ambient dots. Otherwise the NEAREST on-screen node
+        // within a finger-sized threshold wins (screen-space, depth-honest —
+        // see nearestNodeAt above). Only a tap that hits neither falls to the
+        // labels' padded slop rects; and only then, empty space deselects.
+        const lidT = labelAt(e.clientX, e.clientY, false);
+        if (lidT) { api.current?.select(lidT, true); return; }
+        const cT = constellationAt(e.clientX, e.clientY, false);
+        if (cT) { openConst(cT); return; }
+        const n = nearestNodeAt(e.clientX, e.clientY, e.pointerType === 'touch' ? 36 : 24);
+        if (n) { api.current?.select(n.id); return; }
+        const lid = labelAt(e.clientX, e.clientY, true);
+        if (lid) { api.current?.select(lid, true); return; }
+        const c = constellationAt(e.clientX, e.clientY, true);
+        if (c) { openConst(c); return; }
         api.current?.select(null);
       };
       renderer.domElement.addEventListener('pointerdown', onDown);
@@ -1122,7 +1388,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
         setVisible: (f: number) => {
-          visCount = f >= 0.999 ? N : Math.max(minVis, Math.round(N * f));
+          visFrac = f; // remembered so streaming appends re-derive against the live total
+          visCount = f >= 0.999 ? nodes.length : Math.max(focusKeys.size, Math.round(nodes.length * f));
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         },
       };
@@ -1190,13 +1457,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const want = new Set<number>();
         if (selKey) {
           const cands: Array<[number, number]> = [];
-          for (let i = 0; i < E; i++) {
+          for (let i = 0; i < links.length; i++) {
             const l = links[i];
             const a = idOf(l.source), b = idOf(l.target);
             if (a !== selKey && b !== selKey) continue;
             const farN = nodeById.get(a === selKey ? b : a);
             if (!farN || !isVis(farN)) continue;
-            cands.push([i, farN.rank ?? N]);
+            cands.push([i, farN.rank ?? nodes.length]);
           }
           cands.sort((x, y) => x[1] - y[1]); // label the salient connections first
           const placedMid: Array<[number, number]> = [];
@@ -1237,8 +1504,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       };
 
       const beamStreak = new Map<string, number>();
-      // Salience order, computed once — anchors and beam both admit best-first.
-      const byRank = [...nodes].sort((a: any, b: any) => (a.rank ?? N) - (b.rank ?? N));
+      // Salience order — anchors and beam both admit best-first. LIVE under
+      // streaming: refreshed in place (same array identity, closures keep
+      // reading it) by recomputeRanks after every appended page.
+      const byRank: any[] = [];
+      // Recompute rank / focus band / visibility count over the LIVE node set —
+      // the per-batch bookkeeping that used to be one-shot model assembly in
+      // fetchGraphModel.
+      const recomputeRanks = (): void => {
+        const byScore = [...nodes].sort((a, b) => b.score - a.score);
+        byScore.forEach((n, i) => { n.rank = i; });
+        const tierCount = nodes.filter((n) => n.score >= meta.focusThreshold).length;
+        const bandN = Math.min(nodes.length, Math.max(tierCount, Math.ceil(nodes.length * 0.12), 12));
+        focusKeys.clear();
+        for (let i = 0; i < bandN; i++) focusKeys.add(byScore[i].id);
+        byRank.length = 0;
+        byRank.push(...byScore);
+        visCount = visFrac >= 0.999 ? nodes.length : Math.max(focusKeys.size, Math.round(nodes.length * visFrac));
+      };
 
       // ── constellations: the map's PLACE NAMES ──────────────────────────
       // COMPUTED from the data (salience hubs + dominant member types) — the
@@ -1272,7 +1555,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // Authored places carry a whisper of the accent — a view is intent.
         text.color = authored ? PAL.capAuth : PAL.capComp;
         text.outlineColor = PAL.outline;
-        text.outlineWidth = '4%';
+        // Dusk: hairline (the black pill veil does the masking there). Paper:
+        // a REAL knockout — 4% left the caps to be chewed by the tangle
+        // (2026-07-12 "captions disappear into the tangle" report; fact
+        // labels never had this problem because they get TUNE.labelOutline's
+        // 35%). Cartographic convention: area labels overprint detail, but
+        // always behind a halo of ground.
+        text.outlineWidth = isPaper() ? '14%' : '4%';
         text.fillOpacity = 0;
         text.outlineOpacity = 0;
         text.renderOrder = 9;
@@ -1286,6 +1575,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         scene.add(grp);
         constellations.push(st);
       };
+      // Places are computed ONCE, when the stream completes (finishStream) —
+      // they need the whole picture (hubs, membership balls, dominant types),
+      // and captions appearing/renaming mid-stream would read as churn.
+      const computePlaces = (): void => {
       {
         // Computed pass: greedy salience hubs with an exclusion radius, then a
         // membership ball around each. The dominant type names the region when
@@ -1316,7 +1609,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           } else {
             const speaker = members
               .filter((m: any) => placeworthy(m.label))
-              .sort((a: any, b: any) => (a.rank ?? N) - (b.rank ?? N))[0];
+              .sort((a: any, b: any) => (a.rank ?? nodes.length) - (b.rank ?? nodes.length))[0];
             if (speaker) name = String(speaker.label);
           }
           if (!name) continue;
@@ -1400,10 +1693,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           try { localStorage.setItem(VC_KEY, JSON.stringify({ at: Date.now(), places })); } catch { /* */ }
         } catch { /* views are optional */ }
       })();
+      }; // end computePlaces
       const constV = new THREE.Vector3();
       // Tap target: a visible caption's projected rect (troika's real layout
       // bounds, finger-padded).
-      const constellationAt = (cx: number, cy: number): Constellation | null => {
+      // Same two-tier rects as labelAt: tight = the visible caption box,
+      // slop = the padded finger fallback (see onUp's precedence comment).
+      const constellationAt = (cx: number, cy: number, slop: boolean): Constellation | null => {
         for (const c of constellations) {
           if (c.cur < 0.15) continue;
           const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z)) || 1;
@@ -1412,8 +1708,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
           const pxPer = ((H / 2) / camD) * (c.grp.scale?.x || 1);
           const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
-          const w = Math.max(44, (b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer) + 10);
-          const h = Math.max(28, (b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer) + 10);
+          const rawH = b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer;
+          const rawW = b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer;
+          const pillPad = slop ? rawH * 1.2 * TUNE.pillFeather : 0;
+          const w = slop ? Math.max(56, rawW + 24 + pillPad) : rawW + rawH;
+          const h = slop ? Math.max(36, rawH + 16 + pillPad) : rawH * 1.55;
           if (Math.abs(cx - sx) < w / 2 && Math.abs(cy - sy) < h / 2) return c;
         }
         return null;
@@ -1469,6 +1768,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           } else c.grp.scale.setScalar(1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
+          // Dial authority: pillAlpha governs captions exactly like labels,
+          // in both modes (an earlier paper-side 0.88 floor overrode the
+          // tuner — owner report 2026-07-12).
           c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
           const cOccl = TUNE.pillAlpha > 0.95;
           c.pill.renderOrder = cOccl ? -1 : 8;
@@ -1487,9 +1789,16 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const applyMode = (): void => {
         PAL = paletteFor(TUNE.sceneMode);
         const paper = isPaper();
+        // See the construction-time comment above: paper's flat colours want
+        // no filmic curve, or they desaturate toward grey.
+        renderer.toneMapping = paper ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = paper ? 1 : TUNE.exposure;
         scene.background = new THREE.Color(PAL.bg);
         ptMat.uniforms.uPaper.value = paper ? 1 : 0;
         ptMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
+        // Different PRIMITIVE per mode, not just different constants: paper
+        // renders crisp engraved stipple dots, dusk the soft bloomable star.
+        ptMat.uniforms.uTex.value = paper ? stipple : disc;
         eMat.uniforms.uPaper.value = paper ? 1 : 0;
         eMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
         applyNodeColors();
@@ -1503,6 +1812,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const c of constellations) {
           c.text.color = c.authored ? PAL.capAuth : PAL.capComp;
           c.text.outlineColor = PAL.outline;
+          c.text.outlineWidth = paper ? '14%' : '4%'; // see addConstellation
           c.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
         }
         for (const [, o] of edgeLabelObjs) (o.element as HTMLElement).style.color = PAL.rel;
@@ -1573,6 +1883,23 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           }
         }
         if (selKey && nbr) {
+          // INCUMBENCY FIRST (2026-07-12 "labels jump and pop while orbiting
+          // a selection"): a neighbour label that's already up KEEPS its slot
+          // and its displacement while the selection holds. Re-running the
+          // screen-space contest every 5 frames with fresh camera coords was
+          // evicting, re-admitting, and re-displacing labels mid-orbit — the
+          // set must be stable while the QUESTION (the selection) is stable;
+          // only the camera moved. Incumbents still register their rects so
+          // newcomers avoid them; transient overlap between incumbents during
+          // a big orbit is the cheaper artefact.
+          for (const [id, st] of labelObjs) {
+            if (st.role !== 'nbr' || st.dying || !nbr.has(id) || want.has(id)) continue;
+            const n = nodeById.get(id);
+            if (!n || !isVis(n)) continue;
+            const [sx, sy] = screenXY(n);
+            placed.push([sx + st.ox, sy + st.oy, boxOf(n), hOf(n)]);
+            want.set(id, { role: 'nbr', ox: st.ox, oy: st.oy });
+          }
           // EVERY neighbour that wins a collision slot gets a label — at its
           // depth-proportional size. No readable() admission gate: a far
           // neighbour is a tiny label, not a missing one. A colliding
@@ -1582,8 +1909,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const cands = [...nbr]
             .map((id) => nodeById.get(id))
             .filter((n) => n && isVis(n) && !want.has(n.id))
-            .sort((a, b) => (a.rank ?? N) - (b.rank ?? N));
-          let added = 0;
+            .sort((a, b) => (a.rank ?? nodes.length) - (b.rank ?? nodes.length));
+          let added = [...want.values()].filter((w) => w.role === 'nbr').length;
           for (const n of cands) {
             if (added >= labelCap()) break;
             const [sx, sy] = screenXY(n);
@@ -1642,12 +1969,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           }
         }
 
-        // THE BEAM SUGGESTS — in both modes, but as the secondary voice: a
-        // smaller allowance under focus, collision priority already ceded to
-        // the focus labels above, and a candidate must hold the beam across
-        // consecutive syncs before it fades in (the camera drifting past
-        // something no longer pops a label).
-        const beamCap = focusActive ? TUNE.beamCapFocus : labelCap();
+        // THE BEAM SUGGESTS — but only AT REST. Under focus it is now silent
+        // (2026-07-12: with a selection held, orbiting churned the
+        // beamCapFocus slots by camera-relative torch rank — labels popping
+        // in/out behind the answer the user was actually reading). While a
+        // selection/highlight is active, the label set belongs to the
+        // question, not the camera.
+        const beamCap = focusActive ? 0 : labelCap();
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id)) continue;
@@ -1713,6 +2041,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             // no cliff where labels used to pop.
             target = TUNE.beamOpacity * smoothstep(TUNE.beamOff, 0.95, torch);
           }
+          // Paper mode has no additive glow to carry a fractional alpha — the
+          // SAME 0.57 ceiling that reads as a soft dusk glow reads as flat gray
+          // ink on paper (2026-07-12 owner report: "muddy grey" labels, edges
+          // already had this exact compensation via eMat's `min(x*2.5,1)` gain,
+          // labels never did). Gains toward full ink as admission approaches
+          // its own ceiling, instead of capping at a fraction of it.
+          if (isPaper()) target = Math.min(target * 2.5, 1);
           if (st.dying) target = 0;
           st.cur += (target - st.cur) * k;
           if (st.dying && st.cur < 0.03) {
@@ -1772,6 +2107,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         camera.getWorldPosition(camPos);
         torchUniforms.uFocus.value.copy(focusVec);
         torchUniforms.uCam.value.copy(camPos);
+        eMat.uniforms.uTime.value = clock.elapsedTime;
         // Re-pick the beam-lit label set a few times a second (DOM churn is the
         // cost; the beam moves slowly), then size/opacity every frame.
         if ((beamFrame = (beamFrame + 1) % 5) === 0) syncBeamLabels();
@@ -1816,7 +2152,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               const t = makeStarTexture(THREE, TUNE.starSpike);
               disc.dispose?.();
               disc = t;
-              ptMat.uniforms.uTex.value = t;
+              const st2 = makeStippleTexture(THREE, TUNE.starSpike);
+              stipple.dispose?.();
+              stipple = st2;
+              // Each mode keeps ITS OWN texture current under the spike dial —
+              // dusk the soft bloomable star, paper the crisp ink star.
+              ptMat.uniforms.uTex.value = isPaper() ? st2 : t;
             }
             torchUniforms.uConeIn.value = TUNE.coneIn;
             torchUniforms.uConeOut.value = TUNE.coneOut;
@@ -1824,13 +2165,21 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             torchUniforms.uDepthOut.value = SPREAD * TUNE.depthOut;
             torchUniforms.uFloor.value = TUNE.torchFloor;
             torchUniforms.uSizeBoost.value = TUNE.boostSizeGain;
+            eMat.uniforms.uFlowSpeed.value = TUNE.edgeFlowSpeed;
+            eMat.uniforms.uFlowWidth.value = TUNE.edgeFlowWidth;
+            eMat.uniforms.uFlowGain.value = TUNE.edgeFlowGain;
+            eMat.uniforms.uFlowCycles.value = TUNE.edgeFlowCycles;
             if (useBloom()) ensureComposer();
             if (bloomPass) {
               bloomPass.strength = TUNE.bloomStrength;
               bloomPass.radius = TUNE.bloomRadius;
               bloomPass.threshold = TUNE.bloomThreshold;
             }
-            renderer.toneMappingExposure = TUNE.exposure;
+            // Paper stays untone-mapped regardless of the exposure knob — see
+            // applyMode()'s comment. Every OTHER slider change routes through
+            // this same refresh(), so it has to hold that line too, not just
+            // the sceneMode toggle.
+            renderer.toneMappingExposure = isPaper() ? 1 : TUNE.exposure;
             applyNodeAlpha();
             applyEdgeColor();
             // Re-grade the live SDF labels (size mults / outline are layout
@@ -1867,7 +2216,6 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(beamF, 'beamOff', 0.02, 0.8);
           add(beamF, 'beamOpacity', 0, 1);
           add(beamF, 'beamSizeMult', 0.3, 1.5);
-          add(beamF, 'beamCapFocus', 0, 20, 1);
           add(beamF, 'labelCap', 0, 40, 1);
           const labelsF = gui.addFolder('labels');
           add(labelsF, 'selSizeMult', 0.8, 2.5);
@@ -1892,6 +2240,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           add(edgesF, 'edgeAuthored', 0, 1, 0.005);
           add(edgesF, 'focusEdgeAlpha', 0, 1);
           add(edgesF, 'atmosphereDim', 0, 1);
+          add(edgesF, 'edgeFlowSpeed', 0, 2, 0.05); // cycles/sec along the edge
+          add(edgesF, 'edgeFlowWidth', 0.05, 0.5, 0.01); // pulse width (0..1 of the edge)
+          add(edgesF, 'edgeFlowGain', 0, 3, 0.05); // brightness added at the pulse's peak
+          add(edgesF, 'edgeFlowCycles', 1, 8, 1); // pulses per edge, source→target
           // Ranges widened where the owner's grade railed the old stops
           // (constCap/anchorCap max, anchorSizeMult min, labelOutline max).
           const placesF = gui.addFolder('places');
@@ -1965,9 +2317,167 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (crumbTimer) clearTimeout(crumbTimer);
         crumb.remove();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
-        disc.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
+        disc.dispose?.(); stipple.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
-    })().catch((err) => (window.reportError ?? console.error)(err));
+
+      // ── the append API: pages stream INTO the live scene ─────────────────
+      // Edges can land before their endpoints (the two streams race) — park
+      // them and re-try after each entries append. Whatever's still parked at
+      // finishStream points at plumbing-filtered facts and is dropped.
+      const pendingEdges: GEdge[] = [];
+      /** True = handled (added, or dropped by design: similarTo / capacity /
+       *  duplicate). False = endpoints not here yet, caller should park it. */
+      const addEdge = (e: GEdge): boolean => {
+        if (e.rel === 'similarTo') return true; // proximity already says this
+        const a = nodeById.get(e.from), b = nodeById.get(e.to);
+        if (!a || !b) return false;
+        if (links.length >= caps.capE) return true;
+        const i = links.length;
+        const l = { id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived };
+        links.push(l);
+        edgeRGB.push(hexToRgb(edgeStyle(e).stroke));
+        const ai = idx.get(e.from)!, bi = idx.get(e.to)!;
+        eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
+        eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
+        eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1; // pulse travels source→target
+        a.deg++; b.deg++;
+        return true;
+      };
+      const commitEdges = (): void => {
+        egeo.setDrawRange(0, links.length * 2);
+        (egeo.attributes.position as any).needsUpdate = true;
+        (egeo.attributes.flow as any).needsUpdate = true;
+        // deg moved → node radii move with it.
+        refreshSizes();
+        (geo.attributes.size as any).needsUpdate = true;
+        applyEdgeColor();
+      };
+      const drainPendingEdges = (): void => {
+        if (!pendingEdges.length) return;
+        let wrote = false;
+        for (let i = pendingEdges.length - 1; i >= 0; i--) {
+          if (addEdge(pendingEdges[i])) { pendingEdges.splice(i, 1); wrote = true; }
+        }
+        if (wrote) commitEdges();
+      };
+      const appendEntries = (items: ListEntry[]): void => {
+        const n0 = nodes.length;
+        for (const e of items) {
+          if (isPlumbing(e) || nodeById.has(e.key) || nodes.length >= caps.capN) continue;
+          const i = nodes.length;
+          const n: any = {
+            id: e.key,
+            type: e._meta?.type ?? null,
+            score: Number(e._meta?.score) || 0,
+            label: shortLabel(factTitle(e)),
+            deg: 0,
+          };
+          // Fixed position from the semantic [x,y,z]; scattered ring if the
+          // atlas doesn't know this key (yet — see ADR-0047 stage 3).
+          const c = coordMap?.[n.id];
+          if (c) { n.x = c[0] * SPREAD; n.y = c[1] * SPREAD; n.z = (c[2] ?? 0) * SPREAD; }
+          else { const a = i * 2.3999; n.x = Math.cos(a) * SPREAD * 0.6; n.y = Math.sin(a) * SPREAD * 0.6; n.z = ((i % 13) - 6) * 14; }
+          posBuf[i * 3] = n.x; posBuf[i * 3 + 1] = n.y; posBuf[i * 3 + 2] = n.z;
+          nodes.push(n);
+          nodeById.set(n.id, n);
+          idx.set(n.id, i);
+        }
+        if (nodes.length === n0) return;
+        recomputeRanks();
+        applyNodeColors();
+        refreshSizes();
+        applyNodeAlpha(); // flags alpha/boost needsUpdate itself
+        (geo.attributes.position as any).needsUpdate = true;
+        (geo.attributes.color as any).needsUpdate = true;
+        (geo.attributes.size as any).needsUpdate = true;
+        geo.setDrawRange(0, nodes.length);
+        frameBody(); // one-shot: frames on the FIRST page, no-op after
+        drainPendingEdges();
+      };
+      const appendEdges = (items: GEdge[]): void => {
+        let wrote = false;
+        for (const e of items) {
+          if (addEdge(e)) wrote = true;
+          else pendingEdges.push(e);
+        }
+        if (wrote) commitEdges();
+      };
+      const finishStream = (): void => {
+        pendingEdges.length = 0; // stragglers point at plumbing-filtered facts
+        computePlaces();
+        applyNodeAlpha();
+        applyEdgeColor();
+        syncBeamLabels();
+      };
+      return { appendEntries, appendEdges, finishStream };
+    }
+
+    (async () => {
+      // STREAMING orchestration: the entry/edge streams start IMMEDIATELY
+      // (network first — they dominate the wall clock), buffering pages until
+      // (a) both totals are known, so the scene's buffers can be capacity-
+      // allocated once, and (b) THREE + the meta (layout atlas / config /
+      // typography) have loaded. Then ONE mount, buffered pages drain into it,
+      // and every later page appends live — no second bang, and selection/
+      // visibility survive loading by construction (same scene throughout).
+      setLoadState('fast');
+      let stream: StreamApi | null = null;
+      let mountFailed = false;
+      let meta: GraphMeta | null = null;
+      let THREE: any = null, addons: any = null;
+      let nTotal = -1, eTotal = -1;
+      let nGot = 0, eGot = 0;
+      const heldEntries: ListEntry[][] = [];
+      const heldEdges: GEdge[][] = [];
+      const bump = (): void => { if (!disposed) setProgress({ got: nGot + eGot, total: Math.max(0, nTotal) + Math.max(0, eTotal) }); };
+      const maybeMount = (): void => {
+        if (stream || mountFailed || disposed || !meta || nTotal < 0 || eTotal < 0) return;
+        // Headroom over the reported totals: facts written while the stream
+        // runs may push a late page past them; appends past capacity drop.
+        stream = mountScene(meta, { capN: nTotal + 64, capE: eTotal + 256 }, THREE, addons);
+        if (!stream) { mountFailed = true; return; } // renderer message already up
+        setLoadState('full');
+        for (const p of heldEntries) stream.appendEntries(p);
+        for (const p of heldEdges) stream.appendEdges(p);
+        heldEntries.length = 0;
+        heldEdges.length = 0;
+      };
+      const entriesDone = fetchAllEntries((items, total) => {
+        if (disposed) return;
+        nTotal = total;
+        nGot += items.length;
+        bump();
+        if (stream) stream.appendEntries(items);
+        else { heldEntries.push(items); maybeMount(); }
+      });
+      const edgesDone = fetchAllEdges((items, total) => {
+        if (disposed) return;
+        eTotal = total;
+        eGot += items.length;
+        bump();
+        if (stream) stream.appendEdges(items);
+        else { heldEdges.push(items); maybeMount(); }
+      });
+      const [T, A, m] = await Promise.all([loadThree(), loadThreeAddons(), fetchGraphMeta()]);
+      if (disposed) return;
+      THREE = T; addons = A; meta = m;
+      maybeMount();
+      await Promise.all([entriesDone, edgesDone]);
+      if (disposed) return;
+      maybeMount(); // an empty slice reports totals without ever mounting above
+      stream?.finishStream();
+      setLoadState('done');
+    })().catch((err) => {
+      (window.reportError ?? console.error)(err);
+      // A rejected fetch/setup left the scene host empty — a blank page reads as
+      // "broken", not "recoverable". Match the loadThree()/loadThreeAddons()
+      // failure fallback above (line ~471) so any init failure degrades to a
+      // legible message instead of silence.
+      setLoadState('done');
+      if (!disposed && el) {
+        el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace;text-align:center;padding:2rem">graph failed to load — check the console, or reload</div>';
+      }
+    });
 
     return () => {
       disposed = true;
@@ -1988,7 +2498,45 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
   useEffect(() => { api.current?.setVisible(visible); }, [visible]);
 
-  return <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />;
+  return (
+    <>
+      {/* `host` is imperative-only territory below (innerHTML/appendChild
+          straight to the DOM node for the three.js canvas + CSS2D labels) —
+          React must never render children into it, or the two reconcilers
+          fight over the same subtree. The loading pill lives in a SIBLING
+          node instead, fully React-owned. */}
+      <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />
+      {loadState !== 'done' && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed', left: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20,
+            fontFamily: ink.mono, fontSize: '0.72rem', color: ink.text,
+            background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
+            borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
+            display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.8rem',
+            pointerEvents: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: 8, height: 8, borderRadius: '50%', background: ink.accent,
+              animation: 'parc-pulse 1.1s ease-in-out infinite',
+            }}
+          />
+          <span>
+            {loadState === 'fast'
+              ? 'loading graph…'
+              : progress.total > 0
+                ? `charting ${Math.min(progress.got, progress.total).toLocaleString()} / ${progress.total.toLocaleString()}…`
+                : 'loading the rest of the slice…'}
+          </span>
+          <style>{'@keyframes parc-pulse{0%,100%{opacity:.3}50%{opacity:1}}'}</style>
+        </div>
+      )}
+    </>
+  );
 }
 
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {

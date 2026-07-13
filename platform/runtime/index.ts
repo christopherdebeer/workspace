@@ -23,8 +23,10 @@ export {
   intersectScopePatterns,
   intersectScopes,
   ServiceAuthError,
+  unwindActChain,
+  leafActOf,
 } from './auth';
-export type { Identity } from './auth';
+export type { Identity, ActClaim } from './auth';
 export { createEvents, __setEventBridge } from './events';
 export type { Events } from './events';
 export {
@@ -69,6 +71,8 @@ export {
   parseLensesConfig,
 } from './state';
 export { contentHash } from './content-hash';
+export { inferIngestionType } from './ingestion-type';
+export type { IngestionConfig, IngestionRule } from './ingestion-type';
 // The DynamoDB-backed StateStore — surfaced in the barrel (ADR-0042 Inc 0) so a
 // cell's own SSR Lambda can run the SAME read pipeline the gateway does
 // (`createObservedState(createDynamoStateStore(table))`) against its IAM-scoped
@@ -110,8 +114,8 @@ export {
 export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig } from './vectors';
 export { refreshSimilarEdges, dropSimilarEdges, authoredPairs, pairKey, suggestionCandidates, dropSimilarPair, RATIFY_LINK_TYPES } from './similar-edges';
 export type { EdgeIO, SuggestionCandidate, RatifyLinkType } from './similar-edges';
-export { pca, pca2d, normalizeCoords, normalizeCoordsN, projectionFact } from './projection';
-export type { Projected, ProjectionFact } from './projection';
+export { pca, pcaWithBasis, pca2d, normalizeCoords, normalizeCoordsN, computeNormParams, applyNormParams, projectionFact, projectVector, LAYOUT_KEY, LAYOUT_SHARDS, layoutShardKey, layoutShardOf, projectionArtifacts } from './projection';
+export type { Projected, ProjectionFact, PcaBasis, NormParams, LayoutManifest, LayoutShard } from './projection';
 export { createDeclarationRegistry } from './declarations';
 export type { DeclarationKind, DeclarationRegistry, RegisterOptions } from './declarations';
 export type {

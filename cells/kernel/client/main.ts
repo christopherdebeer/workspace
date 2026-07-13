@@ -10,6 +10,7 @@
  * Served as an ESM module at /@c15r/kernel/app.js; cells import the URL.
  * Git truth: cells/kernel/client/main.ts in the platform repo.
  */
+import { resolve as resolveIntent } from '@parc/ui';
 
 /* ── session (shared across the origin) ─────────────────────────── */
 
@@ -464,33 +465,28 @@ export function hrefOf(e: FactEntry): string | null {
     .replace(/\$\{key\}/g, encodeURIComponent(e.key))
     .replace(/\$\{id\}/g, encodeURIComponent(id))
     .replace(/\$\{value\.([A-Za-z0-9_.]+)\}/g, (_, p: string) => String(pathInto(e.value, p) ?? ''));
-  if (decl?.href) return fill(decl.href);
-  // A type's declared `open` handler (ADR-0049, served in $types) is its
-  // canonical route — it was IGNORED here, so typed facts with real routes
-  // (machines: /m/${id} on @c15r/machine) fell through to the convention
-  // fallbacks, most degenerately "the board it's tagged onto".
-  const open = decl?.handlers?.open?.find((h) => h && (h.href || h.path));
-  if (open) {
-    if (open.href) return fill(open.href);
-    const m = /^@([^/]+)\/(.+)$/.exec(decl?.manager ?? '');
-    if (m && open.path) return cellUrl(m[1], m[2], fill(open.path));
-  }
-  // Convention fallbacks (the pre-_types routing). Origin-aware via cellUrl.
-  const t = e._meta?.type ?? null;
+  if (decl?.href) return fill(decl.href); // legacy flat template — a slice override may still carry one
+  // ADR-0044 Inc 4 (closing ADR-0042's routing fork): the ONE shared resolver
+  // (platform/ui/vocab `resolve`) replaces both the local handlers.open scan
+  // and the hardcoded lit/input/canvas convention fallbacks that used to sit
+  // here. Type SIGNALS cover the declared type, the key's prefix, and every
+  // tag's prefix — so a `canvas:X` tag routes through canvas's own declared
+  // open (`?canvas=${match}`), a `doc:` key or tag through lit's
+  // (`/r/doc:${match}`), and a capture through input's declared alternatives
+  // (`/r/log:${value.captured}`, else the input surface) — all data in each
+  // cell's types.json, no per-cell code in the kernel.
+  const h = resolveIntent(
+    { key: e.key, value: e.value, _meta: { type: e._meta?.type ?? null, tags: e._meta?.tags } },
+    'open',
+    (typeDecls ?? {}) as Parameters<typeof resolveIntent>[2],
+  );
+  if (h?.cellRef) return cellUrl(h.cellRef.owner || (cellAddress()?.owner ?? 'c15r'), h.cellRef.name, h.path ?? '');
+  if (h?.surface) return h.surface;
+  // The one convention with no declaration to live in yet: a `cell` fact's
+  // address IS its surface, and the cells service (tier-1, no types.json)
+  // owns that type. Folds away when the service federates a declaration.
   const v = (e.value ?? {}) as Record<string, unknown>;
-  const tags = e._meta?.tags ?? [];
-  const owner = cellAddress()?.owner ?? 'c15r';
-  if (e.key.startsWith('doc:')) return cellUrl(owner, 'lit', `/r/${encodeURIComponent(e.key).replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
-  if (t === 'capture' || e.key.startsWith('inbox/')) {
-    return typeof v.captured === 'string'
-      ? cellUrl(owner, 'lit', `/r/log:${encodeURIComponent(v.captured)}`)
-      : cellUrl(owner, 'input');
-  }
-  if (t === 'cell' && typeof v.address === 'string') return v.address;
-  const docTag = tags.find((x) => x.startsWith('doc:'));
-  if (docTag) return cellUrl(owner, 'lit', `/r/${encodeURIComponent(docTag).replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
-  const boardTag = tags.find((x) => x.startsWith('canvas:'));
-  if (boardTag) return cellUrl(owner, 'canvas', `?canvas=${encodeURIComponent(boardTag.slice(7))}`);
+  if ((e._meta?.type ?? null) === 'cell' && typeof v.address === 'string') return v.address;
   return null;
 }
 
@@ -641,6 +637,135 @@ export function createOutbox(
       flushedAt.clear();
       primingBuffer.clear();
       priming = false;
+    },
+  };
+}
+
+/* ── ADR-0053: the sync seam, Inc 2 — the Projection ─────────────────────
+ * The read half of the same failure class: every surface that shows live
+ * facts hand-rolls a change-feed cursor loop, and each seam (echo refetch,
+ * stale-revision apply, board-switch leakage) was one of the canvas's data
+ * bugs. The kernel owns the loop mechanics — the cursor, the ADR-0055
+ * scope, echo suppression against the bound outbox, the tick cadence.
+ * WHAT a change means stays with the caller: the apply callback keeps the
+ * shape (element vs placement vs edge) out of the kernel. */
+
+/** One change-feed event, as `workspace.changes` ships it (ADR-0055-scoped). */
+export interface ChangeEvent { op: string; key: string | null; rel?: string; to?: string }
+
+export interface Projection {
+  /** Record the initial load on the bound outbox: each entry is "already
+   *  persisted", so the feed's own echoes and the first save-sweep diff both
+   *  no-op against it. Seed with what a save WOULD write (the outbox rule) —
+   *  seeding raw stored values caused the boot write storm. */
+  seedInitial(entries: Iterable<{ key: string; value: unknown }>): void;
+  /** Called after any pump whose apply reported a change (and after a seed) —
+   *  render scheduling lives here, not inside the merge callbacks. */
+  subscribe(cb: () => void): () => void;
+  /** One cursor advance: read the scoped slice since the last seq, drop our
+   *  own echoes, hand the survivors to the apply callback. The first call
+   *  pins the cursor to head — history before the page opened is the
+   *  initial load's business, not the feed's. */
+  pump(): Promise<void>;
+  /** The tick loop. `intervalMs` is re-read every tick (adaptive cadence);
+   *  a hidden tab keeps ticking but reads nothing. */
+  start(): void;
+  stop(): void;
+  dispose(): void;
+}
+
+export function createProjection(
+  readFn: (target: string, input?: unknown) => Promise<unknown>,
+  outbox: Pick<Outbox, 'seed' | 'wroteRecently'>,
+  opts: {
+    /** The ADR-0055 slice `{prefixes, ops}`, re-read every pump — the scope
+     *  can move under a long-lived loop (drill navigation swaps boards).
+     *  Returning null skips the tick entirely. */
+    scope: () => { prefixes: string[]; ops: string[] } | null;
+    /** Merge surviving events into local state; return whether anything
+     *  changed. Prefix dispatch, the live-revision refetch, and the in-place
+     *  merge live HERE — the projection stays shape-agnostic. */
+    apply: (events: ChangeEvent[]) => boolean | Promise<boolean>;
+    intervalMs?: () => number;
+  },
+): Projection {
+  const subscribers = new Set<() => void>();
+  let cursor = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false;
+  let pumping = false;
+  const notify = (): void => {
+    for (const cb of subscribers) {
+      try { cb(); } catch { /* one bad subscriber must not starve the rest */ }
+    }
+  };
+
+  async function pump(): Promise<void> {
+    if (pumping) return; // one in-flight advance — overlap would re-apply a seq window
+    const scope = opts.scope();
+    if (!scope) return;
+    pumping = true;
+    try {
+      if (cursor === 0) {
+        cursor = ((await readFn('workspace.changes', { sinceSeq: 'head' })) as { seq: number }).seq;
+        return;
+      }
+      const res = (await readFn('workspace.changes', { sinceSeq: cursor, scope })) as {
+        events?: ChangeEvent[];
+        seq: number;
+      };
+      cursor = res.seq;
+      const events = (res.events ?? []).filter((ev) => {
+        // Graph events carry no fact write — pass through, the caller decides.
+        if (ev.op === 'link' || ev.op === 'unlink') return true;
+        // Belt-and-braces vs an older gateway: reads are not state changes.
+        if (ev.op !== 'write' && ev.op !== 'supersede') return false;
+        if (!ev.key) return false;
+        // Our own flushes echo straight back through the feed — skip them;
+        // the outbox seeds already hold exactly what we wrote.
+        return !outbox.wroteRecently(ev.key);
+      });
+      if (events.length && (await opts.apply(events))) notify();
+    } finally {
+      pumping = false;
+    }
+  }
+
+  const stop = (): void => {
+    running = false;
+    if (timer) { clearTimeout(timer); timer = undefined; }
+  };
+  const loop = (): void => {
+    timer = setTimeout(() => {
+      void (async () => {
+        try {
+          // A hidden tab does no substrate reads; the loop keeps its cadence.
+          if (typeof document === 'undefined' || !document.hidden) await pump();
+        } catch { /* offline — retry next tick */ }
+        if (running) loop();
+      })();
+    }, opts.intervalMs?.() ?? 6000);
+  };
+
+  return {
+    seedInitial: (entries) => {
+      for (const e of entries) outbox.seed(e.key, e.value);
+      notify();
+    },
+    subscribe: (cb) => {
+      subscribers.add(cb);
+      return () => { subscribers.delete(cb); };
+    },
+    pump,
+    start: () => {
+      if (running) return;
+      running = true;
+      loop();
+    },
+    stop,
+    dispose: () => {
+      stop();
+      subscribers.clear();
     },
   };
 }

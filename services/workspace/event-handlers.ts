@@ -10,6 +10,8 @@ import {
   type ObservedState,
   type StateStore,
   suggestionCandidates,
+  inferIngestionType,
+  type IngestionConfig,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { createServiceClient } from '../../platform/runtime/service-client';
@@ -425,10 +427,13 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // the rail's key-patterns cell-side.
         let deliverParams = params;
         const grants = (params as Record<string, unknown>).grants as { read?: unknown; write?: unknown } | undefined;
-        // Mint a per-run token for a models AGENT (work/decide) or a run CODE step
-        // (ADR-0026 work-code rail) — both call REAL tools as the owner, scoped to
-        // the rail's grants. The token rides in as `token` (models.agent / run.exec).
-        if (grants && (target.name === 'models' || target.name === 'run')) {
+        // Mint a per-run token for a models AGENT (work/decide), a run CODE step
+        // (ADR-0026 work-code rail), or a type-manager REACTION (ADR-0081 —
+        // e.g. @c15r/lit's decomposeMarkdown, delivered a scoped principal so
+        // it can write doc/doc-block facts + edges back through the gateway
+        // instead of needing direct substrate write IAM). The token rides in
+        // as `token`.
+        if (grants && (target.name === 'models' || target.name === 'run' || target.name === 'lit')) {
           const scopes: string[] = [];
           if (grants.read) scopes.push('workspace:read');
           if (grants.write) scopes.push('workspace:write');
@@ -717,10 +722,11 @@ export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHand
       }
       return;
     }
+    const contentType = typeof detail.contentType === 'string' ? detail.contentType : 'application/octet-stream';
     const value = {
       path: s3Key,
       s3Key,
-      contentType: typeof detail.contentType === 'string' ? detail.contentType : 'application/octet-stream',
+      contentType,
       bytes: typeof detail.bytes === 'number' ? detail.bytes : undefined,
       url: typeof detail.url === 'string' ? detail.url : undefined,
       cell: typeof detail.name === 'string' && typeof detail.owner === 'string' ? `@${detail.owner}/${detail.name}` : undefined,
@@ -731,8 +737,14 @@ export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHand
       content: typeof detail.content === 'string' ? detail.content : undefined,
       source: 'cells.putData',
     };
+    // ADR-0081: infer the fact's type from the blob's name/content-type instead
+    // of stamping every upload `file` — a `_config/ingestion` override (best-effort,
+    // same "config, not code" precedent as `_config/typography`) can extend the
+    // built-in table without a deploy.
+    const ingestionConfig = (await state.get(user, '_config/ingestion', writer).catch(() => null))?.value as IngestionConfig | undefined;
+    const inferredType = inferIngestionType(key, contentType, ingestionConfig ?? null);
     const entry = await state.put(
-      { scope: user, key: factKey, value, via: 'cells:data', type: 'file', tags: ['file', 'cell-data'] },
+      { scope: user, key: factKey, value, via: 'cells:data', type: inferredType, tags: ['file', 'cell-data'] },
       writer,
     );
     await ctx.events.emit('workspace.fact.written', { scope: user, key: factKey, revision: entry._meta.revision });

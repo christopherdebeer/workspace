@@ -147,8 +147,15 @@ export class PlatformStack extends cdk.Stack {
       // tripped the 15 s timeout, surfacing as gateway 502s. Lambda CPU scales with
       // memory; 1 GB (~4× CPU) brings a 4-fact batch to a couple seconds. 60 s
       // timeout gives margin for the daily tending pass over a large slice.
-      memorySize: 1024,
-      timeoutSeconds: 60,
+      // Bumped again (2026-07-11, ADR-0081 migration aftermath): `workspace.graph`
+      // computes the FULL derived edge projection server-side regardless of any
+      // caller-side limit (unlike `query`, it has no cursor to page through) —
+      // once the slice crossed a few thousand facts this alone started 502ing.
+      // 2 GB (~8x baseline CPU) + 120 s gives the same headroom the write path
+      // already has for a slice this size; the real fix (bounding the edge
+      // projection itself) is a follow-up, not a hotfix.
+      memorySize: 2048,
+      timeoutSeconds: 120,
       // Semantic search backend (ADR-0030). The bucket + per-slice indexes are
       // created at RUNTIME, create-if-absent (§3a — no CDK for them); only the
       // bucket name + region are wired here. VECTOR_EMBEDDER defaults to the
@@ -317,8 +324,11 @@ export class PlatformStack extends cdk.Stack {
       // so its timeout must outlast the workspace's; 256 MB also throttled its own
       // resolveTarget/scope work. Raise to 512 MB / 60 s so a slow downstream batch
       // no longer surfaces as a CloudFront 502 (telemetry 2026-06-25).
+      // Bumped again (2026-07-11, alongside the workspace 60s→120s bump for
+      // workspace.graph): must stay outlasting workspace's timeout or this
+      // service becomes the new bottleneck at exactly the same failure mode.
       memorySize: 512,
-      timeoutSeconds: 60,
+      timeoutSeconds: 150,
     });
 
     // ── Reflexive control plane (dynamic cells, tier 2) ──────────────
