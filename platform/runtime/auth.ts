@@ -39,6 +39,32 @@ export interface PrincipalPosture {
   adoptedAt?: string;
 }
 
+/**
+ * A delegation-chain claim (ADR-0024, the RFC 8693 `act` shape): `sub` names
+ * the ACTING principal at this hop, `act` nests the prior hop. The OUTERMOST
+ * claim is the leaf — the principal actually doing the work — and unwinding
+ * `act` reads "leaf, acting for …, acting for the subject". The token's
+ * subject (`mintedBy`/`Identity.user`) stays the authorization anchor; the
+ * chain is PROVENANCE, threaded into writer stamps, never into scope checks
+ * (scope already clamps at each exchange — delegation only attenuates).
+ */
+export interface ActClaim {
+  sub: string;
+  act?: ActClaim;
+}
+
+/** The chain unwound leaf-first: `['sub-agent', 'agent']` — for audit views. */
+export function unwindActChain(act: ActClaim | null | undefined): string[] {
+  const out: string[] = [];
+  for (let cur = act ?? undefined; cur; cur = cur.act) out.push(cur.sub);
+  return out;
+}
+
+/** The leaf actor — the principal a delegated write is attributed to (ADR-0024 §3). */
+export function leafActOf(identity: { act?: ActClaim } | null | undefined): string | null {
+  return identity?.act?.sub ?? null;
+}
+
 export interface Identity {
   /** Authenticated principal, e.g. a username. Undefined for anonymous calls. */
   user?: string;
@@ -68,6 +94,13 @@ export interface Identity {
   tokenId?: string;
   /** The adopted posture riding this session's token (ADR-0074), when any. */
   posture?: PrincipalPosture;
+  /**
+   * The delegation chain riding this session's token (ADR-0024), when the
+   * credential was produced by `auth.exchangeToken` — outermost = the leaf
+   * actor. Absent for root tokens (the principal acts as themselves).
+   * Provenance only: `user`/`scopes` still drive every authorization check.
+   */
+  act?: ActClaim;
   /**
    * True when identity resolution ERRORED (auth service unreachable/throwing)
    * rather than returning a clean verdict — the caller's credential was never

@@ -7,6 +7,27 @@
  * original so the OAuth/WebAuthn handlers port with minimal change.
  */
 import { randomUUID, randomBytes, createHash } from 'crypto';
+import type { ActClaim } from '../../platform/runtime/auth';
+
+export type { ActClaim };
+
+/** ADR-0024: how many delegation hops a chain may carry. Generous for any real
+ *  orchestrator-worker topology; a bound at all is the loop/runaway insurance. */
+export const MAX_DELEGATION_DEPTH = 8;
+
+/** Chain length (0 = root token, no chain). */
+export function chainDepth(act: ActClaim | null | undefined): number {
+  let n = 0;
+  for (let cur = act ?? undefined; cur; cur = cur.act) n++;
+  return n;
+}
+
+/** Every actor named in a chain — the loop guard's membership test. */
+export function chainActors(act: ActClaim | null | undefined): string[] {
+  const out: string[] = [];
+  for (let cur = act ?? undefined; cur; cur = cur.act) out.push(cur.sub);
+  return out;
+}
 
 // ─── Crypto helpers ──────────────────────────────────────────────
 
@@ -102,6 +123,9 @@ export interface MintTokenParams {
    * `expiresInSec`. Only meaningful when `withRefresh` is set.
    */
   refreshExpiresInSec?: number;
+  /** ADR-0024: the delegation chain this token carries (set by exchangeToken;
+   *  absent for root mints — the principal acts as themselves). */
+  act?: ActClaim | null;
 }
 
 export interface MintedToken {
@@ -135,6 +159,8 @@ export interface TokenInfo {
   effectiveScope?: string | null;
   /** The adopted posture (ADR-0074); null/absent ⇒ no posture (reads unbiased). */
   posture?: TokenPosture | null;
+  /** The delegation chain (ADR-0024); null/absent ⇒ a root token. */
+  act?: ActClaim | null;
   label: string | null;
   clientId: string | null;
   expiresAt: string | null;
@@ -149,6 +175,9 @@ export interface TokenSummary {
   revoked: boolean;
   expiresAt: string | null;
   createdAt: string;
+  /** The delegation chain (ADR-0024) — so the steward view can render
+   *  "X, acting for Y, acting for you". Absent ⇒ a root token. */
+  act?: ActClaim | null;
 }
 
 export interface RefreshResult {

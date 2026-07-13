@@ -1,7 +1,12 @@
 # ADR-0083 — Async, chunked decomposeMarkdown (the reindex pattern, applied to lit)
 
-- **Status:** Proposed 2026-07-12 (buffer — root cause fully diagnosed and grounded live,
-  fix sketched by direct analogy to a pattern already shipped; not yet built).
+- **Status:** Decided + built 2026-07-13 (cells/lit/tools.ts: sync fast-path for one-chunk docs;
+  larger docs dispatch a `_decompose/<slug>` status fact + a `decompose-run/<slug>/<cursor>` chain,
+  each step delivered back via the new `lit-decompose-chunk` subscription — one bounded chunk per
+  invocation, finish phase as its own step. The chunk-per-invocation chaining runs THROUGH the
+  substrate (fresh run-fact key per step, superseded after processing) rather than tier-1
+  EventBridge continuation events, since lit is a tier-2 cell: same reindex shape, cell-side
+  primitives. Proposed 2026-07-12.)
 - **Depends on:** ADR-0081 (typed file ingestion — `@c15r/lit.decomposeMarkdown`, the tool this
   fixes), ADR-0030/0031 (`workspace.reindex` — the async/chunked/continuation-event pattern this
   ADR proposes reusing, not inventing), ADR-0082 (the sibling RFC on `workspace.project`'s

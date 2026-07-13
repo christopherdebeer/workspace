@@ -14,6 +14,7 @@ import {
   MintedToken,
   TokenInfo,
   TokenPosture,
+  ActClaim,
   TokenSummary,
   RefreshResult,
   DeviceCode,
@@ -39,6 +40,7 @@ interface TokenRow {
   scope: string;
   effectiveScope?: string | null;
   posture?: TokenPosture | null;
+  act?: ActClaim | null;
   label: string | null;
   clientId: string | null;
   revoked: boolean;
@@ -186,6 +188,7 @@ export function createMemoryStore(): AuthStore {
         refreshHash,
         mintedBy: params.userId,
         scope: params.scope,
+        act: params.act ?? null,
         label: params.label ?? null,
         clientId: params.clientId ?? null,
         revoked: false,
@@ -214,6 +217,7 @@ export function createMemoryStore(): AuthStore {
         scope: t.scope,
         effectiveScope: t.effectiveScope ?? null,
         posture: t.posture ?? null,
+        act: t.act ?? null,
         label: t.label,
         clientId: t.clientId,
         expiresAt: t.expiresAt,
@@ -316,6 +320,7 @@ export function createMemoryStore(): AuthStore {
           revoked: t.revoked,
           expiresAt: t.expiresAt,
           createdAt: t.createdAt,
+          ...(t.act ? { act: t.act } : {}),
         }));
     },
 

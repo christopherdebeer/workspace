@@ -6,7 +6,7 @@
  */
 import type { ServiceHttpRequest, ServiceHttpResponse } from '../../platform/runtime';
 import { intersectScopes } from '../../platform/runtime';
-import { AuthStore, TokenPosture, generateToken, sha256, DEVICE_TTL_MS, REFRESH_TTL_MS } from './store';
+import { AuthStore, TokenPosture, generateToken, sha256, DEVICE_TTL_MS, REFRESH_TTL_MS, type ActClaim } from './store';
 
 /**
  * A cell-host redirect (`https://<owner>-<name>.<cellDomain>/…`) means the token
@@ -566,6 +566,9 @@ export interface ValidatedToken {
   /** The adopted posture (ADR-0074), threaded into the identity so reads can
    *  resolve through the principal; null ⇒ no posture. */
   posture: TokenPosture | null;
+  /** The delegation chain (ADR-0024) — outermost = leaf actor; null ⇒ a root
+   *  token (the subject acts as themselves). Provenance, never authorization. */
+  act: ActClaim | null;
 }
 
 /**
@@ -620,5 +623,6 @@ export async function validateBearer(token: string, store: AuthStore): Promise<V
     tokenId: tok.id,
     clientId: tok.clientId,
     posture: tok.posture ?? null,
+    act: tok.act ?? null,
   };
 }

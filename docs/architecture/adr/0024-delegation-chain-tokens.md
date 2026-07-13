@@ -1,11 +1,18 @@
 # ADR-0024 — Delegation-chain tokens (RFC 8693 `sub`+`act`)
 
-- **Status:** Proposed (buffer, not built). **Reconciled 2026-07-09:** partially realised
+- **Status:** Decided + built 2026-07-13. **Reconciled 2026-07-09:** partially realised
   and reassessed by **ADR-0074** — a minted child can now be POSTURED by its minter
   (delegation attenuates attention, not just scope), and mint-time scope narrowing already
-  enforces the ceiling. Remaining here: the chain PROVENANCE record (`sub` + nested `act`)
-  and depth-aware enforcement. First of the two-ahead sketch buffer ahead of the accepted
-  line. Captures the next decision so the direction is legible before code exists.
+  enforces the ceiling. **Built 2026-07-13:** `auth.exchangeToken` (RFC 8693 shape) mints a
+  child from a presented parent token — scope clamps to min(requested, parent grant) via the
+  existing `intersectScopes`, and the child carries `act` ({sub: actor, act: parentChain}),
+  outermost = leaf. Depth bound (MAX_DELEGATION_DEPTH = 8) + loop guard (an actor may not
+  reappear; nor may the subject). The chain threads token → `validateBearer` →
+  `Identity.act` → command envelopes, and the workspace writer stamp reads the LEAF act
+  (`leafActOf`, platform/runtime/state.ts) while authorization stays anchored to the subject
+  (`Identity.user`). `unwindActChain` serves audit views; `TokenSummary.act` surfaces the
+  chain in the steward list. Token format stays opaque server-validated (the first open
+  question, answered conservatively — a signed JWT can come later without schema change).
 - **Date:** 2026-06-25
 - **Context:** ADR-0022 made a token a principal acting on behalf of `c15r`, but only **one writer** is
   stamped per fact. When that embodiment spawns a sub-agent (an orchestrator-worker hop, an MCP cell

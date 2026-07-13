@@ -249,6 +249,9 @@ export function createDynamoStore(tableName: string): AuthStore {
         tokenHash,
         mintedBy: params.userId,
         scope: params.scope,
+        // ADR-0024: the delegation chain rides both rows (TOKEN# for
+        // validation, USERTOK# for the steward list).
+        ...(params.act ? { act: params.act } : {}),
         label: params.label ?? null,
         clientId: params.clientId ?? null,
         revoked: false,
@@ -286,6 +289,7 @@ export function createDynamoStore(tableName: string): AuthStore {
         scope: i.scope,
         effectiveScope: i.effectiveScope ?? null,
         posture: i.posture ?? null,
+        act: (i.act as TokenInfo['act']) ?? null,
         label: i.label ?? null,
         clientId: i.clientId ?? null,
         expiresAt: i.expiresAt ?? null,
@@ -450,6 +454,7 @@ export function createDynamoStore(tableName: string): AuthStore {
           revoked: !!i.revoked,
           expiresAt: i.expiresAt ?? null,
           createdAt: i.createdAt,
+          ...(i.act ? { act: i.act as TokenSummary['act'] } : {}),
         }));
     },
 

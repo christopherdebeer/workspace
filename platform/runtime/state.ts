@@ -40,6 +40,7 @@
  * mirroring how the `auth` cell separates `AuthStore` from its backends).
  */
 import type { ActorClass, Identity } from './auth';
+import { leafActOf } from './auth';
 import { resolveType, type Type } from './type-schema';
 import { layer } from './resolution';
 import { matchesSelector } from './selector';
@@ -1621,7 +1622,10 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   const api: ObservedState = {
     async put(input: WriteInput, identity?: Identity): Promise<Entry> {
       if (!input?.scope || !input?.key) throw new Error('state.put requires `scope` and `key`');
-      const writer = identity?.user ?? null;
+      // ADR-0024 §3: a delegated credential stamps its LEAF actor — the
+      // sub-agent that actually wrote — while authorization stays anchored to
+      // identity.user (the subject). Root tokens stamp the user, unchanged.
+      const writer = leafActOf(identity) ?? identity?.user ?? null;
       const now = new Date();
       const nowMs = now.getTime();
       const nowIso = now.toISOString();
@@ -1840,7 +1844,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         to,
         strength: strength ?? null,
         createdAt: now.toISOString(),
-        writer: identity?.user ?? null,
+        writer: leafActOf(identity) ?? identity?.user ?? null,
       };
       await store.putEdge(edge);
       // Linking is attention on the source fact — both the write-ledger event
@@ -2118,7 +2122,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         ...rec,
         superseded: true,
         supersededBy: by,
-        writer: identity?.user ?? rec.writer,
+        writer: leafActOf(identity) ?? identity?.user ?? rec.writer,
         updatedAt: nowIso,
         seq,
         touches: bumpTouches(rec.touches, identity ? actorOf(identity) : actorClassOf(rec.writer), 'write'),

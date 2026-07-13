@@ -63,6 +63,8 @@ interface ValidatedToken {
   clientId: string | null;
   /** The token's adopted posture (ADR-0074); absent/null ⇒ none. */
   posture?: { goal?: string; lens?: string; salience?: Record<string, number>; adoptedAt?: string } | null;
+  /** The delegation chain (ADR-0024); absent/null ⇒ a root token. */
+  act?: import('./auth').ActClaim | null;
 }
 
 /** Shape returned by the auth cell's `refreshSession` command (edge silent-refresh). */
@@ -127,11 +129,12 @@ function identityFromValidated(validated: ValidatedToken): Identity {
     grantScopes: grant,
     ...(validated.tokenId ? { tokenId: validated.tokenId } : {}),
     ...(validated.posture ? { posture: validated.posture } : {}),
+    ...(validated.act ? { act: validated.act } : {}),
     // Mediation (ADR-0022 × ADR-0050): a DCR-minted client token is a distinct
     // embodiment acting on-behalf-of — its attention weighs as `agent`, even
     // though its subject is the user. A first-party session (no clientId — the
     // browser/passkey path, incl. cookie silent-refresh) is the human.
-    actor: validated.clientId ? 'agent' : 'human',
+    actor: validated.clientId || validated.act ? 'agent' : 'human',
   };
 }
 
@@ -249,6 +252,7 @@ export function defineService(definition: ServiceDefinition) {
       tokenId: opts.identity.tokenId,
       actor: opts.identity.actor,
       posture: opts.identity.posture,
+      act: opts.identity.act,
     });
     return {
       logger,
@@ -311,6 +315,7 @@ export function defineService(definition: ServiceDefinition) {
           ...(event.tokenId ? { tokenId: event.tokenId } : {}),
           ...(event.actor ? { actor: event.actor } : {}),
           ...(event.posture ? { posture: event.posture } : {}),
+          ...(event.act ? { act: event.act } : {}),
         },
       });
       try {

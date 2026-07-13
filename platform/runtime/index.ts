@@ -23,8 +23,10 @@ export {
   intersectScopePatterns,
   intersectScopes,
   ServiceAuthError,
+  unwindActChain,
+  leafActOf,
 } from './auth';
-export type { Identity } from './auth';
+export type { Identity, ActClaim } from './auth';
 export { createEvents, __setEventBridge } from './events';
 export type { Events } from './events';
 export {

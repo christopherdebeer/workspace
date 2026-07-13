@@ -7,7 +7,7 @@
  * events or queues for fan-out and long-running work.
  */
 import type { Lambda } from 'aws-sdk';
-import type { ActorClass, PrincipalPosture } from './auth';
+import type { ActorClass, PrincipalPosture, ActClaim } from './auth';
 
 /** Envelope recognised by `defineService` to route a direct invoke to a command. */
 export interface CommandEnvelope {
@@ -36,6 +36,9 @@ export interface CommandEnvelope {
   /** The caller's adopted posture (ADR-0074), propagated so a downstream read
    *  resolves through the same principal the edge validated. */
   posture?: PrincipalPosture;
+  /** The caller's delegation chain (ADR-0024), propagated so writer stamps
+   *  downstream still attribute the LEAF actor across service hops. */
+  act?: ActClaim;
 }
 
 export interface ServiceClientOptions {
@@ -47,6 +50,7 @@ export interface ServiceClientOptions {
   tokenId?: string;
   actor?: ActorClass;
   posture?: PrincipalPosture;
+  act?: ActClaim;
 }
 
 export class ServiceInvokeError extends Error {
@@ -96,6 +100,7 @@ export function createServiceClient(options: ServiceClientOptions) {
           tokenId: options.tokenId,
           actor: options.actor,
           posture: options.posture,
+          act: options.act,
         };
         const result = await getClient()
           .invoke({
