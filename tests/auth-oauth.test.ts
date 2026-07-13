@@ -564,6 +564,85 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
   });
 });
 
+describe('connected clients are delegation actors from mint (ADR-0024 §code-flow)', () => {
+  // Drive the full DCR → consent → code → token flow and return the token body.
+  async function codeFlow(store: ReturnType<typeof createMemoryStore>, opts: { redirectUri: string; clientName?: string }) {
+    const dcr = await handleDCR(
+      makeReq({ path: '/oauth/register', body: { redirect_uris: [opts.redirectUri], client_name: opts.clientName, token_endpoint_auth_method: 'none' } }),
+      store,
+    );
+    const clientId = (dcr.body as { client_id: string }).client_id;
+    await store.createUser('u1', 'alice').catch(() => undefined); // idempotent across calls
+    const sessionId = await store.createSession('u1');
+    const verifier = 'verifier-actor-1';
+    const consent = await handleConsent(
+      makeReq({
+        path: '/oauth/consent',
+        body: {
+          sessionId, clientId, redirectUri: opts.redirectUri,
+          codeChallenge: sha256(verifier), codeChallengeMethod: 'S256', scope: 'workspace:read',
+        },
+      }),
+      store,
+      CONFIG,
+    );
+    const code = new URL((consent.body as { redirect: string }).redirect).searchParams.get('code')!;
+    const tokenRes = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: 'authorization_code', code, redirect_uri: opts.redirectUri, code_verifier: verifier, client_id: clientId } }),
+      store,
+      CONFIG,
+    );
+    return tokenRes.body as { access_token: string; refresh_token?: string };
+  }
+
+  it('a foreign-origin client (Claude, ChatGPT) mints a chain-carrying token; the platform SPA stays root', async () => {
+    const store = createMemoryStore();
+
+    // Claude.ai connecting: foreign origin + registered name → named actor.
+    const claude = await codeFlow(store, { redirectUri: 'https://claude.ai/api/mcp/auth_callback', clientName: 'Claude' });
+    const vClaude = await validateBearer(claude.access_token, store);
+    expect(vClaude).toMatchObject({ userId: 'alice', act: { sub: 'client:claude' } });
+
+    // ChatGPT connecting: a DIFFERENT actor — the provenance distinction that
+    // was previously flattened to the user.
+    const chatgpt = await codeFlow(store, { redirectUri: 'https://chatgpt.com/connector_platform_oauth_redirect', clientName: 'ChatGPT' });
+    const vGpt = await validateBearer(chatgpt.access_token, store);
+    expect(vGpt?.act).toEqual({ sub: 'client:chatgpt' });
+
+    // The platform's own SPA (same origin as the AS): the human driving a
+    // first-party surface IS the user — no actor.
+    const spa = await codeFlow(store, { redirectUri: 'https://auth.example.com/@c15r/home' });
+    const vSpa = await validateBearer(spa.access_token, store);
+    expect(vSpa?.act).toBeNull();
+  });
+
+  it('the chain SURVIVES refresh — connected clients refresh constantly', async () => {
+    const store = createMemoryStore();
+    const tok = await codeFlow(store, { redirectUri: 'https://claude.ai/api/mcp/auth_callback', clientName: 'Claude' });
+    expect(tok.refresh_token).toBeTruthy();
+
+    const refreshed = await handleToken(
+      makeReq({ path: '/oauth/token', body: { grant_type: 'refresh_token', refresh_token: tok.refresh_token } }),
+      store,
+      CONFIG,
+    );
+    const v = await validateBearer((refreshed.body as { access_token: string }).access_token, store);
+    expect(v?.act).toEqual({ sub: 'client:claude' }); // NOT dropped by the re-mint
+  });
+
+  it('a cell-host redirect names the CELL as the actor', async () => {
+    process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+    try {
+      const store = createMemoryStore();
+      const tok = await codeFlow(store, { redirectUri: 'https://c15r-notes.on.parc.land/cb', clientName: 'notes cell' });
+      const v = await validateBearer(tok.access_token, store);
+      expect(v?.act).toEqual({ sub: 'cell:c15r/notes' });
+    } finally {
+      delete process.env.CELL_DOMAIN_SUFFIX;
+    }
+  });
+});
+
 describe('RFC 8693 token exchange on /oauth/token (ADR-0024 delegation)', () => {
   const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 

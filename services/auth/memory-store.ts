@@ -54,6 +54,8 @@ interface RefreshRow {
   mintedBy: string;
   scope: string;
   clientId: string | null;
+  /** ADR-0024: the chain the refreshed access token must keep carrying. */
+  act?: ActClaim | null;
   expiresAt: string;
 }
 
@@ -197,12 +199,16 @@ export function createMemoryStore(): AuthStore {
       });
       if (refreshHash) {
         // Self-contained, independently-expiring refresh row (mirrors Dynamo).
+        // Carries the act chain (ADR-0024) so a refreshed access token keeps
+        // its delegation actor — connected clients refresh constantly, and the
+        // chain must survive every re-mint.
         refreshRows.set(refreshHash, {
           tokenId: id,
           tokenHash,
           mintedBy: params.userId,
           scope: params.scope,
           clientId: params.clientId ?? null,
+          act: params.act ?? null,
           expiresAt: isoIn((params.refreshExpiresInSec ?? REFRESH_TTL_MS / 1000) * 1000),
         });
       }
@@ -272,6 +278,7 @@ export function createMemoryStore(): AuthStore {
         userId: ref.mintedBy,
         scope: ref.scope,
         clientId: ref.clientId ?? undefined,
+        act: ref.act ?? undefined, // the delegation chain survives refresh (ADR-0024)
         expiresInSec: newExpiresInSec,
       });
       const newHash = sha256(minted.token);

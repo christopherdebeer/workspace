@@ -74,6 +74,43 @@ function cellFromRedirect(redirectUri: string | undefined): { owner: string; nam
   return null;
 }
 
+/** A stable, readable actor handle from a registered client name ("Claude" → "claude"). */
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * The delegation actor a code-flow token should carry (ADR-0024), decided by
+ * where its redirect goes:
+ *   - same origin as the AS → the platform's own SPA — the human driving a
+ *     first-party surface. No actor: the token IS the user, writes stamp them.
+ *   - a cell host (model A, host-isolated) → software acting as the user —
+ *     actor `cell:<owner>/<name>`.
+ *   - any foreign origin (claude.ai, chatgpt.com, a CLI callback, …) → a
+ *     connected client acting on the user's behalf — actor `client:<name>`.
+ * The chain is PROVENANCE only: the subject stays the consenting human, every
+ * scope check is unchanged — but facts written through Claude vs ChatGPT now
+ * stamp differently instead of re-flattening to the user.
+ */
+export function delegationActorForRedirect(
+  redirectUri: string | undefined,
+  asOrigin: string,
+  clientName: string | null,
+  clientId: string,
+): string | null {
+  if (!redirectUri) return null;
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return null;
+  }
+  if (`${u.protocol}//${u.host}` === asOrigin) return null; // first-party SPA — the human themselves
+  const cell = cellFromRedirect(redirectUri);
+  if (cell) return `cell:${cell.owner}/${cell.name}`;
+  return `client:${clientName ? slugify(clientName) : clientId}`;
+}
+
 export interface OAuthConfig {
   serverName: string;
   serverDescription?: string;
@@ -439,14 +476,21 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       withRefresh = refreshLifetime > accessExpiry; // a sub-access grant is one short token
     }
 
+    // ADR-0024: a connected client is an ACTOR acting for the user, and the
+    // token says so from mint — a foreign-origin redirect (Claude, ChatGPT, a
+    // cell host) yields a depth-1 chain, while the platform's own SPA stays a
+    // root credential (the human driving first-party surfaces IS the user).
+    const clientRec = await store.getOAuthClient(authCode.clientId);
+    const actor = delegationActorForRedirect(authCode.redirectUri, originOf(req), clientRec?.clientName ?? null, authCode.clientId);
     const result = await store.mintToken({
       userId: authCode.userId,
       scope: effectiveScope,
-      label: `OAuth: ${authCode.clientId}`,
+      label: `OAuth: ${clientRec?.clientName ?? authCode.clientId}`,
       clientId: authCode.clientId,
       expiresInSec: accessExpiry,
       withRefresh,
       refreshExpiresInSec: refreshLifetime,
+      ...(actor ? { act: { sub: actor } } : {}),
     });
     console.log('[oauth] token: issued', { clientId: authCode.clientId, scope: effectiveScope, capped: !!ceiling, grantSecs: grant, resource: authCode.resource });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
