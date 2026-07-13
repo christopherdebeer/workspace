@@ -1,7 +1,8 @@
 # ADR-0053 — One sync seam: the kernel owns projection and the outbox
 
-- **Status:** Accepted (Inc 1) — the outbox shipped and is live in the lit client
-  (`cells/lit/client/lib/outbox.ts`) and canvas storage; later increments open.
+- **Status:** Accepted (Inc 1–2 built) — the outbox shipped and is live in the lit
+  client (`cells/lit/client/lib/outbox.ts`) and canvas storage; the projection
+  (Inc 2, 2026-07-13) shipped in the kernel with canvas live-sync on it; Inc 3 open.
   Status was stale (“implementing now”); reconciled by the 2026-07-09 ledger scan.
 - **Depends on:** ADR-0017 (kernel as the shared client), ADR-0044 (distill the
   substrate), ADR-0048 (read shaping). Repays the bug class documented in
@@ -77,6 +78,15 @@ same factory so headless verification keeps working.
    intended — the canvas's current semantics ARE the spec; the harness suites
    must stay green.
 2. Projection in the kernel + canvas element/placement live-sync on it.
+   **Built 2026-07-13**: `createProjection(read, outbox, {scope, apply, intervalMs})`
+   in the kernel owns the cursor loop — the ADR-0055 `{prefixes, ops}` scope
+   (re-read every pump, so drill navigation moves it), echo suppression via the
+   bound outbox's `wroteRecently`, the adaptive tick cadence, and `seedInitial`
+   (initial load → outbox seeds). Canvas's inline tick loop in `storage.ts` is
+   gone: the element/placement/edge dispatch, live-revision refetch, and
+   in-place merges stay canvas-side as the apply callback; render scheduling
+   moved to the projection subscription. The harness kernel-stub mirrors the
+   factory; suites stayed green (735 tests, verify-edge-fixes all-pass).
 3. `lit` and `home` migrate opportunistically; new cells start on the seam.
 
 ## Costs & open questions

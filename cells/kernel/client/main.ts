@@ -641,6 +641,135 @@ export function createOutbox(
   };
 }
 
+/* ── ADR-0053: the sync seam, Inc 2 — the Projection ─────────────────────
+ * The read half of the same failure class: every surface that shows live
+ * facts hand-rolls a change-feed cursor loop, and each seam (echo refetch,
+ * stale-revision apply, board-switch leakage) was one of the canvas's data
+ * bugs. The kernel owns the loop mechanics — the cursor, the ADR-0055
+ * scope, echo suppression against the bound outbox, the tick cadence.
+ * WHAT a change means stays with the caller: the apply callback keeps the
+ * shape (element vs placement vs edge) out of the kernel. */
+
+/** One change-feed event, as `workspace.changes` ships it (ADR-0055-scoped). */
+export interface ChangeEvent { op: string; key: string | null; rel?: string; to?: string }
+
+export interface Projection {
+  /** Record the initial load on the bound outbox: each entry is "already
+   *  persisted", so the feed's own echoes and the first save-sweep diff both
+   *  no-op against it. Seed with what a save WOULD write (the outbox rule) —
+   *  seeding raw stored values caused the boot write storm. */
+  seedInitial(entries: Iterable<{ key: string; value: unknown }>): void;
+  /** Called after any pump whose apply reported a change (and after a seed) —
+   *  render scheduling lives here, not inside the merge callbacks. */
+  subscribe(cb: () => void): () => void;
+  /** One cursor advance: read the scoped slice since the last seq, drop our
+   *  own echoes, hand the survivors to the apply callback. The first call
+   *  pins the cursor to head — history before the page opened is the
+   *  initial load's business, not the feed's. */
+  pump(): Promise<void>;
+  /** The tick loop. `intervalMs` is re-read every tick (adaptive cadence);
+   *  a hidden tab keeps ticking but reads nothing. */
+  start(): void;
+  stop(): void;
+  dispose(): void;
+}
+
+export function createProjection(
+  readFn: (target: string, input?: unknown) => Promise<unknown>,
+  outbox: Pick<Outbox, 'seed' | 'wroteRecently'>,
+  opts: {
+    /** The ADR-0055 slice `{prefixes, ops}`, re-read every pump — the scope
+     *  can move under a long-lived loop (drill navigation swaps boards).
+     *  Returning null skips the tick entirely. */
+    scope: () => { prefixes: string[]; ops: string[] } | null;
+    /** Merge surviving events into local state; return whether anything
+     *  changed. Prefix dispatch, the live-revision refetch, and the in-place
+     *  merge live HERE — the projection stays shape-agnostic. */
+    apply: (events: ChangeEvent[]) => boolean | Promise<boolean>;
+    intervalMs?: () => number;
+  },
+): Projection {
+  const subscribers = new Set<() => void>();
+  let cursor = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false;
+  let pumping = false;
+  const notify = (): void => {
+    for (const cb of subscribers) {
+      try { cb(); } catch { /* one bad subscriber must not starve the rest */ }
+    }
+  };
+
+  async function pump(): Promise<void> {
+    if (pumping) return; // one in-flight advance — overlap would re-apply a seq window
+    const scope = opts.scope();
+    if (!scope) return;
+    pumping = true;
+    try {
+      if (cursor === 0) {
+        cursor = ((await readFn('workspace.changes', { sinceSeq: 'head' })) as { seq: number }).seq;
+        return;
+      }
+      const res = (await readFn('workspace.changes', { sinceSeq: cursor, scope })) as {
+        events?: ChangeEvent[];
+        seq: number;
+      };
+      cursor = res.seq;
+      const events = (res.events ?? []).filter((ev) => {
+        // Graph events carry no fact write — pass through, the caller decides.
+        if (ev.op === 'link' || ev.op === 'unlink') return true;
+        // Belt-and-braces vs an older gateway: reads are not state changes.
+        if (ev.op !== 'write' && ev.op !== 'supersede') return false;
+        if (!ev.key) return false;
+        // Our own flushes echo straight back through the feed — skip them;
+        // the outbox seeds already hold exactly what we wrote.
+        return !outbox.wroteRecently(ev.key);
+      });
+      if (events.length && (await opts.apply(events))) notify();
+    } finally {
+      pumping = false;
+    }
+  }
+
+  const stop = (): void => {
+    running = false;
+    if (timer) { clearTimeout(timer); timer = undefined; }
+  };
+  const loop = (): void => {
+    timer = setTimeout(() => {
+      void (async () => {
+        try {
+          // A hidden tab does no substrate reads; the loop keeps its cadence.
+          if (typeof document === 'undefined' || !document.hidden) await pump();
+        } catch { /* offline — retry next tick */ }
+        if (running) loop();
+      })();
+    }, opts.intervalMs?.() ?? 6000);
+  };
+
+  return {
+    seedInitial: (entries) => {
+      for (const e of entries) outbox.seed(e.key, e.value);
+      notify();
+    },
+    subscribe: (cb) => {
+      subscribers.add(cb);
+      return () => { subscribers.delete(cb); };
+    },
+    pump,
+    start: () => {
+      if (running) return;
+      running = true;
+      loop();
+    },
+    stop,
+    dispose: () => {
+      stop();
+      subscribers.clear();
+    },
+  };
+}
+
 /* ── theme tokens (one palette for userland) ────────────────────── */
 
 export function injectTheme(): void {

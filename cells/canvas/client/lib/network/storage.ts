@@ -18,7 +18,7 @@ import { ensureAuth, accessToken, isAuthed } from './auth.ts';
 import { startSalience } from './salience.ts';
 import { registerSubstrateTypes, loadRendererFacts } from '../elements/substrateTypes.ts';
 import { elementRegistry } from '../elements/elementRegistry.ts';
-import { loadTypes, titleOf, hrefOf, createOutbox, stableStringify } from 'https://parc.land/@c15r/kernel/app.js';
+import { loadTypes, titleOf, hrefOf, createOutbox, createProjection, stableStringify } from 'https://parc.land/@c15r/kernel/app.js';
 import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY } from 'd3-force';
 import { installImagePaste } from './imagePaste.ts';
 import { sanitizeElementGeometry } from '../geometry.ts';
@@ -39,6 +39,42 @@ const outbox = createOutbox(act as (t: string, i: Record<string, unknown>) => Pr
   onState: (state) => {
     try { window.dispatchEvent(new CustomEvent('parc:save-state', { detail: { state } })); } catch { /* non-DOM */ }
   },
+});
+
+/* ── ADR-0053 Inc 2: the read half lives in the kernel's Projection ───────
+ * The change-feed cursor loop, the ADR-0055 scope, echo suppression, and the
+ * adaptive cadence were the inline tail of this file; the kernel owns them
+ * now. This file keeps what is CANVAS-shaped: the element-vs-placement-vs-
+ * edge dispatch, the live-revision refetch, and the in-place merges. */
+type ChangeEvent = { op: string; key: string | null; rel?: string; to?: string };
+let lastActivity = Date.now();
+const projection = createProjection(read as (t: string, i?: unknown) => Promise<unknown>, outbox, {
+  // One loop per page, but boards change under it (drill navigation) — the
+  // scope is re-read every pump, keyed to the CURRENT board.
+  scope: () => {
+    const cc = typeof window !== 'undefined' ? (window as { CC?: any }).CC : undefined;
+    const cid = cc?.canvasState?.canvasId ?? '';
+    if (!cc || !cid) return null;
+    // ADR-0055 Inc 3: the server ships only this board's slice — element
+    // facts + board-space keys, state-changing ops only — instead of the
+    // whole workspace firehose filtered client-side. An idle board's tick
+    // is an empty page (seq still advances).
+    return {
+      prefixes: ['el:', `_canvas/${cid}/`],
+      ops: SHOW_LINK_EDGES ? ['write', 'supersede', 'link', 'unlink'] : ['write', 'supersede'],
+    };
+  },
+  apply: (events) => applyBoardEvents(events),
+  // Adaptive cadence: 6s while the human is here, 30s once they've been idle
+  // a couple of minutes — an untouched board must not poll at edit speed.
+  intervalMs: () => (Date.now() - lastActivity < 120_000 ? 6000 : 30_000),
+});
+projection.subscribe(() => {
+  const cc = typeof window !== 'undefined' ? (window as { CC?: any }).CC : undefined;
+  if (cc) {
+    cc.requestRender();
+    cc.requestEdgeUpdate();
+  }
 });
 
 /** Hydrate boot calls this BEFORE constructing the controller: the first
@@ -742,14 +778,16 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     const prefix = `_canvas/${cid}/`;
     const placements = new Map<string, Record<string, unknown>>();
     const edgeEntries: Array<{ key: string; value: any }> = [];
+    const placementSeeds: Array<{ key: string; value: unknown }> = [];
     for (const e of deco.entries ?? []) {
       const sub = e.key.slice(prefix.length);
       if (sub.startsWith('edge:')) edgeEntries.push(e);
       else {
-        outbox.seed(e.key, e.value);
+        placementSeeds.push({ key: e.key, value: e.value });
         placements.set(sub, (e.value ?? {}) as Record<string, unknown>);
       }
     }
+    projection.seedInitial(placementSeeds); // the initial load seeds the outbox (ADR-0053 Inc 2)
 
     // Reserved prefixes are the board's OWN data (placements, vocabulary,
     // type decls) — never board members, whatever the membership query says.
@@ -782,6 +820,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     // Assemble elements; record stored meta + salience for the seams.
     const placed: Array<{ id: string; x: number; y: number; w: number; h: number }> = [];
     const unplaced: any[] = [];
+    const elementSeeds: Array<{ key: string; value: unknown }> = [];
     const elements = (els.entries ?? []).map((e) => {
       factMeta.set(e.key, { type: e._meta?.type ?? null, tags: e._meta?.tags ?? [] });
       if (typeof e._meta?.score === 'number') salienceByKey.set(e.key, e._meta.score);
@@ -799,8 +838,8 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       // its value otherwise diffs forever (domain strips placement fields),
       // so every open rewrote the whole board (the throttling storm).
       const seed = elementPayloads(el);
-      outbox.seed(e.key, seed.domain);
-      if (pl) outbox.seed(`${prefix}${e.key}`, seed.placement);
+      elementSeeds.push({ key: e.key, value: seed.domain });
+      if (pl) elementSeeds.push({ key: `${prefix}${e.key}`, value: seed.placement });
       if (pl && typeof pl.x === 'number')
         placed.push({
           id: el.id,
@@ -812,6 +851,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
       else unplaced.push(el);
       return el;
     });
+    projection.seedInitial(elementSeeds); // seeds → outbox: the change feed's own echoes no-op against these
 
     // Synthesized placement: a DETERMINISTIC force layout (d3-force).
     //   - pinned items join as FIXED nodes — gravity toward the human's pins
@@ -957,14 +997,13 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
 }
 
 /* ------------------------------------------------------------------ */
-/*  Live sync — the open board tails the change feed                   */
+/*  Live sync — the kernel Projection tails the change feed            */
 /*  (canvas horizon A: remote facts/placements/links merge in-place;   */
 /*   self-echoes dedup against the outbox seeds; reads go via `query`   */
 /*   so syncing never inflates salience.)                              */
 /* ------------------------------------------------------------------ */
 
 let liveSyncStarted = false;
-let liveCursor = 0;
 
 async function fetchFact(key: string): Promise<{ key: string; value: any; _meta: any } | null> {
   const res = await read<{ entries: Array<{ key: string; value: any; _meta: any }> }>('workspace.query', {
@@ -1330,7 +1369,45 @@ function startFlightRecorder(): void {
   window.addEventListener('pagehide', () => record(true));
 }
 
-export function startLiveSync(cid: string): void {
+/** The canvas-shaped half of a pump: events arrive echo-suppressed and
+ *  ADR-0055-scoped from the kernel projection; this dispatches by key prefix,
+ *  refetches the live revision, and merges in place. Render scheduling lives
+ *  in the projection subscription. */
+async function applyBoardEvents(events: ChangeEvent[]): Promise<boolean> {
+  const cc = (window as { CC?: any }).CC;
+  const cid = cc?.canvasState?.canvasId ?? '';
+  if (!cc || !cid) return false;
+  const elKeys = new Set<string>();
+  const placeKeys = new Set<string>();
+  let edgesDirty = false;
+  for (const ev of events) {
+    if (ev.op === 'link' || ev.op === 'unlink') {
+      // Link events carry endpoints and arrive pre-scoped to this slice
+      // (key OR `to` matches) — with projection on, that means our edge
+      // set may be stale; with it off they don't render.
+      if (SHOW_LINK_EDGES) edgesDirty = true;
+      continue;
+    }
+    if (!ev.key) continue;
+    if (ev.key.startsWith(`_canvas/${cid}/edge:`)) edgesDirty = true;
+    else if (ev.key.startsWith(`_canvas/${cid}/el:`)) placeKeys.add(ev.key);
+    else if (ev.key.startsWith('el:')) elKeys.add(ev.key);
+  }
+  let dirty = false;
+  for (const key of elKeys) {
+    if (applyRemoteElement(cc, key, await fetchFact(key))) dirty = true;
+  }
+  for (const key of placeKeys) {
+    if (applyRemotePlacement(cc, key, await fetchFact(key))) dirty = true;
+  }
+  if (edgesDirty) {
+    await rebuildEdgesLive(cc, cid);
+    dirty = true;
+  }
+  return dirty;
+}
+
+export function startLiveSync(_cid: string): void {
   if (liveSyncStarted || typeof window === 'undefined') return;
   // Diagnostic kill-switch: ?nosync=1 disables the change-feed poller so a crash
   // can be bisected (is the live merge implicated, or purely local render?).
@@ -1341,77 +1418,8 @@ export function startLiveSync(cid: string): void {
     }
   } catch { /* no URL */ }
   liveSyncStarted = true;
-  // Adaptive cadence: 6s while the human is here, 30s once they've been idle
-  // a couple of minutes — an untouched board must not poll at edit speed.
-  let lastActivity = Date.now();
   const bump = (): void => { lastActivity = Date.now(); };
   window.addEventListener('pointerdown', bump, { passive: true });
   window.addEventListener('keydown', bump, { passive: true });
-  const tick = async (): Promise<void> => {
-    const cc = (window as { CC?: any }).CC;
-    // One poller per page, but boards change under it (drill navigation) —
-    // key every filter to the CURRENT board, not the closed-over first one.
-    const cid = cc?.canvasState?.canvasId ?? '';
-    if (cc && cid && !document.hidden) {
-      try {
-        if (liveCursor === 0) {
-          liveCursor = (await read<{ seq: number }>('workspace.changes', { sinceSeq: 'head' })).seq;
-        } else {
-          const res = await read<{ events: Array<{ op: string; key: string | null; rel?: string; to?: string }>; seq: number }>(
-            'workspace.changes',
-            {
-              sinceSeq: liveCursor,
-              // ADR-0055 Inc 3: the server ships only this board's slice —
-              // element facts + board-space keys, state-changing ops only —
-              // instead of the whole workspace firehose filtered client-side.
-              // An idle board's tick is now an empty page (seq still advances).
-              scope: {
-                prefixes: ['el:', `_canvas/${cid}/`],
-                ops: SHOW_LINK_EDGES ? ['write', 'supersede', 'link', 'unlink'] : ['write', 'supersede'],
-              },
-            },
-          );
-          liveCursor = res.seq;
-          const elKeys = new Set<string>();
-          const placeKeys = new Set<string>();
-          let edgesDirty = false;
-          for (const ev of res.events ?? []) {
-            if (ev.op === 'link' || ev.op === 'unlink') {
-              // Link events now carry endpoints and arrive pre-scoped to this
-              // slice (key OR `to` matches) — with projection on, that means
-              // our edge set may be stale; with it off they don't render.
-              if (SHOW_LINK_EDGES) edgesDirty = true;
-              continue;
-            }
-            // Belt-and-braces vs an older gateway: reads are not state changes.
-            if (ev.op !== 'write' && ev.op !== 'supersede') continue;
-            if (!ev.key) continue;
-            // Our own flushes echo straight back through the feed — skip
-            // them; the outbox seeds already hold exactly what we wrote.
-            if (outbox.wroteRecently(ev.key)) continue;
-            if (ev.key.startsWith(`_canvas/${cid}/edge:`)) edgesDirty = true;
-            else if (ev.key.startsWith(`_canvas/${cid}/el:`)) placeKeys.add(ev.key);
-            else if (ev.key.startsWith('el:')) elKeys.add(ev.key);
-          }
-          let dirty = false;
-          for (const key of elKeys) {
-            if (applyRemoteElement(cc, key, await fetchFact(key))) dirty = true;
-          }
-          for (const key of placeKeys) {
-            if (applyRemotePlacement(cc, key, await fetchFact(key))) dirty = true;
-          }
-          if (edgesDirty) {
-            await rebuildEdgesLive(cc, cid);
-            dirty = true;
-          }
-          if (dirty) {
-            cc.requestRender();
-            cc.requestEdgeUpdate();
-          }
-        }
-      } catch { /* offline — retry next tick */ }
-    }
-    setTimeout(() => void tick(), Date.now() - lastActivity < 120_000 ? 6000 : 30_000);
-  };
-  setTimeout(() => void tick(), 6000);
+  projection.start();
 }

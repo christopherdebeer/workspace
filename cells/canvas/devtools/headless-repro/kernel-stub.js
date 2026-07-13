@@ -79,3 +79,47 @@ export function createOutbox(actFn, opts = {}) {
     reset: () => { seeded.clear(); flushedAt.clear(); primingBuffer.clear(); priming = false; },
   };
 }
+
+/* ADR-0053 Inc 2 projection — REAL semantics (mirrors kernel main.ts). The
+   stub `read` never settles, so a started loop's first pump simply hangs
+   pending — same shape the old inline tick loop had under the stub. */
+export function createProjection(readFn, outbox, opts) {
+  const subscribers = new Set();
+  let cursor = 0, timer, running = false, pumping = false;
+  const notify = () => { for (const cb of subscribers) { try { cb(); } catch { /* */ } } };
+  async function pump() {
+    if (pumping) return;
+    const scope = opts.scope();
+    if (!scope) return;
+    pumping = true;
+    try {
+      if (cursor === 0) { cursor = (await readFn('workspace.changes', { sinceSeq: 'head' })).seq; return; }
+      const res = await readFn('workspace.changes', { sinceSeq: cursor, scope });
+      cursor = res.seq;
+      const events = (res.events ?? []).filter((ev) => {
+        if (ev.op === 'link' || ev.op === 'unlink') return true;
+        if (ev.op !== 'write' && ev.op !== 'supersede') return false;
+        if (!ev.key) return false;
+        return !outbox.wroteRecently(ev.key);
+      });
+      if (events.length && (await opts.apply(events))) notify();
+    } finally {
+      pumping = false;
+    }
+  }
+  const stop = () => { running = false; if (timer) { clearTimeout(timer); timer = undefined; } };
+  const loop = () => {
+    timer = setTimeout(async () => {
+      try { if (typeof document === 'undefined' || !document.hidden) await pump(); } catch { /* retry next tick */ }
+      if (running) loop();
+    }, opts.intervalMs ? opts.intervalMs() : 6000);
+  };
+  return {
+    seedInitial: (entries) => { for (const e of entries) outbox.seed(e.key, e.value); notify(); },
+    subscribe: (cb) => { subscribers.add(cb); return () => { subscribers.delete(cb); }; },
+    pump,
+    start: () => { if (!running) { running = true; loop(); } },
+    stop,
+    dispose: () => { stop(); subscribers.clear(); },
+  };
+}
