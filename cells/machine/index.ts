@@ -467,7 +467,10 @@ async function loadMachine(sub, machineName) {
     sub.query({ prefix: `${base}/node/` }),
     sub.query({ prefix: `${base}/rail/` }),
   ]);
-  return assembleMachine(idFact, nodeFacts, railFacts);
+  // The slug we loaded by is authoritative for `name` — legacy identities (pre
+  // name-on-identity) assemble with name = title, which mangles anything derived
+  // from it (the yield's advance action id: seg("Drive-surface proof…") ≠ slug).
+  return { ...assembleMachine(idFact, nodeFacts, railFacts), name: machineName };
 }
 
 async function stepRun(machineName, runId, decide) {

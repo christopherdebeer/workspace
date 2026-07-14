@@ -197,7 +197,10 @@ export function decomposeWrites(name, nodes, rails, extra) {
   const writes = [
     {
       key: mkey.machine(name),
-      value: { title: (extra && extra.title) || name, entry: entryOf(nodes, rails, extra && extra.entry), ...(extra && Array.isArray(extra.context) ? { context: extra.context } : {}), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
+      // `name` (the slug) rides the identity so assembleMachine recovers it —
+      // without it the assembled name falls back to the TITLE and anything
+      // derived from it (the yield's advance action id) comes out mangled.
+      value: { name, title: (extra && extra.title) || name, entry: entryOf(nodes, rails, extra && extra.entry), ...(extra && Array.isArray(extra.context) ? { context: extra.context } : {}), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
       type: 'machine',
       tags: [...tags, 'dygram'],
     },
