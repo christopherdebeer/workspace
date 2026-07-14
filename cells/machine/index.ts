@@ -494,8 +494,17 @@ async function stepRun(machineName, runId, decide) {
   let claimed;
   if (decide && decide.to) {
     const at = runValue.node;
-    const decision = machineRails(machine).filter((r) => r.from === at && (r.mode === 'agent' || r.mode === 'task'));
-    if (!decision.length) return { error: `node "${at}" owes no decision (no agent/task rail)` };
+    // agent/task rails are decisions in any mode. A WORK rail is decidable only
+    // on a DRIVEN run: the reactive work sub skips driven runs, so the DRIVER is
+    // the executor at that node (protocol/machine-drive) — after doing the work,
+    // step{decide} records the work summary as the claim and advances, exactly
+    // like the spawned agent's own advance. Without this, a driven run parking
+    // at a work yield forces the driver to hand-write the run fact.
+    const driven = runValue.mode === 'driven';
+    const decision = machineRails(machine).filter(
+      (r) => r.from === at && (r.mode === 'agent' || r.mode === 'task' || (driven && (r.mode === 'work' || r.mode === 'work-code'))),
+    );
+    if (!decision.length) return { error: `node "${at}" owes no decision (no agent/task${driven ? '/work' : ''} rail)` };
     if (!decision.some((r) => r.to === decide.to)) {
       return { error: `"${decide.to}" is not a branch at "${at}" — choices: ${decision.map((r) => r.to).join(', ')}` };
     }

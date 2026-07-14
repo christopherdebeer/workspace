@@ -1,9 +1,11 @@
 # ADR-0084 — The drive surface: yields as affordance maps, context binds, and the revisor round-trip
 
-- **Status:** Accepted + built + validated live 2026-07-14 (machine cell
-  `machine-cbc8de2c v1783987916528`, platform deploy run #346, drive-proof run
-  `machine/drive-proof/run/2026-07-14-ergonomics-drive` driven to `done` in three
-  calls). Follow-on increments open (§Open).
+- **Status:** Accepted + built + validated live 2026-07-14. **Inc 1** (drive
+  surface): machine cell `machine-cbc8de2c v1783987916528`, platform deploy run
+  #346, `drive-proof` driven to `done` in three calls. **Inc 2** (work-node drive
+  verb + the specialist fleet): `machine/{weave v2, fix, improve}` defined and
+  `machine/fix` drive-validated end to end; the real `machine/tending` driven
+  with judgment. Follow-on increments open (§Open).
 - **Depends on:** ADR-0065 (drive mode per run), ADR-0018 (stateless stepper),
   ADR-0024 (delegation-chain tokens — the embodiment record), ADR-0001 (declared
   actions). **Completes (first slice):** the DyGram data plane the original fold-in
@@ -157,8 +159,58 @@ live tending audit, yielded at Decide with brief + choices + resolved context)
   (identity carries `name`; `loadMachine` overrides with the authoritative
   slug).
 
+## Increment 2 — the specialist fleet + the work-node drive verb (built 2026-07-14)
+
+The drive surface was validated on a scratch machine (Inc 1); Inc 2 exercised it
+on the real fleet and closed two gaps the real drive exposed.
+
+- **Work nodes are drivable.** `step {decide}` now accepts a decision at a `work`
+  node on a **driven** run (the reactive work sub skips driven runs, so the
+  driver *is* the executor there — `protocol/machine-drive`). Previously a driven
+  run parking at a work node forced the driver to hand-write the run fact; now
+  the cell writes the work-summary claim + merge-advance like any decision.
+  Validated live: `machine/fix/run/2026-07-14-fix-validation` drove a
+  work-node-as-entry (`Harvest`) → `step{decide}` → agent node → terminal, all
+  four transitions clean.
+- **The specialist fleet is substrate-native.** `machine/weave` (v2 —
+  decider brief folded from hand-patched subs into the `Assess` node, drift
+  cleared), `machine/fix` (Harvest→Review→{Work|Nothing}, the bug/todo lifecycle
+  from `kb/ae96ef582e3c46`), and `machine/improve` (Select→Decompose→Action, the
+  generative counterpart from `kb/cdd3b6e54e6747`) all `implements` their legacy
+  protocol facts, and `machine/tending --dispatches-->` each — the dispatch
+  topology the tending protocol describes is now authored graph structure, not
+  prose. All three are drivable in either mode; fix was drive-validated end to
+  end.
+- **Cross-machine knowledge flow.** The real tending drive
+  (`machine/tending/run/2026-07-14T00-24-driven-fable`) traced the chronic
+  ~30-edge dangling backlog to its mechanism — `kb/lit-decompose-placeholder-wikilinks`
+  (lit re-emits edges from example wikilink text every decompose) — rather than
+  re-counting it. That finding is baked into `machine/weave`'s `Assess` brief
+  (and bound as machine context), so the weave specialist now *declines* to
+  treadmill-unlink the known-bug cluster. A finding from one machine's drive
+  shapes another's decisions, through the definition.
+
+### Finding — multi-driver run ownership (`kb/multi-driver-run-ownership`)
+
+The real tending drive interleaved with the scheduled 08:04 driven routine: the
+scheduled run found the interactive run still `running` at `Tend` and closed it
+("remediation not evidenced"), 40 minutes before the interactive driver finished
+the remediation. No data lost, run correctly closed — but it exposes an unowned
+question: **a peer driver closing another's in-flight run after minutes is too
+eager** (it can't tell a slow-but-live drive from a leak), where the 12h reaper
+is safe precisely because 12h exceeds any real drive. **Rule (fold into
+`protocol/machine-drive`): a driver closes only the run it started; sibling leaks
+are the reaper's job.** Primitive-backed version later: a run carries a
+`driver`/lease id claimed via the existing atomic `ifAbsent`+timer mechanism, so
+a second driver skips a leased run — the sync embodiment model (identity declared
+at embodiment) applied to runs, and the natural home for the ADR-0024 `run.driver`
+= actor identity.
+
 ## Open (the next increments, in dependency order)
 
+0. **Run-lease / driver ownership** (`kb/multi-driver-run-ownership`) — the
+   protocol rule now, the `ifAbsent`-lease primitive next. Cheap and it removes a
+   real race the fleet already hit.
 1. **Context edges, not just context properties.** The full DyGram model:
    `machine-node --reads--> fact` / `--writes--> fact` as *authored substrate
    edges*, where the edge rel is simultaneously wiring, render detail, CEL
