@@ -139,3 +139,35 @@ failure the 2026-07-08 tending audit records, reversed.
   in-cycle (a metered `models` call for verdicts) remains the next autonomy rung;
   (c) sequential gateway calls dominate the cycle wall-clock — batch or parallelise
   under the 120s budget.
+
+## Inc 2 — Stage B made drivable (`machine/consolidate`, 2026-07-14)
+
+Open question #1 resolved the other way for the *judgment* layer: the reflex
+(Stage A + scoring) stays the cell, but **Stage B contested adjudication is now a
+drivable DyGram machine** — `machine/consolidate` (Observe → Select → Adjudicate →
+Recorded, ADR-0084 drive surface). The reason is the same medicine that revived
+tending: Stage B was hard-wired to spawn `models`, which has been dead ~5 days
+behind the credit wall (`kb/consolidation-anthropic-credit-exhausted`). Reframed
+as a machine, **driven mode lets a capable session adjudicate the contested
+backlog directly — no `models` call, no billing wall.** Verdicts land as `claim`
+facts (better provenance than the old `stageB.note`), the run carries the ADR-0084
+embodiment record (`run.mode` = who adjudicated), and the cell's `run` tool stays
+the deterministic reflex it always was — a thin machine over a preserved organ,
+not a rewrite.
+
+- **First driven cycle** (`machine/consolidate/run/2026-07-14-first-driven-cycle`)
+  — the first successful Stage B since 2026-07-09. Adjudicated 8 contested pairs;
+  all `independent`, recorded to `checked/*` (they drop from the read).
+- **The finding that matters more than the 8 verdicts:** the contested read
+  (`total: 3492`) is dominated by **byte-identical boilerplate doc-blocks** — every
+  ADR's bare `## Decisions` block shares one version hash, so the kinship pass
+  pairs them combinatorially, ~N² false positives. Captured as
+  `kb/contested-noise-floor-boilerplate-doc-blocks` (sibling of the lit
+  placeholder-dangler bug): the fix is a noise floor excluding same-version-hash /
+  heading-only blocks in the vector-indexer or lit-decomposer, which drops
+  hundreds of candidates at once. **Per-pair hand-adjudication doesn't scale; the
+  noise-floor fix does** — the driven cycle's job was to *surface* that, which the
+  billing-blocked per-pair path never could.
+- **Open (unchanged by this):** reactive Stage B still needs the credit top-up;
+  the noise-floor fix is a separate `fix`-class code change; the run-lease question
+  (`kb/multi-driver-run-ownership`) applies to `machine/consolidate` too.
