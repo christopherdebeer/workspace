@@ -138,10 +138,53 @@ export function assembleMachine(identity, nodeFacts, railFacts) {
   const idv = (identity && identity.value) || identity || {};
   const nodes = (nodeFacts || []).map((f) => {
     const v = (f && f.value) || f || {};
-    return { name: v.name, ...(v.title ? { title: v.title } : {}), ...(v.kind ? { kind: v.kind } : {}) };
+    return {
+      name: v.name,
+      ...(v.title ? { title: v.title } : {}),
+      ...(v.kind ? { kind: v.kind } : {}),
+      // The node's BRIEF — decision guidance at an agent node, surfaced in the
+      // driven yield and prepended to the reactive decide prompt. Lives in the
+      // DEFINITION (not a hand-tuned subscription fact), so a redefine keeps it.
+      ...(v.prompt ? { prompt: v.prompt } : {}),
+      // Node-level context binds (DyGram context nodes, first slice): fact keys
+      // this node's CEL guards and briefs may read, resolved by the shell.
+      ...(Array.isArray(v.context) ? { context: v.context } : {}),
+    };
   });
   const rails = railsFrom([], (railFacts || []).map((f) => (f && f.value) || f));
-  return { name: idv.name ?? idv.title, title: idv.title ?? idv.name, entry: idv.entry ?? entryOf(nodes, rails), nodes, rails };
+  return {
+    name: idv.name ?? idv.title,
+    title: idv.title ?? idv.name,
+    entry: idv.entry ?? entryOf(nodes, rails),
+    ...(Array.isArray(idv.context) ? { context: idv.context } : {}),
+    nodes,
+    rails,
+  };
+}
+
+/**
+ * The context binds in scope at a node (DyGram semantic-nesting inheritance, our
+ * scale): the machine-level `context` is inherited by every node; a node's own
+ * `context` adds to it. Entries are fact keys (`"tending/latest"`) or
+ * `{ bind, as }` objects; `as` defaults to the key's last path segment,
+ * sanitized for CEL (`tending/latest` → `latest` is ambiguous, so the default is
+ * the FULL key with non-word chars → `_`: `tending_latest`). Pure; the shell
+ * reads the facts and hands `{ [as]: value }` to `step`/`railHolds` as `ctx`.
+ */
+export function contextBindsOf(machine, nodeName) {
+  const norm = (e) => {
+    if (!e) return null;
+    if (typeof e === 'string') return { bind: e, as: e.replace(/[^A-Za-z0-9_]/g, '_') };
+    if (e.bind) return { bind: e.bind, as: e.as || e.bind.replace(/[^A-Za-z0-9_]/g, '_') };
+    return null;
+  };
+  const out = [];
+  const seen = new Set();
+  const add = (e) => { const b = norm(e); if (b && !seen.has(b.as)) { seen.add(b.as); out.push(b); } };
+  for (const e of machine?.context || []) add(e);
+  const node = (machine?.nodes || []).find((n) => n && n.name === nodeName);
+  for (const e of node?.context || []) add(e);
+  return out;
 }
 
 /**
@@ -154,7 +197,7 @@ export function decomposeWrites(name, nodes, rails, extra) {
   const writes = [
     {
       key: mkey.machine(name),
-      value: { title: (extra && extra.title) || name, entry: entryOf(nodes, rails, extra && extra.entry), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
+      value: { title: (extra && extra.title) || name, entry: entryOf(nodes, rails, extra && extra.entry), ...(extra && Array.isArray(extra.context) ? { context: extra.context } : {}), ...(extra && extra.kind ? { kind: extra.kind } : {}), ...(extra && extra.source ? { source: extra.source } : {}) },
       type: 'machine',
       tags: [...tags, 'dygram'],
     },
@@ -162,7 +205,14 @@ export function decomposeWrites(name, nodes, rails, extra) {
   for (const n of nodes) {
     writes.push({
       key: mkey.node(name, n.name),
-      value: { machine: name, name: n.name, ...(n.title ? { title: n.title } : {}), ...(n.kind ? { kind: n.kind } : {}) },
+      value: {
+        machine: name,
+        name: n.name,
+        ...(n.title ? { title: n.title } : {}),
+        ...(n.kind ? { kind: n.kind } : {}),
+        ...(n.prompt ? { prompt: n.prompt } : {}),
+        ...(Array.isArray(n.context) ? { context: n.context } : {}),
+      },
       type: 'machine-node',
       tags,
     });
@@ -281,17 +331,21 @@ export function projectActions(name, nodes, rails, entry) {
     const decisionStatus = branches.every((b) => !hasOut(b)) ? 'done' : 'running';
     actions.push({
       id: `machine.${m}.decide-${seg(from)}`,
-      description: `Decision at ${from}: record the chosen branch as a claim and advance. Branches: ${menu}.`,
+      description: `Decision at ${from}: record the chosen branch as a claim and advance. Branches: ${menu}. Driving a mode:"driven" run? Echo mode:"driven" (ADR-0065) or the reactive subs re-engage — or use @owner/machine.step with \`decide\`, which preserves the whole run for you.`,
       params: {
         run: { type: 'string', required: true },
         to: { type: 'string', required: true, enum: branches, description: 'The chosen branch' },
         statement: { type: 'string', description: 'Why this branch — becomes the claim' },
         confidence: { type: 'number', description: 'Calibrated belief 0..1' },
+        // ADR-0065: the advance write REPLACES the run value, so a driven run's
+        // mode must be echoed by the driver or the run silently reverts to
+        // reactive and the model-delivery subs re-engage mid-drive.
+        mode: { type: 'string', required: false, description: 'Echo the run\'s mode ("driven" when driving) — an advance that drops it reverts the run to reactive' },
       },
       if: [{ key: runKey, path: 'node', op: 'eq', value: from }],
       writes: [
         { key: mkey.claim(name, '${params.run}', from), value: { statement: '${params.statement}', confidence: '${params.confidence}', machine: name, at: from, chose: '${params.to}' }, type: 'claim', tags: ['claim', 'machine', 'dygram'] },
-        { key: runKey, value: { machine: name, node: '${params.to}', status: decisionStatus, at: '${now}', via: `${from}=>decision` }, type: 'machine-run', tags },
+        { key: runKey, value: { machine: name, node: '${params.to}', status: decisionStatus, at: '${now}', via: `${from}=>decision`, mode: '${params.mode}' }, type: 'machine-run', tags },
       ],
     });
   }
@@ -314,18 +368,29 @@ export function projectActions(name, nodes, rails, entry) {
  * `context` keys (from the machine identity) are surfaced to the decider. Run +
  * claim keys nest under `machine/<name>/run/`, so a single write grant covers both.
  */
-export function projectSubscriptions(name, rails, owner, context) {
+export function projectSubscriptions(name, rails, owner, context, nodes) {
   const m = seg(name);
   const runPrefix = `machine/${m}/run/`;
   const subs = [projectStepSubscription(name, owner)];
   const tags = (kind) => ['machine', `machine:${name}`, kind];
-  const ctx = Array.isArray(context) && context.length
-    ? `First read these context facts for grounding: ${context.join(', ')}.\n\n`
-    : '';
-
+  const nodeOf = (n) => (nodes || []).find((x) => x && x.name === n);
+  // Context grounding = machine-level context ∪ the node's own binds (DyGram
+  // inheritance) — the reactive decider is told to read the same facts the
+  // driven yield resolves, so both embodiments perceive the same data plane.
+  const ctxAt = (n) => {
+    const keys = [
+      ...(Array.isArray(context) ? context : []),
+      ...((nodeOf(n)?.context || []).map((e) => (typeof e === 'string' ? e : e?.bind)).filter(Boolean)),
+    ];
+    return keys.length ? `First read these context facts for grounding: ${[...new Set(keys)].join(', ')}.\n\n` : '';
+  };
   for (const from of [...new Set(rails.filter((x) => x.mode === 'agent').map((x) => x.from))]) {
     const branches = rails.filter((x) => x.mode === 'agent' && x.from === from);
     const menu = branches.map((b) => (b.when ? `- ${b.to} — when ${b.when}` : `- ${b.to}`)).join('\n');
+    // The node's BRIEF (definition-carried decision guidance) leads the prompt —
+    // this is where tending's hand-tuned decider text lives after v2, so a
+    // redefine regenerates instead of clobbering (ADR-0065 Inc 2).
+    const nodePrompt = nodeOf(from)?.prompt ? `${nodeOf(from).prompt}\n\n` : '';
     // The decision's real-tool allowlist (for assessment) + write scope (the branch
     // rails' scope.write, e.g. a weave repair) UNION the run namespace (claim/advance).
     const branchTools = [...new Set(branches.flatMap((b) => (Array.isArray(b.tools) ? b.tools : [])))];
@@ -333,7 +398,8 @@ export function projectSubscriptions(name, rails, owner, context) {
     const claimKey = `machine/${m}/run/\${keySuffix}/claim/${seg(from)}`;
     const runKeyTpl = `machine/${m}/run/\${keySuffix}`;
     const prompt =
-      `Decide at node "${from}" of machine ${JSON.stringify(name)} (run \${keySuffix}). ${ctx}` +
+      nodePrompt +
+      `Decide at node "${from}" of machine ${JSON.stringify(name)} (run \${keySuffix}). ${ctxAt(from)}` +
       `First substrate_read "${runKeyTpl}" (you'll need its current \`trace\` array). Then choose exactly ONE branch:\n${menu}\n\n` +
       `1) Record your reasoning as a CLAIM — write "${claimKey}" = {"statement":"<why, one sentence>","confidence":<0..1>,"chose":"<the chosen branch>","at":${JSON.stringify(from)},"machine":${JSON.stringify(name)}} (type claim, tags ["claim","machine","dygram"]).\n` +
       `2) ADVANCE the run — write "${runKeyTpl}" back UNCHANGED except: "node":"<the chosen branch>", "status":"running", "via":${JSON.stringify(`${from}=>decision`)}, and APPEND {"node":"<the chosen branch>","via":${JSON.stringify(`${from}=>decision`)}} to its existing \`trace\` array (keep all prior trace entries). type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]. The stepper settles terminality from there.`;
@@ -357,7 +423,7 @@ export function projectSubscriptions(name, rails, owner, context) {
   for (const r of rails.filter((x) => x.mode === 'work')) {
     const runKeyTpl = `machine/${m}/run/\${keySuffix}`;
     const advance = `When the work is complete, advance the run by writing fact "${runKeyTpl}" = {"machine":${JSON.stringify(name)},"node":${JSON.stringify(r.to)},"status":"done","via":${JSON.stringify(`${r.from}~>>work`)}} (type machine-run, tags ["machine",${JSON.stringify(`machine:${name}`)}]).`;
-    const prompt = (r.prompt ? `${r.prompt}\n\n` : `Do the work for node "${r.from}" of machine "${name}", run \${keySuffix}.\n\n`) + advance;
+    const prompt = ctxAt(r.from) + (r.prompt ? `${r.prompt}\n\n` : `Do the work for node "${r.from}" of machine "${name}", run \${keySuffix}.\n\n`) + advance;
     subs.push({
       id: `machine.${m}.work-${seg(r.from)}`,
       match: { keyPrefix: runPrefix, cel: `value.node == ${JSON.stringify(r.from)} && value.status == "running" && value.mode != "driven"` },
@@ -425,13 +491,21 @@ export function projectSubscriptions(name, rails, owner, context) {
  * re-triggers its work/decide delivery). Pure: the shell passes `at` and emits
  * each returned write through the organ path.
  */
-export function spawnChildrenWrites(run, machine, spec, at) {
+export function spawnChildrenWrites(run, machine, spec, at, parentValue) {
   const tags = ['machine', `machine:${machine}`];
   const isVote = spec.kind === 'vote';
   const base = mkey.run(machine, run);
+  // ADR-0065: the fan write REPLACES the parent run value, and the children are
+  // fresh facts — both must carry the parent's drive mode or a driven run that
+  // hits a section/vote node silently reverts (parent) and spawns reactive
+  // children the model-delivery subs pick up. Mode is INHERITED, hop over hop,
+  // exactly like scope in a delegation chain (ADR-0024). `text` (the trigger
+  // context) rides the parent for the same reason.
+  const mode = parentValue?.mode;
+  const inherit = { ...(mode ? { mode } : {}), ...(parentValue?.text ? { text: parentValue.text } : {}) };
   const parent = {
     key: base,
-    value: { machine, node: spec.node, status: isVote ? 'voting' : 'sectioning', join: spec.join, via: `${spec.node}~fan`, at },
+    value: { machine, node: spec.node, status: isVote ? 'voting' : 'sectioning', join: spec.join, via: `${spec.node}~fan`, at, ...inherit },
     type: 'machine-run',
     tags,
   };
@@ -442,7 +516,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
     for (let i = 0; i < k; i++) {
       children.push({
         key: `${base}#${i}`,
-        value: { machine, node: spec.branch, parent: run, kind: 'vote', status: 'running', at },
+        value: { machine, node: spec.branch, parent: run, kind: 'vote', status: 'running', at, ...(mode ? { mode } : {}) },
         type: 'machine-run',
         tags: [...tags, 'parallel-child'],
       });
@@ -452,7 +526,7 @@ export function spawnChildrenWrites(run, machine, spec, at) {
     for (const t of spec.branches || []) {
       children.push({
         key: `${base}§${seg(t)}`,
-        value: { machine, node: t, parent: run, kind: 'section', status: 'running', at },
+        value: { machine, node: t, parent: run, kind: 'section', status: 'running', at, ...(mode ? { mode } : {}) },
         type: 'machine-run',
         tags: [...tags, 'parallel-child'],
       });
@@ -525,7 +599,17 @@ export function barrierAdvance(parentId, parentValue, siblings, machine, now) {
   return {
     advance: {
       key: mkey.run(parentValue.machine, parentId),
-      value: { machine: parentValue.machine, node: join, status: jTerminal ? 'done' : 'running', via: `${parentValue.node}~${kind}-join`, at: now },
+      // Preserve the parent's drive mode + trigger context across the join —
+      // this write replaces the run value (same ADR-0065 hazard as the fan).
+      value: {
+        machine: parentValue.machine,
+        node: join,
+        status: jTerminal ? 'done' : 'running',
+        via: `${parentValue.node}~${kind}-join`,
+        at: now,
+        ...(parentValue.mode ? { mode: parentValue.mode } : {}),
+        ...(parentValue.text ? { text: parentValue.text } : {}),
+      },
       type: 'machine-run',
       tags: ['machine', `machine:${parentValue.machine}`],
     },
@@ -548,12 +632,17 @@ export function machineRails(machine) {
  *  `value.deadline < now` (ISO strings compare lexicographically) or
  *  `nowMs - value.startedMs > 300000`. An undefined condition is vacuously true;
  *  a throwing/invalid condition is treated as false (the rail does not fire). */
-export function railHolds(rail, run, nowIso) {
+export function railHolds(rail, run, nowIso, ctx) {
   if (!rail || rail.condition == null || rail.condition === '') return true;
   const now = nowIso ?? run?.at ?? null;
   const nowMs = now ? Date.parse(now) : null;
   try {
-    return celEvaluate(rail.condition, { value: run, key: `machine-run/${run?.run ?? ''}`, meta: null, now, nowMs }) === true;
+    // `ctx` (DyGram context nodes, first slice): the resolved context binds in
+    // scope at this node — `ctx.tending_latest.stale > 300` gates a rail on real
+    // substrate state, not just what was copied onto the run. The shell resolves
+    // the binds (contextBindsOf) and passes the values; absent ⇒ empty object,
+    // so a condition referencing ctx.* on an unresolved path is simply false.
+    return celEvaluate(rail.condition, { value: run, key: `machine-run/${run?.run ?? ''}`, meta: null, now, nowMs, ctx: ctx ?? {} }) === true;
   } catch {
     return false;
   }
@@ -593,7 +682,7 @@ const choiceOf = (r) => ({
  * a model) makes the decision at `yield.node` and re-steps. Determinism — the
  * `auto` prefix and the join barrier — never needs a model or a fact cascade.
  */
-export function step(run, machine, nowIso) {
+export function step(run, machine, nowIso, ctx) {
   const rails = machineRails(machine);
   const at = nowIso ?? run?.at ?? null;
   let cur = { ...run };
@@ -605,7 +694,32 @@ export function step(run, machine, nowIso) {
   const trace = Array.isArray(run?.trace) ? run.trace.slice() : [];
   const mark = (n, via) => { if (!trace.length || trace[trace.length - 1].node !== n) trace.push({ node: n, ...(via ? { via } : {}), at }); };
   mark(node, run?.via);
-  const out = (status, y) => ({ run: { ...cur, node, status, at, trace }, yield: y, path });
+  // A yield is the driver's whole perceptual context (sync's /wait, node-scoped):
+  // choices + the node's BRIEF (its prompt, the run's trigger text), the run's
+  // drive mode (so the driver knows to preserve it), and the ready-to-fire advance
+  // affordance — the decide action name for agent/task yields.
+  const enrich = (y) => {
+    if (!y) return y;
+    const nodeDef = (machine?.nodes || []).find((n) => n && n.name === y.node);
+    const decidable = y.kind === 'agent' || y.kind === 'task';
+    return {
+      ...y,
+      ...(cur.mode ? { mode: cur.mode } : {}),
+      ...(nodeDef?.prompt || cur.text
+        ? { brief: { ...(nodeDef?.prompt ? { prompt: nodeDef.prompt } : {}), ...(cur.text ? { text: cur.text } : {}) } }
+        : {}),
+      ...(decidable
+        ? {
+            advance: {
+              invoke: `machine.${seg(machine?.name)}.decide-${seg(y.node)}`,
+              params: ['run', 'to', 'statement', 'confidence', ...(cur.mode ? ['mode'] : [])],
+              ...(cur.mode === 'driven' ? { note: 'echo mode:"driven" — or advance via machine.step {decide}, which preserves the run for you' } : {}),
+            },
+          }
+        : {}),
+    };
+  };
+  const out = (status, y) => ({ run: { ...cur, node, status, at, trace }, yield: enrich(y), path });
   // Cycle budget: every node may be entered at most once along a single
   // deterministic walk (auto rails should not revisit without a guard).
   const budget = (Array.isArray(machine?.nodes) ? machine.nodes.length : rails.length) + 1;
@@ -672,7 +786,7 @@ export function step(run, machine, nowIso) {
     }
     // All auto: take the first rail whose condition holds (declaration order).
     // `at` (the step's now) feeds time-aware guards — deadlines/elapsed windows.
-    const chosen = normal.find((r) => railHolds(r, cur, at));
+    const chosen = normal.find((r) => railHolds(r, cur, at, ctx));
     if (!chosen) return out('blocked', { kind: 'blocked', node, choices: normal.map(choiceOf) });
     node = chosen.to;
     cur = { ...cur, node, via: `${chosen.from}->${chosen.to}` };

@@ -1953,3 +1953,43 @@ describe('read-response shaping (ADR-0048 — reads answer at the caller\'s alti
     expect((whole.entries['kb/big'].value as { content: string }).content.length).toBe(LONG.length);
   });
 });
+
+describe('machine tick: wait resume + the stale-run reaper', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const { createMachineTickHandler } = require('../services/workspace/handlers');
+  const handler = createMachineTickHandler(() => ({ state, grants }));
+  const me = (): ServiceContext => ctxFor('alice').ctx;
+  const tick = async (): Promise<void> => {
+    const { ctx } = ctxFor(null);
+    await handler({ scopes: ['alice'] }, { ...ctx, identity: { scopes: [] } } as never, {
+      source: 'platform.machine-tick',
+      detailType: 'machine.tick.requested',
+    });
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('leaves fresh live runs alone, reaps stale ones (preserving mode/text), resumes due waits, skips terminal runs', async () => {
+    await cmds.remember({ key: 'machine/m/run/stale', value: { machine: 'm', node: 'Assess', status: 'running', mode: 'driven', text: 'ctx' }, type: 'machine-run' }, me());
+    await cmds.remember({ key: 'machine/m/run/finished', value: { machine: 'm', node: 'Done', status: 'done' }, type: 'machine-run' }, me());
+    await cmds.remember({ key: 'machine/m/run/parked', value: { machine: 'm', node: 'Cool', status: 'waiting', waitUntil: new Date(Date.now() + 11 * 3600 * 1000).toISOString() }, type: 'machine-run' }, me());
+
+    // Fresh pass: nothing is 12h old — nothing reaped, the wait not yet due.
+    await tick();
+    expect(((await cmds.peek({ key: 'machine/m/run/stale' }, me()))?.value as { status: string }).status).toBe('running');
+    expect(((await cmds.peek({ key: 'machine/m/run/parked' }, me()))?.value as { status: string }).status).toBe('waiting');
+
+    // 13 hours later: the running run is leaked (reaped, fields preserved), the
+    // wait deadline passed (resumed), the done run untouched.
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 13 * 3600 * 1000);
+    await tick();
+    const reaped = (await cmds.peek({ key: 'machine/m/run/stale' }, me()))?.value as Record<string, unknown>;
+    expect(reaped).toMatchObject({ status: 'failed', via: 'tick!!stale', mode: 'driven', text: 'ctx', node: 'Assess' });
+    expect(String(reaped.reason)).toMatch(/stale: no progress/);
+    expect(((await cmds.peek({ key: 'machine/m/run/parked' }, me()))?.value as { status: string }).status).toBe('running');
+    expect(((await cmds.peek({ key: 'machine/m/run/finished' }, me()))?.value as { status: string }).status).toBe('done');
+  });
+});

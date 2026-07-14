@@ -178,6 +178,19 @@ export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
  * advances past the wait. Coarse (cron-granular) by design; a per-run delayed
  * trigger (EventBridge Scheduler) is the precision upgrade.
  */
+/**
+ * A run that has sat in a live status with no revision for this long is not in
+ * flight — it is leaked. Reactive runs park like this when a model delivery
+ * hard-fails outside the onError hook (the 2026-07 billing outage left runs
+ * "running" for days); driven runs leak when the driver forgets to close
+ * (ADR-0065's production finding). 12h is far beyond any legitimate step (model
+ * steps take minutes; driven routines run daily) while comfortably inside the
+ * next day's observation pass, so a leaked run can never miscount as live
+ * backlog for more than one cycle. `waiting` runs are exempt — they carry their
+ * own deadline (waitUntil), which the resume sweep above owns.
+ */
+const STALE_RUN_MS = 12 * 3600 * 1000;
+
 export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler {
   return async (detail, ctx) => {
     const scopes = Array.isArray(detail.scopes) ? (detail.scopes as string[]) : [];
@@ -192,12 +205,30 @@ export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler
       const { entries } = await state.query(scope, { type: 'machine-run', limit: 500 });
       for (const e of entries) {
         const v = (e.value ?? {}) as { status?: string; waitUntil?: string };
-        if (e._meta.superseded || v.status !== 'waiting' || typeof v.waitUntil !== 'string') continue;
-        const due = Date.parse(v.waitUntil);
-        if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
-        await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
-        await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
-        ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
+        if (e._meta.superseded) continue;
+        if (v.status === 'waiting' && typeof v.waitUntil === 'string') {
+          const due = Date.parse(v.waitUntil);
+          if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
+          await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
+          await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
+          ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
+          continue;
+        }
+        // The reaper: fail-fast for leaked runs (honest bookkeeping — the same
+        // close the tending driver performed by hand on the stuck 2026-07 runs).
+        // The write preserves the run's fields (mode/text/trace survive) and
+        // emits fact.written, so a reactive run with a catch rail still gets its
+        // recovery routing; without one the run reads `failed`, not `running`.
+        if (v.status === 'running' || v.status === 'sectioning' || v.status === 'voting') {
+          const updated = Date.parse(e._meta.updatedAt ?? '');
+          if (!Number.isFinite(updated) || nowMs - updated < STALE_RUN_MS) continue;
+          await state.put(
+            { scope, key: e.key, value: { ...v, status: 'failed', reason: `stale: no progress since ${e._meta.updatedAt}`, via: 'tick!!stale' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags },
+            identity,
+          );
+          await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
+          ctx.logger.info('machine tick reaped stale run', { scope, key: e.key, status: v.status, updatedAt: e._meta.updatedAt });
+        }
       }
     }
   };

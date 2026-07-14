@@ -23,11 +23,11 @@ export interface Session { user: string | null }
 export interface Entry { key: string; value: Record<string, unknown> }
 export interface Boot { session: Session; machines: Entry[]; nodes: Entry[]; rails: Entry[]; runs: Entry[]; path?: string; owner?: string }
 
-interface Rail { from: string; to: string; mode: string; when?: string; condition?: string; prompt?: string; tools?: string[]; sections?: Array<{ to: string; when?: string }>; branch?: string; samples?: number }
-interface Node { name: string; kind?: string; title?: string }
+interface Rail { from: string; to: string; mode: string; when?: string; condition?: string; prompt?: string; tools?: string[]; grants?: unknown; scope?: unknown; maxTurns?: number; for?: string | number; sections?: Array<{ to: string; when?: string }>; branch?: string; samples?: number }
+interface Node { name: string; kind?: string; title?: string; prompt?: string; context?: Array<string | { bind: string; as?: string }> }
 interface MachineVal { title?: string; entry?: string; nodes?: Node[]; rails?: Rail[]; context?: string[]; reactive?: boolean }
 interface TraceStep { node: string; via?: string; at?: string }
-interface RunVal { machine?: string; node?: string; status?: string; via?: string; at?: string; trace?: TraceStep[]; reason?: string }
+interface RunVal { machine?: string; node?: string; status?: string; via?: string; at?: string; trace?: TraceStep[]; reason?: string; mode?: string; text?: string; failures?: number; waitUntil?: string }
 
 /* ── theme ──────────────────────────────────────────────────────────────── */
 
@@ -375,9 +375,45 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
               </div>
               {r.when && <div style={{ color: C.mut, fontSize: 12, fontStyle: 'italic' }}>when: {r.when}</div>}
               {r.condition && <div style={{ color: C.mut, fontSize: 12 }}>if <code style={{ fontFamily: C.mono }}>{r.condition}</code></div>}
-              {r.prompt && <div style={{ color: C.mut, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 72, overflow: 'auto' }}>{r.prompt}</div>}
+              {r.for !== undefined && <div style={{ color: C.mut, fontSize: 12 }}>wait {String(r.for)}</div>}
+              {(Array.isArray(r.tools) && r.tools.length > 0 || r.grants != null || r.scope != null || typeof r.maxTurns === 'number') && (
+                <div style={{ color: C.mut, fontSize: 11, fontFamily: C.mono, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {Array.isArray(r.tools) && r.tools.length > 0 && <span title="tool allowlist">🔧 {r.tools.join(' ')}</span>}
+                  {r.grants != null && <span title="scoped grants (the per-run token narrows to this)">🔐 {JSON.stringify(r.grants)}</span>}
+                  {r.scope != null && <span title="fact scope">⊞ {JSON.stringify(r.scope)}</span>}
+                  {typeof r.maxTurns === 'number' && <span>≤{r.maxTurns} turns</span>}
+                </div>
+              )}
+              {r.prompt && (
+                <details>
+                  <summary style={{ color: C.mut, cursor: 'pointer', fontSize: 12 }}>prompt ({r.prompt.length} chars)</summary>
+                  <div style={{ color: C.mut, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{r.prompt}</div>
+                </details>
+              )}
             </div>
           ))}
+          {(m.nodes ?? []).filter((n) => n.prompt || (n.context && n.context.length) || n.kind).map((n) => (
+            <div key={`n-${n.name}`} style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 9, padding: '8px 10px', display: 'grid', gap: 4 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong>{n.name}</strong>
+                {n.kind && <Badge text={n.kind} color={C.mut} />}
+                {Array.isArray(n.context) && n.context.length > 0 && (
+                  <span style={{ color: C.mut, fontSize: 11, fontFamily: C.mono }} title="context binds — resolved into ctx.* at step time">
+                    ⛁ {n.context.map((c) => (typeof c === 'string' ? c : c.bind)).join(', ')}
+                  </span>
+                )}
+              </div>
+              {n.prompt && (
+                <details>
+                  <summary style={{ color: C.mut, cursor: 'pointer', fontSize: 12 }}>brief ({n.prompt.length} chars)</summary>
+                  <div style={{ color: C.mut, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{n.prompt}</div>
+                </details>
+              )}
+            </div>
+          ))}
+          {Array.isArray(m.context) && m.context.length > 0 && (
+            <div style={{ color: C.mut, fontSize: 12 }}>machine context (inherited by every node): <code style={{ fontFamily: C.mono }}>{m.context.join(', ')}</code></div>
+          )}
         </div>
       </details>
 
@@ -508,8 +544,17 @@ function RunView({ runKey, boot }: { runKey: string; boot: Boot }): React.ReactE
           <Field label="machine"><strong>{fact.machine}</strong></Field>
           <Field label="node"><strong>{fact.node}</strong></Field>
           <Field label="status"><Badge text={fact.status ?? '—'} color={statusColor(fact.status)} /></Field>
+          {fact.mode && <Field label="mode"><Badge text={fact.mode} color={fact.mode === 'driven' ? C.ink : C.mut} /></Field>}
+          {typeof fact.failures === 'number' && fact.failures > 0 && <Field label="failures"><Badge text={String(fact.failures)} color="#c33" /></Field>}
+          {fact.waitUntil && <Field label="waiting until"><code style={{ fontFamily: C.mono, fontSize: 12 }}>{fact.waitUntil}</code></Field>}
           {fact.via && <Field label="via"><code style={{ fontFamily: C.mono, fontSize: 12 }}>{fact.via}</code></Field>}
         </div>
+      )}
+      {fact?.text && (
+        <details>
+          <summary style={{ color: C.mut, cursor: 'pointer', fontSize: 13 }}>trigger context</summary>
+          <div style={{ color: C.mut, fontSize: 13, whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' }}>{fact.text}</div>
+        </details>
       )}
 
       {canDecide && (

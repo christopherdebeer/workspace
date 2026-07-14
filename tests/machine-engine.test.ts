@@ -440,3 +440,110 @@ describe('barrierAdvance (deterministic join, nested keys)', () => {
     expect(barrierAdvance('run1', parent({ status: 'running' }), [sib('done'), sib('done')], machine, 'T').advance).toBeNull();
   });
 });
+
+describe('drive-mode preservation (ADR-0065 hardening)', () => {
+  it('spawnChildrenWrites inherits the parent mode + text onto the fan write and every child', () => {
+    const spec = { node: 'Plan', join: 'Join', kind: 'section', branches: ['A', 'B'] };
+    const writes = spawnChildrenWrites('r1', 'm', spec, 'T', { mode: 'driven', text: 'why we run' });
+    expect(writes[0].value).toMatchObject({ mode: 'driven', text: 'why we run', status: 'sectioning' });
+    for (const child of writes.slice(1)) expect(child.value.mode).toBe('driven');
+  });
+  it('spawnChildrenWrites stays mode-less for a reactive parent (back-compat)', () => {
+    const spec = { node: 'Plan', join: 'Join', kind: 'vote', branch: 'V', samples: 2 };
+    const writes = spawnChildrenWrites('r1', 'm', spec, 'T');
+    expect(writes[0].value.mode).toBeUndefined();
+    expect(writes[1].value.mode).toBeUndefined();
+  });
+  it('barrierAdvance carries the parent mode + text through the join', () => {
+    const machine = { nodes: [{ name: 'P' }, { name: 'J' }, { name: 'End' }], rails: [{ from: 'J', to: 'End', mode: 'auto' }] };
+    const parent = { machine: 'm', node: 'P', status: 'sectioning', join: 'J', count: 1, mode: 'driven', text: 't' };
+    const d = barrierAdvance('run1', parent, [{ key: 'x', value: { status: 'done' } }], machine, 'T');
+    expect(d.advance.value).toMatchObject({ mode: 'driven', text: 't' });
+  });
+  it('the decide action template echoes the caller mode param (else the run reverts)', () => {
+    const actions = projectActions('m', [{ name: 'A' }, { name: 'B' }, { name: 'C' }], [
+      { from: 'A', to: 'B', mode: 'agent' },
+      { from: 'A', to: 'C', mode: 'agent' },
+    ]);
+    const decide = actions.find((a: { id: string }) => a.id === 'machine.m.decide-A') as { params: Record<string, unknown>; writes: Array<{ value: Record<string, unknown> }> };
+    expect(decide.params.mode).toBeDefined();
+    expect(decide.writes[1].value.mode).toBe('${params.mode}');
+  });
+});
+
+describe('context binds (DyGram context nodes, first slice)', () => {
+  const machine = {
+    name: 'm',
+    context: ['tending/latest'],
+    nodes: [
+      { name: 'A', context: [{ bind: 'kb/health', as: 'health' }] },
+      { name: 'B' },
+    ],
+    rails: [{ from: 'A', to: 'B', mode: 'auto', condition: 'ctx.health.score > 5' }],
+  };
+  it('contextBindsOf unions machine-level + node-level binds (inheritance), deduped by alias', () => {
+    const { contextBindsOf } = require('../cells/machine/engine');
+    expect(contextBindsOf(machine, 'A')).toEqual([
+      { bind: 'tending/latest', as: 'tending_latest' },
+      { bind: 'kb/health', as: 'health' },
+    ]);
+    expect(contextBindsOf(machine, 'B')).toEqual([{ bind: 'tending/latest', as: 'tending_latest' }]);
+  });
+  it('railHolds evaluates ctx.* against resolved binds; unresolved ctx is safely false', () => {
+    const rail = machine.rails[0];
+    expect(railHolds(rail, { node: 'A' }, 'T', { health: { score: 9 } })).toBe(true);
+    expect(railHolds(rail, { node: 'A' }, 'T', { health: { score: 1 } })).toBe(false);
+    expect(railHolds(rail, { node: 'A' }, 'T', undefined)).toBe(false); // no binds resolved
+  });
+  it('step passes ctx into auto-rail guards', () => {
+    const run = { machine: 'm', node: 'A', status: 'running' };
+    const good = step(run, machine, 'T', { health: { score: 9 } });
+    expect(good.run.node).toBe('B');
+    const blocked = step(run, machine, 'T', { health: { score: 1 } });
+    expect(blocked.yield?.kind).toBe('blocked');
+  });
+});
+
+describe('yield enrichment (the drive surface)', () => {
+  const machine = {
+    name: 'm',
+    nodes: [{ name: 'A', prompt: 'Weigh the backlog honestly.' }, { name: 'B' }, { name: 'C' }],
+    rails: [
+      { from: 'A', to: 'B', mode: 'agent', when: 'backlog clear' },
+      { from: 'A', to: 'C', mode: 'agent', when: 'backlog needs work' },
+    ],
+  };
+  it('an agent yield carries mode, the node brief + trigger text, and the advance affordance', () => {
+    const r = step({ machine: 'm', node: 'A', status: 'running', mode: 'driven', text: 'daily pass' }, machine, 'T');
+    expect(r.yield).toMatchObject({
+      kind: 'agent',
+      node: 'A',
+      mode: 'driven',
+      brief: { prompt: 'Weigh the backlog honestly.', text: 'daily pass' },
+      advance: { invoke: 'machine.m.decide-A' },
+    });
+    expect(r.yield.advance.params).toContain('mode');
+    expect(r.yield.advance.note).toMatch(/driven/);
+  });
+  it('a reactive yield omits mode/note but still names the decide action', () => {
+    const r = step({ machine: 'm', node: 'A', status: 'running' }, machine, 'T');
+    expect(r.yield.mode).toBeUndefined();
+    expect(r.yield.advance.invoke).toBe('machine.m.decide-A');
+    expect(r.yield.advance.note).toBeUndefined();
+  });
+});
+
+describe('definition-carried prompts reach the reactive decide subscription', () => {
+  it('node.prompt leads the decide prompt; node context binds join the grounding list', () => {
+    const nodes = [{ name: 'A', prompt: 'THE BRIEF.', context: ['kb/health'] }, { name: 'B' }, { name: 'C' }];
+    const rails = [
+      { from: 'A', to: 'B', mode: 'agent' },
+      { from: 'A', to: 'C', mode: 'agent' },
+    ];
+    const subs = projectSubscriptions('m', rails, 'o', ['tending/latest'], nodes);
+    const decide = subs.find((s: { id: string }) => s.id === 'machine.m.decide-A') as { params: { prompt: string } };
+    expect(decide.params.prompt.startsWith('THE BRIEF.')).toBe(true);
+    expect(decide.params.prompt).toContain('tending/latest');
+    expect(decide.params.prompt).toContain('kb/health');
+  });
+});
