@@ -49,6 +49,26 @@ describe('ADR-0071 — read(source, shape) parity', () => {
     expect(await cmds.read({ view: 'full' }, ctx)).toEqual(await cmds.recall({ view: 'full' }, ctx));
   });
 
+  it('recall overview card-shapes the focus band; recall({shape:"full"}) restores whole focus bodies', async () => {
+    // A long-bodied, high-salience fact lands in focus — the orientation read
+    // must not inline its whole body (a driven-machine probe hit a ~10KB ADR
+    // shipped in full here, and twice with its doc-block slice).
+    const body = 'y'.repeat(4000);
+    await cmds.remember({ key: 'big/doc', value: { content: body, title: 'Big' }, type: 'note' }, ctx);
+    // Bump salience so it sits in the focus band.
+    for (let i = 0; i < 3; i++) await cmds.peek({ key: 'big/doc' }, ctx);
+
+    const ov = (await cmds.recall(undefined, ctx)) as { focus: Record<string, { value: { content?: string }; _meta: { shaped?: string } }> };
+    const card = ov.focus['big/doc'];
+    expect(card).toBeDefined();
+    expect(card._meta.shaped).toBe('card'); // marked truncated
+    expect((card.value.content ?? '').length).toBeLessThan(body.length); // body cut
+
+    const full = (await cmds.recall({ shape: 'full' }, ctx)) as { focus: Record<string, { value: { content?: string }; _meta: { shaped?: string } }> };
+    expect(full.focus['big/doc'].value.content).toBe(body); // whole body on request
+    expect(full.focus['big/doc']._meta.shaped).toBeUndefined();
+  });
+
   it('read({type}) ≡ query({type}); read({text}) ≡ query({text}) (the search fix)', async () => {
     expect(await cmds.read({ type: 'note' }, ctx)).toEqual(await cmds.query({ type: 'note' }, ctx));
     expect(await cmds.read({ text: 'alpha' }, ctx)).toEqual(await cmds.query({ text: 'alpha' }, ctx));

@@ -180,6 +180,7 @@ function buildOverview(
   bands: { focus: number; peripheral: number; elided: number },
   granted: number,
   decls: Record<string, Record<string, unknown>>,
+  focusShape: ReadShape = 'card',
 ): RecallOverview {
   const entries = Object.entries(merged);
   const byType = new Map<string | null, number>();
@@ -193,8 +194,14 @@ function buildOverview(
   const focusEntries = entries
     .sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))
     .slice(0, OVERVIEW_FOCUS);
+  // Card-shape the focus band (ADR-0048): the overview is orientation — key +
+  // type + salience + a value preview, so an agent skimming "what do I have?"
+  // doesn't pay for a focus fact's whole body (a long ADR/doc could be ~10KB,
+  // and its near-duplicate doc-block slice ships it twice). `peek`, `query`, or
+  // `recall({view:"full"})` restore whole values; `recall({shape:"full"})`
+  // keeps the focus bodies here for a caller that wants them.
   const focus: Record<string, Entry> = {};
-  for (const [k, e] of focusEntries) focus[k] = e;
+  for (const [k, e] of focusEntries) focus[k] = shapeEntry(e, focusShape);
   const types = affordancesForTypes(typesOf(focus), decls);
   return {
     overview: {
@@ -458,8 +465,10 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // The digest fast path (ADR-0050 move 4): a BARE recall — no intent, no
       // lens, no overrides — is answered from the seq-validated cache. Grants
       // are checked LIVE so a new foreign grant always falls through to the
-      // full fold (grant writes don't advance the viewer's seq).
-      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience;
+      // full fold (grant writes don't advance the viewer's seq). An explicit
+      // `shape` also disqualifies it: the cached digest is built at the default
+      // (card) focus tier, so `recall({shape:"full"|"refs"})` must recompute.
+      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience && !input?.shape;
       const grantList = await applicableGrants(grants, viewer);
       const foreign = grantList.some((g) => g.owner !== viewer);
       let digestHead: number | undefined;
@@ -522,7 +531,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       if (!askedFull) {
         const c = shaped._shaping.counts;
         const granted = Object.keys(merged).length - Object.keys(own.entries).length + (own.entries[DIGEST_KEY] ? 1 : 0);
-        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls, input?.shape ?? 'card');
         if (text) {
           overview.hints.unshift(
             relevance

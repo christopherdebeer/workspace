@@ -265,7 +265,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
             byPrefix: { type: 'array', items: { type: 'object', properties: { prefix: { type: 'string' }, count: { type: 'number' } } } },
           },
         },
-        focus: { type: 'object', description: 'Top facts by salience, in full (overview mode)', additionalProperties: ENTRY_SCHEMA },
+        focus: { type: 'object', description: 'Top facts by salience, card-shaped previews (overview mode) — `_meta.shaped:"card"` marks a truncated body; `peek` or `recall({shape:"full"})` for whole values', additionalProperties: ENTRY_SCHEMA },
         hints: { type: 'array', items: { type: 'string' }, description: 'How to drill deeper (overview mode)' },
         entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts (full mode)', additionalProperties: ENTRY_SCHEMA },
         elided: {
