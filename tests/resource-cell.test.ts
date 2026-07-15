@@ -439,8 +439,9 @@ describe('resource cell (MCP gateway, read/act)', () => {
 
   it('whoami returns the identity (built-in tool)', async () => {
     const res = await callTool('creator', 'whoami', {});
-    // grant == scopes until a session narrows its effective focus (incremental auth).
-    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'], actor: 'human' });
+    // `grant` is surfaced only when it DIFFERS from scopes (a narrowed session);
+    // here they're identical, so it's omitted rather than echoed.
+    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], actor: 'human' });
   });
 
   it('resolves identity from x-forwarded-authorization (edge preserves bearer past OAC)', async () => {
@@ -451,7 +452,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
       }),
     )) as FunctionUrlResponse;
     const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
-    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'], actor: 'human' });
+    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], actor: 'human' });
   });
 
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {

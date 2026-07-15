@@ -268,10 +268,21 @@ function firstSentence(text: string): string {
  */
 function summarizeCatalog(caps: CatalogEntry[]): {
   cells: Array<{ cell: string; count: number; capabilities: CatalogSummaryEntry[] }>;
+  deprecated?: string[];
   hint: string;
 } {
+  // Deprecated aliases (each description opens "DEPRECATED (…) — prefer …") are
+  // the wrong thing for a fresh agent to meet in its first menu: they steer to
+  // a superseded verb and cost a full summary line each. List them by NAME only
+  // (still discoverable, still callable, still in detail:"full") instead of
+  // spelling out a dozen redundant "prefer edges(...)"-style lines.
   const byCell = new Map<string, CatalogSummaryEntry[]>();
+  const deprecated: string[] = [];
   for (const c of caps) {
+    if (/^DEPRECATED\b/.test(c.description)) {
+      deprecated.push(c.target);
+      continue;
+    }
     const cell = cellOf(c.target);
     const list = byCell.get(cell) ?? [];
     list.push({ target: c.target, kind: c.kind, summary: firstSentence(c.description) });
@@ -279,7 +290,10 @@ function summarizeCatalog(caps: CatalogEntry[]): {
   }
   return {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
-    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target. Holding a fact? read("$catalog", { for: "<key>" }) returns just what can act on it (ADR-0049).',
+    ...(deprecated.length ? { deprecated } : {}),
+    hint:
+      'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target. Holding a fact? read("$catalog", { for: "<key>" }) returns just what can act on it (ADR-0049).' +
+      (deprecated.length ? ' `deprecated` lists superseded aliases by name (still callable) — read({detail:"full"}) for their contracts.' : ''),
   };
 }
 
@@ -507,17 +521,22 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
 function whoamiTool(
   _input: unknown,
   ctx: ServiceContext,
-): { user: string; scopes: string[]; grant: string[]; actor?: string; posture?: unknown } {
+): { user: string; scopes: string[]; grant?: string[]; actor?: string; posture?: unknown } {
   // `scopes` is the session's effective focus (what's enforced now); `grant` is the
-  // token ceiling. They differ once a session narrows/widens (incremental auth).
+  // token ceiling. They differ only once a session narrows/widens (incremental
+  // auth), so `grant` is surfaced ONLY when it actually differs — otherwise it's
+  // a byte-identical echo of `scopes` on every call.
   // `actor` is the embodiment class (ADR-0022 mediation): a connected client is
   // an `agent` acting on-behalf-of, and its attention weighs accordingly.
   // `posture` is the adopted goal (ADR-0074): what this session is FOR — every
   // workspace read resolves through it (adopt/drop via auth.adoptGoal/dropGoal).
+  const scopes = ctx.identity.scopes;
+  const g = ctx.identity.grantScopes;
+  const grantDiffers = !!g && (g.length !== scopes.length || [...g].sort().join(' ') !== [...scopes].sort().join(' '));
   return {
     user: ctx.identity.user ?? 'anonymous',
-    scopes: ctx.identity.scopes,
-    grant: ctx.identity.grantScopes ?? ctx.identity.scopes,
+    scopes,
+    ...(grantDiffers ? { grant: g } : {}),
     ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
     ...(ctx.identity.posture ? { posture: ctx.identity.posture } : {}),
   };
