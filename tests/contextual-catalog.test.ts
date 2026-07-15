@@ -49,6 +49,20 @@ describe('contextual capabilities (ADR-0049)', () => {
     expect(r.capabilities.map((c) => c.target)).toEqual(['@c15r/lit.save']); // manager normalised c15r/lit → @c15r/lit
   });
 
+  it('grouped-menu summaries are capped to a one-liner (long first sentences are truncated)', () => {
+    // A core verb whose first sentence runs long (parentheticals before the
+    // first period) — the skim summary must be capped, not the whole sentence.
+    const longDesc =
+      'Write a fact to your workspace at `key` (ADR-0033 progressive disclosure), replacing any prior value wholesale and bumping its revision, emitting fact.written so subscriptions and the derived views all reconcile against the new head.';
+    const r = buildContextualCatalog([cap('workspace.remember', 'act', longDesc)], TYPES, { key: 'zzz:nope' });
+    const remember = r.workspace.find((w) => w.target === 'workspace.remember')!;
+    expect(remember.summary.length).toBeLessThanOrEqual(121); // 120 + the ellipsis
+    expect(remember.summary.endsWith('…')).toBe(true);
+    // A short description passes through untouched (no spurious ellipsis).
+    const short = buildContextualCatalog([cap('workspace.peek', 'read', 'One fact, whole.')], TYPES, { key: 'zzz:nope' });
+    expect(short.workspace.find((w) => w.target === 'workspace.peek')!.summary).toBe('One fact, whole.');
+  });
+
   it('forType asks about a type directly; unknown types degrade to the workspace floor', () => {
     const byType = buildContextualCatalog(CAPS, TYPES, { type: 'machine' });
     expect(byType.capabilities.length).toBe(2);

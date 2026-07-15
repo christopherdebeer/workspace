@@ -260,6 +260,21 @@ function firstSentence(text: string): string {
   return (m ? m[0] : text).trim();
 }
 
+/** Longest a grouped-menu summary line may run. Many descriptions pack a long
+ *  first sentence (parentheticals + ADR refs + `∈`-lists before the first
+ *  period), so the raw first sentence can be 300-400 chars — the grouped menu
+ *  is a SKIM ("enough to decide whether to drill"), not the contract, so cap it
+ *  to a real one-liner. The full sentence is one `detail:"full"` / target
+ *  resolve away. */
+const CATALOG_SUMMARY_MAX = 120;
+function summaryLine(text: string): string {
+  const s = firstSentence(text);
+  if (s.length <= CATALOG_SUMMARY_MAX) return s;
+  const cut = s.slice(0, CATALOG_SUMMARY_MAX);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > 60 ? cut.slice(0, sp) : cut).replace(/[\s([{.,;:—-]+$/, '')}…`;
+}
+
 /**
  * The summary catalog: capabilities grouped by cell, one line each, no schemas
  * — a fraction of the full catalog's weight. Progressive disclosure for the
@@ -285,7 +300,7 @@ function summarizeCatalog(caps: CatalogEntry[]): {
     }
     const cell = cellOf(c.target);
     const list = byCell.get(cell) ?? [];
-    list.push({ target: c.target, kind: c.kind, summary: firstSentence(c.description) });
+    list.push({ target: c.target, kind: c.kind, summary: summaryLine(c.description) });
     byCell.set(cell, list);
   }
   return {
@@ -355,7 +370,7 @@ export function buildContextualCatalog(
   const capabilities = caps.filter((c) => managers.has(cellOf(c.target)));
   const workspace = caps
     .filter((c) => CORE_FACT_VERBS.has(c.target))
-    .map((c) => ({ target: c.target, kind: c.kind, summary: firstSentence(c.description) }));
+    .map((c) => ({ target: c.target, kind: c.kind, summary: summaryLine(c.description) }));
   return {
     for: subject.key ?? subject.type ?? '',
     signals: signals.map((s) => s.type),
