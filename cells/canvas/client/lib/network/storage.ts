@@ -1258,7 +1258,11 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
     outbound: Array<{ from: string; rel: string; to: string }>;
     inbound: Array<{ from: string; rel: string; to: string }>;
     entries: Record<string, { value: any; _meta?: any }>;
-  }>('workspace.neighbors', { key });
+    // `shape:'full'` — expandFact materialises each neighbour as an editable
+    // canvas card and seeds the local outbox with its value; the card default
+    // (truncated bodies) would risk a later save clobbering the real fact with
+    // a preview. Topology-only readers take the cheaper card default.
+  }>('workspace.neighbors', { key, shape: 'full' });
   const anchor = cc.canvasState.elements.find((e: any) => e.id === anchorId);
   if (!anchor) return;
   const have = new Set(cc.canvasState.elements.map((e: any) => factKeyOf(e)));

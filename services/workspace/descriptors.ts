@@ -562,7 +562,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members; with `depth` → the walk root)' },
+        around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members; with `depth` → the walk root). Hydrated neighbour entries default to `card` (preview values) — pass `shape:"full"` for whole bodies.' },
         dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'With `around` (one hop): direction (default both)' },
         rel: { type: 'string', description: 'Only edges of this rel type (for a walk: the rel family to follow, e.g. "enables")' },
         membership: { type: 'boolean', description: "With `around`: only membership edges pointing at it (the collection's members)" },
@@ -600,7 +600,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         outbound: { type: 'array', items: EDGE_SCHEMA },
         inbound: { type: 'array', items: EDGE_SCHEMA },
-        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist', additionalProperties: ENTRY_SCHEMA },
+        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist (card-shaped preview values by default; `shape:"full"` for whole bodies)', additionalProperties: ENTRY_SCHEMA },
         types: TYPES_AFFORDANCE_SCHEMA,
       },
     },

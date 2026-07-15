@@ -77,6 +77,26 @@ describe('ADR-0069 — edge query parity', () => {
     expect(shape(await cmds.edges({ keys: ['a'] }, ctx))).toEqual(shape(await cmds.graph({ keys: ['a'] }, ctx)));
   });
 
+  it('hydrated neighbour entries default to the card tier; shape:"full" restores whole bodies', async () => {
+    // A long-bodied neighbour: the default read must not ship the whole value.
+    const body = 'x'.repeat(5000);
+    await cmds.remember({ key: 'bigbody', value: { text: body }, type: 'note' }, ctx);
+    await cmds.link({ from: 'a', rel: 'relates', to: 'bigbody' }, ctx);
+
+    const def = (await cmds.neighbors({ key: 'a' }, ctx)) as { entries: Record<string, { value: { text: string }; _meta: { shaped?: string } }> };
+    const card = def.entries['bigbody'];
+    expect(card._meta.shaped).toBe('card'); // marked as shaped, not whole
+    expect(card.value.text.length).toBeLessThan(body.length); // body truncated
+
+    const whole = (await cmds.neighbors({ key: 'a', shape: 'full' }, ctx)) as { entries: Record<string, { value: { text: string }; _meta: { shaped?: string } }> };
+    expect(whole.entries['bigbody'].value.text).toBe(body); // full body on request
+    expect(whole.entries['bigbody']._meta.shaped).toBeUndefined();
+
+    // edges({ around }) shares the default.
+    const via = (await cmds.edges({ around: 'a' }, ctx)) as { entries: Record<string, { _meta: { shaped?: string } }> };
+    expect(via.entries['bigbody']._meta.shaped).toBe('card');
+  });
+
   it('authored (derived:false) really excludes derived backbone; graph includes it', async () => {
     const authored = (await cmds.edges({ derived: false }, ctx)) as { edges: Array<{ rel: string }>; total: number };
     const full = (await cmds.edges({ derived: true }, ctx)) as { edges: Array<{ rel: string }>; total: number };
