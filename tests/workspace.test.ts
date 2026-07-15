@@ -465,6 +465,18 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(att2.dangling.some((d) => d.to === 'd1v2' && d.reason.includes('retired'))).toBe(true);
   });
 
+  it('attention samples the arrays at the default cap (8) while *Total reports the full count', async () => {
+    // 12 unlinked facts — more than the default sample cap.
+    for (let i = 0; i < 12; i++) await cmds.remember({ key: `lonely/${i}`, value: { i }, type: 'note' }, alice());
+    const att = await cmds.attention({ staleMs: 0 }, alice());
+    expect(att.unlinked.length).toBeLessThanOrEqual(8); // capped sample
+    expect(att.unlinkedTotal).toBeGreaterThanOrEqual(12); // uncapped truth
+    expect(att.unlinkedTotal).toBeGreaterThan(att.unlinked.length);
+    // An explicit larger limit restores the fuller list.
+    const more = await cmds.attention({ staleMs: 0, limit: 50 }, alice());
+    expect(more.unlinked.length).toBeGreaterThan(8);
+  });
+
   it('attention ignores `_` system namespaces unless includeSystem', async () => {
     await cmds.remember({ key: '_canvas/board/el:1', value: { x: 0 } }, alice());
     await cmds.link({ from: '_canvas/board/el:1', rel: 'derived-from', to: '_canvas/board/el:gone' }, alice());
@@ -478,7 +490,9 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(att.unlinked).not.toContain('_canvas/board/el:lonely');
     expect(att.dangling.some((d) => d.from.startsWith('_canvas/'))).toBe(false);
 
-    const withSystem = await cmds.attention({ staleMs: -1, includeSystem: true }, alice());
+    // Explicit high limit: this asserts a specific key is PRESENT, so it must
+    // see the fuller list, not the small default sample (ADR-0048).
+    const withSystem = await cmds.attention({ staleMs: -1, includeSystem: true, limit: 100 }, alice());
     expect(withSystem.stale.map((s) => s.key)).toContain('_canvas/board/el:lonely');
     // el:1 is authored-linked → settled, not stale — but its edge to a missing
     // endpoint still dangles.

@@ -723,14 +723,14 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'attention',
     description:
-      'What needs tending, as a derived read: stale facts (old AND unearned — settled knowledge with authored structure or standing is counted separately, not flagged), unlinked facts (no authored edge, embedded-ref edge, or placement membership — inferred `similarTo` and the pure type backbone never count), and dangling edges. Arrays are capped at `limit`; the `*Total` fields are the real counts. `_`-prefixed system namespaces are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
+      'What needs tending, as a derived read: stale facts (old AND unearned — settled knowledge with authored structure or standing is counted separately, not flagged), unlinked facts (no authored edge, embedded-ref edge, or placement membership — inferred `similarTo` and the pure type backbone never count), and dangling edges. The arrays are illustrative SAMPLES capped at `limit` (default 8); the `*Total` fields are the real counts — read those for magnitude, pass a larger `limit` for the fuller list. `_`-prefixed system namespaces are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         staleMs: { type: 'number', description: 'Staleness threshold in ms (default 14 days)' },
-        limit: { type: 'number', description: 'Max items per category (default 25)' },
+        limit: { type: 'number', description: 'Max SAMPLE items per category (default 8) — the `*Total` fields still report the uncapped counts' },
         includeSystem: { type: 'boolean', description: 'Also surface `_`-prefixed system namespaces (default false)' },
         settledStanding: { type: 'number', description: 'Standing at/above which an old fact is settled, not stale (default 0.25)' },
       },

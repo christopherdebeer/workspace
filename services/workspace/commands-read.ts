@@ -662,9 +662,16 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
     async attention(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
+      // The stale/unlinked/dangling arrays are illustrative SAMPLES — the
+      // `*Total` counts carry the real magnitude (and a tending audit reads
+      // only those). So the orientation default is a small sample (8), not 25:
+      // a driven-machine probe measured this read as its top sink, streaming
+      // ~24 dangling rows (each a spelled-out reason) when the signal was three
+      // integers plus a couple of examples. A caller who wants the fuller list
+      // passes an explicit `limit`.
       return state.attention(scope, {
         staleMs: input?.staleMs,
-        limit: input?.limit,
+        limit: input?.limit ?? 8,
         includeSystem: input?.includeSystem,
         typeRules: await typeRulesFor(ctx),
       });
