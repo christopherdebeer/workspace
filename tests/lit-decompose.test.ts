@@ -78,6 +78,27 @@ describe('planDecomposition', () => {
     const content = '# T\n\nbody';
     expect(planDecomposition(path, content, extractWikiTargets)).toEqual(planDecomposition(path, content, extractWikiTargets));
   });
+
+  it('folds a parent heading with no intro prose into its first subsection (no content-less block)', () => {
+    // The ADR shape: `## Decisions` immediately followed by `### 1. …`. The
+    // old splitter emitted a byte-identical bare `## Decisions` block per doc
+    // (kb/contested-noise-floor-boilerplate-doc-blocks); it must now fold.
+    const content = '# T\n\nintro prose.\n\n## Decisions\n\n### 1. First\n\nbody one.\n\n### 2. Second\n\nbody two.';
+    const plan = planDecomposition(path, content, extractWikiTargets);
+    const contents = plan.blocks.map((b) => b.content);
+    // No block is a bare heading.
+    expect(contents).not.toContain('## Decisions');
+    // `## Decisions` rode into the first subsection; the second stands alone.
+    expect(contents.some((c) => c.includes('## Decisions') && c.includes('### 1. First') && c.includes('body one.'))).toBe(true);
+    expect(contents.some((c) => c.startsWith('### 2. Second') && c.includes('body two.'))).toBe(true);
+    // Blocks: [intro, "## Decisions\n### 1 …", "### 2 …"] — the orphan is gone.
+    expect(plan.blocks).toHaveLength(3);
+  });
+
+  it('still emits a heading-only block when it is genuinely trailing (nothing follows)', () => {
+    const plan = planDecomposition(path, '# T\n\nbody.\n\n## Trailing', extractWikiTargets);
+    expect(plan.blocks.map((b) => b.content)).toContain('## Trailing');
+  });
 });
 
 describe('staleKeys', () => {
