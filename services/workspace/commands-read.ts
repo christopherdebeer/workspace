@@ -15,7 +15,7 @@ import {
   type SalienceLens,
   type SalienceOptions,
 } from '../../platform/runtime';
-import { shapeEntry, shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
+import { shapeEntry, shapeEntryList, shapeEntryMap, orientEntry, type ReadShape } from './shape';
 import { applicableGrants, grantCovers, WHOLE_SLICE } from './grants';
 import {
   type DepsBuilder,
@@ -194,14 +194,18 @@ function buildOverview(
   const focusEntries = entries
     .sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))
     .slice(0, OVERVIEW_FOCUS);
-  // Card-shape the focus band (ADR-0048): the overview is orientation — key +
-  // type + salience + a value preview, so an agent skimming "what do I have?"
-  // doesn't pay for a focus fact's whole body (a long ADR/doc could be ~10KB,
-  // and its near-duplicate doc-block slice ships it twice). `peek`, `query`, or
-  // `recall({view:"full"})` restore whole values; `recall({shape:"full"})`
-  // keeps the focus bodies here for a caller that wants them.
+  // Shape the focus band for orientation (ADR-0048): the overview is a "what do
+  // I have?" skim, so each top fact carries key + type + salience + a value
+  // preview — NOT its whole body (a long ADR/doc could be ~10KB, and its
+  // near-duplicate doc-block slice ships it twice) NOR its full provenance
+  // envelope repeated a dozen times. The default (`focusShape` unset → 'card')
+  // uses `orientEntry`: card value + refs `_meta` slice. `recall({shape:"full"})`
+  // keeps whole entries; `{shape:"refs"}` drops values; `peek`/`recall({view:"full"})`
+  // always restore the whole fact.
+  const shapeFocus = (e: Entry): Entry =>
+    focusShape === 'full' ? e : focusShape === 'refs' ? shapeEntry(e, 'refs') : orientEntry(e);
   const focus: Record<string, Entry> = {};
-  for (const [k, e] of focusEntries) focus[k] = shapeEntry(e, focusShape);
+  for (const [k, e] of focusEntries) focus[k] = shapeFocus(e);
   const types = affordancesForTypes(typesOf(focus), decls);
   return {
     overview: {

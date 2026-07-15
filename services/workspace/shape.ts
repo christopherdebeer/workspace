@@ -71,6 +71,17 @@ export function shapeEntry<E extends { value?: unknown; _meta: EntryMeta }>(e: E
   return { ...e, value: cardValue(e.value), _meta: { ...e._meta, shaped: 'card' } as unknown as EntryMeta };
 }
 
+/** The orientation shape: a card-truncated value PLUS the refs `_meta` slice —
+ *  leaner than `card` (which keeps `_meta` whole). recall's overview `focus`
+ *  band uses it: a context-less agent skimming "what do I have?" needs each
+ *  top fact's identity + preview + salience, not its full provenance envelope
+ *  (writer/via/seq/version/revision/centrality/velocity/standing) repeated
+ *  across a dozen entries. `shaped:"card"` still marks the truncated body;
+ *  `peek` / `recall({shape:"full"})` restore the whole entry. */
+export function orientEntry<E extends { value?: unknown; _meta: EntryMeta }>(e: E): E {
+  return { ...e, value: cardValue(e.value), _meta: { ...refsMeta(e._meta), shaped: 'card' } as unknown as EntryMeta } as unknown as E;
+}
+
 /** Shape an entry ARRAY (query/search results, members). */
 export function shapeEntryList<E extends { value?: unknown; _meta: EntryMeta }>(list: E[], shape: ReadShape | undefined): E[] {
   if (!shape || shape === 'full') return list;

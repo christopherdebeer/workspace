@@ -58,15 +58,22 @@ describe('ADR-0071 — read(source, shape) parity', () => {
     // Bump salience so it sits in the focus band.
     for (let i = 0; i < 3; i++) await cmds.peek({ key: 'big/doc' }, ctx);
 
-    const ov = (await cmds.recall(undefined, ctx)) as { focus: Record<string, { value: { content?: string }; _meta: { shaped?: string } }> };
+    const ov = (await cmds.recall(undefined, ctx)) as { focus: Record<string, { value: { content?: string }; _meta: Record<string, unknown> }> };
     const card = ov.focus['big/doc'];
     expect(card).toBeDefined();
     expect(card._meta.shaped).toBe('card'); // marked truncated
     expect((card.value.content ?? '').length).toBeLessThan(body.length); // body cut
+    // Orientation meta: the refs slice only — full provenance is drilled, not skimmed.
+    expect(card._meta.score).toBeDefined();
+    expect(card._meta.type).toBe('note');
+    expect(card._meta.writers).toBeUndefined();
+    expect(card._meta.version).toBeUndefined();
+    expect(card._meta.seq).toBeUndefined();
 
-    const full = (await cmds.recall({ shape: 'full' }, ctx)) as { focus: Record<string, { value: { content?: string }; _meta: { shaped?: string } }> };
+    const full = (await cmds.recall({ shape: 'full' }, ctx)) as { focus: Record<string, { value: { content?: string }; _meta: Record<string, unknown> }> };
     expect(full.focus['big/doc'].value.content).toBe(body); // whole body on request
     expect(full.focus['big/doc']._meta.shaped).toBeUndefined();
+    expect(full.focus['big/doc']._meta.version).toBeDefined(); // full provenance restored
   });
 
   it('read({type}) ≡ query({type}); read({text}) ≡ query({text}) (the search fix)', async () => {
