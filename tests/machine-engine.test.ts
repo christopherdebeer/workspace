@@ -441,6 +441,24 @@ describe('barrierAdvance (deterministic join, nested keys)', () => {
   });
 });
 
+describe('contextEcho (ADR-0084 yield-echo cap)', () => {
+  const { contextEcho } = require('../cells/machine/engine');
+  it('passes small decision-data values through unchanged', () => {
+    const v = { stale: 321, unlinked: 476, dangling: 30 };
+    expect(contextEcho('tending/latest', v, { version: 'abc' })).toEqual(v);
+  });
+  it('digests a large bound fact to key/version/bytes/head + a peek pointer', () => {
+    const big = { content: 'x'.repeat(5000) };
+    const d = contextEcho('protocol/tending', big, { version: 'v9' }, 2000);
+    expect(d._digest).toBe(true);
+    expect(d.key).toBe('protocol/tending');
+    expect(d.version).toBe('v9');
+    expect(d.bytes).toBeGreaterThan(2000);
+    expect(d.head.length).toBe(400);
+    expect(d.note).toMatch(/peek/);
+  });
+});
+
 describe('drive-mode preservation (ADR-0065 hardening)', () => {
   it('spawnChildrenWrites inherits the parent mode + text onto the fan write and every child', () => {
     const spec = { node: 'Plan', join: 'Join', kind: 'section', branches: ['A', 'B'] };

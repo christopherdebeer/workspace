@@ -635,6 +635,31 @@ export function machineRails(machine) {
  *  `value.deadline < now` (ISO strings compare lexicographically) or
  *  `nowMs - value.startedMs > 300000`. An undefined condition is vacuously true;
  *  a throwing/invalid condition is treated as false (the rail does not fire). */
+/**
+ * Cap the driver-facing context echo (ADR-0084 efficiency). A bound fact's
+ * FULL value feeds the CEL guards (`ctx.*`) and the driver's grounding, but
+ * re-inlining a LARGE bound fact into every step's yield is pure token waste —
+ * a fresh-agent ergonomics audit (2026-07-15) measured the 11.5KB
+ * `protocol/tending` fact echoed FOUR times in one drive, ~tripling context
+ * consumption. Small decision-data facts (counts, status) pass through
+ * unchanged; a large value collapses to a digest the driver expands with one
+ * `peek` if it wants the body. The CEL scope still sees the full value (this
+ * only shapes what rides back in the yield). Pure.
+ */
+export function contextEcho(key, value, meta, cap = 2000) {
+  let s;
+  try { s = typeof value === 'string' ? value : JSON.stringify(value); } catch { s = String(value); }
+  if (s.length <= cap) return value;
+  return {
+    _digest: true,
+    key,
+    bytes: s.length,
+    ...(meta && meta.version ? { version: meta.version } : {}),
+    head: s.slice(0, 400),
+    note: `large bound fact elided from the yield echo — read("workspace.peek",{key:"${key}"}) for the full value (the rail guards already evaluated against it in full).`,
+  };
+}
+
 export function railHolds(rail, run, nowIso, ctx) {
   if (!rail || rail.condition == null || rail.condition === '') return true;
   const now = nowIso ?? run?.at ?? null;

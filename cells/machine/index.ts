@@ -19,7 +19,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App } from './client/app';
 import { installBridge } from './client/bridge';
-import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites, contextBindsOf, machineRails } from './engine';
+import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites, contextBindsOf, machineRails, contextEcho } from './engine';
 // The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
 // over the owner's slice. Vendored (not a URL import): the forge bundler
 // only bundles relative imports within the cell dir + esm.sh-declared deps; a
@@ -535,7 +535,7 @@ async function stepRun(machineName, runId, decide) {
   for (const b of binds) {
     try {
       const f = await sub.read(b.bind);
-      if (f) { ctx[b.as] = f.value; context[b.bind] = f.value; }
+      if (f) { ctx[b.as] = f.value; context[b.bind] = contextEcho(b.bind, f.value, f._meta); }
     } catch { /* an unreadable bind is simply absent from ctx */ }
   }
 
