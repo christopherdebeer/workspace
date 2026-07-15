@@ -128,7 +128,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'remember',
     description:
-      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifVersion`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold; `ifVersion` echoes a read\'s content hash as unforgeable proof-of-read). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
+      'Write a fact to your workspace at `key`. REPLACE semantics: the new `value` overwrites the prior one WHOLESALE — there is NO field-level merge (the old value is recoverable via revision history, which is preserved, but it is not visible in the current fact). To change one field, read the fact first and write the whole value back with your edit. CAUTION on SHARED keys written by more than one producer (e.g. a platform cron AND an agent both writing the same key): a blind write clobbers the other producer\'s value until it next writes — read-then-write with `ifVersion` (proof-of-read CAS) to make the write conditional on the value you actually saw, or write to your own distinct key instead. `type`/`tags` make it queryable; `ifRevision`/`ifVersion`/`ifAbsent` make the write conditional (fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
     scope: null,
     scopeFamily: 'write:type:*',
     kind: 'act',
