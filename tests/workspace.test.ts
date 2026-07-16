@@ -934,10 +934,61 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       const leased = after.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'));
       expect(leased!.leasedBy).toBe('judge/A');
       expect(leased!.leasedUntil).toBeTruthy();
+
+      // ── W3b: genuineOnly drops identical AND leased pairs server-side ──
+      const genuine = await cmds.suggestions({ genuineOnly: true }, admin());
+      expect(genuine.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'))).toBeUndefined();
+      expect(genuine.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'))).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
       else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
     }
+  });
+
+  it('suggestions flags same-source degeneracies; genuineOnly + offset filter and page (W3b/W3e)', async () => {
+    const admin = (): ServiceContext => {
+      const ctx = ctxOf('hana');
+      (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'hana', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+      return ctx;
+    };
+    // Facts whose KEYS derive from one source (the wave-2/3 degenerate classes)
+    // plus one genuinely-distinct pair. Edges are fabricated directly (the
+    // inferred-writer stamp) — the detector is key-structural, not cosine-driven.
+    for (const [key, title] of [
+      ['doc-block:docs/guide/1', 'Part one of the guide'],
+      ['doc-block:docs/guide/2', 'Part two of the guide'],
+      ['file/docs/guide.md', 'The whole guide document'],
+      ['essay/alpha', 'REPL for the mind'],
+      ['essay/beta', 'Conversational programming environments'],
+    ] as const) {
+      await cmds.remember({ key, value: { title }, type: 'note' }, admin());
+    }
+    const infer = (from: string, to: string, score: number): Promise<void> =>
+      store.putEdge({ scope: 'hana', from, rel: 'similarTo', to, strength: 0.3, writer: 'platform/vectors', createdAt: new Date().toISOString(), score });
+    await infer('doc-block:docs/guide/1', 'doc-block:docs/guide/2', 0.999); // sibling blocks — same source
+    await infer('doc-block:docs/guide/1', 'file/docs/guide.md', 0.998); // block vs its own parent doc
+    await infer('essay/alpha', 'essay/beta', 0.9); // a genuine connection
+
+    const sug = await cmds.suggestions(undefined, admin());
+    const sib = sug.suggestions.find((c) => c.from.includes('guide/1') && c.to.includes('guide/2'));
+    expect(sib?.degenerate).toBe('same-source');
+    const parent = sug.suggestions.find((c) => [c.from, c.to].some((k) => k.startsWith('file/')));
+    expect(parent?.degenerate).toBe('contains');
+    const real = sug.suggestions.find((c) => c.from.startsWith('essay/'));
+    expect(real?.degenerate).toBeUndefined();
+    expect(sug.hint).toMatch(/genuineOnly/); // the result teaches the filter
+
+    // genuineOnly: only the essay pair survives; total reflects the filtered list.
+    const genuine = await cmds.suggestions({ genuineOnly: true }, admin());
+    expect(genuine.suggestions.map((c) => [c.from, c.to].sort().join('↔'))).toEqual(['essay/alpha↔essay/beta']);
+    expect(genuine.total).toBe(1);
+
+    // W3e: offset pages the ranked list (limit 1, offset 1 → the second candidate).
+    const p0 = await cmds.suggestions({ limit: 1 }, admin());
+    const p1 = await cmds.suggestions({ limit: 1, offset: 1 }, admin());
+    expect(p1.suggestions).toHaveLength(1);
+    expect(p1.suggestions[0].pairHash).not.toBe(p0.suggestions[0].pairHash);
+    expect(p1.suggestions[0].pairHash).toBe((await cmds.suggestions({ limit: 2 }, admin())).suggestions[1].pairHash);
   });
 
   it('work leases: atomic acquire, contention names the holder, release + expiry self-release (ADR-0086 Inc 3)', async () => {

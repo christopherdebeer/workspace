@@ -175,6 +175,23 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect((bare.parsed as { cells: unknown[] }).cells.length).toBeGreaterThan(0);
   });
 
+  it('read("$catalog", {resolve}) returns ONE capability; unknown targets and options fail loudly (W3d/W3f)', async () => {
+    // The narrow read between the skim (grouped menu) and the dump (detail:"full").
+    const one = await callTool('creator', 'read', { target: '$catalog', input: { resolve: 'workspace.recall' } });
+    const cap = (one.parsed as { capability: { target: string; inputSchema?: unknown } }).capability;
+    expect(cap.target).toBe('workspace.recall');
+    expect(cap.inputSchema).toBeDefined(); // the full contract, not a summary line
+    // A failed narrow read ERRORS — it must never silently widen to the whole menu.
+    const missing = await callTool('creator', 'read', { target: '$catalog', input: { resolve: 'workspace.nope' } });
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toMatch(/unknown target/i);
+    // An option the catalog doesn't understand is rejected with the valid ones named.
+    const junk = await callTool('creator', 'read', { target: '$catalog', input: { fetch: 'workspace.recall' } });
+    expect(junk.isError).toBe(true);
+    expect(junk.text).toMatch(/does not understand/);
+    expect(junk.text).toMatch(/resolve/);
+  });
+
   it('read("$types") returns the global cell-registry vocabulary keyed by bare type name', async () => {
     globalTypes = {
       doc: { manager: '@c15r/lit', handlers: { open: [{ surface: '/@c15r/lit?doc=${match}' }] } },

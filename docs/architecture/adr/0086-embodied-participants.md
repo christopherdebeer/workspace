@@ -1,7 +1,17 @@
 # ADR-0086 — Embodied participants: the participant key, presence, and work leases
 
-- **Status:** Accepted 2026-07-16 — **Inc 0–3 built + validated live**
-  (deploys #356–358, same day). Inc 2 (presence): participant-keyed dispatches
+- **Status:** Accepted 2026-07-16 — **Inc 0–4 built** (Inc 0–3 validated live,
+  deploys #356–358, same day). Inc 4 (per-participant posture) landed
+  substrate-native rather than as an auth surface: a participant adopts its
+  posture by remembering **`_posture/<participant>`** `{goal?, lens?,
+  salience?}` — a plain fact, sibling of `_presence/<participant>`, optionally
+  timer-expiring — and every composed read carrying that participant's `as`
+  resolves through it, overriding the token posture (the finer key wins;
+  `auth.adoptGoal` stays the token-level layer and the fallback). Chosen over
+  extending `adoptGoal` because posture-at-participant-grain is per-dispatch
+  state the workspace read path already owns, and a fact is visible, editable,
+  and expirable the way presence already is — no auth store change, no extra
+  validate-token payload. Inc 2 (presence): participant-keyed dispatches
   refresh throttled `_presence/*` lease facts; `whoami` echoes the ambient
   frame — live proof: two validator participants visible with actor/lastTarget/
   until after their lease calls. Inc 3 (work leases): `workspace.lease`/`release`

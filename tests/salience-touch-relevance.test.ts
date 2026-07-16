@@ -154,8 +154,13 @@ describe('relevance as the sixth signal (ADR-0051)', () => {
     expect(q.entries[0].key).toBe('d-dynamo');
     expect(q.entries[0]._meta.relevance).toBeGreaterThan(0);
     // Structural filters compose with the intent (the hybrid search can't do).
+    // Since ADR-0085 Inc 3 the intent is honest about irrelevance: the only
+    // note has no cosine with this text, so the hybrid returns EMPTY rather
+    // than padding with off-goal rows; rankBy:'salience' readmits them.
     const hybrid = await cmds.query({ type: 'note', text: 'dynamodb table design for facts' }, ctx);
-    expect(hybrid.entries.map((e) => e.key)).toEqual(['n-auth']);
+    expect(hybrid.entries).toEqual([]);
+    const padded = await cmds.query({ type: 'note', text: 'dynamodb table design for facts', rankBy: 'salience' }, ctx);
+    expect(padded.entries.map((e) => e.key)).toEqual(['n-auth']);
 
     const overview = await cmds.recall({ text: 'dynamodb table design for facts' }, ctx);
     if (!('overview' in overview)) throw new Error('expected overview');
@@ -210,6 +215,39 @@ describe('relevance as the sixth signal (ADR-0051)', () => {
       (await cmds.query({ prefix: 'n/', limit: 2, cursor: '2' }, ctx)).entries.map((e) => e.key),
     );
     expect(page2.entries[0].key).not.toBe(page1.entries[0].key); // actually advanced
+    __resetTypeDeclsCache();
+  });
+
+  it('intent queries are relevance-ordered and drop the no-relevance tail; explicit rankBy wins (ADR-0085 Inc 3 / W3c)', async () => {
+    __resetTypeDeclsCache();
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const vstore = new MemoryVectorStore();
+    const embedder = new HashingEmbedder(128);
+    const cmds = createWorkspaceCommands(() => ({ state, grants, vectors: { store: vstore, embedder }, store }));
+    const ctx = ctxFor('alice');
+    const index = async (key: string, value: unknown): Promise<void> => {
+      const [vector] = await embedder.embed([embeddableText(key, value)!]);
+      await vstore.put(indexForScope('alice', embedder.dimension), [{ key, vector, metadata: metadataForFact({ type: 'note' }) }]);
+    };
+    // One on-goal fact, one off-goal fact, and one HIGH-SALIENCE fact the
+    // intent never reaches (not in the vector index at all — the class of row
+    // pure salience used to pad the shortlist with).
+    await cmds.remember({ key: 'on', value: { title: 'ratify a suggestion into an authored edge' }, type: 'note' }, ctx);
+    await cmds.remember({ key: 'off', value: { title: 'sourdough hydration schedule' }, type: 'note' }, ctx);
+    await cmds.remember({ key: 'loud', value: { title: 'completely unrelated but much touched' }, type: 'note' }, ctx);
+    await index('on', { title: 'ratify a suggestion into an authored edge' });
+    await index('off', { title: 'sourdough hydration schedule' });
+    for (let i = 0; i < 30; i++) await cmds.peek({ key: 'loud' }, ctx); // earn salience the intent can't
+
+    const q = await cmds.query({ text: 'ratify suggestion edge' }, ctx);
+    expect(q.entries[0].key).toBe('on'); // relevance drives the order
+    expect(q.entries.map((e) => e.key)).not.toContain('loud'); // the no-relevance tail is DROPPED
+    expect(q.entries.every((e) => (e._meta.relevance ?? 0) > 0)).toBe(true);
+    // An explicit rankBy still wins — salience readmits the loud row.
+    const bySalience = await cmds.query({ text: 'ratify suggestion edge', rankBy: 'salience' }, ctx);
+    expect(bySalience.entries.map((e) => e.key)).toContain('loud');
     __resetTypeDeclsCache();
   });
 

@@ -597,7 +597,7 @@ function describeTools() {
       {
         name: 'adoptGoal',
         description:
-          "Adopt a goal as your session's posture (ADR-0074): every workspace read then resolves through it — the goal becomes the standing relevance bias, the lens/salience the standing weights — without passing text/lens per call. `goal` is ideally a workspace `goal/<id>` fact key (the @c15r/tasks vocabulary — graph-visible, project-linked); free text works for purposes not yet filed. Posture biases RANKING only, never membership: scope is untouched, and a caller's per-call args always win. Drop with auth.dropGoal. With tokenId, posture a child token you minted — delegation attenuates attention, not just scope.",
+          "Adopt a goal as your session's posture (ADR-0074): every workspace read then resolves through it — the goal becomes the standing relevance bias, the lens/salience the standing weights — without passing text/lens per call. `goal` is ideally a workspace `goal/<id>` fact key (the @c15r/tasks vocabulary — graph-visible, project-linked); free text works for purposes not yet filed. Posture biases RANKING only, never membership: scope is untouched, and a caller's per-call args always win. Drop with auth.dropGoal. With tokenId, posture a child token you minted — delegation attenuates attention, not just scope. One level finer (ADR-0086 Inc 4): a PARTICIPANT (`as` key) adopts its own posture by remembering `_posture/<participant>` {goal?, lens?, salience?} in the workspace — dispatches carrying that `as` read through it, overriding this token posture.",
         scope: null,
         kind: 'act' as const,
         inputSchema: {

@@ -1,7 +1,7 @@
 # ADR-0085 — Capabilities are facts: the self-model dissolves into the model
 
-- **Status:** Accepted 2026-07-16 — **Inc 0 + Inc 1 built** (same day). Inc 0:
-  the gateway announces every successful read/act dispatch as
+- **Status:** Accepted 2026-07-16 — **Inc 0, 1, 3 + most of 4 built** (same
+  day). Inc 0: the gateway announces every successful read/act dispatch as
   `capability.invoked` (source-pinned); the workspace applies it as one
   actor-classed touch on `_caps/<target>` via the new `ObservedState.touch`
   primitive (absent-key-safe), so used verbs accrue attention/velocity/standing.
@@ -9,8 +9,16 @@
   (workspace from its descriptors; auth/cells over the same `describeTools`
   seam the gateway aggregates), diff-only, retiring DEPRECATED aliases and
   verbs a provider stops advertising — closing the 80-vs-121 coverage drift.
-  Later increments (capability lens, `$catalog` demotion, `$types`/`$grants`
-  generalization) remain open, §Open.
+  Inc 3 (W3c): intent queries (`text` present) are RELEVANCE-ordered — cosine
+  drives, salience breaks ties, and the no-relevance tail is dropped rather
+  than padded in by standing salience (`rankBy:'relevance'`, the intent-path
+  default; explicit `rankBy` wins). Inc 4 (W3d): `$catalog {resolve:"<target>"}`
+  returns one capability's full contract, unknown catalog options are rejected
+  loudly with the valid ones named (a failed narrow read must never silently
+  widen to the whole menu), and the server instructions + catalog hint now
+  lead with the intent-first move (`workspace.query({text})`) over menu
+  browsing. Remaining: Inc 2 (capability lens) and Inc 5 (`$types`/`$grants`/
+  `$cells` generalization), §Open.
 - **Depends on:** ADR-0033 (progressive-disclosure recall — the overview/focus
   shape this reuses), ADR-0048 (read shaping — `card`/`refs` tiers, already the
   presentation for any fact), ADR-0049 (contextual `$catalog {for}` — capability

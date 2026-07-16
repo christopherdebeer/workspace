@@ -320,7 +320,7 @@ function summarizeCatalog(caps: CatalogEntry[]): {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
     ...(deprecated.length ? { deprecated } : {}),
     hint:
-      'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target. Holding a fact? read("$catalog", { for: "<key>" }) returns just what can act on it (ADR-0049).' +
+      'Grouped menu (the default). One target\'s full contract: read("$catalog", { resolve: "<target>" }); every schema: { detail: "full" }. Holding a fact? { for: "<key>" } returns just what can act on it (ADR-0049). Know your GOAL instead? workspace.query({ text: "<goal>" }) surfaces the relevant capabilities and facts directly, by meaning (ADR-0085) — usually a better first move than reading this menu.' +
       (deprecated.length ? ' `deprecated` lists superseded aliases by name (still callable) — read({detail:"full"}) for their contracts.' : ''),
   };
 }
@@ -530,7 +530,27 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
-    const opts = input?.input as { detail?: string; for?: string; forType?: string } | undefined;
+    const opts = input?.input as { detail?: string; for?: string; forType?: string; resolve?: string } | undefined;
+    // Membrane principle (W3f): a $catalog option we don't understand must fail
+    // loudly, not silently widen a narrow read into the whole menu (W3d — a
+    // probe's `{resolve}` was swallowed and it got 500 lines it didn't ask for).
+    if (opts && typeof opts === 'object') {
+      const KNOWN = new Set(['detail', 'for', 'forType', 'resolve']);
+      const unknown = Object.keys(opts).filter((k) => !KNOWN.has(k));
+      if (unknown.length) {
+        throw new Error(
+          `$catalog does not understand {${unknown.join(', ')}} — valid options: {resolve:"<target>"} (one capability, full schema), {detail:"full"} (all schemas), {for:"<factKey>"} / {forType:"<type>"} (contextual menu), or none (grouped one-line menu).`,
+        );
+      }
+    }
+    // W3d: `{resolve: "<target>"}` — one capability's full contract, the narrow
+    // read between the skim (grouped menu) and the dump (detail:"full").
+    if (opts?.resolve) {
+      const t = String(opts.resolve).trim();
+      const hit = caps.find((c) => c.target === t);
+      if (!hit) throw new Error(`$catalog {resolve}: unknown target "${t}" — read("$catalog") for the grouped menu of what you can call.`);
+      return { capability: hit };
+    }
     // ADR-0049: `{for: <key>}` / `{forType: <type>}` — the contextual menu, a
     // few KB inferred from the fact's type signals instead of the whole surface.
     if (opts?.for || opts?.forType) {
@@ -701,7 +721,7 @@ const INPUT_PROP = { type: 'object', description: 'Arguments for the capability.
 const AS_PROP = {
   type: 'string',
   description:
-    'Optional participant key (ADR-0086): which embodied actor within this connection is acting (e.g. "steward/weave", "probe/IP-1"). Recorded as provenance beside `via` on writes and in usage telemetry — never an authority input. Short path-ish names only.',
+    'Optional participant key (ADR-0086): which embodied actor within this connection is acting (e.g. "steward/weave", "probe/IP-1"). Recorded as provenance beside `via` on writes and in usage telemetry — never an authority input. Short path-ish names only. A participant may adopt its OWN posture by remembering `_posture/<its key>` {goal?, lens?, salience?} — composed reads carrying its `as` then rank through that lens (the token posture is the fallback).',
 };
 const READ_SCHEMA = {
   type: 'object',
@@ -709,7 +729,7 @@ const READ_SCHEMA = {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
     input: {
       ...INPUT_PROP,
-      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
+      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { resolve: "<target>" } returns one capability's full contract; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
     },
     as: AS_PROP,
   },
@@ -822,8 +842,8 @@ export const handler = defineMcpService({
   // client knowing what "read/act" means here.
   instructions:
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
-    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog") for the grouped one-line menu ' +
-    '({detail:"full"} adds every schema). Targets look like workspace.query or @owner/cell.tool. ' +
+    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument. Know your goal? read("workspace.query", {input:{text:"<goal>"}}) surfaces the relevant facts AND capabilities by meaning (ADR-0085) — the intent-first move. ' +
+    'Browsing instead? read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one full contract, {detail:"full"} for every schema). Targets look like workspace.query or @owner/cell.tool. ' +
     'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,

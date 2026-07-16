@@ -150,9 +150,16 @@ export interface PruneSimilarInput {
 export interface SuggestionsInput {
   /** Cap on candidates returned (default 25). */
   limit?: number;
+  /** Skip this many candidates first (paging — W3e: `query` honors it, so this does too). */
+  offset?: number;
   /** Include high-volume runtime/machine facts (transcripts, agent-runs, cells, …) that
    *  are filtered out by default as format-clustered noise. */
   includeRuntime?: boolean;
+  /** Only pairs worth a judge's attention: drop byte-identical pairs, mechanical
+   *  degeneracies (same-source siblings/containment), and pairs another participant
+   *  currently holds a lease on (W3b — every judge that met the degenerate head
+   *  declined it and had to re-derive why). */
+  genuineOnly?: boolean;
 }
 /** A ratification candidate enriched with each endpoint's type + a short label. */
 export interface SuggestionEntry extends SuggestionCandidate {
@@ -167,11 +174,48 @@ export interface SuggestionEntry extends SuggestionCandidate {
    *  near-1.0 score is textual identity — a dedupe/prune candidate, not a
    *  connection to ratify (membrane wave 1, F5). */
   identical?: boolean;
+  /** The pair is mechanically derived from one source (W3b): `same-source` =
+   *  fragments of the same document/run (sibling blocks, snapshot vs latest);
+   *  `contains` = one endpoint is the other's parent/source (a block vs its own
+   *  doc, a decompose copy vs the original). Near-1.0 cosine by construction —
+   *  structure the graph already knows, not a connection to ratify. */
+  degenerate?: 'same-source' | 'contains';
   /** A participant currently holds `lease/suggestion/<pairHash>` on this pair
    *  (ADR-0086 Inc 3) — it is in-flight; skip it rather than double-adjudicate. */
   leasedBy?: string | null;
   leasedUntil?: string | null;
 }
+/** A key reduced to the SOURCE it derives from (W3b): lowercase, colon
+ *  namespace off (`doc-block:docs/x/4` → `docs/x/4`), file extension off
+ *  (`file/docs/x.md` → `file/docs/x`), trailing numeric fragment segments off
+ *  (`docs/x/4` → `docs/x`). Conservative on `/`-namespaces (only extensions and
+ *  numeric tails are stripped) so `goal/123` and `note/123` stay distinct. */
+function keyBase(key: string): string {
+  return key
+    .toLowerCase()
+    .replace(/^[a-z][\w.-]*:/, '')
+    .replace(/\.[a-z0-9]{1,8}$/, '')
+    .replace(/(\/\d+)+$/, '');
+}
+
+/** The mechanical degeneracy class of a pair, if any (W3b, membrane waves 1–3):
+ *  two facts derived from the same source cluster at ~1.0 cosine by
+ *  construction — sibling blocks of one doc (`same-source`), a block vs its own
+ *  parent doc/file or a decompose/snapshot copy vs its original (`contains`).
+ *  Every judge that met these declined to ratify and had to re-derive why;
+ *  say what the key structure implies instead. */
+function degeneracyOf(from: string, to: string): 'same-source' | 'contains' | undefined {
+  const a = keyBase(from);
+  const b = keyBase(to);
+  if (!a || !b) return undefined;
+  if (a === b) return 'same-source';
+  // Parent/source containment — path-prefix either way, tolerating a leading
+  // namespace segment on one side (`file/docs/x` vs `docs/x`).
+  if (a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) return 'contains';
+  if (a.endsWith(`/${b}`) || b.endsWith(`/${a}`)) return 'contains';
+  return undefined;
+}
+
 export interface SuggestionsResult {
   suggestions: SuggestionEntry[];
   /** The recommended relation vocabulary to ratify a suggestion into. */
@@ -427,14 +471,16 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           until: r.timerExpiresAt,
         });
       }
-      // Degeneracy flag (membrane wave 1, F5): a pair whose endpoints share a
-      // CONTENT HASH is byte-identical text — boilerplate headings, decompose
-      // copies — where ~1.0 cosine is textual identity, not a relationship. The
+      // Degeneracy flags (membrane waves 1–3, F5 + W3b): a pair whose endpoints
+      // share a CONTENT HASH is byte-identical text; a pair mechanically derived
+      // from one source (sibling blocks, block vs own doc, snapshot vs latest)
+      // clusters at ~1.0 cosine by construction. Neither is a relationship. The
       // queue head is systematically these; every judge that met them declined
-      // to ratify and had to re-derive why. Say what the score implies: flag
-      // them `identical` (a prune/dedupe candidate, not a ratification one).
-      const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => {
+      // to ratify and had to re-derive why. Say what the score implies — flag
+      // `identical` / `degenerate`, and let `genuineOnly` skip them wholesale.
+      const enrich = (c: SuggestionCandidate): SuggestionEntry => {
         const identical = !!versionByKey.get(c.from) && versionByKey.get(c.from) === versionByKey.get(c.to);
+        const degenerate = degeneracyOf(c.from, c.to);
         // The pair's stable id — what `lease({domain:"suggestion", item})` and
         // the `checked/<hash>` adjudication markers key on. Returned so a judge
         // can lease a pair WITHOUT re-deriving the server's hash (ADR-0086).
@@ -448,16 +494,25 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           toType: typeByKey.get(c.to) ?? null,
           toLabel: labelByKey.get(c.to) ?? c.to,
           ...(identical ? { identical: true } : {}),
+          ...(degenerate ? { degenerate } : {}),
           ...(lease ? { leasedBy: lease.holder, leasedUntil: lease.until } : {}),
         };
-      });
-      const flagged = suggestions.filter((s) => s.identical).length;
+      };
+      // `genuineOnly` (W3b): only pairs worth a judge's attention — not identical,
+      // not mechanically degenerate, not currently leased by another participant.
+      let enriched = candidates.map(enrich);
+      if (input?.genuineOnly) enriched = enriched.filter((s) => !s.identical && !s.degenerate && !s.leasedBy);
+      // W3e: `offset` pages the ranked list (query grew this in wave 2; the same
+      // reach here was silently ignored — membrane principle: honor or reject).
+      const offset = typeof input?.offset === 'number' && input.offset > 0 ? input.offset : 0;
+      const suggestions = enriched.slice(offset, offset + limit);
+      const flagged = suggestions.filter((s) => s.identical || s.degenerate).length;
       return {
         suggestions,
         vocab: RATIFY_LINK_TYPES,
-        total: candidates.length,
+        total: enriched.length,
         ...(flagged
-          ? { hint: `${flagged} of ${suggestions.length} candidates are byte-identical pairs (identical:true) — dedupe/prune material, not connections to ratify.` }
+          ? { hint: `${flagged} of ${suggestions.length} candidates are byte-identical or same-source pairs (identical/degenerate) — dedupe/prune material, not connections to ratify. Pass {genuineOnly:true} to skip them.` }
           : {}),
       };
     },

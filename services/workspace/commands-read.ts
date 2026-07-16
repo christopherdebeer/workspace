@@ -6,6 +6,7 @@
 import {
   requireUser,
   indexForScope,
+  isTimerLive,
   INTENT_PRESET,
   type ChangesResult,
   type ChangesScope,
@@ -273,7 +274,7 @@ export interface QueryInput {
    *  standing/attention; `query({type, text})` is the hybrid. Elision and
    *  ranking are both intent-conditioned. */
   text?: string;
-  rankBy?: 'salience' | 'recency';
+  rankBy?: 'salience' | 'recency' | 'relevance';
   /** Bias salience via a named lens — compiled (recent/connected/durable/
    *  active) or slice-declared (`_config/lenses`, ADR-0078). Unknown ⇒ ignored. */
   lens?: SalienceLens | (string & {});
@@ -389,6 +390,30 @@ export function principalPosture(
   const goal = typeof posture.goal === 'string' && posture.goal.trim() ? posture.goal.trim() : undefined;
   if (!goal && !lens && !salience) return null;
   return { ...(goal ? { goal } : {}), ...(lens ? { lens } : {}), ...(salience ? { salience } : {}) };
+}
+
+/** Where a participant's adopted posture lives (ADR-0086 Inc 4): a plain fact,
+ *  sibling of `_presence/<participant>`. Written with `remember` (value
+ *  {goal?, lens?, salience?}, optionally timer-expiring), read here per
+ *  composed read when the dispatch carried a participant key. Substrate-native
+ *  by design: a fanned-out specialist adopts ITS goal without hijacking the
+ *  session token's standing posture (auth.adoptGoal, which stays token-level),
+ *  and the posture is visible/editable/expirable like any other fact. */
+export const PARTICIPANT_POSTURE_PREFIX = '_posture/';
+
+/** The participant's own posture fact, mapped to the same shape
+ *  `principalPosture` yields — it OVERRIDES the token posture when present
+ *  (the finer key wins; provenance-grade, biases ranking only, never
+ *  membership or authority). Absent/lapsed/superseded ⇒ null ⇒ token posture. */
+export async function participantPosture(
+  store: WorkspaceDeps['store'],
+  user: string | undefined,
+  participant: string | undefined,
+): Promise<{ goal?: string; lens?: SalienceLens; salience?: Partial<SalienceOptions> } | null> {
+  if (!store || !user || !participant) return null;
+  const rec = await store.get(user, `${PARTICIPANT_POSTURE_PREFIX}${participant}`).catch(() => null);
+  if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+  return principalPosture({ posture: rec.value });
 }
 
 /** Derive relevance text from a referenced goal fact's value — the
@@ -612,13 +637,19 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // naturally reach for `offset` — which was silently ignored (RT-A got
       // page 1 twice). Honor it as the alias it structurally is.
       const cursor = input?.cursor ?? (typeof input?.offset === 'number' && input.offset > 0 ? String(input.offset) : undefined);
+      // ADR-0085 Inc 3 (W3c): a stated intent DRIVES the order — relevance
+      // first, salience as tiebreak, no-relevance tail dropped (salience used
+      // to pad the shortlist with rows the intent never reached: "link above
+      // ratify" for a ratification goal). An explicit rankBy still wins, and
+      // without a semantic backend the ranking degrades to salience unchanged.
+      const rankBy = input?.rankBy ?? (relevance && Object.keys(relevance).length ? 'relevance' : undefined);
       const result = await state.query(
         scope,
         {
           type: input?.type,
           tag: input?.tag,
           prefix: input?.prefix,
-          rankBy: input?.rankBy,
+          rankBy,
           lens: input?.lens,
           salience: text ? intentSalience(input?.salience) : input?.salience,
           explain: input?.explain,
@@ -720,7 +751,13 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // semantics, ADR-0051) but never flips an overview into a search.
       const source = inferSource(input);
       const merged: ComposedReadInput = { ...(input ?? {}) };
-      const posture = principalPosture(ctx.identity);
+      // ADR-0086 Inc 4: the dispatch's participant key resolves ITS OWN posture
+      // first — a `_posture/<participant>` fact — so a fanned-out specialist
+      // reads through its task's lens without hijacking the session token's
+      // standing posture. The finer key wins; the token posture is the fallback.
+      const posture =
+        (await participantPosture(build(ctx).store, ctx.identity.user, ctx.identity.participant)) ??
+        principalPosture(ctx.identity);
       if (posture && ctx.identity.user) {
         if (posture.goal && merged.text === undefined && (source === 'slice' || source === 'store' || source === 'vector')) {
           // A `goal/<id>` posture references the goal graph: resolve the fact

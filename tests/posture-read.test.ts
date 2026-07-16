@@ -184,3 +184,58 @@ describe('ADR-0074 — read() resolves through the principal', () => {
     expect(await cmds.read({ type: 'note' }, bare)).toEqual(await cmds.query({ type: 'note' }, bare));
   });
 });
+
+describe('ADR-0086 Inc 4 — per-participant posture (_posture/<participant>)', () => {
+  const store = createMemoryStateStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants: createMemoryGrantStore(), store }));
+
+  const ctxAs = (participant?: string, posture?: TestIdentity['posture']): ServiceContext =>
+    ({
+      identity: {
+        user: 'alice',
+        scopes: ['workspace:write', 'workspace:read'],
+        ...(participant ? { participant } : {}),
+        ...(posture ? { posture } : {}),
+      },
+      config: { tableName: 'unused-in-memory' },
+      events: { emit: async () => {} },
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    }) as unknown as ServiceContext;
+  const bare = ctxAs();
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'n/a', value: { t: 'the contraction wave ships composed reads' }, type: 'note' }, bare);
+    await cmds.remember({ key: 'n/b', value: { t: 'grocery list: apples' }, type: 'note' }, bare);
+    // The participant adopts its OWN posture: a plain fact, sibling of _presence/*.
+    await cmds.remember({ key: '_posture/driver/weave', value: { goal: 'contraction wave', lens: 'recent' } }, bare);
+  });
+
+  it("a participant's _posture fact overrides the token posture; the finer key wins", async () => {
+    // Token says groceries; the participant's own posture says contraction wave.
+    const ctx = ctxAs('driver/weave', { goal: 'grocery' });
+    expect(await cmds.read({ type: 'note' }, ctx)).toEqual(
+      await cmds.query({ type: 'note', text: 'contraction wave', lens: 'recent' }, bare),
+    );
+  });
+
+  it('a participant with no posture fact falls back to the token posture; caller args still win', async () => {
+    const ctx = ctxAs('driver/other', { goal: 'grocery' });
+    expect(await cmds.read({ type: 'note' }, ctx)).toEqual(await cmds.query({ type: 'note', text: 'grocery' }, bare));
+    // Per-call args beat both layers.
+    const explicit = ctxAs('driver/weave', { goal: 'grocery' });
+    expect(await cmds.read({ type: 'note', text: 'apples' }, explicit)).toEqual(
+      await cmds.query({ type: 'note', text: 'apples' }, bare),
+    );
+  });
+
+  it('a lapsed posture fact reads as absent (timer physics — a posture can expire with its task)', async () => {
+    await cmds.remember({ key: '_posture/driver/brief', value: { goal: 'contraction wave' }, timer: { ms: 60_000, effect: 'delete' } }, bare);
+    const ctx = ctxAs('driver/brief');
+    // Live: biases the read.
+    expect(await cmds.read({ type: 'note' }, ctx)).toEqual(await cmds.query({ type: 'note', text: 'contraction wave' }, bare));
+    // Force-expire by rewriting with a past timer (the release idiom).
+    await cmds.remember({ key: '_posture/driver/brief', value: { goal: 'contraction wave' }, timer: { at: new Date(Date.now() - 1000).toISOString(), effect: 'delete' } }, bare);
+    expect(await cmds.read({ type: 'note' }, ctx)).toEqual(await cmds.query({ type: 'note' }, bare));
+  });
+});

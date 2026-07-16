@@ -298,7 +298,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'query',
     description:
-      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor/offset to page. Pass `text` to rank by MEANING as well (ADR-0051): `query({text})` alone is semantic search that still respects earned salience; `query({type, text})` is the structural+semantic hybrid. Intent queries (`text` present) default to a top-20 shortlist of orientation-shaped entries (value preview + trimmed `_meta` incl. `relevance`) — pass explicit `limit`/`shape` for more. Use this instead of recall when you want a targeted subset.',
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor/offset to page. Pass `text` to rank by MEANING (ADR-0051/0085): `query({text})` alone is semantic search; `query({type, text})` is the structural+semantic hybrid. Intent queries (`text` present) are RELEVANCE-ORDERED — cosine drives the ranking, salience breaks ties, and entries the intent never reached are dropped rather than padded in — and default to a top-20 shortlist of orientation-shaped entries (value preview + trimmed `_meta` incl. `relevance`). Pass explicit `limit`/`shape`/`rankBy` to override. Use this instead of recall when you want a targeted subset.',
     scope: null,
     scopeFamily: 'read:type:*',
     kind: 'read',
@@ -310,7 +310,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         prefix: { type: 'string', description: 'Only keys with this prefix' },
         text: { type: 'string', description: 'Rank by meaning: free text, embedded and matched semantically. Relevance leads the salience blend for this call (intent preset; an explicit `salience` override still wins). Prefer this over `search` — same candidates, but salience-aware ranking and full query filters' },
         contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },
-        rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
+        rankBy: { type: 'string', enum: ['salience', 'recency', 'relevance'], description: 'Ranking (default salience; intent queries with `text` default to relevance — cosine first, salience tiebreak, no-relevance tail dropped)' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
         explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
@@ -352,7 +352,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         tag: { type: 'string' },
         prefix: { type: 'string' },
         contains: { type: 'string' },
-        rankBy: { type: 'string', enum: ['salience', 'recency'] },
+        rankBy: { type: 'string', enum: ['salience', 'recency', 'relevance'] },
         limit: { type: 'number' },
         cursor: { type: 'string' },
         view: { type: 'string', enum: ['overview', 'full'], description: 'source:slice — overview (default) or the full shaped view' },
@@ -433,14 +433,16 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'suggestions',
     description:
-      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). Pairs whose endpoints are BYTE-IDENTICAL (same content hash) carry `identical:true` — their ~1.0 score is textual identity, not a relationship: dedupe/prune material, not connections to ratify. Pairs another participant is currently adjudicating carry `leasedBy`/`leasedUntil` (a live `lease/suggestion/<pairHash>`, ADR-0086) — skip those. High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). Pairs whose endpoints are BYTE-IDENTICAL (same content hash) carry `identical:true`; pairs mechanically derived from ONE SOURCE (sibling blocks of a doc, a block vs its own parent, a copy vs its original) carry `degenerate` — in both, the ~1.0 score is construction, not a relationship: dedupe/prune material, not connections to ratify. Pairs another participant is currently adjudicating carry `leasedBy`/`leasedUntil` (a live `lease/suggestion/<pairHash>`, ADR-0086) — skip those. `genuineOnly:true` drops all three classes server-side; `offset` pages the ranked list. High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Cap on candidates returned (default 25)' },
+        offset: { type: 'number', description: 'Skip this many ranked candidates first (paging)' },
         includeRuntime: { type: 'boolean', description: 'Include runtime/machine facts (transcripts, agent-runs, cells) filtered out by default' },
+        genuineOnly: { type: 'boolean', description: 'Only pairs worth judging: drop byte-identical pairs, same-source degeneracies, and pairs another participant holds a lease on' },
       },
       additionalProperties: false,
     },
@@ -462,6 +464,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               createdAt: { type: 'string' },
               pairHash: { type: 'string', description: 'The pair\'s stable id — lease it before adjudicating: lease({domain:"suggestion", item: pairHash}) (ADR-0086)' },
               identical: { type: 'boolean', description: 'Endpoints share a content hash (byte-identical text) — prune, don\'t ratify' },
+              degenerate: { type: 'string', enum: ['same-source', 'contains'], description: 'Mechanically derived from one source (sibling blocks of a doc; a block vs its own parent; a copy vs its original) — structure the graph already knows, not a connection to ratify' },
               leasedBy: { type: ['string', 'null'], description: 'A participant currently holds this pair (skip it — in-flight, ADR-0086)' },
               leasedUntil: { type: ['string', 'null'] },
             },

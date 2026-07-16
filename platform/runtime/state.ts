@@ -1227,8 +1227,12 @@ export interface QueryOptions {
   tag?: string;
   /** Only keys with this prefix. */
   prefix?: string;
-  /** Ranking: read-time salience (default) or last-write recency. */
-  rankBy?: 'salience' | 'recency';
+  /** Ranking: read-time salience (default), last-write recency, or intent
+   *  relevance (ADR-0085 Inc 3 — the default when a `relevance` map is present:
+   *  an intent query is "which few entries matter for THIS goal", so cosine
+   *  drives the order and salience only breaks ties; keys the intent didn't
+   *  reach are dropped, not padded in by standing salience). */
+  rankBy?: 'salience' | 'recency' | 'relevance';
   /** Bias salience for this query via a named lens — compiled or
    *  slice-declared (`_config/lenses`, ADR-0078). Unknown names are ignored. */
   lens?: SalienceLens | (string & {});
@@ -1831,23 +1835,35 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const wrapped = await Promise.all(
         candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain, opts?.relevance)) })),
       );
+      // ADR-0085 Inc 3 (W3c): rankBy:'relevance' — cosine first, salience as
+      // tiebreak — drops the no-relevance tail (rows the intent never reached,
+      // which pure salience used to pad the shortlist with: "link above ratify"
+      // for a ratification goal). OPT-IN here: a bare relevance map still only
+      // adds the sixth signal (never an authority, ADR-0051) — the workspace
+      // intent path is what defaults `text` queries to this ranking.
       const rankBy = opts?.rankBy ?? 'salience';
-      wrapped.sort((a, b) =>
-        rankBy === 'recency'
-          ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
-          : b._meta.score - a._meta.score,
-      );
+      let ranked = wrapped;
+      if (rankBy === 'relevance') {
+        ranked = wrapped.filter((e) => (e._meta.relevance ?? 0) > 0);
+        ranked.sort((a, b) => (b._meta.relevance ?? 0) - (a._meta.relevance ?? 0) || b._meta.score - a._meta.score);
+      } else {
+        ranked.sort((a, b) =>
+          rankBy === 'recency'
+            ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
+            : b._meta.score - a._meta.score,
+        );
+      }
       // Cursor = a plain offset into the fresh ranking: best-effort resume,
       // honest about salience reordering between pages (no snapshot to leak).
       const offset = opts?.cursor ? Math.max(0, Number.parseInt(opts.cursor, 10) || 0) : 0;
       const end = opts?.limit !== undefined ? offset + Math.max(0, opts.limit) : undefined;
-      const page = wrapped.slice(offset, end);
+      const page = ranked.slice(offset, end);
       const consumed = offset + page.length;
       return {
         entries: page,
         count: page.length,
-        total: wrapped.length,
-        ...(consumed < wrapped.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
+        total: ranked.length,
+        ...(consumed < ranked.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
       };
     },
 
