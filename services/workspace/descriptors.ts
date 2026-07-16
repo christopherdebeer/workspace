@@ -433,7 +433,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'suggestions',
     description:
-      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). Pairs whose endpoints are BYTE-IDENTICAL (same content hash) carry `identical:true` — their ~1.0 score is textual identity, not a relationship: dedupe/prune material, not connections to ratify. High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). Pairs whose endpoints are BYTE-IDENTICAL (same content hash) carry `identical:true` — their ~1.0 score is textual identity, not a relationship: dedupe/prune material, not connections to ratify. Pairs another participant is currently adjudicating carry `leasedBy`/`leasedUntil` (a live `lease/suggestion/<pairHash>`, ADR-0086) — skip those. High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -1124,6 +1124,58 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       additionalProperties: false,
     },
     resultSchema: { ...ENTRY_SCHEMA, description: 'The retired fact, or null when the key never existed' },
+  },
+  {
+    name: 'lease',
+    description:
+      'Take a WORK LEASE on a contended item (ADR-0086): time-bounded exclusivity, atomically acquired (`lease/<domain>/<item>` written ifAbsent with a delete-at-expiry timer), so parallel participants do not double-work the same thing — e.g. `{domain:"suggestion", item:"<pairHash>"}` before adjudicating a proposal. A lease asserts nothing (that would be a claim — the epistemic word) and expires on its own: a crashed holder releases by silence. Returns `held:false` with the current holder when contended. Exclusivity is COOPERATIVE — the participant key never carries authority; provenance is the accountability.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Contention domain, e.g. "suggestion", "run"' },
+        item: { type: 'string', description: 'The item within it, e.g. a pair hash or run id' },
+        minutes: { type: 'number', description: 'Lease duration (default 5, clamped 1–120). Must exceed honest work duration' },
+        note: { type: 'string', description: 'Optional: what the holder intends' },
+      },
+      required: ['domain', 'item'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        held: { type: 'boolean' },
+        key: { type: 'string' },
+        holder: { type: ['string', 'null'], description: 'Your participant key/principal when held; the CURRENT holder when not' },
+        expiresAt: { type: ['string', 'null'] },
+      },
+    },
+  },
+  {
+    name: 'release',
+    description:
+      'Release a work lease early (expires the `lease/<domain>/<item>` fact now — a lapsed timer IS "released" in the vocabulary acquirers understand). Letting it lapse is equally valid — release is a courtesy to waiting participants. Releasing a lease another participant holds is permitted but noted in the result (cooperative exclusivity, ADR-0086).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string' },
+        item: { type: 'string' },
+      },
+      required: ['domain', 'item'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        released: { type: 'boolean' },
+        key: { type: 'string' },
+        reason: { type: 'string', description: 'Present when not released (e.g. no live lease)' },
+        note: { type: 'string', description: "Present when you released another participant's lease" },
+      },
+    },
   },
   {
     name: 'share',

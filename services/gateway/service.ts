@@ -605,10 +605,51 @@ async function touchCapability(ctx: ServiceContext, target: string, kind: 'read'
   }
 }
 
-function whoamiTool(
+/** One live participant row in whoami's ambient frame (ADR-0086 Inc 2). */
+interface PresenceRow {
+  participant: string;
+  actor?: string;
+  lastTarget?: string;
+  lastSeen?: string;
+  until?: string | null;
+}
+
+/** The ambient frame's presence read (ADR-0086 Inc 2): live `_presence/*`
+ *  leases in the caller's slice — who else is acting on this substrate right
+ *  now, through what verb. Lapsed leases are already excluded at read (the
+ *  timer IS the liveness). Best-effort: an ambient frame must never fail
+ *  the identity call it decorates, and it arrives as a few thin rows, not a
+ *  roster dump (the membrane lesson cuts both ways). */
+async function livePresence(ctx: ServiceContext): Promise<PresenceRow[] | undefined> {
+  if (!ctx.identity.user) return undefined;
+  try {
+    const res = await ctx
+      .serviceClient('workspace')
+      .command<{ entries?: Array<{ key: string; value?: unknown; _meta?: { updatedAt?: string; timer?: { expiresAt?: string } | null } }> }>(
+        'query',
+        { prefix: '_presence/', limit: 12 },
+      );
+    if (!Array.isArray(res?.entries) || !res.entries.length) return undefined;
+    const rows = res.entries.map((e) => {
+      const v = (e.value ?? {}) as { participant?: string; actor?: string; lastTarget?: string };
+      return {
+        participant: v.participant ?? e.key.slice('_presence/'.length),
+        ...(v.actor ? { actor: v.actor } : {}),
+        ...(v.lastTarget ? { lastTarget: v.lastTarget } : {}),
+        ...(e._meta?.updatedAt ? { lastSeen: e._meta.updatedAt } : {}),
+        ...(e._meta?.timer?.expiresAt ? { until: e._meta.timer.expiresAt } : {}),
+      };
+    });
+    return rows.length ? rows : undefined;
+  } catch {
+    return undefined; // ambient frame is decoration, never a failure
+  }
+}
+
+async function whoamiTool(
   _input: unknown,
   ctx: ServiceContext,
-): { user: string; scopes: string[]; grant?: string[]; actor?: string; posture?: unknown } {
+): Promise<{ user: string; scopes: string[]; grant?: string[]; actor?: string; posture?: unknown; participants?: PresenceRow[] }> {
   // `scopes` is the session's effective focus (what's enforced now); `grant` is the
   // token ceiling. They differ only once a session narrows/widens (incremental
   // auth), so `grant` is surfaced ONLY when it actually differs — otherwise it's
@@ -620,12 +661,17 @@ function whoamiTool(
   const scopes = ctx.identity.scopes;
   const g = ctx.identity.grantScopes;
   const grantDiffers = !!g && (g.length !== scopes.length || [...g].sort().join(' ') !== [...scopes].sort().join(' '));
+  // The ambient frame (ADR-0086 Inc 2): whoami stops answering only "who am I"
+  // and starts answering "who is here, holding what" — awareness through the
+  // board, the only way the blackboard tradition says specialists see each other.
+  const participants = await livePresence(ctx);
   return {
     user: ctx.identity.user ?? 'anonymous',
     scopes,
     ...(grantDiffers ? { grant: g } : {}),
     ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
     ...(ctx.identity.posture ? { posture: ctx.identity.posture } : {}),
+    ...(participants ? { participants } : {}),
   };
 }
 
@@ -666,7 +712,19 @@ const tools: Record<string, McpToolDefinition> = {
     title: 'Who am I',
     description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    outputSchema: { type: 'object', properties: { user: { type: 'string' }, scopes: { type: 'array' }, grant: { type: 'array' } } },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        user: { type: 'string' },
+        scopes: { type: 'array' },
+        grant: { type: 'array' },
+        participants: {
+          type: 'array',
+          description: 'The ambient frame (ADR-0086): other embodied actors live on this substrate right now — each a `_presence/*` lease {participant, actor, lastTarget, lastSeen, until}. Absent when you are alone.',
+          items: { type: 'object' },
+        },
+      },
+    },
     annotations: { readOnlyHint: true },
     handler: whoamiTool,
     // The simplest MCP-Apps canary (ADR-0034): a tiny deterministic result rendered

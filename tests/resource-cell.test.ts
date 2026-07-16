@@ -39,6 +39,8 @@ const CELLS_TOOLS = [
 ];
 
 let lastCall: { fn: string; command: string; payload: unknown; participant?: string } | undefined;
+/** Live `_presence/*` entries the workspace mock serves (ADR-0086 Inc 2). */
+let presenceEntries: Array<{ key: string; value?: unknown; _meta?: unknown }> = [];
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
 /** `_types/<type>` facts workspace.query returns for the per-user `$types` overrides (per-test). */
@@ -58,6 +60,8 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         if (env.__command === 'describeTools') result = { tools: WORKSPACE_TOOLS };
         else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_types/') {
           result = { entries: typeFacts };
+        } else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_presence/') {
+          result = { entries: presenceEntries };
         } else {
           lastCall = { fn: 'workspace', command: env.__command, payload: env.payload, ...(env.participant ? { participant: env.participant } : {}) };
           result = { echoed: env.payload };
@@ -127,6 +131,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
     cellTools = [];
     typeFacts = [];
     globalTypes = {};
+    presenceEntries = [];
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
@@ -435,6 +440,30 @@ describe('resource cell (MCP gateway, read/act)', () => {
     const res = await callTool('creator', 'act', { target: 'workspace.nope' });
     expect(res.isError).toBe(true);
     expect(res.text).toMatch(/unknown capability/i);
+  });
+
+  it('whoami echoes the ambient frame: live participants from _presence leases (ADR-0086 Inc 2)', async () => {
+    presenceEntries = [
+      {
+        key: '_presence/steward/weave',
+        value: { participant: 'steward/weave', actor: 'agent', lastTarget: '@c15r/machine.step' },
+        _meta: { updatedAt: '2026-07-16T15:00:00Z', timer: { expiresAt: '2026-07-16T15:15:00Z' } },
+      },
+    ];
+    const res = await callTool('creator', 'whoami', {});
+    const parsed = res.parsed as { participants?: Array<Record<string, unknown>> };
+    expect(parsed.participants).toHaveLength(1);
+    expect(parsed.participants![0]).toEqual({
+      participant: 'steward/weave',
+      actor: 'agent',
+      lastTarget: '@c15r/machine.step',
+      lastSeen: '2026-07-16T15:00:00Z',
+      until: '2026-07-16T15:15:00Z',
+    });
+    // Alone → the field is absent, not an empty roster (the frame stays thin).
+    presenceEntries = [];
+    const alone = await callTool('creator', 'whoami', {});
+    expect((alone.parsed as { participants?: unknown }).participants).toBeUndefined();
   });
 
   it('act with `as` threads the participant key into the downstream envelope; invalid keys error loudly (ADR-0086)', async () => {

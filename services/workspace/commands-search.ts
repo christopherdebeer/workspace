@@ -29,6 +29,7 @@ import {
   layoutShardKey,
   LAYOUT_KEY,
   contentHash,
+  isTimerLive,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { shapeEntryList, type ReadShape } from './shape';
@@ -163,6 +164,10 @@ export interface SuggestionEntry extends SuggestionCandidate {
    *  near-1.0 score is textual identity — a dedupe/prune candidate, not a
    *  connection to ratify (membrane wave 1, F5). */
   identical?: boolean;
+  /** A participant currently holds `lease/suggestion/<pairHash>` on this pair
+   *  (ADR-0086 Inc 3) — it is in-flight; skip it rather than double-adjudicate. */
+  leasedBy?: string | null;
+  leasedUntil?: string | null;
 }
 export interface SuggestionsResult {
   suggestions: SuggestionEntry[];
@@ -405,6 +410,20 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         k.startsWith('_') || noiseTypes.has(typeByKey.get(k) ?? '');
       let candidates = suggestionCandidates(edges); // already score-desc
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
+      // Work leases (ADR-0086 Inc 3): a pair a participant currently holds under
+      // `lease/suggestion/<pairHash>` is IN-FLIGHT — annotate it so parallel
+      // judges skip it instead of double-adjudicating (the wave-2 CI race).
+      // Leases are ordinary records in the list we already loaded; a lapsed
+      // timer reads as released.
+      const nowMs = Date.now();
+      const leaseByHash = new Map<string, { holder: string | null; until: string | null }>();
+      for (const r of records) {
+        if (!r.key.startsWith('lease/suggestion/') || r.superseded || !isTimerLive(r, nowMs)) continue;
+        leaseByHash.set(r.key.slice('lease/suggestion/'.length), {
+          holder: (r.value as { holder?: string } | null)?.holder ?? r.as ?? null,
+          until: r.timerExpiresAt,
+        });
+      }
       // Degeneracy flag (membrane wave 1, F5): a pair whose endpoints share a
       // CONTENT HASH is byte-identical text — boilerplate headings, decompose
       // copies — where ~1.0 cosine is textual identity, not a relationship. The
@@ -413,6 +432,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       // them `identical` (a prune/dedupe candidate, not a ratification one).
       const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => {
         const identical = !!versionByKey.get(c.from) && versionByKey.get(c.from) === versionByKey.get(c.to);
+        const lease = leaseByHash.get(contentHash(pairKey(c.from, c.to)));
         return {
           ...c,
           fromType: typeByKey.get(c.from) ?? null,
@@ -420,6 +440,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           toType: typeByKey.get(c.to) ?? null,
           toLabel: labelByKey.get(c.to) ?? c.to,
           ...(identical ? { identical: true } : {}),
+          ...(lease ? { leasedBy: lease.holder, leasedUntil: lease.until } : {}),
         };
       });
       const flagged = suggestions.filter((s) => s.identical).length;

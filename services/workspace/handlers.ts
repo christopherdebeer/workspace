@@ -38,7 +38,7 @@ import { type ViewDefinition, type ViewResult } from './views';
 import { type SubscriptionDefinition } from './subscriptions';
 import { type Grant } from './grants';
 import { type DepsBuilder } from './shared';
-import { createWriteCommands, type RememberInput, type IngestInput, type IngestResult, type SupersedeInput } from './commands-write';
+import { createWriteCommands, type RememberInput, type IngestInput, type IngestResult, type SupersedeInput, type LeaseInput, type LeaseResult, type ReleaseInput } from './commands-write';
 import {
   createReadCommands,
   type RecallInput,
@@ -159,6 +159,9 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   undeclare: CommandHandler<UndeclareInput, { ok: true }>;
   evaluate: CommandHandler<EvaluateInput, InvokeResult | ViewResult>;
   supersede: CommandHandler<SupersedeInput, Entry | null>;
+  // ADR-0086 Inc 3: work leases — time-bounded exclusivity over contended items.
+  lease: CommandHandler<LeaseInput, LeaseResult>;
+  release: CommandHandler<ReleaseInput, { released: boolean; key: string; reason?: string; note?: string }>;
   share: CommandHandler<ShareInput, Grant>;
   unshare: CommandHandler<UnshareInput, { ok: true }>;
   shared: CommandHandler<undefined, SharedResult>;

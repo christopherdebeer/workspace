@@ -10,7 +10,7 @@ import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler
 import { resolveParams } from '../services/workspace/subscriptions';
 import { stripUndefined } from '../platform/runtime/state-store-codec';
 import { createMemoryGrantStore } from '../services/workspace/grants';
-import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope } from '../platform/runtime';
+import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope, contentHash, pairKey } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
 
 /** A minimal ServiceContext for a given caller; captures emitted events. */
@@ -220,6 +220,8 @@ describe('workspace sharing / view layer', () => {
         'declare', 'declarations', 'undeclare', 'evaluate', 'edges',
         // ADR-0072 (C7): the contradiction-candidate read (Stage A).
         'contested',
+        // ADR-0086 Inc 3: work leases — cooperative exclusivity over contended items.
+        'lease', 'release',
         // ADR-0071 (C2): the one read by candidate source.
         'read',
       ].sort(),
@@ -912,10 +914,63 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       expect(real).toBeDefined();
       expect(real!.identical).toBeUndefined(); // distinct text → no flag
       expect(sug.hint).toMatch(/byte-identical/); // the result says what the scores imply
+
+      // ── ADR-0086 Inc 3: a leased pair is annotated so parallel judges skip it ──
+      const hash = contentHash(pairKey(real!.from, real!.to));
+      const judgeA = (): ServiceContext => {
+        const c = ctxOf('gina');
+        (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
+          user: 'gina',
+          scopes: ['workspace:read', 'workspace:write'],
+          participant: 'judge/A',
+        };
+        return c;
+      };
+      const got = await cmds.lease({ domain: 'suggestion', item: hash }, judgeA());
+      expect(got.held).toBe(true);
+      expect(got.holder).toBe('judge/A'); // the participant key, not the principal
+      const after = await cmds.suggestions(undefined, admin());
+      const leased = after.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'));
+      expect(leased!.leasedBy).toBe('judge/A');
+      expect(leased!.leasedUntil).toBeTruthy();
     } finally {
       if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
       else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
     }
+  });
+
+  it('work leases: atomic acquire, contention names the holder, release + expiry self-release (ADR-0086 Inc 3)', async () => {
+    const asJudge = (p: string): ServiceContext => {
+      const c = ctxOf('lessee');
+      (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
+        user: 'lessee',
+        scopes: ['workspace:read', 'workspace:write'],
+        participant: p,
+      };
+      return c;
+    };
+    // Acquire.
+    const a = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/A'));
+    expect(a).toMatchObject({ held: true, key: 'lease/suggestion/pair-1', holder: 'judge/A' });
+    expect(a.expiresAt).toBeTruthy();
+    // Contended: the second judge learns WHO holds it and moves on.
+    const b = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
+    expect(b).toMatchObject({ held: false, holder: 'judge/A' });
+    // Cooperative release by a non-holder is permitted but noted.
+    const rel = await cmds.release({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
+    expect(rel.released).toBe(true);
+    expect(rel.note).toMatch(/judge\/A/);
+    // Released → re-acquirable.
+    const c = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
+    expect(c.held).toBe(true);
+    // Expiry self-releases: plant an already-lapsed lease, then acquire over it
+    // (ifAbsent treats an expired-delete fact as absent — the crash-safe path).
+    await cmds.remember(
+      { key: 'lease/suggestion/pair-2', value: { holder: 'judge/crashed' }, type: 'lease', timer: { at: new Date(Date.now() - 60_000).toISOString(), effect: 'delete' } },
+      asJudge('judge/crashed'),
+    );
+    const d = await cmds.lease({ domain: 'suggestion', item: 'pair-2' }, asJudge('judge/B'));
+    expect(d.held).toBe(true); // the crashed holder released by silence
   });
 });
 

@@ -247,8 +247,41 @@ export function createCapabilityTouchHandler(build: DepsBuilder): EventBridgeHan
     // Re-derive the embodiment class from the gateway's stamp; anything
     // unrecognised falls back to name-classification inside actorOf.
     const actor = detail.actor === 'human' || detail.actor === 'agent' || detail.actor === 'platform' ? detail.actor : undefined;
-    const identity: Identity = { user: scope, scopes: [], ...(actor ? { actor } : {}) };
+    const participant = typeof detail.participant === 'string' && detail.participant ? detail.participant : undefined;
+    const identity: Identity = { user: scope, scopes: [], ...(actor ? { actor } : {}), ...(participant ? { participant } : {}) };
     await state.touch(scope, `_caps/${target}`, identity, detail.kind === 'act' ? 'write' : 'read');
+
+    // ADR-0086 Inc 2: PRESENCE. A participant-keyed dispatch refreshes the
+    // participant's `_presence/<key>` fact — a 15-minute delete-at-expiry
+    // lease, so absence needs no reaper (a lapsed lease IS the signal). The
+    // ambient frame (whoami) reads these to answer "who is here, holding
+    // what". Throttled: an update within 5 minutes carrying the same target
+    // is skipped — a presence write per dispatch would be write noise.
+    // Best-effort, like the touch: presence must never fail the event.
+    if (participant) {
+      try {
+        const pKey = `_presence/${participant}`;
+        const prev = await state.get(scope, pKey); // identity-less read: a platform peek, weightless (ADR-0050)
+        const prevVal = prev?.value as { lastTarget?: string } | null;
+        const fresh = !!prev && Date.parse(prev._meta.updatedAt) > Date.now() - 5 * 60_000 && prevVal?.lastTarget === target;
+        if (!fresh) {
+          await state.put(
+            {
+              scope,
+              key: pKey,
+              value: { participant, actor: actor ?? 'agent', lastTarget: target, kind: detail.kind === 'act' ? 'act' : 'read' },
+              via: 'presence:capability-invoked',
+              type: 'presence',
+              tags: ['presence'],
+              timer: { ms: 15 * 60_000, effect: 'delete' },
+            },
+            identity,
+          );
+        }
+      } catch (err) {
+        ctx.logger.warn('presence refresh failed', { scope, participant, error: (err as Error).message });
+      }
+    }
   };
 }
 

@@ -451,6 +451,41 @@ describe('capability usage feeds salience (ADR-0085 Inc 0)', () => {
   });
 });
 
+describe('presence rides the capability event (ADR-0086 Inc 2)', () => {
+  it('a participant-keyed dispatch refreshes a lease-expiring _presence fact; refreshes throttle', async () => {
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const handler = createCapabilityTouchHandler(() => ({ state, grants }));
+    const ctx = ctxFor(null);
+    const meta = { source: 'gateway', detailType: 'capability.invoked' };
+
+    await handler({ scope: 'alice', target: 'workspace.peek', kind: 'read', actor: 'agent', participant: 'probe/IP-1' }, ctx, meta);
+    const p = await store.get('alice', '_presence/probe/IP-1');
+    expect(p).not.toBeNull();
+    expect(p?.as).toBe('probe/IP-1'); // participant-stamped provenance
+    expect(p?.timerEffect).toBe('delete'); // a lease: absence needs no reaper
+    expect(p?.timerExpiresAt).toBeTruthy();
+    expect((p?.value as { lastTarget: string }).lastTarget).toBe('workspace.peek');
+    const rev = p!.revision;
+
+    // Same target within the throttle window → no rewrite (no write noise).
+    await handler({ scope: 'alice', target: 'workspace.peek', kind: 'read', actor: 'agent', participant: 'probe/IP-1' }, ctx, meta);
+    expect((await store.get('alice', '_presence/probe/IP-1'))!.revision).toBe(rev);
+
+    // A different verb refreshes what the participant is "holding".
+    await handler({ scope: 'alice', target: '@c15r/machine.step', kind: 'act', actor: 'agent', participant: 'probe/IP-1' }, ctx, meta);
+    const p2 = await store.get('alice', '_presence/probe/IP-1');
+    expect(p2!.revision).toBe(rev + 1);
+    expect((p2!.value as { lastTarget: string }).lastTarget).toBe('@c15r/machine.step');
+
+    // No participant key → no presence fact (the bare connection stays implicit).
+    await handler({ scope: 'alice', target: 'workspace.query', kind: 'read' }, ctx, meta);
+    const all = await store.list('alice', '_presence/');
+    expect(all.map((r) => r.key)).toEqual(['_presence/probe/IP-1']);
+  });
+});
+
 describe('tier-1 capability projection covers all three providers (ADR-0085 Inc 1)', () => {
   it('runTend projects auth/cells verbs via describeTools and retires deprecated aliases', async () => {
     __resetTypeDeclsCache();
