@@ -756,9 +756,12 @@ export const handler = async (event) => {
       value: { id: 'machine-runs', description: 'Machine runs — active and completed', query: { type: 'machine-run', rankBy: 'recency', limit: 50 }, render: { type: 'fields' } },
       via: 'machine.bootstrap',
     });
-    // Generic claimable-task vocabulary (not machine-specific): an atomic,
-    // lease-bound claim — sync's canonical hand-off — so one agent works a task
-    // at a time, plus the queue of runs awaiting a decision/work.
+    // Generic leasable-task vocabulary (not machine-specific): an atomic
+    // lease — sync's canonical hand-off — so one agent works a task at a
+    // time, plus the queue of runs awaiting a decision/work. (Terminology per
+    // ADR-0086: a LEASE is temporal exclusivity; a CLAIM is an epistemic
+    // assertion. The action id `task.claim` predates the ruling and renames
+    // to `task.lease` with ADR-0086 Increment 3.)
     await emit({
       key: '_actions/task.claim',
       value: {

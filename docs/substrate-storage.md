@@ -210,7 +210,8 @@ workspace read/act targets:
   ne/gt/lt over key+path) — a CEL upgrade can replace the evaluator without
   changing the stored model. Substitution (`${params.x}`/`${self}`/`${now}`)
   is single-pass; per-write `ifAbsent` + `timer` reproduces sync's canonical
-  task-queue claim (atomic, lease-bound, crash-safe). Contested write
+  task-queue lease (atomic, expiring, crash-safe — "lease" not "claim", per
+  ADR-0086's terminology ruling: a claim asserts, a lease excludes). Contested write
   targets are detected from the declared `writes[]` and surfaced, not
   blocked. Actions may not write the `_actions/` vocabulary itself.
 

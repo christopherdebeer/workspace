@@ -754,7 +754,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'registerAction',
     description:
-      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "action", def })`. Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic, lease-bound claim.',
+      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "action", def })`. Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic lease (time-bounded exclusivity — a "claim" in this substrate is an epistemic assertion, ADR-0086).',
     scope: null,
     kind: 'act',
     inputSchema: {
