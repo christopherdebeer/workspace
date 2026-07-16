@@ -474,6 +474,13 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const isNoise = (k: string): boolean =>
         k.startsWith('_') || noiseTypes.has(typeByKey.get(k) ?? '');
       let candidates = suggestionCandidates(edges); // already score-desc
+      // A pair an AUTHORED edge already connects is not a suggestion — it is
+      // structure (wave-4 live finding: a judge's `duplicates` edge written via
+      // plain `link` left the inferred similarTo listed, so the ratified pair
+      // kept resurfacing). Same precondition `contested` enforces; also makes
+      // the queue self-heal when `ratify`'s drop is skipped or raced.
+      const authored = authoredPairs(edges);
+      candidates = candidates.filter((c) => !authored.has(pairKey(c.from, c.to)));
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
       // Work leases (ADR-0086 Inc 3): a pair a participant currently holds under
       // `lease/suggestion/<pairHash>` is IN-FLIGHT — annotate it so parallel

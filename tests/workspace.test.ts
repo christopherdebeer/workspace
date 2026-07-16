@@ -993,6 +993,13 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     expect(p1.suggestions).toHaveLength(1);
     expect(p1.suggestions[0].pairHash).not.toBe(p0.suggestions[0].pairHash);
     expect(p1.suggestions[0].pairHash).toBe((await cmds.suggestions({ limit: 2 }, admin())).suggestions[1].pairHash);
+
+    // Wave-4 live finding: an AUTHORED edge between a pair removes it from the
+    // queue even when the inferred similarTo survives (link, not ratify — no drop).
+    await cmds.link({ from: 'essay/alpha', rel: 'duplicates', to: 'essay/beta' }, admin());
+    const post = await cmds.suggestions({ genuineOnly: true }, admin());
+    expect(post.suggestions.find((c) => c.from.startsWith('essay/'))).toBeUndefined();
+    expect(post.total).toBe(0);
   });
 
   it('work leases: atomic acquire, contention names the holder, release + expiry self-release (ADR-0086 Inc 3)', async () => {
