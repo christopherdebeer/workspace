@@ -1,7 +1,15 @@
 # ADR-0086 — Embodied participants: the participant key, presence, and work leases
 
-- **Status:** Accepted 2026-07-16 — **Inc 0 + Inc 1 built + validated live**
-  (deploy #356, same day). Inc 0: the claim/lease terminology amendments. Inc 1:
+- **Status:** Accepted 2026-07-16 — **Inc 0–3 built + validated live**
+  (deploys #356–358, same day). Inc 2 (presence): participant-keyed dispatches
+  refresh throttled `_presence/*` lease facts; `whoami` echoes the ambient
+  frame — live proof: two validator participants visible with actor/lastTarget/
+  until after their lease calls. Inc 3 (work leases): `workspace.lease`/`release`
+  (ifAbsent+timer; release = expire-now); suggestions annotates in-flight pairs
+  (leasedBy/leasedUntil) and carries `pairHash` so a judge can lease without
+  re-deriving the server hash — live proof: acquire→contend(holder named)→
+  cooperative release(noted)→re-acquire, full cycle. Only Inc 4
+  (per-participant posture) remains open. Inc 0: the claim/lease terminology amendments. Inc 1:
   `read`/`act` accept `as`; the gateway validates it loudly (W3f) and threads it
   via a derived context (`withIdentity` — identity patched AND the
   serviceClient rebuilt) into the identity envelope beside actor/posture/act;
