@@ -960,6 +960,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       ['file/docs/guide.md', 'The whole guide document'],
       ['essay/alpha', 'REPL for the mind'],
       ['essay/beta', 'Conversational programming environments'],
+      ['decompose-run/docs/deep/guide/40', 'A decompose chunk embedding the guide'],
     ] as const) {
       await cmds.remember({ key, value: { title }, type: 'note' }, admin());
     }
@@ -967,13 +968,16 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       store.putEdge({ scope: 'hana', from, rel: 'similarTo', to, strength: 0.3, writer: 'platform/vectors', createdAt: new Date().toISOString(), score });
     await infer('doc-block:docs/guide/1', 'doc-block:docs/guide/2', 0.999); // sibling blocks — same source
     await infer('doc-block:docs/guide/1', 'file/docs/guide.md', 0.998); // block vs its own parent doc
+    await infer('decompose-run/docs/deep/guide/40', 'file/docs/deep/guide.md', 0.997); // cross-namespace: copy vs original
     await infer('essay/alpha', 'essay/beta', 0.9); // a genuine connection
 
     const sug = await cmds.suggestions(undefined, admin());
     const sib = sug.suggestions.find((c) => c.from.includes('guide/1') && c.to.includes('guide/2'));
     expect(sib?.degenerate).toBe('same-source');
-    const parent = sug.suggestions.find((c) => [c.from, c.to].some((k) => k.startsWith('file/')));
+    const parent = sug.suggestions.find((c) => c.from.includes('guide/1') && c.to === 'file/docs/guide.md');
     expect(parent?.degenerate).toBe('contains');
+    const cross = sug.suggestions.find((c) => c.from.startsWith('decompose-run/'));
+    expect(cross?.degenerate).toBe('contains'); // the live wave-4 head: decompose-run/<path>/40 vs file/<path>.md
     const real = sug.suggestions.find((c) => c.from.startsWith('essay/'));
     expect(real?.degenerate).toBeUndefined();
     expect(sug.hint).toMatch(/genuineOnly/); // the result teaches the filter

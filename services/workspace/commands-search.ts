@@ -198,10 +198,21 @@ function keyBase(key: string): string {
     .replace(/(\/\d+)+$/, '');
 }
 
+/** A base's namespaced CORE: the path after its first segment, only when what
+ *  remains is still multi-segment (`file/docs/x/y` → `docs/x/y`; `essay/alpha`
+ *  → null — one bare word is too weak a signal to match across namespaces). */
+function coreOf(base: string): string | null {
+  const i = base.indexOf('/');
+  if (i < 0) return null;
+  const rest = base.slice(i + 1);
+  return rest.includes('/') ? rest : null;
+}
+
 /** The mechanical degeneracy class of a pair, if any (W3b, membrane waves 1–3):
  *  two facts derived from the same source cluster at ~1.0 cosine by
  *  construction — sibling blocks of one doc (`same-source`), a block vs its own
- *  parent doc/file or a decompose/snapshot copy vs its original (`contains`).
+ *  parent doc/file or a decompose/snapshot copy vs its original (`contains`,
+ *  including across namespaces: `decompose-run/<path>/40` vs `file/<path>.md`).
  *  Every judge that met these declined to ratify and had to re-derive why;
  *  say what the key structure implies instead. */
 function degeneracyOf(from: string, to: string): 'same-source' | 'contains' | undefined {
@@ -213,6 +224,13 @@ function degeneracyOf(from: string, to: string): 'same-source' | 'contains' | un
   // namespace segment on one side (`file/docs/x` vs `docs/x`).
   if (a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) return 'contains';
   if (a.endsWith(`/${b}`) || b.endsWith(`/${a}`)) return 'contains';
+  // Cross-namespace: both sides carry their own namespace segment over the
+  // same source path (`decompose-run/docs/x/40` vs `file/docs/x.md`).
+  const ca = coreOf(a);
+  const cb = coreOf(b);
+  if (ca && (ca === b || b.endsWith(`/${ca}`) || ca.endsWith(`/${b}`))) return 'contains';
+  if (cb && (cb === a || a.endsWith(`/${cb}`) || cb.endsWith(`/${a}`))) return 'contains';
+  if (ca && cb && ca === cb) return 'contains';
   return undefined;
 }
 
