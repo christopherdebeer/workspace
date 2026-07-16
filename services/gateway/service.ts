@@ -31,6 +31,7 @@
  */
 import {
   defineMcpService,
+  withIdentity,
   hasScope,
   hasGrantScope,
   holdsUnder,
@@ -398,6 +399,28 @@ export function buildContextualCatalog(
 interface DispatchInput {
   target?: string;
   input?: unknown;
+  /** The participant key (ADR-0086): which embodied actor within this
+   *  connection is acting. Provenance-grade, never authority. */
+  as?: string;
+}
+
+/** Participant keys are short path-ish names (`membrane-probe/CI-d1`,
+ *  `steward/weave`). Anything else is rejected LOUDLY (membrane principle
+ *  W3f: a silently-ignored input is worse than an error). */
+const PARTICIPANT_RE = /^[\w@][\w@/.:-]{0,63}$/;
+
+/** Resolve the dispatch's effective context: with a valid `as`, a derived
+ *  context whose identity (and downstream envelope) carries the participant
+ *  key. Authority is untouched — same principal, same scopes, same token. */
+function dispatchContext(input: DispatchInput, ctx: ServiceContext): ServiceContext {
+  const as = typeof input?.as === 'string' ? input.as.trim() : '';
+  if (!as) return ctx;
+  if (!PARTICIPANT_RE.test(as)) {
+    throw new Error(
+      `Invalid participant key "${as}" — use a short path-ish name (letters/digits/@/_ then up to 63 of [word @ / . : -]), e.g. "steward/weave".`,
+    );
+  }
+  return withIdentity(ctx, { participant: as });
 }
 
 /**
@@ -488,6 +511,7 @@ function withRender(result: unknown, cap: Capability): unknown {
 }
 
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
+  ctx = dispatchContext(input, ctx); // ADR-0086: `as` rides identity, never authority
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
@@ -538,6 +562,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
+  ctx = dispatchContext(input, ctx); // ADR-0086: `as` rides identity, never authority
   const target = (input?.target ?? '').trim();
   if (!target) throw new Error(`act requires a \`target\`. Use read("${CATALOG}") to list capabilities.`);
   const cap = await resolveTarget(ctx, target);
@@ -571,6 +596,9 @@ async function touchCapability(ctx: ServiceContext, target: string, kind: 'read'
       // The embodiment stamp (ADR-0022 mediation): the touch counts as agent vs
       // human attention, so per-actor salience weighting sees who uses which verbs.
       ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
+      // The participant key (ADR-0086): which embodied actor within the
+      // connection used the verb — per-participant usage telemetry.
+      ...(ctx.identity.participant ? { participant: ctx.identity.participant } : {}),
     });
   } catch (err) {
     ctx.logger.warn('capability touch emit failed', { target, error: (err as Error).message });
@@ -608,6 +636,12 @@ const TARGET_PROP = {
 };
 const INPUT_PROP = { type: 'object', description: 'Arguments for the capability.', additionalProperties: true };
 
+/** ADR-0086: the optional participant key on both dispatch verbs. */
+const AS_PROP = {
+  type: 'string',
+  description:
+    'Optional participant key (ADR-0086): which embodied actor within this connection is acting (e.g. "steward/weave", "probe/IP-1"). Recorded as provenance beside `via` on writes and in usage telemetry — never an authority input. Short path-ish names only.',
+};
 const READ_SCHEMA = {
   type: 'object',
   properties: {
@@ -616,12 +650,13 @@ const READ_SCHEMA = {
       ...INPUT_PROP,
       description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
     },
+    as: AS_PROP,
   },
   additionalProperties: false,
 };
 const ACT_SCHEMA = {
   type: 'object',
-  properties: { target: TARGET_PROP, input: INPUT_PROP },
+  properties: { target: TARGET_PROP, input: INPUT_PROP, as: AS_PROP },
   required: ['target'],
   additionalProperties: false,
 };

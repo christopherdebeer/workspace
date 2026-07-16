@@ -383,6 +383,22 @@ describe('workspace core verbs as capability facts (ADR-0052, tend-reconciled)',
 
 // ─── ADR-0085: capabilities rise through salience ───────────────────
 
+describe('the participant key stamps write provenance (ADR-0086 Inc 1)', () => {
+  it('a write by a participant-carrying identity records _meta.as beside via; authority is untouched', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    const probe: Identity = { user: 'alice', scopes: [], participant: 'membrane-probe/IP-1' };
+    const e = await state.put({ scope: 'r', key: 'k', value: 1, via: 'probe:test' }, probe);
+    expect(e._meta.as).toBe('membrane-probe/IP-1'); // the embodied actor
+    expect(e._meta.writer).toBe('alice'); // the verified principal — unchanged
+    expect(e._meta.via).toBe('probe:test'); // as sits BESIDE via, not inside it
+    // A rewrite without a participant clears the stamp: `as` records the LAST
+    // write's embodied actor, exactly like writer/via record the last write.
+    const e2 = await state.put({ scope: 'r', key: 'k', value: 2 }, alice);
+    expect(e2._meta.as).toBeUndefined();
+  });
+});
+
 describe('capability usage feeds salience (ADR-0085 Inc 0)', () => {
   it('state.touch bumps actor-classed counters without a read; an absent key is a silent no-op', async () => {
     const store = createMemoryStateStore();

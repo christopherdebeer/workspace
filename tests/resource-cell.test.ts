@@ -38,7 +38,7 @@ const CELLS_TOOLS = [
   { name: 'list', description: 'List your cells.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
 ];
 
-let lastCall: { fn: string; command: string; payload: unknown } | undefined;
+let lastCall: { fn: string; command: string; payload: unknown; participant?: string } | undefined;
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
 /** `_types/<type>` facts workspace.query returns for the per-user `$types` overrides (per-test). */
@@ -49,7 +49,7 @@ let globalTypes: Record<string, unknown> = {};
 function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
     invoke: (params: { FunctionName: string; Payload: string }) => {
-      const env = JSON.parse(params.Payload) as { __command: string; payload: Record<string, unknown> };
+      const env = JSON.parse(params.Payload) as { __command: string; payload: Record<string, unknown>; participant?: string };
       const fn = params.FunctionName;
       let result: unknown = null;
       if (fn === 'auth-fn' && env.__command === 'validateToken') {
@@ -59,7 +59,7 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_types/') {
           result = { entries: typeFacts };
         } else {
-          lastCall = { fn: 'workspace', command: env.__command, payload: env.payload };
+          lastCall = { fn: 'workspace', command: env.__command, payload: env.payload, ...(env.participant ? { participant: env.participant } : {}) };
           result = { echoed: env.payload };
         }
       } else if (fn === 'cells-fn') {
@@ -435,6 +435,19 @@ describe('resource cell (MCP gateway, read/act)', () => {
     const res = await callTool('creator', 'act', { target: 'workspace.nope' });
     expect(res.isError).toBe(true);
     expect(res.text).toMatch(/unknown capability/i);
+  });
+
+  it('act with `as` threads the participant key into the downstream envelope; invalid keys error loudly (ADR-0086)', async () => {
+    const ok = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k', value: 1 }, as: 'probe/IP-1' });
+    expect(ok.isError).toBeFalsy();
+    expect(lastCall?.participant).toBe('probe/IP-1'); // rode the envelope beside actor/posture
+    // Without `as`, nothing rides — the stamp is per-dispatch, never sticky.
+    await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k2', value: 2 } });
+    expect(lastCall?.participant).toBeUndefined();
+    // Malformed keys error LOUDLY (membrane principle W3f) instead of being dropped.
+    const bad = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k3', value: 3 }, as: 'has spaces!' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toMatch(/Invalid participant key/);
   });
 
   it('whoami returns the identity (built-in tool)', async () => {

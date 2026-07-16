@@ -60,6 +60,10 @@ export interface EntryMeta {
   writer: string | null;
   /** Optional label for *how* it was written (e.g. an action/command name). */
   via: string | null;
+  /** The self-declared participant key behind the last write (ADR-0086):
+   *  WHICH embodied actor within the writer's connection acted — provenance
+   *  at `via`'s trust grade, never authority. Absent when none was declared. */
+  as?: string;
   /** When the key first came into being. */
   createdAt: string;
   /** When it was last written. */
@@ -217,6 +221,10 @@ export interface StateRecord {
   firstSeq: number;
   writer: string | null;
   via: string | null;
+  /** The self-declared participant key behind the last write (ADR-0086) —
+   *  provenance decoration at `via`'s trust grade, never authority. Absent for
+   *  writes made without one. */
+  as?: string;
   createdAt: string;
   updatedAt: string;
   writers: string[];
@@ -1533,6 +1541,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         seq: rec.seq,
         writer: rec.writer,
         via: rec.via,
+        ...(rec.as ? { as: rec.as } : {}),
         createdAt: rec.createdAt,
         updatedAt: rec.updatedAt,
         writers: rec.writers,
@@ -1689,6 +1698,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         firstSeq: prev?.firstSeq ?? seq,
         writer,
         via: input.via ?? null,
+        // The participant key (ADR-0086): WHICH embodied actor within the
+        // writer's connection acted. Provenance beside `via`, never authority.
+        ...(identity?.participant ? { as: identity.participant } : {}),
         // Import preserves the migrated fact's real timestamps (so recency
         // reflects true age); native writes stamp now.
         createdAt: prev?.createdAt ?? input.import?.createdAt ?? nowIso,
