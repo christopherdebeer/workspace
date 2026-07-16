@@ -1,17 +1,29 @@
 # ADR-0086 — Embodied participants: the participant key, presence, and work leases
 
-- **Status:** Accepted 2026-07-16 — **Inc 0–4 built** (Inc 0–3 validated live,
-  deploys #356–358, same day). Inc 4 (per-participant posture) landed
-  substrate-native rather than as an auth surface: a participant adopts its
-  posture by remembering **`_posture/<participant>`** `{goal?, lens?,
-  salience?}` — a plain fact, sibling of `_presence/<participant>`, optionally
-  timer-expiring — and every composed read carrying that participant's `as`
-  resolves through it, overriding the token posture (the finer key wins;
-  `auth.adoptGoal` stays the token-level layer and the fallback). Chosen over
-  extending `adoptGoal` because posture-at-participant-grain is per-dispatch
-  state the workspace read path already owns, and a fact is visible, editable,
-  and expirable the way presence already is — no auth store change, no extra
-  validate-token payload. Inc 2 (presence): participant-keyed dispatches
+- **Status:** Accepted 2026-07-16 — **Inc 0–4 built + ALL validated live**
+  (deploys #356–358 for Inc 0–3; Inc 4 + presence/lease hardening #359–365,
+  same day). Inc 4 (per-participant posture) landed substrate-native rather
+  than as an auth surface: a participant adopts its posture by remembering
+  **`_posture/<participant>`** `{goal?, lens?, salience?}` — a plain fact,
+  sibling of `_presence/<participant>`, optionally timer-expiring — and every
+  composed read carrying that participant's `as` resolves through it,
+  overriding the token posture (the finer key wins; `auth.adoptGoal` stays the
+  token-level layer and the fallback). Chosen over extending `adoptGoal`
+  because posture-at-participant-grain is per-dispatch state the workspace read
+  path already owns, and a fact is visible, editable, and expirable the way
+  presence already is — no auth store change, no extra validate-token payload.
+  **End-to-end live proof — membrane probe wave 4** (`membrane-probes/wave-4`):
+  FOUR embodied drivers (`driver/weave`·`fix`·`improve`·`consolidate`) ran
+  concurrently, each with its own `as`, presence row, run lease, and
+  `_posture/*` — captured mid-flight as five simultaneous distinct
+  `_presence/*` rows, five non-colliding leases, and four driven machine runs
+  (including `machine/improve`'s first-ever run) driven to `done`. The whole
+  design closed the loop it was written for: the wave-2 CI double-ratify (one
+  undifferentiated actor) became four distinguishable ones that leased without
+  contending and found each other on the board. Work leases also hardened
+  under fire: pair-lease domain aliasing (`lease/pair/` ≡ `lease/suggestion/`),
+  a `ttlSeconds` alias with an echoed `grantedMinutes`, and self-renewal
+  (re-leasing your own item refreshes the timer instead of self-contending). Inc 2 (presence): participant-keyed dispatches
   refresh throttled `_presence/*` lease facts; `whoami` echoes the ambient
   frame — live proof: two validator participants visible with actor/lastTarget/
   until after their lease calls. Inc 3 (work leases): `workspace.lease`/`release`
