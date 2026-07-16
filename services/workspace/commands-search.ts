@@ -156,6 +156,9 @@ export interface SuggestionsInput {
 }
 /** A ratification candidate enriched with each endpoint's type + a short label. */
 export interface SuggestionEntry extends SuggestionCandidate {
+  /** The pair's stable id: what `lease({domain:"suggestion", item})` and the
+   *  `checked/<hash>` markers key on (ADR-0086/ADR-0072). */
+  pairHash: string;
   fromLabel: string;
   fromType: string | null;
   toLabel: string;
@@ -432,9 +435,14 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       // them `identical` (a prune/dedupe candidate, not a ratification one).
       const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => {
         const identical = !!versionByKey.get(c.from) && versionByKey.get(c.from) === versionByKey.get(c.to);
-        const lease = leaseByHash.get(contentHash(pairKey(c.from, c.to)));
+        // The pair's stable id — what `lease({domain:"suggestion", item})` and
+        // the `checked/<hash>` adjudication markers key on. Returned so a judge
+        // can lease a pair WITHOUT re-deriving the server's hash (ADR-0086).
+        const pairHash = contentHash(pairKey(c.from, c.to));
+        const lease = leaseByHash.get(pairHash);
         return {
           ...c,
+          pairHash,
           fromType: typeByKey.get(c.from) ?? null,
           fromLabel: labelByKey.get(c.from) ?? c.from,
           toType: typeByKey.get(c.to) ?? null,

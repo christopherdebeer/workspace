@@ -917,6 +917,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
 
       // ── ADR-0086 Inc 3: a leased pair is annotated so parallel judges skip it ──
       const hash = contentHash(pairKey(real!.from, real!.to));
+      expect(real!.pairHash).toBe(hash); // the entry carries its own lease key
       const judgeA = (): ServiceContext => {
         const c = ctxOf('gina');
         (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
