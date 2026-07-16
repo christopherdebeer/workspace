@@ -477,6 +477,17 @@ describe('resource cell (MCP gateway, read/act)', () => {
     const bad = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k3', value: 3 }, as: 'has spaces!' });
     expect(bad.isError).toBe(true);
     expect(bad.text).toMatch(/Invalid participant key/);
+    // FALLBACK SLOT (wave 3, W3g): a stale-schema connection can't express the
+    // top-level `as`, so `input.as` is honored too — and ALWAYS stripped from
+    // the forwarded capability args (the key is membrane metadata).
+    const nested = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k4', value: 4, as: 'probe/nested' } });
+    expect(nested.isError).toBeFalsy();
+    expect(lastCall?.participant).toBe('probe/nested'); // threaded from the fallback slot
+    expect((lastCall?.payload as Record<string, unknown>).as).toBeUndefined(); // stripped before forward
+    // Malformed nested keys error just as loudly.
+    const nestedBad = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k5', value: 5, as: 'nope nope!' } });
+    expect(nestedBad.isError).toBe(true);
+    expect(nestedBad.text).toMatch(/Invalid participant key/);
   });
 
   it('whoami returns the identity (built-in tool)', async () => {

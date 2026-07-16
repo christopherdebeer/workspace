@@ -411,9 +411,24 @@ const PARTICIPANT_RE = /^[\w@][\w@/.:-]{0,63}$/;
 
 /** Resolve the dispatch's effective context: with a valid `as`, a derived
  *  context whose identity (and downstream envelope) carries the participant
- *  key. Authority is untouched — same principal, same scopes, same token. */
+ *  key. Authority is untouched — same principal, same scopes, same token.
+ *
+ *  Two slots (membrane wave 3, W3g): the top-level `as` is primary, but a
+ *  connection whose CACHED tool schema predates the `as` deploy cannot
+ *  express it (`additionalProperties:false` rejects unknown args client-side)
+ *  — wave-3 probes tucked the key inside the capability `input`, where it was
+ *  silently swallowed: presence stayed dark and lease holders collapsed to
+ *  the principal, the exact W3f failure ADR-0086 legislated against. So
+ *  `input.as` is honored as a fallback and ALWAYS stripped before forwarding
+ *  (no capability's own schema owns `as`; leaking it downstream would make
+ *  every handler grow an accidental parameter). */
 function dispatchContext(input: DispatchInput, ctx: ServiceContext): ServiceContext {
-  const as = typeof input?.as === 'string' ? input.as.trim() : '';
+  let as = typeof input?.as === 'string' ? input.as.trim() : '';
+  const nested = input?.input as Record<string, unknown> | undefined;
+  if (nested && typeof nested.as === 'string') {
+    if (!as) as = nested.as.trim();
+    delete nested.as; // stripped in both cases — the key is membrane metadata, never a capability arg
+  }
   if (!as) return ctx;
   if (!PARTICIPANT_RE.test(as)) {
     throw new Error(
