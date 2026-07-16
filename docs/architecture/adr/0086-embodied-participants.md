@@ -1,11 +1,19 @@
 # ADR-0086 — Embodied participants: the participant key, presence, and work leases
 
-- **Status:** Proposed 2026-07-16. A design ADR — nothing here is built. It
-  extends the membrane (doc:docs/the-coupled-workspace) from *one* coupling to
-  *many*: several internal workspaces coupled to one external workspace,
-  distinguishable at the boundary, aware of each other the only way the
-  blackboard tradition says specialists ever are — through the board.
-  Sequenced in §Increments so the participant key can ship alone.
+- **Status:** Accepted 2026-07-16 — **Inc 0 + Inc 1 built + validated live**
+  (deploy #356, same day). Inc 0: the claim/lease terminology amendments. Inc 1:
+  `read`/`act` accept `as`; the gateway validates it loudly (W3f) and threads it
+  via a derived context (`withIdentity` — identity patched AND the
+  serviceClient rebuilt) into the identity envelope beside actor/posture/act;
+  `state.put` stamps `_meta.as` beside `via`; the `capability.invoked` event
+  carries `participant`. Live proof: a dispatch with `as:"validation/inc1"`
+  landed `writer:c15r · via:… · as:validation/inc1`; a malformed key errored
+  with a teaching message. Presence (Inc 2), work leases (Inc 3), and
+  per-participant posture (Inc 4) remain open. This ADR extends the membrane
+  (doc:docs/the-coupled-workspace) from *one* coupling to *many*: several
+  internal workspaces coupled to one external workspace, distinguishable at
+  the boundary, aware of each other the only way the blackboard tradition says
+  specialists ever are — through the board.
 - **Depends on:** ADR-0022 (mediation — the auth layer stamps `identity.actor`),
   ADR-0024 (RFC 8693 delegation chains — `exchangeToken` with `actor` +
   narrowed scope), ADR-0074 (adopted posture, already **per-token**:
