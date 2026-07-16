@@ -1371,6 +1371,13 @@ export interface SupersedeOptions {
 export interface ObservedState {
   put(input: WriteInput, identity?: Identity): Promise<Entry>;
   get(scope: string, key: string, identity?: Identity): Promise<Entry | null>;
+  /** Record attention on a fact WITHOUT reading it (ADR-0050 counters, ADR-0085
+   *  usage signal): one actor-classed counter increment, absent-key-safe (a miss
+   *  is a silent no-op). The capability-salience wire rides this — invoking a
+   *  verb touches its `_caps/<target>` fact, so used capabilities accrue
+   *  attention/velocity/standing and rise through recall like any other fact.
+   *  `op` follows the fact semantics: 'read' feeds attention, 'write' velocity. */
+  touch(scope: string, key: string, identity?: Identity, op?: 'read' | 'write'): Promise<void>;
   /** Batched, TOUCH-FREE entry read (ADR-0055 `include:'entries'`): a change-feed
    *  page inlining its post-write facts is a projection, not attention — no read
    *  touch is recorded (ADR-0050: rendering must not inflate salience). Superseded
@@ -1733,6 +1740,14 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // the next read (attention is about the future ranking, not this response).
       await store.recordTouch(scope, key, actorOf(identity), 'read', bucketOf(now.getTime()));
       return wrap(rec, now.getTime());
+    },
+
+    async touch(scope: string, key: string, identity?: Identity, op: 'read' | 'write' = 'read'): Promise<void> {
+      // The bare counter bump `get` performs, without the read: no seq, no
+      // trajectory event, no value returned. recordTouch's conditional update
+      // makes an absent key a no-op, so callers may touch speculatively (e.g.
+      // a capability target whose `_caps/*` projection hasn't covered it yet).
+      await store.recordTouch(scope, key, actorOf(identity), op, bucketOf(Date.now()));
     },
 
     async getMany(scope: string, keys: string[]): Promise<Record<string, Entry | null>> {

@@ -1,9 +1,16 @@
 # ADR-0085 — Capabilities are facts: the self-model dissolves into the model
 
-- **Status:** Proposed 2026-07-15. A design ADR — nothing here is built. It
-  names a direction the substrate is already **half-committed to** (the
-  `_caps/*` projection exists) and the specific wires left open. Sequenced in
-  §Open so the cheap, high-leverage first increment can land alone.
+- **Status:** Accepted 2026-07-16 — **Inc 0 + Inc 1 built** (same day). Inc 0:
+  the gateway announces every successful read/act dispatch as
+  `capability.invoked` (source-pinned); the workspace applies it as one
+  actor-classed touch on `_caps/<target>` via the new `ObservedState.touch`
+  primitive (absent-key-safe), so used verbs accrue attention/velocity/standing.
+  Inc 1: the tend-pass reconciler now covers ALL THREE tier-1 providers
+  (workspace from its descriptors; auth/cells over the same `describeTools`
+  seam the gateway aggregates), diff-only, retiring DEPRECATED aliases and
+  verbs a provider stops advertising — closing the 80-vs-121 coverage drift.
+  Later increments (capability lens, `$catalog` demotion, `$types`/`$grants`
+  generalization) remain open, §Open.
 - **Depends on:** ADR-0033 (progressive-disclosure recall — the overview/focus
   shape this reuses), ADR-0048 (read shaping — `card`/`refs` tiers, already the
   presentation for any fact), ADR-0049 (contextual `$catalog {for}` — capability

@@ -115,31 +115,80 @@ export async function runTend(
   });
   ctx.logger.info('workspace tended', { scope, via, stale: report.stale, unlinked: report.unlinked, dangling: report.dangling });
 
-  // ADR-0052: the workspace's own verbs are capability facts too — reconciled
-  // by the tend pass (the repair organ), so the fact floor covers tier-1 verbs
-  // without a deploy-time seam. Diff-only writes: an unchanged verb costs
-  // nothing (no revision churn, no re-embed). Best-effort, like suggestions.
+  // ADR-0052 / ADR-0085 Inc 1: tier-1 verbs are capability facts too —
+  // reconciled by the tend pass (the repair organ), so the fact floor covers
+  // the whole tier-1 surface without a deploy-time seam. Best-effort, like
+  // suggestions: a reconcile failure must not fail the audit.
   try {
-    const capWriter: Identity = { user: 'platform/cells', scopes: [] };
-    const existing = await state.query(scope, { prefix: '_caps/workspace.' }, capWriter);
+    await reconcileTierOneCapabilities(ctx, state, scope);
+  } catch (err) {
+    ctx.logger.warn('tier-1 capability reconcile failed', { scope, error: (err as Error).message });
+  }
+  return report;
+}
+
+/**
+ * ADR-0085 Inc 1: reconcile the TIER-1 capability facts — `_caps/workspace.*`,
+ * `_caps/auth.*`, `_caps/cells.*` — closing the coverage gap the ADR measured
+ * live (80 capability facts vs 121 catalog targets: dynamic-cell tools project
+ * on deploy, but only workspace's tier-1 verbs had a writer; auth and cells
+ * were never materialized, so the fact floor lied by two whole services).
+ *
+ * workspace's verbs come from its own static descriptors; auth/cells answer
+ * `describeTools` over the same seam the gateway's catalog aggregates
+ * (`workspace.allow(auth|cells)` already grants the calls). Diff-only writes:
+ * an unchanged verb costs nothing (no revision churn, no re-embed). DEPRECATED
+ * aliases are skipped AND retired if previously projected — an embeddable
+ * capability fact steering goal-matching toward a superseded verb is worse
+ * than none. Verbs a provider stops advertising retire the same way
+ * (supersede, mirroring the dynamic-cell reconciler).
+ */
+async function reconcileTierOneCapabilities(ctx: ServiceContext, state: ObservedState, scope: string): Promise<void> {
+  const capWriter: Identity = { user: 'platform/cells', scopes: [] };
+  const firstSentence = (text: string): string => (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text.slice(0, 240)).trim();
+
+  // Provider → advertised tools. A provider whose discovery fails contributes
+  // nothing this pass — and is EXCLUDED from retirement (absence of evidence).
+  const providers: Array<{ cell: string; tools: Array<{ name: string; description: string; kind: 'read' | 'act' }> }> = [
+    { cell: 'workspace', tools: TOOL_DESCRIPTORS.map((d) => ({ name: d.name, description: d.description, kind: d.kind })) },
+  ];
+  for (const cell of ['auth', 'cells'] as const) {
+    try {
+      const res = await ctx
+        .serviceClient(cell)
+        .command<{ tools?: Array<{ name?: string; description?: string; kind?: string }> }>('describeTools', {});
+      providers.push({
+        cell,
+        tools: (res?.tools ?? [])
+          .filter((t): t is { name: string; description?: string; kind?: string } => typeof t.name === 'string' && !!t.name)
+          .map((t) => ({ name: t.name, description: t.description ?? `${cell}.${t.name}`, kind: t.kind === 'read' ? 'read' : 'act' })),
+      });
+    } catch (err) {
+      ctx.logger.warn('tier-1 capability discovery failed', { cell, error: (err as Error).message });
+    }
+  }
+
+  for (const p of providers) {
+    const prefix = `_caps/${p.cell}.`;
+    const existing = await state.query(scope, { prefix, limit: 200 }, capWriter);
     const summaries = new Map(existing.entries.map((e) => [e.key, (e.value as { summary?: string } | null)?.summary]));
-    const firstSentence = (text: string): string => (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text.slice(0, 240)).trim();
-    for (const d of TOOL_DESCRIPTORS) {
-      if (d.name === 'search') continue; // deprecated alias (ADR-0051) — not worth a fact
-      const key = `_caps/workspace.${d.name}`;
-      const summary = firstSentence(d.description);
+    const live = p.tools.filter((t) => !/^DEPRECATED\b/.test(t.description));
+    const wanted = new Set(live.map((t) => `${prefix}${t.name}`));
+    for (const t of live) {
+      const key = `${prefix}${t.name}`;
+      const summary = firstSentence(t.description);
       if (summaries.get(key) === summary) continue;
       await state.put(
         {
           scope,
           key,
           value: {
-            target: `workspace.${d.name}`,
-            name: `workspace.${d.name}`,
-            kind: d.kind,
+            target: `${p.cell}.${t.name}`,
+            name: `${p.cell}.${t.name}`,
+            kind: t.kind,
             summary,
-            cell: 'workspace',
-            schemaRef: `$catalog resolve: workspace.${d.name}`,
+            cell: p.cell,
+            schemaRef: `$catalog resolve: ${p.cell}.${t.name}`,
           },
           via: 'tend:capabilities',
           type: 'capability',
@@ -148,10 +197,42 @@ export async function runTend(
         capWriter,
       );
     }
-  } catch (err) {
-    ctx.logger.warn('workspace capability reconcile failed', { scope, error: (err as Error).message });
+    for (const stale of existing.entries) {
+      if (!wanted.has(stale.key)) await state.supersede(scope, stale.key, null, capWriter);
+    }
   }
-  return report;
+}
+
+/**
+ * ADR-0085 Inc 0: the usage→salience wire. The gateway announces every
+ * successful dispatch as `capability.invoked`; apply it as ONE actor-classed
+ * counter bump on the target's `_caps/<target>` fact (ADR-0050 — a read-kind
+ * verb feeds attention, an act-kind verb velocity, both standing: the same
+ * signal semantics facts earn from get/put). An absent fact no-ops inside
+ * recordTouch's conditional update, so un-projected targets cost nothing.
+ *
+ * This is the increment that makes ADR-0085's thesis literally true: before
+ * it, every capability fact sat inert at standing:0 — "capabilities rise
+ * through salience" with nothing to rise on. After it, the verbs you actually
+ * drive accrue standing and float into recall's focus band; the long tail
+ * elides. Salience becomes a usage-frequency prior over your own toolset.
+ */
+export function createCapabilityTouchHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'gateway') {
+      ctx.logger.warn('capability.invoked from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const scope = typeof detail.scope === 'string' ? detail.scope : '';
+    const target = typeof detail.target === 'string' ? detail.target : '';
+    if (!scope || !target) return;
+    const { state } = build(ctx);
+    // Re-derive the embodiment class from the gateway's stamp; anything
+    // unrecognised falls back to name-classification inside actorOf.
+    const actor = detail.actor === 'human' || detail.actor === 'agent' || detail.actor === 'platform' ? detail.actor : undefined;
+    const identity: Identity = { user: scope, scopes: [], ...(actor ? { actor } : {}) };
+    await state.touch(scope, `_caps/${target}`, identity, detail.kind === 'act' ? 'write' : 'read');
+  };
 }
 
 /** The scheduled tend: an EventBridge cron delivers `workspace.tend.requested`. */

@@ -271,6 +271,11 @@ export class PlatformStack extends cdk.Stack {
     // a `workspace.reindex.requested` event and the handler chains continuation events to
     // itself (source 'workspace'), one bounded page per invocation, off the 30s edge.
     eventBus.routeTo('ReindexRoute', workspace.fn, ['workspace.reindex.requested'], 'workspace');
+    // ADR-0085 Inc 0 (usage → salience): the gateway announces every successful
+    // read/act dispatch as `capability.invoked` (source pinned to the gateway —
+    // only the real dispatch path may claim a capability was used); the workspace
+    // applies it as one actor-classed touch on the `_caps/<target>` fact.
+    eventBus.routeTo('CapabilityTouchRoute', workspace.fn, ['capability.invoked'], 'gateway');
     // Autonomous tending (the legacy workspace's signature loop): a daily
     // schedule delivers workspace.tend.requested; the handler distills
     // attention() into a tending/latest audit fact per scope.

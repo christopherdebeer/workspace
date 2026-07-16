@@ -256,7 +256,7 @@ describe('capability facts (ADR-0052)', () => {
 
 // ─── ADR-0050 move 4: the recall digest ─────────────────────────────
 
-import { runTend } from '../services/workspace/event-handlers';
+import { runTend, createCapabilityTouchHandler } from '../services/workspace/event-handlers';
 
 describe('recall digest (ADR-0050 — seq-validated write-behind)', () => {
   it('a bare recall caches; the cache serves until a write invalidates it', async () => {
@@ -325,5 +325,99 @@ describe('workspace core verbs as capability facts (ADR-0052, tend-reconciled)',
     await runTend(state, 'alice', ctx, 'test', { user: 'platform/tend', scopes: [] }, store);
     const again = await state.query('alice', { prefix: '_caps/workspace.recall' });
     expect(again.entries[0]._meta.revision).toBe(revBefore); // unchanged → no rewrite
+  });
+});
+
+// ─── ADR-0085: capabilities rise through salience ───────────────────
+
+describe('capability usage feeds salience (ADR-0085 Inc 0)', () => {
+  it('state.touch bumps actor-classed counters without a read; an absent key is a silent no-op', async () => {
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    await state.put({ scope: 'r', key: '_caps/workspace.remember', value: { target: 'workspace.remember' } }, platform);
+    await state.touch('r', '_caps/workspace.remember', alice, 'read');
+    await state.touch('r', '_caps/workspace.remember', agent, 'write');
+    const rec = await store.get('r', '_caps/workspace.remember');
+    expect(rec?.touches?.pw).toBe(1); // the put folded its own platform-write touch
+    expect(rec?.touches?.hr).toBe(1); // human read via touch
+    expect(rec?.touches?.aw).toBe(1); // agent write via touch
+    // Absent key: no throw, nothing created (recordTouch's conditional no-op).
+    await expect(state.touch('r', '_caps/@nobody/void.tool', alice)).resolves.toBeUndefined();
+    expect(await store.get('r', '_caps/@nobody/void.tool')).toBeNull();
+  });
+
+  it('capability.invoked from the gateway touches _caps/<target>; foreign sources are refused', async () => {
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const handler = createCapabilityTouchHandler(() => ({ state, grants }));
+    await state.put({ scope: 'alice', key: '_caps/workspace.remember', value: { target: 'workspace.remember' } }, platform);
+    const ctx = ctxFor(null); // the handler derives everything from the event detail
+
+    // An act-kind dispatch by an agent embodiment → one agent-write counter.
+    await handler(
+      { scope: 'alice', target: 'workspace.remember', kind: 'act', actor: 'agent' },
+      ctx,
+      { source: 'gateway', detailType: 'capability.invoked' },
+    );
+    // A read-kind dispatch by a human → one human-read counter.
+    await handler(
+      { scope: 'alice', target: 'workspace.remember', kind: 'read', actor: 'human' },
+      ctx,
+      { source: 'gateway', detailType: 'capability.invoked' },
+    );
+    let rec = await store.get('alice', '_caps/workspace.remember');
+    expect(rec?.touches?.aw).toBe(1);
+    expect(rec?.touches?.hr).toBe(1);
+
+    // A spoofed source must not count — only the gateway's dispatch path may
+    // claim a capability was used.
+    await handler(
+      { scope: 'alice', target: 'workspace.remember', kind: 'act', actor: 'agent' },
+      ctx,
+      { source: 'mallory', detailType: 'capability.invoked' },
+    );
+    rec = await store.get('alice', '_caps/workspace.remember');
+    expect(rec?.touches?.aw).toBe(1); // unchanged
+  });
+});
+
+describe('tier-1 capability projection covers all three providers (ADR-0085 Inc 1)', () => {
+  it('runTend projects auth/cells verbs via describeTools and retires deprecated aliases', async () => {
+    __resetTypeDeclsCache();
+    const store = createMemoryStateStore();
+    const state = createObservedState(store);
+    // A previously projected fact for a now-DEPRECATED alias (the pre-0085
+    // writer only skipped `search`) — the reconciler must retire it.
+    await state.put(
+      { scope: 'alice', key: '_caps/workspace.neighbors', value: { target: 'workspace.neighbors' }, type: 'capability', tags: ['capability'] },
+      platform,
+    );
+    const ctx = {
+      ...ctxFor('alice'),
+      serviceClient: (cell: string) => ({
+        command: async () => ({
+          tools:
+            cell === 'auth'
+              ? [{ name: 'mintToken', description: 'Mint a bearer token narrowed to your own standing. Details follow.', kind: 'act' }]
+              : [{ name: 'list', description: 'List the dynamic cells you own.', kind: 'read' }],
+        }),
+      }),
+    } as unknown as ServiceContext;
+
+    await runTend(state, 'alice', ctx, 'test', { user: 'platform/tend', scopes: [] }, store);
+
+    const caps = await state.query('alice', { prefix: '_caps/', limit: 200 });
+    const keys = caps.entries.map((e) => e.key);
+    expect(keys).toContain('_caps/workspace.remember');
+    expect(keys).toContain('_caps/auth.mintToken');
+    expect(keys).toContain('_caps/cells.list');
+    expect(keys).not.toContain('_caps/workspace.neighbors'); // deprecated → retired
+
+    const mint = caps.entries.find((e) => e.key === '_caps/auth.mintToken')!;
+    expect(mint._meta.type).toBe('capability');
+    expect((mint.value as { kind: string }).kind).toBe('act');
+    expect((mint.value as { summary: string }).summary).toBe('Mint a bearer token narrowed to your own standing.');
+    expect((mint.value as { cell: string }).cell).toBe('auth');
   });
 });

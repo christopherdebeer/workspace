@@ -520,7 +520,9 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return withRender(await cap.forward(input?.input, ctx), cap);
+  const out = await cap.forward(input?.input, ctx);
+  await touchCapability(ctx, target, cap.kind);
+  return withRender(out, cap);
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
@@ -530,7 +532,37 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return withRender(await cap.forward(input?.input, ctx), cap);
+  const out = await cap.forward(input?.input, ctx);
+  await touchCapability(ctx, target, cap.kind);
+  return withRender(out, cap);
+}
+
+/**
+ * ADR-0085 Inc 0: invocation feeds salience. Every successful dispatch touches
+ * the target's `_caps/<target>` capability fact in the CALLER's scope, via a
+ * platform event the workspace applies as one actor-classed counter bump
+ * (ADR-0050). A target whose projection fact doesn't exist (yet, or in this
+ * scope — e.g. a granted foreign cell's tool, whose fact lives in the owner's
+ * slice) is a silent no-op downstream, so firing unconditionally is safe.
+ * Best-effort by design: a salience signal must never fail the dispatch it
+ * measures. Only real capability dispatches touch — the self-model surfaces
+ * ($catalog/$types/…) are projections, not invocations, and recording them
+ * would make salience a mirror of orientation reads (ADR-0050's own caution).
+ */
+async function touchCapability(ctx: ServiceContext, target: string, kind: 'read' | 'act'): Promise<void> {
+  if (!ctx.identity.user) return;
+  try {
+    await ctx.events.emit('capability.invoked', {
+      scope: ctx.identity.user,
+      target,
+      kind,
+      // The embodiment stamp (ADR-0022 mediation): the touch counts as agent vs
+      // human attention, so per-actor salience weighting sees who uses which verbs.
+      ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
+    });
+  } catch (err) {
+    ctx.logger.warn('capability touch emit failed', { target, error: (err as Error).message });
+  }
 }
 
 function whoamiTool(
@@ -661,6 +693,9 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
 export const handler = defineMcpService({
   name: 'gateway',
   mcpPath: '/mcp',
+  // ADR-0085 Inc 0: every successful read/act dispatch announces itself so the
+  // workspace can bump the target's `_caps/<target>` attention counters.
+  events: { emits: ['capability.invoked'] },
   serverInfo: { name: 'parc-substrate', title: 'parc.land substrate', version: '1.0.0' },
   // The spec's `instructions` field: the server's self-introduction, surfaced
   // into the model's context at connect — discovery must not depend on a
