@@ -50,14 +50,19 @@ export function cardValue(v: unknown, depth = 0): unknown {
 
 /** The `_meta` slice that survives the refs tier: identity, vocabulary signals
  *  (type/tags — key-prefix routing needs them), salience, freshness. The card
- *  tier keeps `_meta` whole — values are where the weight lives. */
+ *  tier keeps `_meta` whole — values are where the weight lives. `relevance`
+ *  rides along when present (a goal-conditioned read ranked this entry BY it —
+ *  membrane wave 1, F7: a ranked shortlist that hides its ranking signal makes
+ *  the caller re-derive why each hit is there). */
 function refsMeta(m: EntryMeta): EntryMeta {
+  const rel = (m as { relevance?: number }).relevance;
   return {
     type: m.type,
     tags: m.tags,
     score: m.score,
     updatedAt: m.updatedAt,
     superseded: m.superseded,
+    ...(rel !== undefined ? { relevance: rel } : {}),
     shaped: 'refs',
   } as unknown as EntryMeta;
 }

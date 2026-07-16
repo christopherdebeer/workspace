@@ -282,6 +282,9 @@ export interface QueryInput {
   limit?: number;
   /** Resume token from a previous page's `nextCursor`. */
   cursor?: string;
+  /** Numeric alias for `cursor` (which is structurally a plain offset into the
+   *  fresh ranking). Previously accepted-and-ignored — the worst API answer. */
+  offset?: number;
   includeSuperseded?: boolean;
   /** Find a fact by what's inside it: keep only facts whose key or value
    *  (stringified) contains this substring, case-insensitively. */
@@ -597,6 +600,18 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // the intent preset (an explicit `salience` override still wins).
       const text = typeof input?.text === 'string' ? input.text.trim() : '';
       const relevance = text ? await relevanceFor(vectors, scope, text) : undefined;
+      // F7 (membrane wave 1): an intent query (`text` present) is an ORIENTATION
+      // read — "which few entries matter for this goal?" — not a corpus dump.
+      // Un-limited, it returned the WHOLE ranked slice with full `_meta` per hit
+      // (102 capability facts = 77KB, blowing a caller's result window with a
+      // shortlist it only needed the head of). Default intent queries to a
+      // top-20 shortlist; an explicit `limit` still wins, filters-only queries
+      // are unchanged.
+      const limit = input?.limit ?? (text ? 20 : undefined);
+      // F9: `cursor` is a plain offset into the fresh ranking, but callers
+      // naturally reach for `offset` — which was silently ignored (RT-A got
+      // page 1 twice). Honor it as the alias it structurally is.
+      const cursor = input?.cursor ?? (typeof input?.offset === 'number' && input.offset > 0 ? String(input.offset) : undefined);
       const result = await state.query(
         scope,
         {
@@ -607,8 +622,8 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           lens: input?.lens,
           salience: text ? intentSalience(input?.salience) : input?.salience,
           explain: input?.explain,
-          limit: input?.limit,
-          cursor: input?.cursor,
+          limit,
+          cursor,
           includeSuperseded: input?.includeSuperseded,
           contains: input?.contains,
           typeRules: await typeRulesFor(ctx),
@@ -618,7 +633,17 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       );
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
-      const shaped = { ...result, entries: shapeEntryList(result.entries, input?.shape) };
+      // Intent queries also default to the ORIENTATION entry shape (card value
+      // preview + refs `_meta` incl. relevance — the same tier as recall's focus
+      // band): a ranked shortlist wants each hit's identity, preview, and WHY
+      // (relevance), not its full provenance envelope. Explicit `shape` wins;
+      // filters-only queries keep whole entries as before.
+      const entries = input?.shape
+        ? shapeEntryList(result.entries, input.shape)
+        : text
+          ? result.entries.map((e) => orientEntry(e))
+          : result.entries;
+      const shaped = { ...result, entries };
       // Observability (ADR-0081 home-cell incident): latency/size, so a future
       // CloudFront-timeout or 6MB-payload regression is diagnosable from logs
       // rather than manual CloudWatch archaeology.

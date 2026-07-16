@@ -145,7 +145,24 @@ export async function runTend(
  */
 async function reconcileTierOneCapabilities(ctx: ServiceContext, state: ObservedState, scope: string): Promise<void> {
   const capWriter: Identity = { user: 'platform/cells', scopes: [] };
-  const firstSentence = (text: string): string => (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text.slice(0, 240)).trim();
+  // First sentence, abbreviation-aware (membrane wave 1, F8): the naive
+  // first-period regex cut summaries at "e.g." — `workspace.link`'s embedded
+  // text became "…in your slice (e." — mangling both readability and the
+  // embedding that intent-routed discovery ranks on. A terminator only ends
+  // the sentence when it isn't a known abbreviation and is followed by a
+  // space/end (so "v3.2", "tar.gz", "docs/x.md" don't terminate either).
+  const firstSentence = (text: string): string => {
+    const re = /[.!?]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const head = text.slice(0, m.index + 1);
+      if (/\b(?:e\.g|i\.e|etc|vs|cf)\.$/i.test(head)) continue;
+      const next = text[m.index + 1];
+      if (next !== undefined && next !== ' ' && next !== '\n') continue;
+      return head.trim();
+    }
+    return text.slice(0, 240).trim();
+  };
 
   // Provider → advertised tools. A provider whose discovery fails contributes
   // nothing this pass — and is EXCLUDED from retirement (absence of evidence).

@@ -254,10 +254,22 @@ function cellOf(target: string): string {
   return dot > 0 ? target.slice(0, dot) : target;
 }
 
-/** First sentence of a description — enough to decide whether to drill in. */
+/** First sentence of a description — enough to decide whether to drill in.
+ *  Abbreviation-aware (membrane wave 1, F8): the naive first-period cut menu
+ *  summaries at "e.g." ("…in your slice (e.") and inside filenames/versions
+ *  ("tar." before "gz"). A terminator ends the sentence only when it isn't a
+ *  known abbreviation and is followed by a space or the end of the text. */
 function firstSentence(text: string): string {
-  const m = text.match(/^[^.!?]*[.!?]/);
-  return (m ? m[0] : text).trim();
+  const re = /[.!?]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const head = text.slice(0, m.index + 1);
+    if (/\b(?:e\.g|i\.e|etc|vs|cf)\.$/i.test(head)) continue;
+    const next = text[m.index + 1];
+    if (next !== undefined && next !== ' ' && next !== '\n') continue;
+    return head.trim();
+  }
+  return text.trim();
 }
 
 /** Longest a grouped-menu summary line may run. Many descriptions pack a long

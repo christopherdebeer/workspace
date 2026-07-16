@@ -885,6 +885,38 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
   it('ratify rejects a self-link', async () => {
     await expect(cmds.ratify({ from: 'x', to: 'x', rel: 'refines' }, ctxOf('alice'))).rejects.toThrow(/self-link/);
   });
+
+  it('suggestions flags byte-identical pairs as identical (prune material, not ratification) — membrane F5', async () => {
+    const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
+    process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05';
+    try {
+      const admin = (): ServiceContext => {
+        const ctx = ctxOf('gina');
+        (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'gina', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+        return ctx;
+      };
+      // Two byte-identical boilerplate blocks (the degenerate class every wave-1
+      // judge met at the queue head) and one genuinely-related distinct pair.
+      await cmds.remember({ key: 'bp1', value: { content: '### Shape' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'bp2', value: { content: '### Shape' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'd1', value: { title: 'GraphQL schema stitching across services' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'd2', value: { title: 'GraphQL federation and schema composition' }, type: 'note' }, admin());
+      await cmds.reindex(undefined, admin());
+      await drainReindex('gina');
+
+      const sug = await cmds.suggestions(undefined, admin());
+      const bp = sug.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'));
+      expect(bp).toBeDefined();
+      expect(bp!.identical).toBe(true); // same content hash → flagged
+      const real = sug.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'));
+      expect(real).toBeDefined();
+      expect(real!.identical).toBeUndefined(); // distinct text → no flag
+      expect(sug.hint).toMatch(/byte-identical/); // the result says what the scores imply
+    } finally {
+      if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
+      else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
+    }
+  });
 });
 
 describe('workspace timers (lease / reveal, evaluated at read)', () => {

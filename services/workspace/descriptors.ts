@@ -298,7 +298,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'query',
     description:
-      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Pass `text` to rank by MEANING as well (ADR-0051): `query({text})` alone is semantic search that still respects earned salience; `query({type, text})` is the structural+semantic hybrid. Use this instead of recall when you want a targeted subset.',
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor/offset to page. Pass `text` to rank by MEANING as well (ADR-0051): `query({text})` alone is semantic search that still respects earned salience; `query({type, text})` is the structural+semantic hybrid. Intent queries (`text` present) default to a top-20 shortlist of orientation-shaped entries (value preview + trimmed `_meta` incl. `relevance`) — pass explicit `limit`/`shape` for more. Use this instead of recall when you want a targeted subset.',
     scope: null,
     scopeFamily: 'read:type:*',
     kind: 'read',
@@ -315,8 +315,9 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         salience: SALIENCE_OVERRIDE_SCHEMA,
         explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
         shape: SHAPE_SCHEMA,
-        limit: { type: 'number', description: 'Max entries to return' },
+        limit: { type: 'number', description: 'Max entries to return (intent queries with `text` default to 20)' },
         cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
+        offset: { type: 'number', description: 'Numeric paging alias for `cursor` (which is a plain offset into the fresh ranking)' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
       },
       additionalProperties: false,
@@ -432,7 +433,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'suggestions',
     description:
-      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). Pairs whose endpoints are BYTE-IDENTICAL (same content hash) carry `identical:true` — their ~1.0 score is textual identity, not a relationship: dedupe/prune material, not connections to ratify. High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -459,6 +460,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               toType: { type: 'string' },
               strength: { type: 'number' },
               createdAt: { type: 'string' },
+              identical: { type: 'boolean', description: 'Endpoints share a content hash (byte-identical text) — prune, don\'t ratify' },
             },
           },
         },

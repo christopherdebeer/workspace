@@ -159,6 +159,10 @@ export interface SuggestionEntry extends SuggestionCandidate {
   fromType: string | null;
   toLabel: string;
   toType: string | null;
+  /** Both endpoints share a content hash: byte-identical text, where the
+   *  near-1.0 score is textual identity — a dedupe/prune candidate, not a
+   *  connection to ratify (membrane wave 1, F5). */
+  identical?: boolean;
 }
 export interface SuggestionsResult {
   suggestions: SuggestionEntry[];
@@ -166,6 +170,8 @@ export interface SuggestionsResult {
   vocab: readonly string[];
   /** Total candidates before `limit` (so a caller knows there are more). */
   total: number;
+  /** Present when identical pairs were flagged — what the scores imply. */
+  hint?: string;
 }
 export interface RatifyInput {
   from: string;
@@ -393,19 +399,38 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
       const typeByKey = new Map(records.map((r) => [r.key, r.type]));
       const labelByKey = new Map(records.map((r) => [r.key, labelForRecord(r.key, r.value)]));
+      const versionByKey = new Map(records.map((r) => [r.key, r.version]));
       const noiseTypes = noiseTypesFor(records); // slice-declared over the floor
       const isNoise = (k: string): boolean =>
         k.startsWith('_') || noiseTypes.has(typeByKey.get(k) ?? '');
       let candidates = suggestionCandidates(edges); // already score-desc
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
-      const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => ({
-        ...c,
-        fromType: typeByKey.get(c.from) ?? null,
-        fromLabel: labelByKey.get(c.from) ?? c.from,
-        toType: typeByKey.get(c.to) ?? null,
-        toLabel: labelByKey.get(c.to) ?? c.to,
-      }));
-      return { suggestions, vocab: RATIFY_LINK_TYPES, total: candidates.length };
+      // Degeneracy flag (membrane wave 1, F5): a pair whose endpoints share a
+      // CONTENT HASH is byte-identical text — boilerplate headings, decompose
+      // copies — where ~1.0 cosine is textual identity, not a relationship. The
+      // queue head is systematically these; every judge that met them declined
+      // to ratify and had to re-derive why. Say what the score implies: flag
+      // them `identical` (a prune/dedupe candidate, not a ratification one).
+      const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => {
+        const identical = !!versionByKey.get(c.from) && versionByKey.get(c.from) === versionByKey.get(c.to);
+        return {
+          ...c,
+          fromType: typeByKey.get(c.from) ?? null,
+          fromLabel: labelByKey.get(c.from) ?? c.from,
+          toType: typeByKey.get(c.to) ?? null,
+          toLabel: labelByKey.get(c.to) ?? c.to,
+          ...(identical ? { identical: true } : {}),
+        };
+      });
+      const flagged = suggestions.filter((s) => s.identical).length;
+      return {
+        suggestions,
+        vocab: RATIFY_LINK_TYPES,
+        total: candidates.length,
+        ...(flagged
+          ? { hint: `${flagged} of ${suggestions.length} candidates are byte-identical pairs (identical:true) — dedupe/prune material, not connections to ratify.` }
+          : {}),
+      };
     },
 
     // ADR-0072 (C7) Stage A: the contradiction-candidate read. Semantic debt, as a

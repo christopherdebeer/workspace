@@ -166,6 +166,53 @@ describe('relevance as the sixth signal (ADR-0051)', () => {
     __resetTypeDeclsCache();
   });
 
+  it('intent queries default to a top-20 orientation shortlist; explicit limit/shape win (membrane F7/F9)', async () => {
+    __resetTypeDeclsCache();
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const vstore = new MemoryVectorStore();
+    const embedder = new HashingEmbedder(128);
+    const cmds = createWorkspaceCommands(() => ({ state, grants, vectors: { store: vstore, embedder }, store }));
+    const ctx = ctxFor('alice');
+    // 25 facts — more than the intent-query default shortlist.
+    for (let i = 0; i < 25; i++) {
+      const value = { title: `note number ${i} about various topics`, body: 'x'.repeat(500) };
+      await cmds.remember({ key: `n/${i}`, value, type: 'note' }, ctx);
+      const [vector] = await embedder.embed([embeddableText(`n/${i}`, value)!]);
+      await vstore.put(indexForScope('alice', embedder.dimension), [{ key: `n/${i}`, vector, metadata: metadataForFact({ type: 'note' }) }]);
+    }
+    // Intent query, no limit/shape: top-20 shortlist of orientation-shaped entries.
+    const q = (await cmds.query({ text: 'notes about topics' }, ctx)) as {
+      entries: Array<{ value?: { body?: string }; _meta: Record<string, unknown> }>;
+      total: number;
+    };
+    expect(q.entries.length).toBeLessThanOrEqual(20); // default shortlist
+    expect(q.total).toBe(25); // total still reports the corpus
+    const first = q.entries[0];
+    expect(first._meta.shaped).toBe('card'); // orientation shape
+    expect(first._meta.writers).toBeUndefined(); // provenance trimmed
+    expect((first.value?.body ?? '').length).toBeLessThan(500); // preview, not body
+    // Explicit limit + shape still win.
+    const full = (await cmds.query({ text: 'notes about topics', limit: 25, shape: 'full' }, ctx)) as {
+      entries: Array<{ value?: { body?: string }; _meta: Record<string, unknown> }>;
+    };
+    expect(full.entries.length).toBe(25);
+    expect(full.entries[0]._meta.writers).toBeDefined();
+    // Filters-only queries are unchanged (whole entries, no implicit limit).
+    const plain = (await cmds.query({ prefix: 'n/' }, ctx)) as { entries: Array<{ _meta: Record<string, unknown> }> };
+    expect(plain.entries.length).toBe(25);
+    expect(plain.entries[0]._meta.shaped).toBeUndefined();
+    // F9: `offset` pages exactly like the numeric cursor it aliases.
+    const page1 = await cmds.query({ prefix: 'n/', limit: 2 }, ctx);
+    const page2 = await cmds.query({ prefix: 'n/', limit: 2, offset: 2 }, ctx);
+    expect(page2.entries.map((e) => e.key)).toEqual(
+      (await cmds.query({ prefix: 'n/', limit: 2, cursor: '2' }, ctx)).entries.map((e) => e.key),
+    );
+    expect(page2.entries[0].key).not.toBe(page1.entries[0].key); // actually advanced
+    __resetTypeDeclsCache();
+  });
+
   it('text without a vector backend degrades honestly (unweighted, hinted)', async () => {
     __resetTypeDeclsCache();
     const store = createMemoryStateStore();
@@ -321,6 +368,12 @@ describe('workspace core verbs as capability facts (ADR-0052, tend-reconciled)',
     expect(recallCap._meta.type).toBe('capability');
     expect((recallCap.value as { kind: string }).kind).toBe('read');
     expect(caps.entries.some((e) => e.key === '_caps/workspace.search')).toBe(false); // deprecated alias skipped
+    // F8 (membrane wave 1): the summary must not truncate at "e.g." — link's
+    // first sentence contains one, and the old regex cut it to "…slice (e."
+    const linkCap = caps.entries.find((e) => e.key === '_caps/workspace.link')!;
+    const linkSummary = (linkCap.value as { summary: string }).summary;
+    expect(linkSummary).toContain('e.g.'); // survived the abbreviation
+    expect(linkSummary.length).toBeGreaterThan(80); // the whole first sentence, not the stub
     const revBefore = recallCap._meta.revision;
     await runTend(state, 'alice', ctx, 'test', { user: 'platform/tend', scopes: [] }, store);
     const again = await state.query('alice', { prefix: '_caps/workspace.recall' });
