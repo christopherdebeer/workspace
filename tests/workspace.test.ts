@@ -1032,6 +1032,15 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     const a = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/A'));
     expect(a).toMatchObject({ held: true, key: 'lease/suggestion/pair-1', holder: 'judge/A' });
     expect(a.expiresAt).toBeTruthy();
+    expect(a.grantedMinutes).toBe(5); // W4g: the granted duration is echoed (default)
+    // W4g: a `seconds`/`ttlSeconds` spelling is honored as the alias it is (the
+    // weave driver's `ttlSeconds:1800` used to be silently dropped to 5 min).
+    const wSec = await cmds.lease({ domain: 'suggestion', item: 'pair-secs', ttlSeconds: 1800 }, asJudge('judge/A'));
+    expect(wSec.grantedMinutes).toBe(30);
+    const capped = await cmds.lease({ domain: 'suggestion', item: 'pair-cap', minutes: 999 }, asJudge('judge/A'));
+    expect(capped.grantedMinutes).toBe(120); // the clamp is now visible, not silent
+    await cmds.release({ domain: 'suggestion', item: 'pair-secs' }, asJudge('judge/A'));
+    await cmds.release({ domain: 'suggestion', item: 'pair-cap' }, asJudge('judge/A'));
     // Contended: the second judge learns WHO holds it and moves on.
     const b = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
     expect(b).toMatchObject({ held: false, holder: 'judge/A' });

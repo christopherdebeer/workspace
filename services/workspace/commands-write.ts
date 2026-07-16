@@ -74,6 +74,11 @@ export interface LeaseInput {
   /** Lease duration in minutes (default 5, clamped 1–120). Must exceed honest
    *  work duration — the reaper lesson (ADR-0084 §6). */
   minutes?: number;
+  /** Seconds alias for `minutes` (W4g — the wave-4 weave driver reached for
+   *  `ttlSeconds`, which was silently dropped to the 5-min default). Either
+   *  spelling works; `minutes` wins if both are given. */
+  seconds?: number;
+  ttlSeconds?: number;
   /** Optional free-text note (what the holder intends). */
   note?: string;
 }
@@ -84,6 +89,10 @@ export interface LeaseResult {
    *  `held`; the CURRENT holder when not. */
   holder: string | null;
   expiresAt: string | null;
+  /** The duration actually granted, in minutes (W4g — so a caller sees the
+   *  120-min cap or the 5-min floor was applied rather than inferring it from
+   *  `expiresAt`). Present when the lease was newly acquired. */
+  grantedMinutes?: number;
 }
 export interface ReleaseInput {
   domain: string;
@@ -228,7 +237,12 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       const scope = requireUser(ctx.identity);
       if (!input?.domain || !input?.item) throw new Error('domain and item are required');
       const { state } = build(ctx);
-      const minutes = Math.min(Math.max(input.minutes ?? 5, 1), 120);
+      // W4g: honor a seconds spelling as the alias it structurally is (the
+      // weave driver's `ttlSeconds:1800` was silently dropped to the default).
+      // `minutes` wins if both are set; a seconds value converts (min 1 min).
+      const secs = input.seconds ?? input.ttlSeconds;
+      const requested = input.minutes ?? (typeof secs === 'number' && secs > 0 ? secs / 60 : undefined) ?? 5;
+      const minutes = Math.min(Math.max(requested, 1), 120);
       const key = `lease/${input.domain}/${input.item}`;
       const holder = ctx.identity?.participant ?? scope;
       try {
@@ -248,7 +262,7 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
           },
           ctx.identity,
         );
-        return { held: true, key, holder, expiresAt: e._meta.timer?.expiresAt ?? null };
+        return { held: true, key, holder, expiresAt: e._meta.timer?.expiresAt ?? null, grantedMinutes: minutes };
       } catch (err) {
         if ((err as { name?: string }).name !== 'StatePreconditionError') throw err;
         // Contended: report the live holder so the caller can move on. (If the
