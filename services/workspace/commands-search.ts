@@ -92,7 +92,10 @@ const CONTESTED_HINT =
   'contradict → remember `contested/<hash>` {a, b, why, verdict} + link a --contradicts--> b. ' +
   'duplicate → consider supersede; subsumes → consider a refines edge. ' +
   'ALWAYS remember `checked/<hash>` {a, b, verdict, versions} (echo this candidate’s `versions`) — ' +
-  'the pair then stays out of this read until either fact’s version drifts.';
+  'the pair then stays out of this read until either fact’s version drifts. ' +
+  'Adjudicating in parallel? lease({domain:"suggestion", item:<hash>}) BEFORE judging (NB the ' +
+  'domain is "suggestion", keyed on this candidate’s `hash`) — a peer’s live lease then shows on ' +
+  '`suggestions` so nobody double-judges (ADR-0086).';
 
 /** A short human label for a fact, for surfaces that show a key without its full value
  *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
@@ -293,6 +296,9 @@ export interface ContestedResult {
   total: number;
   /** Pairs skipped because a current `checked/<hash>` marker already adjudicated them. */
   checked: number;
+  /** Pairs skipped as mechanically degenerate (same-source / containment — they
+   *  cannot contradict; W4c). A judge no longer has to lease + inspect them. */
+  degenerate: number;
   /** How to write a verdict back (existing verbs only — no new write surface). */
   hint: string;
 }
@@ -487,11 +493,18 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       // judges skip it instead of double-adjudicating (the wave-2 CI race).
       // Leases are ordinary records in the list we already loaded; a lapsed
       // timer reads as released.
+      // Accept BOTH the documented domain (`suggestion`) and the intuitive one a
+      // judge naturally reaches for (`pair`) — the wave-4 consolidate driver leased
+      // its adjudication pair under `lease/pair/<hash>` (domain "pair"), which the
+      // suggestion-only scan didn't see, so a parallel judge would have missed it
+      // (W4b). The keys are hash-suffixed identically; honor either prefix.
       const nowMs = Date.now();
       const leaseByHash = new Map<string, { holder: string | null; until: string | null }>();
       for (const r of records) {
-        if (!r.key.startsWith('lease/suggestion/') || r.superseded || !isTimerLive(r, nowMs)) continue;
-        leaseByHash.set(r.key.slice('lease/suggestion/'.length), {
+        if (r.superseded || !isTimerLive(r, nowMs)) continue;
+        const prefix = ['lease/suggestion/', 'lease/pair/'].find((p) => r.key.startsWith(p));
+        if (!prefix) continue;
+        leaseByHash.set(r.key.slice(prefix.length), {
           holder: (r.value as { holder?: string } | null)?.holder ?? r.as ?? null,
           until: r.timerExpiresAt,
         });
@@ -554,7 +567,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
     async contested(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { store } = build(ctx);
-      if (!store) return { candidates: [], total: 0, checked: 0, hint: CONTESTED_HINT };
+      if (!store) return { candidates: [], total: 0, checked: 0, degenerate: 0, hint: CONTESTED_HINT };
       const limit = Math.min(Math.max(input?.limit ?? 10, 1), 50);
       const minScore = input?.minScore ?? 0.5;
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
@@ -576,6 +589,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       };
       const authored = authoredPairs(edges);
       let checkedCount = 0;
+      let degenerateCount = 0;
       const out: ContestedCandidate[] = [];
       for (const c of suggestionCandidates(edges)) {
         const a = byKey.get(c.from);
@@ -587,6 +601,17 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         // similarTo write time, but assert it here so a hand-written edge can't slip a
         // connected pair back into adjudication.
         if (authored.has(pairKey(c.from, c.to))) continue;
+        // Mechanical degeneracy (W3b/W4c): a same-source or containment pair
+        // (sibling doc-blocks, a block vs its own parent, a decompose/snapshot
+        // copy) shares a type by CONSTRUCTION and scores ~1.0 by construction —
+        // it cannot *contradict* itself, so it is never a Stage-A candidate. The
+        // wave-4 consolidate driver read `contested`, met exactly such a pair
+        // (the ADR-0068/0069 doc-block containment), and had to lease + inspect
+        // it to learn what the key structure already said. Skip it here, counted.
+        if (degeneracyOf(c.from, c.to)) {
+          degenerateCount++;
+          continue;
+        }
         const sharedTags = a.tags.filter((t) => b.tags.includes(t));
         const sameType = !!a.type && a.type === b.type;
         if (!sameType && sharedTags.length === 0) continue; // divergence needs common ground
@@ -610,7 +635,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           versions: { a: vA, b: vB },
         });
       }
-      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, hint: CONTESTED_HINT };
+      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, degenerate: degenerateCount, hint: CONTESTED_HINT };
     },
 
     async ratify(input, ctx) {

@@ -935,6 +935,22 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       expect(leased!.leasedBy).toBe('judge/A');
       expect(leased!.leasedUntil).toBeTruthy();
 
+      // W4b: a pair leased under the INTUITIVE domain ("pair" → lease/pair/<hash>)
+      // is honored by the annotation too — the wave-4 consolidate driver reached
+      // for "pair", not the documented "suggestion", and its lease must still show.
+      const judgeB = (): ServiceContext => {
+        const c = ctxOf('gina');
+        (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
+          user: 'gina', scopes: ['workspace:read', 'workspace:write'], participant: 'judge/B',
+        };
+        return c;
+      };
+      const bpHash = contentHash(pairKey('bp1', 'bp2'));
+      await cmds.lease({ domain: 'pair', item: bpHash }, judgeB());
+      const withPairLease = await cmds.suggestions(undefined, admin());
+      const bpLeased = withPairLease.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'));
+      expect(bpLeased!.leasedBy).toBe('judge/B'); // lease/pair/<hash> honored, not just lease/suggestion/
+
       // ── W3b: genuineOnly drops identical AND leased pairs server-side ──
       const genuine = await cmds.suggestions({ genuineOnly: true }, admin());
       expect(genuine.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'))).toBeUndefined();

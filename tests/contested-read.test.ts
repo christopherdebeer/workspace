@@ -107,6 +107,22 @@ describe('ADR-0072 — the contested read (Stage A)', () => {
     expect(res.total).toBe(2);
   });
 
+  it('mechanically degenerate pairs (same-source / containment) are skipped, counted (W4c)', async () => {
+    // Sibling doc-blocks of one doc + a block vs its own parent file: same type
+    // by construction, ~1.0 cosine by construction — they cannot contradict, so
+    // contested must not surface them (the wave-4 consolidate driver had to
+    // lease + inspect exactly such a pair to learn what the keys already said).
+    await cmds.remember({ key: 'doc-block:docs/g/1', value: { content: 'part one' }, type: 'doc-block' }, ctx);
+    await cmds.remember({ key: 'doc-block:docs/g/2', value: { content: 'part two' }, type: 'doc-block' }, ctx);
+    await cmds.remember({ key: 'file/docs/g.md', value: { content: 'the whole doc' }, type: 'doc-block' }, ctx);
+    await similar('doc-block:docs/g/1', 'doc-block:docs/g/2', 0.99); // same-source
+    await similar('doc-block:docs/g/1', 'file/docs/g.md', 0.98); // containment
+    const res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('doc-block:docs/g/1', 'doc-block:docs/g/2'));
+    expect(pairs(res)).not.toContain(pairKey('doc-block:docs/g/1', 'file/docs/g.md'));
+    expect(res.degenerate).toBeGreaterThanOrEqual(2);
+  });
+
   it('noise types are slice-declared (_config/suggestions), not only hardcoded', async () => {
     // Declare a slice-local noise type: the built-in set is only the floor.
     await cmds.remember({ key: '_config/suggestions', value: { noiseTypes: ['decision'] } }, ctx);
