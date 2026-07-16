@@ -44,6 +44,8 @@ export interface MembersInput {
 export interface EdgesInput extends EdgeScopeInput {
   /** Edges incident to this key (→ neighbors / members). Absent = the whole projection. */
   around?: string;
+  /** Alias for `around` (W4d) — the peek/neighbors spelling drivers reach for. */
+  key?: string;
   dir?: 'in' | 'out' | 'both';
   /** Restrict to this rel. */
   rel?: string;
@@ -224,7 +226,11 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
     async edges(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
-      const around = input?.around;
+      // W4d (wave-4, 3 drivers): `around` is the key-scoped anchor, but drivers
+      // reached for `key` (the peek/neighbors spelling) and `edges({key, depth})`
+      // fell through to the WHOLE-graph projection or errored. Honor `key` as the
+      // alias it structurally is — the same fact-scoped neighbourhood read.
+      const around = input?.around ?? input?.key;
       // around + membership → the `members` framing.
       if (around && input?.membership) {
         const result = await state.members(scope, around, { typeRules: await typeRulesFor(ctx) });

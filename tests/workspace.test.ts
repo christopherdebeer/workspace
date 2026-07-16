@@ -1039,6 +1039,12 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     expect(wSec.grantedMinutes).toBe(30);
     const capped = await cmds.lease({ domain: 'suggestion', item: 'pair-cap', minutes: 999 }, asJudge('judge/A'));
     expect(capped.grantedMinutes).toBe(120); // the clamp is now visible, not silent
+    // W4j: re-leasing your OWN held item RENEWS it (fresh timer), not held:false.
+    const renew = await cmds.lease({ domain: 'suggestion', item: 'pair-cap', minutes: 10 }, asJudge('judge/A'));
+    expect(renew).toMatchObject({ held: true, renewed: true, grantedMinutes: 10 });
+    // …but a DIFFERENT participant on the same held item still gets held:false.
+    const other = await cmds.lease({ domain: 'suggestion', item: 'pair-cap' }, asJudge('judge/Z'));
+    expect(other).toMatchObject({ held: false, holder: 'judge/A' });
     await cmds.release({ domain: 'suggestion', item: 'pair-secs' }, asJudge('judge/A'));
     await cmds.release({ domain: 'suggestion', item: 'pair-cap' }, asJudge('judge/A'));
     // Contended: the second judge learns WHO holds it and moves on.

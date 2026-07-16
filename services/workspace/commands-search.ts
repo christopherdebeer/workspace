@@ -612,6 +612,16 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           degenerateCount++;
           continue;
         }
+        // Byte-identical CONTENT (same content-hash version) is degenerate even
+        // when the keys are unrelated (W4l — the wave-4 consolidate driver
+        // adjudicated 8 such pairs, all `### Shape` / `## Phases` boilerplate
+        // shared across DIFFERENT docs, every one `independent`: identical text
+        // cannot contradict). The key-structural `degeneracyOf` misses these
+        // cross-document twins; the version equality catches them.
+        if (versionOf(c.from) && versionOf(c.from) === versionOf(c.to)) {
+          degenerateCount++;
+          continue;
+        }
         const sharedTags = a.tags.filter((t) => b.tags.includes(t));
         const sameType = !!a.type && a.type === b.type;
         if (!sameType && sharedTags.length === 0) continue; // divergence needs common ground

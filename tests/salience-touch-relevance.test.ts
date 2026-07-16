@@ -251,6 +251,30 @@ describe('relevance as the sixth signal (ADR-0051)', () => {
     __resetTypeDeclsCache();
   });
 
+  it('query honors `tags` (match-any) and bounds filter-only reads to a default page (W4i/W4f)', async () => {
+    __resetTypeDeclsCache();
+    const store = createMemoryStateStore();
+    const grants = createMemoryGrantStore();
+    const state = createObservedState(store);
+    const cmds = createWorkspaceCommands(() => ({ state, grants, store }));
+    const ctx = ctxFor('alice');
+    await cmds.remember({ key: 'a', value: { n: 1 }, type: 'note', tags: ['x'] }, ctx);
+    await cmds.remember({ key: 'b', value: { n: 2 }, type: 'note', tags: ['y'] }, ctx);
+    await cmds.remember({ key: 'c', value: { n: 3 }, type: 'note', tags: ['z'] }, ctx);
+    // W4i: `tags` match-any — a plural spelling that used to be a silent no-op
+    // (returning the whole slice). Now it filters to facts carrying any listed tag.
+    const q = await cmds.query({ tags: ['x', 'y'] }, ctx);
+    expect(q.entries.map((e) => e.key).sort()).toEqual(['a', 'b']);
+    // W4f: a filter-only query with no limit is bounded to a default page (not
+    // the whole slice) with nextCursor signaling more — never lossy.
+    for (let i = 0; i < 60; i++) await cmds.remember({ key: `bulk/${i}`, value: { n: i }, type: 'bulk' }, ctx);
+    const bulk = await cmds.query({ type: 'bulk' }, ctx);
+    expect(bulk.entries.length).toBe(50); // bounded default
+    expect(bulk.total).toBe(60); // total still honest
+    expect(bulk.nextCursor).toBeTruthy(); // more available
+    __resetTypeDeclsCache();
+  });
+
   it('text without a vector backend degrades honestly (unweighted, hinted)', async () => {
     __resetTypeDeclsCache();
     const store = createMemoryStateStore();

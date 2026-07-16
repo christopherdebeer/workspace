@@ -93,6 +93,9 @@ export interface LeaseResult {
    *  120-min cap or the 5-min floor was applied rather than inferring it from
    *  `expiresAt`). Present when the lease was newly acquired. */
   grantedMinutes?: number;
+  /** True when this call EXTENDED a lease you already held (W4j) rather than
+   *  acquiring a fresh one — re-leasing your own item refreshes its timer. */
+  renewed?: boolean;
 }
 export interface ReleaseInput {
   domain: string;
@@ -265,14 +268,35 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
         return { held: true, key, holder, expiresAt: e._meta.timer?.expiresAt ?? null, grantedMinutes: minutes };
       } catch (err) {
         if ((err as { name?: string }).name !== 'StatePreconditionError') throw err;
-        // Contended: report the live holder so the caller can move on. (If the
-        // lease lapsed between the failed write and this read, holder comes
-        // back null — retry the lease.)
         const existing = await state.get(scope, key, ctx.identity);
+        const liveHolder = (existing?.value as { holder?: string } | null)?.holder ?? existing?._meta.as ?? null;
+        // W4j — self-renewal: if the live lease is already YOURS, re-leasing
+        // EXTENDS it (fresh timer) rather than reporting contention against
+        // yourself (the improve driver re-leased its own run and got
+        // `held:false`, reading like it had lost the lease mid-drive). Re-put
+        // the same value with a new timer — you hold it, so this is not a steal.
+        if (existing && liveHolder === holder) {
+          const renewed = await state.put(
+            {
+              scope,
+              key,
+              value: { holder, domain: input.domain, item: input.item, ...(input.note ? { note: input.note } : {}) },
+              via: 'workspace.lease',
+              type: 'lease',
+              tags: ['lease'],
+              timer: { ms: minutes * 60_000, effect: 'delete' },
+            },
+            ctx.identity,
+          );
+          return { held: true, key, holder, expiresAt: renewed._meta.timer?.expiresAt ?? null, grantedMinutes: minutes, renewed: true };
+        }
+        // Contended by someone else: report the live holder so the caller can
+        // move on. (If the lease lapsed between the failed write and this read,
+        // holder comes back null — retry the lease.)
         return {
           held: false,
           key,
-          holder: (existing?.value as { holder?: string } | null)?.holder ?? existing?._meta.as ?? null,
+          holder: liveHolder,
           expiresAt: existing?._meta.timer?.expiresAt ?? null,
         };
       }

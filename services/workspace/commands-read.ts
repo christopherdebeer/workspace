@@ -267,6 +267,10 @@ export interface PeekInput {
 export interface QueryInput {
   type?: string;
   tag?: string;
+  /** Match-any over tags (W4i) — the plural spelling; a fact matches if it
+   *  carries at least one. Silently ignored before wave 4 (it returned the
+   *  whole slice), so honored explicitly now. */
+  tags?: string[];
   prefix?: string;
   /** Rank by meaning as well as structure (ADR-0051): free text, embedded and
    *  matched semantically. Relevance joins the salience blend under the intent
@@ -436,7 +440,7 @@ export function inferSource(input?: ComposedReadInput): ReadSource {
   if (input?.source) return input.source;
   if (input?.key) return 'key';
   if (input?.sinceSeq !== undefined || input?.last !== undefined || input?.include !== undefined) return 'changes';
-  if (input?.type || input?.tag || input?.prefix || input?.contains || input?.cursor || input?.rankBy) return 'store';
+  if (input?.type || input?.tag || (input?.tags && input.tags.length) || input?.prefix || input?.contains || input?.cursor || input?.rankBy) return 'store';
   if (input?.view) return 'slice';
   if (typeof input?.text === 'string' && input.text.trim()) return 'vector';
   return 'slice';
@@ -632,7 +636,13 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // shortlist it only needed the head of). Default intent queries to a
       // top-20 shortlist; an explicit `limit` still wins, filters-only queries
       // are unchanged.
-      const limit = input?.limit ?? (text ? 20 : undefined);
+      // W4f (wave-4, 3 drivers independently): a filter-only query with no
+      // limit returned the WHOLE slice as FULL entries — `type:knowledge` (60KB)
+      // and `lens:recent` (262KB) both blew the caller's token ceiling. Bound it
+      // to a generous default page (nextCursor signals more — never lossy), the
+      // same discipline intent queries already have. An explicit limit still wins.
+      const DEFAULT_FILTER_LIMIT = 50;
+      const limit = input?.limit ?? (text ? 20 : DEFAULT_FILTER_LIMIT);
       // F9: `cursor` is a plain offset into the fresh ranking, but callers
       // naturally reach for `offset` — which was silently ignored (RT-A got
       // page 1 twice). Honor it as the alias it structurally is.
@@ -648,6 +658,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         {
           type: input?.type,
           tag: input?.tag,
+          tags: input?.tags,
           prefix: input?.prefix,
           rankBy,
           lens: input?.lens,
@@ -796,6 +807,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           {
             type: merged.type,
             tag: merged.tag,
+            tags: merged.tags,
             prefix: merged.prefix,
             text: merged.text,
             rankBy: merged.rankBy,

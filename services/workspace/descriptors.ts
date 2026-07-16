@@ -307,6 +307,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         type: { type: 'string', description: 'Only facts of this type' },
         tag: { type: 'string', description: 'Only facts carrying this tag' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Only facts carrying at least one of these tags (match-any)' },
         prefix: { type: 'string', description: 'Only keys with this prefix' },
         text: { type: 'string', description: 'Rank by meaning: free text, embedded and matched semantically. Relevance leads the salience blend for this call (intent preset; an explicit `salience` override still wins). Prefer this over `search` — same candidates, but salience-aware ranking and full query filters' },
         contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },

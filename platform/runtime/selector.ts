@@ -16,6 +16,10 @@ export interface Selector {
   type?: string;
   /** Fact must carry this tag. */
   tag?: string;
+  /** Fact must carry AT LEAST ONE of these tags (match-any). The plural
+   *  spelling a caller naturally reaches for (wave-4 W4i: `query{tags:[…]}`
+   *  used to be a silently-ignored unknown arg that returned the whole slice). */
+  tags?: string[];
   /** Fact key must start with this prefix. (Subscriptions spell it `keyPrefix`.) */
   prefix?: string;
 }
@@ -32,6 +36,7 @@ export interface Selectable {
 export function matchesSelector(fact: Selectable, sel: Selector): boolean {
   if (sel.type !== undefined && fact.type !== sel.type) return false;
   if (sel.tag !== undefined && !(fact.tags ?? []).includes(sel.tag)) return false;
+  if (sel.tags !== undefined && sel.tags.length && !sel.tags.some((t) => (fact.tags ?? []).includes(t))) return false;
   if (sel.prefix !== undefined && !fact.key.startsWith(sel.prefix)) return false;
   return true;
 }

@@ -123,6 +123,20 @@ describe('ADR-0072 — the contested read (Stage A)', () => {
     expect(res.degenerate).toBeGreaterThanOrEqual(2);
   });
 
+  it('byte-identical CONTENT across unrelated keys is skipped too (W4l) — cannot contradict', async () => {
+    // Cross-document boilerplate: the same "### Shape" heading in two unrelated
+    // docs. Same type, ~1.0 cosine, but IDENTICAL text — it cannot contradict
+    // itself. `degeneracyOf` (key-structural) misses these; the content-hash
+    // version equality catches them (the wave-4 consolidate driver adjudicated
+    // 8 such pairs, every one `independent`).
+    await cmds.remember({ key: 'adrX/6', value: { content: '### Shape' }, type: 'doc-block' }, ctx);
+    await cmds.remember({ key: 'adrY/6', value: { content: '### Shape' }, type: 'doc-block' }, ctx);
+    await similar('adrX/6', 'adrY/6', 0.99);
+    const res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('adrX/6', 'adrY/6'));
+    expect(res.degenerate).toBeGreaterThanOrEqual(1);
+  });
+
   it('noise types are slice-declared (_config/suggestions), not only hardcoded', async () => {
     // Declare a slice-local noise type: the built-in set is only the floor.
     await cmds.remember({ key: '_config/suggestions', value: { noiseTypes: ['decision'] } }, ctx);

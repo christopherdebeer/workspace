@@ -1225,6 +1225,8 @@ export interface QueryOptions {
   type?: string;
   /** Only facts carrying this tag. */
   tag?: string;
+  /** Only facts carrying at least one of these tags (match-any; W4i). */
+  tags?: string[];
   /** Only keys with this prefix. */
   prefix?: string;
   /** Ranking: read-time salience (default), last-write recency, or intent
@@ -1827,7 +1829,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
         // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
-        if (!matchesSelector(rec, { tag: opts?.tag, prefix: opts?.prefix })) return false;
+        if (!matchesSelector(rec, { tag: opts?.tag, tags: opts?.tags, prefix: opts?.prefix })) return false;
         // Content search: find a fact by what's inside it (substring over value JSON).
         if (opts?.contains && !recordContains(rec, opts.contains)) return false;
         return true;
