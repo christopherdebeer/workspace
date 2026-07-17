@@ -675,9 +675,21 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         const hash = contentHash(pairKey(c.from, c.to));
         const [vA, vB] = [versionOf(c.from), versionOf(c.to)];
         const marker = markers.get(hash);
-        if (marker?.versions && marker.versions[c.from] === vA && marker.versions[c.to] === vB) {
-          checkedCount++;
-          continue; // adjudicated and unchanged since — idempotent skip
+        // The marker echoes the candidate's `versions` object, which is keyed
+        // POSITIONALLY `{a, b}` — not by fact key. The prior check indexed
+        // `marker.versions[c.from]` / `[c.to]` (by fact key), which is always
+        // undefined, so NO marker ever suppressed a pair: `contested` reported
+        // `checked:0` even with valid, version-matched markers present (wave-5
+        // W5-1, reproduced end-to-end). Compare the stored version VALUES to the
+        // pair's current versions, order-independently — the marker is already
+        // pair-scoped by `hash`, and byte-identical pairs (vA === vB) are skipped
+        // above, so set membership is exact.
+        if (marker?.versions) {
+          const stored = new Set(Object.values(marker.versions));
+          if (stored.has(vA) && stored.has(vB)) {
+            checkedCount++;
+            continue; // adjudicated and unchanged since — idempotent skip
+          }
         }
         out.push({
           a: c.from,

@@ -55,8 +55,43 @@ export function __setAthenaRunner(r: AthenaRunner | null): void {
   runner = r;
 }
 
+/**
+ * Redact infra internals from a backend error before it crosses the membrane
+ * (wave-5 W5-3): a raw AWS authorization failure carries the service's own IAM
+ * role ARN and account id (`arn:aws:sts::018159942401:assumed-role/…`), which
+ * leaked straight to the caller. Keep the teaching signal (which action is
+ * missing), drop the identifiers. A permission failure here is an infra grant
+ * gap, not a query the caller can fix — say so.
+ */
+export function sanitizeAthenaError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const authMiss = /not authorized to perform:?\s*([\w:*]+)/i.exec(msg);
+  if (authMiss || /access\s*denied|AccessDenied/i.test(msg)) {
+    const action = authMiss?.[1];
+    return new Error(
+      `athena backend is missing an IAM permission${action ? ` (${action})` : ''} — the analytics-lake grant needs updating; this is an infra grant gap, not a fault in your query.`,
+    );
+  }
+  // Any other backend error: scrub ARNs and bare 12-digit account ids, keep the rest.
+  const scrubbed = msg
+    .replace(/arn:aws:[^\s"')]+/gi, '[redacted-arn]')
+    .replace(/\b\d{12}\b/g, '[redacted-account]');
+  return new Error(scrubbed);
+}
+
 /** The production runner — Athena v3 SDK, lazily imported (no SDK at module load). */
 async function athenaRunner(
+  sql: string,
+  opts: { workgroup: string; database: string; maxRows: number },
+): Promise<AthenaResult> {
+  try {
+    return await athenaRunnerRaw(sql, opts);
+  } catch (err) {
+    throw sanitizeAthenaError(err);
+  }
+}
+
+async function athenaRunnerRaw(
   sql: string,
   opts: { workgroup: string; database: string; maxRows: number },
 ): Promise<AthenaResult> {
