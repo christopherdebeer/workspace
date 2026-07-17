@@ -1073,7 +1073,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       const scratchP = new THREE.Vector3();
       const labelTorchNode = (n: any): number => labelTorchAt(scratchP.set(n.x, n.y, n.z));
       // Fewer beam-lit labels on a phone — 28 at once piled up in the core.
-      const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 12 : 22;
+      // Quiet default (2026-07-17, Codex P1 "reduce ambient beam labels"):
+      // the resting map should show PLACES, not a field of fact names in
+      // motion. Ambient cap tightened 12/22 → 8/12; selection/search caps below
+      // narrow to "top representatives" so a question freezes the field to its
+      // answer, not the whole neighbourhood.
+      const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 8 : 12;
       const labelCap = (): number => TUNE.labelCap > 0 ? TUNE.labelCap : LABEL_CAP_DEFAULT;
       // Legibility gates (the dense core turned its beam labels into a white
       // pile of 7px mush): a candidate must render big enough to READ, and must
@@ -1591,9 +1596,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         };
         const focusActive = !!(selKey || hiSet);
         const mobile = Math.min(W, H) < 700;
-        const ambientCap = Math.min(labelCap(), mobile ? 10 : 14);
-        const neighbourCap = mobile ? 4 : 7;
-        const hitCap = mobile ? 8 : 12;
+        const ambientCap = Math.min(labelCap(), mobile ? 6 : 10);
+        const neighbourCap = mobile ? 3 : 5; // selection = anchor + its TOP few neighbours
+        const hitCap = mobile ? 6 : 9;
         const anchorCap = Math.min(TUNE.anchorCap, mobile ? 4 : 6);
 
         // The selected fact and hover preview are declarations: always label
@@ -1869,7 +1874,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
             torchUniforms.uSizeBoost.value = TUNE.boostSizeGain;
             eMat.uniforms.uFlowSpeed.value = TUNE.edgeFlowSpeed;
             eMat.uniforms.uFlowWidth.value = TUNE.edgeFlowWidth;
-            eMat.uniforms.uFlowGain.value = TUNE.edgeFlowGain;
+            // Edge flow is selection-only already (focus edges carry the pulse);
+            // disable it on mobile/coarse-pointer screens (Codex P1) — the moving
+            // ink is fill-rate cost and visual noise where the viewport is small.
+            eMat.uniforms.uFlowGain.value = bigScreen ? TUNE.edgeFlowGain : 0;
             eMat.uniforms.uFlowCycles.value = TUNE.edgeFlowCycles;
             if (useBloom()) ensureComposer();
             if (bloomPass) {
