@@ -44,6 +44,7 @@ import {
 } from '../../platform/runtime';
 import { typeSignals } from '../../platform/ui/vocab';
 import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
+import { validateInput, withInputWarnings, acceptedKeys, type InputValidation } from './validate';
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -591,9 +592,10 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
+  const check = enforceInput(target, input, cap.inputSchema);
   const out = await cap.forward(input?.input, ctx);
   await touchCapability(ctx, target, cap.kind);
-  return withRender(out, cap);
+  return withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
@@ -604,9 +606,28 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
+  const check = enforceInput(target, input, cap.inputSchema);
   const out = await cap.forward(input?.input, ctx);
   await touchCapability(ctx, target, cap.kind);
-  return withRender(out, cap);
+  return withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
+}
+
+/** Membrane input validation (wave-5 — W3f enforced centrally): violations of
+ *  the capability's DECLARED contract fail fast with schema feedback; keys the
+ *  contract does not know pass through but come back as a result warning, so a
+ *  silently-dropped filter can never read as "the filter applied". Runs AFTER
+ *  `dispatchContext` (the `as` slot is membrane metadata, already stripped). */
+function enforceInput(target: string, input: DispatchInput, schema: Record<string, unknown> | undefined): InputValidation {
+  const check = validateInput(input?.input, schema);
+  if (check.errors.length) {
+    const accepted = acceptedKeys(schema);
+    throw new Error(
+      `"${target}" input invalid: ${check.errors.join('; ')}.` +
+        (accepted.length ? ` Accepted keys: ${accepted.join(', ')}.` : '') +
+        ` Full contract: read("${CATALOG}", { resolve: "${target}" }).`,
+    );
+  }
+  return check;
 }
 
 /**
