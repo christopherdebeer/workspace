@@ -55,6 +55,7 @@ import {
   fetchEntryPage, fetchEdgesForKeys, fetchChangeHead, fetchGraphMeta,
   keysOfResult, isPlumbing,
 } from './graph/data';
+import { recomputeRanks as recomputeRanksImpl, salienceHubPlaces, membershipPlaces } from './graph/layout';
 
 const { useEffect, useRef, useState } = React;
 
@@ -1162,15 +1163,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       // the per-batch bookkeeping that used to be one-shot model assembly in
       // fetchGraphModel.
       const recomputeRanks = (): void => {
-        const byScore = nodes.filter((n) => !n.deleted).sort((a, b) => b.score - a.score);
-        byScore.forEach((n, i) => { n.rank = i; });
-        const tierCount = byScore.filter((n) => n.score >= meta.focusThreshold).length;
-        const bandN = Math.min(byScore.length, Math.max(tierCount, Math.ceil(byScore.length * 0.12), Math.min(12, byScore.length)));
-        focusKeys.clear();
-        for (let i = 0; i < bandN; i++) focusKeys.add(byScore[i].id);
-        byRank.length = 0;
-        byRank.push(...byScore);
-        visCount = visFrac >= 0.999 ? byScore.length : Math.max(focusKeys.size, Math.round(byScore.length * visFrac));
+        visCount = recomputeRanksImpl(nodes, meta.focusThreshold, focusKeys, byRank, visFrac);
       };
 
       // ── constellations: the map's PLACE NAMES ──────────────────────────
@@ -1257,91 +1250,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           placeOrigin.y = active.reduce((v, n) => v + n.y, 0) / active.length;
           placeOrigin.z = active.reduce((v, n) => v + n.z, 0) / active.length;
         }
-        // Computed pass: spatially distributed salience hubs, then a
-        // membership ball around each. The dominant type names the region when
-        // one truly dominates (a "notes quarter"); otherwise the hub fact
-        // itself stands for the neighbourhood.
-        const R_EX = SPREAD * 0.55, R_MEM = SPREAD * 0.45;
-        const d2 = (a: any, b: any): number => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
-        // Farthest-point sampling prevents the salient dense core from naming
-        // every territory. Salience still weights the contest, but each next
-        // hub must explain a part of semantic space not already represented.
-        const pool = byRank.slice(0, Math.min(byRank.length, 480));
-        const hubs: any[] = pool.length ? [pool[0]] : [];
-        while (hubs.length < 12 && hubs.length < pool.length) {
-          let best: any = null, bestScore = -1;
-          for (let i = 0; i < pool.length; i++) {
-            const n = pool[i];
-            if (hubs.includes(n)) continue;
-            const minD2 = Math.min(...hubs.map((h) => d2(h, n)));
-            const salienceWeight = 0.42 + 0.58 * (1 - i / Math.max(1, pool.length - 1));
-            const score = minD2 * salienceWeight;
-            if (score > bestScore) { best = n; bestScore = score; }
-          }
-          if (!best || bestScore < R_EX * R_EX * 0.12) break;
-          hubs.push(best);
-        }
-        for (const h of hubs) {
-          const members = nodes.filter((n: any) => d2(n, h) < R_MEM * R_MEM);
-          if (members.length < 6) continue; // a place needs a population
-          const counts = new Map<string, number>();
-          for (const m of members) if (m.type) counts.set(m.type, (counts.get(m.type) ?? 0) + 1);
-          let topType: string | null = null, topN = 0;
-          for (const [t, c] of counts) if (c > topN) { topType = t; topN = c; }
-          // Name the region: a truly dominant type ("notes"), else the most
-          // salient member whose title reads as WORDS — a region with only
-          // key-shaped names (machine runs, dated logs) gets no caption at
-          // all rather than a plumbing key in display caps.
-          let name: string | null = null;
-          if (topType && topN / members.length >= 0.5) {
-            name = topType.endsWith('s') || topType === 'knowledge' ? topType : `${topType}s`;
-          } else {
-            const speaker = members
-              .filter((m: any) => placeworthy(m.label))
-              .sort((a: any, b: any) => (a.rank ?? nodes.length) - (b.rank ?? nodes.length))[0];
-            if (speaker) name = String(speaker.label);
-          }
-          if (!name) continue;
-          name = name.length > 24 ? name.slice(0, 23) + '…' : name;
-          const cx = members.reduce((s: number, m: any) => s + m.x, 0) / members.length;
-          const cy = members.reduce((s: number, m: any) => s + m.y, 0) / members.length;
-          const cz = members.reduce((s: number, m: any) => s + m.z, 0) / members.length;
-          const dists = members.map((m: any) => Math.hypot(m.x - cx, m.y - cy, m.z - cz)).sort((a: number, b: number) => a - b);
-          const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
-          addConstellation(name, cx, cy, cz, cr, false);
-        }
-      }
-      // Authored pass, part 1 — MEMBERSHIP CONTAINERS. Boards, docs, and
-      // spatial views already name their members through placement edges
-      // (onBoard/inDoc/inView — ADR-0046/0054), and ADR-0057 frames all of
-      // these plus views as ONE collections family. So every container fact
-      // that enough slice members point at IS an authored place — no new
-      // grouping machinery, just the read side of the family.
-      {
-        const memberOf = new Map<string, any[]>();
-        for (const l of links) {
-          if (!MEMBER_RELS.has(l.rel)) continue;
-          const m = nodeById.get(idOf(l.source));
-          const c = nodeById.get(idOf(l.target));
-          if (!m || !c) continue;
-          const arr = memberOf.get(c.id) ?? [];
-          arr.push(m);
-          memberOf.set(c.id, arr);
-        }
-        for (const [cid, members] of memberOf) {
-          if (members.length < 4) continue; // a place needs a population
-          const c = nodeById.get(cid);
-          const rawName = String(c?.label ?? cid);
-          if (!placeworthy(rawName)) continue;
-          const cx = members.reduce((s: number, m: any) => s + m.x, 0) / members.length;
-          const cy = members.reduce((s: number, m: any) => s + m.y, 0) / members.length;
-          const cz = members.reduce((s: number, m: any) => s + m.z, 0) / members.length;
-          const dists = members.map((m: any) => Math.hypot(m.x - cx, m.y - cy, m.z - cz)).sort((a: number, b: number) => a - b);
-          const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
-          // Containers carry their fact key: the caption becomes a live door
-          // to the place itself (tap = SELECT the board/doc, not just fly).
-          addConstellation(rawName.length > 24 ? rawName.slice(0, 23) + '…' : rawName, cx, cy, cz, cr, true, cid);
-        }
+        // Place descriptors (salience hubs + membership containers) now come
+        // from graph/layout.ts as pure functions; the scene wiring stays here.
+        for (const p of salienceHubPlaces(nodes, byRank, SPREAD)) addConstellation(p.name, p.x, p.y, p.z, p.r, false);
+        for (const p of membershipPlaces(links, nodeById, idOf, SPREAD)) addConstellation(p.name, p.x, p.y, p.z, p.r, true, p.key);
       }
       // Authored pass, part 2 (async garnish — the scene never waits on it):
       // evaluate registered views, centroid their members present in this
