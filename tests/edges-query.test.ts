@@ -111,4 +111,30 @@ describe('ADR-0069 — edge query parity', () => {
     expect(authored.edges.every((e) => e.rel === 'relates')).toBe(true);
     expect(full.edges.length).toBeGreaterThan(authored.edges.length);
   });
+
+  it('an omitted limit is a bounded first page, never the whole projection (ADR-0081)', async () => {
+    // A scope whose authored edge count exceeds DEFAULT_EDGE_LIMIT: the
+    // unbounded read is exactly what failed live (CloudFront 30s / 6MB).
+    const big = ctxFor('bigscope');
+    await cmds.remember({ key: 'hub', value: { n: 0 } }, big);
+    for (let i = 0; i < 1100; i++) {
+      await cmds.link({ from: 'hub', rel: 'relates', to: `spoke/${i}` }, big);
+    }
+    const page = (await cmds.edges({ derived: false }, big)) as { edges: unknown[]; total: number; nextCursor?: string };
+    expect(page.total).toBe(1100);
+    expect(page.edges.length).toBe(1000); // DEFAULT_EDGE_LIMIT
+    expect(page.nextCursor).toBe('1000');
+
+    // The cursor walks to the end; an explicit limit still overrides the default.
+    const rest = (await cmds.edges({ derived: false, cursor: page.nextCursor }, big)) as { edges: unknown[]; nextCursor?: string };
+    expect(rest.edges.length).toBe(100);
+    expect(rest.nextCursor).toBeUndefined();
+    const capped = (await cmds.graph({ limit: 5 }, big)) as { edges: unknown[]; total: number; nextCursor?: string };
+    expect(capped.edges.length).toBe(5);
+    expect(capped.nextCursor).toBe('5');
+    // {limit: 0} stays the idiomatic count-only read.
+    const count = (await cmds.links({ limit: 0 }, big)) as { edges: unknown[]; total: number };
+    expect(count.edges.length).toBe(0);
+    expect(count.total).toBe(1100);
+  });
 });

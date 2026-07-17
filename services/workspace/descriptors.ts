@@ -582,7 +582,9 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         prefix: { type: 'string', description: 'Authored-only: only edges whose from/to starts with this prefix' },
         keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end)' },
         rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
-        limit: { type: 'number', description: 'Cap returned edges; `total` still counts every match (0 = count only)' },
+        limit: { type: 'number', description: 'Page size for projection/authored framings (default 1000 — an omitted limit returns the FIRST PAGE + `nextCursor`, never the whole projection); `total` still counts every match (0 = count only)' },
+        cursor: { type: 'string', description: "A previous page's `nextCursor` (a plain offset into the scoped edge list)" },
+        edgeShape: { type: 'string', enum: ['thin', 'full'], description: 'Edge trim for projection/authored framings: `thin` = {from, rel, to, derived?} only (a rendering consumer needs nothing else); default full' },
         depth: { type: 'number', description: 'ADR-0075: walk this many hops from `around` (2–6). 1/absent = one-hop framings' },
         direction: { type: 'string', enum: ['out', 'in'], description: "Walk direction: 'out' = downstream of the root (what X leads to), 'in' = upstream (what leads to X). Default out" },
         shape: SHAPE_SCHEMA,
@@ -619,7 +621,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: 'links',
-    description: 'DEPRECATED (ADR-0069) — prefer `edges({ derived: false })`. Every edge in your slice — boards and graph surfaces project their edges from this. Scope it (ADR-0048): `keys` = only edges touching those facts, `rels` = only those rel types, `prefix` = from/to key prefix, `limit` caps the list (`{limit: 0}` = just the `total` count). Bare calls return everything — prefer scoping.',
+    description: 'DEPRECATED (ADR-0069) — prefer `edges({ derived: false })`. Every edge in your slice — boards and graph surfaces project their edges from this. Scope it (ADR-0048): `keys` = only edges touching those facts, `rels` = only those rel types, `prefix` = from/to key prefix, `limit` sets the page size (default 1000; `{limit: 0}` = just the `total` count). Bare calls return the FIRST PAGE + `nextCursor`, never everything — page with the cursor.',
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -628,16 +630,18 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         prefix: { type: 'string', description: 'Only edges whose from or to starts with this prefix' },
         keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end)' },
         rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
-        limit: { type: 'number', description: 'Cap the returned edges; `total` still counts every match (0 = count only)' },
+        limit: { type: 'number', description: 'Page size (default 1000); `total` still counts every match (0 = count only)' },
+        cursor: { type: 'string', description: "A previous page's `nextCursor`" },
+        edgeShape: { type: 'string', enum: ['thin', 'full'], description: 'thin = {from, rel, to} only; default full' },
       },
       additionalProperties: false,
     },
-    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' } } },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' }, nextCursor: { type: 'string', description: 'Present when more pages remain' } } },
   },
   {
     name: 'graph',
     description:
-      "DEPRECATED (ADR-0069) — prefer `edges({ derived: true })`. The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary).",
+      "DEPRECATED (ADR-0069) — prefer `edges({ derived: true })`. The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary). Paged: an omitted `limit` returns the first 1000-edge page + `nextCursor` (ADR-0081 — the unbounded read failed live at the CloudFront 30s / 6MB ceiling).",
     scope: null,
     kind: 'read',
     inputSchema: {
@@ -645,11 +649,13 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end) — "the edges around these facts" instead of the whole projection (ADR-0048)' },
         rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
-        limit: { type: 'number', description: 'Cap the returned edges; `total` still counts every match (0 = count only)' },
+        limit: { type: 'number', description: 'Page size (default 1000); `total` still counts every match (0 = count only)' },
+        cursor: { type: 'string', description: "A previous page's `nextCursor`" },
+        edgeShape: { type: 'string', enum: ['thin', 'full'], description: 'thin = {from, rel, to, derived?} only; default full' },
       },
       additionalProperties: false,
     },
-    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' } } },
+    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' }, nextCursor: { type: 'string', description: 'Present when more pages remain' } } },
   },
   {
     name: 'members',
