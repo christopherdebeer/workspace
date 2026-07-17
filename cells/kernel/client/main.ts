@@ -10,7 +10,7 @@
  * Served as an ESM module at /@c15r/kernel/app.js; cells import the URL.
  * Git truth: cells/kernel/client/main.ts in the platform repo.
  */
-import { resolve as resolveIntent } from '@parc/ui';
+import { resolve as resolveIntent, titleOf as presentTitleOf } from '@parc/ui';
 
 /* ── session (shared across the origin) ─────────────────────────── */
 
@@ -427,35 +427,11 @@ function pathInto(value: unknown, path: string): unknown {
 }
 
 export function titleOf(e: FactEntry): string {
-  const decl = typeDecls?.[e._meta?.type ?? ''];
-  // Prefer the gateway-resolved Present facet (ADR-0012): its `label` is the
-  // normalised path — legacy `titlePath` folded in once, server-side. Reading
-  // the path against the fact is the irreducible client half (Present resolves
-  // where the value is). `value.*`/`key`/`meta.*` read the envelope; a bare
-  // token reads the value (legacy `titlePath` rooting) — mirrors `resolveLabel`.
-  const labelPath = decl?.present?.label ?? decl?.titlePath;
-  if (labelPath) {
-    const head = labelPath.split('.')[0];
-    const root = head === 'value' || head === 'key' || head === 'meta'
-      ? { value: e.value, key: e.key, meta: e._meta }
-      : e.value;
-    const v = pathInto(root, labelPath);
-    if (typeof v === 'string' && v) return v.slice(0, 80);
-    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-  }
-  const v = e.value;
-  if (typeof v === 'string') return v.slice(0, 80) || e.key;
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    if (typeof o.title === 'string' && o.title) return o.title.slice(0, 80);
-    if (typeof o.name === 'string' && o.name) return o.name.slice(0, 80);
-    if (typeof o.content === 'string' && o.content) {
-      const line = o.content.match(/^#+\s*(.+)$/m)?.[1] ?? o.content.split('\n').find((l) => l.trim()) ?? '';
-      const clean = line.replace(/^[-*]\s*\[[ x]\]\s*/, '').replace(/[#*_`>\\[\]()]/g, '').trim();
-      if (clean) return clean.slice(0, 80);
-    }
-  }
-  return e.key;
+  // The ONE shared Present resolver (@parc/ui): declared label path (envelope-
+  // rooted for `value.*`/`key`/`meta.*`, value-rooted for legacy bare tokens,
+  // mirroring the runtime's `resolveLabel`) → value heuristic → key. Kernel's
+  // former local body was the reference implementation the shared one keeps.
+  return presentTitleOf(e, typeDecls?.[e._meta?.type ?? '']);
 }
 
 export function hrefOf(e: FactEntry): string | null {

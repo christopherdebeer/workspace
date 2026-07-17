@@ -20,7 +20,7 @@ import { ensureAuth, isAuthed, authFetch } from './lib/auth.ts';
 import { loadTypes, cellAddress, cellUrl } from 'https://parc.land/@c15r/kernel/app.js';
 import { read, act } from './lib/substrate.ts';
 import { outbox } from './lib/outbox.ts';
-import { attachSandboxedRenderer, bodyText, fieldsToHtml } from '@parc/ui';
+import { attachSandboxedRenderer, bodyText, fieldsToHtml, heuristicTitle } from '@parc/ui';
 import {
   Surface, FactView, DocRow, TypeView, renderMarkdown, splitCells, seqBetween, extractWikiTargets, factRoute,
   parseFenceMeta, fenceTagsOf, type FenceMeta,
@@ -141,9 +141,10 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
       if (e.from === `doc:${docId}` || seen.has(e.from)) continue;
       seen.add(e.from);
       const ent = nb.entries?.[e.from];
-      const ev = ent?.value as Record<string, unknown> | undefined;
-      const label = (typeof ev?.title === 'string' && ev.title) || (typeof ev?.name === 'string' && ev.name) || deriveId(e.from);
-      backlinks.push({ key: e.from, rel: e.rel, label: label as string, type: ent?._meta?.type ?? null });
+      // The shared Present heuristic (@parc/ui) — title/name/first-content-line,
+      // replacing lit's hand-rolled title||name (which missed content-carrying facts).
+      const label = heuristicTitle(ent?.value) || deriveId(e.from);
+      backlinks.push({ key: e.from, rel: e.rel, label, type: ent?._meta?.type ?? null });
     }
   } catch { /* best-effort */ }
   return { meta, cells, backlinks };
@@ -1213,9 +1214,7 @@ async function loadFact(key: string): Promise<Extract<ViewModel, { kind: 'fact' 
     const nb = await read<{ inbound: Array<{ from: string; rel: string }>; outbound: Array<{ to: string; rel: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key });
     const labelFor = (k: string): { label: string; type: string | null } => {
       const ent = nb.entries?.[k];
-      const ev = ent?.value as Record<string, unknown> | undefined;
-      const l = (typeof ev?.title === 'string' && ev.title) || (typeof ev?.name === 'string' && ev.name) || deriveId(k);
-      return { label: l as string, type: ent?._meta?.type ?? null };
+      return { label: heuristicTitle(ent?.value) || deriveId(k), type: ent?._meta?.type ?? null };
     };
     const dedupe = (refs: LinkRef[]): LinkRef[] => {
       const seen = new Set<string>();

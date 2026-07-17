@@ -5,7 +5,7 @@
  * fact detail (peek modal, generic editor), and the workspace window itself.
  */
 import * as React from 'react';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
 import { SafeMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
@@ -36,8 +36,9 @@ interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; man
 function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
   // Prefer the gateway-resolved `present` facet (ADR-0012/0014 row 3): the legacy
   // {icon,titlePath} → {icon,label} normalisation now happens once, server-side via
-  // resolveType, so home consumes it instead of re-deriving. (The per-fact label is still
-  // applied client-side by `pathInto` — Present runs where the fact's value is.)
+  // resolveType, so home consumes it instead of re-deriving. (The per-fact label is
+  // still applied client-side, by the shared @parc/ui `titleOf` — Present runs where
+  // the fact's value is.)
   const icon = d.present?.icon ?? d.icon;
   const label = d.present?.label ?? d.label ?? d.titlePath;
   if (d.handlers || !d.href) return { ...(d as TypeDecl), icon, label }; // new-shape (+ served present)
@@ -69,39 +70,16 @@ export async function loadTypeDecls(): Promise<void> {
     /* defaults still apply */
   }
 }
-function pathInto(value: unknown, path: string): unknown {
-  let cur: unknown = value;
-  for (const p of path.split('.')) {
-    if (cur === null || typeof cur !== 'object') return undefined;
-    cur = (cur as Record<string, unknown>)[p];
-  }
-  return cur;
-}
-
 export function typeIcon(e: ListEntry): string {
-  return declFor(e, typeDecls)?.icon ?? '';
+  return iconOf(declFor(e, typeDecls));
 }
 
-/** A fact's one-line presentation: title from its value (its declared label path), not its key. */
+/** A fact's one-line presentation, via the ONE shared resolver (@parc/ui
+ *  `titleOf`): declared label path (envelope-rooted, so `value.title` reads
+ *  the entry's value — the local fork rooted it at the value and broke every
+ *  declared `value.*` label) → value heuristic → key. */
 export function factTitle(e: ListEntry): string {
-  const label = declFor(e, typeDecls)?.label;
-  if (label) {
-    const v = pathInto(e.value, label);
-    if (typeof v === 'string' && v) return v.slice(0, 80);
-  }
-  const v = e.value;
-  if (typeof v === 'string') return v.slice(0, 80) || e.key;
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    if (typeof o.title === 'string' && o.title) return o.title.slice(0, 80);
-    if (typeof o.name === 'string' && o.name) return o.name.slice(0, 80);
-    if (typeof o.content === 'string' && o.content) {
-      const line = o.content.match(/^#+\s*(.+)$/m)?.[1] ?? o.content.split('\n').find((l) => l.trim()) ?? '';
-      const clean = line.replace(/^[-*]\s*\[[ x]\]\s*/, '').replace(/[#*_`>\\[\]()]/g, '').trim();
-      if (clean) return clean.slice(0, 80);
-    }
-  }
-  return e.key;
+  return titleOf(e, declFor(e, typeDecls));
 }
 
 /**

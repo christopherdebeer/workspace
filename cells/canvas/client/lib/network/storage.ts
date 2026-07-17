@@ -108,10 +108,16 @@ const synthOrigin = new Map<string, { x: number; y: number }>();
 /** Read-time salience per fact key, for the presentation channel. */
 export const salienceByKey = new Map<string, number>();
 
+/** The type glyph ladder `present.icon ?? icon ?? floor` — ONE copy (mirrors
+ *  @parc/ui `iconOf`, kept local: canvas bundles no React and its headless
+ *  harness resolves no virtual modules, so it doesn't import the kit). */
+const iconOf = (td: { icon?: string; present?: { icon?: string } } | undefined, floor = '•'): string =>
+  td?.present?.icon ?? td?.icon ?? floor;
+
 /** The declared type vocabulary, for palette `type:` autocomplete. */
 export function knownTypes(): Array<{ name: string; icon: string }> {
   return Object.entries(factTypeDecls)
-    .map(([name, td]) => ({ name, icon: td?.present?.icon ?? td?.icon ?? '•' }))
+    .map(([name, td]) => ({ name, icon: iconOf(td) }))
     .sort((a, b) => (a.name < b.name ? -1 : 1));
 }
 
@@ -157,8 +163,7 @@ function decorateFactCard(el: any, meta: { type?: string | null; tags?: string[]
   const self = !!href && !!currentBoardId
     && (href.includes(`canvas=${encodeURIComponent(currentBoardId)}`) || href.includes(`canvas=${currentBoardId}`));
   el._factHref = self ? undefined : href;
-  const td = factTypeDecls[metaType ?? ''];
-  el._factIcon = td?.present?.icon ?? td?.icon ?? '•';
+  el._factIcon = iconOf(factTypeDecls[metaType ?? '']);
   el._factMeta = [metaType ?? 'fact', entry.key].join(' · ');
   if (typeof el.items === 'number') el._factMeta += ` · ${el.items} item${el.items === 1 ? '' : 's'}`;
   if (el.width === 240 && el.height === 120) { el.width = 270; el.height = 92; }
@@ -527,7 +532,7 @@ export async function searchFacts(q: string, controller: any, limit = 8, cursor?
     const td = r.types?.[t ?? ''] ?? factTypeDecls[t ?? ''];
     let title = key;
     try { title = titleOf({ key, value: e.value, _meta: e._meta }) || key; } catch { /* fall back to key */ }
-    hits.push({ key, title, type: t, icon: td?.present?.icon ?? td?.icon ?? '•' });
+    hits.push({ key, title, type: t, icon: iconOf(td) });
     if (hits.length >= limit) break;
   }
   return { hits, nextCursor: r.nextCursor ?? null, total: r.total ?? hits.length };
