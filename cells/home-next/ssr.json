@@ -1,0 +1,9 @@
+{
+  "reads": [
+    {
+      "as": "types",
+      "target": "cells.describeTypes",
+      "input": {}
+    }
+  ]
+}
