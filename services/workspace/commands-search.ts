@@ -29,6 +29,7 @@ import {
   layoutShardKey,
   LAYOUT_KEY,
   contentHash,
+  isTimerLive,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { shapeEntryList, type ReadShape } from './shape';
@@ -82,6 +83,19 @@ function noiseTypesFor(records: Array<{ key: string; superseded: boolean; value:
     | undefined;
   if (Array.isArray(cfg?.noiseTypes)) for (const t of cfg.noiseTypes) if (typeof t === 'string') out.add(t);
   if (Array.isArray(cfg?.admitTypes)) for (const t of cfg.admitTypes) if (typeof t === 'string') out.delete(t);
+  // The $types home for the same declaration (wave-5, cross-vendor session): a
+  // type-decl `_types/<name>` carrying {operational: true} (or {embed: false})
+  // marks a slice's own coordination vocabulary — its leases, adjudication
+  // markers, presence rows — as machinery, never a suggestion/contested
+  // candidate. The platform ships the mechanism; each slice binds its own
+  // names (the same trust seam $types already carries for render/edit
+  // affordances). Declared operational wins over `admitTypes` — a type cannot
+  // be simultaneously machinery and a candidate.
+  for (const r of records) {
+    if (r.superseded || !r.key.startsWith('_types/')) continue;
+    const v = r.value as { operational?: unknown; embed?: unknown } | null;
+    if (v?.operational === true || v?.embed === false) out.add(r.key.slice('_types/'.length));
+  }
   return out;
 }
 
@@ -91,7 +105,10 @@ const CONTESTED_HINT =
   'contradict → remember `contested/<hash>` {a, b, why, verdict} + link a --contradicts--> b. ' +
   'duplicate → consider supersede; subsumes → consider a refines edge. ' +
   'ALWAYS remember `checked/<hash>` {a, b, verdict, versions} (echo this candidate’s `versions`) — ' +
-  'the pair then stays out of this read until either fact’s version drifts.';
+  'the pair then stays out of this read until either fact’s version drifts. ' +
+  'Adjudicating in parallel? lease({domain:"suggestion", item:<hash>}) BEFORE judging (NB the ' +
+  'domain is "suggestion", keyed on this candidate’s `hash`) — a peer’s live lease then shows on ' +
+  '`suggestions` so nobody double-judges (ADR-0086).';
 
 /** A short human label for a fact, for surfaces that show a key without its full value
  *  (e.g. `suggestions`): prefer a `title`/`name`/`label` on the value, else the key. */
@@ -149,23 +166,98 @@ export interface PruneSimilarInput {
 export interface SuggestionsInput {
   /** Cap on candidates returned (default 25). */
   limit?: number;
+  /** Skip this many candidates first (paging — W3e: `query` honors it, so this does too). */
+  offset?: number;
   /** Include high-volume runtime/machine facts (transcripts, agent-runs, cells, …) that
    *  are filtered out by default as format-clustered noise. */
   includeRuntime?: boolean;
+  /** Only pairs worth a judge's attention: drop byte-identical pairs, mechanical
+   *  degeneracies (same-source siblings/containment), and pairs another participant
+   *  currently holds a lease on (W3b — every judge that met the degenerate head
+   *  declined it and had to re-derive why). */
+  genuineOnly?: boolean;
 }
 /** A ratification candidate enriched with each endpoint's type + a short label. */
 export interface SuggestionEntry extends SuggestionCandidate {
+  /** The pair's stable id: what `lease({domain:"suggestion", item})` and the
+   *  `checked/<hash>` markers key on (ADR-0086/ADR-0072). */
+  pairHash: string;
   fromLabel: string;
   fromType: string | null;
   toLabel: string;
   toType: string | null;
+  /** Both endpoints share a content hash: byte-identical text, where the
+   *  near-1.0 score is textual identity — a dedupe/prune candidate, not a
+   *  connection to ratify (membrane wave 1, F5). */
+  identical?: boolean;
+  /** The pair is mechanically derived from one source (W3b): `same-source` =
+   *  fragments of the same document/run (sibling blocks, snapshot vs latest);
+   *  `contains` = one endpoint is the other's parent/source (a block vs its own
+   *  doc, a decompose copy vs the original). Near-1.0 cosine by construction —
+   *  structure the graph already knows, not a connection to ratify. */
+  degenerate?: 'same-source' | 'contains';
+  /** A participant currently holds `lease/suggestion/<pairHash>` on this pair
+   *  (ADR-0086 Inc 3) — it is in-flight; skip it rather than double-adjudicate. */
+  leasedBy?: string | null;
+  leasedUntil?: string | null;
 }
+/** A key reduced to the SOURCE it derives from (W3b): lowercase, colon
+ *  namespace off (`doc-block:docs/x/4` → `docs/x/4`), file extension off
+ *  (`file/docs/x.md` → `file/docs/x`), trailing numeric fragment segments off
+ *  (`docs/x/4` → `docs/x`). Conservative on `/`-namespaces (only extensions and
+ *  numeric tails are stripped) so `goal/123` and `note/123` stay distinct. */
+function keyBase(key: string): string {
+  return key
+    .toLowerCase()
+    .replace(/^[a-z][\w.-]*:/, '')
+    .replace(/\.[a-z0-9]{1,8}$/, '')
+    .replace(/(\/\d+)+$/, '');
+}
+
+/** A base's namespaced CORE: the path after its first segment, only when what
+ *  remains is still multi-segment (`file/docs/x/y` → `docs/x/y`; `essay/alpha`
+ *  → null — one bare word is too weak a signal to match across namespaces). */
+function coreOf(base: string): string | null {
+  const i = base.indexOf('/');
+  if (i < 0) return null;
+  const rest = base.slice(i + 1);
+  return rest.includes('/') ? rest : null;
+}
+
+/** The mechanical degeneracy class of a pair, if any (W3b, membrane waves 1–3):
+ *  two facts derived from the same source cluster at ~1.0 cosine by
+ *  construction — sibling blocks of one doc (`same-source`), a block vs its own
+ *  parent doc/file or a decompose/snapshot copy vs its original (`contains`,
+ *  including across namespaces: `decompose-run/<path>/40` vs `file/<path>.md`).
+ *  Every judge that met these declined to ratify and had to re-derive why;
+ *  say what the key structure implies instead. */
+function degeneracyOf(from: string, to: string): 'same-source' | 'contains' | undefined {
+  const a = keyBase(from);
+  const b = keyBase(to);
+  if (!a || !b) return undefined;
+  if (a === b) return 'same-source';
+  // Parent/source containment — path-prefix either way, tolerating a leading
+  // namespace segment on one side (`file/docs/x` vs `docs/x`).
+  if (a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) return 'contains';
+  if (a.endsWith(`/${b}`) || b.endsWith(`/${a}`)) return 'contains';
+  // Cross-namespace: both sides carry their own namespace segment over the
+  // same source path (`decompose-run/docs/x/40` vs `file/docs/x.md`).
+  const ca = coreOf(a);
+  const cb = coreOf(b);
+  if (ca && (ca === b || b.endsWith(`/${ca}`) || ca.endsWith(`/${b}`))) return 'contains';
+  if (cb && (cb === a || a.endsWith(`/${cb}`) || cb.endsWith(`/${a}`))) return 'contains';
+  if (ca && cb && ca === cb) return 'contains';
+  return undefined;
+}
+
 export interface SuggestionsResult {
   suggestions: SuggestionEntry[];
   /** The recommended relation vocabulary to ratify a suggestion into. */
   vocab: readonly string[];
   /** Total candidates before `limit` (so a caller knows there are more). */
   total: number;
+  /** Present when identical pairs were flagged — what the scores imply. */
+  hint?: string;
 }
 export interface RatifyInput {
   from: string;
@@ -217,6 +309,13 @@ export interface ContestedResult {
   total: number;
   /** Pairs skipped because a current `checked/<hash>` marker already adjudicated them. */
   checked: number;
+  /** Pairs skipped as mechanically degenerate (same-source / containment — they
+   *  cannot contradict; W4c). A judge no longer has to lease + inspect them. */
+  degenerate: number;
+  /** Pairs skipped because an endpoint is ephemeral machinery: a delete-timer
+   *  fact (lease, presence) — live or lapsed-awaiting-TTL. Coordination
+   *  exhaust, never a contradiction candidate (wave-5). */
+  ephemeral: number;
   /** How to write a verdict back (existing verbs only — no new write surface). */
   hint: string;
 }
@@ -393,19 +492,98 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
       const typeByKey = new Map(records.map((r) => [r.key, r.type]));
       const labelByKey = new Map(records.map((r) => [r.key, labelForRecord(r.key, r.value)]));
+      const versionByKey = new Map(records.map((r) => [r.key, r.version]));
       const noiseTypes = noiseTypesFor(records); // slice-declared over the floor
       const isNoise = (k: string): boolean =>
         k.startsWith('_') || noiseTypes.has(typeByKey.get(k) ?? '');
       let candidates = suggestionCandidates(edges); // already score-desc
+      // A pair an AUTHORED edge already connects is not a suggestion — it is
+      // structure (wave-4 live finding: a judge's `duplicates` edge written via
+      // plain `link` left the inferred similarTo listed, so the ratified pair
+      // kept resurfacing). Same precondition `contested` enforces; also makes
+      // the queue self-heal when `ratify`'s drop is skipped or raced.
+      const authored = authoredPairs(edges);
+      candidates = candidates.filter((c) => !authored.has(pairKey(c.from, c.to)));
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
-      const suggestions: SuggestionEntry[] = candidates.slice(0, limit).map((c) => ({
-        ...c,
-        fromType: typeByKey.get(c.from) ?? null,
-        fromLabel: labelByKey.get(c.from) ?? c.from,
-        toType: typeByKey.get(c.to) ?? null,
-        toLabel: labelByKey.get(c.to) ?? c.to,
-      }));
-      return { suggestions, vocab: RATIFY_LINK_TYPES, total: candidates.length };
+      // Ephemeral machinery (wave-5, cross-vendor finding): a fact carrying a
+      // delete-effect timer — a lease, a presence row — is coordination exhaust
+      // whatever its type is named; it can never be a durable connection
+      // candidate. And once the timer lapses the RAW ROW lingers until DDB TTL
+      // fires (expiry + 24h grace), so timer-liveness must be re-checked here
+      // rather than trusted to the store: timer-deleted `lease/suggestion/*`
+      // rows led the live contested read at 0.99 cosine for the whole lag
+      // window. A missing endpoint (dangling similarTo edge) drops the same way.
+      const nowMs = Date.now();
+      const recByKey = new Map(records.map((r) => [r.key, r]));
+      const isEphemeral = (k: string): boolean => {
+        const r = recByKey.get(k);
+        return !r || r.timerEffect === 'delete' || !isTimerLive(r, nowMs);
+      };
+      candidates = candidates.filter((c) => !isEphemeral(c.from) && !isEphemeral(c.to));
+      // Work leases (ADR-0086 Inc 3): a pair a participant currently holds under
+      // `lease/suggestion/<pairHash>` is IN-FLIGHT — annotate it so parallel
+      // judges skip it instead of double-adjudicating (the wave-2 CI race).
+      // Leases are ordinary records in the list we already loaded; a lapsed
+      // timer reads as released.
+      // Accept BOTH the documented domain (`suggestion`) and the intuitive one a
+      // judge naturally reaches for (`pair`) — the wave-4 consolidate driver leased
+      // its adjudication pair under `lease/pair/<hash>` (domain "pair"), which the
+      // suggestion-only scan didn't see, so a parallel judge would have missed it
+      // (W4b). The keys are hash-suffixed identically; honor either prefix.
+      const leaseByHash = new Map<string, { holder: string | null; until: string | null }>();
+      for (const r of records) {
+        if (r.superseded || !isTimerLive(r, nowMs)) continue;
+        const prefix = ['lease/suggestion/', 'lease/pair/'].find((p) => r.key.startsWith(p));
+        if (!prefix) continue;
+        leaseByHash.set(r.key.slice(prefix.length), {
+          holder: (r.value as { holder?: string } | null)?.holder ?? r.as ?? null,
+          until: r.timerExpiresAt,
+        });
+      }
+      // Degeneracy flags (membrane waves 1–3, F5 + W3b): a pair whose endpoints
+      // share a CONTENT HASH is byte-identical text; a pair mechanically derived
+      // from one source (sibling blocks, block vs own doc, snapshot vs latest)
+      // clusters at ~1.0 cosine by construction. Neither is a relationship. The
+      // queue head is systematically these; every judge that met them declined
+      // to ratify and had to re-derive why. Say what the score implies — flag
+      // `identical` / `degenerate`, and let `genuineOnly` skip them wholesale.
+      const enrich = (c: SuggestionCandidate): SuggestionEntry => {
+        const identical = !!versionByKey.get(c.from) && versionByKey.get(c.from) === versionByKey.get(c.to);
+        const degenerate = degeneracyOf(c.from, c.to);
+        // The pair's stable id — what `lease({domain:"suggestion", item})` and
+        // the `checked/<hash>` adjudication markers key on. Returned so a judge
+        // can lease a pair WITHOUT re-deriving the server's hash (ADR-0086).
+        const pairHash = contentHash(pairKey(c.from, c.to));
+        const lease = leaseByHash.get(pairHash);
+        return {
+          ...c,
+          pairHash,
+          fromType: typeByKey.get(c.from) ?? null,
+          fromLabel: labelByKey.get(c.from) ?? c.from,
+          toType: typeByKey.get(c.to) ?? null,
+          toLabel: labelByKey.get(c.to) ?? c.to,
+          ...(identical ? { identical: true } : {}),
+          ...(degenerate ? { degenerate } : {}),
+          ...(lease ? { leasedBy: lease.holder, leasedUntil: lease.until } : {}),
+        };
+      };
+      // `genuineOnly` (W3b): only pairs worth a judge's attention — not identical,
+      // not mechanically degenerate, not currently leased by another participant.
+      let enriched = candidates.map(enrich);
+      if (input?.genuineOnly) enriched = enriched.filter((s) => !s.identical && !s.degenerate && !s.leasedBy);
+      // W3e: `offset` pages the ranked list (query grew this in wave 2; the same
+      // reach here was silently ignored — membrane principle: honor or reject).
+      const offset = typeof input?.offset === 'number' && input.offset > 0 ? input.offset : 0;
+      const suggestions = enriched.slice(offset, offset + limit);
+      const flagged = suggestions.filter((s) => s.identical || s.degenerate).length;
+      return {
+        suggestions,
+        vocab: RATIFY_LINK_TYPES,
+        total: enriched.length,
+        ...(flagged
+          ? { hint: `${flagged} of ${suggestions.length} candidates are byte-identical or same-source pairs (identical/degenerate) — dedupe/prune material, not connections to ratify. Pass {genuineOnly:true} to skip them.` }
+          : {}),
+      };
     },
 
     // ADR-0072 (C7) Stage A: the contradiction-candidate read. Semantic debt, as a
@@ -420,7 +598,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
     async contested(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { store } = build(ctx);
-      if (!store) return { candidates: [], total: 0, checked: 0, hint: CONTESTED_HINT };
+      if (!store) return { candidates: [], total: 0, checked: 0, degenerate: 0, ephemeral: 0, hint: CONTESTED_HINT };
       const limit = Math.min(Math.max(input?.limit ?? 10, 1), 50);
       const minScore = input?.minScore ?? 0.5;
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
@@ -441,18 +619,56 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         return r?.version || contentHash(r?.value ?? null);
       };
       const authored = authoredPairs(edges);
+      const nowMs = Date.now();
       let checkedCount = 0;
+      let degenerateCount = 0;
+      let ephemeralCount = 0;
       const out: ContestedCandidate[] = [];
       for (const c of suggestionCandidates(edges)) {
         const a = byKey.get(c.from);
         const b = byKey.get(c.to);
         if (!a || !b || a.superseded || b.superseded) continue;
+        // Ephemeral machinery (wave-5, cross-vendor finding): a delete-timer
+        // fact — a lease, a presence row — is coordination exhaust whatever its
+        // type is named, and once its timer lapses the RAW ROW lingers until
+        // DDB TTL fires (expiry + 24h grace). Timer-liveness is a READ-time
+        // contract; re-check it here rather than trusting the store list:
+        // timer-deleted `lease/suggestion/*` rows led this read at 0.99 cosine
+        // for the whole lag window, crowding out every genuine candidate.
+        if (
+          a.timerEffect === 'delete' || b.timerEffect === 'delete' ||
+          !isTimerLive(a, nowMs) || !isTimerLive(b, nowMs)
+        ) {
+          ephemeralCount++;
+          continue;
+        }
         if ((c.score ?? 0) < minScore) continue;
         if (!input?.includeRuntime && (isNoise(c.from) || isNoise(c.to))) continue;
         // "No authored edge" is Stage A's precondition — normally guaranteed at
         // similarTo write time, but assert it here so a hand-written edge can't slip a
         // connected pair back into adjudication.
         if (authored.has(pairKey(c.from, c.to))) continue;
+        // Mechanical degeneracy (W3b/W4c): a same-source or containment pair
+        // (sibling doc-blocks, a block vs its own parent, a decompose/snapshot
+        // copy) shares a type by CONSTRUCTION and scores ~1.0 by construction —
+        // it cannot *contradict* itself, so it is never a Stage-A candidate. The
+        // wave-4 consolidate driver read `contested`, met exactly such a pair
+        // (the ADR-0068/0069 doc-block containment), and had to lease + inspect
+        // it to learn what the key structure already said. Skip it here, counted.
+        if (degeneracyOf(c.from, c.to)) {
+          degenerateCount++;
+          continue;
+        }
+        // Byte-identical CONTENT (same content-hash version) is degenerate even
+        // when the keys are unrelated (W4l — the wave-4 consolidate driver
+        // adjudicated 8 such pairs, all `### Shape` / `## Phases` boilerplate
+        // shared across DIFFERENT docs, every one `independent`: identical text
+        // cannot contradict). The key-structural `degeneracyOf` misses these
+        // cross-document twins; the version equality catches them.
+        if (versionOf(c.from) && versionOf(c.from) === versionOf(c.to)) {
+          degenerateCount++;
+          continue;
+        }
         const sharedTags = a.tags.filter((t) => b.tags.includes(t));
         const sameType = !!a.type && a.type === b.type;
         if (!sameType && sharedTags.length === 0) continue; // divergence needs common ground
@@ -476,7 +692,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           versions: { a: vA, b: vB },
         });
       }
-      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, hint: CONTESTED_HINT };
+      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, degenerate: degenerateCount, ephemeral: ephemeralCount, hint: CONTESTED_HINT };
     },
 
     async ratify(input, ctx) {

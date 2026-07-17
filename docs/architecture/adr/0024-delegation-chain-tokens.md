@@ -13,6 +13,24 @@
   (`Identity.user`). `unwindActChain` serves audit views; `TokenSummary.act` surfaces the
   chain in the steward list. Token format stays opaque server-validated (the first open
   question, answered conservatively — a signed JWT can come later without schema change).
+  **Consumed 2026-07-13 (same day, second pass):** the mechanism gained its two real callers.
+  (1) The exchange core moved to `performTokenExchange` (services/auth/oauth.ts), shared by the
+  `auth.exchangeToken` command and a new `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`
+  on `/oauth/token` (advertised in AS metadata) — any OAuth client holding a parent token can now
+  mint an attenuated, chain-carrying child through the standard AS surface (RFC 8693 response
+  shape: `issued_token_type` + `act` echo; `invalid_grant`/`invalid_scope`/`invalid_request`
+  mapping). (2) The reactor's rail-spawn mint (`mintTokenFor`, called from
+  services/workspace/event-handlers.ts) now names the spawned agent as `actor`, so the per-run
+  token carries a depth-1 chain (`{sub: "agent:<cell>.<tool>"}`) and facts written by a
+  machine-rail agent stamp the AGENT as writer instead of re-flattening to the owner — the
+  scorecard ❌ closed in the production path, not just the test suite.
+  (3) Connected clients are actors FROM MINT: the `authorization_code` grant now decides by
+  redirect origin (`delegationActorForRedirect`) — same-origin = the platform's own SPA (the
+  human, root token); a cell host = `cell:<owner>/<name>`; any foreign origin (Claude, ChatGPT)
+  = `client:<name>`. Facts written through Claude vs ChatGPT stamp differently instead of both
+  flattening to the user, and the chain now rides the refresh row in both stores so it survives
+  the re-mints connected clients perform constantly. Device-code tokens stay root (no client
+  identity on that path — a follow-up if device connectors matter).
 - **Date:** 2026-06-25
 - **Context:** ADR-0022 made a token a principal acting on behalf of `c15r`, but only **one writer** is
   stamped per fact. When that embodiment spawns a sub-agent (an orchestrator-worker hop, an MCP cell

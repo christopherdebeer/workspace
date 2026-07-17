@@ -107,6 +107,36 @@ describe('ADR-0072 — the contested read (Stage A)', () => {
     expect(res.total).toBe(2);
   });
 
+  it('mechanically degenerate pairs (same-source / containment) are skipped, counted (W4c)', async () => {
+    // Sibling doc-blocks of one doc + a block vs its own parent file: same type
+    // by construction, ~1.0 cosine by construction — they cannot contradict, so
+    // contested must not surface them (the wave-4 consolidate driver had to
+    // lease + inspect exactly such a pair to learn what the keys already said).
+    await cmds.remember({ key: 'doc-block:docs/g/1', value: { content: 'part one' }, type: 'doc-block' }, ctx);
+    await cmds.remember({ key: 'doc-block:docs/g/2', value: { content: 'part two' }, type: 'doc-block' }, ctx);
+    await cmds.remember({ key: 'file/docs/g.md', value: { content: 'the whole doc' }, type: 'doc-block' }, ctx);
+    await similar('doc-block:docs/g/1', 'doc-block:docs/g/2', 0.99); // same-source
+    await similar('doc-block:docs/g/1', 'file/docs/g.md', 0.98); // containment
+    const res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('doc-block:docs/g/1', 'doc-block:docs/g/2'));
+    expect(pairs(res)).not.toContain(pairKey('doc-block:docs/g/1', 'file/docs/g.md'));
+    expect(res.degenerate).toBeGreaterThanOrEqual(2);
+  });
+
+  it('byte-identical CONTENT across unrelated keys is skipped too (W4l) — cannot contradict', async () => {
+    // Cross-document boilerplate: the same "### Shape" heading in two unrelated
+    // docs. Same type, ~1.0 cosine, but IDENTICAL text — it cannot contradict
+    // itself. `degeneracyOf` (key-structural) misses these; the content-hash
+    // version equality catches them (the wave-4 consolidate driver adjudicated
+    // 8 such pairs, every one `independent`).
+    await cmds.remember({ key: 'adrX/6', value: { content: '### Shape' }, type: 'doc-block' }, ctx);
+    await cmds.remember({ key: 'adrY/6', value: { content: '### Shape' }, type: 'doc-block' }, ctx);
+    await similar('adrX/6', 'adrY/6', 0.99);
+    const res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('adrX/6', 'adrY/6'));
+    expect(res.degenerate).toBeGreaterThanOrEqual(1);
+  });
+
   it('noise types are slice-declared (_config/suggestions), not only hardcoded', async () => {
     // Declare a slice-local noise type: the built-in set is only the floor.
     await cmds.remember({ key: '_config/suggestions', value: { noiseTypes: ['decision'] } }, ctx);
@@ -117,5 +147,47 @@ describe('ADR-0072 — the contested read (Stage A)', () => {
     res = await cmds.contested(undefined, ctx);
     expect(pairs(res)).toContain(pairKey('k/e', 'k/f'));
     await cmds.supersede({ key: '_config/suggestions' }, ctx);
+  });
+
+  it('ephemeral machinery is skipped, counted: a delete-timer fact (a lease) is never a candidate (wave-5)', async () => {
+    // Two live work leases — coordination artefacts that cluster at ~1.0 cosine
+    // by format. Whatever their type is named, the delete-effect timer IS the
+    // declaration that they are machinery, not knowledge. Typed 'knowledge'
+    // here so nothing but the timer gate can be doing the excluding.
+    await cmds.remember({ key: 'lease/suggestion/aaa', value: { holder: 'judge/alpha' }, type: 'knowledge', timer: { ms: 15 * 60_000, effect: 'delete' } }, ctx);
+    await cmds.remember({ key: 'lease/suggestion/bbb', value: { holder: 'judge/beta' }, type: 'knowledge', timer: { ms: 15 * 60_000, effect: 'delete' } }, ctx);
+    await similar('lease/suggestion/aaa', 'lease/suggestion/bbb', 0.99);
+    const res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('lease/suggestion/aaa', 'lease/suggestion/bbb'));
+    expect(res.ephemeral).toBeGreaterThanOrEqual(1);
+  });
+
+  it('…and a LAPSED delete-timer row (awaiting DDB TTL, up to 24h) stays out the same way', async () => {
+    // The wave-5 live finding: timer-deleted `lease/suggestion/*` rows led the
+    // real contested read at 0.99 cosine — peek said null, but the raw row (and
+    // its similarTo edges) lingered until DDB TTL (expiry + 24h). Timer-liveness
+    // is a READ-time contract; contested re-checks it, never trusting the list.
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await cmds.remember({ key: 'lease/pair/ccc', value: { holder: 'judge/alpha' }, type: 'knowledge', timer: { at: past, effect: 'delete' } }, ctx);
+    await cmds.remember({ key: 'k/j', value: { claim: 'held item' }, type: 'knowledge' }, ctx);
+    await similar('lease/pair/ccc', 'k/j', 0.95);
+    const res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('lease/pair/ccc', 'k/j'));
+  });
+
+  it('a type declared operational in $types is machinery, not a candidate (wave-5, slice vocabulary)', async () => {
+    // The $types home: `_types/<name>` {operational: true} marks a slice's own
+    // coordination vocabulary as never-a-candidate. Durable markers here (no
+    // timer), so this exercises the DECLARED layer, not the timer gate — and
+    // the pair is visible BEFORE the declaration, proving the flag did it.
+    await cmds.remember({ key: 'marker/one', value: { note: 'adjudicated pair one' }, type: 'adjudication-marker' }, ctx);
+    await cmds.remember({ key: 'marker/two', value: { note: 'adjudicated pair two' }, type: 'adjudication-marker' }, ctx);
+    await similar('marker/one', 'marker/two', 0.97);
+    let res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).toContain(pairKey('marker/one', 'marker/two'));
+    await cmds.remember({ key: '_types/adjudication-marker', value: { icon: '✓', operational: true } }, ctx);
+    res = await cmds.contested(undefined, ctx);
+    expect(pairs(res)).not.toContain(pairKey('marker/one', 'marker/two'));
+    await cmds.supersede({ key: '_types/adjudication-marker' }, ctx);
   });
 });

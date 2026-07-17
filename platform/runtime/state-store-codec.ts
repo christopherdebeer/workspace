@@ -86,6 +86,8 @@ export function itemToRecord(item: Item): StateRecord {
     firstSeq: num(item.firstSeq),
     writer: (item.writer as string | null) ?? null,
     via: (item.via as string | null) ?? null,
+    // Participant key (ADR-0086) — provenance beside `via`; absent when none declared.
+    ...(typeof item.as === 'string' && item.as ? { as: item.as } : {}),
     createdAt: item.createdAt as string,
     updatedAt: item.updatedAt as string,
     writers: arr(item.writers),

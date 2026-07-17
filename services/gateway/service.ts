@@ -31,6 +31,7 @@
  */
 import {
   defineMcpService,
+  withIdentity,
   hasScope,
   hasGrantScope,
   holdsUnder,
@@ -43,6 +44,7 @@ import {
 } from '../../platform/runtime';
 import { typeSignals } from '../../platform/ui/vocab';
 import { resolveUiResource, listUiResources, CARD_URI, UI_MIME } from './widgets';
+import { validateInput, withInputWarnings, acceptedKeys, type InputValidation } from './validate';
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -254,10 +256,37 @@ function cellOf(target: string): string {
   return dot > 0 ? target.slice(0, dot) : target;
 }
 
-/** First sentence of a description — enough to decide whether to drill in. */
+/** First sentence of a description — enough to decide whether to drill in.
+ *  Abbreviation-aware (membrane wave 1, F8): the naive first-period cut menu
+ *  summaries at "e.g." ("…in your slice (e.") and inside filenames/versions
+ *  ("tar." before "gz"). A terminator ends the sentence only when it isn't a
+ *  known abbreviation and is followed by a space or the end of the text. */
 function firstSentence(text: string): string {
-  const m = text.match(/^[^.!?]*[.!?]/);
-  return (m ? m[0] : text).trim();
+  const re = /[.!?]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const head = text.slice(0, m.index + 1);
+    if (/\b(?:e\.g|i\.e|etc|vs|cf)\.$/i.test(head)) continue;
+    const next = text[m.index + 1];
+    if (next !== undefined && next !== ' ' && next !== '\n') continue;
+    return head.trim();
+  }
+  return text.trim();
+}
+
+/** Longest a grouped-menu summary line may run. Many descriptions pack a long
+ *  first sentence (parentheticals + ADR refs + `∈`-lists before the first
+ *  period), so the raw first sentence can be 300-400 chars — the grouped menu
+ *  is a SKIM ("enough to decide whether to drill"), not the contract, so cap it
+ *  to a real one-liner. The full sentence is one `detail:"full"` / target
+ *  resolve away. */
+const CATALOG_SUMMARY_MAX = 120;
+function summaryLine(text: string): string {
+  const s = firstSentence(text);
+  if (s.length <= CATALOG_SUMMARY_MAX) return s;
+  const cut = s.slice(0, CATALOG_SUMMARY_MAX);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > 60 ? cut.slice(0, sp) : cut).replace(/[\s([{.,;:—-]+$/, '')}…`;
 }
 
 /**
@@ -268,18 +297,32 @@ function firstSentence(text: string): string {
  */
 function summarizeCatalog(caps: CatalogEntry[]): {
   cells: Array<{ cell: string; count: number; capabilities: CatalogSummaryEntry[] }>;
+  deprecated?: string[];
   hint: string;
 } {
+  // Deprecated aliases (each description opens "DEPRECATED (…) — prefer …") are
+  // the wrong thing for a fresh agent to meet in its first menu: they steer to
+  // a superseded verb and cost a full summary line each. List them by NAME only
+  // (still discoverable, still callable, still in detail:"full") instead of
+  // spelling out a dozen redundant "prefer edges(...)"-style lines.
   const byCell = new Map<string, CatalogSummaryEntry[]>();
+  const deprecated: string[] = [];
   for (const c of caps) {
+    if (/^DEPRECATED\b/.test(c.description)) {
+      deprecated.push(c.target);
+      continue;
+    }
     const cell = cellOf(c.target);
     const list = byCell.get(cell) ?? [];
-    list.push({ target: c.target, kind: c.kind, summary: firstSentence(c.description) });
+    list.push({ target: c.target, kind: c.kind, summary: summaryLine(c.description) });
     byCell.set(cell, list);
   }
   return {
     cells: [...byCell.entries()].map(([cell, capabilities]) => ({ cell, count: capabilities.length, capabilities })),
-    hint: 'Grouped menu (the default). For full input/result schemas: read("$catalog", { detail: "full" }), or resolve one target. Holding a fact? read("$catalog", { for: "<key>" }) returns just what can act on it (ADR-0049).',
+    ...(deprecated.length ? { deprecated } : {}),
+    hint:
+      'Grouped menu (the default). One target\'s full contract: read("$catalog", { resolve: "<target>" }); every schema: { detail: "full" }. Holding a fact? { for: "<key>" } returns just what can act on it (ADR-0049). Know your GOAL instead? workspace.query({ text: "<goal>" }) surfaces the relevant capabilities and facts directly, by meaning (ADR-0085) — usually a better first move than reading this menu.' +
+      (deprecated.length ? ' `deprecated` lists superseded aliases by name (still callable) — read({detail:"full"}) for their contracts.' : ''),
   };
 }
 
@@ -341,7 +384,7 @@ export function buildContextualCatalog(
   const capabilities = caps.filter((c) => managers.has(cellOf(c.target)));
   const workspace = caps
     .filter((c) => CORE_FACT_VERBS.has(c.target))
-    .map((c) => ({ target: c.target, kind: c.kind, summary: firstSentence(c.description) }));
+    .map((c) => ({ target: c.target, kind: c.kind, summary: summaryLine(c.description) }));
   return {
     for: subject.key ?? subject.type ?? '',
     signals: signals.map((s) => s.type),
@@ -357,6 +400,43 @@ export function buildContextualCatalog(
 interface DispatchInput {
   target?: string;
   input?: unknown;
+  /** The participant key (ADR-0086): which embodied actor within this
+   *  connection is acting. Provenance-grade, never authority. */
+  as?: string;
+}
+
+/** Participant keys are short path-ish names (`membrane-probe/CI-d1`,
+ *  `steward/weave`). Anything else is rejected LOUDLY (membrane principle
+ *  W3f: a silently-ignored input is worse than an error). */
+const PARTICIPANT_RE = /^[\w@][\w@/.:-]{0,63}$/;
+
+/** Resolve the dispatch's effective context: with a valid `as`, a derived
+ *  context whose identity (and downstream envelope) carries the participant
+ *  key. Authority is untouched — same principal, same scopes, same token.
+ *
+ *  Two slots (membrane wave 3, W3g): the top-level `as` is primary, but a
+ *  connection whose CACHED tool schema predates the `as` deploy cannot
+ *  express it (`additionalProperties:false` rejects unknown args client-side)
+ *  — wave-3 probes tucked the key inside the capability `input`, where it was
+ *  silently swallowed: presence stayed dark and lease holders collapsed to
+ *  the principal, the exact W3f failure ADR-0086 legislated against. So
+ *  `input.as` is honored as a fallback and ALWAYS stripped before forwarding
+ *  (no capability's own schema owns `as`; leaking it downstream would make
+ *  every handler grow an accidental parameter). */
+function dispatchContext(input: DispatchInput, ctx: ServiceContext): ServiceContext {
+  let as = typeof input?.as === 'string' ? input.as.trim() : '';
+  const nested = input?.input as Record<string, unknown> | undefined;
+  if (nested && typeof nested.as === 'string') {
+    if (!as) as = nested.as.trim();
+    delete nested.as; // stripped in both cases — the key is membrane metadata, never a capability arg
+  }
+  if (!as) return ctx;
+  if (!PARTICIPANT_RE.test(as)) {
+    throw new Error(
+      `Invalid participant key "${as}" — use a short path-ish name (letters/digits/@/_ then up to 63 of [word @ / . : -]), e.g. "steward/weave".`,
+    );
+  }
+  return withIdentity(ctx, { participant: as });
 }
 
 /**
@@ -447,10 +527,31 @@ function withRender(result: unknown, cap: Capability): unknown {
 }
 
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
+  ctx = dispatchContext(input, ctx); // ADR-0086: `as` rides identity, never authority
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
-    const opts = input?.input as { detail?: string; for?: string; forType?: string } | undefined;
+    const opts = input?.input as { detail?: string; for?: string; forType?: string; resolve?: string } | undefined;
+    // Membrane principle (W3f): a $catalog option we don't understand must fail
+    // loudly, not silently widen a narrow read into the whole menu (W3d — a
+    // probe's `{resolve}` was swallowed and it got 500 lines it didn't ask for).
+    if (opts && typeof opts === 'object') {
+      const KNOWN = new Set(['detail', 'for', 'forType', 'resolve']);
+      const unknown = Object.keys(opts).filter((k) => !KNOWN.has(k));
+      if (unknown.length) {
+        throw new Error(
+          `$catalog does not understand {${unknown.join(', ')}} — valid options: {resolve:"<target>"} (one capability, full schema), {detail:"full"} (all schemas), {for:"<factKey>"} / {forType:"<type>"} (contextual menu), or none (grouped one-line menu).`,
+        );
+      }
+    }
+    // W3d: `{resolve: "<target>"}` — one capability's full contract, the narrow
+    // read between the skim (grouped menu) and the dump (detail:"full").
+    if (opts?.resolve) {
+      const t = String(opts.resolve).trim();
+      const hit = caps.find((c) => c.target === t);
+      if (!hit) throw new Error(`$catalog {resolve}: unknown target "${t}" — read("$catalog") for the grouped menu of what you can call.`);
+      return { capability: hit };
+    }
     // ADR-0049: `{for: <key>}` / `{forType: <type>}` — the contextual menu, a
     // few KB inferred from the fact's type signals instead of the whole surface.
     if (opts?.for || opts?.forType) {
@@ -491,35 +592,142 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return withRender(await cap.forward(input?.input, ctx), cap);
+  const check = enforceInput(target, input, cap.inputSchema);
+  const out = await cap.forward(input?.input, ctx);
+  await touchCapability(ctx, target, cap.kind);
+  return withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
+  ctx = dispatchContext(input, ctx); // ADR-0086: `as` rides identity, never authority
   const target = (input?.target ?? '').trim();
   if (!target) throw new Error(`act requires a \`target\`. Use read("${CATALOG}") to list capabilities.`);
   const cap = await resolveTarget(ctx, target);
   if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  return withRender(await cap.forward(input?.input, ctx), cap);
+  const check = enforceInput(target, input, cap.inputSchema);
+  const out = await cap.forward(input?.input, ctx);
+  await touchCapability(ctx, target, cap.kind);
+  return withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
 }
 
-function whoamiTool(
+/** Membrane input validation (wave-5 — W3f enforced centrally): violations of
+ *  the capability's DECLARED contract fail fast with schema feedback; keys the
+ *  contract does not know pass through but come back as a result warning, so a
+ *  silently-dropped filter can never read as "the filter applied". Runs AFTER
+ *  `dispatchContext` (the `as` slot is membrane metadata, already stripped). */
+function enforceInput(target: string, input: DispatchInput, schema: Record<string, unknown> | undefined): InputValidation {
+  const check = validateInput(input?.input, schema);
+  if (check.errors.length) {
+    const accepted = acceptedKeys(schema);
+    throw new Error(
+      `"${target}" input invalid: ${check.errors.join('; ')}.` +
+        (accepted.length ? ` Accepted keys: ${accepted.join(', ')}.` : '') +
+        ` Full contract: read("${CATALOG}", { resolve: "${target}" }).`,
+    );
+  }
+  return check;
+}
+
+/**
+ * ADR-0085 Inc 0: invocation feeds salience. Every successful dispatch touches
+ * the target's `_caps/<target>` capability fact in the CALLER's scope, via a
+ * platform event the workspace applies as one actor-classed counter bump
+ * (ADR-0050). A target whose projection fact doesn't exist (yet, or in this
+ * scope — e.g. a granted foreign cell's tool, whose fact lives in the owner's
+ * slice) is a silent no-op downstream, so firing unconditionally is safe.
+ * Best-effort by design: a salience signal must never fail the dispatch it
+ * measures. Only real capability dispatches touch — the self-model surfaces
+ * ($catalog/$types/…) are projections, not invocations, and recording them
+ * would make salience a mirror of orientation reads (ADR-0050's own caution).
+ */
+async function touchCapability(ctx: ServiceContext, target: string, kind: 'read' | 'act'): Promise<void> {
+  if (!ctx.identity.user) return;
+  try {
+    await ctx.events.emit('capability.invoked', {
+      scope: ctx.identity.user,
+      target,
+      kind,
+      // The embodiment stamp (ADR-0022 mediation): the touch counts as agent vs
+      // human attention, so per-actor salience weighting sees who uses which verbs.
+      ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
+      // The participant key (ADR-0086): which embodied actor within the
+      // connection used the verb — per-participant usage telemetry.
+      ...(ctx.identity.participant ? { participant: ctx.identity.participant } : {}),
+    });
+  } catch (err) {
+    ctx.logger.warn('capability touch emit failed', { target, error: (err as Error).message });
+  }
+}
+
+/** One live participant row in whoami's ambient frame (ADR-0086 Inc 2). */
+interface PresenceRow {
+  participant: string;
+  actor?: string;
+  lastTarget?: string;
+  lastSeen?: string;
+  until?: string | null;
+}
+
+/** The ambient frame's presence read (ADR-0086 Inc 2): live `_presence/*`
+ *  leases in the caller's slice — who else is acting on this substrate right
+ *  now, through what verb. Lapsed leases are already excluded at read (the
+ *  timer IS the liveness). Best-effort: an ambient frame must never fail
+ *  the identity call it decorates, and it arrives as a few thin rows, not a
+ *  roster dump (the membrane lesson cuts both ways). */
+async function livePresence(ctx: ServiceContext): Promise<PresenceRow[] | undefined> {
+  if (!ctx.identity.user) return undefined;
+  try {
+    const res = await ctx
+      .serviceClient('workspace')
+      .command<{ entries?: Array<{ key: string; value?: unknown; _meta?: { updatedAt?: string; timer?: { expiresAt?: string } | null } }> }>(
+        'query',
+        { prefix: '_presence/', limit: 12 },
+      );
+    if (!Array.isArray(res?.entries) || !res.entries.length) return undefined;
+    const rows = res.entries.map((e) => {
+      const v = (e.value ?? {}) as { participant?: string; actor?: string; lastTarget?: string };
+      return {
+        participant: v.participant ?? e.key.slice('_presence/'.length),
+        ...(v.actor ? { actor: v.actor } : {}),
+        ...(v.lastTarget ? { lastTarget: v.lastTarget } : {}),
+        ...(e._meta?.updatedAt ? { lastSeen: e._meta.updatedAt } : {}),
+        ...(e._meta?.timer?.expiresAt ? { until: e._meta.timer.expiresAt } : {}),
+      };
+    });
+    return rows.length ? rows : undefined;
+  } catch {
+    return undefined; // ambient frame is decoration, never a failure
+  }
+}
+
+async function whoamiTool(
   _input: unknown,
   ctx: ServiceContext,
-): { user: string; scopes: string[]; grant: string[]; actor?: string; posture?: unknown } {
+): Promise<{ user: string; scopes: string[]; grant?: string[]; actor?: string; posture?: unknown; participants?: PresenceRow[] }> {
   // `scopes` is the session's effective focus (what's enforced now); `grant` is the
-  // token ceiling. They differ once a session narrows/widens (incremental auth).
+  // token ceiling. They differ only once a session narrows/widens (incremental
+  // auth), so `grant` is surfaced ONLY when it actually differs — otherwise it's
+  // a byte-identical echo of `scopes` on every call.
   // `actor` is the embodiment class (ADR-0022 mediation): a connected client is
   // an `agent` acting on-behalf-of, and its attention weighs accordingly.
   // `posture` is the adopted goal (ADR-0074): what this session is FOR — every
   // workspace read resolves through it (adopt/drop via auth.adoptGoal/dropGoal).
+  const scopes = ctx.identity.scopes;
+  const g = ctx.identity.grantScopes;
+  const grantDiffers = !!g && (g.length !== scopes.length || [...g].sort().join(' ') !== [...scopes].sort().join(' '));
+  // The ambient frame (ADR-0086 Inc 2): whoami stops answering only "who am I"
+  // and starts answering "who is here, holding what" — awareness through the
+  // board, the only way the blackboard tradition says specialists see each other.
+  const participants = await livePresence(ctx);
   return {
     user: ctx.identity.user ?? 'anonymous',
-    scopes: ctx.identity.scopes,
-    grant: ctx.identity.grantScopes ?? ctx.identity.scopes,
+    scopes,
+    ...(grantDiffers ? { grant: g } : {}),
     ...(ctx.identity.actor ? { actor: ctx.identity.actor } : {}),
     ...(ctx.identity.posture ? { posture: ctx.identity.posture } : {}),
+    ...(participants ? { participants } : {}),
   };
 }
 
@@ -530,20 +738,27 @@ const TARGET_PROP = {
 };
 const INPUT_PROP = { type: 'object', description: 'Arguments for the capability.', additionalProperties: true };
 
+/** ADR-0086: the optional participant key on both dispatch verbs. */
+const AS_PROP = {
+  type: 'string',
+  description:
+    'Optional participant key (ADR-0086): which embodied actor within this connection is acting (e.g. "steward/weave", "probe/IP-1"). Recorded as provenance beside `via` on writes and in usage telemetry — never an authority input. Short path-ish names only. A participant may adopt its OWN posture by remembering `_posture/<its key>` {goal?, lens?, salience?} — composed reads carrying its `as` then rank through that lens (the token posture is the fallback).',
+};
 const READ_SCHEMA = {
   type: 'object',
   properties: {
     target: { ...TARGET_PROP, description: `${TARGET_PROP.description} Omit or pass "${CATALOG}" to list everything you can read/act on.` },
     input: {
       ...INPUT_PROP,
-      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
+      description: `${INPUT_PROP.description} For "${CATALOG}": the grouped one-line menu is the default; { resolve: "<target>" } returns one capability's full contract; { detail: "full" } returns every input/result schema; { for: "<factKey>" } (or { forType: "<type>" }) returns the CONTEXTUAL menu — just what can act on that fact, inferred from its type signals (ADR-0049).`,
     },
+    as: AS_PROP,
   },
   additionalProperties: false,
 };
 const ACT_SCHEMA = {
   type: 'object',
-  properties: { target: TARGET_PROP, input: INPUT_PROP },
+  properties: { target: TARGET_PROP, input: INPUT_PROP, as: AS_PROP },
   required: ['target'],
   additionalProperties: false,
 };
@@ -553,7 +768,19 @@ const tools: Record<string, McpToolDefinition> = {
     title: 'Who am I',
     description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    outputSchema: { type: 'object', properties: { user: { type: 'string' }, scopes: { type: 'array' }, grant: { type: 'array' } } },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        user: { type: 'string' },
+        scopes: { type: 'array' },
+        grant: { type: 'array' },
+        participants: {
+          type: 'array',
+          description: 'The ambient frame (ADR-0086): other embodied actors live on this substrate right now — each a `_presence/*` lease {participant, actor, lastTarget, lastSeen, until}. Absent when you are alone.',
+          items: { type: 'object' },
+        },
+      },
+    },
     annotations: { readOnlyHint: true },
     handler: whoamiTool,
     // The simplest MCP-Apps canary (ADR-0034): a tiny deterministic result rendered
@@ -627,14 +854,17 @@ function info(req: ServiceHttpRequest): ServiceHttpResponse {
 export const handler = defineMcpService({
   name: 'gateway',
   mcpPath: '/mcp',
+  // ADR-0085 Inc 0: every successful read/act dispatch announces itself so the
+  // workspace can bump the target's `_caps/<target>` attention counters.
+  events: { emits: ['capability.invoked'] },
   serverInfo: { name: 'parc-substrate', title: 'parc.land substrate', version: '1.0.0' },
   // The spec's `instructions` field: the server's self-introduction, surfaced
   // into the model's context at connect — discovery must not depend on a
   // client knowing what "read/act" means here.
   instructions:
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
-    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument — start with read("$catalog") for the grouped one-line menu ' +
-    '({detail:"full"} adds every schema). Targets look like workspace.query or @owner/cell.tool. ' +
+    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument. Know your goal? read("workspace.query", {input:{text:"<goal>"}}) surfaces the relevant facts AND capabilities by meaning (ADR-0085) — the intent-first move. ' +
+    'Browsing instead? read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one full contract, {detail:"full"} for every schema). Targets look like workspace.query or @owner/cell.tool. ' +
     'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,

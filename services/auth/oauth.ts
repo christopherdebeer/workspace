@@ -1,12 +1,24 @@
 /**
  * OAuth 2.1 handlers — RFC 9728 (PRM), RFC 8414 (ASM), RFC 7591 (DCR),
- * consent, token (authorization_code + refresh + PKCE S256), and the device
- * authorization grant. Ported from c15r/mcp-auth/oauth.ts onto the platform's
+ * consent, token (authorization_code + refresh + PKCE S256), the device
+ * authorization grant, and RFC 8693 token exchange (ADR-0024 delegation).
+ * Ported from c15r/mcp-auth/oauth.ts onto the platform's
  * `ServiceHttpRequest` and a storage-agnostic `AuthStore`.
  */
 import type { ServiceHttpRequest, ServiceHttpResponse } from '../../platform/runtime';
 import { intersectScopes } from '../../platform/runtime';
-import { AuthStore, TokenPosture, generateToken, sha256, DEVICE_TTL_MS, REFRESH_TTL_MS, type ActClaim } from './store';
+import {
+  AuthStore,
+  TokenPosture,
+  generateToken,
+  sha256,
+  DEVICE_TTL_MS,
+  REFRESH_TTL_MS,
+  MAX_DELEGATION_DEPTH,
+  chainDepth,
+  chainActors,
+  type ActClaim,
+} from './store';
 
 /**
  * A cell-host redirect (`https://<owner>-<name>.<cellDomain>/…`) means the token
@@ -60,6 +72,43 @@ function cellFromRedirect(redirectUri: string | undefined): { owner: string; nam
   const m = u.pathname.match(/^\/@([^/]+)\/([^/]+)/);
   if (m) return { owner: m[1], name: m[2], address: `@${m[1]}/${m[2]}` };
   return null;
+}
+
+/** A stable, readable actor handle from a registered client name ("Claude" → "claude"). */
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * The delegation actor a code-flow token should carry (ADR-0024), decided by
+ * where its redirect goes:
+ *   - same origin as the AS → the platform's own SPA — the human driving a
+ *     first-party surface. No actor: the token IS the user, writes stamp them.
+ *   - a cell host (model A, host-isolated) → software acting as the user —
+ *     actor `cell:<owner>/<name>`.
+ *   - any foreign origin (claude.ai, chatgpt.com, a CLI callback, …) → a
+ *     connected client acting on the user's behalf — actor `client:<name>`.
+ * The chain is PROVENANCE only: the subject stays the consenting human, every
+ * scope check is unchanged — but facts written through Claude vs ChatGPT now
+ * stamp differently instead of re-flattening to the user.
+ */
+export function delegationActorForRedirect(
+  redirectUri: string | undefined,
+  asOrigin: string,
+  clientName: string | null,
+  clientId: string,
+): string | null {
+  if (!redirectUri) return null;
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return null;
+  }
+  if (`${u.protocol}//${u.host}` === asOrigin) return null; // first-party SPA — the human themselves
+  const cell = cellFromRedirect(redirectUri);
+  if (cell) return `cell:${cell.owner}/${cell.name}`;
+  return `client:${clientName ? slugify(clientName) : clientId}`;
 }
 
 export interface OAuthConfig {
@@ -234,7 +283,12 @@ export function handleASMetadata(req: ServiceHttpRequest, config: OAuthConfig): 
     token_endpoint: `${origin}/oauth/token`,
     registration_endpoint: `${origin}/oauth/register`,
     response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
+    grant_types_supported: [
+      'authorization_code',
+      'refresh_token',
+      'urn:ietf:params:oauth:grant-type:device_code',
+      'urn:ietf:params:oauth:grant-type:token-exchange',
+    ],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
     scopes_supported: config.scopesSupported,
@@ -422,14 +476,21 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       withRefresh = refreshLifetime > accessExpiry; // a sub-access grant is one short token
     }
 
+    // ADR-0024: a connected client is an ACTOR acting for the user, and the
+    // token says so from mint — a foreign-origin redirect (Claude, ChatGPT, a
+    // cell host) yields a depth-1 chain, while the platform's own SPA stays a
+    // root credential (the human driving first-party surfaces IS the user).
+    const clientRec = await store.getOAuthClient(authCode.clientId);
+    const actor = delegationActorForRedirect(authCode.redirectUri, originOf(req), clientRec?.clientName ?? null, authCode.clientId);
     const result = await store.mintToken({
       userId: authCode.userId,
       scope: effectiveScope,
-      label: `OAuth: ${authCode.clientId}`,
+      label: `OAuth: ${clientRec?.clientName ?? authCode.clientId}`,
       clientId: authCode.clientId,
       expiresInSec: accessExpiry,
       withRefresh,
       refreshExpiresInSec: refreshLifetime,
+      ...(actor ? { act: { sub: actor } } : {}),
     });
     console.log('[oauth] token: issued', { clientId: authCode.clientId, scope: effectiveScope, capped: !!ceiling, grantSecs: grant, resource: authCode.resource });
     const response: Record<string, unknown> = { access_token: result.token, token_type: 'Bearer', scope: effectiveScope };
@@ -484,6 +545,51 @@ export async function handleToken(req: ServiceHttpRequest, store: AuthStore, con
       response.refresh_token = result.refreshToken;
     }
     return ok(response);
+  }
+
+  if (body.grant_type === 'urn:ietf:params:oauth:grant-type:token-exchange') {
+    // RFC 8693 delegation (ADR-0024): the presented subject_token IS the
+    // credential — same self-authorizing shape as the `auth.exchangeToken`
+    // command, now reachable through the standard AS surface so any OAuth
+    // client holding a parent token can mint an attenuated, chain-carrying
+    // child without speaking the gateway's `act` vocabulary.
+    const { subject_token, subject_token_type, scope, actor, label } = body;
+    if (!subject_token) {
+      return ok({ error: 'invalid_request', error_description: 'subject_token required' }, 400);
+    }
+    if (subject_token_type && subject_token_type !== 'urn:ietf:params:oauth:token-type:access_token') {
+      return ok({ error: 'invalid_request', error_description: `unsupported subject_token_type: ${subject_token_type}` }, 400);
+    }
+    if (!scope) {
+      // Delegation must state what it wants — an implicit full-width child
+      // defeats the attenuation discipline, so scope is required here.
+      return ok({ error: 'invalid_request', error_description: 'scope required (delegation must name the attenuated scope)' }, 400);
+    }
+    try {
+      const result = await performTokenExchange(store, {
+        from: subject_token,
+        scope,
+        actor,
+        label,
+        expiresInSec: mintExpiry,
+      });
+      console.log('[oauth] token: exchanged (delegation)', { child: result.id, actor: result.actor, depth: chainDepth(result.act) });
+      return ok({
+        access_token: result.token,
+        issued_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+        token_type: 'Bearer',
+        scope: result.scope,
+        ...(neverExpires ? {} : { expires_in: configuredExpiry }),
+        act: result.act,
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      console.warn('[oauth] token: exchange refused', { error: message });
+      if (message.startsWith('invalid_grant')) return ok({ error: 'invalid_grant', error_description: message }, 400);
+      if (message.startsWith('scope_denied')) return ok({ error: 'invalid_scope', error_description: message }, 400);
+      // delegation_too_deep / delegation_loop / missing fields
+      return ok({ error: 'invalid_request', error_description: message }, 400);
+    }
   }
 
   return ok({ error: 'unsupported_grant_type' }, 400);
@@ -624,5 +730,88 @@ export async function validateBearer(token: string, store: AuthStore): Promise<V
     clientId: tok.clientId,
     posture: tok.posture ?? null,
     act: tok.act ?? null,
+  };
+}
+
+// ─── Token exchange core (RFC 8693 / ADR-0024) ───────────────────
+
+export interface TokenExchangeInput {
+  /** The parent token VALUE (the credential being delegated from). */
+  from: string;
+  scope: string;
+  /** The child actor's name — what writer stamps will read (e.g. "agent:researcher"). */
+  actor?: string;
+  label?: string;
+  expiresInSec?: number;
+}
+
+export interface TokenExchangeResult {
+  id: string;
+  token: string;
+  scope: string;
+  act: ActClaim;
+  actor: string;
+  parentTokenId: string;
+  expiresAt: string | null;
+}
+
+/**
+ * The one exchange implementation (ADR-0024), shared by the `auth.exchangeToken`
+ * command and the `/oauth/token` RFC 8693 grant: validate the presented parent,
+ * clamp the child to min(requested, parent grant) — delegation only attenuates —
+ * and mint a child carrying the appended `act` chain, depth-bounded and
+ * loop-guarded. Throws with the `invalid_grant:` / `scope_denied:` /
+ * `delegation_too_deep:` / `delegation_loop:` prefixes both callers map onto
+ * their own error surfaces.
+ */
+export async function performTokenExchange(store: AuthStore, input: TokenExchangeInput): Promise<TokenExchangeResult> {
+  if (!input?.from?.trim()) throw new Error('`from` (the parent token) is required');
+  if (!input?.scope?.trim()) throw new Error('A `scope` for the child token is required');
+  const parent = await validateBearer(input.from, store);
+  if (!parent) throw new Error('invalid_grant: the presented parent token is not valid');
+
+  const requested = input.scope.split(/[\s,]+/).filter(Boolean);
+  // The ceiling is the PARENT TOKEN's grant — not the caller's session — so a
+  // chain can only narrow hop over hop, whoever performs the exchange.
+  const ceiling = parent.scope.split(/[\s,]+/).filter(Boolean);
+  const effective = intersectScopes(requested, ceiling);
+  if (!effective.length) {
+    throw new Error(
+      `scope_denied: none of the requested scopes (${requested.join(' ')}) are within the parent token's ceiling (${ceiling.join(' ') || 'none'}). Delegation can only attenuate.`,
+    );
+  }
+
+  // The chain: the child's actor name, nested over the parent's own chain.
+  // A root parent contributes no act — the child is then depth 1 ("actor,
+  // acting for <sub>"). Names must be fresh per hop (loop guard) and the
+  // chain bounded (runaway guard).
+  const actor = input.actor?.trim() || input.label?.trim() || `delegate:${parent.tokenId.slice(0, 8)}`;
+  const parentChain = parent.act ?? undefined;
+  if (chainDepth(parentChain) + 1 > MAX_DELEGATION_DEPTH) {
+    throw new Error(`delegation_too_deep: the chain already carries ${chainDepth(parentChain)} hops (max ${MAX_DELEGATION_DEPTH})`);
+  }
+  if (chainActors(parentChain).includes(actor) || actor === parent.userId) {
+    throw new Error(`delegation_loop: "${actor}" already appears in this chain`);
+  }
+  const act: ActClaim = { sub: actor, ...(parentChain ? { act: parentChain } : {}) };
+
+  // The child's SUBJECT stays the parent's subject — authorization anchors to
+  // the original consenting principal; the chain carries the provenance.
+  const account = await store.getUserByUsername(parent.userId);
+  const result = await store.mintToken({
+    userId: account?.id ?? parent.userId,
+    scope: effective.join(' '),
+    label: input.label ?? actor,
+    expiresInSec: input.expiresInSec ?? 3600,
+    act,
+  });
+  return {
+    id: result.id,
+    token: result.token,
+    scope: effective.join(' '),
+    act,
+    actor,
+    parentTokenId: parent.tokenId,
+    expiresAt: result.expiresAt,
   };
 }

@@ -128,7 +128,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'remember',
     description:
-      'Write a fact to your workspace at `key`. Re-writing a key bumps its revision; nothing is lost. Optional `type`/`tags` make it queryable; `ifRevision`/`ifVersion`/`ifAbsent` make the write conditional (CAS — fails if the precondition does not hold; `ifVersion` echoes a read\'s content hash as unforgeable proof-of-read). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
+      'Write a fact to your workspace at `key`. REPLACE semantics: the new `value` overwrites the prior one WHOLESALE — there is NO field-level merge (the old value is recoverable via revision history, which is preserved, but it is not visible in the current fact). To change one field, read the fact first and write the whole value back with your edit. CAUTION on SHARED keys written by more than one producer (e.g. a platform cron AND an agent both writing the same key): a blind write clobbers the other producer\'s value until it next writes — read-then-write with `ifVersion` (proof-of-read CAS) to make the write conditional on the value you actually saw, or write to your own distinct key instead. `type`/`tags` make it queryable; `ifRevision`/`ifVersion`/`ifAbsent` make the write conditional (fails if the precondition does not hold). Pass `owner` to write into another user\'s slice under their write grant (write-through — your identity is stamped as the writer).',
     scope: null,
     scopeFamily: 'write:type:*',
     kind: 'act',
@@ -265,7 +265,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
             byPrefix: { type: 'array', items: { type: 'object', properties: { prefix: { type: 'string' }, count: { type: 'number' } } } },
           },
         },
-        focus: { type: 'object', description: 'Top facts by salience, in full (overview mode)', additionalProperties: ENTRY_SCHEMA },
+        focus: { type: 'object', description: 'Top facts by salience, orientation-shaped (overview mode): a card-truncated value preview + the refs `_meta` slice (type/tags/score/updatedAt/superseded) — `_meta.shaped:"card"` marks it. `peek` or `recall({shape:"full"})` for the whole entry (full value + provenance)', additionalProperties: ENTRY_SCHEMA },
         hints: { type: 'array', items: { type: 'string' }, description: 'How to drill deeper (overview mode)' },
         entries: { type: 'object', description: 'key → { value, _meta } for focus/peripheral facts (full mode)', additionalProperties: ENTRY_SCHEMA },
         elided: {
@@ -298,7 +298,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'query',
     description:
-      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor to page. Pass `text` to rank by MEANING as well (ADR-0051): `query({text})` alone is semantic search that still respects earned salience; `query({type, text})` is the structural+semantic hybrid. Use this instead of recall when you want a targeted subset.',
+      'Projection over your slice: filter facts by type, tag, and/or key prefix; rank by salience (default) or recency; limit + cursor/offset to page. Pass `text` to rank by MEANING (ADR-0051/0085): `query({text})` alone is semantic search; `query({type, text})` is the structural+semantic hybrid. Intent queries (`text` present) are RELEVANCE-ORDERED — cosine drives the ranking, salience breaks ties, and entries the intent never reached are dropped rather than padded in — and default to a top-20 shortlist of orientation-shaped entries (value preview + trimmed `_meta` incl. `relevance`). Pass explicit `limit`/`shape`/`rankBy` to override. Use this instead of recall when you want a targeted subset.',
     scope: null,
     scopeFamily: 'read:type:*',
     kind: 'read',
@@ -307,16 +307,18 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         type: { type: 'string', description: 'Only facts of this type' },
         tag: { type: 'string', description: 'Only facts carrying this tag' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Only facts carrying at least one of these tags (match-any)' },
         prefix: { type: 'string', description: 'Only keys with this prefix' },
         text: { type: 'string', description: 'Rank by meaning: free text, embedded and matched semantically. Relevance leads the salience blend for this call (intent preset; an explicit `salience` override still wins). Prefer this over `search` — same candidates, but salience-aware ranking and full query filters' },
         contains: { type: 'string', description: 'Find a fact by what is INSIDE it: keep only facts whose key or value (stringified) contains this substring, case-insensitively — full-text search over value content, so you need not page a partition to find "the fact that mentions X"' },
-        rankBy: { type: 'string', enum: ['salience', 'recency'], description: 'Ranking (default salience)' },
+        rankBy: { type: 'string', enum: ['salience', 'recency', 'relevance'], description: 'Ranking (default salience; intent queries with `text` default to relevance — cosine first, salience tiebreak, no-relevance tail dropped)' },
         lens: LENS_SCHEMA,
         salience: SALIENCE_OVERRIDE_SCHEMA,
         explain: { type: 'boolean', description: 'Attach `_meta.explain` (signals · weights · contributions · degree) to each entry, for salience tuning' },
         shape: SHAPE_SCHEMA,
-        limit: { type: 'number', description: 'Max entries to return' },
+        limit: { type: 'number', description: 'Max entries to return (intent queries with `text` default to 20)' },
         cursor: { type: 'string', description: "A previous page's nextCursor (best-effort resume over a fresh ranking)" },
+        offset: { type: 'number', description: 'Numeric paging alias for `cursor` (which is a plain offset into the fresh ranking)' },
         includeSuperseded: { type: 'boolean', description: 'Include retired facts' },
       },
       additionalProperties: false,
@@ -351,7 +353,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         tag: { type: 'string' },
         prefix: { type: 'string' },
         contains: { type: 'string' },
-        rankBy: { type: 'string', enum: ['salience', 'recency'] },
+        rankBy: { type: 'string', enum: ['salience', 'recency', 'relevance'] },
         limit: { type: 'number' },
         cursor: { type: 'string' },
         view: { type: 'string', enum: ['overview', 'full'], description: 'source:slice — overview (default) or the full shaped view' },
@@ -432,14 +434,16 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'suggestions',
     description:
-      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
+      'List ratification candidates (ADR-0032): the inferred `similarTo` kinship the vector index proposed but no authored edge yet connects — "a link you might want". Each is an unordered pair (reciprocals collapse) with both endpoints\' type + a short label, ranked by cosine similarity (most relevant first). Pairs whose endpoints are BYTE-IDENTICAL (same content hash) carry `identical:true`; pairs mechanically derived from ONE SOURCE (sibling blocks of a doc, a block vs its own parent, a copy vs its original) carry `degenerate` — in both, the ~1.0 score is construction, not a relationship: dedupe/prune material, not connections to ratify. Pairs another participant is currently adjudicating carry `leasedBy`/`leasedUntil` (a live `lease/suggestion/<pairHash>`, ADR-0086) — skip those. `genuineOnly:true` drops all three classes server-side; `offset` pages the ranked list. High-volume runtime/machine facts (transcripts, agent-runs, cells) are filtered out by default — pass `includeRuntime:true` to see them. These already feed salience weakly (centrality); `ratify` promotes one to a typed, authored, full-weight edge. Returns the recommended relation `vocab`.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Cap on candidates returned (default 25)' },
+        offset: { type: 'number', description: 'Skip this many ranked candidates first (paging)' },
         includeRuntime: { type: 'boolean', description: 'Include runtime/machine facts (transcripts, agent-runs, cells) filtered out by default' },
+        genuineOnly: { type: 'boolean', description: 'Only pairs worth judging: drop byte-identical pairs, same-source degeneracies, and pairs another participant holds a lease on' },
       },
       additionalProperties: false,
     },
@@ -459,6 +463,11 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               toType: { type: 'string' },
               strength: { type: 'number' },
               createdAt: { type: 'string' },
+              pairHash: { type: 'string', description: 'The pair\'s stable id — lease it before adjudicating: lease({domain:"suggestion", item: pairHash}) (ADR-0086)' },
+              identical: { type: 'boolean', description: 'Endpoints share a content hash (byte-identical text) — prune, don\'t ratify' },
+              degenerate: { type: 'string', enum: ['same-source', 'contains'], description: 'Mechanically derived from one source (sibling blocks of a doc; a block vs its own parent; a copy vs its original) — structure the graph already knows, not a connection to ratify' },
+              leasedBy: { type: ['string', 'null'], description: 'A participant currently holds this pair (skip it — in-flight, ADR-0086)' },
+              leasedUntil: { type: ['string', 'null'] },
             },
           },
         },
@@ -478,7 +487,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         limit: { type: 'number', description: 'Cap on candidates returned (1–50, default 10) — adjudication is metered' },
         minScore: { type: 'number', description: 'Cosine floor (default 0.5) — contradiction candidates should be close, not merely related' },
-        includeRuntime: { type: 'boolean', description: 'Include format-clustered noise types. The noise set is slice-declared: `_config/suggestions` `{ noiseTypes?, admitTypes? }` over a built-in floor — vocabulary, not hardcoding.' },
+        includeRuntime: { type: 'boolean', description: 'Include format-clustered noise types. The noise set is slice-declared: `_config/suggestions` `{ noiseTypes?, admitTypes? }` over a built-in floor, plus any type whose `_types/<name>` decl carries `{operational:true}` — vocabulary, not hardcoding. Ephemeral facts (delete-timer rows: leases, presence) are excluded unconditionally.' },
       },
       additionalProperties: false,
     },
@@ -498,14 +507,16 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               aType: { type: 'string' },
               bType: { type: 'string' },
               sharedTags: { type: 'array', items: { type: 'string' } },
-              hash: { type: 'string', description: 'Unordered pair hash — the checked/<hash> and contested/<hash> key suffix' },
+              hash: { type: 'string', description: 'Unordered pair hash — the checked/<hash> and contested/<hash> key suffix, AND the lease item: lease({domain:"suggestion", item:hash}) before adjudicating in parallel' },
               versions: { type: 'object', description: "Both facts' current content-hash versions — echo onto the checked/<hash> marker" },
             },
           },
         },
         total: { type: 'number', description: 'Candidates before the limit cap' },
         checked: { type: 'number', description: 'Pairs skipped: already adjudicated and unchanged since' },
-        hint: { type: 'string', description: 'How to write a verdict back (existing verbs only)' },
+        degenerate: { type: 'number', description: 'Pairs skipped: mechanically degenerate (same-source/containment — cannot contradict)' },
+        ephemeral: { type: 'number', description: 'Pairs skipped: an endpoint is ephemeral machinery (a delete-timer fact — lease/presence — live or lapsed-awaiting-TTL). Coordination exhaust, never a candidate' },
+        hint: { type: 'string', description: 'How to write a verdict back (existing verbs only) + the parallel-lease recipe' },
       },
     },
   },
@@ -562,7 +573,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members; with `depth` → the walk root)' },
+        around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members; with `depth` → the walk root). Hydrated neighbour entries default to `card` (preview values) — pass `shape:"full"` for whole bodies.' },
         dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'With `around` (one hop): direction (default both)' },
         rel: { type: 'string', description: 'Only edges of this rel type (for a walk: the rel family to follow, e.g. "enables")' },
         membership: { type: 'boolean', description: "With `around`: only membership edges pointing at it (the collection's members)" },
@@ -600,7 +611,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         outbound: { type: 'array', items: EDGE_SCHEMA },
         inbound: { type: 'array', items: EDGE_SCHEMA },
-        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist', additionalProperties: ENTRY_SCHEMA },
+        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist (card-shaped preview values by default; `shape:"full"` for whole bodies)', additionalProperties: ENTRY_SCHEMA },
         types: TYPES_AFFORDANCE_SCHEMA,
       },
     },
@@ -723,14 +734,14 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'attention',
     description:
-      'What needs tending, as a derived read: stale facts (old AND unearned — settled knowledge with authored structure or standing is counted separately, not flagged), unlinked facts (no authored edge, embedded-ref edge, or placement membership — inferred `similarTo` and the pure type backbone never count), and dangling edges. Arrays are capped at `limit`; the `*Total` fields are the real counts. `_`-prefixed system namespaces are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
+      'What needs tending, as a derived read: stale facts (old AND unearned — settled knowledge with authored structure or standing is counted separately, not flagged), unlinked facts (no authored edge, embedded-ref edge, or placement membership — inferred `similarTo` and the pure type backbone never count), and dangling edges. The arrays are illustrative SAMPLES capped at `limit` (default 8); the `*Total` fields are the real counts — read those for magnitude, pass a larger `limit` for the fuller list. `_`-prefixed system namespaces are excluded unless includeSystem. The just-in-time cron — read it at session start and act on what surfaces.',
     scope: null,
     kind: 'read',
     inputSchema: {
       type: 'object',
       properties: {
         staleMs: { type: 'number', description: 'Staleness threshold in ms (default 14 days)' },
-        limit: { type: 'number', description: 'Max items per category (default 25)' },
+        limit: { type: 'number', description: 'Max SAMPLE items per category (default 8) — the `*Total` fields still report the uncapped counts' },
         includeSystem: { type: 'boolean', description: 'Also surface `_`-prefixed system namespaces (default false)' },
         settledStanding: { type: 'number', description: 'Standing at/above which an old fact is settled, not stale (default 0.25)' },
       },
@@ -752,7 +763,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'registerAction',
     description:
-      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "action", def })`. Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic, lease-bound claim.',
+      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "action", def })`. Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic lease (time-bounded exclusivity — a "claim" in this substrate is an epistemic assertion, ADR-0086).',
     scope: null,
     kind: 'act',
     inputSchema: {
@@ -1122,6 +1133,61 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       additionalProperties: false,
     },
     resultSchema: { ...ENTRY_SCHEMA, description: 'The retired fact, or null when the key never existed' },
+  },
+  {
+    name: 'lease',
+    description:
+      'Take a WORK LEASE on a contended item (ADR-0086): time-bounded exclusivity, atomically acquired (`lease/<domain>/<item>` written ifAbsent with a delete-at-expiry timer), so parallel participants do not double-work the same thing — e.g. `{domain:"suggestion", item:"<pairHash>"}` before adjudicating a proposal. A lease asserts nothing (that would be a claim — the epistemic word) and expires on its own: a crashed holder releases by silence. Returns `held:false` with the current holder when contended. Exclusivity is COOPERATIVE — the participant key never carries authority; provenance is the accountability.',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Contention domain, e.g. "suggestion", "run"' },
+        item: { type: 'string', description: 'The item within it, e.g. a pair hash or run id' },
+        minutes: { type: 'number', description: 'Lease duration (default 5, clamped 1–120). Must exceed honest work duration' },
+        seconds: { type: 'number', description: 'Seconds alias for `minutes` (converted; `minutes` wins if both given)' },
+        ttlSeconds: { type: 'number', description: 'Seconds alias for `minutes` (converted; `minutes` wins if both given)' },
+        note: { type: 'string', description: 'Optional: what the holder intends' },
+      },
+      required: ['domain', 'item'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        held: { type: 'boolean' },
+        key: { type: 'string' },
+        holder: { type: ['string', 'null'], description: 'Your participant key/principal when held; the CURRENT holder when not' },
+        expiresAt: { type: ['string', 'null'] },
+        grantedMinutes: { type: 'number', description: 'Duration actually granted (shows the 1–120 clamp was applied)' },
+      },
+    },
+  },
+  {
+    name: 'release',
+    description:
+      'Release a work lease early (expires the `lease/<domain>/<item>` fact now — a lapsed timer IS "released" in the vocabulary acquirers understand). Letting it lapse is equally valid — release is a courtesy to waiting participants. Releasing a lease another participant holds is permitted but noted in the result (cooperative exclusivity, ADR-0086).',
+    scope: null,
+    kind: 'act',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string' },
+        item: { type: 'string' },
+      },
+      required: ['domain', 'item'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        released: { type: 'boolean' },
+        key: { type: 'string' },
+        reason: { type: 'string', description: 'Present when not released (e.g. no live lease)' },
+        note: { type: 'string', description: "Present when you released another participant's lease" },
+      },
+    },
   },
   {
     name: 'share',

@@ -39,6 +39,10 @@ export interface CommandEnvelope {
   /** The caller's delegation chain (ADR-0024), propagated so writer stamps
    *  downstream still attribute the LEAF actor across service hops. */
   act?: ActClaim;
+  /** The caller's self-declared participant key (ADR-0086), propagated so
+   *  provenance stamps downstream distinguish embodied actors sharing one
+   *  token. Provenance-grade only — never an authority input. */
+  participant?: string;
 }
 
 export interface ServiceClientOptions {
@@ -51,6 +55,7 @@ export interface ServiceClientOptions {
   actor?: ActorClass;
   posture?: PrincipalPosture;
   act?: ActClaim;
+  participant?: string;
 }
 
 export class ServiceInvokeError extends Error {
@@ -101,6 +106,7 @@ export function createServiceClient(options: ServiceClientOptions) {
           actor: options.actor,
           posture: options.posture,
           act: options.act,
+          participant: options.participant,
         };
         const result = await getClient()
           .invoke({

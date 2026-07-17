@@ -21,7 +21,7 @@ import {
   grantScopesOf,
   hasGrantScope,
 } from '../../platform/runtime';
-import { AuthStore, MAX_DELEGATION_DEPTH, chainDepth, chainActors, type ActClaim } from './store';
+import { AuthStore, chainDepth, type ActClaim } from './store';
 import { createMemoryStore } from './memory-store';
 import { createDynamoStore } from './dynamo-store';
 import {
@@ -38,6 +38,7 @@ import {
   handleDeviceApprove,
   handleRefreshSession,
   validateBearer,
+  performTokenExchange,
 } from './oauth';
 import {
   WebAuthnConfig,
@@ -203,49 +204,20 @@ interface ExchangeTokenInput {
  * can spawn a scoped sub-agent.
  */
 async function exchangeToken(input: ExchangeTokenInput, ctx: ServiceContext) {
-  if (!input?.from?.trim()) throw new Error('`from` (the parent token) is required');
-  if (!input?.scope?.trim()) throw new Error('A `scope` for the child token is required');
-  const parent = await validateBearer(input.from, store);
-  if (!parent) throw new Error('invalid_grant: the presented parent token is not valid');
-
-  const requested = input.scope.split(/[\s,]+/).filter(Boolean);
-  // The ceiling is the PARENT TOKEN's grant — not the caller's session — so a
-  // chain can only narrow hop over hop, whoever performs the exchange.
-  const ceiling = parent.scope.split(/[\s,]+/).filter(Boolean);
-  const effective = intersectScopes(requested, ceiling);
-  if (!effective.length) {
-    throw new Error(
-      `scope_denied: none of the requested scopes (${requested.join(' ')}) are within the parent token's ceiling (${ceiling.join(' ') || 'none'}). Delegation can only attenuate.`,
-    );
-  }
-
-  // The chain: the child's actor name, nested over the parent's own chain.
-  // A root parent contributes no act — the child is then depth 1 ("actor,
-  // acting for <sub>"). Names must be fresh per hop (loop guard) and the
-  // chain bounded (runaway guard).
-  const actor = input.actor?.trim() || input.label?.trim() || `delegate:${parent.tokenId.slice(0, 8)}`;
-  const parentChain = parent.act ?? undefined;
-  if (chainDepth(parentChain) + 1 > MAX_DELEGATION_DEPTH) {
-    throw new Error(`delegation_too_deep: the chain already carries ${chainDepth(parentChain)} hops (max ${MAX_DELEGATION_DEPTH})`);
-  }
-  if (chainActors(parentChain).includes(actor) || actor === parent.userId) {
-    throw new Error(`delegation_loop: "${actor}" already appears in this chain`);
-  }
-  const act: ActClaim = { sub: actor, ...(parentChain ? { act: parentChain } : {}) };
-
-  // The child's SUBJECT stays the parent's subject — authorization anchors to
-  // the original consenting principal; the chain carries the provenance.
-  const account = await store.getUserByUsername(parent.userId);
-  const result = await store.mintToken({
-    userId: account?.id ?? parent.userId,
-    scope: effective.join(' '),
-    label: input.label ?? actor,
-    expiresInSec: input.expiresInSec ?? 3600,
-    act,
+  // The one exchange implementation lives in oauth.ts (performTokenExchange),
+  // shared with the /oauth/token RFC 8693 grant so the two surfaces cannot
+  // drift; this command wraps it with the event + log the gateway vocabulary
+  // expects.
+  const result = await performTokenExchange(store, input);
+  await ctx.events.emit('auth.token.exchanged', {
+    id: result.id,
+    parent: result.parentTokenId,
+    actor: result.actor,
+    scope: result.scope,
+    depth: chainDepth(result.act),
   });
-  await ctx.events.emit('auth.token.exchanged', { id: result.id, parent: parent.tokenId, actor, scope: effective.join(' '), depth: chainDepth(act) });
-  ctx.logger.info('token exchanged (delegation)', { parent: parent.tokenId, child: result.id, actor, depth: chainDepth(act) });
-  return { ...result, scope: effective.join(' '), act };
+  ctx.logger.info('token exchanged (delegation)', { parent: result.parentTokenId, child: result.id, actor: result.actor, depth: chainDepth(result.act) });
+  return { id: result.id, token: result.token, scope: result.scope, act: result.act, expiresAt: result.expiresAt };
 }
 
 interface MintTokenForInput {
@@ -253,6 +225,11 @@ interface MintTokenForInput {
   scope: string;
   expiresInSec?: number;
   label?: string;
+  /** ADR-0024: the spawned agent's name. When set, the token carries a depth-1
+   *  delegation chain ({sub: actor}) so the agent's writes stamp the AGENT as
+   *  writer instead of re-flattening to the owner — authorization still anchors
+   *  to the owner (the subject). */
+  actor?: string;
 }
 /**
  * Grants-to-principals (machine.md §9 Increment 3): a per-run token minted FOR an
@@ -270,10 +247,22 @@ async function mintTokenFor(input: MintTokenForInput, ctx: ServiceContext) {
   const account = await store.getUserByUsername(input.owner);
   const userId = account?.id ?? input.owner;
   const scope = input.scope.split(/[\s,]+/).filter(Boolean).join(' ');
-  const result = await store.mintToken({ userId, scope, label: input.label ?? `machine-agent:${input.owner}`, expiresInSec: input.expiresInSec ?? 900 });
+  // ADR-0024: a named actor makes this a delegated credential — the reactor
+  // spawning an agent for a rail is a delegation hop even though no parent
+  // token exists on the path (the reactor is IAM-trusted platform code), so
+  // the chain starts here at depth 1 and the writer stamp reads the agent.
+  const actor = input.actor?.trim();
+  const act: ActClaim | undefined = actor && actor !== input.owner ? { sub: actor } : undefined;
+  const result = await store.mintToken({
+    userId,
+    scope,
+    label: input.label ?? actor ?? `machine-agent:${input.owner}`,
+    expiresInSec: input.expiresInSec ?? 900,
+    ...(act ? { act } : {}),
+  });
   await ctx.events.emit('auth.token.minted', { userId, id: result.id, scope });
-  ctx.logger.info('minted per-run agent token', { owner: input.owner, scope, id: result.id });
-  return { ...result, scope };
+  ctx.logger.info('minted per-run agent token', { owner: input.owner, scope, id: result.id, ...(actor ? { actor } : {}) });
+  return { ...result, scope, ...(act ? { act } : {}) };
 }
 
 async function listTokens(_input: unknown, ctx: ServiceContext) {
@@ -608,7 +597,7 @@ function describeTools() {
       {
         name: 'adoptGoal',
         description:
-          "Adopt a goal as your session's posture (ADR-0074): every workspace read then resolves through it — the goal becomes the standing relevance bias, the lens/salience the standing weights — without passing text/lens per call. `goal` is ideally a workspace `goal/<id>` fact key (the @c15r/tasks vocabulary — graph-visible, project-linked); free text works for purposes not yet filed. Posture biases RANKING only, never membership: scope is untouched, and a caller's per-call args always win. Drop with auth.dropGoal. With tokenId, posture a child token you minted — delegation attenuates attention, not just scope.",
+          "Adopt a goal as your session's posture (ADR-0074): every workspace read then resolves through it — the goal becomes the standing relevance bias, the lens/salience the standing weights — without passing text/lens per call. `goal` is ideally a workspace `goal/<id>` fact key (the @c15r/tasks vocabulary — graph-visible, project-linked); free text works for purposes not yet filed. Posture biases RANKING only, never membership: scope is untouched, and a caller's per-call args always win. Drop with auth.dropGoal. With tokenId, posture a child token you minted — delegation attenuates attention, not just scope. One level finer (ADR-0086 Inc 4): a PARTICIPANT (`as` key) adopts its own posture by remembering `_posture/<participant>` {goal?, lens?, salience?} in the workspace — dispatches carrying that `as` read through it, overriding this token posture.",
         scope: null,
         kind: 'act' as const,
         inputSchema: {

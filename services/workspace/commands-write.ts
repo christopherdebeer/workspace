@@ -63,6 +63,45 @@ export interface SupersedeInput {
   migrateLinks?: boolean;
 }
 
+/** ADR-0086 Inc 3: a WORK LEASE — time-bounded exclusivity over a contended
+ *  item. A lease asserts nothing (that would be a claim — the epistemic word);
+ *  it expires on its own, so a crashed holder releases it by silence. */
+export interface LeaseInput {
+  /** The contention domain, e.g. `suggestion`, `run`. */
+  domain: string;
+  /** The item within it, e.g. a pair hash or run id. */
+  item: string;
+  /** Lease duration in minutes (default 5, clamped 1–120). Must exceed honest
+   *  work duration — the reaper lesson (ADR-0084 §6). */
+  minutes?: number;
+  /** Seconds alias for `minutes` (W4g — the wave-4 weave driver reached for
+   *  `ttlSeconds`, which was silently dropped to the 5-min default). Either
+   *  spelling works; `minutes` wins if both are given. */
+  seconds?: number;
+  ttlSeconds?: number;
+  /** Optional free-text note (what the holder intends). */
+  note?: string;
+}
+export interface LeaseResult {
+  held: boolean;
+  key: string;
+  /** Who holds it — the caller's participant key (ADR-0086) or principal when
+   *  `held`; the CURRENT holder when not. */
+  holder: string | null;
+  expiresAt: string | null;
+  /** The duration actually granted, in minutes (W4g — so a caller sees the
+   *  120-min cap or the 5-min floor was applied rather than inferring it from
+   *  `expiresAt`). Present when the lease was newly acquired. */
+  grantedMinutes?: number;
+  /** True when this call EXTENDED a lease you already held (W4j) rather than
+   *  acquiring a fresh one — re-leasing your own item refreshes its timer. */
+  renewed?: boolean;
+}
+export interface ReleaseInput {
+  domain: string;
+  item: string;
+}
+
 /**
  * Write-through guard: a caller may write into another owner's slice only
  * under a `write` grant covering the key — and never into the reserved
@@ -94,7 +133,7 @@ async function requireWriteThrough(
 }
 
 /** The write/remember/supersede command handlers (ADR-0044 Inc 5). */
-export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'remember' | 'ingest' | 'supersede'> {
+export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'remember' | 'ingest' | 'supersede' | 'lease' | 'release'> {
   return {
     async remember(input, ctx) {
       const caller = requireUser(ctx.identity);
@@ -194,6 +233,103 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       if (!input?.key) throw new Error('key is required');
       const { state } = build(ctx);
       return state.supersede(scope, input.key, input.by ?? null, ctx.identity, { migrateLinks: input.migrateLinks });
+    },
+
+    // ── ADR-0086 Inc 3: work leases ─────────────────────────────────
+    async lease(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.domain || !input?.item) throw new Error('domain and item are required');
+      const { state } = build(ctx);
+      // W4g: honor a seconds spelling as the alias it structurally is (the
+      // weave driver's `ttlSeconds:1800` was silently dropped to the default).
+      // `minutes` wins if both are set; a seconds value converts (min 1 min).
+      const secs = input.seconds ?? input.ttlSeconds;
+      const requested = input.minutes ?? (typeof secs === 'number' && secs > 0 ? secs / 60 : undefined) ?? 5;
+      const minutes = Math.min(Math.max(requested, 1), 120);
+      const key = `lease/${input.domain}/${input.item}`;
+      const holder = ctx.identity?.participant ?? scope;
+      try {
+        // The ifAbsent+timer atomic write IS the lease (an expired-delete fact
+        // reads as absent, so a crashed holder's lease self-releases). One call,
+        // crash-safe, no scheduler — sync's canonical hand-off.
+        const e = await state.put(
+          {
+            scope,
+            key,
+            value: { holder, domain: input.domain, item: input.item, ...(input.note ? { note: input.note } : {}) },
+            via: 'workspace.lease',
+            type: 'lease',
+            tags: ['lease'],
+            ifAbsent: true,
+            timer: { ms: minutes * 60_000, effect: 'delete' },
+          },
+          ctx.identity,
+        );
+        return { held: true, key, holder, expiresAt: e._meta.timer?.expiresAt ?? null, grantedMinutes: minutes };
+      } catch (err) {
+        if ((err as { name?: string }).name !== 'StatePreconditionError') throw err;
+        const existing = await state.get(scope, key, ctx.identity);
+        const liveHolder = (existing?.value as { holder?: string } | null)?.holder ?? existing?._meta.as ?? null;
+        // W4j — self-renewal: if the live lease is already YOURS, re-leasing
+        // EXTENDS it (fresh timer) rather than reporting contention against
+        // yourself (the improve driver re-leased its own run and got
+        // `held:false`, reading like it had lost the lease mid-drive). Re-put
+        // the same value with a new timer — you hold it, so this is not a steal.
+        if (existing && liveHolder === holder) {
+          const renewed = await state.put(
+            {
+              scope,
+              key,
+              value: { holder, domain: input.domain, item: input.item, ...(input.note ? { note: input.note } : {}) },
+              via: 'workspace.lease',
+              type: 'lease',
+              tags: ['lease'],
+              timer: { ms: minutes * 60_000, effect: 'delete' },
+            },
+            ctx.identity,
+          );
+          return { held: true, key, holder, expiresAt: renewed._meta.timer?.expiresAt ?? null, grantedMinutes: minutes, renewed: true };
+        }
+        // Contended by someone else: report the live holder so the caller can
+        // move on. (If the lease lapsed between the failed write and this read,
+        // holder comes back null — retry the lease.)
+        return {
+          held: false,
+          key,
+          holder: liveHolder,
+          expiresAt: existing?._meta.timer?.expiresAt ?? null,
+        };
+      }
+    },
+
+    async release(input, ctx) {
+      const scope = requireUser(ctx.identity);
+      if (!input?.domain || !input?.item) throw new Error('domain and item are required');
+      const { state } = build(ctx);
+      const key = `lease/${input.domain}/${input.item}`;
+      const existing = await state.get(scope, key, ctx.identity);
+      if (!existing) return { released: false, key, reason: 'no live lease' };
+      const holder = (existing.value as { holder?: string } | null)?.holder ?? null;
+      const me = ctx.identity?.participant ?? scope;
+      // Release = EXPIRE NOW, not supersede: acquisition's ifAbsent already
+      // reads a lapsed-delete timer as absent, so an expired lease is exactly
+      // "released" in the vocabulary acquirers understand — and the key keeps
+      // its revision continuity for the next lease. Releasing another
+      // participant's lease is permitted but NOTED — the participant key never
+      // carries authority (ADR-0086); the provenance trail is the accountability.
+      await state.put(
+        {
+          scope,
+          key,
+          value: { ...(existing.value as Record<string, unknown>), released: true, releasedBy: me },
+          via: 'workspace.release',
+          type: 'lease',
+          tags: ['lease'],
+          timer: { at: new Date(Date.now() - 1000).toISOString(), effect: 'delete' },
+        },
+        ctx.identity,
+      );
+      return { released: true, key, ...(holder && holder !== me ? { note: `released a lease held by ${holder}` } : {}) };
     },
   };
 }

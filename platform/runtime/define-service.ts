@@ -209,6 +209,33 @@ async function resolveHttpIdentity(
   }
 }
 
+/**
+ * A derived context whose identity carries additional fields — e.g. the
+ * ADR-0086 participant key stamped by the gateway from a dispatch's `as`
+ * argument. The serviceClient must be REBUILT (not just the identity object
+ * patched): its envelope options were captured at context construction, so a
+ * bare identity mutation would never reach downstream services.
+ */
+export function withIdentity(ctx: ServiceContext, patch: Partial<Identity>): ServiceContext {
+  const identity = { ...ctx.identity, ...patch } as Identity;
+  return {
+    ...ctx,
+    identity,
+    serviceClient: createServiceClient({
+      registry: ctx.config.registry,
+      correlationId: ctx.correlationId,
+      user: identity.user,
+      scopes: identity.scopes?.length ? identity.scopes : undefined,
+      grantScopes: identity.grantScopes?.length ? identity.grantScopes : undefined,
+      tokenId: identity.tokenId,
+      actor: identity.actor,
+      posture: identity.posture,
+      act: identity.act,
+      participant: identity.participant,
+    }),
+  };
+}
+
 export function defineService(definition: ServiceDefinition) {
   const version = definition.version ?? '1.0.0';
   // Distinct route prefixes owned by raw HTTP handlers, e.g. "/oauth/*".
@@ -253,6 +280,7 @@ export function defineService(definition: ServiceDefinition) {
       actor: opts.identity.actor,
       posture: opts.identity.posture,
       act: opts.identity.act,
+      participant: opts.identity.participant,
     });
     return {
       logger,
@@ -316,6 +344,7 @@ export function defineService(definition: ServiceDefinition) {
           ...(event.actor ? { actor: event.actor } : {}),
           ...(event.posture ? { posture: event.posture } : {}),
           ...(event.act ? { act: event.act } : {}),
+          ...(event.participant ? { participant: event.participant } : {}),
         },
       });
       try {

@@ -1562,6 +1562,18 @@ interface CallCellToolInput {
  */
 async function callCellTool(input: CallCellToolInput, ctx: ServiceContext): Promise<unknown> {
   if (!input?.tool || !SAFE_TOOL_NAME.test(input.tool)) throw new Error('a valid tool name is required');
+  // `as` is membrane metadata (ADR-0086), never a cell-tool argument. The
+  // gateway strips it on both dispatch verbs, but a leaked key observed live
+  // (2026-07-16: @c15r/tasks.create_task 400'd on a strict body parser —
+  // kb/cross-cell-act-drops-participant-as) proves at least one path reaches
+  // here without that strip. Strip defensively at this choke point so no cell
+  // grows an accidental parameter; carrying the participant TO the cell (an
+  // identity envelope, not body mutation) is the deferred feature half.
+  let args = input.args ?? {};
+  if (typeof (args as Record<string, unknown>).as === 'string') {
+    const { as: _as, ...rest } = args as Record<string, unknown>;
+    args = rest;
+  }
   const res = (await callCell(
     {
       cellId: input.cellId,
@@ -1569,7 +1581,7 @@ async function callCellTool(input: CallCellToolInput, ctx: ServiceContext): Prom
       name: input.name,
       method: 'POST',
       path: `${TOOLS_PATH}/${input.tool}`,
-      body: input.args ?? {},
+      body: args,
     },
     ctx,
   )) as InvokeCellResult;

@@ -19,7 +19,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App } from './client/app';
 import { installBridge } from './client/bridge';
-import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites } from './engine';
+import { seg, railsFrom, validateMachine, projectActions, projectSubscriptions, spawnChildrenWrites, step, specFromYield, parentOf, barrierAdvance, mkey, assembleMachine, decomposeWrites, contextBindsOf, machineRails, contextEcho } from './engine';
 // The shared SERVER-side substrate client (ADR-0017) — read/query/emit/supersede
 // over the owner's slice. Vendored (not a URL import): the forge bundler
 // only bundles relative imports within the cell dir + esm.sh-declared deps; a
@@ -108,7 +108,7 @@ const MACHINE_RUN_RENDERER_SRC = `
   // mounted the bare SVG with no badge — so its presence in claude.ai is
   // conclusive proof the federated ui:// renderer ran (not a cached card, not the
   // fields-hint fallback).
-  var BUILD = 'v2';
+  var BUILD = 'v3';
   var reg = (window.__parcRender = window.__parcRender || {});
   var M;
   function loadMermaid(){
@@ -133,12 +133,38 @@ const MACHINE_RUN_RENDERER_SRC = `
   function badge(){
     return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ rendered by @c15r/machine · federated ui:// renderer · '+BUILD+'</div>';
   }
+  function h(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+  function ex(s,n){ s=String(s==null?'':s); return s.length>n ? s.slice(0,n)+'…' : s; }
+  var COLORS = { running:'#6d5ef0', done:'#2a8a2a', failed:'#c33', waiting:'#d98800', sectioning:'#0886c8', voting:'#0886c8' };
+  function chip(txt, color){ return '<span style="display:inline-block;padding:1px 7px;border-radius:9px;font:11px ui-monospace,monospace;color:#fff;background:'+(color||'#888')+'">'+h(txt)+'</span>'; }
+  function header(v){
+    var bits = ['<span style="font-weight:650">'+h(v.machine||'run')+'</span>', chip(v.status||'?', COLORS[v.status]), '<span>at <b>'+h(v.node||'?')+'</b></span>'];
+    if(v.mode) bits.push(chip(v.mode, v.mode==='driven' ? '#333' : '#888'));
+    if(typeof v.failures==='number' && v.failures>0) bits.push(chip(v.failures+' failure'+(v.failures>1?'s':''), '#c33'));
+    if(v.waitUntil) bits.push('<span style="opacity:.75">until '+h(v.waitUntil)+'</span>');
+    return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'+bits.join(' ')+'</div>';
+  }
+  function claimRows(entries){
+    if(!entries.length) return '';
+    var rows = entries.map(function(f){
+      var c = f.value||{};
+      var conf = (typeof c.confidence==='number') ? ' <span style="opacity:.7">('+c.confidence+')</span>' : '';
+      return '<li><b>'+h(c.at||'?')+'</b> → '+h(c.chose||'?')+conf+(c.statement?'<div style="opacity:.85;margin:1px 0 4px">'+h(ex(c.statement,280))+'</div>':'')+'</li>';
+    }).join('');
+    return '<details open style="margin-top:6px"><summary style="cursor:pointer">claims — the reasoning trail ('+entries.length+')</summary><ul style="margin:4px 0 2px;padding-left:18px">'+rows+'</ul></details>';
+  }
   var seq=0;
-  reg['machine-run'] = function(host, value){
+  reg['machine-run'] = function(host, value, api){
     try{
       host.textContent='…';
-      var src = toMermaid(value || {});
-      loadMermaid().then(function(m){ return m.render('mr'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + badge(); }).catch(function(err){ host.innerHTML = '<div class="hint">machine-run: '+e((err&&err.message)||err)+'</div>' + badge(); });
+      var v = value || {};
+      var src = toMermaid(v);
+      var claims = (api && api.key && typeof api.call==='function')
+        ? api.call('read','workspace.query',{ prefix: api.key + '/claim/', limit: 50 }).then(function(r){ return (r && r.entries) || []; }).catch(function(){ return []; })
+        : Promise.resolve([]);
+      Promise.all([loadMermaid().then(function(m){ return m.render('mr'+(++seq), src); }), claims])
+        .then(function(res){ host.innerHTML = header(v) + res[0].svg + claimRows(res[1]) + (v.text?'<details><summary style="cursor:pointer">trigger context</summary><div style="opacity:.85;margin:3px 0">'+h(ex(v.text,600))+'</div></details>':'') + badge(); })
+        .catch(function(err){ host.innerHTML = header(v) + '<div class="hint">machine-run: '+e((err&&err.message)||err)+'</div>' + badge(); });
     }catch(err){ host.innerHTML = '<div class="hint">machine-run render error</div>' + badge(); }
   };
 })();
@@ -156,7 +182,7 @@ const MACHINE_RUN_RENDERER_SRC = `
  */
 const MACHINE_DEF_RENDERER_SRC = `
 (function(){
-  var BUILD = 'v2';
+  var BUILD = 'v3';
   var reg = (window.__parcRender = window.__parcRender || {});
   var M;
   function loadMermaid(){
@@ -166,12 +192,66 @@ const MACHINE_DEF_RENDERER_SRC = `
   function e(s){ return String(s==null?'':s).replace(/["\\n|]/g,' '); }
   function sid(s){ return String(s==null?'n':s).replace(/[^A-Za-z0-9_]/g,'_'); }
   function entriesOf(r){ return (r && Array.isArray(r.entries)) ? r.entries : []; }
+  function h(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+  function ex(s,n){ s=String(s==null?'':s); return s.length>n ? s.slice(0,n)+'…' : s; }
+  var MODE_STROKE = { agent:'#6d5ef0', work:'#0a8f7a', 'work-code':'#0a8f7a', task:'#b48ead', section:'#0886c8', vote:'#0886c8', 'catch':'#c33', wait:'#d98800' };
   function toMermaid(nodes, rails, entry){
     var lines = ['flowchart TD'];
-    for(var i=0;i<nodes.length;i++){ var v=nodes[i].value||{}; lines.push('  '+sid(v.name)+'["'+e(v.title||v.name)+'"]'); }
-    for(var j=0;j<rails.length;j++){ var r=rails[j].value||{}; var lbl=e(r.mode||r.when||''); lines.push('  '+sid(r.from)+' -->'+(lbl?'|'+lbl+'|':'')+' '+sid(r.to)); }
+    for(var i=0;i<nodes.length;i++){
+      var v=nodes[i].value||{};
+      // A node that carries a brief or context binds is marked so the diagram
+      // shows where the DETAIL lives (the list below carries the detail itself).
+      var mark = (v.prompt?'✎':'') + ((v.context&&v.context.length)?'⛁':'');
+      lines.push('  '+sid(v.name)+'["'+e(v.title||v.name)+(mark?' '+mark:'')+'"]');
+    }
+    var styles=[];
+    for(var j=0;j<rails.length;j++){
+      var r=rails[j].value||{};
+      var lbl=e(r.mode||'') + (r.when?': '+e(ex(r.when,28)):(r.condition?': ⟨'+e(ex(r.condition,24))+'⟩':''));
+      lines.push('  '+sid(r.from)+' -->'+(lbl?'|'+lbl+'|':'')+' '+sid(r.to));
+      var stroke = MODE_STROKE[r.mode];
+      if(stroke) styles.push('  linkStyle '+j+' stroke:'+stroke+',stroke-width:2px'+((r.mode==='catch'||r.mode==='wait')?',stroke-dasharray:4 3':'')+';');
+    }
+    lines = lines.concat(styles);
     if(entry){ lines.push('  classDef entry fill:#6d5ef0,color:#fff,stroke:#6d5ef0;'); lines.push('  class '+sid(entry)+' entry;'); }
     return lines.join('\\n');
+  }
+  function railRow(r){
+    var facets=[];
+    if(r.when) facets.push('<i>when</i> '+h(r.when));
+    if(r.condition) facets.push('<i>if</i> <code>'+h(r.condition)+'</code>');
+    if(r.for!==undefined) facets.push('<i>wait</i> '+h(r.for));
+    if(Array.isArray(r.tools)&&r.tools.length) facets.push('<i>tools</i> '+h(r.tools.join(', ')));
+    if(r.grants) facets.push('<i>grants</i> <code>'+h(ex(JSON.stringify(r.grants),90))+'</code>');
+    if(r.scope) facets.push('<i>scope</i> <code>'+h(ex(JSON.stringify(r.scope),90))+'</code>');
+    if(typeof r.maxTurns==='number') facets.push('<i>maxTurns</i> '+r.maxTurns);
+    if(typeof r.samples==='number') facets.push('<i>samples</i> '+r.samples);
+    if(r.branch) facets.push('<i>branch</i> '+h(r.branch));
+    if(Array.isArray(r.sections)) facets.push('<i>sections</i> '+h(r.sections.map(function(s){return s.to;}).join(', ')));
+    var head = '<b>'+h(r.from)+'</b> →'+' <b>'+h(r.to)+'</b> <span style="color:'+(MODE_STROKE[r.mode]||'#888')+';font:11px ui-monospace,monospace">['+h(r.mode||'auto')+']</span>';
+    var body = facets.length ? '<div style="opacity:.85;margin:1px 0 2px">'+facets.join(' · ')+'</div>' : '';
+    var prompt = r.prompt ? '<details style="margin:1px 0 3px"><summary style="cursor:pointer;opacity:.8">prompt ('+r.prompt.length+' chars)</summary><div style="white-space:pre-wrap;opacity:.9;font-size:12px">'+h(r.prompt)+'</div></details>' : '';
+    return '<li style="margin-bottom:3px">'+head+body+prompt+'</li>';
+  }
+  function nodeRow(v){
+    if(!v.prompt && !(v.context&&v.context.length) && !v.kind) return '';
+    var bits=['<b>'+h(v.name)+'</b>'];
+    if(v.kind) bits.push('<span style="opacity:.7">['+h(v.kind)+']</span>');
+    if(v.context&&v.context.length) bits.push('<i>context</i> '+h(v.context.map(function(c){return typeof c==='string'?c:(c&&c.bind)||'';}).join(', ')));
+    var prompt = v.prompt ? '<details style="margin:1px 0 3px"><summary style="cursor:pointer;opacity:.8">brief ('+v.prompt.length+' chars)</summary><div style="white-space:pre-wrap;opacity:.9;font-size:12px">'+h(v.prompt)+'</div></details>' : '';
+    return '<li style="margin-bottom:3px">'+bits.join(' ')+prompt+'</li>';
+  }
+  function detail(idv, nodes, rails){
+    var hd=[];
+    if(idv&&idv.entry) hd.push('<i>entry</i> <b>'+h(idv.entry)+'</b>');
+    if(idv&&idv.reactive===false) hd.push('<i>driven-only</i>');
+    if(idv&&Array.isArray(idv.context)&&idv.context.length) hd.push('<i>context</i> '+h(idv.context.join(', ')));
+    var out = hd.length ? '<div style="margin:5px 0 2px;opacity:.9">'+hd.join(' · ')+'</div>' : '';
+    var nrows = nodes.map(function(f){ return nodeRow(f.value||{}); }).filter(Boolean).join('');
+    if(nrows) out += '<details style="margin-top:4px"><summary style="cursor:pointer">nodes — briefs + context binds</summary><ul style="margin:4px 0;padding-left:18px">'+nrows+'</ul></details>';
+    var rrows = rails.map(function(f){ return railRow(f.value||{}); }).join('');
+    if(rrows) out += '<details open style="margin-top:4px"><summary style="cursor:pointer">rails — the mechanics ('+rails.length+')</summary><ul style="margin:4px 0;padding-left:18px;list-style:none">'+rrows+'</ul></details>';
+    return out;
   }
   function badge(n, m){
     return '<div style="font:11px ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.7;margin-top:6px;padding-top:5px;border-top:1px solid rgba(127,127,127,.25)">▶ machine definition · '+n+' nodes · '+m+' rails · federated ui:// renderer · '+BUILD+'</div>';
@@ -188,7 +268,7 @@ const MACHINE_DEF_RENDERER_SRC = `
       var nodes = entriesOf(res[0]), rails = entriesOf(res[1]);
       if(!nodes.length && !rails.length){ host.innerHTML = '<div class="hint">'+e((value&&value.title)||key)+' — no nodes/rails found</div>' + badge(0,0); return; }
       var src = toMermaid(nodes, rails, value && value.entry);
-      return loadMermaid().then(function(m){ return m.render('md'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + badge(nodes.length, rails.length); });
+      return loadMermaid().then(function(m){ return m.render('md'+(++seq), src); }).then(function(r){ host.innerHTML = r.svg + detail(value, nodes, rails) + badge(nodes.length, rails.length); });
     }).catch(function(err){ host.innerHTML = '<div class="hint">machine: '+e((err&&err.message)||err)+'</div>' + badge(0,0); });
   };
 })();
@@ -254,7 +334,7 @@ const TOOLS = [
         source: { type: 'string', description: 'Optional original .dy source text' },
         nodes: {
           type: 'array',
-          description: 'Nodes: [{ name, kind, title?, attributes? }] (kind = Task/State/Input/Output/Context/Resource/Process/Concept/Implementation/Result/tool/…)',
+          description: 'Nodes: [{ name, kind?, title?, prompt?, context? }]. `prompt` is the node\'s BRIEF — decision guidance at an agent node (leads the reactive decide prompt AND the driven yield\'s brief), work guidance elsewhere; it lives in the DEFINITION so a redefine regenerates instead of clobbering. `context` is the node\'s context binds (DyGram context nodes): fact keys (or {bind, as}) resolved at step time into the CEL scope (`ctx.<as>`) and the driven yield — machine-level `context` is inherited by every node.',
           items: { type: 'object' },
         },
         arrows: {
@@ -264,7 +344,7 @@ const TOOLS = [
         },
         rails: {
           type: 'array',
-          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work"|"catch", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns?, maxMs? }]. `condition` (auto rails) is CEL over `{ value:<run>, now, nowMs }` — so an edge can gate on machine state AND time, e.g. `value.deadline < now` or `nowMs - value.startedMs > 300000` (a deadline/wait). `maxMs` is a soft per-step wall-clock budget (ms) the spawned work agent honours — bounds a step below the models cell Lambda ceiling (default ≈285s). A `catch` rail from a node fires only when that node`s work/agent step FAILED (`status:"failed"`), routing the run to a recovery node — the error-handling primitive (machine.md §13). NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
+          description: 'Optional explicit rails: [{ from, to, mode: "auto"|"agent"|"task"|"work"|"catch", condition?(CEL), prompt?, grants?, tools?, scope?, maxTurns?, maxMs? }]. `condition` (auto rails) is CEL over `{ value:<run>, now, nowMs, ctx }` — machine state, time, AND the node\'s resolved context binds, e.g. `value.deadline < now`, `nowMs - value.startedMs > 300000`, or `ctx.tending_latest.stale > 300` (a mechanical assessment that needs no agent node). `maxMs` is a soft per-step wall-clock budget (ms) the spawned work agent honours — bounds a step below the models cell Lambda ceiling (default ≈285s). A `catch` rail from a node fires only when that node`s work/agent step FAILED (`status:"failed"`), routing the run to a recovery node — the error-handling primitive (machine.md §13). NB: making rail mode explicit data — and the arrow→mode default below — is a substrate-only design choice, NOT a DyGram port: DyGram has no rail-mode enum and infers auto-vs-agent dynamically from node-type/out-degree/annotations (its `=>` is causation *styling*, not an agent marker). Our arrow→mode default: -> ⇒ auto, => ⇒ agent, ~> ⇒ task, ~>> ⇒ work. "work" SPAWNS @owner/models.agent at the node (machine-uses-agent): it runs `prompt` with scoped `grants` ({read,write[]}) and advances the run itself; `tools` is the allowlist of substrate tools it may call (the executor filters to it — docs/machine.md). "task" parks a claimable hand-off for a DRIVING agent instead.',
           items: { type: 'object' },
         },
         dryRun: { type: 'boolean', description: 'Validate + preview the decomposition facts + projected action/subscription ids WITHOUT writing anything.' },
@@ -301,15 +381,39 @@ const TOOLS = [
   {
     name: 'step',
     description:
-      'Advance a machine run STATELESSLY (ADR-0018, the stateless stepper). Assembles the machine from its decomposed facts, reads machine/<machine>/run/<run>, follows deterministic `auto` rails IN-PROCESS (CEL-guarded, no per-hop fact-write), and emits at most ONE advanced run fact (carrying the execution `trace`). Returns the `yield`: the non-deterministic point where a decision is owed — `{kind:"agent"|"task"|"work"|"section"|"vote", node, choices}` — or null when the run completed. On a section/vote yield it spawns the children; when a child completes it runs the DETERMINISTIC join barrier (reads the siblings, advances the parent once all are done — no model). The driven counterpart to the reactive step subscription. Idempotent: a run already parked at its yield emits nothing.',
+      'Advance a machine run STATELESSLY (ADR-0018) — and, with `decide`, resolve the decision it is parked at in the same call (the DRIVE verb, ADR-0065). Assembles the machine from its decomposed facts, reads machine/<machine>/run/<run>, follows deterministic `auto` rails IN-PROCESS (CEL-guarded, ctx.* bound from the node\'s declared context binds), and emits at most ONE advanced run fact (carrying the execution `trace`). Returns the `yield` — the point where a decision is owed: `{kind, node, choices, mode?, brief?{prompt,text}, advance?}` plus `context` (the node\'s declared context binds, RESOLVED — no follow-up reads needed) — or null when the run completed. THE DRIVE LOOP: trigger_run {mode:"driven"} → step → read the yield\'s brief/choices/context, exercise judgment → step again with decide:{to, statement, confidence} — the cell writes the claim AND the merge-preserving advance (mode/text/trace all survive; the two classic driven-mode footguns are gone) — repeat until yield is null (the run closed itself). On a section/vote yield it spawns the children (inheriting the run\'s mode); the join barrier is deterministic. Idempotent: a parked run without `decide` emits nothing.',
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
         machine: { type: 'string', description: 'Machine slug (the <name> in machine/<name>)' },
         run: { type: 'string', description: 'Run id → machine/<machine>/run/<run>' },
+        decide: {
+          type: 'object',
+          description: 'Resolve the decision the run is parked at, then step: {to: <a branch from the yield choices>, statement: <why — becomes the claim>, confidence: <0..1>}. The cell records the claim (machine/<m>/run/<run>/claim/<node>) and advances with a MERGE (mode, text, failures, trace preserved) — safer than hand-writing the run or the decide-* action for driven runs.',
+          properties: {
+            to: { type: 'string', description: 'The chosen branch (must be one of the yield\'s choices)' },
+            statement: { type: 'string', description: 'Why this branch — the claim\'s statement' },
+            confidence: { type: 'number', description: 'Calibrated belief 0..1' },
+          },
+          required: ['to'],
+        },
       },
       required: ['machine', 'run'],
+    },
+    scope: null,
+  },
+  {
+    name: 'describe_machine',
+    description:
+      'The REVISOR surface: return a machine\'s full definition AS CONTENT — the exact `define_machine` input that reproduces it (nodes with prompts/context binds, rails with conditions/prompts/grants/tools) — plus validation, the projected vocabulary a redefine would regenerate, DRIFT (live _actions/_subscriptions that differ from that regeneration: hand-patched prompts a redefine would CLOBBER — fold them into the definition first), and the machine\'s open runs (parked yields = standing obligations). Read this before editing any machine; iterate by round-tripping: describe_machine → edit the returned definition → define_machine {dryRun:true} → define_machine.',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'Machine slug (the <name> in machine/<name>)' },
+      },
+      required: ['machine'],
     },
     scope: null,
   },
@@ -363,34 +467,92 @@ async function loadMachine(sub, machineName) {
     sub.query({ prefix: `${base}/node/` }),
     sub.query({ prefix: `${base}/rail/` }),
   ]);
-  return assembleMachine(idFact, nodeFacts, railFacts);
+  // The slug we loaded by is authoritative for `name` — legacy identities (pre
+  // name-on-identity) assemble with name = title, which mangles anything derived
+  // from it (the yield's advance action id: seg("Drive-surface proof…") ≠ slug).
+  return { ...assembleMachine(idFact, nodeFacts, railFacts), name: machineName };
 }
 
-async function stepRun(machineName, runId) {
+async function stepRun(machineName, runId, decide) {
   const sub = createSubstrate({ owner: OWNER, via: 'machine.step' });
   const now = new Date().toISOString();
   const runKey = mkey.run(machineName, runId);
   const runFact = await sub.read(runKey);
   if (!runFact) return { error: `no run ${runKey}` };
-  const runValue = runFact.value || {};
+  const original = runFact.value || {};
+  let runValue = original;
   const mName = runValue.machine || machineName;
   const machine = await loadMachine(sub, mName);
   if (!machine) return { error: `no machine ${mkey.machine(mName)}` };
 
-  const result = step(runValue, machine, now);
+  // `decide` (the driven advance, ADR-0065 ergonomics): the DRIVER supplies only
+  // the judgment — {to, statement, confidence} — and the CELL performs the
+  // mechanics: claim write + a MERGE-preserving advance (mode, text, failures,
+  // trace all survive; only node/status/via move). This kills the two footguns
+  // of hand-advancing: the mode-drop (run silently reverts to reactive) and the
+  // "back UNCHANGED except…" merge each driver had to re-implement in-context.
+  let claimed;
+  if (decide && decide.to) {
+    const at = runValue.node;
+    // agent/task rails are decisions in any mode. A WORK rail is decidable only
+    // on a DRIVEN run: the reactive work sub skips driven runs, so the DRIVER is
+    // the executor at that node (protocol/machine-drive) — after doing the work,
+    // step{decide} records the work summary as the claim and advances, exactly
+    // like the spawned agent's own advance. Without this, a driven run parking
+    // at a work yield forces the driver to hand-write the run fact.
+    const driven = runValue.mode === 'driven';
+    const decision = machineRails(machine).filter(
+      (r) => r.from === at && (r.mode === 'agent' || r.mode === 'task' || (driven && (r.mode === 'work' || r.mode === 'work-code'))),
+    );
+    if (!decision.length) return { error: `node "${at}" owes no decision (no agent/task${driven ? '/work' : ''} rail)` };
+    if (!decision.some((r) => r.to === decide.to)) {
+      return { error: `"${decide.to}" is not a branch at "${at}" — choices: ${decision.map((r) => r.to).join(', ')}` };
+    }
+    claimed = mkey.claim(mName, runId, at);
+    await sub.emit([
+      {
+        key: claimed,
+        value: {
+          statement: decide.statement ?? '',
+          ...(typeof decide.confidence === 'number' ? { confidence: decide.confidence } : {}),
+          machine: mName,
+          at,
+          chose: decide.to,
+        },
+        type: 'claim',
+        tags: ['claim', 'machine', 'dygram'],
+      },
+    ]);
+    runValue = { ...runValue, node: decide.to, status: 'running', via: `${at}=>decision`, at: now };
+  }
+
+  // Resolve the node's context binds (DyGram context nodes, first slice): the
+  // values feed the CEL guards as `ctx.*` and ride back to the driver so its
+  // yield arrives already grounded — no follow-up reads for declared context.
+  const binds = contextBindsOf(machine, runValue.node);
+  const ctx = {};
+  const context = {};
+  for (const b of binds) {
+    try {
+      const f = await sub.read(b.bind);
+      if (f) { ctx[b.as] = f.value; context[b.bind] = contextEcho(b.bind, f.value, f._meta); }
+    } catch { /* an unreadable bind is simply absent from ctx */ }
+  }
+
+  const result = step(runValue, machine, now, ctx);
 
   // A section/vote yield spawns children; the spawn writes include the parent's
   // wait-state (which supersedes the plain advance), so don't also emit `result.run`.
   if (result.yield && (result.yield.kind === 'section' || result.yield.kind === 'vote')) {
     const spec = specFromYield(result.yield);
-    const writes = spawnChildrenWrites(runId, mName, spec, now);
+    const writes = spawnChildrenWrites(runId, mName, spec, now, result.run);
     await sub.emit(writes);
-    return { run: runId, machine: mName, node: result.yield.node, yield: result.yield, spawned: writes.slice(1).map((w) => w.key) };
+    return { run: runId, machine: mName, node: result.yield.node, yield: result.yield, spawned: writes.slice(1).map((w) => w.key), ...(claimed ? { claimed } : {}) };
   }
 
   // Emit the advance only if the meaningful state changed (idempotent — so a
   // reactive deliver to a parked run is a cheap no-op, no loop). trace always rides.
-  const changed = result.run.node !== runValue.node || result.run.status !== runValue.status || JSON.stringify(result.run.trace) !== JSON.stringify(runValue.trace);
+  const changed = result.run.node !== original.node || result.run.status !== original.status || JSON.stringify(result.run.trace) !== JSON.stringify(original.trace);
   if (changed) {
     await sub.emit([{ key: runKey, value: result.run, type: 'machine-run', tags: ['machine', `machine:${mName}`] }]);
   }
@@ -400,7 +562,19 @@ async function stepRun(machineName, runId) {
     barrier = await advanceParentBarrier(sub, mName, runId, result.run, machine, now);
   }
 
-  return { run: runId, machine: mName, node: result.run.node, status: result.run.status, changed, yield: result.yield ?? null, path: result.path, ...(barrier ? { barrier } : {}) };
+  return {
+    run: runId,
+    machine: mName,
+    node: result.run.node,
+    status: result.run.status,
+    ...(result.run.mode ? { mode: result.run.mode } : {}),
+    changed,
+    yield: result.yield ?? null,
+    path: result.path,
+    ...(Object.keys(context).length ? { context } : {}),
+    ...(claimed ? { claimed } : {}),
+    ...(barrier ? { barrier } : {}),
+  };
 }
 
 /**
@@ -430,6 +604,92 @@ async function advanceParentBarrier(sub, machineName, childRunId, childRun, mach
   return { parent: rel.parent, advanced: true, node: decision.advance.value.node, done: decision.done, expected: decision.expected };
 }
 
+
+/**
+ * The revisor surface (see the describe_machine tool description). Returns the
+ * DEFINITION as re-definable content, what a redefine would project, the drift
+ * between that and the live vocabulary (hand-patched subscription prompts are
+ * exactly what this catches — the ADR-0065 tending clobber hazard), and the
+ * machine's open runs. Read-only.
+ */
+async function describeMachine(machineName) {
+  const sub = createSubstrate({ owner: OWNER, via: 'machine.describe' });
+  const base = mkey.machine(machineName);
+  const idFact = await sub.read(base);
+  if (!idFact) return { error: `no machine ${base}` };
+  const idv = idFact.value || {};
+  const [nodeFacts, railFacts, liveActions, liveSubs, runFacts] = await Promise.all([
+    sub.query({ prefix: `${base}/node/` }),
+    sub.query({ prefix: `${base}/rail/` }),
+    sub.query({ prefix: `_actions/machine.${seg(machineName)}.` }),
+    sub.query({ prefix: `_subscriptions/machine.${seg(machineName)}.` }),
+    sub.query({ prefix: `${base}/run/`, limit: 200 }),
+  ]);
+  const machine = assembleMachine(idFact, nodeFacts, railFacts);
+  const reactive = idv.reactive !== false;
+
+  // The round-trippable definition: feed this straight back to define_machine.
+  const definition = {
+    name: machineName,
+    title: machine.title,
+    entry: machine.entry,
+    ...(Array.isArray(machine.context) ? { context: machine.context } : {}),
+    reactive,
+    nodes: machine.nodes,
+    rails: machine.rails,
+  };
+  const validation = validateMachine(machine.nodes, machine.rails, machine.entry);
+
+  // What a redefine would regenerate — compared against the LIVE vocabulary so a
+  // revisor sees hand-patches before clobbering them.
+  const expActions = projectActions(machineName, machine.nodes, machine.rails, machine.entry);
+  const expSubs = reactive ? projectSubscriptions(machineName, machine.rails, OWNER, machine.context, machine.nodes) : [];
+  const expected = new Map([
+    ...expActions.map((d) => [`_actions/${d.id}`, d]),
+    ...expSubs.map((s) => [`_subscriptions/${s.id}`, s]),
+  ]);
+  const drift = [];
+  const norm = (v) => JSON.stringify(v);
+  for (const f of [...liveActions, ...liveSubs]) {
+    // itrigger/trigger subs are emitted outside projectSubscriptions — expected by id shape.
+    if (/\.(itrigger|trigger)$/.test(f.key)) continue;
+    const e = expected.get(f.key);
+    if (!e) drift.push({ key: f.key, kind: 'live-only', note: 'a redefine would supersede this (not derivable from the definition)' });
+    else if (norm(f.value) !== norm(e)) {
+      drift.push({ key: f.key, kind: 'differs', note: 'live value differs from what this definition regenerates — hand-patched? Fold the difference into the definition (node.prompt / rail facets) before redefining, or it will be clobbered.' });
+    }
+  }
+  for (const key of expected.keys()) {
+    if (![...liveActions, ...liveSubs].some((f) => f.key === key)) drift.push({ key, kind: 'expected-missing', note: 'this definition projects it, but it is not live — the machine predates a projection change; a redefine adds it' });
+  }
+
+  // Open runs = the machine's standing obligations (parked yields, waits, fans).
+  const isRun = (f) => !f.key.includes('/claim/');
+  const open = runFacts
+    .filter(isRun)
+    .filter((f) => ['running', 'waiting', 'sectioning', 'voting'].includes(f.value?.status))
+    .map((f) => ({
+      run: f.key.slice(`${base}/run/`.length),
+      node: f.value?.node,
+      status: f.value?.status,
+      ...(f.value?.mode ? { mode: f.value.mode } : {}),
+      ...(f.value?.at ? { at: f.value.at } : {}),
+    }));
+
+  return {
+    machine: machineName,
+    definition,
+    validation,
+    projected: { actions: expActions.map((d) => d.id), subscriptions: expSubs.map((s) => s.id) },
+    drift,
+    runs: { total: runFacts.filter(isRun).length, open },
+    guide: {
+      drive: 'trigger_run {machine, mode:"driven", text?} → step {machine, run} → read the yield (brief, choices, resolved context) → step {machine, run, decide:{to, statement, confidence}} → repeat until yield is null.',
+      revise: 'Edit `definition` above (prompts live on nodes, mechanics on rails) → define_machine {...definition, dryRun:true} → review wouldSupersede + drift → define_machine {...definition}. Run history is never touched.',
+      create: 'define_machine {name, nodes:[{name, kind?, prompt?, context?}], rails:[{from, to, mode, condition?, when?, prompt?, grants?, tools?}], context?, entry?, dryRun:true} — arrows [-> auto, => agent, ~> task, ~>> work] may replace rails.',
+    },
+  };
+}
 
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? 'GET';
@@ -496,9 +756,12 @@ export const handler = async (event) => {
       value: { id: 'machine-runs', description: 'Machine runs — active and completed', query: { type: 'machine-run', rankBy: 'recency', limit: 50 }, render: { type: 'fields' } },
       via: 'machine.bootstrap',
     });
-    // Generic claimable-task vocabulary (not machine-specific): an atomic,
-    // lease-bound claim — sync's canonical hand-off — so one agent works a task
-    // at a time, plus the queue of runs awaiting a decision/work.
+    // Generic leasable-task vocabulary (not machine-specific): an atomic
+    // lease — sync's canonical hand-off — so one agent works a task at a
+    // time, plus the queue of runs awaiting a decision/work. (Terminology per
+    // ADR-0086: a LEASE is temporal exclusivity; a CLAIM is an epistemic
+    // assertion. The action id `task.claim` predates the ruling and renames
+    // to `task.lease` with ADR-0086 Increment 3.)
     await emit({
       key: '_actions/task.claim',
       value: {
@@ -537,7 +800,18 @@ export const handler = async (event) => {
     const a = event.body ? JSON.parse(event.body) : {};
     if (!a.run || !a.machine) return json(400, { error: 'run and machine are required' });
     try {
-      const out = await stepRun(a.machine, a.run);
+      const out = await stepRun(a.machine, a.run, a.decide);
+      return json(out.error ? 404 : 200, out);
+    } catch (err) {
+      return json(500, { error: (err && err.message) || String(err) });
+    }
+  }
+
+  if (method === 'POST' && path === '/_tools/describe_machine') {
+    const a = event.body ? JSON.parse(event.body) : {};
+    if (!a.machine) return json(400, { error: 'machine is required' });
+    try {
+      const out = await describeMachine(a.machine);
       return json(out.error ? 404 : 200, out);
     } catch (err) {
       return json(500, { error: (err && err.message) || String(err) });
@@ -560,7 +834,7 @@ export const handler = async (event) => {
     if (Array.isArray(a.tags)) writes[0].tags = [...new Set([...writes[0].tags, ...a.tags])];
 
     const actions = project ? projectActions(a.name, nodes, rails, a.entry) : [];
-    const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER, a.context) : [];
+    const subs = project && reactive ? projectSubscriptions(a.name, rails, OWNER, a.context, nodes) : [];
     const sub = createSubstrate({ owner: OWNER, via: 'machine.define_machine' });
 
     // Which prior definition facts / projected vocabulary this re-definition would

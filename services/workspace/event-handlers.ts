@@ -115,31 +115,97 @@ export async function runTend(
   });
   ctx.logger.info('workspace tended', { scope, via, stale: report.stale, unlinked: report.unlinked, dangling: report.dangling });
 
-  // ADR-0052: the workspace's own verbs are capability facts too — reconciled
-  // by the tend pass (the repair organ), so the fact floor covers tier-1 verbs
-  // without a deploy-time seam. Diff-only writes: an unchanged verb costs
-  // nothing (no revision churn, no re-embed). Best-effort, like suggestions.
+  // ADR-0052 / ADR-0085 Inc 1: tier-1 verbs are capability facts too —
+  // reconciled by the tend pass (the repair organ), so the fact floor covers
+  // the whole tier-1 surface without a deploy-time seam. Best-effort, like
+  // suggestions: a reconcile failure must not fail the audit.
   try {
-    const capWriter: Identity = { user: 'platform/cells', scopes: [] };
-    const existing = await state.query(scope, { prefix: '_caps/workspace.' }, capWriter);
+    await reconcileTierOneCapabilities(ctx, state, scope);
+  } catch (err) {
+    ctx.logger.warn('tier-1 capability reconcile failed', { scope, error: (err as Error).message });
+  }
+  return report;
+}
+
+/**
+ * ADR-0085 Inc 1: reconcile the TIER-1 capability facts — `_caps/workspace.*`,
+ * `_caps/auth.*`, `_caps/cells.*` — closing the coverage gap the ADR measured
+ * live (80 capability facts vs 121 catalog targets: dynamic-cell tools project
+ * on deploy, but only workspace's tier-1 verbs had a writer; auth and cells
+ * were never materialized, so the fact floor lied by two whole services).
+ *
+ * workspace's verbs come from its own static descriptors; auth/cells answer
+ * `describeTools` over the same seam the gateway's catalog aggregates
+ * (`workspace.allow(auth|cells)` already grants the calls). Diff-only writes:
+ * an unchanged verb costs nothing (no revision churn, no re-embed). DEPRECATED
+ * aliases are skipped AND retired if previously projected — an embeddable
+ * capability fact steering goal-matching toward a superseded verb is worse
+ * than none. Verbs a provider stops advertising retire the same way
+ * (supersede, mirroring the dynamic-cell reconciler).
+ */
+async function reconcileTierOneCapabilities(ctx: ServiceContext, state: ObservedState, scope: string): Promise<void> {
+  const capWriter: Identity = { user: 'platform/cells', scopes: [] };
+  // First sentence, abbreviation-aware (membrane wave 1, F8): the naive
+  // first-period regex cut summaries at "e.g." — `workspace.link`'s embedded
+  // text became "…in your slice (e." — mangling both readability and the
+  // embedding that intent-routed discovery ranks on. A terminator only ends
+  // the sentence when it isn't a known abbreviation and is followed by a
+  // space/end (so "v3.2", "tar.gz", "docs/x.md" don't terminate either).
+  const firstSentence = (text: string): string => {
+    const re = /[.!?]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const head = text.slice(0, m.index + 1);
+      if (/\b(?:e\.g|i\.e|etc|vs|cf)\.$/i.test(head)) continue;
+      const next = text[m.index + 1];
+      if (next !== undefined && next !== ' ' && next !== '\n') continue;
+      return head.trim();
+    }
+    return text.slice(0, 240).trim();
+  };
+
+  // Provider → advertised tools. A provider whose discovery fails contributes
+  // nothing this pass — and is EXCLUDED from retirement (absence of evidence).
+  const providers: Array<{ cell: string; tools: Array<{ name: string; description: string; kind: 'read' | 'act' }> }> = [
+    { cell: 'workspace', tools: TOOL_DESCRIPTORS.map((d) => ({ name: d.name, description: d.description, kind: d.kind })) },
+  ];
+  for (const cell of ['auth', 'cells'] as const) {
+    try {
+      const res = await ctx
+        .serviceClient(cell)
+        .command<{ tools?: Array<{ name?: string; description?: string; kind?: string }> }>('describeTools', {});
+      providers.push({
+        cell,
+        tools: (res?.tools ?? [])
+          .filter((t): t is { name: string; description?: string; kind?: string } => typeof t.name === 'string' && !!t.name)
+          .map((t) => ({ name: t.name, description: t.description ?? `${cell}.${t.name}`, kind: t.kind === 'read' ? 'read' : 'act' })),
+      });
+    } catch (err) {
+      ctx.logger.warn('tier-1 capability discovery failed', { cell, error: (err as Error).message });
+    }
+  }
+
+  for (const p of providers) {
+    const prefix = `_caps/${p.cell}.`;
+    const existing = await state.query(scope, { prefix, limit: 200 }, capWriter);
     const summaries = new Map(existing.entries.map((e) => [e.key, (e.value as { summary?: string } | null)?.summary]));
-    const firstSentence = (text: string): string => (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text.slice(0, 240)).trim();
-    for (const d of TOOL_DESCRIPTORS) {
-      if (d.name === 'search') continue; // deprecated alias (ADR-0051) — not worth a fact
-      const key = `_caps/workspace.${d.name}`;
-      const summary = firstSentence(d.description);
+    const live = p.tools.filter((t) => !/^DEPRECATED\b/.test(t.description));
+    const wanted = new Set(live.map((t) => `${prefix}${t.name}`));
+    for (const t of live) {
+      const key = `${prefix}${t.name}`;
+      const summary = firstSentence(t.description);
       if (summaries.get(key) === summary) continue;
       await state.put(
         {
           scope,
           key,
           value: {
-            target: `workspace.${d.name}`,
-            name: `workspace.${d.name}`,
-            kind: d.kind,
+            target: `${p.cell}.${t.name}`,
+            name: `${p.cell}.${t.name}`,
+            kind: t.kind,
             summary,
-            cell: 'workspace',
-            schemaRef: `$catalog resolve: workspace.${d.name}`,
+            cell: p.cell,
+            schemaRef: `$catalog resolve: ${p.cell}.${t.name}`,
           },
           via: 'tend:capabilities',
           type: 'capability',
@@ -148,10 +214,75 @@ export async function runTend(
         capWriter,
       );
     }
-  } catch (err) {
-    ctx.logger.warn('workspace capability reconcile failed', { scope, error: (err as Error).message });
+    for (const stale of existing.entries) {
+      if (!wanted.has(stale.key)) await state.supersede(scope, stale.key, null, capWriter);
+    }
   }
-  return report;
+}
+
+/**
+ * ADR-0085 Inc 0: the usage→salience wire. The gateway announces every
+ * successful dispatch as `capability.invoked`; apply it as ONE actor-classed
+ * counter bump on the target's `_caps/<target>` fact (ADR-0050 — a read-kind
+ * verb feeds attention, an act-kind verb velocity, both standing: the same
+ * signal semantics facts earn from get/put). An absent fact no-ops inside
+ * recordTouch's conditional update, so un-projected targets cost nothing.
+ *
+ * This is the increment that makes ADR-0085's thesis literally true: before
+ * it, every capability fact sat inert at standing:0 — "capabilities rise
+ * through salience" with nothing to rise on. After it, the verbs you actually
+ * drive accrue standing and float into recall's focus band; the long tail
+ * elides. Salience becomes a usage-frequency prior over your own toolset.
+ */
+export function createCapabilityTouchHandler(build: DepsBuilder): EventBridgeHandler {
+  return async (detail, ctx, meta) => {
+    if (meta.source !== 'gateway') {
+      ctx.logger.warn('capability.invoked from unexpected source refused', { source: meta.source });
+      return;
+    }
+    const scope = typeof detail.scope === 'string' ? detail.scope : '';
+    const target = typeof detail.target === 'string' ? detail.target : '';
+    if (!scope || !target) return;
+    const { state } = build(ctx);
+    // Re-derive the embodiment class from the gateway's stamp; anything
+    // unrecognised falls back to name-classification inside actorOf.
+    const actor = detail.actor === 'human' || detail.actor === 'agent' || detail.actor === 'platform' ? detail.actor : undefined;
+    const participant = typeof detail.participant === 'string' && detail.participant ? detail.participant : undefined;
+    const identity: Identity = { user: scope, scopes: [], ...(actor ? { actor } : {}), ...(participant ? { participant } : {}) };
+    await state.touch(scope, `_caps/${target}`, identity, detail.kind === 'act' ? 'write' : 'read');
+
+    // ADR-0086 Inc 2: PRESENCE. A participant-keyed dispatch refreshes the
+    // participant's `_presence/<key>` fact — a 15-minute delete-at-expiry
+    // lease, so absence needs no reaper (a lapsed lease IS the signal). The
+    // ambient frame (whoami) reads these to answer "who is here, holding
+    // what". Throttled: an update within 5 minutes carrying the same target
+    // is skipped — a presence write per dispatch would be write noise.
+    // Best-effort, like the touch: presence must never fail the event.
+    if (participant) {
+      try {
+        const pKey = `_presence/${participant}`;
+        const prev = await state.get(scope, pKey); // identity-less read: a platform peek, weightless (ADR-0050)
+        const prevVal = prev?.value as { lastTarget?: string } | null;
+        const fresh = !!prev && Date.parse(prev._meta.updatedAt) > Date.now() - 5 * 60_000 && prevVal?.lastTarget === target;
+        if (!fresh) {
+          await state.put(
+            {
+              scope,
+              key: pKey,
+              value: { participant, actor: actor ?? 'agent', lastTarget: target, kind: detail.kind === 'act' ? 'act' : 'read' },
+              via: 'presence:capability-invoked',
+              type: 'presence',
+              tags: ['presence'],
+              timer: { ms: 15 * 60_000, effect: 'delete' },
+            },
+            identity,
+          );
+        }
+      } catch (err) {
+        ctx.logger.warn('presence refresh failed', { scope, participant, error: (err as Error).message });
+      }
+    }
+  };
 }
 
 /** The scheduled tend: an EventBridge cron delivers `workspace.tend.requested`. */
@@ -178,6 +309,19 @@ export function createTendHandler(build: DepsBuilder): EventBridgeHandler {
  * advances past the wait. Coarse (cron-granular) by design; a per-run delayed
  * trigger (EventBridge Scheduler) is the precision upgrade.
  */
+/**
+ * A run that has sat in a live status with no revision for this long is not in
+ * flight — it is leaked. Reactive runs park like this when a model delivery
+ * hard-fails outside the onError hook (the 2026-07 billing outage left runs
+ * "running" for days); driven runs leak when the driver forgets to close
+ * (ADR-0065's production finding). 12h is far beyond any legitimate step (model
+ * steps take minutes; driven routines run daily) while comfortably inside the
+ * next day's observation pass, so a leaked run can never miscount as live
+ * backlog for more than one cycle. `waiting` runs are exempt — they carry their
+ * own deadline (waitUntil), which the resume sweep above owns.
+ */
+const STALE_RUN_MS = 12 * 3600 * 1000;
+
 export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler {
   return async (detail, ctx) => {
     const scopes = Array.isArray(detail.scopes) ? (detail.scopes as string[]) : [];
@@ -192,12 +336,30 @@ export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler
       const { entries } = await state.query(scope, { type: 'machine-run', limit: 500 });
       for (const e of entries) {
         const v = (e.value ?? {}) as { status?: string; waitUntil?: string };
-        if (e._meta.superseded || v.status !== 'waiting' || typeof v.waitUntil !== 'string') continue;
-        const due = Date.parse(v.waitUntil);
-        if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
-        await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
-        await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
-        ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
+        if (e._meta.superseded) continue;
+        if (v.status === 'waiting' && typeof v.waitUntil === 'string') {
+          const due = Date.parse(v.waitUntil);
+          if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
+          await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
+          await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
+          ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
+          continue;
+        }
+        // The reaper: fail-fast for leaked runs (honest bookkeeping — the same
+        // close the tending driver performed by hand on the stuck 2026-07 runs).
+        // The write preserves the run's fields (mode/text/trace survive) and
+        // emits fact.written, so a reactive run with a catch rail still gets its
+        // recovery routing; without one the run reads `failed`, not `running`.
+        if (v.status === 'running' || v.status === 'sectioning' || v.status === 'voting') {
+          const updated = Date.parse(e._meta.updatedAt ?? '');
+          if (!Number.isFinite(updated) || nowMs - updated < STALE_RUN_MS) continue;
+          await state.put(
+            { scope, key: e.key, value: { ...v, status: 'failed', reason: `stale: no progress since ${e._meta.updatedAt}`, via: 'tick!!stale' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags },
+            identity,
+          );
+          await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
+          ctx.logger.info('machine tick reaped stale run', { scope, key: e.key, status: v.status, updatedAt: e._meta.updatedAt });
+        }
       }
     }
   };
@@ -439,7 +601,17 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
           if (grants.write) scopes.push('workspace:write');
           if (scopes.length) {
             try {
-              const minted = await ctx.serviceClient('auth').command<{ token?: string }>('mintTokenFor', { owner: scope, scope: scopes.join(' '), expiresInSec: 900 });
+              // ADR-0024: name the spawned agent as the delegation actor, so the
+              // facts it writes stamp `agent:<cell>.<tool>` as writer (leaf act)
+              // instead of re-flattening to the owner.
+              const minted = await ctx
+                .serviceClient('auth')
+                .command<{ token?: string }>('mintTokenFor', {
+                  owner: scope,
+                  scope: scopes.join(' '),
+                  expiresInSec: 900,
+                  actor: `agent:${target.name}.${target.tool}`,
+                });
               if (minted?.token) deliverParams = { ...params, token: minted.token };
             } catch (err) {
               ctx.logger.warn('per-run agent token mint failed; agent runs substrate-only', { scope, subscription: sub.id, error: (err as Error).message });

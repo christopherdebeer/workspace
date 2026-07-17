@@ -92,6 +92,15 @@ export interface Identity {
   /** The id of the bearer token backing this session, when known — the handle the
    *  session uses to mutate its own effective scope. Absent for internal/event calls. */
   tokenId?: string;
+  /**
+   * The self-declared PARTICIPANT key (ADR-0086): which embodied actor within
+   * this connection is acting — e.g. `membrane-probe/CI-d1`, `steward/weave`.
+   * PROVENANCE ONLY, trust-grade of `via`: it decorates write stamps and usage
+   * telemetry so fanned-out subagents sharing one token stay distinguishable.
+   * It must NEVER carry authority — no filter, grant, or guard may condition
+   * on it (real delegation uses child tokens, ADR-0024).
+   */
+  participant?: string;
   /** The adopted posture riding this session's token (ADR-0074), when any. */
   posture?: PrincipalPosture;
   /**

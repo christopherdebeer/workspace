@@ -44,6 +44,8 @@ export interface MembersInput {
 export interface EdgesInput extends EdgeScopeInput {
   /** Edges incident to this key (→ neighbors / members). Absent = the whole projection. */
   around?: string;
+  /** Alias for `around` (W4d) — the peek/neighbors spelling drivers reach for. */
+  key?: string;
   dir?: 'in' | 'out' | 'both';
   /** Restrict to this rel. */
   rel?: string;
@@ -179,7 +181,12 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       const { state } = build(ctx);
       const result = await state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx)); // R1 (ADR-0029)
-      const shaped = { ...result, entries: shapeEntryMap(result.entries, input.shape) };
+      // A neighbourhood read is a topology question ("what's connected, and what
+      // is each one?"), not a body dump — default the hydrated entries to `card`
+      // (key + type + salience + a value preview), matching recall's default.
+      // The full neighbour bodies are one `shape:'full'` away; an agent asking
+      // "does this have edges?" no longer pays for every neighbour's whole value.
+      const shaped = { ...result, entries: shapeEntryMap(result.entries, input.shape ?? 'card') };
       return Object.keys(types).length ? { ...shaped, types } : shaped;
     },
 
@@ -211,7 +218,7 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       const { state } = build(ctx);
       const result = await state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
       const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx)); // R1 (ADR-0029)
-      const shaped = { ...result, members: shapeEntryList(result.members, input.shape) };
+      const shaped = { ...result, members: shapeEntryList(result.members, input.shape ?? 'card') };
       return Object.keys(types).length ? { ...shaped, types } : shaped;
     },
 
@@ -219,12 +226,16 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
     async edges(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
-      const around = input?.around;
+      // W4d (wave-4, 3 drivers): `around` is the key-scoped anchor, but drivers
+      // reached for `key` (the peek/neighbors spelling) and `edges({key, depth})`
+      // fell through to the WHOLE-graph projection or errored. Honor `key` as the
+      // alias it structurally is — the same fact-scoped neighbourhood read.
+      const around = input?.around ?? input?.key;
       // around + membership → the `members` framing.
       if (around && input?.membership) {
         const result = await state.members(scope, around, { typeRules: await typeRulesFor(ctx) });
         const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx));
-        const shaped = { ...result, members: shapeEntryList(result.members, input?.shape) };
+        const shaped = { ...result, members: shapeEntryList(result.members, input?.shape ?? 'card') };
         return Object.keys(types).length ? { ...shaped, types } : shaped;
       }
       // around + depth ≥ 2 → the directional walk (ADR-0075, C4): transitive
@@ -242,7 +253,7 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       if (around) {
         const result = await state.neighbors(scope, around, { dir: input?.dir, rel: input?.rel, typeRules: await typeRulesFor(ctx) });
         const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
-        const shaped = { ...result, entries: shapeEntryMap(result.entries, input?.shape) };
+        const shaped = { ...result, entries: shapeEntryMap(result.entries, input?.shape ?? 'card') };
         return Object.keys(types).length ? { ...shaped, types } : shaped;
       }
       // derived:false → the authored-only `links` framing (+ optional prefix).

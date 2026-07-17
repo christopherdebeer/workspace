@@ -6,6 +6,7 @@
 import {
   requireUser,
   indexForScope,
+  isTimerLive,
   INTENT_PRESET,
   type ChangesResult,
   type ChangesScope,
@@ -15,7 +16,7 @@ import {
   type SalienceLens,
   type SalienceOptions,
 } from '../../platform/runtime';
-import { shapeEntry, shapeEntryList, shapeEntryMap, type ReadShape } from './shape';
+import { shapeEntry, shapeEntryList, shapeEntryMap, orientEntry, type ReadShape } from './shape';
 import { applicableGrants, grantCovers, WHOLE_SLICE } from './grants';
 import {
   type DepsBuilder,
@@ -180,6 +181,7 @@ function buildOverview(
   bands: { focus: number; peripheral: number; elided: number },
   granted: number,
   decls: Record<string, Record<string, unknown>>,
+  focusShape: ReadShape = 'card',
 ): RecallOverview {
   const entries = Object.entries(merged);
   const byType = new Map<string | null, number>();
@@ -193,8 +195,18 @@ function buildOverview(
   const focusEntries = entries
     .sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))
     .slice(0, OVERVIEW_FOCUS);
+  // Shape the focus band for orientation (ADR-0048): the overview is a "what do
+  // I have?" skim, so each top fact carries key + type + salience + a value
+  // preview — NOT its whole body (a long ADR/doc could be ~10KB, and its
+  // near-duplicate doc-block slice ships it twice) NOR its full provenance
+  // envelope repeated a dozen times. The default (`focusShape` unset → 'card')
+  // uses `orientEntry`: card value + refs `_meta` slice. `recall({shape:"full"})`
+  // keeps whole entries; `{shape:"refs"}` drops values; `peek`/`recall({view:"full"})`
+  // always restore the whole fact.
+  const shapeFocus = (e: Entry): Entry =>
+    focusShape === 'full' ? e : focusShape === 'refs' ? shapeEntry(e, 'refs') : orientEntry(e);
   const focus: Record<string, Entry> = {};
-  for (const [k, e] of focusEntries) focus[k] = e;
+  for (const [k, e] of focusEntries) focus[k] = shapeFocus(e);
   const types = affordancesForTypes(typesOf(focus), decls);
   return {
     overview: {
@@ -255,6 +267,10 @@ export interface PeekInput {
 export interface QueryInput {
   type?: string;
   tag?: string;
+  /** Match-any over tags (W4i) — the plural spelling; a fact matches if it
+   *  carries at least one. Silently ignored before wave 4 (it returned the
+   *  whole slice), so honored explicitly now. */
+  tags?: string[];
   prefix?: string;
   /** Rank by meaning as well as structure (ADR-0051): free text, embedded and
    *  matched semantically. Relevance joins the salience blend under the intent
@@ -262,7 +278,7 @@ export interface QueryInput {
    *  standing/attention; `query({type, text})` is the hybrid. Elision and
    *  ranking are both intent-conditioned. */
   text?: string;
-  rankBy?: 'salience' | 'recency';
+  rankBy?: 'salience' | 'recency' | 'relevance';
   /** Bias salience via a named lens — compiled (recent/connected/durable/
    *  active) or slice-declared (`_config/lenses`, ADR-0078). Unknown ⇒ ignored. */
   lens?: SalienceLens | (string & {});
@@ -271,6 +287,9 @@ export interface QueryInput {
   limit?: number;
   /** Resume token from a previous page's `nextCursor`. */
   cursor?: string;
+  /** Numeric alias for `cursor` (which is structurally a plain offset into the
+   *  fresh ranking). Previously accepted-and-ignored — the worst API answer. */
+  offset?: number;
   includeSuperseded?: boolean;
   /** Find a fact by what's inside it: keep only facts whose key or value
    *  (stringified) contains this substring, case-insensitively. */
@@ -377,6 +396,30 @@ export function principalPosture(
   return { ...(goal ? { goal } : {}), ...(lens ? { lens } : {}), ...(salience ? { salience } : {}) };
 }
 
+/** Where a participant's adopted posture lives (ADR-0086 Inc 4): a plain fact,
+ *  sibling of `_presence/<participant>`. Written with `remember` (value
+ *  {goal?, lens?, salience?}, optionally timer-expiring), read here per
+ *  composed read when the dispatch carried a participant key. Substrate-native
+ *  by design: a fanned-out specialist adopts ITS goal without hijacking the
+ *  session token's standing posture (auth.adoptGoal, which stays token-level),
+ *  and the posture is visible/editable/expirable like any other fact. */
+export const PARTICIPANT_POSTURE_PREFIX = '_posture/';
+
+/** The participant's own posture fact, mapped to the same shape
+ *  `principalPosture` yields — it OVERRIDES the token posture when present
+ *  (the finer key wins; provenance-grade, biases ranking only, never
+ *  membership or authority). Absent/lapsed/superseded ⇒ null ⇒ token posture. */
+export async function participantPosture(
+  store: WorkspaceDeps['store'],
+  user: string | undefined,
+  participant: string | undefined,
+): Promise<{ goal?: string; lens?: SalienceLens; salience?: Partial<SalienceOptions> } | null> {
+  if (!store || !user || !participant) return null;
+  const rec = await store.get(user, `${PARTICIPANT_POSTURE_PREFIX}${participant}`).catch(() => null);
+  if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+  return principalPosture({ posture: rec.value });
+}
+
 /** Derive relevance text from a referenced goal fact's value — the
  *  `@c15r/tasks` shape (`title`/`detail`) first, generic text fields after. */
 export function goalTextOf(value: unknown): string | null {
@@ -397,7 +440,7 @@ export function inferSource(input?: ComposedReadInput): ReadSource {
   if (input?.source) return input.source;
   if (input?.key) return 'key';
   if (input?.sinceSeq !== undefined || input?.last !== undefined || input?.include !== undefined) return 'changes';
-  if (input?.type || input?.tag || input?.prefix || input?.contains || input?.cursor || input?.rankBy) return 'store';
+  if (input?.type || input?.tag || (input?.tags && input.tags.length) || input?.prefix || input?.contains || input?.cursor || input?.rankBy) return 'store';
   if (input?.view) return 'slice';
   if (typeof input?.text === 'string' && input.text.trim()) return 'vector';
   return 'slice';
@@ -458,8 +501,10 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // The digest fast path (ADR-0050 move 4): a BARE recall — no intent, no
       // lens, no overrides — is answered from the seq-validated cache. Grants
       // are checked LIVE so a new foreign grant always falls through to the
-      // full fold (grant writes don't advance the viewer's seq).
-      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience;
+      // full fold (grant writes don't advance the viewer's seq). An explicit
+      // `shape` also disqualifies it: the cached digest is built at the default
+      // (card) focus tier, so `recall({shape:"full"|"refs"})` must recompute.
+      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience && !input?.shape;
       const grantList = await applicableGrants(grants, viewer);
       const foreign = grantList.some((g) => g.owner !== viewer);
       let digestHead: number | undefined;
@@ -522,7 +567,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       if (!askedFull) {
         const c = shaped._shaping.counts;
         const granted = Object.keys(merged).length - Object.keys(own.entries).length + (own.entries[DIGEST_KEY] ? 1 : 0);
-        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls);
+        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls, input?.shape ?? 'card');
         if (text) {
           overview.hints.unshift(
             relevance
@@ -584,18 +629,43 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // the intent preset (an explicit `salience` override still wins).
       const text = typeof input?.text === 'string' ? input.text.trim() : '';
       const relevance = text ? await relevanceFor(vectors, scope, text) : undefined;
+      // F7 (membrane wave 1): an intent query (`text` present) is an ORIENTATION
+      // read — "which few entries matter for this goal?" — not a corpus dump.
+      // Un-limited, it returned the WHOLE ranked slice with full `_meta` per hit
+      // (102 capability facts = 77KB, blowing a caller's result window with a
+      // shortlist it only needed the head of). Default intent queries to a
+      // top-20 shortlist; an explicit `limit` still wins, filters-only queries
+      // are unchanged.
+      // W4f (wave-4, 3 drivers independently): a filter-only query with no
+      // limit returned the WHOLE slice as FULL entries — `type:knowledge` (60KB)
+      // and `lens:recent` (262KB) both blew the caller's token ceiling. Bound it
+      // to a generous default page (nextCursor signals more — never lossy), the
+      // same discipline intent queries already have. An explicit limit still wins.
+      const DEFAULT_FILTER_LIMIT = 50;
+      const limit = input?.limit ?? (text ? 20 : DEFAULT_FILTER_LIMIT);
+      // F9: `cursor` is a plain offset into the fresh ranking, but callers
+      // naturally reach for `offset` — which was silently ignored (RT-A got
+      // page 1 twice). Honor it as the alias it structurally is.
+      const cursor = input?.cursor ?? (typeof input?.offset === 'number' && input.offset > 0 ? String(input.offset) : undefined);
+      // ADR-0085 Inc 3 (W3c): a stated intent DRIVES the order — relevance
+      // first, salience as tiebreak, no-relevance tail dropped (salience used
+      // to pad the shortlist with rows the intent never reached: "link above
+      // ratify" for a ratification goal). An explicit rankBy still wins, and
+      // without a semantic backend the ranking degrades to salience unchanged.
+      const rankBy = input?.rankBy ?? (relevance && Object.keys(relevance).length ? 'relevance' : undefined);
       const result = await state.query(
         scope,
         {
           type: input?.type,
           tag: input?.tag,
+          tags: input?.tags,
           prefix: input?.prefix,
-          rankBy: input?.rankBy,
+          rankBy,
           lens: input?.lens,
           salience: text ? intentSalience(input?.salience) : input?.salience,
           explain: input?.explain,
-          limit: input?.limit,
-          cursor: input?.cursor,
+          limit,
+          cursor,
           includeSuperseded: input?.includeSuperseded,
           contains: input?.contains,
           typeRules: await typeRulesFor(ctx),
@@ -605,7 +675,17 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       );
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
-      const shaped = { ...result, entries: shapeEntryList(result.entries, input?.shape) };
+      // Intent queries also default to the ORIENTATION entry shape (card value
+      // preview + refs `_meta` incl. relevance — the same tier as recall's focus
+      // band): a ranked shortlist wants each hit's identity, preview, and WHY
+      // (relevance), not its full provenance envelope. Explicit `shape` wins;
+      // filters-only queries keep whole entries as before.
+      const entries = input?.shape
+        ? shapeEntryList(result.entries, input.shape)
+        : text
+          ? result.entries.map((e) => orientEntry(e))
+          : result.entries;
+      const shaped = { ...result, entries };
       // Observability (ADR-0081 home-cell incident): latency/size, so a future
       // CloudFront-timeout or 6MB-payload regression is diagnosable from logs
       // rather than manual CloudWatch archaeology.
@@ -649,9 +729,16 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
     async attention(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { state } = build(ctx);
+      // The stale/unlinked/dangling arrays are illustrative SAMPLES — the
+      // `*Total` counts carry the real magnitude (and a tending audit reads
+      // only those). So the orientation default is a small sample (8), not 25:
+      // a driven-machine probe measured this read as its top sink, streaming
+      // ~24 dangling rows (each a spelled-out reason) when the signal was three
+      // integers plus a couple of examples. A caller who wants the fuller list
+      // passes an explicit `limit`.
       return state.attention(scope, {
         staleMs: input?.staleMs,
-        limit: input?.limit,
+        limit: input?.limit ?? 8,
         includeSystem: input?.includeSystem,
         typeRules: await typeRulesFor(ctx),
       });
@@ -675,7 +762,13 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // semantics, ADR-0051) but never flips an overview into a search.
       const source = inferSource(input);
       const merged: ComposedReadInput = { ...(input ?? {}) };
-      const posture = principalPosture(ctx.identity);
+      // ADR-0086 Inc 4: the dispatch's participant key resolves ITS OWN posture
+      // first — a `_posture/<participant>` fact — so a fanned-out specialist
+      // reads through its task's lens without hijacking the session token's
+      // standing posture. The finer key wins; the token posture is the fallback.
+      const posture =
+        (await participantPosture(build(ctx).store, ctx.identity.user, ctx.identity.participant)) ??
+        principalPosture(ctx.identity);
       if (posture && ctx.identity.user) {
         if (posture.goal && merged.text === undefined && (source === 'slice' || source === 'store' || source === 'vector')) {
           // A `goal/<id>` posture references the goal graph: resolve the fact
@@ -714,6 +807,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           {
             type: merged.type,
             tag: merged.tag,
+            tags: merged.tags,
             prefix: merged.prefix,
             text: merged.text,
             rankBy: merged.rankBy,

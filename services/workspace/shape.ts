@@ -50,14 +50,19 @@ export function cardValue(v: unknown, depth = 0): unknown {
 
 /** The `_meta` slice that survives the refs tier: identity, vocabulary signals
  *  (type/tags — key-prefix routing needs them), salience, freshness. The card
- *  tier keeps `_meta` whole — values are where the weight lives. */
+ *  tier keeps `_meta` whole — values are where the weight lives. `relevance`
+ *  rides along when present (a goal-conditioned read ranked this entry BY it —
+ *  membrane wave 1, F7: a ranked shortlist that hides its ranking signal makes
+ *  the caller re-derive why each hit is there). */
 function refsMeta(m: EntryMeta): EntryMeta {
+  const rel = (m as { relevance?: number }).relevance;
   return {
     type: m.type,
     tags: m.tags,
     score: m.score,
     updatedAt: m.updatedAt,
     superseded: m.superseded,
+    ...(rel !== undefined ? { relevance: rel } : {}),
     shaped: 'refs',
   } as unknown as EntryMeta;
 }
@@ -69,6 +74,17 @@ export function shapeEntry<E extends { value?: unknown; _meta: EntryMeta }>(e: E
     return { ...rest, _meta: refsMeta(e._meta) } as unknown as E;
   }
   return { ...e, value: cardValue(e.value), _meta: { ...e._meta, shaped: 'card' } as unknown as EntryMeta };
+}
+
+/** The orientation shape: a card-truncated value PLUS the refs `_meta` slice —
+ *  leaner than `card` (which keeps `_meta` whole). recall's overview `focus`
+ *  band uses it: a context-less agent skimming "what do I have?" needs each
+ *  top fact's identity + preview + salience, not its full provenance envelope
+ *  (writer/via/seq/version/revision/centrality/velocity/standing) repeated
+ *  across a dozen entries. `shaped:"card"` still marks the truncated body;
+ *  `peek` / `recall({shape:"full"})` restore the whole entry. */
+export function orientEntry<E extends { value?: unknown; _meta: EntryMeta }>(e: E): E {
+  return { ...e, value: cardValue(e.value), _meta: { ...refsMeta(e._meta), shaped: 'card' } as unknown as EntryMeta } as unknown as E;
 }
 
 /** Shape an entry ARRAY (query/search results, members). */

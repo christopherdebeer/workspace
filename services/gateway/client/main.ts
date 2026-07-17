@@ -304,10 +304,18 @@ function renderAttention(d: Record<string, unknown>): string {
   const stale = (d.stale as Array<{ key: string; updatedAt?: string; type?: string }>) || [];
   const unlinked = (d.unlinked as string[]) || [];
   const dangling = (d.dangling as Array<{ from: string; rel: string; to: string; reason?: string }>) || [];
-  let h = `<h2>Attention</h2><div class="hint">${stale.length} stale · ${unlinked.length} unlinked · ${dangling.length} dangling</div>`;
-  if (stale.length) h += `<h2>Stale (${stale.length})</h2>` + rowsBlock(stale.map((s) => `<div class="k drill" data-call="read" data-target="workspace.peek" data-input="${esc(JSON.stringify({ key: s.key }))}">${esc(s.key)}${s.type ? ` <span class="ty">${esc(s.type)}</span>` : ''}</div><div class="v">${esc((s.updatedAt || '').slice(0, 10))}</div>`));
-  if (unlinked.length) h += `<h2>Unlinked (${unlinked.length})</h2>` + rowsBlock(unlinked.map((k) => `<div class="k drill" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key: k }))}">${esc(k)}</div><div class="v"></div>`));
-  if (dangling.length) h += `<h2>Dangling (${dangling.length})</h2>` + rowsBlock(dangling.map((g) => `<div class="k"><span class="ty">${esc(g.rel)}</span> ${esc(g.from)} → ${esc(g.to)}</div><div class="v"><span class="hint">${esc(g.reason || '')}</span></div>`));
+  // The arrays are capped samples; `*Total` are the real counts. Show the
+  // totals in the headers (so a small sample never under-reports), and mark a
+  // section "N of Total" when it's truncated.
+  const num = (k: string, fallback: number): number => (typeof d[k] === 'number' ? (d[k] as number) : fallback);
+  const staleTotal = num('staleTotal', stale.length);
+  const unlinkedTotal = num('unlinkedTotal', unlinked.length);
+  const danglingTotal = num('danglingTotal', dangling.length);
+  const cap = (shown: number, total: number): string => (total > shown ? ` (${shown} of ${total})` : ` (${total})`);
+  let h = `<h2>Attention</h2><div class="hint">${staleTotal} stale · ${unlinkedTotal} unlinked · ${danglingTotal} dangling</div>`;
+  if (stale.length) h += `<h2>Stale${cap(stale.length, staleTotal)}</h2>` + rowsBlock(stale.map((s) => `<div class="k drill" data-call="read" data-target="workspace.peek" data-input="${esc(JSON.stringify({ key: s.key }))}">${esc(s.key)}${s.type ? ` <span class="ty">${esc(s.type)}</span>` : ''}</div><div class="v">${esc((s.updatedAt || '').slice(0, 10))}</div>`));
+  if (unlinked.length) h += `<h2>Unlinked${cap(unlinked.length, unlinkedTotal)}</h2>` + rowsBlock(unlinked.map((k) => `<div class="k drill" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key: k }))}">${esc(k)}</div><div class="v"></div>`));
+  if (dangling.length) h += `<h2>Dangling${cap(dangling.length, danglingTotal)}</h2>` + rowsBlock(dangling.map((g) => `<div class="k"><span class="ty">${esc(g.rel)}</span> ${esc(g.from)} → ${esc(g.to)}</div><div class="v"><span class="hint">${esc(g.reason || '')}</span></div>`));
   return h;
 }
 function renderGrantRequests(d: Record<string, unknown>): string {

@@ -463,4 +463,19 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
     });
     expect(plans.size).toBe(0); // text unchanged → no re-embed
   });
+
+  it('a delete-timer fact (a lease) never enters the index — ephemeral by declaration (wave-5)', () => {
+    // Embedding a lease mints similarTo kinship between coordination artefacts,
+    // which then leads contested/suggestions (the wave-5 tombstone flood). The
+    // timer IS the declaration — no type vocabulary involved. The plan DROPS any
+    // existing vector under the key rather than merely skipping the put.
+    const plans = planStreamWork({
+      Records: [
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'lease/suggestion/abc', { value: { holder: 'judge/alpha' }, type: 'lease', timerEffect: 'delete', timerExpiresAt: '2026-07-16T21:42:00Z' })) } },
+      ],
+    });
+    const p = plans.get('slice-alice-d256')!;
+    expect(p.puts).toHaveLength(0);
+    expect([...p.removes]).toEqual(['lease/suggestion/abc']);
+  });
 });

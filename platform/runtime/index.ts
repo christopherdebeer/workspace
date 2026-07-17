@@ -4,7 +4,7 @@
  * Service authors import from here; they should never need to touch the AWS
  * SDK directly. The infrastructure layer lives in `platform/infra`.
  */
-export { defineService, UnknownCommandError } from './define-service';
+export { defineService, withIdentity, UnknownCommandError } from './define-service';
 export { defineMcpService } from './define-mcp-service';
 export type { McpServiceDefinition, McpToolDefinition } from './define-mcp-service';
 export { createLogger } from './logger';

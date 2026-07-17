@@ -273,6 +273,10 @@ export function createDynamoStore(tableName: string): AuthStore {
           mintedBy: params.userId,
           scope: params.scope,
           clientId: params.clientId ?? null,
+          // ADR-0024: the chain rides the refresh row too, so a refreshed
+          // access token keeps its delegation actor — connected clients
+          // refresh constantly, and the chain must survive every re-mint.
+          ...(params.act ? { act: params.act } : {}),
           revoked: false,
           expiresAt: refreshExpiresAt,
           ttl: ttlOf(refreshExpiresAt),
@@ -377,6 +381,7 @@ export function createDynamoStore(tableName: string): AuthStore {
         userId: ref.mintedBy,
         scope: ref.scope,
         clientId: ref.clientId ?? undefined,
+        act: (ref.act as MintTokenParams['act']) ?? undefined, // the delegation chain survives refresh (ADR-0024)
         expiresInSec: newExpiresInSec,
       });
       const newHash = sha256(minted.token);

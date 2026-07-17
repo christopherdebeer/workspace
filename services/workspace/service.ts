@@ -8,7 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
-import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, dynamoDeps } from './handlers';
+import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, createCapabilityTouchHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
 
@@ -52,6 +52,10 @@ export const handler = defineService({
       // ADR-0030/0031: the async, chunked semantic-search backfill — one page per
       // invocation, chaining itself until the slice is embedded + similarTo-linked.
       'workspace.reindex.requested': createReindexHandler(dynamoDeps),
+      // ADR-0085 Inc 0: the gateway announces each successful dispatch; apply it
+      // as an actor-classed touch on the target's `_caps/<target>` fact, so used
+      // capabilities accrue salience and rise through recall.
+      'capability.invoked': createCapabilityTouchHandler(dynamoDeps),
     },
   },
 });

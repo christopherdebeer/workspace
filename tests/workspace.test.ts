@@ -10,7 +10,7 @@ import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler
 import { resolveParams } from '../services/workspace/subscriptions';
 import { stripUndefined } from '../platform/runtime/state-store-codec';
 import { createMemoryGrantStore } from '../services/workspace/grants';
-import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope } from '../platform/runtime';
+import { createObservedState, createMemoryStateStore, MemoryVectorStore, HashingEmbedder, embeddableText, metadataForFact, indexForScope, contentHash, pairKey } from '../platform/runtime';
 import type { ServiceContext } from '../platform/runtime';
 
 /** A minimal ServiceContext for a given caller; captures emitted events. */
@@ -220,6 +220,8 @@ describe('workspace sharing / view layer', () => {
         'declare', 'declarations', 'undeclare', 'evaluate', 'edges',
         // ADR-0072 (C7): the contradiction-candidate read (Stage A).
         'contested',
+        // ADR-0086 Inc 3: work leases — cooperative exclusivity over contended items.
+        'lease', 'release',
         // ADR-0071 (C2): the one read by candidate source.
         'read',
       ].sort(),
@@ -465,6 +467,18 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(att2.dangling.some((d) => d.to === 'd1v2' && d.reason.includes('retired'))).toBe(true);
   });
 
+  it('attention samples the arrays at the default cap (8) while *Total reports the full count', async () => {
+    // 12 unlinked facts — more than the default sample cap.
+    for (let i = 0; i < 12; i++) await cmds.remember({ key: `lonely/${i}`, value: { i }, type: 'note' }, alice());
+    const att = await cmds.attention({ staleMs: 0 }, alice());
+    expect(att.unlinked.length).toBeLessThanOrEqual(8); // capped sample
+    expect(att.unlinkedTotal).toBeGreaterThanOrEqual(12); // uncapped truth
+    expect(att.unlinkedTotal).toBeGreaterThan(att.unlinked.length);
+    // An explicit larger limit restores the fuller list.
+    const more = await cmds.attention({ staleMs: 0, limit: 50 }, alice());
+    expect(more.unlinked.length).toBeGreaterThan(8);
+  });
+
   it('attention ignores `_` system namespaces unless includeSystem', async () => {
     await cmds.remember({ key: '_canvas/board/el:1', value: { x: 0 } }, alice());
     await cmds.link({ from: '_canvas/board/el:1', rel: 'derived-from', to: '_canvas/board/el:gone' }, alice());
@@ -478,7 +492,9 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     expect(att.unlinked).not.toContain('_canvas/board/el:lonely');
     expect(att.dangling.some((d) => d.from.startsWith('_canvas/'))).toBe(false);
 
-    const withSystem = await cmds.attention({ staleMs: -1, includeSystem: true }, alice());
+    // Explicit high limit: this asserts a specific key is PRESENT, so it must
+    // see the fuller list, not the small default sample (ADR-0048).
+    const withSystem = await cmds.attention({ staleMs: -1, includeSystem: true, limit: 100 }, alice());
     expect(withSystem.stale.map((s) => s.key)).toContain('_canvas/board/el:lonely');
     // el:1 is authored-linked → settled, not stale — but its edge to a missing
     // endpoint still dangles.
@@ -870,6 +886,189 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
 
   it('ratify rejects a self-link', async () => {
     await expect(cmds.ratify({ from: 'x', to: 'x', rel: 'refines' }, ctxOf('alice'))).rejects.toThrow(/self-link/);
+  });
+
+  it('suggestions flags byte-identical pairs as identical (prune material, not ratification) — membrane F5', async () => {
+    const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
+    process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05';
+    try {
+      const admin = (): ServiceContext => {
+        const ctx = ctxOf('gina');
+        (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'gina', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+        return ctx;
+      };
+      // Two byte-identical boilerplate blocks (the degenerate class every wave-1
+      // judge met at the queue head) and one genuinely-related distinct pair.
+      await cmds.remember({ key: 'bp1', value: { content: '### Shape' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'bp2', value: { content: '### Shape' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'd1', value: { title: 'GraphQL schema stitching across services' }, type: 'note' }, admin());
+      await cmds.remember({ key: 'd2', value: { title: 'GraphQL federation and schema composition' }, type: 'note' }, admin());
+      await cmds.reindex(undefined, admin());
+      await drainReindex('gina');
+
+      const sug = await cmds.suggestions(undefined, admin());
+      const bp = sug.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'));
+      expect(bp).toBeDefined();
+      expect(bp!.identical).toBe(true); // same content hash → flagged
+      const real = sug.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'));
+      expect(real).toBeDefined();
+      expect(real!.identical).toBeUndefined(); // distinct text → no flag
+      expect(sug.hint).toMatch(/byte-identical/); // the result says what the scores imply
+
+      // ── ADR-0086 Inc 3: a leased pair is annotated so parallel judges skip it ──
+      const hash = contentHash(pairKey(real!.from, real!.to));
+      expect(real!.pairHash).toBe(hash); // the entry carries its own lease key
+      const judgeA = (): ServiceContext => {
+        const c = ctxOf('gina');
+        (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
+          user: 'gina',
+          scopes: ['workspace:read', 'workspace:write'],
+          participant: 'judge/A',
+        };
+        return c;
+      };
+      const got = await cmds.lease({ domain: 'suggestion', item: hash }, judgeA());
+      expect(got.held).toBe(true);
+      expect(got.holder).toBe('judge/A'); // the participant key, not the principal
+      const after = await cmds.suggestions(undefined, admin());
+      const leased = after.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'));
+      expect(leased!.leasedBy).toBe('judge/A');
+      expect(leased!.leasedUntil).toBeTruthy();
+
+      // W4b: a pair leased under the INTUITIVE domain ("pair" → lease/pair/<hash>)
+      // is honored by the annotation too — the wave-4 consolidate driver reached
+      // for "pair", not the documented "suggestion", and its lease must still show.
+      const judgeB = (): ServiceContext => {
+        const c = ctxOf('gina');
+        (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
+          user: 'gina', scopes: ['workspace:read', 'workspace:write'], participant: 'judge/B',
+        };
+        return c;
+      };
+      const bpHash = contentHash(pairKey('bp1', 'bp2'));
+      await cmds.lease({ domain: 'pair', item: bpHash }, judgeB());
+      const withPairLease = await cmds.suggestions(undefined, admin());
+      const bpLeased = withPairLease.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'));
+      expect(bpLeased!.leasedBy).toBe('judge/B'); // lease/pair/<hash> honored, not just lease/suggestion/
+
+      // ── W3b: genuineOnly drops identical AND leased pairs server-side ──
+      const genuine = await cmds.suggestions({ genuineOnly: true }, admin());
+      expect(genuine.suggestions.find((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'))).toBeUndefined();
+      expect(genuine.suggestions.find((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'))).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.VECTOR_SIMILAR_MIN_SCORE;
+      else process.env.VECTOR_SIMILAR_MIN_SCORE = prev;
+    }
+  });
+
+  it('suggestions flags same-source degeneracies; genuineOnly + offset filter and page (W3b/W3e)', async () => {
+    const admin = (): ServiceContext => {
+      const ctx = ctxOf('hana');
+      (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'hana', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+      return ctx;
+    };
+    // Facts whose KEYS derive from one source (the wave-2/3 degenerate classes)
+    // plus one genuinely-distinct pair. Edges are fabricated directly (the
+    // inferred-writer stamp) — the detector is key-structural, not cosine-driven.
+    for (const [key, title] of [
+      ['doc-block:docs/guide/1', 'Part one of the guide'],
+      ['doc-block:docs/guide/2', 'Part two of the guide'],
+      ['file/docs/guide.md', 'The whole guide document'],
+      ['essay/alpha', 'REPL for the mind'],
+      ['essay/beta', 'Conversational programming environments'],
+      ['decompose-run/docs/deep/guide/40', 'A decompose chunk embedding the guide'],
+      // Both endpoints must be LIVE facts (wave-5): suggestions drops a
+      // candidate whose endpoint is missing — a dangling similarTo edge can
+      // only be ratified into a dangling authored edge.
+      ['file/docs/deep/guide.md', 'The deep guide document'],
+    ] as const) {
+      await cmds.remember({ key, value: { title }, type: 'note' }, admin());
+    }
+    const infer = (from: string, to: string, score: number): Promise<void> =>
+      store.putEdge({ scope: 'hana', from, rel: 'similarTo', to, strength: 0.3, writer: 'platform/vectors', createdAt: new Date().toISOString(), score });
+    await infer('doc-block:docs/guide/1', 'doc-block:docs/guide/2', 0.999); // sibling blocks — same source
+    await infer('doc-block:docs/guide/1', 'file/docs/guide.md', 0.998); // block vs its own parent doc
+    await infer('decompose-run/docs/deep/guide/40', 'file/docs/deep/guide.md', 0.997); // cross-namespace: copy vs original
+    await infer('essay/alpha', 'essay/beta', 0.9); // a genuine connection
+
+    const sug = await cmds.suggestions(undefined, admin());
+    const sib = sug.suggestions.find((c) => c.from.includes('guide/1') && c.to.includes('guide/2'));
+    expect(sib?.degenerate).toBe('same-source');
+    const parent = sug.suggestions.find((c) => c.from.includes('guide/1') && c.to === 'file/docs/guide.md');
+    expect(parent?.degenerate).toBe('contains');
+    const cross = sug.suggestions.find((c) => c.from.startsWith('decompose-run/'));
+    expect(cross?.degenerate).toBe('contains'); // the live wave-4 head: decompose-run/<path>/40 vs file/<path>.md
+    const real = sug.suggestions.find((c) => c.from.startsWith('essay/'));
+    expect(real?.degenerate).toBeUndefined();
+    expect(sug.hint).toMatch(/genuineOnly/); // the result teaches the filter
+
+    // genuineOnly: only the essay pair survives; total reflects the filtered list.
+    const genuine = await cmds.suggestions({ genuineOnly: true }, admin());
+    expect(genuine.suggestions.map((c) => [c.from, c.to].sort().join('↔'))).toEqual(['essay/alpha↔essay/beta']);
+    expect(genuine.total).toBe(1);
+
+    // W3e: offset pages the ranked list (limit 1, offset 1 → the second candidate).
+    const p0 = await cmds.suggestions({ limit: 1 }, admin());
+    const p1 = await cmds.suggestions({ limit: 1, offset: 1 }, admin());
+    expect(p1.suggestions).toHaveLength(1);
+    expect(p1.suggestions[0].pairHash).not.toBe(p0.suggestions[0].pairHash);
+    expect(p1.suggestions[0].pairHash).toBe((await cmds.suggestions({ limit: 2 }, admin())).suggestions[1].pairHash);
+
+    // Wave-4 live finding: an AUTHORED edge between a pair removes it from the
+    // queue even when the inferred similarTo survives (link, not ratify — no drop).
+    await cmds.link({ from: 'essay/alpha', rel: 'duplicates', to: 'essay/beta' }, admin());
+    const post = await cmds.suggestions({ genuineOnly: true }, admin());
+    expect(post.suggestions.find((c) => c.from.startsWith('essay/'))).toBeUndefined();
+    expect(post.total).toBe(0);
+  });
+
+  it('work leases: atomic acquire, contention names the holder, release + expiry self-release (ADR-0086 Inc 3)', async () => {
+    const asJudge = (p: string): ServiceContext => {
+      const c = ctxOf('lessee');
+      (c as unknown as { identity: { user: string; scopes: string[]; participant: string } }).identity = {
+        user: 'lessee',
+        scopes: ['workspace:read', 'workspace:write'],
+        participant: p,
+      };
+      return c;
+    };
+    // Acquire.
+    const a = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/A'));
+    expect(a).toMatchObject({ held: true, key: 'lease/suggestion/pair-1', holder: 'judge/A' });
+    expect(a.expiresAt).toBeTruthy();
+    expect(a.grantedMinutes).toBe(5); // W4g: the granted duration is echoed (default)
+    // W4g: a `seconds`/`ttlSeconds` spelling is honored as the alias it is (the
+    // weave driver's `ttlSeconds:1800` used to be silently dropped to 5 min).
+    const wSec = await cmds.lease({ domain: 'suggestion', item: 'pair-secs', ttlSeconds: 1800 }, asJudge('judge/A'));
+    expect(wSec.grantedMinutes).toBe(30);
+    const capped = await cmds.lease({ domain: 'suggestion', item: 'pair-cap', minutes: 999 }, asJudge('judge/A'));
+    expect(capped.grantedMinutes).toBe(120); // the clamp is now visible, not silent
+    // W4j: re-leasing your OWN held item RENEWS it (fresh timer), not held:false.
+    const renew = await cmds.lease({ domain: 'suggestion', item: 'pair-cap', minutes: 10 }, asJudge('judge/A'));
+    expect(renew).toMatchObject({ held: true, renewed: true, grantedMinutes: 10 });
+    // …but a DIFFERENT participant on the same held item still gets held:false.
+    const other = await cmds.lease({ domain: 'suggestion', item: 'pair-cap' }, asJudge('judge/Z'));
+    expect(other).toMatchObject({ held: false, holder: 'judge/A' });
+    await cmds.release({ domain: 'suggestion', item: 'pair-secs' }, asJudge('judge/A'));
+    await cmds.release({ domain: 'suggestion', item: 'pair-cap' }, asJudge('judge/A'));
+    // Contended: the second judge learns WHO holds it and moves on.
+    const b = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
+    expect(b).toMatchObject({ held: false, holder: 'judge/A' });
+    // Cooperative release by a non-holder is permitted but noted.
+    const rel = await cmds.release({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
+    expect(rel.released).toBe(true);
+    expect(rel.note).toMatch(/judge\/A/);
+    // Released → re-acquirable.
+    const c = await cmds.lease({ domain: 'suggestion', item: 'pair-1' }, asJudge('judge/B'));
+    expect(c.held).toBe(true);
+    // Expiry self-releases: plant an already-lapsed lease, then acquire over it
+    // (ifAbsent treats an expired-delete fact as absent — the crash-safe path).
+    await cmds.remember(
+      { key: 'lease/suggestion/pair-2', value: { holder: 'judge/crashed' }, type: 'lease', timer: { at: new Date(Date.now() - 60_000).toISOString(), effect: 'delete' } },
+      asJudge('judge/crashed'),
+    );
+    const d = await cmds.lease({ domain: 'suggestion', item: 'pair-2' }, asJudge('judge/B'));
+    expect(d.held).toBe(true); // the crashed holder released by silence
   });
 });
 
@@ -1951,5 +2150,45 @@ describe('read-response shaping (ADR-0048 — reads answer at the caller\'s alti
     const whole = await cmds.recall({ view: 'full', shape: 'full' }, me());
     if (!('entries' in whole)) throw new Error('expected full view');
     expect((whole.entries['kb/big'].value as { content: string }).content.length).toBe(LONG.length);
+  });
+});
+
+describe('machine tick: wait resume + the stale-run reaper', () => {
+  const store = createMemoryStateStore();
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(store);
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const { createMachineTickHandler } = require('../services/workspace/handlers');
+  const handler = createMachineTickHandler(() => ({ state, grants }));
+  const me = (): ServiceContext => ctxFor('alice').ctx;
+  const tick = async (): Promise<void> => {
+    const { ctx } = ctxFor(null);
+    await handler({ scopes: ['alice'] }, { ...ctx, identity: { scopes: [] } } as never, {
+      source: 'platform.machine-tick',
+      detailType: 'machine.tick.requested',
+    });
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('leaves fresh live runs alone, reaps stale ones (preserving mode/text), resumes due waits, skips terminal runs', async () => {
+    await cmds.remember({ key: 'machine/m/run/stale', value: { machine: 'm', node: 'Assess', status: 'running', mode: 'driven', text: 'ctx' }, type: 'machine-run' }, me());
+    await cmds.remember({ key: 'machine/m/run/finished', value: { machine: 'm', node: 'Done', status: 'done' }, type: 'machine-run' }, me());
+    await cmds.remember({ key: 'machine/m/run/parked', value: { machine: 'm', node: 'Cool', status: 'waiting', waitUntil: new Date(Date.now() + 11 * 3600 * 1000).toISOString() }, type: 'machine-run' }, me());
+
+    // Fresh pass: nothing is 12h old — nothing reaped, the wait not yet due.
+    await tick();
+    expect(((await cmds.peek({ key: 'machine/m/run/stale' }, me()))?.value as { status: string }).status).toBe('running');
+    expect(((await cmds.peek({ key: 'machine/m/run/parked' }, me()))?.value as { status: string }).status).toBe('waiting');
+
+    // 13 hours later: the running run is leaked (reaped, fields preserved), the
+    // wait deadline passed (resumed), the done run untouched.
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 13 * 3600 * 1000);
+    await tick();
+    const reaped = (await cmds.peek({ key: 'machine/m/run/stale' }, me()))?.value as Record<string, unknown>;
+    expect(reaped).toMatchObject({ status: 'failed', via: 'tick!!stale', mode: 'driven', text: 'ctx', node: 'Assess' });
+    expect(String(reaped.reason)).toMatch(/stale: no progress/);
+    expect(((await cmds.peek({ key: 'machine/m/run/parked' }, me()))?.value as { status: string }).status).toBe('running');
+    expect(((await cmds.peek({ key: 'machine/m/run/finished' }, me()))?.value as { status: string }).status).toBe('done');
   });
 });

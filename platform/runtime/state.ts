@@ -60,6 +60,10 @@ export interface EntryMeta {
   writer: string | null;
   /** Optional label for *how* it was written (e.g. an action/command name). */
   via: string | null;
+  /** The self-declared participant key behind the last write (ADR-0086):
+   *  WHICH embodied actor within the writer's connection acted — provenance
+   *  at `via`'s trust grade, never authority. Absent when none was declared. */
+  as?: string;
   /** When the key first came into being. */
   createdAt: string;
   /** When it was last written. */
@@ -217,6 +221,10 @@ export interface StateRecord {
   firstSeq: number;
   writer: string | null;
   via: string | null;
+  /** The self-declared participant key behind the last write (ADR-0086) —
+   *  provenance decoration at `via`'s trust grade, never authority. Absent for
+   *  writes made without one. */
+  as?: string;
   createdAt: string;
   updatedAt: string;
   writers: string[];
@@ -1217,10 +1225,16 @@ export interface QueryOptions {
   type?: string;
   /** Only facts carrying this tag. */
   tag?: string;
+  /** Only facts carrying at least one of these tags (match-any; W4i). */
+  tags?: string[];
   /** Only keys with this prefix. */
   prefix?: string;
-  /** Ranking: read-time salience (default) or last-write recency. */
-  rankBy?: 'salience' | 'recency';
+  /** Ranking: read-time salience (default), last-write recency, or intent
+   *  relevance (ADR-0085 Inc 3 — the default when a `relevance` map is present:
+   *  an intent query is "which few entries matter for THIS goal", so cosine
+   *  drives the order and salience only breaks ties; keys the intent didn't
+   *  reach are dropped, not padded in by standing salience). */
+  rankBy?: 'salience' | 'recency' | 'relevance';
   /** Bias salience for this query via a named lens — compiled or
    *  slice-declared (`_config/lenses`, ADR-0078). Unknown names are ignored. */
   lens?: SalienceLens | (string & {});
@@ -1371,6 +1385,13 @@ export interface SupersedeOptions {
 export interface ObservedState {
   put(input: WriteInput, identity?: Identity): Promise<Entry>;
   get(scope: string, key: string, identity?: Identity): Promise<Entry | null>;
+  /** Record attention on a fact WITHOUT reading it (ADR-0050 counters, ADR-0085
+   *  usage signal): one actor-classed counter increment, absent-key-safe (a miss
+   *  is a silent no-op). The capability-salience wire rides this — invoking a
+   *  verb touches its `_caps/<target>` fact, so used capabilities accrue
+   *  attention/velocity/standing and rise through recall like any other fact.
+   *  `op` follows the fact semantics: 'read' feeds attention, 'write' velocity. */
+  touch(scope: string, key: string, identity?: Identity, op?: 'read' | 'write'): Promise<void>;
   /** Batched, TOUCH-FREE entry read (ADR-0055 `include:'entries'`): a change-feed
    *  page inlining its post-write facts is a projection, not attention — no read
    *  touch is recorded (ADR-0050: rendering must not inflate salience). Superseded
@@ -1526,6 +1547,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         seq: rec.seq,
         writer: rec.writer,
         via: rec.via,
+        ...(rec.as ? { as: rec.as } : {}),
         createdAt: rec.createdAt,
         updatedAt: rec.updatedAt,
         writers: rec.writers,
@@ -1682,6 +1704,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         firstSeq: prev?.firstSeq ?? seq,
         writer,
         via: input.via ?? null,
+        // The participant key (ADR-0086): WHICH embodied actor within the
+        // writer's connection acted. Provenance beside `via`, never authority.
+        ...(identity?.participant ? { as: identity.participant } : {}),
         // Import preserves the migrated fact's real timestamps (so recency
         // reflects true age); native writes stamp now.
         createdAt: prev?.createdAt ?? input.import?.createdAt ?? nowIso,
@@ -1733,6 +1758,14 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // the next read (attention is about the future ranking, not this response).
       await store.recordTouch(scope, key, actorOf(identity), 'read', bucketOf(now.getTime()));
       return wrap(rec, now.getTime());
+    },
+
+    async touch(scope: string, key: string, identity?: Identity, op: 'read' | 'write' = 'read'): Promise<void> {
+      // The bare counter bump `get` performs, without the read: no seq, no
+      // trajectory event, no value returned. recordTouch's conditional update
+      // makes an absent key a no-op, so callers may touch speculatively (e.g.
+      // a capability target whose `_caps/*` projection hasn't covered it yet).
+      await store.recordTouch(scope, key, actorOf(identity), op, bucketOf(Date.now()));
     },
 
     async getMany(scope: string, keys: string[]): Promise<Record<string, Entry | null>> {
@@ -1796,7 +1829,7 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
         // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
-        if (!matchesSelector(rec, { tag: opts?.tag, prefix: opts?.prefix })) return false;
+        if (!matchesSelector(rec, { tag: opts?.tag, tags: opts?.tags, prefix: opts?.prefix })) return false;
         // Content search: find a fact by what's inside it (substring over value JSON).
         if (opts?.contains && !recordContains(rec, opts.contains)) return false;
         return true;
@@ -1804,23 +1837,35 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const wrapped = await Promise.all(
         candidates.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, signals, sCall, opts?.explain, opts?.relevance)) })),
       );
+      // ADR-0085 Inc 3 (W3c): rankBy:'relevance' — cosine first, salience as
+      // tiebreak — drops the no-relevance tail (rows the intent never reached,
+      // which pure salience used to pad the shortlist with: "link above ratify"
+      // for a ratification goal). OPT-IN here: a bare relevance map still only
+      // adds the sixth signal (never an authority, ADR-0051) — the workspace
+      // intent path is what defaults `text` queries to this ranking.
       const rankBy = opts?.rankBy ?? 'salience';
-      wrapped.sort((a, b) =>
-        rankBy === 'recency'
-          ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
-          : b._meta.score - a._meta.score,
-      );
+      let ranked = wrapped;
+      if (rankBy === 'relevance') {
+        ranked = wrapped.filter((e) => (e._meta.relevance ?? 0) > 0);
+        ranked.sort((a, b) => (b._meta.relevance ?? 0) - (a._meta.relevance ?? 0) || b._meta.score - a._meta.score);
+      } else {
+        ranked.sort((a, b) =>
+          rankBy === 'recency'
+            ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
+            : b._meta.score - a._meta.score,
+        );
+      }
       // Cursor = a plain offset into the fresh ranking: best-effort resume,
       // honest about salience reordering between pages (no snapshot to leak).
       const offset = opts?.cursor ? Math.max(0, Number.parseInt(opts.cursor, 10) || 0) : 0;
       const end = opts?.limit !== undefined ? offset + Math.max(0, opts.limit) : undefined;
-      const page = wrapped.slice(offset, end);
+      const page = ranked.slice(offset, end);
       const consumed = offset + page.length;
       return {
         entries: page,
         count: page.length,
-        total: wrapped.length,
-        ...(consumed < wrapped.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
+        total: ranked.length,
+        ...(consumed < ranked.length && opts?.limit !== undefined ? { nextCursor: String(consumed) } : {}),
       };
     },
 

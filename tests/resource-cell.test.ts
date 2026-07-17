@@ -38,7 +38,9 @@ const CELLS_TOOLS = [
   { name: 'list', description: 'List your cells.', inputSchema: { type: 'object' }, scope: null, kind: 'read' },
 ];
 
-let lastCall: { fn: string; command: string; payload: unknown } | undefined;
+let lastCall: { fn: string; command: string; payload: unknown; participant?: string } | undefined;
+/** Live `_presence/*` entries the workspace mock serves (ADR-0086 Inc 2). */
+let presenceEntries: Array<{ key: string; value?: unknown; _meta?: unknown }> = [];
 /** Dynamic-cell tools forge advertises via describeCellTools (per-test). */
 let cellTools: Array<Record<string, unknown>> = [];
 /** `_types/<type>` facts workspace.query returns for the per-user `$types` overrides (per-test). */
@@ -49,7 +51,7 @@ let globalTypes: Record<string, unknown> = {};
 function stub(tokens: Record<string, ValidatedToken>): void {
   __setLambda({
     invoke: (params: { FunctionName: string; Payload: string }) => {
-      const env = JSON.parse(params.Payload) as { __command: string; payload: Record<string, unknown> };
+      const env = JSON.parse(params.Payload) as { __command: string; payload: Record<string, unknown>; participant?: string };
       const fn = params.FunctionName;
       let result: unknown = null;
       if (fn === 'auth-fn' && env.__command === 'validateToken') {
@@ -58,8 +60,10 @@ function stub(tokens: Record<string, ValidatedToken>): void {
         if (env.__command === 'describeTools') result = { tools: WORKSPACE_TOOLS };
         else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_types/') {
           result = { entries: typeFacts };
+        } else if (env.__command === 'query' && (env.payload as { prefix?: string }).prefix === '_presence/') {
+          result = { entries: presenceEntries };
         } else {
-          lastCall = { fn: 'workspace', command: env.__command, payload: env.payload };
+          lastCall = { fn: 'workspace', command: env.__command, payload: env.payload, ...(env.participant ? { participant: env.participant } : {}) };
           result = { echoed: env.payload };
         }
       } else if (fn === 'cells-fn') {
@@ -127,6 +131,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
     cellTools = [];
     typeFacts = [];
     globalTypes = {};
+    presenceEntries = [];
     stub({
       creator: { userId: 'alice', scope: 'platform:cells:create', clientId: null },
       plain: { userId: 'bob', scope: 'workspace:read', clientId: null },
@@ -168,6 +173,23 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect((cat.parsed as { capabilities?: unknown }).capabilities).toBeUndefined(); // not the heavy form by default
     const bare = await callTool('creator', 'read', {});
     expect((bare.parsed as { cells: unknown[] }).cells.length).toBeGreaterThan(0);
+  });
+
+  it('read("$catalog", {resolve}) returns ONE capability; unknown targets and options fail loudly (W3d/W3f)', async () => {
+    // The narrow read between the skim (grouped menu) and the dump (detail:"full").
+    const one = await callTool('creator', 'read', { target: '$catalog', input: { resolve: 'workspace.recall' } });
+    const cap = (one.parsed as { capability: { target: string; inputSchema?: unknown } }).capability;
+    expect(cap.target).toBe('workspace.recall');
+    expect(cap.inputSchema).toBeDefined(); // the full contract, not a summary line
+    // A failed narrow read ERRORS — it must never silently widen to the whole menu.
+    const missing = await callTool('creator', 'read', { target: '$catalog', input: { resolve: 'workspace.nope' } });
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toMatch(/unknown target/i);
+    // An option the catalog doesn't understand is rejected with the valid ones named.
+    const junk = await callTool('creator', 'read', { target: '$catalog', input: { fetch: 'workspace.recall' } });
+    expect(junk.isError).toBe(true);
+    expect(junk.text).toMatch(/does not understand/);
+    expect(junk.text).toMatch(/resolve/);
   });
 
   it('read("$types") returns the global cell-registry vocabulary keyed by bare type name', async () => {
@@ -437,10 +459,59 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(res.text).toMatch(/unknown capability/i);
   });
 
+  it('whoami echoes the ambient frame: live participants from _presence leases (ADR-0086 Inc 2)', async () => {
+    presenceEntries = [
+      {
+        key: '_presence/steward/weave',
+        value: { participant: 'steward/weave', actor: 'agent', lastTarget: '@c15r/machine.step' },
+        _meta: { updatedAt: '2026-07-16T15:00:00Z', timer: { expiresAt: '2026-07-16T15:15:00Z' } },
+      },
+    ];
+    const res = await callTool('creator', 'whoami', {});
+    const parsed = res.parsed as { participants?: Array<Record<string, unknown>> };
+    expect(parsed.participants).toHaveLength(1);
+    expect(parsed.participants![0]).toEqual({
+      participant: 'steward/weave',
+      actor: 'agent',
+      lastTarget: '@c15r/machine.step',
+      lastSeen: '2026-07-16T15:00:00Z',
+      until: '2026-07-16T15:15:00Z',
+    });
+    // Alone → the field is absent, not an empty roster (the frame stays thin).
+    presenceEntries = [];
+    const alone = await callTool('creator', 'whoami', {});
+    expect((alone.parsed as { participants?: unknown }).participants).toBeUndefined();
+  });
+
+  it('act with `as` threads the participant key into the downstream envelope; invalid keys error loudly (ADR-0086)', async () => {
+    const ok = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k', value: 1 }, as: 'probe/IP-1' });
+    expect(ok.isError).toBeFalsy();
+    expect(lastCall?.participant).toBe('probe/IP-1'); // rode the envelope beside actor/posture
+    // Without `as`, nothing rides — the stamp is per-dispatch, never sticky.
+    await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k2', value: 2 } });
+    expect(lastCall?.participant).toBeUndefined();
+    // Malformed keys error LOUDLY (membrane principle W3f) instead of being dropped.
+    const bad = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k3', value: 3 }, as: 'has spaces!' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toMatch(/Invalid participant key/);
+    // FALLBACK SLOT (wave 3, W3g): a stale-schema connection can't express the
+    // top-level `as`, so `input.as` is honored too — and ALWAYS stripped from
+    // the forwarded capability args (the key is membrane metadata).
+    const nested = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k4', value: 4, as: 'probe/nested' } });
+    expect(nested.isError).toBeFalsy();
+    expect(lastCall?.participant).toBe('probe/nested'); // threaded from the fallback slot
+    expect((lastCall?.payload as Record<string, unknown>).as).toBeUndefined(); // stripped before forward
+    // Malformed nested keys error just as loudly.
+    const nestedBad = await callTool('creator', 'act', { target: 'workspace.remember', input: { key: 'k5', value: 5, as: 'nope nope!' } });
+    expect(nestedBad.isError).toBe(true);
+    expect(nestedBad.text).toMatch(/Invalid participant key/);
+  });
+
   it('whoami returns the identity (built-in tool)', async () => {
     const res = await callTool('creator', 'whoami', {});
-    // grant == scopes until a session narrows its effective focus (incremental auth).
-    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'], actor: 'human' });
+    // `grant` is surfaced only when it DIFFERS from scopes (a narrowed session);
+    // here they're identical, so it's omitted rather than echoed.
+    expect(res.parsed).toEqual({ user: 'alice', scopes: ['platform:cells:create'], actor: 'human' });
   });
 
   it('resolves identity from x-forwarded-authorization (edge preserves bearer past OAC)', async () => {
@@ -451,7 +522,7 @@ describe('resource cell (MCP gateway, read/act)', () => {
       }),
     )) as FunctionUrlResponse;
     const content = (JSON.parse(res.body).result.content as Array<{ text: string }>)[0];
-    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], grant: ['platform:cells:create'], actor: 'human' });
+    expect(JSON.parse(content.text)).toEqual({ user: 'alice', scopes: ['platform:cells:create'], actor: 'human' });
   });
 
   it('POST /mcp without a bearer answers 401 + WWW-Authenticate', async () => {
