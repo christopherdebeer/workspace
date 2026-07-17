@@ -83,6 +83,19 @@ function noiseTypesFor(records: Array<{ key: string; superseded: boolean; value:
     | undefined;
   if (Array.isArray(cfg?.noiseTypes)) for (const t of cfg.noiseTypes) if (typeof t === 'string') out.add(t);
   if (Array.isArray(cfg?.admitTypes)) for (const t of cfg.admitTypes) if (typeof t === 'string') out.delete(t);
+  // The $types home for the same declaration (wave-5, cross-vendor session): a
+  // type-decl `_types/<name>` carrying {operational: true} (or {embed: false})
+  // marks a slice's own coordination vocabulary — its leases, adjudication
+  // markers, presence rows — as machinery, never a suggestion/contested
+  // candidate. The platform ships the mechanism; each slice binds its own
+  // names (the same trust seam $types already carries for render/edit
+  // affordances). Declared operational wins over `admitTypes` — a type cannot
+  // be simultaneously machinery and a candidate.
+  for (const r of records) {
+    if (r.superseded || !r.key.startsWith('_types/')) continue;
+    const v = r.value as { operational?: unknown; embed?: unknown } | null;
+    if (v?.operational === true || v?.embed === false) out.add(r.key.slice('_types/'.length));
+  }
   return out;
 }
 
@@ -299,6 +312,10 @@ export interface ContestedResult {
   /** Pairs skipped as mechanically degenerate (same-source / containment — they
    *  cannot contradict; W4c). A judge no longer has to lease + inspect them. */
   degenerate: number;
+  /** Pairs skipped because an endpoint is ephemeral machinery: a delete-timer
+   *  fact (lease, presence) — live or lapsed-awaiting-TTL. Coordination
+   *  exhaust, never a contradiction candidate (wave-5). */
+  ephemeral: number;
   /** How to write a verdict back (existing verbs only — no new write surface). */
   hint: string;
 }
@@ -488,6 +505,21 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       const authored = authoredPairs(edges);
       candidates = candidates.filter((c) => !authored.has(pairKey(c.from, c.to)));
       if (!input?.includeRuntime) candidates = candidates.filter((c) => !isNoise(c.from) && !isNoise(c.to));
+      // Ephemeral machinery (wave-5, cross-vendor finding): a fact carrying a
+      // delete-effect timer — a lease, a presence row — is coordination exhaust
+      // whatever its type is named; it can never be a durable connection
+      // candidate. And once the timer lapses the RAW ROW lingers until DDB TTL
+      // fires (expiry + 24h grace), so timer-liveness must be re-checked here
+      // rather than trusted to the store: timer-deleted `lease/suggestion/*`
+      // rows led the live contested read at 0.99 cosine for the whole lag
+      // window. A missing endpoint (dangling similarTo edge) drops the same way.
+      const nowMs = Date.now();
+      const recByKey = new Map(records.map((r) => [r.key, r]));
+      const isEphemeral = (k: string): boolean => {
+        const r = recByKey.get(k);
+        return !r || r.timerEffect === 'delete' || !isTimerLive(r, nowMs);
+      };
+      candidates = candidates.filter((c) => !isEphemeral(c.from) && !isEphemeral(c.to));
       // Work leases (ADR-0086 Inc 3): a pair a participant currently holds under
       // `lease/suggestion/<pairHash>` is IN-FLIGHT — annotate it so parallel
       // judges skip it instead of double-adjudicating (the wave-2 CI race).
@@ -498,7 +530,6 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       // its adjudication pair under `lease/pair/<hash>` (domain "pair"), which the
       // suggestion-only scan didn't see, so a parallel judge would have missed it
       // (W4b). The keys are hash-suffixed identically; honor either prefix.
-      const nowMs = Date.now();
       const leaseByHash = new Map<string, { holder: string | null; until: string | null }>();
       for (const r of records) {
         if (r.superseded || !isTimerLive(r, nowMs)) continue;
@@ -567,7 +598,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
     async contested(input, ctx) {
       const scope = requireUser(ctx.identity);
       const { store } = build(ctx);
-      if (!store) return { candidates: [], total: 0, checked: 0, degenerate: 0, hint: CONTESTED_HINT };
+      if (!store) return { candidates: [], total: 0, checked: 0, degenerate: 0, ephemeral: 0, hint: CONTESTED_HINT };
       const limit = Math.min(Math.max(input?.limit ?? 10, 1), 50);
       const minScore = input?.minScore ?? 0.5;
       const [edges, records] = await Promise.all([store.listEdges(scope), store.list(scope)]);
@@ -588,13 +619,29 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         return r?.version || contentHash(r?.value ?? null);
       };
       const authored = authoredPairs(edges);
+      const nowMs = Date.now();
       let checkedCount = 0;
       let degenerateCount = 0;
+      let ephemeralCount = 0;
       const out: ContestedCandidate[] = [];
       for (const c of suggestionCandidates(edges)) {
         const a = byKey.get(c.from);
         const b = byKey.get(c.to);
         if (!a || !b || a.superseded || b.superseded) continue;
+        // Ephemeral machinery (wave-5, cross-vendor finding): a delete-timer
+        // fact — a lease, a presence row — is coordination exhaust whatever its
+        // type is named, and once its timer lapses the RAW ROW lingers until
+        // DDB TTL fires (expiry + 24h grace). Timer-liveness is a READ-time
+        // contract; re-check it here rather than trusting the store list:
+        // timer-deleted `lease/suggestion/*` rows led this read at 0.99 cosine
+        // for the whole lag window, crowding out every genuine candidate.
+        if (
+          a.timerEffect === 'delete' || b.timerEffect === 'delete' ||
+          !isTimerLive(a, nowMs) || !isTimerLive(b, nowMs)
+        ) {
+          ephemeralCount++;
+          continue;
+        }
         if ((c.score ?? 0) < minScore) continue;
         if (!input?.includeRuntime && (isNoise(c.from) || isNoise(c.to))) continue;
         // "No authored edge" is Stage A's precondition — normally guaranteed at
@@ -645,7 +692,7 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
           versions: { a: vA, b: vB },
         });
       }
-      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, degenerate: degenerateCount, hint: CONTESTED_HINT };
+      return { candidates: out.slice(0, limit), total: out.length, checked: checkedCount, degenerate: degenerateCount, ephemeral: ephemeralCount, hint: CONTESTED_HINT };
     },
 
     async ratify(input, ctx) {

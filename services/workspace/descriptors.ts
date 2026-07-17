@@ -487,7 +487,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       properties: {
         limit: { type: 'number', description: 'Cap on candidates returned (1–50, default 10) — adjudication is metered' },
         minScore: { type: 'number', description: 'Cosine floor (default 0.5) — contradiction candidates should be close, not merely related' },
-        includeRuntime: { type: 'boolean', description: 'Include format-clustered noise types. The noise set is slice-declared: `_config/suggestions` `{ noiseTypes?, admitTypes? }` over a built-in floor — vocabulary, not hardcoding.' },
+        includeRuntime: { type: 'boolean', description: 'Include format-clustered noise types. The noise set is slice-declared: `_config/suggestions` `{ noiseTypes?, admitTypes? }` over a built-in floor, plus any type whose `_types/<name>` decl carries `{operational:true}` — vocabulary, not hardcoding. Ephemeral facts (delete-timer rows: leases, presence) are excluded unconditionally.' },
       },
       additionalProperties: false,
     },
@@ -515,6 +515,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         total: { type: 'number', description: 'Candidates before the limit cap' },
         checked: { type: 'number', description: 'Pairs skipped: already adjudicated and unchanged since' },
         degenerate: { type: 'number', description: 'Pairs skipped: mechanically degenerate (same-source/containment — cannot contradict)' },
+        ephemeral: { type: 'number', description: 'Pairs skipped: an endpoint is ephemeral machinery (a delete-timer fact — lease/presence — live or lapsed-awaiting-TTL). Coordination exhaust, never a candidate' },
         hint: { type: 'string', description: 'How to write a verdict back (existing verbs only) + the parallel-lease recipe' },
       },
     },

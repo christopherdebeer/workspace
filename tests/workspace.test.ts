@@ -977,6 +977,10 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       ['essay/alpha', 'REPL for the mind'],
       ['essay/beta', 'Conversational programming environments'],
       ['decompose-run/docs/deep/guide/40', 'A decompose chunk embedding the guide'],
+      // Both endpoints must be LIVE facts (wave-5): suggestions drops a
+      // candidate whose endpoint is missing — a dangling similarTo edge can
+      // only be ratified into a dangling authored edge.
+      ['file/docs/deep/guide.md', 'The deep guide document'],
     ] as const) {
       await cmds.remember({ key, value: { title }, type: 'note' }, admin());
     }

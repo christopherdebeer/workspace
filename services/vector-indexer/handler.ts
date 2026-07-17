@@ -53,6 +53,8 @@ interface FactItem {
   type?: string | null;
   tags?: string[];
   superseded?: boolean;
+  /** Delete-effect timer (a lease/presence row) — ephemeral by declaration. */
+  timerEffect?: 'delete' | 'enable' | null;
 }
 
 const DIM = Number(process.env.VECTOR_DIM ?? (process.env.VECTOR_EMBEDDER === 'bedrock' ? 1024 : 256));
@@ -90,6 +92,18 @@ export function planStreamWork(event: StreamEvent): Map<string, IndexPlan> {
 
     // Hard delete (incl. delete-effect timer TTL) or supersession → drop the vector.
     if (r.eventName === 'REMOVE' || img?.superseded) {
+      planFor(index, scope).removes.add(key);
+      continue;
+    }
+    // Ephemeral by declaration (wave-5, cross-vendor finding): a fact written
+    // with a delete-effect timer — a lease, a presence row — self-destructs. It
+    // must never enter the index: embedding it mints `similarTo` kinship edges
+    // between coordination artefacts, which then lead the contested/suggestions
+    // views (timer-deleted leases held the top 19 contested slots at 0.99
+    // cosine). Vocabulary-free — no type names involved, the timer IS the
+    // declaration. Drop any existing vector under the key (a durable fact later
+    // reusing it re-embeds on its own write).
+    if (img?.timerEffect === 'delete') {
       planFor(index, scope).removes.add(key);
       continue;
     }
