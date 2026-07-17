@@ -573,9 +573,11 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
       // SWARM-D (wave-5): the UNFILTERED full dump is ~130KB across every cell —
       // it overflows the read token cap, so a naive driver reaching for the
       // sledgehammer got a raw transport error, not schemas. Scope it: `{cell}`
-      // returns one cell's full schemas, and an unscoped dump over budget fails
-      // LOUD with the cell sizes so the caller can narrow (never a silent
-      // truncation — the F7/W3f lesson).
+      // returns one cell's full schemas; an over-budget dump (whole OR a single
+      // large cell — W6-A: workspace alone is ~80KB) fails LOUD with the way to
+      // narrow, never a silent truncation (the F7/W3f lesson).
+      const FULL_BUDGET = 60_000; // bytes — comfortably under the read cap
+      const overBudget = (r: unknown): boolean => JSON.stringify(r).length > FULL_BUDGET;
       if (opts?.cell) {
         const cell = String(opts.cell).trim();
         const scoped = caps.filter((c) => cellOf(c.target) === cell);
@@ -583,11 +585,17 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
           const cells = [...new Set(caps.map((c) => cellOf(c.target)))].join(', ');
           throw new Error(`$catalog {cell}: no capabilities in cell "${cell}" — cells: ${cells}.`);
         }
-        return { capabilities: scoped };
+        const scopedResult = { capabilities: scoped };
+        if (!overBudget(scopedResult)) return scopedResult;
+        // Even one cell's full schemas can exceed the cap — the only finer grain
+        // is per-capability, so point there and list the targets to pick from.
+        const targets = scoped.map((c) => c.target).join(', ');
+        throw new Error(
+          `$catalog {detail:"full", cell:"${cell}"} is still too large (${scoped.length} capabilities over the read budget). Full schemas are one grain finer only per capability: {resolve:"<target>"}. Or read the grouped menu ($catalog, no options) for one-liners. Targets: ${targets}.`,
+        );
       }
-      const FULL_BUDGET = 60_000; // bytes — comfortably under the read cap
       const full = { capabilities: caps };
-      if (JSON.stringify(full).length <= FULL_BUDGET) return full;
+      if (!overBudget(full)) return full;
       const sizes = [...caps.reduce((m, c) => m.set(cellOf(c.target), (m.get(cellOf(c.target)) ?? 0) + 1), new Map<string, number>())]
         .map(([cell, n]) => `${cell}(${n})`)
         .join(', ');
