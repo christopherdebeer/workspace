@@ -914,6 +914,12 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       expect(real).toBeDefined();
       expect(real!.identical).toBeUndefined(); // distinct text → no flag
       expect(sug.hint).toMatch(/byte-identical/); // the result says what the scores imply
+      // SWARM-E (wave-5): the genuine pair ranks ABOVE the byte-identical one even
+      // though the identical pair scores ~1.0 — the degenerate head is sunk so a
+      // judge meets ratifiable candidates first, not prune material.
+      const idxReal = sug.suggestions.findIndex((c) => (c.from === 'd1' && c.to === 'd2') || (c.from === 'd2' && c.to === 'd1'));
+      const idxBp = sug.suggestions.findIndex((c) => (c.from === 'bp1' && c.to === 'bp2') || (c.from === 'bp2' && c.to === 'bp1'));
+      expect(idxReal).toBeLessThan(idxBp);
 
       // ── ADR-0086 Inc 3: a leased pair is annotated so parallel judges skip it ──
       const hash = contentHash(pairKey(real!.from, real!.to));

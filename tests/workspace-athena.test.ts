@@ -4,7 +4,7 @@
  * Pins the two guarantees that matter: only `platform:*` may call it, and only
  * read-only single statements run. The Athena SDK is stubbed via the runner seam.
  */
-import { createAthenaCommand, assertReadOnlySql, __setAthenaRunner, type AthenaResult } from '../services/workspace/commands-athena';
+import { createAthenaCommand, assertReadOnlySql, sanitizeAthenaError, __setAthenaRunner, type AthenaResult } from '../services/workspace/commands-athena';
 import type { ServiceContext } from '../platform/runtime';
 
 const ctxWith = (scopes: string[]): ServiceContext =>
@@ -25,6 +25,32 @@ describe('assertReadOnlySql', () => {
     for (const bad of ['INSERT INTO t VALUES (1)', 'DROP TABLE facts', 'CREATE TABLE t AS SELECT 1', 'UPDATE t SET a=1', 'MSCK REPAIR TABLE facts', 'SELECT 1; DROP TABLE facts', '', '   ']) {
       expect(() => assertReadOnlySql(bad)).toThrow();
     }
+  });
+});
+
+describe('sanitizeAthenaError (wave-5 W5-3: no infra internals across the membrane)', () => {
+  it('turns an IAM authorization failure into a clean teaching message, no ARN/account', () => {
+    const raw = new Error(
+      'athena query FAILED: Insufficient permissions to execute the query. User: ' +
+        'arn:aws:sts::018159942401:assumed-role/PlatformStack-WorkspaceServiceFunctionRole/abc ' +
+        'is not authorized to perform: glue:GetDatabases on resource: ' +
+        'arn:aws:glue:us-east-1:018159942401:catalog because no identity-based policy allows the action',
+    );
+    const clean = sanitizeAthenaError(raw);
+    expect(clean.message).not.toMatch(/arn:aws/i);
+    expect(clean.message).not.toMatch(/018159942401/);
+    expect(clean.message).toMatch(/glue:GetDatabases/); // the actionable signal survives
+    expect(clean.message).toMatch(/infra grant/i);
+  });
+  it('scrubs ARNs and 12-digit account ids from any other backend error', () => {
+    const clean = sanitizeAthenaError(new Error('boom at arn:aws:glue:us-east-1:018159942401:table/x for account 018159942401'));
+    expect(clean.message).not.toMatch(/arn:aws/i);
+    expect(clean.message).not.toMatch(/018159942401/);
+  });
+  it('leaves an ordinary query error untouched', () => {
+    expect(sanitizeAthenaError(new Error('line 1:8: SYNTAX_ERROR: column x not found')).message).toBe(
+      'line 1:8: SYNTAX_ERROR: column x not found',
+    );
   });
 });
 

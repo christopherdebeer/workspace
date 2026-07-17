@@ -574,6 +574,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       type: 'object',
       properties: {
         around: { type: 'string', description: 'Edges incident to this fact key (→ neighbours; with `membership` → its members; with `depth` → the walk root). Hydrated neighbour entries default to `card` (preview values) — pass `shape:"full"` for whole bodies.' },
+        key: { type: 'string', description: 'Alias for `around` (W4d) — the peek/neighbors spelling drivers reach for; the same fact-scoped neighbourhood read. Declared here so the validator does not warn on the honored alias (wave-5 W5-5).' },
         dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'With `around` (one hop): direction (default both)' },
         rel: { type: 'string', description: 'Only edges of this rel type (for a walk: the rel family to follow, e.g. "enables")' },
         membership: { type: 'boolean', description: "With `around`: only membership edges pointing at it (the collection's members)" },

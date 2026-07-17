@@ -80,10 +80,17 @@ describe('ADR-0072 — the contested read (Stage A)', () => {
   it('a checked/<hash> marker with matching versions hides the pair (idempotence)…', async () => {
     const before = await cmds.contested(undefined, ctx);
     const ab = before.candidates.find((c) => pairKey(c.a, c.b) === pairKey('k/a', 'k/b'))!;
+    // Write the marker the way the CONTESTED_HINT instructs and every live
+    // adjudicator (the consolidation organ, the probe drivers) actually does:
+    // "echo this candidate's `versions`", and the candidate's `versions` is the
+    // POSITIONAL `{ a, b }` object — NOT keyed by fact key. The earlier test
+    // wrote `{ [ab.a]: …, [ab.b]: … }`, which happened to match the old buggy
+    // read (`marker.versions[c.from]`), so the test passed while production —
+    // following the hint — never suppressed anything (wave-5 W5-1).
     await cmds.remember(
       {
         key: `checked/${ab.hash}`,
-        value: { a: ab.a, b: ab.b, verdict: 'independent', versions: { [ab.a]: ab.versions.a, [ab.b]: ab.versions.b } },
+        value: { a: ab.a, b: ab.b, verdict: 'independent', versions: { a: ab.versions.a, b: ab.versions.b } },
         type: 'adjudication',
         via: 'contested-test',
       },

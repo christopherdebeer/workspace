@@ -239,7 +239,12 @@ export class SubstrateAnalyticsLane extends Construct {
       resources: [stack.formatArn({ service: 'athena', resource: 'workgroup', resourceName: this.workgroupName })],
     }));
     fn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['glue:GetDatabase', 'glue:GetTable', 'glue:GetTables', 'glue:GetPartition', 'glue:GetPartitions'],
+      // GetDatabases (plural) is needed for catalog introspection — information_schema
+      // and SHOW DATABASES enumerate the catalog, which a direct `FROM facts` query
+      // does not. Without it, introspection queries failed while table queries worked
+      // (wave-5 W5-3: the capability looked structurally dead when probed via
+      // information_schema.tables).
+      actions: ['glue:GetDatabase', 'glue:GetDatabases', 'glue:GetTable', 'glue:GetTables', 'glue:GetPartition', 'glue:GetPartitions'],
       resources: [
         stack.formatArn({ service: 'glue', resource: 'catalog' }),
         stack.formatArn({ service: 'glue', resource: 'database', resourceName: this.databaseName }),

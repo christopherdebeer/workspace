@@ -571,6 +571,14 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       // not mechanically degenerate, not currently leased by another participant.
       let enriched = candidates.map(enrich);
       if (input?.genuineOnly) enriched = enriched.filter((s) => !s.identical && !s.degenerate && !s.leasedBy);
+      // SWARM-E (wave-5, unanimous across both CI probe drivers): byte-identical /
+      // same-source pairs score ~0.9999 and so LED every default page — a judge met
+      // the degenerate head first and had to re-call with genuineOnly. Sink flagged
+      // pairs (identical / degenerate / leased-by-a-peer) below genuine ones. The
+      // SET is unchanged and `genuineOnly` still drops them entirely; only the
+      // order changes, and V8's stable sort preserves score-desc WITHIN each group.
+      const flaggedRank = (s: SuggestionEntry): number => (s.identical || s.degenerate || s.leasedBy ? 1 : 0);
+      enriched = [...enriched].sort((a, b) => flaggedRank(a) - flaggedRank(b));
       // W3e: `offset` pages the ranked list (query grew this in wave 2; the same
       // reach here was silently ignored — membrane principle: honor or reject).
       const offset = typeof input?.offset === 'number' && input.offset > 0 ? input.offset : 0;
@@ -675,9 +683,21 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
         const hash = contentHash(pairKey(c.from, c.to));
         const [vA, vB] = [versionOf(c.from), versionOf(c.to)];
         const marker = markers.get(hash);
-        if (marker?.versions && marker.versions[c.from] === vA && marker.versions[c.to] === vB) {
-          checkedCount++;
-          continue; // adjudicated and unchanged since — idempotent skip
+        // The marker echoes the candidate's `versions` object, which is keyed
+        // POSITIONALLY `{a, b}` — not by fact key. The prior check indexed
+        // `marker.versions[c.from]` / `[c.to]` (by fact key), which is always
+        // undefined, so NO marker ever suppressed a pair: `contested` reported
+        // `checked:0` even with valid, version-matched markers present (wave-5
+        // W5-1, reproduced end-to-end). Compare the stored version VALUES to the
+        // pair's current versions, order-independently — the marker is already
+        // pair-scoped by `hash`, and byte-identical pairs (vA === vB) are skipped
+        // above, so set membership is exact.
+        if (marker?.versions) {
+          const stored = new Set(Object.values(marker.versions));
+          if (stored.has(vA) && stored.has(vB)) {
+            checkedCount++;
+            continue; // adjudicated and unchanged since — idempotent skip
+          }
         }
         out.push({
           a: c.from,

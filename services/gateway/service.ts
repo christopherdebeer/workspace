@@ -531,12 +531,12 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const target = (input?.target ?? '').trim();
   if (!target || target === CATALOG) {
     const caps = await buildCatalog(ctx);
-    const opts = input?.input as { detail?: string; for?: string; forType?: string; resolve?: string } | undefined;
+    const opts = input?.input as { detail?: string; for?: string; forType?: string; resolve?: string; cell?: string } | undefined;
     // Membrane principle (W3f): a $catalog option we don't understand must fail
     // loudly, not silently widen a narrow read into the whole menu (W3d — a
     // probe's `{resolve}` was swallowed and it got 500 lines it didn't ask for).
     if (opts && typeof opts === 'object') {
-      const KNOWN = new Set(['detail', 'for', 'forType', 'resolve']);
+      const KNOWN = new Set(['detail', 'for', 'forType', 'resolve', 'cell']);
       const unknown = Object.keys(opts).filter((k) => !KNOWN.has(k));
       if (unknown.length) {
         throw new Error(
@@ -569,7 +569,47 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     // ADR-0033: progressive disclosure by default — a bare `$catalog` returns the
     // grouped one-line menu (skim), not every input/result schema. `detail:"full"`
     // (or "schemas") returns the heavy full contract.
-    if (opts?.detail === 'full' || opts?.detail === 'schemas') return { capabilities: caps };
+    if (opts?.detail === 'full' || opts?.detail === 'schemas') {
+      // SWARM-D (wave-5): the UNFILTERED full dump is ~130KB across every cell —
+      // it overflows the read token cap, so a naive driver reaching for the
+      // sledgehammer got a raw transport error, not schemas. Scope it: `{cell}`
+      // returns one cell's full schemas; an over-budget dump (whole OR a single
+      // large cell — W6-A: workspace alone is ~80KB) fails LOUD with the way to
+      // narrow, never a silent truncation (the F7/W3f lesson).
+      // Measure the DELIVERED form: the MCP layer serializes results
+      // pretty-printed (indent 2), which is ~1.5× the compact size — the
+      // workspace cell is 48.7KB compact but 73.7KB delivered, so a compact
+      // measure let it slip the guard and overflow anyway (W6-A follow-up:
+      // re-probe caught the guard firing on the whole dump but NOT on the one
+      // cell that overflows). Budget the indented bytes, comfortably under the
+      // read cap.
+      const FULL_BUDGET = 60_000; // bytes of the delivered (indented) payload
+      const overBudget = (r: unknown): boolean => JSON.stringify(r, null, 2).length > FULL_BUDGET;
+      if (opts?.cell) {
+        const cell = String(opts.cell).trim();
+        const scoped = caps.filter((c) => cellOf(c.target) === cell);
+        if (!scoped.length) {
+          const cells = [...new Set(caps.map((c) => cellOf(c.target)))].join(', ');
+          throw new Error(`$catalog {cell}: no capabilities in cell "${cell}" — cells: ${cells}.`);
+        }
+        const scopedResult = { capabilities: scoped };
+        if (!overBudget(scopedResult)) return scopedResult;
+        // Even one cell's full schemas can exceed the cap — the only finer grain
+        // is per-capability, so point there and list the targets to pick from.
+        const targets = scoped.map((c) => c.target).join(', ');
+        throw new Error(
+          `$catalog {detail:"full", cell:"${cell}"} is still too large (${scoped.length} capabilities over the read budget). Full schemas are one grain finer only per capability: {resolve:"<target>"}. Or read the grouped menu ($catalog, no options) for one-liners. Targets: ${targets}.`,
+        );
+      }
+      const full = { capabilities: caps };
+      if (!overBudget(full)) return full;
+      const sizes = [...caps.reduce((m, c) => m.set(cellOf(c.target), (m.get(cellOf(c.target)) ?? 0) + 1), new Map<string, number>())]
+        .map(([cell, n]) => `${cell}(${n})`)
+        .join(', ');
+      throw new Error(
+        `$catalog {detail:"full"} is too large to return whole (${caps.length} capabilities over the read budget). Scope it: {detail:"full", cell:"<name>"} for one cell's schemas, or {resolve:"<target>"} for one capability. Cells: ${sizes}.`,
+      );
+    }
     return summarizeCatalog(caps);
   }
   if (target === TYPES) return buildTypes(ctx);
