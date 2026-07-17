@@ -76,6 +76,17 @@ lit/canvas renderers calling `resolvePresent` and deleting their own copies — 
 Eliminate-phase work (ADR-0014); this increment provides the resolver they converge on.
 322 tests green.
 
+> **Status note (2026-07, coherence audit).** The Eliminate-phase convergence above
+> did **not** happen. `resolvePresent` has no non-test, non-reexport caller: it ships
+> only as exported cell-SDK surface. The server's live per-fact affordance path is
+> `affordancesForTypes` → `resolveType` (`services/workspace/shared.ts`), the gateway
+> `$types` facet is resolved by `buildTypeVocabulary` (`services/gateway/service.ts:490-509`),
+> and canvas/lit still hand-roll their own `present.{icon,label,render}` composition. The
+> present *facet convention* is single-sourced; the present *function* is not. Resolve by
+> either (a) wiring `affordancesForTypes` and the clients onto `resolvePresent`, or
+> (b) retiring `resolvePresent` and naming `affordancesForTypes` as the present stage.
+> See `docs/platform-reference/coherence-audit.md` — present-affordance seam (DIVERGENT).
+
 ## Consequences
 - The "default viewer for an orphaned/undefined type" problem (the early floor-renderer work)
   becomes one branch of `Present.resolve` (no type → the generic floor), not per-cell code.
