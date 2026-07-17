@@ -6,7 +6,7 @@ import { requireUser, schemaHints, mergeTypeDecl, resolveType, type FactTimer } 
 import { RENDERERS_PREFIX } from '../../platform/runtime/state';
 import { ACTIONS_PREFIX } from './actions';
 import { VIEWS_PREFIX } from './views';
-import { grantCovers, GROUPS_NS, PUBLIC_NS, type GrantStore } from './grants';
+import { applicableGrants, grantCovers, GROUPS_NS, PUBLIC_NS, type GrantStore } from './grants';
 import { GRANTS_NS } from './grant-requests';
 import { type DepsBuilder, typeDeclsFor, enforceTypeWrite } from './shared';
 import type { WorkspaceCommands } from './handlers';
@@ -122,7 +122,11 @@ async function requireWriteThrough(
   if (key.startsWith(ACTIONS_PREFIX) || key.startsWith(VIEWS_PREFIX) || key.startsWith(RENDERERS_PREFIX) || key.startsWith(GRANTS_NS) || key.startsWith(GROUPS_NS) || key.startsWith(PUBLIC_NS)) {
     throw new Error(`write-through may not touch the reserved namespace ("${key}")`);
   }
-  const held = await grants.listForGrantee(caller);
+  // Resolve grants exactly as the read seams do (recall/peek/search): direct ∪
+  // public ∪ group memberships. Direct-only here silently denied group-scoped
+  // write grants — a whole grant class `grants()` advertises. (Public shares are
+  // read-only by construction, so the public fold can never widen writes.)
+  const held = await applicableGrants(grants, caller);
   const ok = held.some((g) => g.owner === owner && g.mode === 'write' && grantCovers(g.key, key));
   if (!ok) {
     throw new Error(

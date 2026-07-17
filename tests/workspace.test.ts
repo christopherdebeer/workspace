@@ -1740,6 +1740,28 @@ describe('workspace granular grants (write-through / prefix / request loop)', ()
     await cmds.unshare({ to: 'bob' }, alice);
   });
 
+  it('group-scoped write grants authorize write-through for members (regression)', async () => {
+    const alice = ctxFor('alice').ctx;
+    const gwen = ctxFor('gwen').ctx;
+
+    // alice shares write access to a GROUP, not to gwen directly.
+    await cmds.group({ name: 'team', members: ['gwen'] }, alice);
+    await cmds.share({ to: 'group:team', key: 'team-inbox/*', mode: 'write' }, alice);
+
+    // The grant resolves through membership — write-through must accept it.
+    const entry = await cmds.remember({ key: 'team-inbox/note', value: 'via group', owner: 'alice' }, gwen);
+    expect(entry._meta.writer).toBe('gwen');
+    expect((await cmds.peek({ key: 'team-inbox/note' }, alice))?.value).toBe('via group');
+
+    // The grant is still a boundary: uncovered keys stay refused…
+    await expect(cmds.remember({ key: 'private/x', value: 'no', owner: 'alice' }, gwen)).rejects.toThrow(/grant_denied/);
+    // …and leaving the group withdraws the authority.
+    await cmds.group({ name: 'team', remove: ['gwen'] }, alice);
+    await expect(
+      cmds.remember({ key: 'team-inbox/again', value: 'no', owner: 'alice' }, gwen),
+    ).rejects.toThrow(/grant_denied/);
+  });
+
   it('runs the request → inbox → approve loop for a workspace resource', async () => {
     const carol = ctxFor('carol');
     const res = await cmds.requestGrant(
