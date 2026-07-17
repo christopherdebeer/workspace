@@ -571,6 +571,14 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       // not mechanically degenerate, not currently leased by another participant.
       let enriched = candidates.map(enrich);
       if (input?.genuineOnly) enriched = enriched.filter((s) => !s.identical && !s.degenerate && !s.leasedBy);
+      // SWARM-E (wave-5, unanimous across both CI probe drivers): byte-identical /
+      // same-source pairs score ~0.9999 and so LED every default page — a judge met
+      // the degenerate head first and had to re-call with genuineOnly. Sink flagged
+      // pairs (identical / degenerate / leased-by-a-peer) below genuine ones. The
+      // SET is unchanged and `genuineOnly` still drops them entirely; only the
+      // order changes, and V8's stable sort preserves score-desc WITHIN each group.
+      const flaggedRank = (s: SuggestionEntry): number => (s.identical || s.degenerate || s.leasedBy ? 1 : 0);
+      enriched = [...enriched].sort((a, b) => flaggedRank(a) - flaggedRank(b));
       // W3e: `offset` pages the ranked list (query grew this in wave 2; the same
       // reach here was silently ignored — membrane principle: honor or reject).
       const offset = typeof input?.offset === 'number' && input.offset > 0 ? input.offset : 0;
