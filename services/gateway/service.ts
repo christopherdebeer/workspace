@@ -576,8 +576,15 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
       // returns one cell's full schemas; an over-budget dump (whole OR a single
       // large cell — W6-A: workspace alone is ~80KB) fails LOUD with the way to
       // narrow, never a silent truncation (the F7/W3f lesson).
-      const FULL_BUDGET = 60_000; // bytes — comfortably under the read cap
-      const overBudget = (r: unknown): boolean => JSON.stringify(r).length > FULL_BUDGET;
+      // Measure the DELIVERED form: the MCP layer serializes results
+      // pretty-printed (indent 2), which is ~1.5× the compact size — the
+      // workspace cell is 48.7KB compact but 73.7KB delivered, so a compact
+      // measure let it slip the guard and overflow anyway (W6-A follow-up:
+      // re-probe caught the guard firing on the whole dump but NOT on the one
+      // cell that overflows). Budget the indented bytes, comfortably under the
+      // read cap.
+      const FULL_BUDGET = 60_000; // bytes of the delivered (indented) payload
+      const overBudget = (r: unknown): boolean => JSON.stringify(r, null, 2).length > FULL_BUDGET;
       if (opts?.cell) {
         const cell = String(opts.cell).trim();
         const scoped = caps.filter((c) => cellOf(c.target) === cell);
