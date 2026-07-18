@@ -1,12 +1,15 @@
 /**
  * StateStore wire codec (ADR-0042 Inc 1, part of the platform-SDK-for-cells) —
- * the PURE item⇄record mapping and key grammar the DynamoDB-backed `StateStore`s
- * use. Extracted so the v3 (cell-ambient) store and any future store share ONE
- * marshalling, and so the mapping is unit-testable WITHOUT a DynamoDB client or
+ * the PURE item⇄record mapping and key grammar the DynamoDB-backed `StateStore`
+ * uses. `dynamo-state-store-v3.ts` is the ONE Dynamo consumer today; the codec
+ * exists so that marshalling stays unit-testable WITHOUT a DynamoDB client or
  * the AWS SDK (the part of a store port most likely to drift is the field
- * coercion, not the `send` wiring). Mirrors the item shapes documented in
- * `dynamo-state-store.ts`; the v2 store keeps its inline copy for now (a later
- * consolidation can route it here too).
+ * coercion, not the `send` wiring), and so the memory store has an explicit
+ * parity target. `itemToRecord`/`itemToEdge` are hand-maintained field
+ * allowlists — a new `StateRecord`/`EdgeRecord` field wired through `put()` but
+ * not added here is silently dropped in production while the
+ * structurally-spreading memory store preserves it; the round-trip suite in
+ * `tests/state-store-parity.test.ts` is the canary that catches that.
  *
  * No AWS import, no I/O — safe to bundle anywhere.
  */
