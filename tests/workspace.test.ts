@@ -33,15 +33,16 @@ describe('workspace cell', () => {
   const state = createObservedState(store);
   const cmds = createWorkspaceCommands(() => ({ state, grants }));
 
-  it('remembers a fact in the caller slice and announces it', async () => {
+  it('remembers a fact in the caller slice; the announcement rides the stream, not a hand emit', async () => {
     const { ctx, emitted } = ctxFor('alice');
     const e = await cmds.remember({ key: 'phase', value: 'planning', via: 'remember' }, ctx);
     expect(e.value).toBe('planning');
     expect(e._meta.writer).toBe('alice');
     expect(e._meta.via).toBe('remember');
-    expect(emitted).toEqual([
-      { type: 'workspace.fact.written', payload: { scope: 'alice', key: 'phase', revision: 1 } },
-    ]);
+    // `workspace.fact.written` has ONE physical origin — the FactFanout
+    // DynamoDB-stream consumer (services/fact-fanout) — so the command itself
+    // must not hand-emit it (a hand emit would double-fire every reaction).
+    expect(emitted.filter((ev) => ev.type === 'workspace.fact.written')).toEqual([]);
   });
 
   it('recall({view:"full"}) returns the caller view, salience-shaped with a _shaping summary', async () => {
@@ -1900,7 +1901,7 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
     expect((await cmds.peek({ key: 'run/r1' }, alice))?.value).toEqual({ node: 'C' });
   });
 
-  it('re-emits fact.written for each reactive write so the next rail can react', async () => {
+  it('a reactive write chains via the stream — the reactor does NOT hand re-emit', async () => {
     const { ctx: alice, emitted } = ctxFor('alice');
     await cmds.registerAction(
       { action: { id: 'mark', writes: [{ key: 'flag/${params.id}', value: { done: true }, type: 'flag' }], params: { id: { type: 'string', required: true } } } },
@@ -1912,8 +1913,10 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
     const { ctx: busc, emitted: busEmitted } = ctxFor('alice');
     await react({ scope: 'alice', key: 'thing/x', revision: 1 }, busc, { source: 'workspace', detailType: 'workspace.fact.written' });
     expect((await cmds.peek({ key: 'flag/thing/x' }, alice))?.value).toEqual({ done: true });
-    // The reaction's write is itself announced, so downstream subscriptions chain.
-    expect(busEmitted).toContainEqual({ type: 'workspace.fact.written', payload: { scope: 'alice', key: 'flag/thing/x', revision: 1 } });
+    // The reaction's write reappears on the DynamoDB stream and the FactFanout
+    // consumer announces it — a hand re-emit here would DOUBLE-fire every
+    // downstream subscription (once per origin).
+    expect(busEmitted.filter((ev) => ev.type === 'workspace.fact.written')).toEqual([]);
     void emitted;
   });
 

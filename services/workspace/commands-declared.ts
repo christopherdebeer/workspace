@@ -94,11 +94,9 @@ export function createDeclaredCommands(build: DepsBuilder): Pick<WorkspaceComman
       const { state } = build(ctx);
       const result = await createDeclarativeActions(state).invoke(scope, input.action, input.params ?? {}, ctx.identity);
       await ctx.events.emit('workspace.action.invoked', { scope, action: input.action });
-      // Each write is a fact change — surface it so subscriptions react to a
-      // manual step exactly as they do to a reactive one.
-      for (const w of result.writes) {
-        await ctx.events.emit('workspace.fact.written', { scope, key: w.key, revision: w._meta.revision });
-      }
+      // Each write is announced by the FactFanout stream consumer (the one
+      // origin), so subscriptions react to a manual step exactly as they do to
+      // a reactive one — no hand emit.
       ctx.logger.info('workspace action invoked', { scope, action: input.action, writes: result.writes.length });
       return result;
     },
@@ -227,13 +225,10 @@ export function createDeclaredCommands(build: DepsBuilder): Pick<WorkspaceComman
         return createRegisteredViews(state).evaluate(scope, input.id, ctx.identity);
       }
       if (input.kind === 'action') {
-        // Mirror `invoke` exactly: same interpreter + the same surfaced events so
-        // subscriptions react to a manual step as they do to a reactive one.
+        // Mirror `invoke` exactly: same interpreter, same events (the writes
+        // themselves are announced by the FactFanout stream consumer).
         const result = await createDeclarativeActions(state).invoke(scope, input.id, input.params ?? {}, ctx.identity);
         await ctx.events.emit('workspace.action.invoked', { scope, action: input.id });
-        for (const w of result.writes) {
-          await ctx.events.emit('workspace.fact.written', { scope, key: w.key, revision: w._meta.revision });
-        }
         ctx.logger.info('workspace declaration evaluated', { scope, kind: input.kind, id: input.id, writes: result.writes.length });
         return result;
       }

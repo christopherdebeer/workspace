@@ -163,7 +163,8 @@ export function createWriteCommands(build: DepsBuilder): Pick<WorkspaceCommands,
         },
         ctx.identity,
       );
-      await ctx.events.emit('workspace.fact.written', { scope, key: input.key, revision: entry._meta.revision });
+      // No hand emit: `workspace.fact.written` is announced by the FactFanout
+      // stream consumer — the one physical origin every write path shares.
       ctx.logger.info('workspace fact written', { scope, key: input.key, revision: entry._meta.revision, writer: caller });
       // Advisory only: the write already happened. Nudge missing recommended
       // fields (per the type's schema), or that a typed-but-schemaless type could

@@ -103,10 +103,8 @@ export async function runTend(
     { scope, key: 'tending/latest', value: report, via: `tend:${via}`, type: 'audit', tags: ['tending'] },
     writer,
   );
-  // A tending pass is a fact change like any other — announce it so reactions
-  // (e.g. a tending machine's trigger) fire. Without this the audit is invisible
-  // to the reactor.
-  await ctx.events.emit('workspace.fact.written', { scope, key: 'tending/latest', revision: entry._meta.revision });
+  // A tending pass is a fact change like any other — the FactFanout stream
+  // consumer announces it, so reactions (e.g. a tending machine's trigger) fire.
   await ctx.events.emit('workspace.tended', {
     scope,
     stale: report.stale,
@@ -340,8 +338,10 @@ export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler
         if (v.status === 'waiting' && typeof v.waitUntil === 'string') {
           const due = Date.parse(v.waitUntil);
           if (!Number.isFinite(due) || due > nowMs) continue; // deadline not reached yet
+          // The FactFanout stream consumer announces this write (with the run's
+          // REAL revision — a long run past a subscription's maxDepth no longer
+          // sneaks past the loop bound on a `revision: 0` hand emit).
           await state.put({ scope, key: e.key, value: { ...v, status: 'running' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags }, identity);
-          await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
           ctx.logger.info('machine tick resumed waiting run', { scope, key: e.key, waitUntil: v.waitUntil });
           continue;
         }
@@ -357,7 +357,6 @@ export function createMachineTickHandler(build: DepsBuilder): EventBridgeHandler
             { scope, key: e.key, value: { ...v, status: 'failed', reason: `stale: no progress since ${e._meta.updatedAt}`, via: 'tick!!stale' }, via: 'machine.tick', type: 'machine-run', tags: e._meta.tags },
             identity,
           );
-          await ctx.events.emit('workspace.fact.written', { scope, key: e.key, revision: 0 });
           ctx.logger.info('machine tick reaped stale run', { scope, key: e.key, status: v.status, updatedAt: e._meta.updatedAt });
         }
       }
@@ -435,7 +434,6 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
         ctx.logger.warn('organ supersede refused', { cell: writerAddress, key, error: (err as Error).message });
         return;
       }
-      await ctx.events.emit('workspace.fact.written', { scope, key, revision: 0 });
       ctx.logger.info('substrate supersede applied for organ', { cell: writerAddress, scope, key });
       return;
     }
@@ -484,22 +482,24 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
 
     const entry = await state.get(scope, key);
     const revision = entry?._meta.revision ?? 1;
-    await ctx.events.emit('workspace.fact.written', { scope, key, revision });
     ctx.logger.info('substrate write applied for organ', { cell: writerAddress, scope, key, revision });
   };
 }
 
 /**
  * The reaction reactor: the generic tier-1 half of "machines react to the
- * substrate". Every fact change emits `workspace.fact.written`; this handler
- * loads the changed fact, finds the slice's matching `_subscriptions/*`, and
- * invokes each one's declared action with params templated from the event.
+ * substrate". Every fact change is announced as `workspace.fact.written` by the
+ * FactFanout DynamoDB-stream consumer (the one physical origin — no write path
+ * can forget it); this handler loads the changed fact, finds the slice's
+ * matching `_subscriptions/*`, and invokes each one's declared action with
+ * params templated from the event.
  *
  * Reactions invoke *declared actions*, so the action's own `if` guard decides
  * whether it actually fires (an auto-rail action whose `from` ≠ the run's node
- * fails the precondition — an expected no-op). A write that does fire re-emits
- * `workspace.fact.written`, so the next rail reacts in turn — a bounded fixpoint
- * (capped by the triggering fact's revision vs. the subscription's maxDepth).
+ * fails the precondition — an expected no-op). A write that does fire reappears
+ * on the stream, so the next rail reacts in turn — a bounded fixpoint (capped
+ * by the triggering fact's revision vs. the subscription's maxDepth, and the
+ * revision rides the stream image, so no event-carried depth is needed).
  *
  * A subscription either `invoke`s a declared action (in-process, the bounded
  * default) or `deliver`s to a cell tool — called AS the slice owner — for
@@ -630,10 +630,10 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
 
       try {
         const result = await actions.invoke(scope, sub.invoke as string, params, identity);
-        // Re-surface the writes so a downstream subscription (the next rail) reacts.
-        for (const w of result.writes) {
-          await ctx.events.emit('workspace.fact.written', { scope, key: w.key, revision: w._meta.revision });
-        }
+        // The reaction's writes reappear on the DynamoDB stream, so the
+        // FactFanout consumer announces them and the next rail reacts — the
+        // chain no longer needs (and must not have) a hand re-emit, which
+        // would double-fire every downstream subscription.
         ctx.logger.info('reaction fired', { scope, key, subscription: sub.id, invoke: sub.invoke, writes: result.writes.length });
       } catch (err) {
         // A failed `if`/`enabled` guard is the expected no-op (the rail whose
@@ -737,7 +737,6 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
       { scope: owner, key, value, via: `cells:${meta.detailType}`, type: 'cell', tags: ['cell'] },
       writer,
     );
-    await ctx.events.emit('workspace.fact.written', { scope: owner, key, revision: entry._meta.revision });
     ctx.logger.info('cell lifecycle projected', { scope: owner, key, status: value.status, revision: entry._meta.revision });
 
     // ADR-0027 Inc 3: on deploy, project a `file`-typed SOURCE MANIFEST so a cell's
@@ -755,11 +754,10 @@ export function createCellLifecycleHandler(build: DepsBuilder): EventBridgeHandl
         clientEntry: (detail.clientEntry as string | null | undefined) ?? null,
         source: 'cells:deployed',
       };
-      const m = await state.put(
+      await state.put(
         { scope: owner, key: manifestKey, value: manifest, via: 'cells:deployed', type: 'file', tags: ['file', 'cell-source'] },
         writer,
       );
-      await ctx.events.emit('workspace.fact.written', { scope: owner, key: manifestKey, revision: m._meta.revision });
     }
 
     // ADR-0052: capabilities are facts. On deploy, project each tool the cell
@@ -844,11 +842,10 @@ async function projectCapabilityFacts(
       cell: addr,
       schemaRef: `$catalog resolve: ${addr}.${t.tool}`,
     };
-    const e = await state.put(
+    await state.put(
       { scope: cell.owner, key, value, via: 'cells:capability', type: 'capability', tags: ['capability'] },
       writer,
     );
-    await ctx.events.emit('workspace.fact.written', { scope: cell.owner, key, revision: e._meta.revision });
   }
   for (const stale of existing.entries) {
     if (!wanted.has(stale.key)) await state.supersede(cell.owner, stale.key, null, writer);
@@ -915,11 +912,10 @@ export function createDataFileMirrorHandler(build: DepsBuilder): EventBridgeHand
     // built-in table without a deploy.
     const ingestionConfig = (await state.get(user, '_config/ingestion', writer).catch(() => null))?.value as IngestionConfig | undefined;
     const inferredType = inferIngestionType(key, contentType, ingestionConfig ?? null);
-    const entry = await state.put(
+    await state.put(
       { scope: user, key: factKey, value, via: 'cells:data', type: inferredType, tags: ['file', 'cell-data'] },
       writer,
     );
-    await ctx.events.emit('workspace.fact.written', { scope: user, key: factKey, revision: entry._meta.revision });
     ctx.logger.info('cell data mirrored to file fact', { scope: user, key: factKey });
   };
 }
