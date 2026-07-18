@@ -795,6 +795,26 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     await expect(cmds.reindex(undefined, ctxOf('alice'))).rejects.toThrow(/admin/);
   });
 
+  it('reindex never embeds a LIVE delete-timer lease — the shared indexableText gate (regression)', async () => {
+    const adminCtx = (): ServiceContext => {
+      const ctx = ctxOf('hana');
+      (ctx as unknown as { identity: { user: string; scopes: string[] } }).identity = { user: 'hana', scopes: ['workspace:read', 'workspace:write', 'workspace:admin'] };
+      return ctx;
+    };
+    await cmds.remember({ key: 'note/durable', value: { title: 'A durable quantum chromodynamics note' }, type: 'note' }, adminCtx());
+    // An unexpired delete-effect lease: query() still returns it (timer-LIVE),
+    // so a text-only gate would re-embed it — the audit's leak.
+    await cmds.remember(
+      { key: 'lease/run/xyz', value: { holder: 'quantum chromodynamics judge' }, timer: { ms: 3_600_000, effect: 'delete' } },
+      adminCtx(),
+    );
+    await cmds.reindex(undefined, adminCtx());
+    await drainReindex('hana');
+    const res = await cmds.search({ text: 'quantum chromodynamics' }, adminCtx());
+    expect(res.entries.some((e) => e.key === 'note/durable')).toBe(true); // the durable fact made it in
+    expect(res.entries.some((e) => e.key.startsWith('lease/'))).toBe(false); // the lease never did
+  });
+
   it('reindex wires inferred similarTo edges that feed neighbors + centrality (ADR-0031)', async () => {
     const prev = process.env.VECTOR_SIMILAR_MIN_SCORE;
     process.env.VECTOR_SIMILAR_MIN_SCORE = '0.05'; // hashing-embedder cosines run low; ensure edges form

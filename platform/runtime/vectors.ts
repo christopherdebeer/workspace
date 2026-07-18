@@ -109,6 +109,31 @@ export function embeddableText(key: string, value: unknown): string | null {
   return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
+/** What the index-membership rule inspects of a fact. `timerEffect` is the raw
+ *  store field (`StateRecord.timerEffect`) or an `Entry`'s `_meta.timer?.effect`. */
+export interface IndexableFact {
+  key: string;
+  value?: unknown;
+  superseded?: boolean;
+  timerEffect?: 'delete' | 'enable' | null;
+}
+
+/** The ONE index-membership rule, shared by BOTH vector writers (the live
+ *  stream indexer and the `reindex` backfill): a fact belongs in the index iff
+ *  it is live (not superseded), not ephemeral-by-declaration (a delete-effect
+ *  timer — a lease/presence row — must never be embedded: it mints `similarTo`
+ *  kinship between coordination artefacts and leads the contested/suggestions
+ *  views), and has embeddable text. Returns that text, or `null` for a
+ *  non-member. Keeping this in the shared contract is what stops the two
+ *  writers' membership predicates drifting apart (the reindex worker once
+ *  gated only on `!!text`, so a full reindex re-embedded live delete-timer
+ *  leases the stream had deliberately dropped). */
+export function indexableText(fact: IndexableFact): string | null {
+  if (fact.superseded) return null;
+  if (fact.timerEffect === 'delete') return null;
+  return embeddableText(fact.key, fact.value);
+}
+
 /** Content types whose bytes are UTF-8 text we can embed directly (ADR-0030 Inc 4
  *  follow-on — blob text extraction). Binary types (images, PDF, audio) are NOT
  *  text-like and need an extraction lane (Textract) to become searchable. */

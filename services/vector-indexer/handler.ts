@@ -11,7 +11,7 @@
  */
 import { DynamoDB } from 'aws-sdk';
 import {
-  embeddableText,
+  indexableText,
   metadataForFact,
   indexForScope,
   selectNeighbors,
@@ -57,8 +57,6 @@ interface FactItem {
   timerEffect?: 'delete' | 'enable' | null;
 }
 
-const DIM = Number(process.env.VECTOR_DIM ?? (process.env.VECTOR_EMBEDDER === 'bedrock' ? 1024 : 256));
-
 interface IndexPlan {
   scope: string;
   puts: Array<{ key: string; text: string; meta: ReturnType<typeof metadataForFact> }>;
@@ -69,9 +67,13 @@ interface IndexPlan {
  * Pure: turn a batch of stream records into per-index work (texts to embed + keys to
  * remove), with no embedding or IO — the testable core of the indexer. Filters to
  * facts (`sk` = `KEY#…`), drops the vector on REMOVE/supersession, and sha-skips a
- * metadata-only rewrite (same embeddable text, still live).
+ * metadata-only rewrite (same embeddable text, still live). Index membership is the
+ * shared `indexableText` rule (one predicate for both vector writers); `dim` is the
+ * active embedder's dimension — threaded from the caller so the index name and the
+ * vectors written into it can never disagree (the old module-level env-derived DIM
+ * re-decided it with divergent case-sensitivity vs `vectorsFromEnv`).
  */
-export function planStreamWork(event: StreamEvent): Map<string, IndexPlan> {
+export function planStreamWork(event: StreamEvent, dim: number): Map<string, IndexPlan> {
   const plans = new Map<string, IndexPlan>();
   const planFor = (index: string, scope: string): IndexPlan => {
     let p = plans.get(index);
@@ -88,30 +90,31 @@ export function planStreamWork(event: StreamEvent): Map<string, IndexPlan> {
     const scope = item.scope;
     const key = item.key;
     if (typeof scope !== 'string' || typeof key !== 'string') continue;
-    const index = indexForScope(scope, DIM);
+    const index = indexForScope(scope, dim);
 
     // Hard delete (incl. delete-effect timer TTL) or supersession → drop the vector.
     if (r.eventName === 'REMOVE' || img?.superseded) {
       planFor(index, scope).removes.add(key);
       continue;
     }
-    // Ephemeral by declaration (wave-5, cross-vendor finding): a fact written
-    // with a delete-effect timer — a lease, a presence row — self-destructs. It
-    // must never enter the index: embedding it mints `similarTo` kinship edges
-    // between coordination artefacts, which then lead the contested/suggestions
-    // views (timer-deleted leases held the top 19 contested slots at 0.99
-    // cosine). Vocabulary-free — no type names involved, the timer IS the
-    // declaration. Drop any existing vector under the key (a durable fact later
-    // reusing it re-embeds on its own write).
-    if (img?.timerEffect === 'delete') {
-      planFor(index, scope).removes.add(key);
+    // Membership is the ONE shared rule (`indexableText`): live, not ephemeral-
+    // by-declaration, embeddable. A delete-effect timer — a lease, a presence
+    // row — self-destructs and must never enter the index: embedding it mints
+    // `similarTo` kinship edges between coordination artefacts, which then lead
+    // the contested/suggestions views (timer-deleted leases held the top 19
+    // contested slots at 0.99 cosine). Vocabulary-free — the timer IS the
+    // declaration. The stream's extra duty over the shared rule is choosing
+    // remove-vs-skip for a non-member: an ephemeral fact actively DROPS any
+    // existing vector under its key (a durable fact later reusing it re-embeds
+    // on its own write); a merely unembeddable value just skips.
+    const text = indexableText({ key, value: img?.value, superseded: img?.superseded, timerEffect: img?.timerEffect });
+    if (!text) {
+      if (img?.timerEffect === 'delete') planFor(index, scope).removes.add(key);
       continue;
     }
-    const text = embeddableText(key, img?.value);
-    if (!text) continue;
     // sha-skip: a metadata-only rewrite (same embeddable text, still live) leaves the
     // vector unchanged — don't re-embed.
-    if (old && !old.superseded && embeddableText(key, old.value) === text) continue;
+    if (old && !old.superseded && indexableText({ key, value: old.value, timerEffect: old.timerEffect }) === text) continue;
     planFor(index, scope).puts.push({ key, text, meta: metadataForFact({ type: img?.type ?? undefined, tags: img?.tags, superseded: false }) });
   }
   return plans;
@@ -121,7 +124,10 @@ export async function handler(event: StreamEvent): Promise<void> {
   const vectors = vectorsFromEnv();
   if (!vectors) return; // backend not configured → no-op (safe)
 
-  const plans = planStreamWork(event);
+  // The embedder is the ONE dimension source — index name and written vectors
+  // derive from the same value, so they cannot skew.
+  const dim = vectors.embedder.dimension;
+  const plans = planStreamWork(event, dim);
   if (!plans.size) return;
   // ADR-0031: inferred similarTo edges live in the substrate table; the indexer writes
   // them directly through the raw store (no trajectory/resolve side effects).
@@ -130,7 +136,7 @@ export async function handler(event: StreamEvent): Promise<void> {
   const edgeStore: StateStore | null = sim.enabled && table ? createDynamoStateStore(table) : null;
 
   for (const [index, { scope, puts, removes }] of plans) {
-    await vectors.store.ensureIndex(index, { dimension: DIM });
+    await vectors.store.ensureIndex(index, { dimension: dim });
     let putVecs: number[][] = [];
     if (puts.length) {
       putVecs = await vectors.embedder.embed(puts.map((p) => p.text));

@@ -12,7 +12,7 @@ import {
   type LinkResult,
   type VectorFilter,
   indexForScope,
-  embeddableText,
+  indexableText,
   metadataForFact,
   selectNeighbors,
   similarConfig,
@@ -761,8 +761,13 @@ async function reindexChunk(deps: WorkspaceDeps, scope: string, p: ReindexParams
   let { indexed, skipped, edges } = p;
 
   const page = await state.query(scope, { type: p.type, prefix: p.prefix, limit: REINDEX_CHUNK, cursor: p.cursor }, REINDEX_IDENTITY);
+  // Membership via the ONE shared rule (`indexableText`) — the same gate the
+  // stream indexer applies. `query` already hides superseded and timer-DEAD
+  // facts, but a LIVE (unexpired) delete-timer lease passes it; gating only on
+  // "has text" re-embedded those ephemera on every full reindex, leaking them
+  // into search's candidates and recall's relevance until their TTL fired.
   const embeddable = page.entries
-    .map((e) => ({ key: e.key, text: embeddableText(e.key, e.value), type: e._meta.type, tags: e._meta.tags }))
+    .map((e) => ({ key: e.key, text: indexableText({ key: e.key, value: e.value, timerEffect: e._meta.timer?.effect }), type: e._meta.type, tags: e._meta.tags }))
     .filter((e): e is { key: string; text: string; type: string | null; tags: string[] } => !!e.text);
 
   if (p.phase === 'embed') {

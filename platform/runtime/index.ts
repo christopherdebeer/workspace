@@ -99,6 +99,7 @@ export {
   PUBLIC_INDEX,
   indexForScope,
   embeddableText,
+  indexableText,
   metadataForFact,
   isTextLikeContentType,
   BLOB_INLINE_MAX_BYTES,
@@ -111,7 +112,7 @@ export {
   HashingEmbedder,
   MemoryVectorStore,
 } from './vectors';
-export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig } from './vectors';
+export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig, IndexableFact } from './vectors';
 export { refreshSimilarEdges, dropSimilarEdges, authoredPairs, pairKey, suggestionCandidates, dropSimilarPair, RATIFY_LINK_TYPES } from './similar-edges';
 export type { EdgeIO, SuggestionCandidate, RatifyLinkType } from './similar-edges';
 export { pca, pcaWithBasis, pca2d, normalizeCoords, normalizeCoordsN, computeNormParams, applyNormParams, projectionFact, projectVector, LAYOUT_KEY, LAYOUT_SHARDS, layoutShardKey, layoutShardOf, projectionArtifacts } from './projection';
