@@ -25,6 +25,31 @@ export const computerUrl = 'https://parc.land/@c15r/home/_data/c15r/public/asset
 
 const { useState, useEffect } = React;
 
+let rpcSequence = 0;
+function nextRpcId(): string {
+  rpcSequence += 1;
+  return `home-${Date.now().toString(36)}-${rpcSequence.toString(36)}`;
+}
+
+async function timedAuthFetch(path: string, init: RequestInit, timeoutMs = 20000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await authFetch(path, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function decodeContent(content: Array<{ type?: string; text?: string; [key: string]: unknown }> | undefined): unknown {
+  if (!content?.length) return null;
+  const decoded = content.map((part) => {
+    if (part.type !== 'text' || typeof part.text !== 'string') return part;
+    try { return JSON.parse(part.text) as unknown; } catch { return part.text; }
+  });
+  return decoded.length === 1 ? decoded[0] : decoded;
+}
+
 // ─── auth/session ──────────────────────────────────────────────────
 
 export interface Session {
@@ -68,10 +93,10 @@ export function useAuth(initial?: Session): Session & { signIn: () => void; sign
           // Identity via the `whoami` MCP tool over POST /mcp — the CORS-enabled
           // endpoint (the bare GET /mcp/whoami isn't CORS'd for cell origins, so
           // it fails cross-origin now that home is a cell, not same-origin).
-          const res = await authFetch('/mcp', {
+          const res = await timedAuthFetch('/mcp', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'whoami', arguments: {} } }),
+            body: JSON.stringify({ jsonrpc: '2.0', id: nextRpcId(), method: 'tools/call', params: { name: 'whoami', arguments: {} } }),
           });
           if (res.ok) {
             const rpc = (await res.json()) as { result?: { content?: Array<{ text?: string }> } };
@@ -133,31 +158,40 @@ export async function getJson(path: string, init?: RequestInit): Promise<{ statu
  * tool's JSON result (or its error text). This is the one call the whole page
  * is built on — the human drives read/act the same way the agent does.
  */
-export async function mcpCall(verb: string, target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
-  const res = await authFetch('/mcp', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: 'tools/call',
-      params: { name: verb, arguments: input === undefined ? { target } : { target, input } },
-    }),
-  });
-  if (!res.ok) return { ok: false, value: `HTTP ${res.status}` };
-  const rpc = (await res.json()) as {
-    result?: { content?: Array<{ text?: string }>; isError?: boolean };
-    error?: { message?: string };
-  };
-  if (rpc.error) return { ok: false, value: rpc.error.message ?? 'error' };
-  const text = rpc.result?.content?.[0]?.text ?? '';
-  let value: unknown = text;
+export async function mcpCall(verb: 'read' | 'act', target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
+  const requestId = nextRpcId();
+  if (!target || target.length > 256) return { ok: false, value: 'invalid capability target' };
   try {
-    value = JSON.parse(text);
-  } catch {
-    /* not JSON — keep the raw text (e.g. an error message) */
+    const res = await timedAuthFetch('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: requestId,
+        method: 'tools/call',
+        params: { name: verb, arguments: input === undefined ? { target } : { target, input } },
+      }),
+    });
+    if (!res.ok) return { ok: false, value: `HTTP ${res.status} (request ${requestId})` };
+    const rpc = (await res.json()) as {
+      result?: {
+        structuredContent?: unknown;
+        content?: Array<{ type?: string; text?: string; [key: string]: unknown }>;
+        isError?: boolean;
+      };
+      error?: { message?: string; code?: number };
+    };
+    if (rpc.error) return { ok: false, value: `${rpc.error.message ?? 'RPC error'} (request ${requestId})` };
+    const value = rpc.result && Object.prototype.hasOwnProperty.call(rpc.result, 'structuredContent')
+      ? rpc.result.structuredContent
+      : decodeContent(rpc.result?.content);
+    return { ok: !rpc.result?.isError, value };
+  } catch (error) {
+    const message = error instanceof DOMException && error.name === 'AbortError'
+      ? 'request timed out'
+      : String((error as Error)?.message ?? error);
+    return { ok: false, value: `${message} (request ${requestId})` };
   }
-  return { ok: !rpc.result?.isError, value };
 }
 
 /** Resolve a `ui://` resource (a cell-authored renderer script) over the SAME
@@ -167,16 +201,18 @@ export async function mcpCall(verb: string, target: string, input?: unknown): Pr
  *  potentially third-party cell code; see `FederatedRendererFrame`, which runs
  *  it inside an isolated sandbox iframe instead (ADR-0041). */
 export async function mcpResourceRead(uri: string): Promise<string | null> {
+  if (!uri.startsWith('ui://') || uri.length > 1024 || /[\u0000-\u0020]/.test(uri)) return null;
   try {
-    const res = await authFetch('/mcp', {
+    const res = await timedAuthFetch('/mcp', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'resources/read', params: { uri } }),
-    });
+      body: JSON.stringify({ jsonrpc: '2.0', id: nextRpcId(), method: 'resources/read', params: { uri } }),
+    }, 15000);
     if (!res.ok) return null;
-    const rpc = (await res.json()) as { result?: { contents?: Array<{ text?: string }> } };
+    const rpc = (await res.json()) as { result?: { contents?: Array<{ text?: string }> }; error?: unknown };
+    if (rpc.error) return null;
     const text = rpc.result?.contents?.[0]?.text;
-    return typeof text === 'string' ? text : null;
+    return typeof text === 'string' && text.length <= 1000000 ? text : null;
   } catch {
     return null;
   }

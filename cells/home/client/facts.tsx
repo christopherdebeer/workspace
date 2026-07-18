@@ -7,7 +7,7 @@
 import * as React from 'react';
 import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
-import { marked } from 'marked';
+import { SafeMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -20,7 +20,7 @@ const { useState, useEffect } = React;
 export interface ListEntry {
   key: string;
   value?: unknown;
-  _meta?: { type?: string | null; tags?: string[]; updatedAt?: string };
+  _meta?: { type?: string | null; tags?: string[]; updatedAt?: string; version?: number; revision?: number; writer?: string; via?: string; seq?: number; score?: number; superseded?: boolean; supersededBy?: string };
 }
 
 /**
@@ -91,8 +91,10 @@ export function factTitle(e: ListEntry): string {
  */
 function handlerUrl(r: ReturnType<typeof resolve>): string | null {
   if (!r) return null;
-  if (r.cellRef && r.path !== undefined) return cellUrl(r.cellRef.owner, r.cellRef.name, r.path);
-  return r.surface ? localize(r.surface) : null;
+  const candidate = r.cellRef && r.path !== undefined
+    ? cellUrl(r.cellRef.owner, r.cellRef.name, r.path)
+    : r.surface ? localize(r.surface) : null;
+  return safeNavigationUrl(candidate);
 }
 
 /** Where a fact opens — resolved from the type vocabulary, no hardcoded cells. */
@@ -153,8 +155,6 @@ function factPreview(e: ListEntry): string {
 // enforce. `marked` is isomorphic (same pin server+client, like starter), so
 // markdown bodies hydrate without a flash.
 
-marked.setOptions({ gfm: true, breaks: false });
-
 /** First present string field among `keys` of an object value. */
 function strField(v: unknown, keys: string[]): string | undefined {
   if (v && typeof v === 'object') {
@@ -178,12 +178,11 @@ function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Elemen
     case 'markdown': {
       const md = bodyText(v);
       if (!md) return null;
-      const html = marked.parse(md.replace(/\r\n/g, '\n'), { async: false }) as string;
-      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
     }
     case 'image': {
-      const src = strField(v, ['src', 'url', 'href', 'image']);
-      return src ? <img src={src} alt={factTitle(e)} loading="lazy" style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} /> : null;
+      const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
+      return src ? <img src={src} alt={factTitle(e)} loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} /> : null;
     }
     case 'code': {
       const code = bodyText(v);
@@ -222,11 +221,14 @@ function FieldsBody({ value }: { value: unknown }): React.JSX.Element | null {
 /** A cell-SSR'd embed: the managing cell renders a zero-JS thumbnail on its own
  *  origin; home shows it in a pointer-inert iframe (origin-isolated — the cell's
  *  code never touches home). Lazy-loaded; a transparent overlay link opens it. */
-function FactEmbed({ src, href, title }: { src: string; href: string | null; title: string }): React.JSX.Element {
+function FactEmbed({ src, href, title }: { src: string; href: string | null; title: string }): React.JSX.Element | null {
+  const frameSrc = safeFrameUrl(src);
+  const openHref = safeNavigationUrl(href);
+  if (!frameSrc) return null;
   return (
     <div style={{ position: 'relative', height: 200, borderRadius: 8, overflow: 'hidden', border: `1px solid ${ink.line}`, background: '#fff' }}>
-      <iframe src={src} title={title} loading="lazy" scrolling="no" tabIndex={-1} aria-hidden style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', pointerEvents: 'none' }} />
-      {href ? <a href={href} title={`Open ${title}`} aria-label={`Open ${title}`} style={{ position: 'absolute', inset: 0, display: 'block' }} /> : null}
+      <iframe src={frameSrc} title={title} loading="lazy" scrolling="no" tabIndex={-1} aria-hidden sandbox="" referrerPolicy="no-referrer" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', pointerEvents: 'none' }} />
+      {openHref ? <a href={openHref} title={`Open ${title}`} aria-label={`Open ${title}`} rel="noopener noreferrer" style={{ position: 'absolute', inset: 0, display: 'block' }} /> : null}
     </div>
   );
 }
@@ -286,8 +288,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      const html = marked.parse(body.replace(/\r\n/g, '\n'), { async: false }) as string;
-      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     if (e.value != null && typeof e.value === 'object') return <CodeBlock>{JSON.stringify(e.value, null, 2)}</CodeBlock>;
@@ -444,7 +445,7 @@ function FactEditor({
 }: {
   e: ListEntry;
   fields?: FormField[];
-  onSaved: (v: unknown, hints?: string[]) => void;
+  onSaved: (entry: ListEntry, hints?: string[]) => void;
   onCancel: () => void;
 }): React.JSX.Element {
   const isStr = typeof e.value === 'string';
@@ -473,14 +474,21 @@ function FactEditor({
     }
     setBusy(true);
     setErr(null);
-    const r = await mcpCall('act', 'workspace.remember', { key: e.key, value, ...(e._meta?.type ? { type: e._meta.type } : {}) });
+    const r = await mcpCall('act', 'workspace.remember', {
+      key: e.key,
+      value,
+      ...(e._meta?.type ? { type: e._meta.type } : {}),
+      ...(typeof e._meta?.version === 'number' ? { ifVersion: e._meta.version } : {}),
+    });
     setBusy(false);
     if (!r.ok) {
       setErr(typeof r.value === 'string' ? r.value : 'Save failed');
       return;
     }
-    const hints = (r.value as { hints?: string[] })?.hints;
-    onSaved(value, Array.isArray(hints) ? hints : undefined);
+    const saved = (r.value && typeof r.value === 'object' ? r.value : {}) as { value?: unknown; _meta?: ListEntry['_meta']; hints?: string[] };
+    const nextValue = Object.prototype.hasOwnProperty.call(saved, 'value') ? saved.value : value;
+    const hints = saved.hints;
+    onSaved({ ...e, value: nextValue, _meta: saved._meta ?? e._meta }, Array.isArray(hints) ? hints : undefined);
   };
 
   return (
@@ -511,9 +519,9 @@ function FactEditor({
 /** The generic in-place editor, usable OUTSIDE this module (the context
  *  panel's Edit action) — resolves the type's declared fields (ADR-0002
  *  shape.fields) exactly as FactDetail does. */
-export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (v: unknown) => void }): React.JSX.Element {
+export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (entry: ListEntry) => void }): React.JSX.Element {
   const fields = (declFor(e, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
-  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(v) => onSaved(v)} />;
+  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(entry) => onSaved(entry)} />;
 }
 
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
@@ -545,8 +553,8 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
           e={entry}
           fields={fields}
           onCancel={() => setEditing(false)}
-          onSaved={(v, h) => {
-            setEntry({ ...entry, value: v });
+          onSaved={(savedEntry, h) => {
+            setEntry(savedEntry);
             setHints(h ?? null);
             setEditing(false);
           }}
@@ -588,16 +596,23 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
  *  via peek, and renders the modal. Returns null when nothing is open. */
 export function FactDetailHost(): React.JSX.Element | null {
   const [entry, setEntry] = useState<ListEntry | null>(null);
+  const activeKey = React.useRef<string | null>(null);
+  const close = (): void => {
+    activeKey.current = null;
+    setEntry(null);
+  };
   useEffect(() => {
     const onOpen = (ev: Event): void => {
       const detail = (ev as CustomEvent<ListEntry>).detail;
       if (!detail?.key) return;
+      activeKey.current = detail.key;
       setEntry(detail);
       if (detail.value === undefined) {
-        mcpCall('read', 'workspace.peek', { key: detail.key })
+        const requestedKey = detail.key;
+        mcpCall('read', 'workspace.peek', { key: requestedKey })
           .then((r) => {
             const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
-            if (r.ok && f) setEntry({ key: detail.key, value: f.value, _meta: f._meta });
+            if (r.ok && f && activeKey.current === requestedKey) setEntry({ key: requestedKey, value: f.value, _meta: f._meta });
           })
           .catch(() => undefined);
       }
@@ -608,7 +623,7 @@ export function FactDetailHost(): React.JSX.Element | null {
   useEffect(() => {
     if (!entry) return;
     const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === 'Escape') setEntry(null);
+      if (ev.key === 'Escape') close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -623,7 +638,7 @@ export function FactDetailHost(): React.JSX.Element | null {
     <div
       role="dialog"
       aria-modal="true"
-      onClick={() => setEntry(null)}
+      onClick={() => close()}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
     >
       <div
@@ -649,7 +664,7 @@ export function FactDetailHost(): React.JSX.Element | null {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
           <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
           <button
-            onClick={() => setEntry(null)}
+            onClick={() => close()}
             aria-label="close"
             style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
           >

@@ -39,6 +39,24 @@ import { mcpCall } from './lib';
 import { factTitle, type ListEntry } from './facts';
 import { ink } from './ink';
 
+// ── decomposition (2026-07-17): the closure-free helpers now live in graph/*.
+import { TUNE, TUNE_DEFAULTS, TUNE_LS, tuneEnabled } from './graph/tune';
+import {
+  loadThree, loadThreeAddons, esmURL, hslToRgb, hexToRgb, paperInkFor,
+  makeStarTexture, makeStippleTexture, makeRingTexture,
+} from './graph/scene';
+import {
+  hueOf, nodeColor, TYPE_SERIF, typeGroup, FONT_BY_GROUP, LABEL_HALO,
+  placeworthy, MEMBER_RELS, edgeStyle, nodeDOI, shortLabel, type EdgeStyle,
+} from './graph/style';
+import {
+  type GEdge, type EntryPage, type ChangeEvent, type ChangePage, type GraphMeta,
+  INITIAL_ENTRY_LIMIT, LIVE_NODE_HEADROOM, LIVE_EDGE_CAPACITY, CHANGE_POLL_MS,
+  fetchEntryPage, fetchEdgesForKeys, fetchChangeHead, fetchGraphMeta,
+  keysOfResult, isPlumbing,
+} from './graph/data';
+import { recomputeRanks as recomputeRanksImpl, salienceHubPlaces, membershipPlaces } from './graph/layout';
+
 const { useEffect, useRef, useState } = React;
 
 export interface GraphNode {
@@ -51,206 +69,9 @@ export interface GraphNode {
 /** Console → graph seam (dispatched by Console.invoke; the openFact pattern). */
 export const CONSOLE_RESULT_EVENT = 'home:console-result';
 
-interface GEdge {
-  from: string;
-  rel: string;
-  to: string;
-  derived?: boolean;
-}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// ─── scene tunables (?tune=1 mounts a live panel; ?tune=0 clears) ──────────
-// Every hand-tuned constant of the torch/beam/label/edge/bloom system, in one
-// mutable object. The tuner (lil-gui, esm.sh) writes here, persists overrides
-// to localStorage, and pokes the refresh hooks — so feel can be dialled on a
-// PHONE against live data, then the winning values sent back to be hard-coded.
-const TUNE_DEFAULTS = {
-  // torch (the scene LIGHTING — owner re-grade 2026-07-12: coneIn/depthIn at 0
-  // means the full-brightness plateau starts AT the focal point itself — no
-  // graded falloff onset, angle/depth attenuation begin immediately. Floor
-  // lowered to 0.09 (was 0.2): the periphery goes darker before the torch
-  // picks it up, sharpening the beam's contrast against the rest.)
-  coneIn: 0, coneOut: 1.2, depthIn: 0, depthOut: 4, torchFloor: 0.09,
-  // label admission (the SELECTOR) — decoupled from the lighting: labels need
-  // a sharp instrument even when the light is flat, so admission ranks by its
-  // own narrow cone. Owner re-grade 2026-07-12: labelConeOut widened to 1.2
-  // (was 0.42) — admission now spans nearly the whole torch cone, not just
-  // its dead-centre.
-  labelConeIn: 0.02, labelConeOut: 1.2,
-  beamOn: 0.85, beamOff: 0.2, beamCapFocus: 5, labelCap: 0, // labelCap 0 = viewport default (12/22)
-  beamOpacity: 0.57, beamSizeMult: 0.3,
-  // focus labels (owner re-grade 2026-07-12): hits headline (1.17), and
-  // neighbours now hold FULL opacity near and far (1/1, was 0.41/0.81) —
-  // size still grades the role, opacity no longer does.
-  selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 1, nbrOpNear: 1,
-  labelFade: 4, // lerp rate: higher = snappier (owner re-grade 2026-07-12: was 1/SLOW, now snappy)
-  // nodes — neighbours barely lift (0.2): selection lights the ANCHOR, the
-  // neighbourhood whispers; the fan edges carry the structure.
-  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1,
-  // edges (owner re-grade 2026-07-12: brought back up from "all but erased" —
-  // the resting lattice now reads at rest, authored edges especially (0.24,
-  // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
-  // since the resting mat itself now carries more of the structure).
-  edgeSimilar: 0.035, edgeMember: 0.06, edgeDerived: 0.06, edgeAuthored: 0.24,
-  focusEdgeAlpha: 0.76, atmosphereDim: 0.49,
-  // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
-  // already fanning from a selection/hit) — direction is source→target, so
-  // the animation reads as energy moving the way the edge actually points.
-  // Resting edges stay static on purpose (the file's own standing rule:
-  // "lines earn ink only under focus" — movement is the same kind of ink).
-  // Dusk only: paper's printed-map metaphor has no motion to carry.
-  edgeFlowSpeed: 0.5, edgeFlowWidth: 0.35, edgeFlowGain: 1.4, edgeFlowCycles: 3,
-  // bloom — threshold restored to 0.6 (2026-07-12 regression fix): the
-  // 2026-07-12 owner re-grade set this to 0.05, which — combined with
-  // edgeAuthored's own bump to 0.24 that same pass and the corpus having
-  // grown substantially since (ADR-0081's backfill) — reintroduced the
-  // EXACT failure ensureComposer()'s own comment already documents: at a
-  // threshold this low, the dense core's additive edge/point SUM blooms in
-  // its entirety and clips to a white blob that swallows every label in it
-  // (confirmed live: the "dusk regression" screenshots this session). 0.6
-  // is the value that fixed it the first time — only genuinely bright
-  // points/edges bloom, not the whole resting wash.
-  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.7,
-  bloomMode: 'on' as 'auto' | 'on' | 'off',
-  // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
-  starSpike: 0.55,
-  // scene mode: 'dusk' = the luminous dark field; 'paper' = a cartographic
-  // star ATLAS — ink stars and fine linework on warm paper, bloom off.
-  sceneMode: 'dusk' as 'dusk' | 'paper',
-  // places (cartography): constellation captions — COMPUTED from salience
-  // hubs + dominant types, with registered VIEWS as the authored layer — and
-  // resting orientation anchors (top-salience node per screen region).
-  // constNear/Far: approach-fade band as multiples of a cluster's radius —
-  // captions read from afar and hand off to fact labels as you arrive.
-  // places (owner grade #4): captions many and STRONG (a star atlas names
-  // its constellations), tight approach band; anchors as micro-print star
-  // names — many, tiny, full-opacity (celestial-chart typography).
-  constCap: 32, constOpacity: 1, constNear: 0.5, constFar: 1.2,
-  anchorCap: 32, anchorOpacity: 1, anchorSizeMult: 0.1,
-  // in-scene label furniture. The dial is a real continuum: below ~0.95 the
-  // pill is a translucent VEIL rendered over the cloud (genuine gradient —
-  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER. Owner
-  // re-grade 2026-07-12: pillAlpha up to 0.61 (was 0.39) and pillFeather to
-  // the max 1 (was 0.65) — a heavier, more diffuse veil.
-  pillAlpha: 0.61, pillFeather: 1, labelOutline: 0.35,
-  // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
-  // label that flies close now carries an OPAQUE pill, and unbounded it
-  // becomes a viewport-eating billboard (the mis-step). Far labels still
-  // shrink honestly; only the near extreme compresses toward this cap.
-  // 0 = uncapped (the old behaviour). Owner re-grade 2026-07-12: tightened
-  // to 8px (was 24) — near labels compress much harder now.
-  labelMaxPx: 8,
-};
-const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
-const TUNE_LS = 'parc.home.tune';
-try {
-  const saved = JSON.parse(localStorage.getItem(TUNE_LS) ?? 'null');
-  if (saved && typeof saved === 'object') Object.assign(TUNE, saved);
-} catch { /* defaults */ }
-const tuneEnabled = (): boolean => {
-  try {
-    const q = new URLSearchParams(location.search).get('tune');
-    if (q === '0') localStorage.removeItem(TUNE_LS + '.on');
-    else if (q === '1' || location.hash.includes('tune')) localStorage.setItem(TUNE_LS + '.on', '1');
-    return q === '1' || location.hash.includes('tune') || localStorage.getItem(TUNE_LS + '.on') === '1';
-  } catch { return false; }
-};
-const hueOf = (t: string): number => {
-  let h = 0;
-  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 360;
-  return h;
-};
-const nodeColor = (t: string | null): string => (t ? `hsl(${hueOf(t)} 42% 55%)` : '#9a917f');
-
-// Typography carries ONTOLOGY (the map-reading trick: a river and a road are
-// distinguishable by letterform alone). Hue already codes type on the dots;
-// letterform repeats it on the labels, so the coding survives at label-only
-// zoom. The type→letterform mapping is DATA, not code — the type vocabulary
-// evolves at runtime, so a hardcoded set is stale the day it ships. It lives
-// in the `_config/typography` fact ({ groups: { <type>: 'act'|'doc'|'kb' } },
-// the `_config/suggestions` precedent), loaded with the graph model and
-// editable like any fact; unmapped types stay instrument mono.
-const TYPE_SERIF = 'Georgia,"Iowan Old Style","Palatino Linotype",serif';
-let TYPE_GROUP: Record<string, string> = {};
-const typeGroup = (t: string | null): string => (t && TYPE_GROUP[t]) || 'mono';
-// SDF font files for the in-scene labels (troika needs real font URLs —
-// .woff, not woff2). One face per group; weight/emphasis is carried by
-// size, colour, and opacity (the role grade), not by extra font files.
-const FONT_BY_GROUP: Record<string, string> = {
-  act: 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.1.0/files/ibm-plex-sans-latin-600-normal.woff',
-  doc: 'https://cdn.jsdelivr.net/npm/@fontsource/source-serif-4@5.1.0/files/source-serif-4-latin-400-italic.woff',
-  kb: 'https://cdn.jsdelivr.net/npm/@fontsource/source-serif-4@5.1.0/files/source-serif-4-latin-400-normal.woff',
-  mono: 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.1.0/files/ibm-plex-mono-latin-500-normal.woff',
-};
-// Knockout halo: thin text must survive sitting over a bloom core.
-const LABEL_HALO = 'text-shadow:0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
-
-// A name fit to stand for a PLACE (or hold an orientation anchor): human
-// words, not machine keys. "Design Models world time" qualifies; a run key
-// like "machine/weave/run/2026-07-01T21…" is data, not a toponym — first
-// screenshots put exactly those in 24px caps across the map.
-const placeworthy = (s: string | null | undefined): boolean =>
-  !!s && s.length >= 3 && !s.includes('/') && !/\d{4}-\d{2}/.test(s);
-
-const MEMBER_RELS = new Set(['onBoard', 'inDoc', 'inView']);
-// Warm-light strokes — a dark #5a5142 vanished into the dusk background. Base
-// opacities are the CEILING an edge reaches at full interest; at rest the DOI
-// scaling below keeps the mat far quieter (the ~9k-edge slice was drowning the
-// nodes in a beige wash — figure/ground collapse).
-interface EdgeStyle { stroke: string; dash: number[] | null; opacity: number; width: number }
-function edgeStyle(e: GEdge): EdgeStyle {
-  if (e.rel === 'similarTo') return { stroke: ink.edge, dash: null, opacity: 0.06, width: 1 };
-  if (MEMBER_RELS.has(e.rel)) return { stroke: ink.edge, dash: [2, 3], opacity: 0.22, width: 1 };
-  if (e.derived) return { stroke: ink.edge, dash: [3, 3], opacity: 0.18, width: 1 };
-  return { stroke: ink.edgeAuthored, dash: null, opacity: 0.45, width: 1.5 };
-}
-
-/**
- * Degree-of-Interest (Furnas) — ONE continuous [0,1] emphasis per node, the
- * unified "focus+context" signal that drives opacity, size, labels, and edge
- * brightness alike (so they can't disagree). It blends intrinsic salience with
- * graph-focus (the current selection/highlight neighbourhood). The renderer
- * layers its SPATIAL focal falloff (the torch) on top. Selection lifts a
- * node's DOI above any spatial penalty, so a selected node's neighbour reads as
- * focused even when it's far from the camera (the disagreement the old stacked
- * dimmers had).
- */
-function nodeDOI(n: any, selKey: string | null, nbr: Set<string> | null, hiSet: Set<string> | null, N: number): number {
-  if (selKey) return n.id === selKey ? 1 : nbr?.has(n.id) ? 0.8 : 0.1;
-  if (hiSet) return hiSet.has(n.id) ? 1 : 0.12;
-  const salN = 1 - (n.rank ?? N) / Math.max(1, N); // 1 = most salient
-  return 0.12 + 0.88 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
-}
-
-// Generous cap — SDF labels WRAP now (maxWidth), so a longer title becomes
-// two or three centred lines instead of an ellipsis at 26 chars.
-const shortLabel = (s: string): string => (s.length > 44 ? s.slice(0, 43) + '…' : s);
-
-/** Extract fact keys from an arbitrary console result (search/query/recall/
- *  neighbors/single-fact shapes) — best-effort, empty = no graph reaction. */
-function keysOfResult(value: unknown): string[] {
-  const v = value as Record<string, any> | null;
-  if (!v || typeof v !== 'object') return [];
-  const out = new Set<string>();
-  const entries = v.entries;
-  if (Array.isArray(entries)) {
-    for (const e of entries) if (e?.key) out.add(String(e.key));
-  } else if (entries && typeof entries === 'object') {
-    for (const k of Object.keys(entries)) out.add(k);
-  }
-  if (v.focus && typeof v.focus === 'object') for (const k of Object.keys(v.focus)) out.add(k);
-  if (Array.isArray(v.members)) for (const m of v.members) if (m?.key) out.add(String(m.key));
-  if (typeof v.key === 'string' && v.value !== undefined) out.add(v.key);
-  return [...out];
-}
-
-/** Substrate plumbing stays out of the node band: reserved-namespace keys
- *  (`_canvas/…` placements, `_home/layout`, `_types/…`) are projections'
- *  raw material, not knowledge — a placement's geometry already surfaces as
- *  the el's `onBoard` edge (ADR-0046); showing the decoration fact too would
- *  scatter edgeless satellites across the graph. */
-const isPlumbing = (e: ListEntry): boolean => e.key.startsWith('_') || (e._meta?.type ?? '') === 'canvas-placement';
 
 /** Errors thrown inside externally-dispatched handlers (event listeners fed by
  *  cross-origin CDN code) surface as a masked "Script error." on Safari.
@@ -265,323 +86,35 @@ function guard<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
   };
 }
 
-// The slice has grown past what one unbounded workspace.query can return
-// inside the Lambda's own execution window (2026-07-11: an unbounded call
-// started 502ing once the corpus crossed a few thousand facts — the query
-// itself is fine, the single round trip just no longer fits). `workspace.
-// query` already supports cursor paging (docs-sync.mjs's own liveShas() uses
-// it the same way) — page through instead of one all-at-once request. The
-// page size is arbitrary; large enough to keep round trips few, small enough
-// to stay well under the timeout that bit the unbounded form.
-//
-// Every paged read's FIRST page already reports `total` — once known, every
-// remaining page's offset is knowable up front (both `workspace.query` and
-// `workspace.graph` use a plain numeric-offset cursor), so the rest fetch
-// CONCURRENTLY (bounded).
-//
-// STREAMING (2026-07-12, owner: "far more incremental… instead of two
-// bangs"): `onPage(items, total)` fires for every page as it lands —
-// including the first — so the scene APPENDS continuously instead of
-// mounting twice. The promise still resolves when the whole stream is done.
-// Appearance order = fetch order = salience (the focus band materializes
-// first, the periphery fills in); a seq/trajectory-replay ordering — the map
-// drawing itself in the order the knowledge accreted — needs a one-line
-// server rankBy:'seq' and is noted as a follow-up toggle.
-const PAGE_CONCURRENCY = 4;
-async function pagedFetch<T>(
-  page: (cursor?: string) => Promise<{ ok: boolean; value: unknown }>,
-  pick: (v: unknown) => { items: T[]; total?: number; nextCursor?: string },
-  onPage: (items: T[], total: number) => void,
-): Promise<void> {
-  const res = await page();
-  if (!res.ok) { onPage([], 0); return; } // best-effort: render whatever pages already landed rather than fail the whole graph
-  const first = pick(res.value);
-  const total = first.total ?? first.items.length;
-  onPage(first.items, total);
-  if (!first.nextCursor || !total || !first.items.length) return;
-  const pageSize = first.items.length;
-  const offsets: number[] = [];
-  for (let o = pageSize; o < total; o += pageSize) offsets.push(o);
-  let idx = 0;
-  async function worker(): Promise<void> {
-    while (idx < offsets.length) {
-      const cursor = String(offsets[idx++]);
-      const r = await page(cursor);
-      if (r.ok) onPage(pick(r.value).items, total);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, offsets.length) }, worker));
-}
 
-const QUERY_PAGE_SIZE = 300;
-async function fetchAllEntries(onPage: (items: ListEntry[], total: number) => void): Promise<void> {
-  return pagedFetch<ListEntry>(
-    (cursor) => mcpCall('read', 'workspace.query', { rankBy: 'salience', shape: 'card', limit: QUERY_PAGE_SIZE, ...(cursor ? { cursor } : {}) }),
-    (v) => {
-      const p = v as { entries?: ListEntry[]; total?: number; nextCursor?: string } | null;
-      return { items: p?.entries ?? [], total: p?.total, nextCursor: p?.nextCursor };
-    },
-    onPage,
-  );
-}
-
-// workspace.graph/edges has the same shape of problem as the query above, one
-// step worse: it isn't just slow at full-slice size, its response can exceed
-// the Lambda platform's hard 6MB payload ceiling outright (confirmed live,
-// 2026-07-11 — a 502 with no retry-shaped error, distinct from a timeout).
-// scopeEdges (services/workspace/shape.ts) now supports the same offset
-// cursor as query — CloudFront's ~30s default origin timeout means a bigger
-// per-call `limit` isn't free either, so this stays a real page size, not a
-// token gesture. `edgeShape:'thin'` (2026-07-11) drops the fields this
-// renderer never reads (`scope`/`strength`/`createdAt`/`writer`/`score`/
-// `source`) — GEdge only ever used `{from,rel,to,derived}`, so every edge was
-// carrying ~2-3x the bytes it needed to.
-const EDGES_PAGE_SIZE = 2000;
-async function fetchAllEdges(onPage: (items: GEdge[], total: number) => void): Promise<void> {
-  return pagedFetch<GEdge>(
-    (cursor) => mcpCall('read', 'workspace.graph', { limit: EDGES_PAGE_SIZE, edgeShape: 'thin', ...(cursor ? { cursor } : {}) }),
-    (v) => {
-      const p = v as { edges?: GEdge[]; total?: number; nextCursor?: string } | null;
-      return { items: p?.edges ?? [], total: p?.total, nextCursor: p?.nextCursor };
-    },
-    onPage,
-  );
-}
-
-/** Load the whole slice + projection into a render-ready model: nodes, edges,
- *  the focus band, and the semantic coordinates — REPLACED by the streaming
- *  path (2026-07-12): fetchGraphMeta loads only what positioning needs up
- *  front (salience config, the layout atlas, typography); entries/edges then
- *  STREAM into the mounted scene via the append API. */
-interface GraphMeta {
-  coordMap: Record<string, number[]> | null;
-  focusThreshold: number;
-}
-async function fetchGraphMeta(): Promise<GraphMeta> {
-  const [cfgRes, layoutRes, typoRes] = await Promise.all([
-    mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
-    // The precomputed SEMANTIC layout (workspace.project → `_home/embed2d`, [x,y,z]).
-    mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
-    // The type→letterform mapping (see TYPE_GROUP) — config, not code.
-    mcpCall('read', 'workspace.peek', { key: '_config/typography' }).catch(() => null),
-  ]);
-  const typoVal = (typoRes && typoRes.ok ? (typoRes.value as { value?: { groups?: Record<string, string> } } | null)?.value : null) ?? null;
-  if (typoVal?.groups && typeof typoVal.groups === 'object') TYPE_GROUP = typoVal.groups;
-  const cfgVal = (cfgRes && cfgRes.ok ? (cfgRes.value as { value?: { focusThreshold?: unknown } } | null)?.value : null) ?? null;
-  const ftRaw = Number(cfgVal?.focusThreshold);
-  const focusThreshold = Number.isFinite(ftRaw) && ftRaw > 0 && ftRaw <= 1 ? ftRaw : 0.5;
-  const layoutV = (layoutRes && layoutRes.ok
-    ? (layoutRes.value as { value?: { coords?: Record<string, number[]>; shards?: number } } | null)?.value
-    : null) ?? null;
-  // The sharded atlas (ADR-0082): a manifest with `shards` means coords live
-  // in `_home/embed2d/s<i>` sibling facts — fetch all in parallel and merge
-  // (each is small; 16 concurrent peeks beat one near-400KB monolith). A
-  // value with inline `coords` is the legacy monolith, still honored.
-  let coordMap: Record<string, number[]> | null = null;
-  if (layoutV && typeof layoutV.shards === 'number' && layoutV.shards > 0) {
-    const shardRes = await Promise.all(Array.from({ length: layoutV.shards }, (_, i) =>
-      mcpCall('read', 'workspace.peek', { key: `_home/embed2d/s${i}` }).catch(() => null)));
-    coordMap = {};
-    for (const r of shardRes) {
-      const sc = (r && r.ok ? (r.value as { value?: { coords?: Record<string, number[]> } } | null)?.value?.coords : null) ?? null;
-      if (sc) Object.assign(coordMap, sc);
-    }
-    if (!Object.keys(coordMap).length) coordMap = null;
-  } else if (layoutV?.coords && typeof layoutV.coords === 'object') {
-    coordMap = layoutV.coords as Record<string, number[]>;
-  }
-  return { coordMap, focusThreshold };
-}
-
-/* ── 3D explore mode (raw three.js) ──────────────────────────────────────────
- * The same slice + semantic projection as the 2D map, rendered as a luminous
- * point-cloud constellation you orbit. Positions are precomputed, so there is no
- * force engine — a thin three.js scene we own end to end, which is what lets us
- * do the "make it glow / make it breathe" treatment: additive-blended point
- * nodes (ONE draw call) and additive edges, UnrealBloom (desktop), ACES tone
- * mapping, focal depth-fade for atmosphere, and a star-map camera (camera-
- * controls) — dolly-to-cursor, fly-through, and fitToSphere framing on select. Edges are the authored + derived BACKBONE only — `similarTo` is
- * already expressed by proximity, so it's dropped. Labels are CSS2D (focus band
- * + selection), faded by camera distance. The 2D canvas stays the legible default. */
-
-// three + its addons from a SINGLE pinned version so they share one module
-// instance (bloom/controls break across mismatched three copies). esm.sh
-// externalizes each addon's `three` to this same URL. Computed specifiers keep
-// the whole three tree out of the SSR bundle (bundling it OOMs the deployer).
-const THREE_VER = '0.160.0';
-const esmURL = (path: string): string => `https://esm.sh/${path}`;
-let threeMod: Promise<any> | null = null;
-const loadThree = (): Promise<any> =>
-  (threeMod ??= import(/* @vite-ignore */ esmURL(`three@${THREE_VER}`)).catch(() => null));
-let addonsMod: Promise<any> | null = null;
-const loadThreeAddons = (): Promise<any> =>
-  (addonsMod ??= Promise.all([
-    // camera-controls (yomotsu): the star-map camera — damped orbit, dolly-to-
-    // cursor, fly-through, and smooth fitToSphere/moveTo framing. Uses an
-    // injected THREE subset (no bundled three), so it shares our instance.
-    import(/* @vite-ignore */ esmURL(`camera-controls@2.9.0`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/EffectComposer.js`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/RenderPass.js`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/UnrealBloomPass.js`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/renderers/CSS2DRenderer.js`)),
-    // SDF text (troika): node labels live IN the scene — they take the
-    // camera's perspective (depth honesty for free), the tone mapping, and
-    // the bloom, instead of floating on a DOM overlay. `deps` pins its
-    // three to our version so the module graphs align.
-    import(/* @vite-ignore */ esmURL(`troika-three-text@0.49.1?deps=three@${THREE_VER}`)),
-  ])
-    .then(([cc, comp, rp, bloom, css, troika]) => ({
-      CameraControls: cc.default ?? cc,
-      EffectComposer: comp.EffectComposer,
-      RenderPass: rp.RenderPass,
-      UnrealBloomPass: bloom.UnrealBloomPass,
-      CSS2DRenderer: css.CSS2DRenderer,
-      CSS2DObject: css.CSS2DObject,
-      TroikaText: troika.Text,
-    }))
-    .catch(() => null));
 let ccInstalled = false;
 
-/** HSL (h∈[0,360], s,l∈[0,1]) → [r,g,b] in [0,1], for colour buffers. */
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  h /= 360;
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  const hue = (t: number): number => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  return s === 0 ? [l, l, l] : [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)];
-}
-/** PAPER'S INK SET (2026-07-12, owner: "paper palette still very shallow").
- *  The old formula — hsl(typeHue, 55%, 30%) — collapses every hue into the
- *  same dark mud at 30% lightness on cream: a wall of maroon with stray
- *  blue. Engraved atlases didn't mix continuous colour; they printed from a
- *  SMALL set of distinguishable inks. Type hue now quantizes to the nearest
- *  of seven period inks — related hues stay related across modes (the same
- *  type keeps its dusk hue FAMILY), but on paper each family is a genuinely
- *  separate, legible ink. */
-const PAPER_INKS: Array<{ upTo: number; rgb: [number, number, number] }> = [
-  { upTo: 25, rgb: hexToRgb01('#8f3b2c') },   // madder red
-  { upTo: 70, rgb: hexToRgb01('#a0662a') },   // raw sienna / ochre
-  { upTo: 160, rgb: hexToRgb01('#4a6135') },  // sap green
-  { upTo: 205, rgb: hexToRgb01('#2f5d58') },  // slate teal
-  { upTo: 262, rgb: hexToRgb01('#2e4a66') },  // prussian blue
-  { upTo: 320, rgb: hexToRgb01('#5d4064') },  // plum violet
-  { upTo: 360, rgb: hexToRgb01('#8f3b2c') },  // magenta wraps to madder
-];
-function hexToRgb01(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
-const paperInkFor = (hue: number): [number, number, number] =>
-  (PAPER_INKS.find((i) => hue < i.upTo) ?? PAPER_INKS[0]).rgb;
-
-/** '#rrggbb' → [r,g,b] in [0,1]. */
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
-  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
-/** The point sprite: a STAR — tight bright core, steep falloff, and four
- *  diffraction spikes whose strength rides `spike` (0 = the old soft disc).
- *  Bloom (threshold ~0 in the owner's grade) supplies the halo. */
-function makeStarTexture(THREE: any, spike: number): any {
-  const s = 96;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = s;
-  const g = cv.getContext('2d')!;
-  const c = s / 2;
-  // Core: hotter and tighter than the old disc — a star, not a blob.
-  const core = g.createRadialGradient(c, c, 0, c, c, c);
-  core.addColorStop(0, 'rgba(255,255,255,1)');
-  core.addColorStop(0.18, 'rgba(255,255,255,0.9)');
-  core.addColorStop(0.42, `rgba(255,255,255,${0.35 - 0.15 * spike})`);
-  core.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = core;
-  g.fillRect(0, 0, s, s);
-  if (spike > 0.01) {
-    // Four diffraction spikes: thin gradients along the axes.
-    const a = 0.85 * spike;
-    for (const rot of [0, Math.PI / 2]) {
-      g.save();
-      g.translate(c, c);
-      g.rotate(rot);
-      const lg = g.createLinearGradient(-c, 0, c, 0);
-      lg.addColorStop(0, 'rgba(255,255,255,0)');
-      lg.addColorStop(0.5, `rgba(255,255,255,${a})`);
-      lg.addColorStop(1, 'rgba(255,255,255,0)');
-      g.fillStyle = lg;
-      const th = 1.6 + 1.4 * spike; // spike thickness
-      g.fillRect(-c, -th / 2, s, th);
-      g.restore();
-    }
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  tex.needsUpdate = true;
-  return tex;
-}
-/** The PAPER point sprite: a crisp INK STAR — a filled four-pointed star
- *  (solid core, hard tapered rays, no gradient, no glow fringe), the way old
- *  celestial atlases actually stamp stars. First cut was a plain stipple
- *  disc; owner correction 2026-07-12: "dots should still be stars, just no
- *  gradient/bloom" — the star SHAPE carries the atlas idiom, only the soft
- *  falloff belonged to dusk. `spike` still grades ray length, same dial as
- *  the dusk sprite. Canvas AA gives the 1px edge softening; everything else
- *  is solid ink. */
-function makeStippleTexture(THREE: any, spike: number): any {
-  const s = 96;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = s;
-  const g = cv.getContext('2d')!;
-  const c = s / 2;
-  const R = c * (0.5 + 0.48 * spike); // ray reach rides the spike dial
-  const r = c * 0.3;                  // waist between rays (also the core disc)
-  g.fillStyle = 'rgba(255,255,255,1)';
-  // Four-pointed concave star: alternate outer ray tips and inner waist
-  // points every 45°.
-  g.beginPath();
-  for (let i = 0; i < 8; i++) {
-    const ang = (i * Math.PI) / 4 - Math.PI / 2;
-    const rad2 = i % 2 === 0 ? R : r;
-    const x = c + Math.cos(ang) * rad2, y = c + Math.sin(ang) * rad2;
-    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-  }
-  g.closePath();
-  g.fill();
-  // Round core so the body reads as a star with a heart, not a sharp jack.
-  g.beginPath();
-  g.arc(c, c, r * 1.05, 0, Math.PI * 2);
-  g.fill();
-  const tex = new THREE.CanvasTexture(cv);
-  tex.needsUpdate = true;
-  return tex;
-}
-/** A hollow ring sprite — the selection highlight around the chosen node. */
-function makeRingTexture(THREE: any): any {
-  const s = 128;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = s;
-  const g = cv.getContext('2d')!;
-  g.strokeStyle = 'rgba(255,255,255,1)';
-  g.lineWidth = 7;
-  g.beginPath();
-  g.arc(s / 2, s / 2, s / 2 - 10, 0, Math.PI * 2);
-  g.stroke();
-  const tex = new THREE.CanvasTexture(cv);
-  tex.needsUpdate = true;
-  return tex;
+interface GraphReach {
+  charted: number;
+  total: number;
+  loading: boolean;
+  hasMore: boolean;
 }
 
-function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void; visible: number }): React.JSX.Element {
+function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, overviewNonce }: {
+  selectedKey: string | null;
+  onSelect: (n: GraphNode | null) => void;
+  visible: number;
+  onReach: (reach: GraphReach) => void;
+  revealNonce: number;
+  overviewNonce: number;
+}): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
-  const api = useRef<{ select: (key: string | null, fly?: boolean) => void; setVisible: (f: number) => void } | null>(null);
+  const reachRef = useRef(onReach);
+  reachRef.current = onReach;
+  const api = useRef<{
+    select: (key: string | null, fly?: boolean) => void;
+    setVisible: (f: number) => void;
+    reveal: () => void;
+    overview: () => void;
+  } | null>(null);
   const lastExternal = useRef<string | null>(null);
   // Loading UX: 'fast' = the first pages are still in flight, 'full' = the
   // scene is up and pages are streaming into it, 'done' = the whole slice
@@ -598,6 +131,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
     let ro: ResizeObserver | null = null;
     let onResult: ((ev: Event) => void) | null = null;
     let cleanup: (() => void) | null = null;
+    let changeTimer: number | null = null;
+    let changePolling = false;
 
     // Progressive mount (2026-07-11 follow-up to the query/edges pagination
     // fix): called TWICE — once with a "fast" model (page 1 of entries+edges,
@@ -617,6 +152,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
     interface StreamApi {
       appendEntries: (items: ListEntry[]) => void;
       appendEdges: (items: GEdge[]) => void;
+      removeEntries: (keys: string[]) => void;
+      removeEdges: (items: GEdge[]) => void;
       finishStream: () => void;
     }
     function mountScene(meta: GraphMeta, caps: { capN: number; capE: number }, THREE: any, addons: any): StreamApi | null {
@@ -650,13 +187,24 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       let selKey: string | null = null;
       let nbr: Set<string> | null = null;
       let hiSet: Set<string> | null = null;
+      // Ephemeral intent: unlike selection this never changes camera/focus or
+      // persists into React state. It only says “this is what a click will hit”.
+      let hoverKey: string | null = null;
+      // A node can be “hot” immediately while its text waits for a deliberate
+      // dwell. Keeping these keys separate prevents pointer scans from emitting
+      // a wake of labels.
+      let hoverLabelKey: string | null = null;
+      const hoverRetiredUntil = new Map<string, number>();
       // Salience visibility (slider): show the top `visCount` by rank; hidden
       // nodes/edges/labels get alpha 0. Never below the focus band. The
       // slider stores a FRACTION so streaming appends can keep re-deriving
       // the count against the live total.
       let visFrac = 1;
       let visCount = 0;
-      const isVis = (n: any): boolean => !!n && (n.rank === undefined || n.rank < visCount);
+      const isVis = (n: any): boolean => !!n && !n.deleted && (
+        n.id === selKey || n.id === hoverKey || hiSet?.has(n.id) ||
+        n.rank === undefined || n.rank < visCount
+      );
       const neighborsOf = (k: string): Set<string> => {
         const s = new Set<string>();
         for (const l of links) { const a = idOf(l.source), b = idOf(l.target); if (a === k) s.add(b); else if (b === k) s.add(a); }
@@ -760,7 +308,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const nodeBoostOf = (i: number): number => {
         const n = nodes[i];
         if (!isVis(n)) return 0;
-        if (n.id === selKey || hiSet?.has(n.id)) return 1;
+        if (n.id === selKey || n.id === hoverKey || hiSet?.has(n.id)) return 1;
         if (nbr?.has(n.id)) return TUNE.nbrBoost; // lit, with a whisper of depth left
         return 0;
       };
@@ -840,6 +388,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const ring = new THREE.Sprite(ringMat);
       ring.visible = false;
       scene.add(ring);
+      const hoverMat = new THREE.SpriteMaterial({ map: ringTex, color: ink.text, transparent: true, opacity: 0.72, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
+      const hoverRing = new THREE.Sprite(hoverMat);
+      hoverRing.visible = false;
+      hoverRing.renderOrder = 12;
+      scene.add(hoverRing);
       const showRing = (n: any): void => {
         if (!n) { ring.visible = false; return; }
         ring.position.set(n.x, n.y, n.z);
@@ -848,6 +401,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // No additive constant — that inflated the ring on small nodes.
         ring.scale.setScalar(rad(n) * 2.1);
         ring.visible = true;
+      };
+      const showHover = (n: any): void => {
+        if (!n || n.id === selKey) { hoverRing.visible = false; return; }
+        hoverRing.position.set(n.x, n.y, n.z);
+        hoverRing.scale.setScalar(rad(n) * 1.72);
+        hoverRing.visible = true;
       };
 
       // ── edges: additive LineSegments (alpha premultiplied into the colours;
@@ -986,7 +545,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // in/out (lerped per frame), and the beam is a visibly SECONDARY voice —
       // smaller, dimmer, lighter weight — that yields collision priority to
       // focus and needs consecutive in-beam syncs before it appears.
-      type LabelRole = 'sel' | 'hit' | 'nbr' | 'beam' | 'anchor';
+      type LabelRole = 'sel' | 'hover' | 'hit' | 'nbr' | 'beam' | 'anchor';
       /** What a sync wants a label to be: its role, plus an optional screen-px
        *  DISPLACEMENT (dense-core collision resolved by nudging the label aside
        *  and drawing a hairline leader back to its node — classic map labeling
@@ -1016,6 +575,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const labelObjs = new Map<string, LabelState>();
       const roleMult = (role: LabelRole): number =>
         role === 'sel' ? TUNE.selSizeMult
+        : role === 'hover' ? TUNE.hitSizeMult
         : role === 'hit' ? TUNE.hitSizeMult
         : role === 'nbr' ? TUNE.nbrSizeMult
         : role === 'anchor' ? TUNE.anchorSizeMult
@@ -1144,6 +704,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             // is born at its role's size and offset and FADES in. The cost —
             // a beam label promoted to 'sel' keeps its smaller size — is
             // carried by the accent colour and the selection ring instead.
+          } else if (st.role === 'hover') {
+            // Hover-only labels do not inherit the ambient 0.7s grace: that
+            // grace is useful for map labels during orbit, but makes tooltips
+            // trail behind the pointer.
+            st.miss = LABEL_GRACE + 1;
+            st.dying = true;
           } else if (++st.miss > LABEL_GRACE) st.dying = true;
         }
         for (const [id, w] of want) {
@@ -1198,8 +764,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
       controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY_TRUCK;
       controls.touches.three = CameraControls.ACTION.TOUCH_TRUCK;
-      controls.dampingFactor = 0.05;
-      controls.draggingDampingFactor = 0.25;
+      // camera-controls 2.x ignores the deprecated damping setters; these
+      // explicit SmoothDamp values preserve its effective/default behaviour.
+      controls.smoothTime = 0.25;
+      controls.draggingSmoothTime = 0.125;
       controls.setLookAt(0, 0, SPREAD * 2.15, 0, 0, 0, false);
       // Open FRAMING the cloud's BODY, not a fixed dolly and not its extremes:
       // centre = per-axis MEDIAN (a mean drifts toward outlier tendrils),
@@ -1209,8 +777,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // already the body of the map), not per append (the camera must not
       // keep re-framing under the user).
       let framed = false;
-      const frameBody = (): void => {
-        if (framed || !nodes.length) return;
+      const frameBody = (force = false): void => {
+        if ((framed && !force) || !nodes.length) return;
         framed = true;
         const med = (vals: number[]): number => { const s = [...vals].sort((a, b) => a - b); return s[s.length >> 1] ?? 0; };
         const xs: number[] = [], ys: number[] = [], zs: number[] = [];
@@ -1220,7 +788,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (let i = 0; i < nodes.length; i++) dists.push(c.distanceTo(new THREE.Vector3(posBuf[i * 3], posBuf[i * 3 + 1], posBuf[i * 3 + 2])));
         dists.sort((a, b) => a - b);
         const r = (dists[Math.floor(dists.length * 0.8)] ?? SPREAD) * 1.1;
-        controls.fitToSphere(new THREE.Sphere(c, Math.max(r, SPREAD * 0.3)), false);
+        controls.fitToSphere(new THREE.Sphere(c, Math.max(r, SPREAD * 0.3)), force);
       };
       // Hold SPACE: left-drag TRUCKS (pans) instead of orbiting — the design-
       // tool convention, matching mobile's two-finger drag. Temporary while
@@ -1239,7 +807,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (e.code !== 'Space' || !spaceHeld) return;
         spaceHeld = false;
         controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
-        renderer.domElement.style.cursor = '';
+        renderer.domElement.style.cursor = hoverKey ? 'pointer' : '';
       };
       window.addEventListener('keydown', onSpaceDown);
       window.addEventListener('keyup', onSpaceUp);
@@ -1329,12 +897,68 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // threshold was eating most label taps on touch (they registered as
       // micro-orbits, so nothing ever selected).
       let dragThreshold = 6;
-      const onDown = (e: PointerEvent): void => {
-        downX = e.clientX; downY = e.clientY; moved = false;
-        dragThreshold = e.pointerType === 'touch' ? 14 : 6;
+      let pointerDown = false;
+      let hoverPickRaf = 0;
+      let hoverLabelTimer: ReturnType<typeof setTimeout> | null = null;
+      const HOVER_LABEL_DWELL_MS = 320;
+      const setHover = (n: any | null): void => {
+        const key = n?.id ?? null;
+        if (key === hoverKey) return;
+        if (hoverLabelTimer) {
+          clearTimeout(hoverLabelTimer);
+          hoverLabelTimer = null;
+        }
+        const retiredLabel = hoverLabelKey;
+        const hadLabel = retiredLabel !== null;
+        if (retiredLabel) hoverRetiredUntil.set(retiredLabel, performance.now() + 550);
+        hoverLabelKey = null;
+        hoverKey = key;
+        if (key) hoverRetiredUntil.delete(key);
+        showHover(n);
+        renderer.domElement.style.cursor = key ? 'pointer' : spaceHeld ? 'grab' : '';
+        // Geometry responds on the next render frame; text does not enter the
+        // label pool until this target survives the dwell.
+        applyNodeAlpha();
+        if (hadLabel) syncBeamLabels();
+        if (key) {
+          hoverLabelTimer = setTimeout(() => {
+            hoverLabelTimer = null;
+            if (disposed || hoverKey !== key) return;
+            hoverLabelKey = key;
+            syncBeamLabels();
+          }, HOVER_LABEL_DWELL_MS);
+        }
       };
-      const onMove = (e: PointerEvent): void => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) moved = true; };
+      const onDown = (e: PointerEvent): void => {
+        downX = e.clientX; downY = e.clientY; moved = false; pointerDown = true;
+        dragThreshold = e.pointerType === 'touch' ? 14 : 6;
+        if (e.pointerType === 'touch') setHover(null);
+      };
+      const onMove = (e: PointerEvent): void => {
+        if (pointerDown && Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) {
+          moved = true;
+          setHover(null);
+        }
+        if (pointerDown || e.pointerType === 'touch' || hoverPickRaf) return;
+        const x = e.clientX, y = e.clientY;
+        hoverPickRaf = requestAnimationFrame(() => {
+          hoverPickRaf = 0;
+          const labelKey = labelAt(x, y, false);
+          const n = labelKey ? nodeById.get(labelKey) : nearestNodeAt(x, y, 18);
+          if (n) setHover(n);
+          else {
+            setHover(null);
+            renderer.domElement.style.cursor = constellationAt(x, y, false) ? 'pointer' : spaceHeld ? 'grab' : '';
+          }
+        });
+      };
+      const onLeave = (): void => {
+        pointerDown = false;
+        setHover(null);
+        renderer.domElement.style.cursor = '';
+      };
       const onUp = (e: PointerEvent): void => {
+        pointerDown = false;
         if (moved) return;
         const openConst = (c: Constellation): void => {
           // A caption is a DOOR: an AUTHORED place selects its container fact
@@ -1364,6 +988,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       renderer.domElement.addEventListener('pointerdown', onDown);
       renderer.domElement.addEventListener('pointermove', onMove);
       renderer.domElement.addEventListener('pointerup', onUp);
+      renderer.domElement.addEventListener('pointerleave', onLeave);
 
       // Frame a point and re-anchor the orbit to it — camera-controls eases the
       // whole transition (position + target) and rotation then pivots around it.
@@ -1379,18 +1004,36 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         select: (key: string | null, doFly = false) => {
           lastExternal.current = key;
           selKey = key; nbr = key ? neighborsOf(key) : null;
+          setHover(null);
           if (key) hiSet = null;
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
-          const d = key ? nodeById.get(key) : null;
+          const found = key ? nodeById.get(key) : null;
+          const d = found && !found.deleted ? found : null;
           showRing(d);
           showCrumb(key);
-          if (d && doFly) frame(d.x, d.y, d.z, SPREAD * 0.42); // frame the node + its local neighbourhood
+          if (d && doFly) frame(d.x, d.y, d.z, SPREAD * 0.42);
+          if (key && !d) void hydrateKey(key);
+          // Selection completes its own local map: the bounded initial load
+          // means a selected node's neighbours may not be in the scene yet —
+          // pull them in (see pullNeighbours below).
+          if (key) void pullNeighbours(key);
           selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
         setVisible: (f: number) => {
-          visFrac = f; // remembered so streaming appends re-derive against the live total
-          visCount = f >= 0.999 ? nodes.length : Math.max(focusKeys.size, Math.round(nodes.length * f));
+          visFrac = f;
+          const activeCount = nodes.reduce((n, node) => n + (node.deleted ? 0 : 1), 0);
+          visCount = f >= 0.999 ? activeCount : Math.max(focusKeys.size, Math.round(activeCount * f));
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
+        },
+        reveal: () => { /* installed once the initial page has mounted */ },
+        overview: () => {
+          lastExternal.current = null;
+          setHover(null);
+          selKey = null; nbr = null; hiSet = null;
+          showRing(null); showCrumb(null);
+          applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
+          selectRef.current(null);
+          frameBody(true);
         },
       };
 
@@ -1399,6 +1042,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (!detail?.ok) return;
         const keys = keysOfResult(detail.value).filter((k) => nodeById.has(k));
         if (!keys.length) return;
+        setHover(null);
         hiSet = new Set(keys); selKey = null; nbr = null;
         showRing(null);
         applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
@@ -1434,7 +1078,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const scratchP = new THREE.Vector3();
       const labelTorchNode = (n: any): number => labelTorchAt(scratchP.set(n.x, n.y, n.z));
       // Fewer beam-lit labels on a phone — 28 at once piled up in the core.
-      const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 12 : 22;
+      // Quiet default (2026-07-17, Codex P1 "reduce ambient beam labels"):
+      // the resting map should show PLACES, not a field of fact names in
+      // motion. Ambient cap tightened 12/22 → 8/12; selection/search caps below
+      // narrow to "top representatives" so a question freezes the field to its
+      // answer, not the whole neighbourhood.
+      const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 8 : 12;
       const labelCap = (): number => TUNE.labelCap > 0 ? TUNE.labelCap : LABEL_CAP_DEFAULT;
       // Legibility gates (the dense core turned its beam labels into a white
       // pile of 7px mush): a candidate must render big enough to READ, and must
@@ -1447,6 +1096,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         projV.set(n.x, n.y, n.z).project(camera);
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H, projV.z];
       };
+      // Text never competes with persistent chrome. This keeps map names out
+      // from under the header, the graph controls, and the bottom palette.
+      const screenReserved = (sx: number, sy: number, w: number, h: number): boolean =>
+        sy - h / 2 < 92 ||
+        sy + h / 2 > H - 142 ||
+        (sx + w / 2 > W - 292 && sy - h / 2 < 168);
       // TERTIARY layer: the selection fan's REL labels, at edge midpoints —
       // what each connection IS, not just that it exists. Selection-only
       // (search-hit pairs stay unlabelled), capped, and an edge must be long
@@ -1469,12 +1124,12 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const placedMid: Array<[number, number]> = [];
           let added = 0;
           for (const [i] of cands) {
-            if (added >= 12) break;
+            if (added >= 4) break;
             const l = links[i];
             const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
             const [ax, ay] = screenXY(aN);
             const [bx, by] = screenXY(bN);
-            if (Math.hypot(bx - ax, by - ay) < 80) continue; // no room for a word
+            if (Math.hypot(bx - ax, by - ay) < 120) continue; // no room for a word
             const mx = (ax + bx) / 2, my = (ay + by) / 2;
             if (placedMid.some(([px, py]) => Math.abs(px - mx) < 70 && Math.abs(py - my) < 14)) continue;
             placedMid.push([mx, my]);
@@ -1512,15 +1167,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // the per-batch bookkeeping that used to be one-shot model assembly in
       // fetchGraphModel.
       const recomputeRanks = (): void => {
-        const byScore = [...nodes].sort((a, b) => b.score - a.score);
-        byScore.forEach((n, i) => { n.rank = i; });
-        const tierCount = nodes.filter((n) => n.score >= meta.focusThreshold).length;
-        const bandN = Math.min(nodes.length, Math.max(tierCount, Math.ceil(nodes.length * 0.12), 12));
-        focusKeys.clear();
-        for (let i = 0; i < bandN; i++) focusKeys.add(byScore[i].id);
-        byRank.length = 0;
-        byRank.push(...byScore);
-        visCount = visFrac >= 0.999 ? nodes.length : Math.max(focusKeys.size, Math.round(nodes.length * visFrac));
+        visCount = recomputeRanksImpl(nodes, meta.focusThreshold, focusKeys, byRank, visFrac);
       };
 
       // ── constellations: the map's PLACE NAMES ──────────────────────────
@@ -1533,8 +1180,17 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // centroid — legible from afar, handing off to fact labels as the
       // camera arrives. The approach fade IS the semantic zoom: continuous,
       // per-region, no tier boundaries to flicker across.
-      interface Constellation { name: string; x: number; y: number; z: number; r: number; authored: boolean; key?: string; grp: any; text: any; pill: any; fs: number; cur: number }
+      interface Constellation {
+        name: string;
+        // Region centre (x/y/z) stays truthful for framing/breadcrumbs; the
+        // caption anchor (ax/ay/az) sits toward the territory's outer rim.
+        x: number; y: number; z: number;
+        ax: number; ay: number; az: number;
+        r: number; authored: boolean; key?: string;
+        grp: any; text: any; pill: any; fs: number; cur: number;
+      }
       const constellations: Constellation[] = [];
+      const placeOrigin = { x: 0, y: 0, z: 0 };
       const addConstellation = (name: string, cx: number, cy: number, cz: number, cr: number, authored: boolean, key?: string): void => {
         // One caption per name — a view and its placement container (inView
         // edges) are the same place arriving by two routes.
@@ -1544,7 +1200,19 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         // the labels use. World font size is REGION-proportional — perspective
         // then makes big places read big.
         const grp = new THREE.Group();
-        grp.position.set(cx, cy, cz);
+        let dx = cx - placeOrigin.x, dy = cy - placeOrigin.y, dz = cz - placeOrigin.z;
+        let dd = Math.hypot(dx, dy, dz);
+        if (dd < 1) {
+          let hash = 0;
+          for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+          const a = ((hash % 360) / 180) * Math.PI;
+          dx = Math.cos(a); dy = Math.sin(a); dz = 0; dd = 1;
+        }
+        // Place names sit on the outward shoulder of their territory. Detail
+        // can then occupy the centre and emerge as the camera approaches.
+        const shift = Math.min(cr * 0.38, SPREAD * 0.2);
+        const ax = cx + dx / dd * shift, ay = cy + dy / dd * shift, az = cz + dz / dd * shift;
+        grp.position.set(ax, ay, az);
         const text = new TroikaText();
         text.text = name.toUpperCase();
         text.font = FONT_BY_GROUP.kb; // the serif face
@@ -1570,7 +1238,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         pill.renderOrder = -1;
         grp.add(pill);
         grp.add(text);
-        const st: Constellation = { name, x: cx, y: cy, z: cz, r: cr, authored, key, grp, text, pill, fs: cr * 0.055, cur: 0 };
+        const st: Constellation = { name, x: cx, y: cy, z: cz, ax, ay, az, r: cr, authored, key, grp, text, pill, fs: cr * 0.055, cur: 0 };
         text.sync(() => fitPillTo(text, pill, 0));
         scene.add(grp);
         constellations.push(st);
@@ -1580,79 +1248,16 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // and captions appearing/renaming mid-stream would read as churn.
       const computePlaces = (): void => {
       {
-        // Computed pass: greedy salience hubs with an exclusion radius, then a
-        // membership ball around each. The dominant type names the region when
-        // one truly dominates (a "notes quarter"); otherwise the hub fact
-        // itself stands for the neighbourhood.
-        const R_EX = SPREAD * 0.55, R_MEM = SPREAD * 0.45;
-        const d2 = (a: any, b: any): number => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
-        const hubs: any[] = [];
-        for (const n of byRank) {
-          if (hubs.length >= 16) break; // generous pool; TUNE.constCap gates at render
-          if (hubs.some((h) => d2(h, n) < R_EX * R_EX)) continue;
-          hubs.push(n);
+        const active = nodes.filter((n) => !n.deleted);
+        if (active.length) {
+          placeOrigin.x = active.reduce((v, n) => v + n.x, 0) / active.length;
+          placeOrigin.y = active.reduce((v, n) => v + n.y, 0) / active.length;
+          placeOrigin.z = active.reduce((v, n) => v + n.z, 0) / active.length;
         }
-        for (const h of hubs) {
-          const members = nodes.filter((n: any) => d2(n, h) < R_MEM * R_MEM);
-          if (members.length < 6) continue; // a place needs a population
-          const counts = new Map<string, number>();
-          for (const m of members) if (m.type) counts.set(m.type, (counts.get(m.type) ?? 0) + 1);
-          let topType: string | null = null, topN = 0;
-          for (const [t, c] of counts) if (c > topN) { topType = t; topN = c; }
-          // Name the region: a truly dominant type ("notes"), else the most
-          // salient member whose title reads as WORDS — a region with only
-          // key-shaped names (machine runs, dated logs) gets no caption at
-          // all rather than a plumbing key in display caps.
-          let name: string | null = null;
-          if (topType && topN / members.length >= 0.5) {
-            name = topType.endsWith('s') || topType === 'knowledge' ? topType : `${topType}s`;
-          } else {
-            const speaker = members
-              .filter((m: any) => placeworthy(m.label))
-              .sort((a: any, b: any) => (a.rank ?? nodes.length) - (b.rank ?? nodes.length))[0];
-            if (speaker) name = String(speaker.label);
-          }
-          if (!name) continue;
-          name = name.length > 24 ? name.slice(0, 23) + '…' : name;
-          const cx = members.reduce((s: number, m: any) => s + m.x, 0) / members.length;
-          const cy = members.reduce((s: number, m: any) => s + m.y, 0) / members.length;
-          const cz = members.reduce((s: number, m: any) => s + m.z, 0) / members.length;
-          const dists = members.map((m: any) => Math.hypot(m.x - cx, m.y - cy, m.z - cz)).sort((a: number, b: number) => a - b);
-          const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
-          addConstellation(name, cx, cy, cz, cr, false);
-        }
-      }
-      // Authored pass, part 1 — MEMBERSHIP CONTAINERS. Boards, docs, and
-      // spatial views already name their members through placement edges
-      // (onBoard/inDoc/inView — ADR-0046/0054), and ADR-0057 frames all of
-      // these plus views as ONE collections family. So every container fact
-      // that enough slice members point at IS an authored place — no new
-      // grouping machinery, just the read side of the family.
-      {
-        const memberOf = new Map<string, any[]>();
-        for (const l of links) {
-          if (!MEMBER_RELS.has(l.rel)) continue;
-          const m = nodeById.get(idOf(l.source));
-          const c = nodeById.get(idOf(l.target));
-          if (!m || !c) continue;
-          const arr = memberOf.get(c.id) ?? [];
-          arr.push(m);
-          memberOf.set(c.id, arr);
-        }
-        for (const [cid, members] of memberOf) {
-          if (members.length < 4) continue; // a place needs a population
-          const c = nodeById.get(cid);
-          const rawName = String(c?.label ?? cid);
-          if (!placeworthy(rawName)) continue;
-          const cx = members.reduce((s: number, m: any) => s + m.x, 0) / members.length;
-          const cy = members.reduce((s: number, m: any) => s + m.y, 0) / members.length;
-          const cz = members.reduce((s: number, m: any) => s + m.z, 0) / members.length;
-          const dists = members.map((m: any) => Math.hypot(m.x - cx, m.y - cy, m.z - cz)).sort((a: number, b: number) => a - b);
-          const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
-          // Containers carry their fact key: the caption becomes a live door
-          // to the place itself (tap = SELECT the board/doc, not just fly).
-          addConstellation(rawName.length > 24 ? rawName.slice(0, 23) + '…' : rawName, cx, cy, cz, cr, true, cid);
-        }
+        // Place descriptors (salience hubs + membership containers) now come
+        // from graph/layout.ts as pure functions; the scene wiring stays here.
+        for (const p of salienceHubPlaces(nodes, byRank, SPREAD)) addConstellation(p.name, p.x, p.y, p.z, p.r, false);
+        for (const p of membershipPlaces(links, nodeById, idOf, SPREAD)) addConstellation(p.name, p.x, p.y, p.z, p.r, true, p.key);
       }
       // Authored pass, part 2 (async garnish — the scene never waits on it):
       // evaluate registered views, centroid their members present in this
@@ -1702,8 +1307,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       const constellationAt = (cx: number, cy: number, slop: boolean): Constellation | null => {
         for (const c of constellations) {
           if (c.cur < 0.15) continue;
-          const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z)) || 1;
-          constV.set(c.x, c.y, c.z).project(camera);
+          const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
+          constV.set(c.ax, c.ay, c.az).project(camera);
           if (constV.z > 1) continue;
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
           const pxPer = ((H / 2) / camD) * (c.grp.scale?.x || 1);
@@ -1726,16 +1331,29 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         const focusActive = !!(selKey || hiSet);
         // ONE budget for all captions, tighter on a phone (the container pass
         // pushed mobile past ten captions — a pile, not a map).
-        const capTotal = Math.min(W, H) < 700 ? Math.min(TUNE.constCap, 5) : TUNE.constCap;
+        const capTotal = Math.min(TUNE.constCap, Math.min(W, H) < 700 ? 4 : 8);
         let shown = 0;
         // Captions declutter against EACH OTHER in screen space (authored
         // first) — the first render piled three names on the dense core. A
         // losing caption fades, it doesn't pop.
-        const placedCaps: Array<[number, number, number]> = [];
+        const placedCaps: Array<[number, number, number, number]> = [];
+        const labelRects: Array<[number, number, number, number]> = [];
+        for (const [id, st] of labelObjs) {
+          if (st.cur < 0.15 || st.dying) continue;
+          const n = nodeById.get(id);
+          if (!n) continue;
+          const ld = camPos.distanceTo(st.grp.position) || 1;
+          const pxPer = (H / 2) / ld * (st.scl || 1);
+          const bounds = st.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
+          const rawH = bounds ? (bounds[3] - bounds[1]) * pxPer : st.text.fontSize * pxPer * 1.3;
+          const rawW = bounds ? (bounds[2] - bounds[0]) * pxPer : Math.min(16, String(n.label).length) * st.text.fontSize * pxPer * 0.62;
+          const [lx, ly] = screenXY(n);
+          labelRects.push([lx + st.cox, ly + st.coy + rawH * 0.58 + 4, rawW + rawH + 8, rawH * 1.55 + 4]);
+        }
         for (const c of constOrdered()) {
           let target = 0;
           if (shown < capTotal) {
-            const camD = camPos.distanceTo(constV.set(c.x, c.y, c.z));
+            const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az));
             // Approach fade: a caption reads from OUTSIDE its region and
             // yields to fact labels once the camera is inside it.
             target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
@@ -1744,14 +1362,19 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
               // World-proportional caption (fs = f(region radius)) — the
               // declutter box uses its actual projected size.
               const fontPx = c.fs * (H / 2) / Math.max(camD, 1);
-              constV.set(c.x, c.y, c.z).project(camera);
+              constV.set(c.ax, c.ay, c.az).project(camera);
               if (constV.z > 1) target = 0;
               else {
                 const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
                 const w = c.name.length * fontPx * 0.85; // caps + tracking
-                if (placedCaps.some(([px2, py2, pw2]) => Math.abs(px2 - sx) < (pw2 + w) / 2 && Math.abs(py2 - sy) < fontPx * 2.2)) target = 0;
+                const h = fontPx * 1.7;
+                if (
+                  screenReserved(sx, sy, w, h) ||
+                  placedCaps.some(([px2, py2, pw2, ph2]) => Math.abs(px2 - sx) < (pw2 + w) / 2 && Math.abs(py2 - sy) < (ph2 + h) / 2) ||
+                  labelRects.some(([px2, py2, pw2, ph2]) => Math.abs(px2 - sx) < (pw2 + w) / 2 && Math.abs(py2 - sy) < (ph2 + h) / 2)
+                ) target = 0;
                 else {
-                  placedCaps.push([sx, sy, w]);
+                  placedCaps.push([sx, sy, w, h]);
                   shown++;
                 }
               }
@@ -1761,7 +1384,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           c.grp.quaternion.copy(camera.quaternion); // billboard
           // Captions take the same near-field ceiling (a bit more headroom).
           if (TUNE.labelMaxPx > 0) {
-            const camD2 = camPos.distanceTo(constV.set(c.x, c.y, c.z)) || 1;
+            const camD2 = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
             const px = c.fs * (H / 2) / camD2;
             const capPx = TUNE.labelMaxPx * 1.2;
             c.grp.scale.setScalar(px > capPx ? capPx / px : 1);
@@ -1805,6 +1428,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         (geo.attributes.color as any).needsUpdate = true;
         applyEdgeColor();
         ringMat.color = new THREE.Color(PAL.accent);
+        hoverMat.color = new THREE.Color(PAL.text);
         for (const [, st] of labelObjs) {
           st.text.outlineColor = PAL.outline;
           st.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
@@ -1840,149 +1464,146 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
       const syncBeamLabels = (): void => {
         syncEdgeLabels();
+        const now = performance.now();
+        for (const [id, until] of hoverRetiredUntil) if (until <= now) hoverRetiredUntil.delete(id);
+        const hoverSuppressed = (id: string): boolean => (hoverRetiredUntil.get(id) ?? 0) > now;
         const want = new Map<string, LabelWant>();
-        // Size-aware declutter: a small (far) label needs little clearance, so
-        // depth-proportional labels pack naturally instead of fighting a fixed
-        // 90px box sized for the biggest.
-        const placed: Array<[number, number, number, number]> = [];
-        const pxOf = (n: any): number => {
+        type Rect = [number, number, number, number];
+        const placed: Rect[] = [];
+        const pxOf = (n: any, role: LabelRole): number => {
           const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
-          return rad(n) * 2.4 * (H / 2) / camD;
+          const incumbent = labelObjs.get(n.id);
+          const mult = incumbent?.mult ?? roleMult(role);
+          return fontWorld(n, mult) * (H / 2) / camD * (incumbent?.scl ?? 1);
         };
-        const boxOf = (n: any): number => Math.max(36, pxOf(n) * 7);
-        // Wrapped labels are TALL — collision clearance is a box, not a row.
-        const hOf = (n: any): number => {
-          const fs = pxOf(n) * 0.85;
-          const lines = Math.max(1, Math.ceil(String(n.label).length / 18));
-          return Math.max(14, fs * 1.25 * lines);
+        // Prefer Troika's measured glyph bounds once available. Before its
+        // first sync, approximate from the same 10-em wrap used by makeLabel.
+        const dimsOf = (n: any, role: LabelRole): [number, number] => {
+          const st = labelObjs.get(n.id);
+          const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
+          const pxPer = (H / 2) / camD * (st?.scl ?? 1);
+          const b = st?.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
+          if (b) {
+            const rawW = (b[2] - b[0]) * pxPer;
+            const rawH = (b[3] - b[1]) * pxPer;
+            return [Math.max(34, rawW + rawH + 8), Math.max(16, rawH * 1.55 + 4)];
+          }
+          const fs = Math.max(6, pxOf(n, role));
+          const chars = String(n.label).length;
+          const lineChars = 16;
+          const lines = Math.max(1, Math.ceil(chars / lineChars));
+          return [Math.max(34, Math.min(lineChars, chars) * fs * 0.62 + fs + 8), Math.max(16, lines * fs * 1.2 + 5)];
         };
-        const collides = (sx: number, sy: number, w: number, h: number): boolean =>
-          placed.some(([px, py, pw, ph]) => Math.abs(px - sx) < (pw + w) / 2 && Math.abs(py - sy) < (ph + h) / 2);
+        const collides = (r: Rect): boolean =>
+          placed.some((p) => Math.abs(p[0] - r[0]) < (p[2] + r[2]) / 2 && Math.abs(p[1] - r[1]) < (p[3] + r[3]) / 2);
+        const rectOf = (n: any, role: LabelRole, ox = 0, oy = 0): Rect => {
+          const [sx, sy] = screenXY(n);
+          const [w, h] = dimsOf(n, role);
+          // Text hangs below the point; test the box where it actually reads,
+          // not centred on the node.
+          return [sx + ox, sy + oy + h * 0.56 + 4, w, h];
+        };
+        const admit = (n: any, role: LabelRole, ox = 0, oy = 0, force = false): boolean => {
+          const r = rectOf(n, role, ox, oy);
+          if (!force && (screenReserved(r[0], r[1], r[2], r[3]) || collides(r))) return false;
+          placed.push(r);
+          want.set(n.id, { role, ox, oy });
+          return true;
+        };
         const focusActive = !!(selKey || hiSet);
+        const mobile = Math.min(W, H) < 700;
+        const ambientCap = Math.min(labelCap(), mobile ? 6 : 10);
+        const neighbourCap = mobile ? 3 : 5; // selection = anchor + its TOP few neighbours
+        const hitCap = mobile ? 6 : 9;
+        const anchorCap = Math.min(TUNE.anchorCap, mobile ? 4 : 6);
 
-        // FOCUS DECLARES: the anchor and every search hit label unconditionally
-        // (they are the question being asked); neighbours pass legibility gates
-        // (salience-first, readable, decluttered, capped).
+        // The selected fact and hover preview are declarations: always label
+        // them, even in a reserved screen zone. Hover never changes camera or
+        // graph focus; it previews precisely what pointer-up would select.
         if (selKey) {
           const n = nodeById.get(selKey);
-          if (n && isVis(n)) {
-            want.set(selKey, { role: 'sel' });
-            const [sx, sy] = screenXY(n);
-            placed.push([sx, sy, boxOf(n), hOf(n)]);
-          }
+          if (n && isVis(n)) admit(n, 'sel', 0, 0, true);
         }
+        if (hoverLabelKey && hoverLabelKey === hoverKey && !want.has(hoverLabelKey)) {
+          const n = nodeById.get(hoverLabelKey);
+          if (n && isVis(n)) admit(n, 'hover', 0, 0, true);
+        }
+
         if (hiSet) {
-          for (const id of hiSet) {
-            if (want.has(id)) continue;
-            const n = nodeById.get(id);
-            if (n && isVis(n)) {
-              want.set(id, { role: 'hit' });
-              const [sx, sy] = screenXY(n);
-              placed.push([sx, sy, boxOf(n), hOf(n)]);
-            }
+          let added = 0;
+          const hits = [...hiSet]
+            .map((id) => nodeById.get(id))
+            .filter((n) => n && isVis(n) && !want.has(n.id))
+            .sort((a, b) => (a.rank ?? nodes.length) - (b.rank ?? nodes.length));
+          for (const n of hits) {
+            if (added >= hitCap) break;
+            if (admit(n, 'hit')) added++;
           }
         }
+
         if (selKey && nbr) {
-          // INCUMBENCY FIRST (2026-07-12 "labels jump and pop while orbiting
-          // a selection"): a neighbour label that's already up KEEPS its slot
-          // and its displacement while the selection holds. Re-running the
-          // screen-space contest every 5 frames with fresh camera coords was
-          // evicting, re-admitting, and re-displacing labels mid-orbit — the
-          // set must be stable while the QUESTION (the selection) is stable;
-          // only the camera moved. Incumbents still register their rects so
-          // newcomers avoid them; transient overlap between incumbents during
-          // a big orbit is the cheaper artefact.
+          let added = 0;
+          // Preserve incumbent neighbour slots, but within an explicit detail
+          // budget. The palette carries the complete neighbourhood; the map
+          // presents only the most legible representatives.
           for (const [id, st] of labelObjs) {
+            if (added >= neighbourCap) break;
             if (st.role !== 'nbr' || st.dying || !nbr.has(id) || want.has(id)) continue;
             const n = nodeById.get(id);
-            if (!n || !isVis(n)) continue;
-            const [sx, sy] = screenXY(n);
-            placed.push([sx + st.ox, sy + st.oy, boxOf(n), hOf(n)]);
-            want.set(id, { role: 'nbr', ox: st.ox, oy: st.oy });
+            if (n && isVis(n) && admit(n, 'nbr', st.ox, st.oy)) added++;
           }
-          // EVERY neighbour that wins a collision slot gets a label — at its
-          // depth-proportional size. No readable() admission gate: a far
-          // neighbour is a tiny label, not a missing one. A colliding
-          // neighbour is NUDGED to a free spot (down / up / aside, leader
-          // line back to the node) before it is ever dropped — the dense
-          // core kept eating exactly the labels a selection was asking for.
           const cands = [...nbr]
             .map((id) => nodeById.get(id))
             .filter((n) => n && isVis(n) && !want.has(n.id))
             .sort((a, b) => (a.rank ?? nodes.length) - (b.rank ?? nodes.length));
-          let added = [...want.values()].filter((w) => w.role === 'nbr').length;
           for (const n of cands) {
-            if (added >= labelCap()) break;
-            const [sx, sy] = screenXY(n);
-            const w = boxOf(n);
-            const h = hOf(n);
-            // Offset STICKINESS: a label that already found a displaced home
-            // tries its current offset first, so it doesn't wander between
-            // free slots as the contest order shifts frame to frame.
+            if (added >= neighbourCap) break;
+            const [w, h] = dimsOf(n, 'nbr');
+            const dx = w * 0.55 + 14;
+            const dy = h + 9;
             const prev = labelObjs.get(n.id);
-            const tries: Array<[number, number]> = [[0, 0], [0, h + 4], [0, -(h + 10)], [w / 2 + 14, 0], [-(w / 2 + 14), 0]];
+            const tries: Array<[number, number]> = [
+              [0, 0], [0, dy], [0, -dy], [dx, 0], [-dx, 0],
+              [dx * 0.72, dy * 0.72], [-dx * 0.72, dy * 0.72],
+              [dx * 0.72, -dy * 0.72], [-dx * 0.72, -dy * 0.72],
+            ];
             if (prev && (prev.ox || prev.oy)) tries.unshift([prev.ox, prev.oy]);
             for (const [ox, oy] of tries) {
-              if (collides(sx + ox, sy + oy, w, h)) continue;
-              placed.push([sx + ox, sy + oy, w, h]);
-              want.set(n.id, { role: 'nbr', ox, oy });
-              added++;
-              break;
+              if (admit(n, 'nbr', ox, oy)) { added++; break; }
             }
           }
         }
 
-        // ORIENTATION ANCHORS — the map's resting place-holds: at rest (no
-        // selection, no search) the most salient visible node per screen
-        // region keeps a dim, persistent name up, so there is always something
-        // to navigate by before the beam or a selection speaks. A 3×3 grid
-        // spreads them; salience-first keeps them stable as the camera moves.
-        if (!focusActive && TUNE.anchorCap > 0) {
+        // At rest, a sparse 3×3 wayfinding layer marks broad territories.
+        if (!focusActive && anchorCap > 0) {
           const takenCell = new Set<number>();
           let added = 0;
           const tryAnchor = (n: any): void => {
-            if (added >= TUNE.anchorCap || !n || !isVis(n) || want.has(n.id)) return;
-            // Anchors are wayfinding text — a salient machine-run KEY is
-            // honest data but useless as a resting place-hold; words only.
-            if (!placeworthy(n.label)) return;
+            if (added >= anchorCap || !n || !isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || !placeworthy(n.label)) return;
             const [sx, sy, sz] = screenXY(n);
-            if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) return; // offscreen/behind
+            if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) return;
             const cell = Math.min(2, Math.floor((sy / H) * 3)) * 3 + Math.min(2, Math.floor((sx / W) * 3));
             if (takenCell.has(cell)) return;
-            const w = boxOf(n);
-            const h = hOf(n);
-            if (collides(sx, sy, w, h)) return;
+            if (!admit(n, 'anchor')) return;
             takenCell.add(cell);
-            placed.push([sx, sy, w, h]);
-            want.set(n.id, { role: 'anchor' });
             added++;
           };
-          // INCUMBENCY: a standing anchor keeps its post while it stays on
-          // screen — the resting layer shouldn't reshuffle with every drift
-          // of the camera. New posts fill whatever cells remain.
           for (const [id, st] of labelObjs) {
             if (st.role === 'anchor' && !st.dying) tryAnchor(nodeById.get(id));
           }
           for (const n of byRank) {
-            if (added >= TUNE.anchorCap) break;
+            if (added >= anchorCap) break;
             tryAnchor(n);
           }
         }
 
-        // THE BEAM SUGGESTS — but only AT REST. Under focus it is now silent
-        // (2026-07-12: with a selection held, orbiting churned the
-        // beamCapFocus slots by camera-relative torch rank — labels popping
-        // in/out behind the answer the user was actually reading). While a
-        // selection/highlight is active, the label set belongs to the
-        // question, not the camera.
-        const beamCap = focusActive ? 0 : labelCap();
+        // Beam labels are deferred detail: sparse, collision-safe, and silent
+        // while a question (selection/search) owns the scene.
+        const beamCap = focusActive ? 0 : ambientCap;
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
-          if (!isVis(n) || want.has(n.id)) continue;
+          if (!isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || (n.id === hoverKey && hoverLabelKey !== hoverKey)) continue;
           const t = labelTorchNode(n);
-          // Enter at BEAM_ON, stay until BEAM_OFF — hysteresis against edge flicker.
-          // Standing labels get an INCUMBENCY bonus in the contest for the cap,
-          // so the set doesn't reshuffle when two candidates trade rank.
           if (t > TUNE.beamOn || (labelObjs.has(n.id) && t > TUNE.beamOff)) {
             lit.push([n.id, t + (labelObjs.get(n.id)?.role === 'beam' ? 0.2 : 0)]);
           }
@@ -1993,15 +1614,13 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         for (const [id] of lit) {
           if (added >= beamCap) break;
           const n = nodeById.get(id);
-          const [sx, sy] = screenXY(n);
-          const w = boxOf(n);
-          const h = hOf(n);
-          if (collides(sx, sy, w, h)) continue;
+          const r = rectOf(n, 'beam');
+          if (screenReserved(r[0], r[1], r[2], r[3]) || collides(r)) continue;
           inBeam.add(id);
           const streak = (beamStreak.get(id) ?? 0) + 1;
           beamStreak.set(id, streak);
-          if (streak < 2 && !labelObjs.has(id)) continue; // entry debounce
-          placed.push([sx, sy, w, h]);
+          if (streak < 2 && !labelObjs.has(id)) continue;
+          placed.push(r);
           want.set(id, { role: 'beam' });
           added++;
         }
@@ -2024,6 +1643,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           let color = PAL.text;
           const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           if (st.role === 'sel') {
+            target = 1;
+            color = PAL.accent;
+          } else if (st.role === 'hover') {
             target = 1;
             color = PAL.accent;
           } else if (st.role === 'hit') {
@@ -2049,7 +1671,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           // its own ceiling, instead of capping at a fraction of it.
           if (isPaper()) target = Math.min(target * 2.5, 1);
           if (st.dying) target = 0;
-          st.cur += (target - st.cur) * k;
+          const opacityK = st.dying && st.role === 'hover' ? Math.min(1, dt * 24) : k;
+          st.cur += (target - st.cur) * opacityK;
           if (st.dying && st.cur < 0.03) {
             scene.remove(st.grp);
             st.text.dispose?.();
@@ -2082,11 +1705,11 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           const occl = TUNE.pillAlpha > 0.95;
           st.pill.renderOrder = occl ? -1 : 8;
           st.pill.material.depthWrite = occl;
-          // Near-field ceiling: compress (smoothly) once the projected size
-          // exceeds the cap — sel/hit earn a third more headroom. Far labels
-          // are untouched; depth-truth is only bounded at the near extreme.
+          // One role-independent ceiling: selecting/hovering changes colour,
+          // opacity and the halo, never geometry. The former sel/hit ×1.35 cap
+          // made an incumbent label visibly “bounce in” when its role changed.
           const fsPx = st.text.fontSize * (H / 2) / camD;
-          const capPx = TUNE.labelMaxPx * (st.role === 'sel' || st.role === 'hit' ? 1.35 : 1);
+          const capPx = TUNE.labelMaxPx;
           const sTarget = TUNE.labelMaxPx > 0 && fsPx > capPx ? capPx / fsPx : 1;
           st.scl += (sTarget - st.scl) * k;
           st.inner.scale.setScalar(st.scl);
@@ -2143,7 +1766,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           if (disposed) return;
           const GUI = m.default ?? m.GUI;
           gui = new GUI({ title: 'graph tune' });
-          gui.domElement.style.cssText = 'position:fixed;top:64px;right:8px;z-index:60;max-height:70dvh;overflow-y:auto';
+          gui.domElement.style.cssText = 'position:fixed;top:164px;right:8px;z-index:60;max-height:calc(100dvh - 176px);overflow-y:auto';
           const persist = (): void => { try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ } };
           let lastSpike = TUNE.starSpike;
           const refresh = (): void => {
@@ -2167,7 +1790,10 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             torchUniforms.uSizeBoost.value = TUNE.boostSizeGain;
             eMat.uniforms.uFlowSpeed.value = TUNE.edgeFlowSpeed;
             eMat.uniforms.uFlowWidth.value = TUNE.edgeFlowWidth;
-            eMat.uniforms.uFlowGain.value = TUNE.edgeFlowGain;
+            // Edge flow is selection-only already (focus edges carry the pulse);
+            // disable it on mobile/coarse-pointer screens (Codex P1) — the moving
+            // ink is fill-rate cost and visual noise where the viewport is small.
+            eMat.uniforms.uFlowGain.value = bigScreen ? TUNE.edgeFlowGain : 0;
             eMat.uniforms.uFlowCycles.value = TUNE.edgeFlowCycles;
             if (useBloom()) ensureComposer();
             if (bloomPass) {
@@ -2310,6 +1936,9 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         renderer.domElement.removeEventListener('pointerdown', onDown);
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
+        renderer.domElement.removeEventListener('pointerleave', onLeave);
+        if (hoverPickRaf) cancelAnimationFrame(hoverPickRaf);
+        if (hoverLabelTimer) clearTimeout(hoverLabelTimer);
         for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); }
         pillGeo.dispose();
         for (const [, o] of edgeLabelObjs) o.element.remove?.();
@@ -2317,7 +1946,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         if (crumbTimer) clearTimeout(crumbTimer);
         crumb.remove();
         controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
-        disc.dispose?.(); stipple.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); composer?.dispose?.(); renderer.dispose();
+        disc.dispose?.(); stipple.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); hoverMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
 
       // ── the append API: pages stream INTO the live scene ─────────────────
@@ -2325,21 +1954,27 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
       // them and re-try after each entries append. Whatever's still parked at
       // finishStream points at plumbing-filtered facts and is dropped.
       const pendingEdges: GEdge[] = [];
-      /** True = handled (added, or dropped by design: similarTo / capacity /
-       *  duplicate). False = endpoints not here yet, caller should park it. */
+      const linkIds = new Set<string>();
+      const edgeId = (e: GEdge): string => `${e.from}|${e.rel}|${e.to}`;
+
+      /** True = handled (added, or dropped by design/capacity/duplicate).
+       * False = an endpoint is not in the chart yet, so park it. */
       const addEdge = (e: GEdge): boolean => {
-        if (e.rel === 'similarTo') return true; // proximity already says this
+        if (e.rel === 'similarTo') return true;
+        const id = edgeId(e);
+        if (linkIds.has(id)) return true;
         const a = nodeById.get(e.from), b = nodeById.get(e.to);
         if (!a || !b) return false;
         if (links.length >= caps.capE) return true;
         const i = links.length;
-        const l = { id: `${e.from}|${e.rel}|${e.to}`, source: e.from, target: e.to, rel: e.rel, derived: e.derived };
+        const l = { id, source: e.from, target: e.to, rel: e.rel, derived: e.derived };
         links.push(l);
+        linkIds.add(id);
         edgeRGB.push(hexToRgb(edgeStyle(e).stroke));
         const ai = idx.get(e.from)!, bi = idx.get(e.to)!;
         eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
         eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
-        eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1; // pulse travels source→target
+        eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1;
         a.deg++; b.deg++;
         return true;
       };
@@ -2347,23 +1982,72 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
         egeo.setDrawRange(0, links.length * 2);
         (egeo.attributes.position as any).needsUpdate = true;
         (egeo.attributes.flow as any).needsUpdate = true;
-        // deg moved → node radii move with it.
         refreshSizes();
         (geo.attributes.size as any).needsUpdate = true;
         applyEdgeColor();
+      };
+      const rebuildEdgeBuffers = (): void => {
+        for (const n of nodes) n.deg = 0;
+        edgeRGB.length = 0;
+        for (let i = 0; i < links.length; i++) {
+          const l = links[i];
+          const ai = idx.get(idOf(l.source)), bi = idx.get(idOf(l.target));
+          if (ai === undefined || bi === undefined) continue;
+          eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
+          eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
+          eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1;
+          edgeRGB.push(hexToRgb(edgeStyle({ from: idOf(l.source), rel: l.rel, to: idOf(l.target), derived: l.derived }).stroke));
+          const a = nodeById.get(idOf(l.source)), b = nodeById.get(idOf(l.target));
+          if (a) a.deg++;
+          if (b) b.deg++;
+        }
+        commitEdges();
       };
       const drainPendingEdges = (): void => {
         if (!pendingEdges.length) return;
         let wrote = false;
         for (let i = pendingEdges.length - 1; i >= 0; i--) {
-          if (addEdge(pendingEdges[i])) { pendingEdges.splice(i, 1); wrote = true; }
+          const before = links.length;
+          if (addEdge(pendingEdges[i])) {
+            pendingEdges.splice(i, 1);
+            if (links.length > before) wrote = true;
+          }
         }
         if (wrote) commitEdges();
       };
+      const refreshNodes = (): void => {
+        recomputeRanks();
+        applyNodeColors();
+        refreshSizes();
+        applyNodeAlpha();
+        applyEdgeColor();
+        (geo.attributes.position as any).needsUpdate = true;
+        (geo.attributes.color as any).needsUpdate = true;
+        (geo.attributes.size as any).needsUpdate = true;
+        geo.setDrawRange(0, nodes.length);
+        syncBeamLabels();
+      };
       const appendEntries = (items: ListEntry[]): void => {
-        const n0 = nodes.length;
+        let changed = false;
+        let added = false;
         for (const e of items) {
-          if (isPlumbing(e) || nodeById.has(e.key) || nodes.length >= caps.capN) continue;
+          if (!e?.key || isPlumbing(e)) continue;
+          const existing = nodeById.get(e.key);
+          if (e._meta?.superseded) {
+            if (existing && !existing.deleted) { existing.deleted = true; changed = true; }
+            continue;
+          }
+          if (existing) {
+            existing.type = e._meta?.type ?? null;
+            existing.score = Number(e._meta?.score) || 0;
+            existing.label = shortLabel(factTitle(e));
+            existing.deleted = false;
+            const label = labelObjs.get(e.key);
+            if (label) { label.text.text = existing.label; label.text.sync?.(); }
+            changed = true;
+            continue;
+          }
+          if (nodes.length >= caps.capN) continue;
           const i = nodes.length;
           const n: any = {
             id: e.key,
@@ -2371,9 +2055,8 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
             score: Number(e._meta?.score) || 0,
             label: shortLabel(factTitle(e)),
             deg: 0,
+            deleted: false,
           };
-          // Fixed position from the semantic [x,y,z]; scattered ring if the
-          // atlas doesn't know this key (yet — see ADR-0047 stage 3).
           const c = coordMap?.[n.id];
           if (c) { n.x = c[0] * SPREAD; n.y = c[1] * SPREAD; n.z = (c[2] ?? 0) * SPREAD; }
           else { const a = i * 2.3999; n.x = Math.cos(a) * SPREAD * 0.6; n.y = Math.sin(a) * SPREAD * 0.6; n.z = ((i % 13) - 6) * 14; }
@@ -2381,92 +2064,258 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           nodes.push(n);
           nodeById.set(n.id, n);
           idx.set(n.id, i);
+          changed = true;
+          added = true;
         }
-        if (nodes.length === n0) return;
-        recomputeRanks();
-        applyNodeColors();
-        refreshSizes();
-        applyNodeAlpha(); // flags alpha/boost needsUpdate itself
-        (geo.attributes.position as any).needsUpdate = true;
-        (geo.attributes.color as any).needsUpdate = true;
-        (geo.attributes.size as any).needsUpdate = true;
-        geo.setDrawRange(0, nodes.length);
-        frameBody(); // one-shot: frames on the FIRST page, no-op after
-        drainPendingEdges();
+        if (!changed) return;
+        refreshNodes();
+        if (added) {
+          frameBody();
+          drainPendingEdges();
+        }
       };
       const appendEdges = (items: GEdge[]): void => {
         let wrote = false;
         for (const e of items) {
-          if (addEdge(e)) wrote = true;
-          else pendingEdges.push(e);
+          const before = links.length;
+          if (addEdge(e)) {
+            if (links.length > before) wrote = true;
+          } else {
+            pendingEdges.push(e);
+          }
         }
         if (wrote) commitEdges();
       };
+      const removeEdges = (items: GEdge[]): void => {
+        if (!items.length) return;
+        const removeIds = new Set(items.map(edgeId));
+        for (let i = pendingEdges.length - 1; i >= 0; i--) {
+          if (removeIds.has(edgeId(pendingEdges[i]))) pendingEdges.splice(i, 1);
+        }
+        let changed = false;
+        for (let i = links.length - 1; i >= 0; i--) {
+          if (!removeIds.has(links[i].id)) continue;
+          linkIds.delete(links[i].id);
+          links.splice(i, 1);
+          changed = true;
+        }
+        if (changed) rebuildEdgeBuffers();
+      };
+      const removeEntries = (keys: string[]): void => {
+        if (!keys.length) return;
+        const remove = new Set(keys);
+        let changed = false;
+        for (const key of remove) {
+          const n = nodeById.get(key);
+          if (n && !n.deleted) { n.deleted = true; changed = true; }
+        }
+        for (let i = pendingEdges.length - 1; i >= 0; i--) {
+          if (remove.has(pendingEdges[i].from) || remove.has(pendingEdges[i].to)) pendingEdges.splice(i, 1);
+        }
+        let edgeChanged = false;
+        for (let i = links.length - 1; i >= 0; i--) {
+          if (!remove.has(idOf(links[i].source)) && !remove.has(idOf(links[i].target))) continue;
+          linkIds.delete(links[i].id);
+          links.splice(i, 1);
+          edgeChanged = true;
+        }
+        if (hoverKey && remove.has(hoverKey)) setHover(null);
+        if (selKey && remove.has(selKey)) {
+          selKey = null;
+          nbr = null;
+          showRing(null);
+          showCrumb(null);
+          selectRef.current(null);
+        }
+        if (edgeChanged) rebuildEdgeBuffers();
+        if (changed) refreshNodes();
+      };
+      const hydrating = new Set<string>();
+      const hydrateKey = async (key: string): Promise<void> => {
+        const current = nodeById.get(key);
+        if (hydrating.has(key) || (current && !current.deleted)) return;
+        hydrating.add(key);
+        try {
+          const [factRes, edgeRes] = await Promise.all([
+            mcpCall('read', 'workspace.peek', { key }),
+            mcpCall('read', 'workspace.edges', { keys: [key], derived: false, limit: 2000 }),
+          ]);
+          if (factRes.ok) {
+            const fact = factRes.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
+            if (fact) appendEntries([{ key, value: fact.value, _meta: fact._meta }]);
+          }
+          if (edgeRes.ok) appendEdges((edgeRes.value as { edges?: GEdge[] } | null)?.edges ?? []);
+          if (selKey === key) api.current?.select(key, true);
+        } finally {
+          hydrating.delete(key);
+        }
+      };
+      // Selection pulls the whole NEIGHBOURHOOD (2026-07-18 owner ask): the
+      // bounded initial load charts the salience shortlist, so a selected
+      // node's neighbours may not be in the scene yet — its edges sit parked
+      // in pendingEdges with nothing to land on. One `edges({around})` read
+      // returns the incident edges AND card-hydrated neighbour entries in a
+      // single round trip; unseen neighbours are appended (placed by the
+      // atlas coordMap when charted), their edges drain from the park, and
+      // the neighbour ring recomputes so the new arrivals join it. Cached
+      // per key for the mount — the 12s change poll owns later arrivals.
+      const pulledNeighbours = new Set<string>();
+      const pullNeighbours = async (key: string): Promise<void> => {
+        if (pulledNeighbours.has(key)) return;
+        pulledNeighbours.add(key);
+        try {
+          const r = await mcpCall('read', 'workspace.edges', { around: key, shape: 'card' });
+          if (!r.ok) { pulledNeighbours.delete(key); return; }
+          const v = (r.value ?? {}) as {
+            outbound?: GEdge[];
+            inbound?: GEdge[];
+            entries?: Record<string, { value?: unknown; _meta?: ListEntry['_meta'] } | null>;
+          };
+          const fresh: ListEntry[] = [];
+          for (const [k, entry] of Object.entries(v.entries ?? {})) {
+            if (!entry || entry._meta?.superseded) continue;
+            const cur = nodeById.get(k);
+            if (cur && !cur.deleted) continue;
+            fresh.push({ key: k, value: entry.value, _meta: entry._meta });
+          }
+          if (fresh.length) appendEntries(fresh);
+          // Plumbing endpoints (`_types/…` backbone targets) never chart, so
+          // don't park their edges — they would sit in pendingEdges forever.
+          const edges = [...(v.outbound ?? []), ...(v.inbound ?? [])]
+            .filter((e) => !e.from.startsWith('_') && !e.to.startsWith('_'));
+          if (edges.length) appendEdges(edges);
+          if ((fresh.length || edges.length) && selKey === key) {
+            nbr = neighborsOf(key);
+            applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
+          }
+        } catch {
+          pulledNeighbours.delete(key); // a failed pull may retry on re-select
+        }
+      };
       const finishStream = (): void => {
-        pendingEdges.length = 0; // stragglers point at plumbing-filtered facts
+        pendingEdges.length = 0;
         computePlaces();
         applyNodeAlpha();
         applyEdgeColor();
         syncBeamLabels();
       };
-      return { appendEntries, appendEdges, finishStream };
+      return { appendEntries, appendEdges, removeEntries, removeEdges, finishStream };
     }
 
     (async () => {
-      // STREAMING orchestration: the entry/edge streams start IMMEDIATELY
-      // (network first — they dominate the wall clock), buffering pages until
-      // (a) both totals are known, so the scene's buffers can be capacity-
-      // allocated once, and (b) THREE + the meta (layout atlas / config /
-      // typography) have loaded. Then ONE mount, buffered pages drain into it,
-      // and every later page appends live — no second bang, and selection/
-      // visibility survive loading by construction (same scene throughout).
+      // Fast orientation first: chart the salience shortlist, then ask the
+      // Reference projection only for authored edges touching those keys.
+      // A change cursor captured in parallel closes the race and keeps this
+      // mounted scene reconciled without reloading the page.
       setLoadState('fast');
-      let stream: StreamApi | null = null;
-      let mountFailed = false;
-      let meta: GraphMeta | null = null;
-      let THREE: any = null, addons: any = null;
-      let nTotal = -1, eTotal = -1;
-      let nGot = 0, eGot = 0;
-      const heldEntries: ListEntry[][] = [];
-      const heldEdges: GEdge[][] = [];
-      const bump = (): void => { if (!disposed) setProgress({ got: nGot + eGot, total: Math.max(0, nTotal) + Math.max(0, eTotal) }); };
-      const maybeMount = (): void => {
-        if (stream || mountFailed || disposed || !meta || nTotal < 0 || eTotal < 0) return;
-        // Headroom over the reported totals: facts written while the stream
-        // runs may push a late page past them; appends past capacity drop.
-        stream = mountScene(meta, { capN: nTotal + 64, capE: eTotal + 256 }, THREE, addons);
-        if (!stream) { mountFailed = true; return; } // renderer message already up
-        setLoadState('full');
-        for (const p of heldEntries) stream.appendEntries(p);
-        for (const p of heldEdges) stream.appendEdges(p);
-        heldEntries.length = 0;
-        heldEdges.length = 0;
-      };
-      const entriesDone = fetchAllEntries((items, total) => {
-        if (disposed) return;
-        nTotal = total;
-        nGot += items.length;
-        bump();
-        if (stream) stream.appendEntries(items);
-        else { heldEntries.push(items); maybeMount(); }
-      });
-      const edgesDone = fetchAllEdges((items, total) => {
-        if (disposed) return;
-        eTotal = total;
-        eGot += items.length;
-        bump();
-        if (stream) stream.appendEdges(items);
-        else { heldEdges.push(items); maybeMount(); }
-      });
-      const [T, A, m] = await Promise.all([loadThree(), loadThreeAddons(), fetchGraphMeta()]);
+      const [THREE, addons, meta, initial, initialHead] = await Promise.all([
+        loadThree(),
+        loadThreeAddons(),
+        fetchGraphMeta(),
+        fetchEntryPage(),
+        fetchChangeHead(),
+      ]);
       if (disposed) return;
-      THREE = T; addons = A; meta = m;
-      maybeMount();
-      await Promise.all([entriesDone, edgesDone]);
+      const stream = mountScene(meta, {
+        capN: Math.max(256, initial.total + LIVE_NODE_HEADROOM),
+        capE: LIVE_EDGE_CAPACITY,
+      }, THREE, addons);
+      if (!stream) {
+        setLoadState('done');
+        return;
+      }
+      stream.appendEntries(initial.items);
+      let charted = initial.items.length;
+      let graphTotal = initial.total;
+      let nextCursor = initial.nextCursor;
+      let revealing = false;
+      const reportReach = (loading = revealing): void => reachRef.current({
+        charted,
+        total: graphTotal,
+        loading,
+        hasMore: !!nextCursor,
+      });
+      setProgress({ got: charted, total: graphTotal });
+      setLoadState('full');
+      reportReach(true);
+
+      const edgePage = await fetchEdgesForKeys(initial.items.map((entry) => entry.key));
       if (disposed) return;
-      maybeMount(); // an empty slice reports totals without ever mounting above
-      stream?.finishStream();
+      stream.appendEdges(edgePage.items);
+      stream.finishStream();
+      setProgress({ got: charted, total: graphTotal });
       setLoadState('done');
+      reportReach(false);
+
+      const revealMore = async (): Promise<void> => {
+        if (disposed || revealing || !nextCursor) return;
+        revealing = true;
+        reportReach(true);
+        const cursor = nextCursor;
+        try {
+          const page = await fetchEntryPage(cursor);
+          if (disposed || !page.ok) return;
+          graphTotal = page.total || graphTotal;
+          nextCursor = page.nextCursor;
+          const fresh = page.items.filter((entry) => !!entry?.key);
+          stream.appendEntries(fresh);
+          charted = Math.min(graphTotal, charted + fresh.length);
+          setProgress({ got: charted, total: graphTotal });
+          reportReach(true);
+          const moreEdges = await fetchEdgesForKeys(fresh.map((entry) => entry.key));
+          if (disposed) return;
+          stream.appendEdges(moreEdges.items);
+        } finally {
+          revealing = false;
+          reportReach(false);
+        }
+      };
+      if (api.current) api.current.reveal = () => { void revealMore(); };
+
+      let sinceSeq: number | null = initialHead;
+      const pollChanges = async (): Promise<void> => {
+        if (disposed || changePolling) return;
+        changePolling = true;
+        try {
+          if (sinceSeq === null) {
+            sinceSeq = await fetchChangeHead();
+            return;
+          }
+          const r = await mcpCall('read', 'workspace.changes', {
+            sinceSeq,
+            limit: 200,
+            scope: { ops: ['write', 'supersede', 'link', 'unlink'] },
+            include: 'entries',
+          });
+          if (!r.ok || disposed) return;
+          const page = (r.value ?? {}) as ChangePage;
+          const events = page.events ?? [];
+          const upserts: ListEntry[] = [];
+          const removals: string[] = [];
+          for (const [key, entry] of Object.entries(page.entries ?? {})) {
+            if (!entry || entry._meta?.superseded) removals.push(key);
+            else upserts.push({ ...entry, key });
+          }
+          if (upserts.length) stream.appendEntries(upserts);
+          if (removals.length) stream.removeEntries(removals);
+          const links: GEdge[] = [];
+          const unlinks: GEdge[] = [];
+          for (const event of events) {
+            if (typeof event.key !== 'string' || typeof event.rel !== 'string' || typeof event.to !== 'string') continue;
+            const edge = { from: event.key, rel: event.rel, to: event.to };
+            if (event.op === 'link') links.push(edge);
+            else if (event.op === 'unlink') unlinks.push(edge);
+          }
+          if (unlinks.length) stream.removeEdges(unlinks);
+          if (links.length) stream.appendEdges(links);
+          const lastEventSeq = events.reduce((max, event) => typeof event.seq === 'number' ? Math.max(max, event.seq) : max, sinceSeq);
+          sinceSeq = events.length >= 200 ? lastEventSeq : typeof page.seq === 'number' ? page.seq : lastEventSeq;
+        } finally {
+          changePolling = false;
+        }
+      };
+      void pollChanges();
+      changeTimer = window.setInterval(() => { void pollChanges(); }, CHANGE_POLL_MS);
     })().catch((err) => {
       (window.reportError ?? console.error)(err);
       // A rejected fetch/setup left the scene host empty — a blank page reads as
@@ -2481,6 +2330,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
     return () => {
       disposed = true;
+      if (changeTimer !== null) clearInterval(changeTimer);
       if (raf) cancelAnimationFrame(raf);
       ro?.disconnect();
       if (onResult) window.removeEventListener(CONSOLE_RESULT_EVENT, onResult);
@@ -2498,6 +2348,20 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 
   useEffect(() => { api.current?.setVisible(visible); }, [visible]);
 
+  const lastRevealNonce = useRef(revealNonce);
+  useEffect(() => {
+    if (revealNonce === lastRevealNonce.current) return;
+    lastRevealNonce.current = revealNonce;
+    api.current?.reveal();
+  }, [revealNonce]);
+
+  const lastOverviewNonce = useRef(overviewNonce);
+  useEffect(() => {
+    if (overviewNonce === lastOverviewNonce.current) return;
+    lastOverviewNonce.current = overviewNonce;
+    api.current?.overview();
+  }, [overviewNonce]);
+
   return (
     <>
       {/* `host` is imperative-only territory below (innerHTML/appendChild
@@ -2511,7 +2375,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           role="status"
           aria-live="polite"
           style={{
-            position: 'fixed', left: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20,
+            position: 'fixed', left: 12, top: 'calc(max(10px, env(safe-area-inset-top)) + 44px)', zIndex: 20,
             fontFamily: ink.mono, fontSize: '0.72rem', color: ink.text,
             background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
             borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
@@ -2528,9 +2392,7 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
           <span>
             {loadState === 'fast'
               ? 'loading graph…'
-              : progress.total > 0
-                ? `charting ${Math.min(progress.got, progress.total).toLocaleString()} / ${progress.total.toLocaleString()}…`
-                : 'loading the rest of the slice…'}
+              : 'mapping relationships…'}
           </span>
           <style>{'@keyframes parc-pulse{0%,100%{opacity:.3}50%{opacity:1}}'}</style>
         </div>
@@ -2540,39 +2402,103 @@ function ThreeGraph({ selectedKey, onSelect, visible }: { selectedKey: string | 
 }
 
 export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
-  // Salience visibility: 0 → only the focus band, 1 → the whole slice. The
-  // renderer culls nodes/edges above the corresponding salience rank.
+  // Two independent ideas: FOCUS filters what is already charted; REACH pages
+  // more of the substrate into the chart. Keeping both visible prevents a
+  // salience filter from masquerading as a data boundary.
   const [visible, setVisible] = useState(1);
-  // Ink surface, sized so the control is a real touch target over the canvas.
-  const pill: React.CSSProperties = {
-    fontFamily: ink.mono, fontSize: '0.75rem', color: ink.text,
-    background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
-    borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
-    display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.35rem 0.8rem',
+  const [revealNonce, setRevealNonce] = useState(0);
+  const [overviewNonce, setOverviewNonce] = useState(0);
+  const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false });
+  const surface: React.CSSProperties = {
+    fontFamily: ink.mono,
+    fontSize: '0.72rem',
+    color: ink.text,
+    background: 'rgba(24,21,17,0.86)',
+    border: `1px solid ${ink.line}`,
+    borderRadius: 14,
+    backdropFilter: 'blur(7px)',
+    minWidth: 260,
+    padding: '0.55rem 0.65rem',
+    display: 'grid',
+    gap: '0.55rem',
+    boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+  };
+  const button: React.CSSProperties = {
+    appearance: 'none',
+    border: `1px solid ${ink.line}`,
+    background: reach.hasMore ? 'rgba(255,255,255,0.05)' : 'transparent',
+    color: reach.hasMore ? ink.text : ink.dim,
+    borderRadius: 999,
+    minHeight: 34,
+    padding: '0.25rem 0.65rem',
+    font: `600 0.7rem ${ink.mono}`,
+    cursor: reach.hasMore && !reach.loading ? 'pointer' : 'default',
   };
   return (
     <>
-      <ThreeGraph selectedKey={selectedKey} onSelect={onSelect} visible={visible} />
-      {/* Salience dial — from just the focus band to the whole slice. */}
-      <label
-        title="Show more or fewer facts, by salience"
-        style={{ ...pill, position: 'fixed', right: 12, top: 'max(10px, env(safe-area-inset-top))', zIndex: 20, cursor: 'default' }}
+      <ThreeGraph
+        selectedKey={selectedKey}
+        onSelect={onSelect}
+        visible={visible}
+        onReach={setReach}
+        revealNonce={revealNonce}
+        overviewNonce={overviewNonce}
+      />
+      <section
+        aria-label="Graph visibility"
+        style={{
+          ...surface,
+          position: 'fixed',
+          right: 12,
+          top: 'calc(max(10px, env(safe-area-inset-top)) + 48px)',
+          zIndex: 20,
+        }}
       >
-        <span style={{ color: ink.dim }}>focus</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.02}
-          value={visible}
-          onChange={(e) => setVisible(Number(e.target.value))}
-          aria-label="Salience visibility"
-          style={{ width: 96, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
-        />
-        <span style={{ width: 26, textAlign: 'right', color: ink.dim, fontVariantNumeric: 'tabular-nums' }}>
-          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
-        </span>
-      </label>
+        <label title="Filter the charted facts by salience" style={{ display: 'grid', gridTemplateColumns: '42px 1fr 38px', alignItems: 'center', gap: '0.45rem' }}>
+          <span style={{ color: ink.dim }}>focus</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.02}
+            value={visible}
+            onChange={(e) => setVisible(Number(e.target.value))}
+            aria-label="Salience visibility"
+            style={{ width: '100%', accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
+          />
+          <span style={{ textAlign: 'right', color: visible >= 0.999 ? ink.text : ink.dim, fontVariantNumeric: 'tabular-nums' }}>
+            {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+          </span>
+        </label>
+        <div style={{ height: 1, background: ink.line, opacity: 0.7 }} />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '0.55rem' }}>
+          <div>
+            <div style={{ color: ink.dim, fontSize: '0.64rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>substrate reach</div>
+            <div aria-live="polite" style={{ marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+              {reach.total ? `${reach.charted.toLocaleString()} / ${reach.total.toLocaleString()}` : 'mapping…'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            <button
+              type="button"
+              onClick={() => { setVisible(1); setOverviewNonce((n) => n + 1); }}
+              title="Clear focus and frame the charted substrate"
+              style={{ ...button, color: ink.text, background: 'transparent', cursor: 'pointer' }}
+            >
+              overview
+            </button>
+            <button
+              type="button"
+              disabled={reach.loading || !reach.hasMore}
+              onClick={() => { setVisible(1); setRevealNonce((n) => n + 1); }}
+              title={reach.hasMore ? 'Chart the next salience-ranked region of the substrate' : 'All available facts are charted'}
+              style={{ ...button, opacity: reach.loading ? 0.58 : 1 }}
+            >
+              {reach.loading ? 'mapping…' : reach.hasMore ? `+${Math.min(INITIAL_ENTRY_LIMIT, Math.max(0, reach.total - reach.charted)).toLocaleString()}` : 'complete'}
+            </button>
+          </div>
+        </div>
+      </section>
     </>
   );
 }

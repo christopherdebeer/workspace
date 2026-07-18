@@ -257,9 +257,14 @@ function capToCmd(cap: Capability): Cmd {
  *  needs the form first: a required arg, a cell-authored form, or an `act`
  *  (whose run button is the explicit confirmation a mutation deserves). */
 function runsDirectly(c: Cmd): boolean {
-  if (!c.needsArgs) return true;
   if (c.kind === 'act' || c.ui?.form) return false;
+  if (!c.needsArgs) return true;
   return (c.schema?.required ?? []).length === 0;
+}
+
+const HIGH_RISK_ACT = /(delete|remove|revoke|supersede|unlink|unshare|undeclare|prune|deploy|configure|grant|updatetoken|reindex|project|bootstrap|reset|purge|destroy|rotate)/i;
+function requiresTypedConfirmation(c: Cmd): boolean {
+  return c.kind === 'act' && HIGH_RISK_ACT.test(c.id);
 }
 
 /** One list, two sources: workspace matches lead, capabilities follow — a
@@ -284,6 +289,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   const [args, setArgs] = useState('{}');
   const [formValue, setFormValue] = useState<Record<string, unknown>>({});
   const [rawJson, setRawJson] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const [results, setResults] = useState<ListEntry[]>([]);
@@ -295,6 +301,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     if (!seed) return;
     setQuery(seed.q);
     setFocused(null);
+    setConfirmText('');
     setSel(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.n]);
@@ -383,6 +390,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
 
   const openForm = (cmd: Cmd): void => {
     setFocused(cmd);
+    setConfirmText('');
     const skeleton = argSkeletonObject(cmd.schema);
     setFormValue(skeleton);
     setArgs(JSON.stringify(skeleton, null, 2));
@@ -426,6 +434,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
 
   const runFocused = (): void => {
     if (!focused) return;
+    if (requiresTypedConfirmation(focused) && confirmText !== focused.id) return;
     if (!rawJson) {
       void invoke(focused, formValue);
       return;
@@ -462,11 +471,13 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   // ── focused: one command's arg entry (renders in the sheet area) ──
   const focusedSchema = focused ? splitSchema(focused.schema) : null;
   const advancedCount = Object.keys((focusedSchema?.advanced as { properties?: object } | undefined)?.properties ?? {}).length;
+  const confirmationTarget = focused && requiresTypedConfirmation(focused) ? focused.id : null;
+  const confirmationReady = !confirmationTarget || confirmText === confirmationTarget;
   const focusedView = focused && focusedSchema ? (
       <div style={{ display: 'grid', gap: '0.7rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
           <button
-            onClick={() => setFocused(null)}
+            onClick={() => { setFocused(null); setConfirmText(''); }}
             aria-label="back to search"
             style={{ background: 'none', border: 'none', color: ink.dim, fontFamily: ink.mono, fontSize: '0.85rem', cursor: 'pointer', padding: '0.3rem 0.4rem 0.3rem 0', flexShrink: 0 }}
           >
@@ -528,13 +539,31 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
               style={{ ...inset, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem', color: ink.text, fontFamily: ink.mono }}
             />
           )}
+          {confirmationTarget ? (
+            <div style={{ ...inset, padding: '0.65rem', display: 'grid', gap: '0.45rem' }}>
+              <span style={{ color: ink.danger, fontSize: '0.75rem', lineHeight: 1.4 }}>
+                High-impact action. Type the exact capability address to confirm:
+              </span>
+              <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.76rem', overflowWrap: 'anywhere' }}>{confirmationTarget}</code>
+              <input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="type capability address to confirm"
+                style={{ ...inset, minHeight: 38, padding: '0.45rem 0.55rem', color: ink.text, fontFamily: ink.mono, fontSize: '0.78rem' }}
+              />
+            </div>
+          ) : focused.kind === 'act' ? (
+            <span style={{ color: ink.dim, fontSize: '0.74rem' }}>This action changes substrate state. Review its arguments before running.</span>
+          ) : null}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <button
               onClick={runFocused}
-              disabled={busy}
-              style={{ padding: '0.5rem 1rem', minHeight: 40, borderRadius: 8, border: `1px solid ${ink.accent}`, background: 'rgba(245,196,83,0.08)', color: ink.accent, fontFamily: ink.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
+              disabled={busy || !confirmationReady}
+              style={{ padding: '0.5rem 1rem', minHeight: 40, borderRadius: 8, border: `1px solid ${ink.accent}`, background: 'rgba(245,196,83,0.08)', color: ink.accent, fontFamily: ink.mono, fontSize: '0.8rem', cursor: busy || !confirmationReady ? 'not-allowed' : 'pointer', opacity: confirmationReady ? 1 : 0.55 }}
             >
-              {busy ? 'running…' : 'run ⌘↵'}
+              {busy ? 'running…' : focused.kind === 'act' ? 'run action' : 'run ⌘↵'}
             </button>
             {focused.ui?.form || isFormable(focused.schema) ? (
               <button
@@ -645,6 +674,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             setQuery(e.target.value);
             setSel(0);
             setFocused(null);
+            setConfirmText('');
             onCollapse?.(false); // typing re-opens the sheet
           }}
           onFocus={() => onCollapse?.(false)}

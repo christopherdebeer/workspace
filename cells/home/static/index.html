@@ -33,8 +33,17 @@
         var q = new URLSearchParams(location.search).get('debug');
         if (q === '0') localStorage.removeItem('parc.debug');
         else if (q === '1') localStorage.setItem('parc.debug', '1');
-        if (q === '1' || localStorage.getItem('parc.debug') === '1') {
-          document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/eruda@3" crossorigin="anonymous"><\/scr' + 'ipt>');
+        var stickyDebug = localStorage.getItem('parc.debug') === '1';
+        // Preserve the explicit opt-in across full reloads too: the server can
+        // then return the debug-only CSP needed by Eruda's console evaluator.
+        if (q === null && stickyDebug) {
+          var debugUrl = new URL(location.href);
+          debugUrl.searchParams.set('debug', '1');
+          location.replace(debugUrl.href);
+          return;
+        }
+        if (q === '1' || stickyDebug) {
+          document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/eruda@3.4.3/eruda.min.js" integrity="sha384-F7xQBvh3l6dG/mMD6QPIeVmXtzWT4Ce3ZDu8ysPuzMWMx9bFOIMGnRPUhLuQipss" crossorigin="anonymous"><\/scr' + 'ipt>');
           document.write('<scr' + 'ipt>window.eruda && eruda.init();<\/scr' + 'ipt>');
         }
       } catch (e) { /* storage blocked — no debug console */ }
@@ -52,6 +61,6 @@
     });
     document.getElementById('err-banner').addEventListener('click', function () { this.style.display = 'none'; });
   </script>
-  <script type="module" src="/@c15r/home/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

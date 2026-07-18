@@ -3,10 +3,45 @@
  * split from app.tsx (moved verbatim).
  */
 import * as React from 'react';
-import { mountSandboxedRenderer, attachSandboxedRenderer, SANDBOX_HOST_HTML } from '@parc/ui';
+import { mountSandboxedRenderer, attachSandboxedRenderer, SANDBOX_HOST_HTML } from './federated-host';
 import { mcpCall, mcpResourceRead } from './lib';
 
 const { useState, useEffect } = React;
+
+function rejectedCall(reason = 'renderer substrate call rejected by home policy'): Promise<never> {
+  return Promise.reject(new Error(reason));
+}
+
+function safeRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/**
+ * A renderer gets only the exact reads its published implementation needs.
+ * Acts are never proxied, and an unknown renderer gets no substrate channel.
+ */
+function rendererCall(uri: string, factKey: string | undefined) {
+  return (kind: 'read' | 'act', target: string, input: unknown): Promise<unknown> => {
+    if (kind !== 'read') return rejectedCall();
+    const args = safeRecord(input);
+    if (uri.startsWith('ui://@c15r/canvas/') && target === '@c15r/canvas.scene') {
+      const view = args?.view;
+      if (typeof view !== 'string' || view.length === 0 || view.length > 256) return rejectedCall('invalid canvas view');
+      return mcpCall('read', target, { view }).then((r) => r.ok ? r.value : rejectedCall(String(r.value)));
+    }
+    if (uri.startsWith('ui://@c15r/machine/') && target === 'workspace.query' && factKey) {
+      const prefix = args?.prefix;
+      const allowed = ['claim', 'node', 'rail'].some((part) => prefix === `${factKey}/${part}/`);
+      if (!allowed) return rejectedCall('machine query outside fact namespace');
+      const requestedLimit = typeof args?.limit === 'number' && Number.isFinite(args.limit) ? args.limit : 50;
+      const limit = Math.max(1, Math.min(300, Math.floor(requestedLimit)));
+      return mcpCall('read', target, { prefix, limit }).then((r) => r.ok ? r.value : rejectedCall(String(r.value)));
+    }
+    return rejectedCall();
+  };
+}
+
+const denyFormCalls = (): Promise<never> => rejectedCall('federated forms have no substrate channel');
 
 /**
  * Run a cell-authored `ui://` renderer for a fact or tool result, isolated in a
@@ -36,10 +71,10 @@ export function FederatedRendererFrame({
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    // The shared embed-host sequence (ADR-0044 Inc 4) — this frame is just its
-    // React shell: state wiring + the placeholder/iframe swap below.
+    setHeight(0);
+    setSettled(null);
     return attachSandboxedRenderer(iframe, {
-      call: (kind, target, input) => mcpCall(kind, target, input).then((r) => (r.ok ? r.value : Promise.reject(new Error(String(r.value))))),
+      call: rendererCall(uri, factKey),
       fetchSource: mcpResourceRead,
       uri,
       type,
@@ -48,16 +83,15 @@ export function FederatedRendererFrame({
       onResize: setHeight,
       onSettled: setSettled,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, type, factKey]);
+  }, [uri, type, value, factKey]);
 
   return (
     <div style={{ position: 'relative' }}>
       {settled !== true ? placeholder ?? null : null}
       <iframe
         ref={iframeRef}
-        srcDoc={SANDBOX_HOST_HTML}
         sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
         title="federated renderer"
         style={{ display: settled === true ? 'block' : 'none', width: '100%', border: 'none', height: Math.max(24, height) }}
       />
@@ -96,6 +130,8 @@ export function FederatedFormFrame({
   const initialValueRef = React.useRef(initialValue);
   const schemaRef = React.useRef(schema);
   const onChangeRef = React.useRef(onChange);
+  initialValueRef.current = initialValue;
+  schemaRef.current = schema;
   onChangeRef.current = onChange;
 
   useEffect(() => {
@@ -103,10 +139,12 @@ export function FederatedFormFrame({
     if (!iframe) return;
     let disposed = false;
     let handle: ReturnType<typeof mountSandboxedRenderer> | null = null;
+    setHeight(0);
+    setSettled(null);
     const onLoad = (): void => {
       if (disposed) return;
       handle = mountSandboxedRenderer(iframe, {
-        call: (kind, target, input) => mcpCall(kind, target, input).then((r) => (r.ok ? r.value : Promise.reject(new Error(String(r.value))))),
+        call: denyFormCalls,
         onResize: setHeight,
         onSettled: setSettled,
         onFormChange: (v) => onChangeRef.current(v),
@@ -116,6 +154,7 @@ export function FederatedFormFrame({
       });
     };
     iframe.addEventListener('load', onLoad);
+    iframe.srcdoc = SANDBOX_HOST_HTML;
     return () => {
       disposed = true;
       iframe.removeEventListener('load', onLoad);
@@ -133,8 +172,8 @@ export function FederatedFormFrame({
       {settled !== true ? placeholder ?? null : null}
       <iframe
         ref={iframeRef}
-        srcDoc={SANDBOX_HOST_HTML}
         sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
         title="federated form"
         style={{ display: settled === true ? 'block' : 'none', width: '100%', border: 'none', height: Math.max(24, height) }}
       />

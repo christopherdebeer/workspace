@@ -36,9 +36,40 @@ function buildBoot(session: Session, ssrData: Record<string, unknown> | undefine
 }
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
+
+const BASE_SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  'x-frame-options': 'DENY',
+  'x-robots-tag': 'noindex, nofollow',
+};
+function htmlHeaders(debug: boolean): Record<string, string> {
+  const debugScripts = debug ? " https://cdn.jsdelivr.net 'unsafe-eval'" : '';
+  return {
+    ...BASE_SECURITY_HEADERS,
+    'cache-control': 'private, no-store',
+    'content-security-policy': [
+      "default-src 'self'",
+      `script-src 'self' 'unsafe-inline' blob: https://esm.sh https://parc.land${debugScripts}`,
+      "script-src-attr 'none'",
+      "style-src 'self' 'unsafe-inline'",
+      "connect-src 'self' blob: https://parc.land https://*.on.parc.land https://cdn.jsdelivr.net https://esm.sh",
+      "img-src 'self' data: blob: https://parc.land https://*.on.parc.land",
+      "font-src 'self' data: https://cdn.jsdelivr.net",
+      "frame-src 'self' https://*.on.parc.land",
+      "worker-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'self' https://parc.land",
+      "frame-ancestors 'none'",
+      "upgrade-insecure-requests",
+    ].join('; '),
+  };
+}
 const respond = (statusCode: number, contentType: string, body: string, extra: Record<string, string> = {}) => ({
   statusCode,
-  headers: { 'content-type': contentType, ...extra },
+  headers: { 'content-type': contentType, ...BASE_SECURITY_HEADERS, ...extra },
   body,
 });
 
@@ -65,14 +96,16 @@ export const handler = async (event: {
   requestContext?: { http?: { method?: string } };
   rawPath?: string;
   headers?: Record<string, string | undefined>;
+  rawQueryString?: string;
   /** Shaped substrate reads forge ran as the caller (see forge runSsrReads). */
   ssrData?: Record<string, unknown>;
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+  const debug = new URLSearchParams(event.rawQueryString ?? '').get('debug') === '1';
   if (method !== 'GET' && method !== 'HEAD') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
-    if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'), { 'access-control-allow-origin': '*' });
+    if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'), { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=0, must-revalidate' });
     if (path === '/' || path === '') {
       // `x-cell-caller` is the dispatch-validated session identity (from the
       // `parc_session` cookie on a top-level navigation), or 'anonymous'.
@@ -91,13 +124,14 @@ export const handler = async (event: {
       const html = read('static/index.html')
         .replace('<div id="root"></div>', `<div id="root" data-ssr="1">${inner}</div>`)
         .replace('<script type="module"', `<script id="home-state" type="application/json">${state}</script>\n  <script type="module"`);
-      return respond(200, 'text/html; charset=utf-8', html);
+      return respond(200, 'text/html; charset=utf-8', html, htmlHeaders(debug));
     }
   } catch (err) {
+    console.error('[home ssr]', err);
     // SSR is best-effort: a render failure falls back to the cold-mount shell
     // (the client still boots the full app) rather than a hard 500.
     try {
-      if (path === '/' || path === '') return respond(200, 'text/html; charset=utf-8', read('static/index.html'));
+      if (path === '/' || path === '') return respond(200, 'text/html; charset=utf-8', read('static/index.html'), htmlHeaders(debug));
     } catch {
       /* shell unreadable — fall through to 404 */
     }

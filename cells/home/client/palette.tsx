@@ -131,8 +131,8 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
             <InlineFactEditor
               e={entry}
               onCancel={() => setEditing(false)}
-              onSaved={(v) => {
-                setEntry({ ...entry, value: v });
+              onSaved={(savedEntry) => {
+                setEntry(savedEntry);
                 setEditing(false);
               }}
             />
@@ -145,7 +145,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           as dense noise on a phone — owner feedback): a few readable verbs,
           then the neighbours that actually HAVE a name. Horizontal scroll. */}
       {verbs.length || namedNeighbors.length ? (
-        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 5, alignItems: 'center', scrollbarWidth: 'thin', scrollbarColor: `${ink.line} transparent` }}>
           {verbs.slice(0, 3).map((v) => (
             <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent, maxWidth: 220 }} title={v.target} onClick={() => onCommand(v.target)}>
               {v.target.slice(v.target.lastIndexOf('.') + 1)}
