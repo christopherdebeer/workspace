@@ -22,8 +22,26 @@ export const TUNE_DEFAULTS = {
   // (was 0.42) — admission now spans nearly the whole torch cone, not just
   // its dead-centre.
   labelConeIn: 0.02, labelConeOut: 1.2,
-  beamOn: 0.85, beamOff: 0.2, beamCapFocus: 5, labelCap: 0, // labelCap 0 = viewport default (12/22)
+  // THE NAME BUDGET (the coupled-workspace co-sizing rule): ONE mind-sized
+  // ceiling on how many names are legible at once — the focus band the read
+  // ignites into (docs/the-coupled-workspace.md §3; docs/home-graph-experience
+  // .md §10). Every tier spends from this, so "how many labels" is a single
+  // number tuned to the coupled mind, not a scatter of per-tier caps.
+  // 0 = viewport default (mobile 16 / desktop 26 — a few dozen).
+  focusBand: 0,
+  // Landmarks (register 1) reserve this FRACTION of the band; the rest is the
+  // suggestion remainder. So the resting sky is "a few steady names + the
+  // whispered candidates that fill the leftover budget."
+  landmarkFrac: 0.35,
+  beamOn: 0.85, beamOff: 0.2,
   beamOpacity: 0.57, beamSizeMult: 0.3,
+  // SUGGESTIONS are a DIFFERENT VOICE, not a small focus chip (the beam's
+  // original sin: catches wore result styling, so unrelated items read as
+  // answers). beamPill 0 = pill-less whisper — a suggestion never carries the
+  // committed-name occluder chip that Landmarks/Focus wear. beamPerCell caps
+  // suggestions PER SCREEN TERRITORY so a dense cluster can't monopolise the
+  // whisper and starve a sparse region (per-place broadcast, mirrors slices).
+  beamPill: 0, beamPerCell: 2,
   // focus labels (owner re-grade 2026-07-12): hits headline (1.17), and
   // neighbours now hold FULL opacity near and far (1/1, was 0.41/0.81) —
   // size still grades the role, opacity no longer does.

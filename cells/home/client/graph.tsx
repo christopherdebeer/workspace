@@ -1083,8 +1083,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       // motion. Ambient cap tightened 12/22 → 8/12; selection/search caps below
       // narrow to "top representatives" so a question freezes the field to its
       // answer, not the whole neighbourhood.
-      const LABEL_CAP_DEFAULT = Math.min(W, H) < 700 ? 8 : 12;
-      const labelCap = (): number => TUNE.labelCap > 0 ? TUNE.labelCap : LABEL_CAP_DEFAULT;
       // Legibility gates (the dense core turned its beam labels into a white
       // pile of 7px mush): a candidate must render big enough to READ, and must
       // not land on top of an already-placed label — greedy, brightest first.
@@ -1512,10 +1510,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         };
         const focusActive = !!(selKey || hiSet);
         const mobile = Math.min(W, H) < 700;
-        const ambientCap = Math.min(labelCap(), mobile ? 6 : 10);
-        const neighbourCap = mobile ? 3 : 5; // selection = anchor + its TOP few neighbours
+        // THE NAME BUDGET (coupled-workspace co-sizing): one mind-sized ceiling
+        // on how many names are legible at once — a couple dozen, the focus band
+        // the read ignites into. Every register spends from it; this is THE dial
+        // to move first (the registers make the count legible, so it can rise).
+        const focusBand = TUNE.focusBand > 0 ? TUNE.focusBand : (mobile ? 14 : 22);
+        // Register 2 (Focus/ignition): the selection's structure OWNS the band
+        // when a question is active — sel + its top neighbours + search hits.
+        const neighbourCap = mobile ? 3 : 5;
         const hitCap = mobile ? 6 : 9;
-        const anchorCap = Math.min(TUNE.anchorCap, mobile ? 4 : 6);
+        // Register 1 (Landmarks/orientation): a persistent, grid-distributed
+        // slice of the band — the steady "north" the resting sky keeps.
+        const anchorCap = Math.min(TUNE.anchorCap, Math.max(2, Math.round(focusBand * TUNE.landmarkFrac)));
 
         // The selected fact and hover preview are declarations: always label
         // them, even in a reserved screen zone. Hover never changes camera or
@@ -1574,32 +1580,42 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           }
         }
 
-        // At rest, a sparse 3×3 wayfinding layer marks broad territories.
+        // ── REGISTER 1 — LANDMARKS (orientation) ──
+        // At rest, a sparse 3×3 wayfinding layer marks broad territories: the
+        // standing-highest name per screen region, persistent across visits —
+        // the "north" that lets spatial memory accrue. Steady, grid-distributed,
+        // pill-backed (a committed name). Spends the reserved slice of the band.
+        let landmarksShown = 0;
         if (!focusActive && anchorCap > 0) {
           const takenCell = new Set<number>();
-          let added = 0;
           const tryAnchor = (n: any): void => {
-            if (added >= anchorCap || !n || !isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || !placeworthy(n.label)) return;
+            if (landmarksShown >= anchorCap || !n || !isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || !placeworthy(n.label)) return;
             const [sx, sy, sz] = screenXY(n);
             if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) return;
             const cell = Math.min(2, Math.floor((sy / H) * 3)) * 3 + Math.min(2, Math.floor((sx / W) * 3));
             if (takenCell.has(cell)) return;
             if (!admit(n, 'anchor')) return;
             takenCell.add(cell);
-            added++;
+            landmarksShown++;
           };
           for (const [id, st] of labelObjs) {
             if (st.role === 'anchor' && !st.dying) tryAnchor(nodeById.get(id));
           }
           for (const n of byRank) {
-            if (added >= anchorCap) break;
+            if (landmarksShown >= anchorCap) break;
             tryAnchor(n);
           }
         }
 
-        // Beam labels are deferred detail: sparse, collision-safe, and silent
-        // while a question (selection/search) owns the scene.
-        const beamCap = focusActive ? 0 : ambientCap;
+        // ── REGISTER 3 — SUGGESTIONS (peripheral) ──
+        // The whispered "what could I look at next": beam catches near the line
+        // of approach. They spend the REMAINDER of the band after landmarks (so
+        // total legible names stay mind-sized), are silent while a question owns
+        // the scene, and render as a DIFFERENT VOICE (pill-less, dim — see
+        // updateLabels) so a suggestion never reads as a result. Distributed
+        // per screen TERRITORY (a 4×3 grid, ≤ beamPerCell each) so a dense
+        // cluster can't monopolise the whisper and starve a sparse region.
+        const suggestBudget = focusActive ? 0 : Math.max(0, focusBand - landmarksShown);
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || (n.id === hoverKey && hoverLabelKey !== hoverKey)) continue;
@@ -1610,10 +1626,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         }
         lit.sort((a, b) => b[1] - a[1]);
         const inBeam = new Set<string>();
+        const cellUsed = new Map<number, number>();
         let added = 0;
         for (const [id] of lit) {
-          if (added >= beamCap) break;
+          if (added >= suggestBudget) break;
           const n = nodeById.get(id);
+          const [sx, sy, sz] = screenXY(n);
+          if (sz > 1) continue; // behind the camera
+          // Territory fairness: ≤ beamPerCell suggestions per 4×3 screen cell.
+          const cell = Math.min(2, Math.floor((sy / H) * 3)) * 4 + Math.min(3, Math.floor((sx / W) * 4));
+          if ((cellUsed.get(cell) ?? 0) >= TUNE.beamPerCell) continue;
           const r = rectOf(n, 'beam');
           if (screenReserved(r[0], r[1], r[2], r[3]) || collides(r)) continue;
           inBeam.add(id);
@@ -1622,6 +1644,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           if (streak < 2 && !labelObjs.has(id)) continue;
           placed.push(r);
           want.set(id, { role: 'beam' });
+          cellUsed.set(cell, (cellUsed.get(cell) ?? 0) + 1);
           added++;
         }
         for (const id of [...beamStreak.keys()]) if (!inBeam.has(id)) beamStreak.delete(id);
@@ -1701,8 +1724,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           // The pill rides the label's own opacity. Mode by strength:
           // translucent veil (drawn over the cloud, real gradient) below
           // ~0.95; hard depth-writing occluder at the top of the dial.
-          st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * st.cur;
-          const occl = TUNE.pillAlpha > 0.95;
+          // SUGGESTIONS wear (almost) no pill — the register differentiator:
+          // a whisper carries no committed-name chip, so it can never be
+          // mistaken for a Focus/Landmark result even at the same size.
+          const pillMul = st.role === 'beam' ? TUNE.beamPill : 1;
+          st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * pillMul * st.cur;
+          const occl = TUNE.pillAlpha * pillMul > 0.95;
           st.pill.renderOrder = occl ? -1 : 8;
           st.pill.material.depthWrite = occl;
           // One role-independent ceiling: selecting/hovering changes colour,
@@ -1835,6 +1862,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           add(torchF, 'depthIn', 0, 1.5);
           add(torchF, 'depthOut', 0.3, 4);
           add(torchF, 'torchFloor', 0, 0.2, 0.005);
+          // The ONE name budget + register split (coupled-workspace co-sizing).
+          const budgetF = gui.addFolder('name budget');
+          add(budgetF, 'focusBand', 0, 60, 1);     // 0 = viewport default (16/26)
+          add(budgetF, 'landmarkFrac', 0, 0.8, 0.05); // landmark share of the band
+          add(budgetF, 'beamPerCell', 1, 5, 1);    // suggestions per screen territory
+          add(budgetF, 'beamPill', 0, 1, 0.01);    // suggestion pill (0 = pill-less whisper)
           const beamF = gui.addFolder('beam');
           add(beamF, 'labelConeIn', 0.02, 0.5);
           add(beamF, 'labelConeOut', 0.1, 1.2);
@@ -1842,7 +1875,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           add(beamF, 'beamOff', 0.02, 0.8);
           add(beamF, 'beamOpacity', 0, 1);
           add(beamF, 'beamSizeMult', 0.3, 1.5);
-          add(beamF, 'labelCap', 0, 40, 1);
           const labelsF = gui.addFolder('labels');
           add(labelsF, 'selSizeMult', 0.8, 2.5);
           add(labelsF, 'hitSizeMult', 0.8, 2.5);

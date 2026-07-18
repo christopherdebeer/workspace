@@ -60,9 +60,13 @@ screen:
 - **Colour is kind.** Each type of thing (a note, a decision, a document, a
   running process) carries its own hue, consistently. You learn the palette by
   living with it, not from a legend — there is no legend.
-- **Names are earned.** At rest, only *places* are named — captions over major
-  clusters. Individual points do not carry labels until attention reaches
-  them. Naming is a scarce resource the map spends only where you are looking.
+- **Names are earned, from one budget.** At rest the map names a *couple dozen*
+  things total — a single mind-sized budget (the focus band), spent across
+  three distinct voices: a few **landmarks** (steady, always-named territory
+  markers — the "north" that persists across visits), and, filling the rest of
+  the budget, quiet **suggestions** (faint candidate names near where you're
+  looking). Naming is scarce and the scarcity is *one number*, not a scatter of
+  caps — and the two voices look different on purpose (see §4).
 - **Threads are relations.** Fine lines connect some points. At rest they are
   quiet, almost subliminal — a webbing that suggests structure without
   drawing it. Some lines carry a barely-perceptible directional shimmer, a
@@ -72,6 +76,24 @@ The overall composition at rest is deliberately *quiet*: places, not names; a
 sense of where mass is, not an inventory. The map's first job is orientation —
 "where is everything, and where has my attention been" — and it does that
 without any interaction at all.
+
+There are exactly **three label voices** (the reframe, now built), and their
+whole job is to never be confused for one another:
+
+- **Landmarks** — *orientation*. Persistent territory names, grid-distributed
+  so one lives in each broad region of the sky; the same few survive an orbit,
+  so you can build a memory of where things are. Steady, quiet, chip-backed.
+- **Focus** — *ignition*. The names that appear only when you select or ask:
+  the thing you touched and its immediate structure. Committed, accent-lit,
+  the only articulate text on screen while a question is open. (Detailed in §4.)
+- **Suggestions** — *periphery*. Faint candidate names near your line of
+  approach — "you could look here." Deliberately a *different kind of mark*:
+  no backing chip, dimmer, lighter. A suggestion can never be mistaken for a
+  landmark or a result, because it isn't dressed like one.
+
+The load-bearing rule: these three do not compete on a single size gradient.
+They occupy different registers, so a dense region can hold quiet suggestions
+*and* a steady landmark without the two blurring into an illegible pile.
 
 - **IS**: no legend, no axes, no explanation anywhere. Comprehension is
   entirely by acquaintance.
@@ -241,9 +263,11 @@ Recorded so a redesign argues with reality, not a brochure:
 3. **The encodings are esoteric.** Light/size/colour/position all mean things,
    and none are ever stated. First-time comprehension is near zero; the map
    selects for people willing to acquire it by use.
-4. **Names contend at density.** In tight clusters, ignited labels crowd and
-   the beam's suggestions flicker between neighbours as you drift — reading a
-   dense region can feel like tuning a radio.
+4. **Names contend at density** *(largely addressed by the three-register
+   build; watch for residue).* Suggestions are now capped per screen territory
+   and drawn as pill-less whispers, so a dense cluster no longer piles chips or
+   monopolises the budget — but very tight cores may still shimmer as the
+   camera drifts and the per-cell winners change. Re-check against reality.
 5. **Relations are undifferentiated.** Threads show *that* things connect and
    faintly *which way*, but not *why* — every kind of relation is the same
    line. The structure the map is proudest of is its least articulate layer.
