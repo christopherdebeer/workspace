@@ -68,7 +68,7 @@ async function hydrate(host: HTMLElement): Promise<void> {
     return;
   }
   try {
-    const out = await read<ViewOut>('workspace.view', { id });
+    const out = await read<ViewOut>('workspace.evaluate', { kind: 'view', id });
     renderViewValue(host, out);
   } catch (err) {
     host.textContent = '⚠ ' + ((err as Error).message ?? String(err));

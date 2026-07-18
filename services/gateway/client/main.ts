@@ -136,7 +136,7 @@ function typedCard(key: string, entry: Entry, types: Types, slot: string, clamp 
   // ranked results read as a ranking, not a column of bare numbers (ADR-0038 Inc 6).
   const scoreNum = typeof entry.score === 'number' ? entry.score : (entry._meta && typeof entry._meta.score === 'number' ? entry._meta.score : null);
   const sc = scoreNum != null ? `<span class="sim" title="${scoreNum.toFixed(3)}"><i style="width:${Math.max(4, Math.min(100, Math.round(scoreNum * 100)))}%"></i></span><span class="sc">${scoreNum.toFixed(2)}</span>` : '';
-  const nav = key ? `<button class="mini" title="neighbors" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key }))}">↹</button>` : '';
+  const nav = key ? `<button class="mini" title="neighbors" data-call="read" data-target="workspace.edges" data-input="${esc(JSON.stringify({ around: key }))}">↹</button>` : '';
   // Clamp only TEXT bodies (md/code/fields/pre) in list contexts — viewer/machine-run
   // mounts fill the slot later (body === '') and must not be height-capped.
   const showClamp = clamp && !!body;
@@ -314,7 +314,7 @@ function renderAttention(d: Record<string, unknown>): string {
   const cap = (shown: number, total: number): string => (total > shown ? ` (${shown} of ${total})` : ` (${total})`);
   let h = `<h2>Attention</h2><div class="hint">${staleTotal} stale · ${unlinkedTotal} unlinked · ${danglingTotal} dangling</div>`;
   if (stale.length) h += `<h2>Stale${cap(stale.length, staleTotal)}</h2>` + rowsBlock(stale.map((s) => `<div class="k drill" data-call="read" data-target="workspace.peek" data-input="${esc(JSON.stringify({ key: s.key }))}">${esc(s.key)}${s.type ? ` <span class="ty">${esc(s.type)}</span>` : ''}</div><div class="v">${esc((s.updatedAt || '').slice(0, 10))}</div>`));
-  if (unlinked.length) h += `<h2>Unlinked${cap(unlinked.length, unlinkedTotal)}</h2>` + rowsBlock(unlinked.map((k) => `<div class="k drill" data-call="read" data-target="workspace.neighbors" data-input="${esc(JSON.stringify({ key: k }))}">${esc(k)}</div><div class="v"></div>`));
+  if (unlinked.length) h += `<h2>Unlinked${cap(unlinked.length, unlinkedTotal)}</h2>` + rowsBlock(unlinked.map((k) => `<div class="k drill" data-call="read" data-target="workspace.edges" data-input="${esc(JSON.stringify({ around: k }))}">${esc(k)}</div><div class="v"></div>`));
   if (dangling.length) h += `<h2>Dangling${cap(dangling.length, danglingTotal)}</h2>` + rowsBlock(dangling.map((g) => `<div class="k"><span class="ty">${esc(g.rel)}</span> ${esc(g.from)} → ${esc(g.to)}</div><div class="v"><span class="hint">${esc(g.reason || '')}</span></div>`));
   return h;
 }
@@ -400,7 +400,7 @@ function renderSingleFact(d: Record<string, unknown>, types: Types): string {
 }
 /** Assemble a lit doc from its ordered `members` (host-proxied), rendered in place. */
 function lazyDoc(key: string, slot: string, types: Types): void {
-  callServer('read', 'workspace.members', { key }).then((r) => {
+  callServer('read', 'workspace.edges', { around: key, membership: true }).then((r) => {
     const m = r as { members?: Entry[]; types?: Types } | null;
     const el = document.getElementById(slot);
     if (!el || !m || !Array.isArray(m.members) || !m.members.length) return;
@@ -412,7 +412,7 @@ function lazyDoc(key: string, slot: string, types: Types): void {
 }
 /** "Linked from" — inbound references for a fact (host-proxied neighbors, dir:in). */
 function lazyBacklinks(key: string, slot: string, types: Types): void {
-  callServer('read', 'workspace.neighbors', { key, dir: 'in' }).then((r) => {
+  callServer('read', 'workspace.edges', { around: key, dir: 'in' }).then((r) => {
     const n = r as { inbound?: Edge[]; entries?: Record<string, Entry>; types?: Types } | null;
     const el = document.getElementById(slot);
     if (!el || !n || !Array.isArray(n.inbound) || !n.inbound.length) return;
@@ -666,7 +666,7 @@ async function retryPending(): Promise<void> {
  *  plus next neighbours (one hop). Reads all slice edges once and filters to the set. */
 async function showGraphOf(keys: string[]): Promise<void> {
   const set = new Set(keys);
-  const r = await callServer('read', 'workspace.links', {}) as { edges?: Edge[] } | null;
+  const r = await callServer('read', 'workspace.edges', { derived: false }) as { edges?: Edge[] } | null;
   const edges = (r && Array.isArray(r.edges) ? r.edges : []).filter((e) => set.has(e.from) || set.has(e.to));
   viewStack.push(currentData);
   render({ edges, _seed: keys }); // seed = the result set; one-hop neighbours render outlined

@@ -211,13 +211,14 @@ describe('workspace sharing / view layer', () => {
       [
         'peek', 'recall', 'remember', 'ingest', 'shared', 'grants', 'share', 'supersede', 'unshare',
         'group', 'groups',
-        'query', 'search', 'link', 'unlink', 'neighbors', 'graph', 'members', 'changes', 'attention',
-        'registerAction', 'actions', 'deleteAction', 'invoke', 'reindex', 'project', 'pruneSimilar', 'suggestions', 'ratify',
-        'registerView', 'views', 'view', 'deleteView', 'links', 'tend',
-        'registerSubscription', 'subscriptions', 'deleteSubscription',
+        'query', 'link', 'unlink', 'changes', 'attention',
+        'actions', 'deleteAction', 'reindex', 'project', 'pruneSimilar', 'suggestions', 'ratify',
+        'views', 'deleteView', 'tend',
+        'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena',
-        // ADR-0068 (C1) declaration surface + ADR-0069 (C3) edge query — the legacy
-        // verbs above remain as aliases during the deprecation window.
+        // ADR-0068 (C1) declaration surface + ADR-0069 (C3) edge query — the retired
+        // aliases (search/neighbors/links/graph/members/register*/invoke/view) are
+        // GONE from the membrane; the gateway tombstones teach their successors.
         'declare', 'declarations', 'undeclare', 'evaluate', 'edges',
         // ADR-0072 (C7): the contradiction-candidate read (Stage A).
         'contested',
@@ -407,23 +408,23 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     await cmds.link({ from: 't1', rel: 'grounds', to: 'd1' }, alice());
     await cmds.link({ from: 'd2', rel: 'refines', to: 'd1' }, alice());
 
-    const around = await cmds.neighbors({ key: 'd1' }, alice());
+    const around = await cmds.edges({ around: 'd1' }, alice());
     // Authored edges only here; the derived backbone (instanceOf → _types/decision) is asserted separately.
     expect(around.inbound.filter((e) => !e.derived).map((e) => `${e.from}-${e.rel}`).sort()).toEqual(['d2-refines', 't1-grounds']);
     expect(around.outbound.filter((e) => !e.derived)).toEqual([]);
     expect(Object.keys(around.entries).sort()).toEqual(['d2', 't1']); // neighbor entries included
 
-    const onlyGrounds = await cmds.neighbors({ key: 'd1', dir: 'in', rel: 'grounds' }, alice());
+    const onlyGrounds = await cmds.edges({ around: 'd1', dir: 'in', rel: 'grounds' }, alice());
     expect(onlyGrounds.inbound.map((e) => e.from)).toEqual(['t1']);
 
     await cmds.unlink({ from: 'd2', rel: 'refines', to: 'd1' }, alice());
-    expect((await cmds.neighbors({ key: 'd1' }, alice())).inbound.map((e) => e.from)).toEqual(['t1']);
+    expect((await cmds.edges({ around: 'd1' }, alice())).inbound.map((e) => e.from)).toEqual(['t1']);
   });
 
-  it('links lists every edge in the slice, with prefix filtering', async () => {
-    const all = await cmds.links(undefined, alice());
+  it('edges({derived:false}) lists every authored edge in the slice, with prefix filtering', async () => {
+    const all = await cmds.edges({ derived: false }, alice());
     expect(all.edges.length).toBeGreaterThanOrEqual(1);
-    const filtered = await cmds.links({ prefix: 't1' }, alice());
+    const filtered = await cmds.edges({ derived: false, prefix: 't1' }, alice());
     expect(filtered.edges.every((e) => e.from.startsWith('t1') || e.to.startsWith('t1'))).toBe(true);
     expect(filtered.edges.length).toBeGreaterThanOrEqual(1);
   });
@@ -432,9 +433,9 @@ describe('workspace substrate primitives (query / CAS / links / changes / attent
     await cmds.remember({ key: 'd1v2', value: 'successor decision', type: 'decision' }, alice());
     await cmds.supersede({ key: 'd1', by: 'd1v2', migrateLinks: true }, alice());
 
-    const successor = await cmds.neighbors({ key: 'd1v2' }, alice());
+    const successor = await cmds.edges({ around: 'd1v2' }, alice());
     expect(successor.inbound.map((e) => `${e.from}-${e.rel}`)).toEqual(['t1-grounds']);
-    expect((await cmds.neighbors({ key: 'd1' }, alice())).inbound).toEqual([]); // old edges gone
+    expect((await cmds.edges({ around: 'd1' }, alice())).inbound).toEqual([]); // old edges gone
   });
 
   it('changes tails the trajectory from a seq and reports the head', async () => {
@@ -724,50 +725,45 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
   });
   afterAll(() => __resetTypeDeclsCache());
 
-  it('ranks by meaning and returns the R1 types envelope', async () => {
-    const res = await cmds.search({ text: 'dynamodb storage table design' }, ctxOf('alice'));
+  it('query({text}) ranks by meaning and returns the R1 types envelope (ADR-0051 — the search successor)', async () => {
+    const res = await cmds.query({ text: 'dynamodb storage table design' }, ctxOf('alice'));
     expect(res.entries.length).toBeGreaterThanOrEqual(2);
     expect(['d-dynamo', 'd-stream']).toContain(res.entries[0].key); // a dynamo decision ranks first
-    expect(res.entries[0].score).toBeGreaterThan(res.entries[res.entries.length - 1].score);
     expect(res.types?.decision).toBeDefined(); // R1 envelope (declared types resolved client-free)
   });
 
   it('isolates slices — bob’s search never surfaces alice’s facts (structural index boundary)', async () => {
-    const res = await cmds.search({ text: 'dynamodb storage table design' }, ctxOf('bob'));
+    const res = await cmds.query({ text: 'dynamodb storage table design' }, ctxOf('bob'));
     expect(res.entries.every((e) => !e.key.startsWith('alice/') && e.key !== 'd-dynamo')).toBe(true);
   });
 
   it('honours a type filter (the granular read:type pin)', async () => {
-    const res = await cmds.search({ text: 'dynamodb', type: 'decision' }, ctxOf('alice'));
+    const res = await cmds.query({ text: 'dynamodb', type: 'decision' }, ctxOf('alice'));
     expect(res.entries.every((e) => e._meta.type === 'decision')).toBe(true);
     expect(res.entries.some((e) => e.key === 'n-auth')).toBe(false);
   });
 
-  it('folds a grant: a shared prefix surfaces for the grantee, keyed <owner>/<key>, post-filtered by prefix', async () => {
+  it('grant-folded semantic reads live in recall({text}): a shared prefix surfaces for the grantee, keyed <owner>/<key>', async () => {
     await cmds.share({ to: 'carol', key: 'd-*' }, ctxOf('alice')); // prefix grant: only d-* keys
-    const res = await cmds.search({ text: 'dynamodb stream vectors' }, ctxOf('carol'));
-    expect(res.entries.length).toBeGreaterThanOrEqual(1);
-    expect(res.entries.every((e) => e.key.startsWith('alice/d-'))).toBe(true); // prefix post-filter
-    expect(res.entries.some((e) => e.key === 'alice/n-auth')).toBe(false); // outside the grant prefix
+    const res = await cmds.recall({ text: 'dynamodb stream vectors', view: 'full', elision: 'none' }, ctxOf('carol'));
+    if (!('entries' in res)) throw new Error('expected full view');
+    const keys = Object.keys(res.entries);
+    expect(keys.some((k) => k.startsWith('alice/d-'))).toBe(true); // the granted subset folded in
+    expect(keys.some((k) => k === 'alice/n-auth')).toBe(false); // outside the grant prefix
   });
 
   it('authoritative re-read drops a superseded fact still present in the (stale) index', async () => {
     await cmds.remember({ key: 'tmp', value: { title: 'dynamodb temporary scratch decision' }, type: 'decision' }, ctxOf('alice'));
     await indexFact('alice', 'tmp', { title: 'dynamodb temporary scratch decision' }, { type: 'decision', superseded: false });
-    expect((await cmds.search({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'))).entries.some((e) => e.key === 'tmp')).toBe(true);
+    expect((await cmds.query({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'))).entries.some((e) => e.key === 'tmp')).toBe(true);
     await cmds.supersede({ key: 'tmp' }, ctxOf('alice')); // index NOT updated → still superseded:false there
-    const after = await cmds.search({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'));
+    const after = await cmds.query({ text: 'temporary scratch', type: 'decision' }, ctxOf('alice'));
     expect(after.entries.some((e) => e.key === 'tmp')).toBe(false); // dropped on re-read (Decision 1)
   });
 
-  it('degrades gracefully with no vector backend (hint, not error)', async () => {
-    const res = await noVecCmds.search({ text: 'anything' }, ctxOf('alice'));
-    expect(res.entries).toEqual([]);
-    expect(res.hint).toMatch(/not configured/i);
-  });
-
-  it('requires query text', async () => {
-    await expect(cmds.search({ text: '   ' }, ctxOf('alice'))).rejects.toThrow(/text is required/);
+  it('degrades gracefully with no vector backend (plain salience query, no error)', async () => {
+    const res = await noVecCmds.query({ text: 'anything' }, ctxOf('alice'));
+    expect(Array.isArray(res.entries)).toBe(true); // no throw, no hint needed — relevance simply contributes nothing
   });
 
   it('reindex (admin) backfills a slice so search finds never-manually-indexed facts', async () => {
@@ -778,8 +774,10 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     };
     await cmds.remember({ key: 'k1', value: { title: 'Kubernetes ingress controller routing' }, type: 'note' }, adminCtx());
     await cmds.remember({ key: 'k2', value: { title: 'Sourdough starter hydration schedule' }, type: 'note' }, adminCtx());
-    // Not indexed yet → search is empty.
-    expect((await cmds.search({ text: 'kubernetes ingress' }, adminCtx())).entries).toHaveLength(0);
+    // Not indexed yet → the intent can't discriminate: relevance contributes
+    // nothing, so the read degrades to plain salience (no per-entry relevance).
+    const before = await cmds.query({ text: 'kubernetes ingress' }, adminCtx());
+    expect(before.entries.every((e) => e._meta.relevance === undefined)).toBe(true);
     // reindex now DISPATCHES async + chunked; the work happens in the handler chain.
     const r = await cmds.reindex(undefined, adminCtx());
     expect(r.status).toBe('started');
@@ -788,7 +786,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     const status = await cmds.peek({ key: '_reindex/dave' }, adminCtx());
     expect((status?.value as { status: string }).status).toBe('done');
     expect((status?.value as { indexed: number }).indexed).toBeGreaterThanOrEqual(2);
-    const res = await cmds.search({ text: 'kubernetes ingress routing' }, adminCtx());
+    const res = await cmds.query({ text: 'kubernetes ingress routing' }, adminCtx());
     expect(res.entries[0]?.key).toBe('k1'); // the k8s note, not the sourdough one
   });
 
@@ -811,7 +809,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
     );
     await cmds.reindex(undefined, adminCtx());
     await drainReindex('hana');
-    const res = await cmds.search({ text: 'quantum chromodynamics' }, adminCtx());
+    const res = await cmds.query({ text: 'quantum chromodynamics' }, adminCtx());
     expect(res.entries.some((e) => e.key === 'note/durable')).toBe(true); // the durable fact made it in
     expect(res.entries.some((e) => e.key.startsWith('lease/'))).toBe(false); // the lease never did
   });
@@ -836,7 +834,7 @@ describe('semantic search (ADR-0030 — vector seam: candidate generation + auth
       expect((status?.value as { edges: number }).edges).toBeGreaterThan(0);
 
       // The inferred edges are real graph structure: neighbors surfaces them…
-      const n = await cmds.neighbors({ key: 'r1' }, admin());
+      const n = await cmds.edges({ around: 'r1' }, admin());
       const similar = n.outbound.filter((e) => e.rel === 'similarTo');
       expect(similar.length).toBeGreaterThan(0);
       expect(similar.every((e) => e.to.startsWith('r'))).toBe(true);
@@ -1158,9 +1156,9 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
   it('registers an action as a fact and lists it', async () => {
-    const res = await cmds.registerAction(
+    const res = await cmds.declare(
       {
-        action: {
+        kind: 'action', def: {
           id: 'set-phase',
           description: 'Move the project phase',
           params: { phase: { type: 'string', enum: ['planning', 'building', 'done'], required: true } },
@@ -1177,7 +1175,7 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
   });
 
   it('invoke applies the declared writes with substitution and stamps via', async () => {
-    const res = await cmds.invoke({ action: 'set-phase', params: { phase: 'building' } }, alice());
+    const res = await cmds.evaluate({ kind: 'action', id: 'set-phase', params: { phase: 'building' } }, alice());
     expect(res.writes).toHaveLength(1);
     expect(res.writes[0].key).toBe('phase');
     expect(res.writes[0].value).toBe('building');
@@ -1188,17 +1186,17 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
   });
 
   it('validates params against the declared schema', async () => {
-    await expect(cmds.invoke({ action: 'set-phase', params: {} }, alice())).rejects.toThrow(/invalid_param/);
-    await expect(cmds.invoke({ action: 'set-phase', params: { phase: 'flying' } }, alice())).rejects.toThrow(/invalid_param/);
+    await expect(cmds.evaluate({ kind: 'action', id: 'set-phase', params: {} }, alice())).rejects.toThrow(/invalid_param/);
+    await expect(cmds.evaluate({ kind: 'action', id: 'set-phase', params: { phase: 'flying' } }, alice())).rejects.toThrow(/invalid_param/);
   });
 
   it('treats a null/absent OPTIONAL param as absent, not a wrong-type error (no-`text` trigger regression)', async () => {
     // Mirrors the machine `start` action: an optional `text`. A reaction resolved
     // an absent trigger `text` to `null`; the validator then hit `typeof null !==
     // "string"` and silently aborted the reaction, so the run never started.
-    await cmds.registerAction(
+    await cmds.declare(
       {
-        action: {
+        kind: 'action', def: {
           id: 'start-like',
           description: 'start a run; optional text',
           params: { run: { type: 'string', required: true }, text: { type: 'string', required: false } },
@@ -1209,16 +1207,16 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
     );
     // Optional param absent → succeeds. Optional param explicitly null → succeeds
     // (used to throw invalid_param). Both must start the run.
-    await expect(cmds.invoke({ action: 'start-like', params: { run: 'a' } }, alice())).resolves.toBeDefined();
-    await expect(cmds.invoke({ action: 'start-like', params: { run: 'b', text: null } }, alice())).resolves.toBeDefined();
+    await expect(cmds.evaluate({ kind: 'action', id: 'start-like', params: { run: 'a' } }, alice())).resolves.toBeDefined();
+    await expect(cmds.evaluate({ kind: 'action', id: 'start-like', params: { run: 'b', text: null } }, alice())).resolves.toBeDefined();
     expect((await cmds.peek({ key: 'srun/b' }, alice()))?.value).toMatchObject({ run: 'b', status: 'running' });
     await cmds.deleteAction({ id: 'start-like' }, alice()); // shared store — don't leak into the action-list assertions
   });
 
   it('if conditions gate invocation with a precondition_failed error', async () => {
-    await cmds.registerAction(
+    await cmds.declare(
       {
-        action: {
+        kind: 'action', def: {
           id: 'ship',
           if: [{ key: 'phase', op: 'eq', value: 'done' }],
           writes: [{ key: 'shipped', value: '${now}' }],
@@ -1226,16 +1224,16 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
       },
       alice(),
     );
-    await expect(cmds.invoke({ action: 'ship' }, alice())).rejects.toThrow(/precondition_failed/);
-    await cmds.invoke({ action: 'set-phase', params: { phase: 'done' } }, alice());
-    const shipped = await cmds.invoke({ action: 'ship' }, alice());
+    await expect(cmds.evaluate({ kind: 'action', id: 'ship' }, alice())).rejects.toThrow(/precondition_failed/);
+    await cmds.evaluate({ kind: 'action', id: 'set-phase', params: { phase: 'done' } }, alice());
+    const shipped = await cmds.evaluate({ kind: 'action', id: 'ship' }, alice());
     expect(shipped.invoked).toBe(true);
   });
 
   it('surfaces contested write targets at registration (not blocked)', async () => {
-    const res = await cmds.registerAction(
+    const res = await cmds.declare(
       {
-        action: { id: 'set-phase-2', writes: [{ key: 'phase', value: 'override' }] },
+        kind: 'action', def: { id: 'set-phase-2', writes: [{ key: 'phase', value: 'override' }] },
       },
       alice(),
     );
@@ -1243,9 +1241,9 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
   });
 
   it('reproduces the canonical claim: ifAbsent + lease timer = atomic, crash-safe hand-off', async () => {
-    await cmds.registerAction(
+    await cmds.declare(
       {
-        action: {
+        kind: 'action', def: {
           id: 'claim-task',
           description: 'Claim a task for ${self} with a 50ms lease',
           params: { task: { type: 'string', required: true } },
@@ -1262,17 +1260,17 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
       alice(),
     );
 
-    const first = await cmds.invoke({ action: 'claim-task', params: { task: 't1' } }, alice());
+    const first = await cmds.evaluate({ kind: 'action', id: 'claim-task', params: { task: 't1' } }, alice());
     expect((first.writes[0].value as { by: string }).by).toBe('alice');
 
     // Racing second claim → 409-style precondition failure.
-    await expect(cmds.invoke({ action: 'claim-task', params: { task: 't1' } }, alice())).rejects.toThrow(
+    await expect(cmds.evaluate({ kind: 'action', id: 'claim-task', params: { task: 't1' } }, alice())).rejects.toThrow(
       /precondition_failed/,
     );
 
     // The claimant crashes (never releases); the lease lapses; the claim frees.
     await sleep(60);
-    const reclaim = await cmds.invoke({ action: 'claim-task', params: { task: 't1' } }, alice());
+    const reclaim = await cmds.evaluate({ kind: 'action', id: 'claim-task', params: { task: 't1' } }, alice());
     expect(reclaim.invoked).toBe(true);
   });
 
@@ -1280,16 +1278,16 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
     await cmds.deleteAction({ id: 'set-phase-2' }, alice());
     const listed = await cmds.actions(undefined, alice());
     expect(listed.actions.map((a) => a.id).sort()).toEqual(['claim-task', 'set-phase', 'ship']);
-    await expect(cmds.invoke({ action: 'set-phase-2' }, alice())).rejects.toThrow(/not_found/);
+    await expect(cmds.evaluate({ kind: 'action', id: 'set-phase-2' }, alice())).rejects.toThrow(/not_found/);
   });
 
   it('a declared-action write carries ifVersion proof-of-read (ADR-0066 Inc 2)', async () => {
     // The token rides in via a ${params.*} substitution — parity with sync's
     // action write-templates. Registers + deletes itself to leave the shared
     // vocabulary unchanged for sibling tests.
-    await cmds.registerAction(
+    await cmds.declare(
       {
-        action: {
+        kind: 'action', def: {
           id: 'por-write',
           description: 'Proof-of-read write to por:${params.k}',
           params: { k: { type: 'string', required: true }, ver: { type: 'string', required: true }, v: { type: 'any' } },
@@ -1300,17 +1298,17 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
     );
 
     // ifVersion:"" = create-only
-    const created = await cmds.invoke({ action: 'por-write', params: { k: 's', ver: '', v: 'one' } }, alice());
+    const created = await cmds.evaluate({ kind: 'action', id: 'por-write', params: { k: 's', ver: '', v: 'one' } }, alice());
     const token = created.writes[0]._meta.version;
     expect(token).toMatch(/^[0-9a-f]{16}$/);
 
     // a guessed token is rejected
     await expect(
-      cmds.invoke({ action: 'por-write', params: { k: 's', ver: 'deadbeefdeadbeef', v: 'two' } }, alice()),
+      cmds.evaluate({ kind: 'action', id: 'por-write', params: { k: 's', ver: 'deadbeefdeadbeef', v: 'two' } }, alice()),
     ).rejects.toThrow(/precondition_failed/);
 
     // the token from the create succeeds and rotates the version
-    const ok = await cmds.invoke({ action: 'por-write', params: { k: 's', ver: token, v: 'two' } }, alice());
+    const ok = await cmds.evaluate({ kind: 'action', id: 'por-write', params: { k: 's', ver: token, v: 'two' } }, alice());
     expect(ok.writes[0].value).toBe('two');
     expect(ok.writes[0]._meta.version).not.toBe(token);
 
@@ -1319,8 +1317,7 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
 
   it('a declared action may not write the vocabulary itself', async () => {
     await expect(
-      cmds.registerAction(
-        { action: { id: 'sneaky', writes: [{ key: '_actions/set-phase', value: {} }] } },
+      cmds.declare({ kind: 'action', def: { id: 'sneaky', writes: [{ key: '_actions/set-phase', value: {} }] } },
         alice(),
       ),
     ).rejects.toThrow(/may not write/);
@@ -1328,9 +1325,9 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
 
   it('CEL conditions: declared fetch + real expression over { value, exists, params, self }', async () => {
     await cmds.remember({ key: 'task:t9', value: { status: 'open', priority: 5, assignees: ['alice', 'bob'] } }, alice());
-    await cmds.registerAction(
+    await cmds.declare(
       {
-        action: {
+        kind: 'action', def: {
           id: 'escalate',
           params: { task: { type: 'string', required: true } },
           if: [
@@ -1342,29 +1339,27 @@ describe('workspace declarative actions (the no-code vocabulary tier)', () => {
       },
       alice(),
     );
-    const res = await cmds.invoke({ action: 'escalate', params: { task: 't9' } }, alice());
+    const res = await cmds.evaluate({ kind: 'action', id: 'escalate', params: { task: 't9' } }, alice());
     expect(res.invoked).toBe(true);
 
     // The expression's verdict gates with the same explained errors as v1.
     await cmds.remember({ key: 'task:t9', value: { status: 'closed', priority: 5 } }, alice());
-    await expect(cmds.invoke({ action: 'escalate', params: { task: 't9' } }, alice())).rejects.toThrow(
+    await expect(cmds.evaluate({ kind: 'action', id: 'escalate', params: { task: 't9' } }, alice())).rejects.toThrow(
       /precondition_failed.*status/,
     );
   });
 
   it('CEL conditions: parse errors refuse registration; non-boolean results fail closed', async () => {
     await expect(
-      cmds.registerAction(
-        { action: { id: 'broken', if: [{ cel: 'value.' }], writes: [{ key: 'x' }] } },
+      cmds.declare({ kind: 'action', def: { id: 'broken', if: [{ cel: 'value.' }], writes: [{ key: 'x' }] } },
         alice(),
       ),
     ).rejects.toThrow(/invalid CEL/);
 
-    await cmds.registerAction(
-      { action: { id: 'nonbool', if: [{ cel: '1 + 1' }], writes: [{ key: 'x', value: 1 }] } },
+    await cmds.declare({ kind: 'action', def: { id: 'nonbool', if: [{ cel: '1 + 1' }], writes: [{ key: 'x', value: 1 }] } },
       alice(),
     );
-    await expect(cmds.invoke({ action: 'nonbool' }, alice())).rejects.toThrow(/precondition_failed/);
+    await expect(cmds.evaluate({ kind: 'action', id: 'nonbool' }, alice())).rejects.toThrow(/precondition_failed/);
   });
 });
 
@@ -1382,9 +1377,9 @@ describe('workspace registered views (the declared read vocabulary)', () => {
   });
 
   it('registers a view as a fact, lists and evaluates it (count + render hint)', async () => {
-    const def = await cmds.registerView(
+    const def = await cmds.declare(
       {
-        view: {
+        kind: 'view', def: {
           id: 'open-todos',
           query: { type: 'todo' },
           reduce: 'count',
@@ -1398,27 +1393,26 @@ describe('workspace registered views (the declared read vocabulary)', () => {
     // Vocabulary is state: the definition is a fact.
     expect((await cmds.peek({ key: '_views/open-todos' }, alice()))?._meta.type).toBe('view');
 
-    const res = await cmds.view({ id: 'open-todos' }, alice());
+    const res = await cmds.evaluate({ kind: 'view', id: 'open-todos' }, alice());
     expect(res.value).toBe(2);
     expect(res.count).toBe(2);
     expect(res.render).toEqual({ type: 'metric', label: 'Open todos' });
   });
 
   it('evaluates sum and latest reductions', async () => {
-    await cmds.registerView(
-      { view: { id: 'total-effort', query: { type: 'todo' }, reduce: 'sum', path: 'effort' } },
+    await cmds.declare({ kind: 'view', def: { id: 'total-effort', query: { type: 'todo' }, reduce: 'sum', path: 'effort' } },
       alice(),
     );
-    expect((await cmds.view({ id: 'total-effort' }, alice())).value).toBe(5);
+    expect((await cmds.evaluate({ kind: 'view', id: 'total-effort' }, alice())).value).toBe(5);
 
-    await cmds.registerView({ view: { id: 'latest-todo', query: { type: 'todo' }, reduce: 'latest' } }, alice());
-    const latest = await cmds.view({ id: 'latest-todo' }, alice());
+    await cmds.declare({ kind: 'view', def: { id: 'latest-todo', query: { type: 'todo' }, reduce: 'latest' } }, alice());
+    const latest = await cmds.evaluate({ kind: 'view', id: 'latest-todo' }, alice());
     expect((latest.value as { key: string }).key).toBeDefined();
   });
 
   it('a prefix-less view does not observe the vocabulary itself', async () => {
-    await cmds.registerView({ view: { id: 'everything', query: {} } }, alice());
-    const res = await cmds.view({ id: 'everything' }, alice());
+    await cmds.declare({ kind: 'view', def: { id: 'everything', query: {} } }, alice());
+    const res = await cmds.evaluate({ kind: 'view', id: 'everything' }, alice());
     const keys = (res.value as Array<{ key: string }>).map((e) => e.key);
     expect(keys.some((k) => k.startsWith('_views/') || k.startsWith('_actions/'))).toBe(false);
     expect(keys).toContain('note');
@@ -1429,20 +1423,20 @@ describe('workspace registered views (the declared read vocabulary)', () => {
     expect((await cmds.views(undefined, alice())).views.map((v) => v.id).sort()).toEqual([
       'latest-todo', 'open-todos', 'total-effort',
     ]);
-    await expect(cmds.view({ id: 'everything' }, alice())).rejects.toThrow(/not_found/);
+    await expect(cmds.evaluate({ kind: 'view', id: 'everything' }, alice())).rejects.toThrow(/not_found/);
   });
 
   it('rejects malformed views', async () => {
-    await expect(cmds.registerView({ view: { id: 'bad/slash', query: {} } }, alice())).rejects.toThrow(/must not contain/);
+    await expect(cmds.declare({ kind: 'view', def: { id: 'bad/slash', query: {} } }, alice())).rejects.toThrow(/must not contain/);
     await expect(
-      cmds.registerView({ view: { id: 'bad', query: {}, reduce: 'median' as never } }, alice()),
+      cmds.declare({ kind: 'view', def: { id: 'bad', query: {}, reduce: 'median' as never } }, alice()),
     ).rejects.toThrow(/reduce/);
   });
 
   it('CEL filter narrows the query before reduce; eval errors fail closed per entry', async () => {
-    await cmds.registerView(
+    await cmds.declare(
       {
-        view: {
+        kind: 'view', def: {
           id: 'heavy-todos',
           query: { type: 'todo' },
           // `note` has a string value — value.effort errors there; it is a todo-typed
@@ -1453,11 +1447,11 @@ describe('workspace registered views (the declared read vocabulary)', () => {
       },
       alice(),
     );
-    expect((await cmds.view({ id: 'heavy-todos' }, alice())).value).toBe(1);
+    expect((await cmds.evaluate({ kind: 'view', id: 'heavy-todos' }, alice())).value).toBe(1);
 
     // A broken expression can never be registered.
     await expect(
-      cmds.registerView({ view: { id: 'bad-cel', query: {}, filter: 'value.' } }, alice()),
+      cmds.declare({ kind: 'view', def: { id: 'bad-cel', query: {}, filter: 'value.' } }, alice()),
     ).rejects.toThrow(/valid CEL/);
   });
 });
@@ -1881,17 +1875,15 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
   it('registers an auto-rail action + a subscription, then a fact change advances the run', async () => {
     const alice = ctxFor('alice').ctx;
     // Two auto rails as declared actions, guarded by the run's current node.
-    await cmds.registerAction(
-      { action: { id: 'A-to-B', if: [{ key: 'run/${params.run}', path: 'node', op: 'eq', value: 'A' }], writes: [{ key: 'run/${params.run}', value: { node: 'B' }, type: 'run' }], params: { run: { type: 'string', required: true } } } },
+    await cmds.declare({ kind: 'action', def: { id: 'A-to-B', if: [{ key: 'run/${params.run}', path: 'node', op: 'eq', value: 'A' }], writes: [{ key: 'run/${params.run}', value: { node: 'B' }, type: 'run' }], params: { run: { type: 'string', required: true } } } },
       alice,
     );
-    await cmds.registerAction(
-      { action: { id: 'B-to-C', if: [{ key: 'run/${params.run}', path: 'node', op: 'eq', value: 'B' }], writes: [{ key: 'run/${params.run}', value: { node: 'C' }, type: 'run' }], params: { run: { type: 'string', required: true } } } },
+    await cmds.declare({ kind: 'action', def: { id: 'B-to-C', if: [{ key: 'run/${params.run}', path: 'node', op: 'eq', value: 'B' }], writes: [{ key: 'run/${params.run}', value: { node: 'C' }, type: 'run' }], params: { run: { type: 'string', required: true } } } },
       alice,
     );
     // Both rails subscribe to run/* changes; each fires only when its guard holds.
-    await cmds.registerSubscription({ subscription: { id: 'r-A-to-B', match: { keyPrefix: 'run/' }, invoke: 'A-to-B', params: { run: '${keySuffix}' } } }, alice);
-    await cmds.registerSubscription({ subscription: { id: 'r-B-to-C', match: { keyPrefix: 'run/' }, invoke: 'B-to-C', params: { run: '${keySuffix}' } } }, alice);
+    await cmds.declare({ kind: 'subscription', def: { id: 'r-A-to-B', match: { keyPrefix: 'run/' }, invoke: 'A-to-B', params: { run: '${keySuffix}' } } }, alice);
+    await cmds.declare({ kind: 'subscription', def: { id: 'r-B-to-C', match: { keyPrefix: 'run/' }, invoke: 'B-to-C', params: { run: '${keySuffix}' } } }, alice);
 
     await cmds.remember({ key: 'run/r1', value: { node: 'A' }, type: 'run' }, alice);
     // Reacting to the run's changes drives the deterministic prefix to its
@@ -1903,11 +1895,10 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
 
   it('a reactive write chains via the stream — the reactor does NOT hand re-emit', async () => {
     const { ctx: alice, emitted } = ctxFor('alice');
-    await cmds.registerAction(
-      { action: { id: 'mark', writes: [{ key: 'flag/${params.id}', value: { done: true }, type: 'flag' }], params: { id: { type: 'string', required: true } } } },
+    await cmds.declare({ kind: 'action', def: { id: 'mark', writes: [{ key: 'flag/${params.id}', value: { done: true }, type: 'flag' }], params: { id: { type: 'string', required: true } } } },
       alice,
     );
-    await cmds.registerSubscription({ subscription: { id: 'on-thing', match: { type: 'thing' }, invoke: 'mark', params: { id: '${keySuffix}' } } }, alice);
+    await cmds.declare({ kind: 'subscription', def: { id: 'on-thing', match: { type: 'thing' }, invoke: 'mark', params: { id: '${keySuffix}' } } }, alice);
     await cmds.remember({ key: 'thing/x', value: 1, type: 'thing' }, alice);
 
     const { ctx: busc, emitted: busEmitted } = ctxFor('alice');
@@ -1922,22 +1913,20 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
 
   it('honours the depth cap (loop bound) and the cel match', async () => {
     const alice = ctxFor('alice').ctx;
-    await cmds.registerAction(
-      { action: { id: 'bump', writes: [{ key: 'ctr/${params.id}', value: { n: 1 }, type: 'ctr' }], params: { id: { type: 'string', required: true } } } },
+    await cmds.declare({ kind: 'action', def: { id: 'bump', writes: [{ key: 'ctr/${params.id}', value: { n: 1 }, type: 'ctr' }], params: { id: { type: 'string', required: true } } } },
       alice,
     );
     // maxDepth 2: a fact change at revision 3 must not fire.
-    await cmds.registerSubscription({ subscription: { id: 'capped', match: { keyPrefix: 'ctr/' }, invoke: 'bump', params: { id: '${keySuffix}' }, maxDepth: 2 } }, alice);
+    await cmds.declare({ kind: 'subscription', def: { id: 'capped', match: { keyPrefix: 'ctr/' }, invoke: 'bump', params: { id: '${keySuffix}' }, maxDepth: 2 } }, alice);
     await cmds.remember({ key: 'ctr/c1', value: { n: 0 }, type: 'ctr' }, alice);
     await fire('alice', 'ctr/c1', 3); // over the cap → skipped
     expect((await cmds.peek({ key: 'ctr/c1' }, alice))?.value).toEqual({ n: 0 });
 
     // cel match: only fire when value.ready is true.
-    await cmds.registerAction(
-      { action: { id: 'go', writes: [{ key: 'gate/${params.id}', value: { open: true }, type: 'gate' }], params: { id: { type: 'string', required: true } } } },
+    await cmds.declare({ kind: 'action', def: { id: 'go', writes: [{ key: 'gate/${params.id}', value: { open: true }, type: 'gate' }], params: { id: { type: 'string', required: true } } } },
       alice,
     );
-    await cmds.registerSubscription({ subscription: { id: 'cel-gate', match: { keyPrefix: 'item/', cel: 'value.ready == true' }, invoke: 'go', params: { id: '${keySuffix}' } } }, alice);
+    await cmds.declare({ kind: 'subscription', def: { id: 'cel-gate', match: { keyPrefix: 'item/', cel: 'value.ready == true' }, invoke: 'go', params: { id: '${keySuffix}' } } }, alice);
     await cmds.remember({ key: 'item/i1', value: { ready: false }, type: 'item' }, alice);
     await fire('alice', 'item/i1', 1);
     expect(await cmds.peek({ key: 'gate/i1' }, alice)).toBeNull(); // cel false → no fire
@@ -1956,8 +1945,7 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
     );
     const alice = ctxFor('alice').ctx;
     // No declared action needed — the reaction hands off to a cell tool.
-    await cmds.registerSubscription(
-      { subscription: { id: 'agent-rail', match: { keyPrefix: 'arun/', cel: 'value.node == "decide"' }, deliver: '@alice/models.decide', params: { run: '${keySuffix}' } } },
+    await cmds.declare({ kind: 'subscription', def: { id: 'agent-rail', match: { keyPrefix: 'arun/', cel: 'value.node == "decide"' }, deliver: '@alice/models.decide', params: { run: '${keySuffix}' } } },
       alice,
     );
     await cmds.remember({ key: 'arun/x9', value: { node: 'decide', machine: 'm' }, type: 'machine-run' }, alice);
@@ -1971,10 +1959,10 @@ describe('workspace reactions (subscriptions → declared actions, the generic r
   it('rejects a subscription that sets neither or both of invoke/deliver', async () => {
     const alice = ctxFor('alice').ctx;
     await expect(
-      cmds.registerSubscription({ subscription: { id: 'bad-none', match: { type: 'x' } } as never }, alice),
+      cmds.declare({ kind: 'subscription', def: { id: 'bad-none', match: { type: 'x' } } as never }, alice),
     ).rejects.toThrow(/exactly one of/);
     await expect(
-      cmds.registerSubscription({ subscription: { id: 'bad-both', match: { type: 'x' }, invoke: 'a', deliver: '@o/c.t' } as never }, alice),
+      cmds.declare({ kind: 'subscription', def: { id: 'bad-both', match: { type: 'x' }, invoke: 'a', deliver: '@o/c.t' } as never }, alice),
     ).rejects.toThrow(/exactly one of/);
   });
 
@@ -2151,7 +2139,7 @@ describe('read-response shaping (ADR-0048 — reads answer at the caller\'s alti
   });
 
   it('neighbors shape:"card" shapes the entries map; the edges stay complete', async () => {
-    const nb = await cmds.neighbors({ key: 'kb/small', shape: 'card' }, me());
+    const nb = await cmds.edges({ around: 'kb/small', shape: 'card' }, me());
     expect(nb.inbound.length + nb.outbound.length).toBeGreaterThanOrEqual(2);
     const big = nb.entries['kb/big'] as { value?: { content?: string }; _meta: { shaped?: string } };
     expect(big._meta.shaped).toBe('card');
@@ -2159,16 +2147,16 @@ describe('read-response shaping (ADR-0048 — reads answer at the caller\'s alti
   });
 
   it('graph/links scope by keys + rels and report total; {limit: 0} is "just count"', async () => {
-    const scoped = await cmds.graph({ keys: ['kb/big'] }, me());
+    const scoped = await cmds.edges({ keys: ['kb/big'] }, me());
     expect(scoped.edges.length).toBeGreaterThanOrEqual(2);
     expect(scoped.edges.every((e) => e.from === 'kb/big' || e.to === 'kb/big')).toBe(true);
     expect(scoped.total).toBe(scoped.edges.length);
 
-    const relOnly = await cmds.graph({ keys: ['kb/big'], rels: ['related'] }, me());
+    const relOnly = await cmds.edges({ keys: ['kb/big'], rels: ['related'] }, me());
     expect(relOnly.edges.every((e) => e.rel === 'related')).toBe(true);
     expect(relOnly.edges.length).toBeGreaterThanOrEqual(1);
 
-    const counted = await cmds.links({ limit: 0 }, me());
+    const counted = await cmds.edges({ derived: false, limit: 0 }, me());
     expect(counted.edges).toEqual([]);
     expect(counted.total).toBeGreaterThanOrEqual(2);
   });

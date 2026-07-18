@@ -48,7 +48,7 @@ describe('ADR-0068 — declaration surface parity', () => {
     const A = freshCmds();
     const B = freshCmds();
     const a = await A.declare({ kind: 'action', def: actionDef }, ctxFor('alice').ctx);
-    const b = await B.registerAction({ action: actionDef }, ctxFor('alice').ctx);
+    const b = await B.declare({ kind: 'action', def: actionDef }, ctxFor('alice').ctx);
     expect(norm(a)).toEqual(norm(b));
   });
 
@@ -56,12 +56,12 @@ describe('ADR-0068 — declaration surface parity', () => {
     const A = freshCmds();
     const B = freshCmds();
     expect(norm(await A.declare({ kind: 'view', def: viewDef }, ctxFor('alice').ctx))).toEqual(
-      norm(await B.registerView({ view: viewDef }, ctxFor('alice').ctx)),
+      norm(await B.declare({ kind: 'view', def: viewDef }, ctxFor('alice').ctx)),
     );
     const C = freshCmds();
     const D = freshCmds();
     expect(norm(await C.declare({ kind: 'subscription', def: subDef }, ctxFor('alice').ctx))).toEqual(
-      norm(await D.registerSubscription({ subscription: subDef }, ctxFor('alice').ctx)),
+      norm(await D.declare({ kind: 'subscription', def: subDef }, ctxFor('alice').ctx)),
     );
   });
 
@@ -92,11 +92,11 @@ describe('ADR-0068 — declaration surface parity', () => {
     const ca = ctxFor('alice');
     const cb = ctxFor('alice');
     await A.declare({ kind: 'action', def: actionDef }, ca.ctx);
-    await B.registerAction({ action: actionDef }, cb.ctx);
+    await B.declare({ kind: 'action', def: actionDef }, cb.ctx);
     ca.emitted.length = 0;
     cb.emitted.length = 0;
     const a = await A.evaluate({ kind: 'action', id: 'greet', params: { name: 'x' } }, ca.ctx);
-    const b = await B.invoke({ action: 'greet', params: { name: 'x' } }, cb.ctx);
+    const b = await B.evaluate({ kind: 'action', id: 'greet', params: { name: 'x' } }, cb.ctx);
     expect(norm(a)).toEqual(norm(b));
     expect(ca.emitted).toEqual(cb.emitted);
   });
@@ -113,7 +113,7 @@ describe('ADR-0068 — declaration surface parity', () => {
     }
     // legacy path uses registerView on B for a true legacy comparison:
     const a = await A.evaluate({ kind: 'view', id: 'todos' }, ca);
-    const b = await B.view({ id: 'todos' }, cb);
+    const b = await B.evaluate({ kind: 'view', id: 'todos' }, cb);
     expect(norm(a)).toEqual(norm(b));
   });
 
@@ -123,7 +123,7 @@ describe('ADR-0068 — declaration surface parity', () => {
     const ca = ctxFor('alice').ctx;
     const cb = ctxFor('alice').ctx;
     await A.declare({ kind: 'action', def: actionDef }, ca);
-    await B.registerAction({ action: actionDef }, cb);
+    await B.declare({ kind: 'action', def: actionDef }, cb);
     expect(await A.undeclare({ kind: 'action', id: 'greet' }, ca)).toEqual(await B.deleteAction({ id: 'greet' }, cb));
     expect(norm((await A.actions(undefined, ca)).actions)).toEqual([]);
   });

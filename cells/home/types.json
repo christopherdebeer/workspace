@@ -2,7 +2,7 @@
   "types": [
     {
       "type": "knowledge",
-      "icon": "🧠",
+      "icon": "\ud83e\udde0",
       "manager": "@c15r/home",
       "note": "A durable note/fact in the personal knowledge base. Opens in the home peek modal; no bespoke editor, so it edits generically.",
       "handlers": {
@@ -15,7 +15,7 @@
     },
     {
       "type": "decision",
-      "icon": "⚖️",
+      "icon": "\u2696\ufe0f",
       "manager": "@c15r/home",
       "note": "A recorded decision (what was chosen and why).",
       "handlers": {
@@ -28,7 +28,7 @@
     },
     {
       "type": "project",
-      "icon": "📦",
+      "icon": "\ud83d\udce6",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -40,7 +40,7 @@
     },
     {
       "type": "question",
-      "icon": "❓",
+      "icon": "\u2753",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -52,7 +52,7 @@
     },
     {
       "type": "concept",
-      "icon": "💡",
+      "icon": "\ud83d\udca1",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -64,7 +64,7 @@
     },
     {
       "type": "pattern",
-      "icon": "🧩",
+      "icon": "\ud83e\udde9",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -76,7 +76,7 @@
     },
     {
       "type": "protocol",
-      "icon": "📐",
+      "icon": "\ud83d\udcd0",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -88,7 +88,7 @@
     },
     {
       "type": "source",
-      "icon": "🔗",
+      "icon": "\ud83d\udd17",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -100,7 +100,7 @@
     },
     {
       "type": "reading",
-      "icon": "📖",
+      "icon": "\ud83d\udcd6",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -112,7 +112,7 @@
     },
     {
       "type": "prompt",
-      "icon": "💬",
+      "icon": "\ud83d\udcac",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -124,7 +124,7 @@
     },
     {
       "type": "todo",
-      "icon": "☑️",
+      "icon": "\u2611\ufe0f",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -136,7 +136,7 @@
     },
     {
       "type": "bug",
-      "icon": "🐞",
+      "icon": "\ud83d\udc1e",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -148,7 +148,7 @@
     },
     {
       "type": "fixed",
-      "icon": "✅",
+      "icon": "\u2705",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -160,7 +160,7 @@
     },
     {
       "type": "shipped",
-      "icon": "🚀",
+      "icon": "\ud83d\ude80",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -172,19 +172,19 @@
     },
     {
       "type": "file",
-      "icon": "📄",
+      "icon": "\ud83d\udcc4",
       "label": "value.path",
       "manager": "@c15r/home",
-      "note": "A file as a fact (ADR-0027): a thin pointer to a source/doc/S3 object — never a copy of the bytes. Keyed `file/<path>`. Small text (docs) stores `content` inline so query `contains` is full-text over it; binary/large objects carry `s3Key`/`url` instead. The public docs corpus (file/docs/*) is upserted by scripts/docs-sync.mjs and shared read-only to all.",
+      "note": "A file as a fact (ADR-0027): a thin pointer to a source/doc/S3 object \u2014 never a copy of the bytes. Keyed `file/<path>`. Small text (docs) stores `content` inline so query `contains` is full-text over it; binary/large objects carry `s3Key`/`url` instead. The public docs corpus (file/docs/*) is upserted by scripts/docs-sync.mjs and shared read-only to all.",
       "schema": {
-        "path": "string — the file's logical path (e.g. docs/machine.md)",
-        "contentType": "string — MIME type (e.g. text/markdown)",
-        "bytes": "number — size in bytes",
-        "sha": "string — content hash (change detection / integrity)",
-        "content": "string? — inline body, small text only",
-        "s3Key": "string? — S3 access handle for large/binary objects",
-        "url": "string? — public URL when servable",
-        "source": "string — provenance (docs-sync | s3:PutObject | cells:deployed)"
+        "path": "string \u2014 the file's logical path (e.g. docs/machine.md)",
+        "contentType": "string \u2014 MIME type (e.g. text/markdown)",
+        "bytes": "number \u2014 size in bytes",
+        "sha": "string \u2014 content hash (change detection / integrity)",
+        "content": "string? \u2014 inline body, small text only",
+        "s3Key": "string? \u2014 S3 access handle for large/binary objects",
+        "url": "string? \u2014 public URL when servable",
+        "source": "string \u2014 provenance (docs-sync | s3:PutObject | cells:deployed)"
       },
       "handlers": {
         "render": [
@@ -196,15 +196,15 @@
     },
     {
       "type": "mental-model",
-      "icon": "🧭",
+      "icon": "\ud83e\udded",
       "label": "value.name",
       "manager": "@c15r/home",
-      "note": "One mental model of the latticework (ADR-0045): a named, simplified explanation of how something works, held as ONE fact per model (keyed model/<slug>) so the vector index embeds each individually and inferred similarTo edges (ADR-0030/0031/0032) surface the right model as a LENS beside otherwise-unlinked facts — the latticework as live graph structure, not a list inside a reading blob. `source` refs the reading it was extracted from (projects a `from` edge).",
+      "note": "One mental model of the latticework (ADR-0045): a named, simplified explanation of how something works, held as ONE fact per model (keyed model/<slug>) so the vector index embeds each individually and inferred similarTo edges (ADR-0030/0031/0032) surface the right model as a LENS beside otherwise-unlinked facts \u2014 the latticework as live graph structure, not a list inside a reading blob. `source` refs the reading it was extracted from (projects a `from` edge).",
       "schema": {
-        "name": "string — the model's canonical name",
-        "gloss": "string — one-line explanation of the model",
-        "category": "string — latticework discipline (general-thinking-tools | physics-chemistry-biology | systems | numeracy | microeconomics | art | …)",
-        "source": "ref? — the reading this model was extracted from"
+        "name": "string \u2014 the model's canonical name",
+        "gloss": "string \u2014 one-line explanation of the model",
+        "category": "string \u2014 latticework discipline (general-thinking-tools | physics-chemistry-biology | systems | numeracy | microeconomics | art | \u2026)",
+        "source": "ref? \u2014 the reading this model was extracted from"
       },
       "fields": [
         {
@@ -243,15 +243,15 @@
     },
     {
       "type": "collection",
-      "icon": "🗂️",
+      "icon": "\ud83d\uddc2\ufe0f",
       "manager": "@c15r/home",
-      "note": "ADR-0057: the ONE collections family — a fact that names members (value.members: [keys]) or a query (value.query, the view shape). Presentation facets (group/frame/board) say how it shows up; promotions are facet additions, never rewrites. Members resolve via workspace.members: declared members[] ∪ inbound membership edges (memberOf/inDoc/onBoard/inView), declared array order as seq.",
+      "note": "ADR-0057: the ONE collections family \u2014 a fact that names members (value.members: [keys]) or a query (value.query, the view shape). Presentation facets (group/frame/board) say how it shows up; promotions are facet additions, never rewrites. Members resolve via workspace.edges({around, membership:true}): declared members[] \u222a inbound membership edges (memberOf/inDoc/onBoard/inView), declared array order as seq.",
       "keyPattern": "collection:{id}",
       "schema": {
-        "label": "string? — the collection's display name",
-        "members": "string[]? — declared member fact keys, in order",
-        "query": "object? — intensional membership (the _views/ query shape)",
-        "facets": "object? — { group?, frame?, board? } presentation facets"
+        "label": "string? \u2014 the collection's display name",
+        "members": "string[]? \u2014 declared member fact keys, in order",
+        "query": "object? \u2014 intensional membership (the _views/ query shape)",
+        "facets": "object? \u2014 { group?, frame?, board? } presentation facets"
       },
       "handlers": {
         "render": [
@@ -263,7 +263,7 @@
     },
     {
       "type": "collection-membership",
-      "icon": "📎",
+      "icon": "\ud83d\udcce",
       "manager": "@c15r/home",
       "note": "ADR-0057: an edge-with-properties placing a fact IN a collection (the same ADR-0016 shape as canvas-placement and lit's doc-order). Keyed _collection/<coll>/<memberKey>; the key rule projects `<memberKey> memberOf collection:<coll>`. seq/fold ride the membership, never the member.",
       "keyPattern": "_collection/{coll}/{member}",
@@ -275,8 +275,8 @@
         }
       ],
       "schema": {
-        "seq": "number? — order within the collection",
-        "fold": "boolean? — presentation fold state"
+        "seq": "number? \u2014 order within the collection",
+        "fold": "boolean? \u2014 presentation fold state"
       },
       "handlers": {
         "render": [

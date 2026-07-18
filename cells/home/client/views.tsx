@@ -59,7 +59,7 @@ export function ViewSurface({ def }: { def: ViewDef }): React.JSX.Element {
 
   useEffect(() => {
     let live = true;
-    mcpCall('read', 'workspace.view', { id: def.id })
+    mcpCall('read', 'workspace.evaluate', { kind: 'view', id: def.id })
       .then((r) => {
         if (!live) return;
         if (r.ok) setOut(r.value as ViewEval);

@@ -325,76 +325,9 @@ export interface ContestedResult {
  *  the live vector-indexer can read/patch it too. */
 export { LAYOUT_KEY };
 
-export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'search' | 'reindex' | 'project' | 'pruneSimilar' | 'suggestions' | 'ratify' | 'contested'> {
+export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'reindex' | 'project' | 'pruneSimilar' | 'suggestions' | 'ratify' | 'contested'> {
   return {
-    async search(input, ctx) {
-      const viewer = requireUser(ctx.identity);
-      const { state, grants, vectors } = build(ctx);
-      // No backend wired → degrade gracefully (the substrate still has query/contains).
-      if (!vectors) {
-        return {
-          entries: [],
-          count: 0,
-          total: 0,
-          hint: 'semantic search is not configured on this deployment — use workspace.query (type/tag/prefix filter) or query `contains` (substring search)',
-        };
-      }
-      const text = typeof input?.text === 'string' ? input.text.trim() : '';
-      if (!text) throw new Error('text is required');
-      enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`
-      const limit = Math.min(Math.max(1, input?.limit ?? 10), 50);
-      const topK = limit * 4; // over-fetch; the authoritative re-read + grant post-filter trim
 
-      const [queryVector] = await vectors.embedder.embed([text]);
-      // Filter on string metadata only (type/tag) — safest across S3 Vectors filter
-      // value types. `superseded` is NOT filtered here: the authoritative re-read
-      // (Decision 1) drops retired facts, so the filter is pure optimization, and a
-      // boolean-filter edge case must never break the whole query.
-      const filter: VectorFilter = {};
-      if (input?.type) filter.type = input.type;
-      if (input?.tag) filter.tag = input.tag;
-      const queryOpts = Object.keys(filter).length ? { topK, filter } : { topK };
-
-      // Candidate generation (ADR-0030 Decision 1: the index is NOT an authority).
-      // The readable index set mirrors recall's fold: own slice + every applicable
-      // grant's owner (direct/public/group). Each hit is re-read authoritatively below.
-      type Cand = { owner: string; key: string; outKey: string; score: number };
-      const cands: Cand[] = [];
-      const dim = vectors.embedder.dimension;
-      const ownMatches = await vectors.store.query(indexForScope(viewer, dim), queryVector, queryOpts).catch(() => []);
-      for (const m of ownMatches) cands.push({ owner: viewer, key: m.key, outKey: m.key, score: m.score });
-      for (const g of await applicableGrants(grants, viewer)) {
-        if (g.owner === viewer) continue;
-        const matches = await vectors.store.query(indexForScope(g.owner, dim), queryVector, queryOpts).catch(() => []);
-        for (const m of matches) {
-          if (!grantCovers(g.key, m.key)) continue; // whole-slice / prefix / exact — exactly as peek
-          cands.push({ owner: g.owner, key: m.key, outKey: `${g.owner}/${m.key}`, score: m.score });
-        }
-      }
-
-      // Collapse a key reachable via >1 path to its best score, then rank.
-      const best = new Map<string, Cand>();
-      for (const c of cands) {
-        const prev = best.get(c.outKey);
-        if (!prev || c.score > prev.score) best.set(c.outKey, c);
-      }
-      const ranked = [...best.values()].sort((a, b) => b.score - a.score);
-
-      // Authoritative re-read (Decision 1): scope/grant/timer/supersession re-enforced
-      // on the LIVE substrate with the viewer's identity. A stale or wrong vector — a
-      // superseded fact still in the index, a lapsed lease — is dropped here, never leaked.
-      const entries: Array<{ key: string; value: unknown; _meta: EntryMeta; score: number }> = [];
-      for (const c of ranked) {
-        if (entries.length >= limit) break;
-        const e = await state.get(c.owner, c.key, ctx.identity);
-        if (!e || e._meta.superseded) continue;
-        entries.push({ key: c.outKey, value: e.value, _meta: e._meta, score: Number(c.score.toFixed(4)) });
-      }
-
-      const types = affordancesForTypes(typesOf(entries), await typeDeclsFor(ctx)); // R1 envelope
-      const result = { entries: shapeEntryList(entries, input.shape), count: entries.length, total: entries.length };
-      return Object.keys(types).length ? { ...result, types } : result;
-    },
 
     async reindex(input, ctx) {
       const scope = requireUser(ctx.identity);

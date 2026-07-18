@@ -2,7 +2,7 @@
  * Vectors (ADR-0030) — the semantic-search substrate seam.
  *
  * Two pure interfaces — `Embedder` (text → vector) and `VectorStore` (k-NN index)
- * — plus the addressing/extraction helpers shared by the indexer and `workspace.search`.
+ * — plus the addressing/extraction helpers shared by the indexer and `workspace.query({text})` semantic reads.
  * The point of the seam is reversibility (ADR-0030 §2a): the production backend is
  * S3 Vectors + Bedrock Titan, but the contract is small enough that an in-memory
  * brute-force store + a deterministic hashing embedder satisfy it for tests and for a

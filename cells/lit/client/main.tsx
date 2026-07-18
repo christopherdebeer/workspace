@@ -118,8 +118,8 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   // ADR-0005/0014 row 2): each extensional member carries its placing decoration's
   // {seq, fold}, so lit no longer re-scans `_doc/<id>/` + fetches each fact itself.
   const res = await read<{ members: Array<{ key: string; value: unknown; _meta?: { score?: number }; placement?: { seq?: number; fold?: boolean } }> }>(
-    'workspace.members',
-    { key: `doc:${docId}` },
+    'workspace.edges',
+    { around: `doc:${docId}`, membership: true },
   );
   const cells: LoadedCell[] = (res.members ?? []).map((m) => ({
     key: m.key,
@@ -135,7 +135,7 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   // its own `doc:` namespace). Collapsed to distinct sources.
   const backlinks: LinkRef[] = [];
   try {
-    const nb = await read<{ inbound: Array<{ from: string; rel: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key: `doc:${docId}` });
+    const nb = await read<{ inbound: Array<{ from: string; rel: string }>; entries: Record<string, Entry> }>('workspace.edges', { around: `doc:${docId}` });
     const seen = new Set<string>();
     for (const e of nb.inbound ?? []) {
       if (e.from === `doc:${docId}` || seen.has(e.from)) continue;
@@ -164,7 +164,7 @@ async function saveCell(docId: string, key: string, content: string): Promise<vo
 async function syncCellLinks(cellKey: string, content: string): Promise<void> {
   try {
     const want = new Set(extractWikiTargets(content));
-    const nb = await read<{ outbound: Array<{ to: string; rel: string }> }>('workspace.neighbors', { key: cellKey });
+    const nb = await read<{ outbound: Array<{ to: string; rel: string }> }>('workspace.edges', { around: cellKey });
     const have = (nb.outbound ?? []).filter((e) => e.rel === 'related');
     const haveSet = new Set(have.map((e) => e.to));
     await Promise.all([
@@ -711,7 +711,7 @@ async function enhanceFences(root: HTMLElement, ctx?: { onAgentOutput?: (srcKey:
       continue; // view/cell need a session — leave the SSR'd code block
     } else if (lang === 'view') {
       const box = el('div', 'embed-view'); box.textContent = '…'; pre.replaceWith(box);
-      read<{ value: unknown; render: { label?: string } | null }>('workspace.view', { id: arg })
+      read<{ value: unknown; render: { label?: string } | null }>('workspace.evaluate', { kind: 'view', id: arg })
         .then((res) => {
           box.textContent = '';
           box.appendChild(el('span', 'embed-label', res.render?.label ?? arg));
@@ -1211,7 +1211,7 @@ async function loadFact(key: string): Promise<Extract<ViewModel, { kind: 'fact' 
   let links: LinkRef[] = [];
   let backlinks: LinkRef[] = [];
   try {
-    const nb = await read<{ inbound: Array<{ from: string; rel: string }>; outbound: Array<{ to: string; rel: string }>; entries: Record<string, Entry> }>('workspace.neighbors', { key });
+    const nb = await read<{ inbound: Array<{ from: string; rel: string }>; outbound: Array<{ to: string; rel: string }>; entries: Record<string, Entry> }>('workspace.edges', { around: key });
     const labelFor = (k: string): { label: string; type: string | null } => {
       const ent = nb.entries?.[k];
       return { label: heuristicTitle(ent?.value) || deriveId(k), type: ent?._meta?.type ?? null };

@@ -313,7 +313,7 @@ function MachineView({ name, boot }: { name: string; boot: Boot }): React.ReactE
   const trigger = async (): Promise<void> => {
     const run = new Date().toISOString().replace(/[:.]/g, '-');
     setBusy(true);
-    const r = await mcpCall('act', 'workspace.invoke', { action: `machine.${name}.start`, params: { run } });
+    const r = await mcpCall('act', 'workspace.evaluate', { kind: 'action', id: `machine.${name}.start`, params: { run } });
     setBusy(false);
     if (r.ok) navigate(restRun(runKeyOf(name, run)));
     else alert(`Trigger failed: ${typeof r.value === 'string' ? r.value : JSON.stringify(r.value)}`);
@@ -492,7 +492,7 @@ function RunView({ runKey, boot }: { runKey: string; boot: Boot }): React.ReactE
     if (!fact?.node) return;
     const statement = (typeof window !== 'undefined' && window.prompt(`Why "${to}"? (recorded as the claim)`)) || `chose ${to}`;
     setDeciding(to);
-    await mcpCall('act', 'workspace.invoke', { action: `machine.${machine}.decide-${segId(fact.node)}`, params: { run: runId, to, statement } });
+    await mcpCall('act', 'workspace.evaluate', { kind: 'action', id: `machine.${machine}.decide-${segId(fact.node)}`, params: { run: runId, to, statement } });
     await mcpCall('act', '@c15r/machine.step', { machine, run: runId });
     setDeciding(null);
     await refresh();

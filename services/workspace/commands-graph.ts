@@ -157,7 +157,7 @@ async function walkFrom(
 
 /** The links/edges/graph command handlers (ADR-0044 Inc 5) + the composed `edges`
  *  query (ADR-0069). */
-export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'link' | 'unlink' | 'neighbors' | 'links' | 'graph' | 'members' | 'edges'> {
+export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'link' | 'unlink' | 'edges'> {
   return {
     async link(input, ctx) {
       const scope = requireUser(ctx.identity);
@@ -175,52 +175,6 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       return state.unlink(scope, input.from, input.rel, input.to, ctx.identity);
     },
 
-    async neighbors(input, ctx) {
-      const scope = requireUser(ctx.identity);
-      if (!input?.key) throw new Error('key is required');
-      const { state } = build(ctx);
-      const result = await state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
-      const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx)); // R1 (ADR-0029)
-      // A neighbourhood read is a topology question ("what's connected, and what
-      // is each one?"), not a body dump — default the hydrated entries to `card`
-      // (key + type + salience + a value preview), matching recall's default.
-      // The full neighbour bodies are one `shape:'full'` away; an agent asking
-      // "does this have edges?" no longer pays for every neighbour's whole value.
-      const shaped = { ...result, entries: shapeEntryMap(result.entries, input.shape ?? 'card') };
-      return Object.keys(types).length ? { ...shaped, types } : shaped;
-    },
-
-    async links(input, ctx) {
-      const started = Date.now();
-      const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
-      const all = await state.edges(scope);
-      const prefix = input?.prefix;
-      const prefixed = prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all;
-      const scoped = scopeEdges(prefixed, input); // ADR-0048: keys/rels scope + limit cap; total always counts
-      logEdgeRead(ctx, 'links', scope, input, scoped, started);
-      return scoped;
-    },
-
-    async graph(input, ctx) {
-      const started = Date.now();
-      const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
-      const result = await state.graph(scope, { typeRules: await typeRulesFor(ctx) });
-      const scoped = scopeEdges(result.edges, input); // ADR-0048: `{keys}` = "edges around these facts", not the whole projection
-      logEdgeRead(ctx, 'graph', scope, input, scoped, started);
-      return scoped;
-    },
-
-    async members(input, ctx) {
-      const scope = requireUser(ctx.identity);
-      if (!input?.key) throw new Error('key is required');
-      const { state } = build(ctx);
-      const result = await state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
-      const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx)); // R1 (ADR-0029)
-      const shaped = { ...result, members: shapeEntryList(result.members, input.shape ?? 'card') };
-      return Object.keys(types).length ? { ...shaped, types } : shaped;
-    },
 
     // ── ADR-0069 (C3): one edge query over the four framings ──────────────
     async edges(input, ctx) {

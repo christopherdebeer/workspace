@@ -330,7 +330,7 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
   const [err, setErr] = useState(false);
   useEffect(() => {
     let live = true;
-    mcpCall('read', 'workspace.neighbors', { key: keyName })
+    mcpCall('read', 'workspace.edges', { around: keyName })
       .then((r) => {
         if (!live) return;
         if (r.ok) setN(r.value as { outbound: Edge[]; inbound: Edge[] });
@@ -793,7 +793,7 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
   useEffect(() => {
     if (!authed || !facts?.length) return;
     let live = true;
-    void mcpCall('read', 'workspace.links', { keys: facts.map((f) => f.key) }).then((r) => {
+    void mcpCall('read', 'workspace.edges', { derived: false, keys: facts.map((f) => f.key) }).then((r) => {
       if (live && r.ok) setEdges(edgeMap((r.value as { edges?: Edge[] }).edges ?? []));
     });
     return () => {

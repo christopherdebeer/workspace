@@ -266,7 +266,7 @@ export async function loadDashboard(): Promise<DashboardData> {
     mcpCall('read', 'workspace.query', { limit: 1, shape: 'refs' }),
     mcpCall('read', 'cells.list'),
     mcpCall('read', 'workspace.views'),
-    mcpCall('read', 'workspace.links', { limit: 0 }),
+    mcpCall('read', 'workspace.edges', { derived: false, limit: 0 }),
     mcpCall('read', 'workspace.changes', { last: 1000 }),
   ]);
   // The dashboard already fetched the view list (for the stat count) — feed the

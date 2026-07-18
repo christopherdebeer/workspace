@@ -752,7 +752,7 @@ export async function loadInitialCanvas(defaultState: any, _paramToken?: string 
     const [elsR, decoR, linksR] = await Promise.all([
       timedRead<{ entries: QueryEntry[]; count: number }>('membership', 'workspace.query', membership),
       timedRead<{ entries: QueryEntry[]; count: number }>('placements', 'workspace.query', { prefix: `_canvas/${cid}/` }),
-      timedRead<{ edges: LinkEdge[] }>('links', 'workspace.links', {}).catch((err) => {
+      timedRead<{ edges: LinkEdge[] }>('links', 'workspace.edges', { derived: false }).catch((err) => {
         console.warn('[substrate] links unavailable; decoration edges only', err);
         return { value: { edges: [] as LinkEdge[] }, ms: 0, bytes: 0 };
       }),
@@ -1102,7 +1102,7 @@ async function rebuildEdgesLive(cc: any, cid: string): Promise<void> {
   const deco = await read<{ entries: Array<{ key: string; value: any }> }>('workspace.query', { prefix: `_canvas/${cid}/edge:` });
   let links: LinkEdge[] = [];
   try {
-    links = (await read<{ edges: LinkEdge[] }>('workspace.links', {})).edges ?? [];
+    links = (await read<{ edges: LinkEdge[] }>('workspace.edges', { derived: false })).edges ?? [];
   } catch { /* links unavailable */ }
   lastEdges.clear();
   linkedEdges.clear();
@@ -1267,7 +1267,7 @@ async function expandFact(cc: any, key: string, anchorId: string): Promise<void>
     // canvas card and seeds the local outbox with its value; the card default
     // (truncated bodies) would risk a later save clobbering the real fact with
     // a preview. Topology-only readers take the cheaper card default.
-  }>('workspace.neighbors', { key, shape: 'full' });
+  }>('workspace.edges', { around: key, shape: 'full' });
   const anchor = cc.canvasState.elements.find((e: any) => e.id === anchorId);
   if (!anchor) return;
   const have = new Set(cc.canvasState.elements.map((e: any) => factKeyOf(e)));

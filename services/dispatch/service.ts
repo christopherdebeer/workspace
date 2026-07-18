@@ -141,7 +141,7 @@ export function selectSsrReads(reads: SsrRead[], subPath: string): SsrRead[] {
  */
 const SSR_READ_TARGETS = new Set<string>([
   'workspace.query', 'workspace.changes', 'workspace.peek', 'workspace.recall',
-  'workspace.views', 'workspace.links', 'workspace.attention', 'workspace.neighbors',
+  'workspace.views', 'workspace.edges', 'workspace.attention',
   'workspace.shared', 'workspace.grantRequests',
   'cells.list', 'cells.describeTypes', 'cells.describeTools', 'cells.get',
   'auth.tokens',

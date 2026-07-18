@@ -1280,7 +1280,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           const ids = defs.map((d: any) => (typeof d === 'string' ? d : (d?.id ?? d?.name))).filter(Boolean).slice(0, 6);
           const places: Array<{ name: string; x: number; y: number; z: number; r: number }> = [];
           await Promise.all(ids.map(async (id) => {
-            const r = await mcpCall('read', 'workspace.view', { id }).catch(() => null);
+            const r = await mcpCall('read', 'workspace.evaluate', { kind: 'view', id }).catch(() => null);
             if (disposed || !r || !r.ok) return;
             const keys = keysOfResult(r.value).filter((k) => nodeById.has(k));
             if (keys.length < 3) return;

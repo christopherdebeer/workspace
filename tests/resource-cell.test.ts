@@ -459,6 +459,23 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(res.text).toMatch(/unknown capability/i);
   });
 
+  it('a RETIRED verb fails with a teaching tombstone naming its successor — never "Unhandled"', async () => {
+    // The strangler-fig's final step: the deprecated aliases are gone from the
+    // membrane, but their NAMES must teach. (workspace.graph once rotted live —
+    // callable, unlisted, erroring "Unhandled" — this pins that never recurring.)
+    const graph = await callTool('creator', 'read', { target: 'workspace.graph' });
+    expect(graph.isError).toBe(true);
+    expect(graph.text).toMatch(/capability_retired/);
+    expect(graph.text).toMatch(/workspace\.edges/); // the successor is spelled out
+    const invoke = await callTool('creator', 'act', { target: 'workspace.invoke' });
+    expect(invoke.isError).toBe(true);
+    expect(invoke.text).toMatch(/capability_retired/);
+    expect(invoke.text).toMatch(/workspace\.evaluate/);
+    const search = await callTool('creator', 'read', { target: 'workspace.search' });
+    expect(search.isError).toBe(true);
+    expect(search.text).toMatch(/workspace\.query/);
+  });
+
   it('whoami echoes the ambient frame: live participants from _presence leases (ADR-0086 Inc 2)', async () => {
     presenceEntries = [
       {

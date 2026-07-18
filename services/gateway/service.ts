@@ -160,6 +160,31 @@ function unauthorized(req: ServiceHttpRequest, error: string): ServiceHttpRespon
  * that target needs (its provider's describe, not the whole registry). Returns
  * `null` for an unknown/unaddressable target.
  */
+/** Retired capability names → their successor call (the strangler-fig's final
+ *  step, ADR-0068/0069/0071/0051). A retired name must TEACH, never vanish: the
+ *  deprecated aliases rotted live once before (`workspace.graph` errored
+ *  "Unhandled" while still listed), so on removal every one of them fails with
+ *  the successor spelled out. This map is the membrane's memory of the old
+ *  vocabulary — absent from `$catalog`, present only to teach. */
+const RETIRED: Record<string, string> = {
+  'workspace.search': 'workspace.query({ text })',
+  'workspace.neighbors': 'workspace.edges({ around: key })',
+  'workspace.links': 'workspace.edges({ derived: false })',
+  'workspace.graph': 'workspace.edges({}) — paged; also read("$graph")',
+  'workspace.members': 'workspace.edges({ around: key, membership: true })',
+  'workspace.registerAction': 'workspace.declare({ kind: "action", def })',
+  'workspace.invoke': 'workspace.evaluate({ kind: "action", id, params })',
+  'workspace.registerView': 'workspace.declare({ kind: "view", def })',
+  'workspace.view': 'workspace.evaluate({ kind: "view", id })',
+  'workspace.registerSubscription': 'workspace.declare({ kind: "subscription", def })',
+};
+
+/** The teaching error for a retired capability name, or null when it isn't one. */
+function retiredError(target: string): Error | null {
+  const successor = RETIRED[target];
+  return successor ? new Error(`capability_retired: "${target}" was removed — use ${successor}. See read("$catalog").`) : null;
+}
+
 async function resolveTarget(ctx: ServiceContext, target: string): Promise<Capability | null> {
   if (target.startsWith('@')) {
     // @<owner>/<slug>.<tool>
@@ -331,8 +356,7 @@ function summarizeCatalog(caps: CatalogEntry[]): {
 /** The workspace verbs that act on ANY fact — the floor of a contextual menu. */
 const CORE_FACT_VERBS = new Set([
   'workspace.peek',
-  'workspace.neighbors',
-  'workspace.members',
+  'workspace.edges',
   'workspace.link',
   'workspace.unlink',
   'workspace.remember',
@@ -614,7 +638,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   }
   if (target === TYPES) return buildTypes(ctx);
   // $graph — the Reference projection (authored + derived), the self-model's third surface.
-  if (target === GRAPH) return ctx.serviceClient('workspace').command('graph', {});
+  if (target === GRAPH) return ctx.serviceClient('workspace').command('edges', {});
   // $grants — the authority self-model (ADR-0007), the self-model's fourth surface:
   // what the caller may see and do (scope · grant · partition).
   if (target === GRANTS) return ctx.serviceClient('workspace').command('grants', {});
@@ -629,7 +653,7 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     return ctx.serviceClient('cells').command('platformLogs', (input?.input as Record<string, unknown>) ?? {});
   }
   const cap = await resolveTarget(ctx, target);
-  if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
+  if (!cap) throw retiredError(target) ?? new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
   const check = enforceInput(target, input, cap.inputSchema);
@@ -643,7 +667,7 @@ async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> 
   const target = (input?.target ?? '').trim();
   if (!target) throw new Error(`act requires a \`target\`. Use read("${CATALOG}") to list capabilities.`);
   const cap = await resolveTarget(ctx, target);
-  if (!cap) throw new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
+  if (!cap) throw retiredError(target) ?? new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'act') throw new Error(`"${target}" is read-only — invoke it with read, not act.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
   const check = enforceInput(target, input, cap.inputSchema);
@@ -905,7 +929,7 @@ export const handler = defineMcpService({
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
     'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument. Know your goal? read("workspace.query", {input:{text:"<goal>"}}) surfaces the relevant facts AND capabilities by meaning (ADR-0085) — the intent-first move. ' +
     'Browsing instead? read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one full contract, {detail:"full"} for every schema). Targets look like workspace.query or @owner/cell.tool. ' +
-    'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered, paged), workspace.search (semantic), or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
+    'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered/paged; pass {text} for semantic ranking) or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
     'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
   tools,
   // ADR-0034: declare the MCP-Apps UI extension (spec 2026-01-26 nests it under

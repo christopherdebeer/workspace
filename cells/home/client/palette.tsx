@@ -65,7 +65,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
     });
     // Chips need icons + titles, not bodies — card tier (ADR-0048); the content
     // preview comes from the full `peek` above.
-    void mcpCall('read', 'workspace.neighbors', { key: factKey, shape: 'card' }).then((r) => {
+    void mcpCall('read', 'workspace.edges', { around: factKey, shape: 'card' }).then((r) => {
       if (!live || !r.ok) return;
       const v = r.value as { outbound?: Array<{ to: string; rel: string }>; inbound?: Array<{ from: string; rel: string }>; entries?: Record<string, ListEntry> } | null;
       const seen = new Set<string>([factKey]);
