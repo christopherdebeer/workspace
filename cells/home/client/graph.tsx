@@ -835,27 +835,21 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         controls.setTarget(0, 0, 0, true);
         controls.dollyTo(ORRERY, true);
       };
+      const toEnvelop = (): void => {
+        controls.setTarget(0, 0, 0, true);
+        controls.dollyTo(ENVELOP, true);
+      };
+      /** Are we pulled back toward the orrery (vs up close)? */
+      const isOrrery = (): boolean => controls.distance > (ENVELOP + ORRERY) / 2;
       // Hold SPACE: left-drag TRUCKS (pans) instead of orbiting — the design-
       // tool convention, matching mobile's two-finger drag. Temporary while
       // held; skipped when the palette (or any field) has keyboard focus.
-      let spaceHeld = false;
-      const onSpaceDown = (e: KeyboardEvent): void => {
-        if (e.code !== 'Space' || spaceHeld) return;
-        const tag = document.activeElement?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement as HTMLElement | null)?.isContentEditable) return;
-        e.preventDefault(); // keep Space from scrolling/activating
-        spaceHeld = true;
-        controls.mouseButtons.left = CameraControls.ACTION.TRUCK;
-        renderer.domElement.style.cursor = 'grab';
-      };
-      const onSpaceUp = (e: KeyboardEvent): void => {
-        if (e.code !== 'Space' || !spaceHeld) return;
-        spaceHeld = false;
-        controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
-        renderer.domElement.style.cursor = hoverKey ? 'pointer' : '';
-      };
-      window.addEventListener('keydown', onSpaceDown);
-      window.addEventListener('keyup', onSpaceUp);
+      // No pan/truck: you can't slide a sky sideways. The only motions are
+      // TURN (drag / one finger) and IN-OUT (wheel / pinch) — two degrees of
+      // freedom, the sphere's own. (The old hold-SPACE-to-pan escape hatch
+      // belonged to the aerial cloud; it has no meaning against a globe locked
+      // at the centre, and it could drift you off-axis.)
+      const spaceHeld = false;
 
       // Idle auto-rotate: resume a slow orbit ~5s after the last user gesture.
       let interacting = false;
@@ -1082,10 +1076,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           showRing(null); showCrumb(null);
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
           selectRef.current(null);
-          // "Show me everything" = step back to the orrery and hold the whole
-          // sphere (the sky model's overview — you can't see the far side from
-          // under the dome, so overview is a step OUT, not a re-centre).
-          toOrrery();
+          // The vantage TOGGLE: pulled back → come in and hold the sphere up
+          // close; up close → step out to the whole-sky orrery. Clearing focus
+          // and switching vantage are one gesture, so the same control gets you
+          // both ways (you can always return to the close view).
+          if (isOrrery()) toEnvelop(); else toOrrery();
         },
       };
 
@@ -1796,13 +1791,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       };
 
       const clock = new THREE.Clock();
-      const AUTOROT = 0.12; // rad/sec idle orbit
       let beamFrame = 0;
       const tick = (): void => {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
         const delta = clock.getDelta();
-        if (!interacting && performance.now() - lastInput > 5000) controls.rotate(AUTOROT * delta, 0, false);
+        // No idle auto-orbit: a place you inhabit holds still. (The old slow
+        // spin read as a screensaver, not as the sky wheeling — real diurnal
+        // motion is ~1600× slower, i.e. imperceptible, so a visible spin is
+        // just churn. The sphere waits for your hand.)
         controls.update(delta);
         // Feed the beam (camera + focal point) to the torch shaders + labels.
         controls.getTarget(focusVec);
@@ -2015,8 +2012,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
 
       cleanup = () => {
         gui?.destroy?.();
-        window.removeEventListener('keydown', onSpaceDown);
-        window.removeEventListener('keyup', onSpaceUp);
         renderer.domElement.removeEventListener('pointerdown', onDown);
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
@@ -2567,10 +2562,10 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
             <button
               type="button"
               onClick={() => { setVisible(1); setOverviewNonce((n) => n + 1); }}
-              title="Clear focus and frame the charted substrate"
+              title="Toggle vantage: step out to the whole sky, or come back and hold the sphere up close"
               style={{ ...button, color: ink.text, background: 'transparent', cursor: 'pointer' }}
             >
-              overview
+              vantage
             </button>
             <button
               type="button"
