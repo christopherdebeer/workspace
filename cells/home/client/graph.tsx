@@ -505,10 +505,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // anchor label, so "this is the structure you asked about" is one visual
       // statement — at an alpha far above the resting bases (which exist to
       // keep 9k edges from summing to a wash; a dozen fan edges have no such
-      // problem). Meanwhile the atmosphere dims further: contrast is relative.
+      // problem). The resting lattice keeps its OWN tuned alpha under a
+      // selection — prominence comes from lifting the fan, not from dimming the
+      // rest (owner: "edges' existing tuned dim is right").
       const ACCENT_RGB = hexToRgb(ink.accent);
       const applyEdgeColor = (): void => {
-        const focusActive = !!(selKey || hiSet);
         const paper = isPaper();
         for (let i = 0; i < links.length; i++) {
           const bo = edgeBoostOf(links[i]);
@@ -518,7 +519,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             al = TUNE.focusEdgeAlpha;
           } else {
             [r, g, b] = edgeRGB[i];
-            al = edgeAlphaOf(links[i]) * (focusActive ? TUNE.atmosphereDim : 1);
+            al = edgeAlphaOf(links[i]);
           }
           if (paper) {
             // The buffer carries ALPHA for the paper shader (grayscale);
@@ -1047,7 +1048,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           lastPX = e.clientX; lastPY = e.clientY;
           if (moved) {
             const k = rotPerPx();
-            velYaw = -dx * k; velPitch = dy * k;
+            // Drag-the-sky: horizontal follows the finger (owner: left/right
+            // read inverted the other way); vertical tips the gaze up as the
+            // finger pulls down.
+            velYaw = dx * k; velPitch = dy * k;
             yaw += velYaw; pitch = clampPitch(pitch + velPitch);
             lastMoveT = lastInput = performance.now();
           }
@@ -1464,7 +1468,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         [...constellations].sort((a, b) => (b.authored ? 1 : 0) - (a.authored ? 1 : 0));
       const updateConstellations = (dt: number): void => {
         const k = Math.min(1, dt * TUNE.labelFade * 0.5); // captions ease slower than labels
-        const focusActive = !!(selKey || hiSet);
         // ONE budget for all captions, tighter on a phone (the container pass
         // pushed mobile past ten captions — a pile, not a map).
         const capTotal = Math.min(TUNE.constCap, Math.min(W, H) < 700 ? 4 : 8);
@@ -1493,7 +1496,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // Approach fade: a caption reads from OUTSIDE its region and
             // yields to fact labels once the camera is inside it.
             target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
-            if (focusActive) target *= 0.3; // atmosphere under focus
             if (target > 0.02) {
               // World-proportional caption (fs = f(region radius)) — the
               // declutter box uses its actual projected size.
@@ -1649,7 +1651,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           want.set(n.id, { role, ox, oy });
           return true;
         };
-        const focusActive = !!(selKey || hiSet);
         const mobile = Math.min(W, H) < 700;
         // THE NAME BUDGET (coupled-workspace co-sizing): one mind-sized ceiling
         // on how many names are legible at once — a couple dozen, the focus band
@@ -1726,8 +1727,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // standing-highest name per screen region, persistent across visits —
         // the "north" that lets spatial memory accrue. Steady, grid-distributed,
         // pill-backed (a committed name). Spends the reserved slice of the band.
+        // Landmarks stand THROUGH a selection: the orientation layer is the
+        // resting "north," and a selection makes one thing prominent without
+        // erasing the map around it (owner: "labels' existing tuned dim is
+        // right, selection is just more prominent"). They share the one name
+        // budget with everything else, so the total stays mind-sized.
         let landmarksShown = 0;
-        if (!focusActive && anchorCap > 0) {
+        if (anchorCap > 0) {
           const takenCell = new Set<number>();
           const tryAnchor = (n: any): void => {
             if (landmarksShown >= anchorCap || !n || !isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || !placeworthy(n.label)) return;
@@ -1756,7 +1762,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // updateLabels) so a suggestion never reads as a result. Distributed
         // per screen TERRITORY (a 4×3 grid, ≤ beamPerCell each) so a dense
         // cluster can't monopolise the whisper and starve a sparse region.
-        const suggestBudget = focusActive ? 0 : Math.max(0, focusBand - landmarksShown);
+        // The remainder of the ONE budget after everything already admitted
+        // (selection, hits, neighbours, landmarks) — so at rest OR under a
+        // selection the total legible names stay mind-sized, and the whisper
+        // fills whatever is left rather than being silenced outright.
+        const suggestBudget = Math.max(0, focusBand - want.size);
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || (n.id === hoverKey && hoverLabelKey !== hoverKey)) continue;
@@ -1918,6 +1928,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         dist += (distTarget - dist) * Math.min(1, delta * 6);
         fov += (fovTarget - fov) * Math.min(1, delta * 10);
         applyCamera();
+        // The atmosphere belongs to the GROUND: full under the dome, gone by
+        // the time you have stepped out to hold the globe (a sky seen from
+        // space has no airglow). Fades with the vantage distance.
+        skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, 1 - dist / ORRERY);
         // Feed the beam (camera + focal point) to the torch shaders + labels.
         camPos.copy(camera.position);
         torchUniforms.uFocus.value.copy(focusVec);
@@ -2019,7 +2033,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             folder.add(TUNE, key, min, max, step).onChange(refresh);
           };
           gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
-          gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(() => { skyUniforms.uAtmo.value = TUNE.atmosphere; persist(); });
+          gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(persist); // tick applies it (faded by vantage)
           const torchF = gui.addFolder('torch');
           // Mins go to TRUE zero — the owner's grade railed the old bottom stops
           // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
@@ -2063,7 +2077,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           add(edgesF, 'edgeDerived', 0, 0.5, 0.005);
           add(edgesF, 'edgeAuthored', 0, 1, 0.005);
           add(edgesF, 'focusEdgeAlpha', 0, 1);
-          add(edgesF, 'atmosphereDim', 0, 1);
           add(edgesF, 'edgeFlowSpeed', 0, 2, 0.05); // cycles/sec along the edge
           add(edgesF, 'edgeFlowWidth', 0.05, 0.5, 0.01); // pulse width (0..1 of the edge)
           add(edgesF, 'edgeFlowGain', 0, 3, 0.05); // brightness added at the pulse's peak

@@ -74,10 +74,15 @@ export function edgeStyle(e: GEdge): EdgeStyle {
  * dimmers had).
  */
 export function nodeDOI(n: any, selKey: string | null, nbr: Set<string> | null, hiSet: Set<string> | null, N: number): number {
-  if (selKey) return n.id === selKey ? 1 : nbr?.has(n.id) ? 0.8 : 0.1;
-  if (hiSet) return hiSet.has(n.id) ? 1 : 0.12;
   const salN = 1 - (n.rank ?? N) / Math.max(1, N); // 1 = most salient
-  return 0.12 + 0.88 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
+  const resting = 0.12 + 0.88 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
+  // Selection is ADDITIVE, not subtractive: the selected star and its
+  // neighbours are lifted, but the rest of the field keeps its resting
+  // brightness — a selection makes ONE thing prominent, it does not black out
+  // everything else (owner: "selected items dim the rest too much").
+  if (selKey) return n.id === selKey ? 1 : nbr?.has(n.id) ? Math.max(0.8, resting) : resting;
+  if (hiSet) return hiSet.has(n.id) ? 1 : resting;
+  return resting;
 }
 
 // Generous cap — SDF labels WRAP now (maxWidth), so a longer title becomes

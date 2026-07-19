@@ -55,7 +55,7 @@ export const TUNE_DEFAULTS = {
   // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
   // since the resting mat itself now carries more of the structure).
   edgeSimilar: 0.035, edgeMember: 0.06, edgeDerived: 0.06, edgeAuthored: 0.24,
-  focusEdgeAlpha: 0.76, atmosphereDim: 0.49,
+  focusEdgeAlpha: 0.76,
   // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
   // already fanning from a selection/hit) — direction is source→target, so
   // the animation reads as energy moving the way the edge actually points.
