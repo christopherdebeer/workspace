@@ -13,6 +13,17 @@
 > — a property that may exist only because of how it was built, flagged so a
 > redesign knows it is negotiable.
 
+> **⚠ IN FLUX (2026-07-19): the aerial model below is being replaced by the
+> night-sky model.** The graph is being rebuilt as a *celestial sphere* — you
+> stand under it (planetarium) and can pull out to hold it (orrery), one layout,
+> the camera the only difference; direction on the sphere is meaning, salience
+> is brightness + a whisper of nearness, nothing is culled. Sections §1 and §3
+> (arrival "from above," aerial orbit, 3D terrain, free orbit with "no north")
+> describe the *superseded* vantage. This banner stays until the sky model is
+> felt-validated and the body is rewritten to match. See the conversation of
+> 2026-07-18/19 for the reasoning (surveyor → inhabitant; occlusion and "no
+> north" dissolve on a shell).
+
 ---
 
 ## 1. Arrival

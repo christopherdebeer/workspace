@@ -30,7 +30,7 @@
  * The scene: a luminous additive point cloud (one draw call) with additive
  * backbone edges (`similarTo` dropped — proximity already says it), UnrealBloom
  * (desktop), ACES tone mapping, a camera-aimed TORCH falloff for atmosphere,
- * a star-map camera (camera-controls: dolly-to-cursor, fly-through, fitToSphere
+ * a celestial-sphere camera (camera-controls: planetarium↔orrery on one dolly
  * framing on select) with idle auto-rotate, and CSS2D labels lit by the beam
  * (plus the selection/highlight set, always).
  */
@@ -182,6 +182,36 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       const idx = new Map<string, number>();
 
       const SPREAD = 420;
+      // ── THE CELESTIAL SPHERE (docs/home-graph-experience.md §"night sky") ──
+      // The graph is a SHELL of stars around the origin, not a filled cloud.
+      // DIRECTION on the sphere = meaning (the semantic embedding's direction);
+      // salience is carried by brightness + size (and a whisper of nearness),
+      // NOT by radius — so the SAME model reads as a planetarium from inside
+      // (camera near centre, looking out — the primary vantage) and an orrery
+      // from outside (camera pulled back, holding the globe). One layout, the
+      // camera is the only difference. A shell also dissolves depth-occlusion:
+      // every star is a unique direction, so a tap is unambiguous.
+      const SHELL = SPREAD;
+      const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+      /** Place a node on the shell: keep the embedding's DIRECTION, set radius
+       *  to SHELL (louder stars sit a whisper nearer the enveloped observer).
+       *  A node with no embedding (uncharted) gets a stable golden-spiral seat
+       *  by index, so it still lands on the sphere rather than collapsing to 0. */
+      const toShell = (c: number[] | undefined, i: number, score: number): [number, number, number] => {
+        let x: number, y: number, z: number;
+        const len = c ? Math.hypot(c[0] ?? 0, c[1] ?? 0, c[2] ?? 0) : 0;
+        if (c && len > 1e-6) {
+          x = (c[0] ?? 0) / len; y = (c[1] ?? 0) / len; z = (c[2] ?? 0) / len;
+        } else {
+          const t = ((i % 997) + 0.5) / 997; // pseudo-uniform latitude
+          y = 1 - 2 * t;
+          const rr = Math.sqrt(Math.max(0, 1 - y * y));
+          const th = i * GOLDEN;
+          x = Math.cos(th) * rr; z = Math.sin(th) * rr;
+        }
+        const r = SHELL * (1 - 0.08 * Math.max(0, Math.min(1, score))); // loud = a whisper nearer
+        return [x * r, y * r, z * r];
+      };
 
       // ── selection / highlight state ──
       let selKey: string | null = null;
@@ -752,23 +782,31 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       // ── controls: damped orbit + idle auto-rotate (stops on touch, resumes) ──
       // ── star-map camera (camera-controls) ──
       const controls = new CameraControls(camera, renderer.domElement);
-      controls.dollyToCursor = true; // zoom toward the finger, so the target drifts to where you work
-      controls.infinityDolly = true; // fly THROUGH the cloud, don't bounce off a min distance
-      controls.minDistance = SPREAD * 0.04;
-      controls.maxDistance = SPREAD * 6;
-      // One finger orbits. TWO fingers do both, disambiguated by the gesture: a
-      // symmetric PINCH is a pure dolly (moves the camera origin in/out — FOV is
-      // fixed, this is not a zoom-lens), while a two-finger DRAG trucks (pans).
-      // camera-controls' DOLLY_TRUCK splits them by pinch-distance vs centroid-
-      // motion, so they read as separate gestures on the same two fingers.
+      // PLANETARIUM RIG: the target is LOCKED to the sphere centre (the origin).
+      // Two degrees of freedom, and only two — the sky's own controls:
+      //   ROTATE  = turn your gaze around the centre (which way you face).
+      //   DOLLY   = the ONE continuum from planetarium to orrery: pull IN to
+      //             stand enveloped under the dome, OUT to hold the whole globe.
+      // No truck/pan (that would unlock you from the centre), no dolly-to-cursor
+      // (the centre stays the centre) — so the frame is stable and you can never
+      // lose your bearings, the way the real sky is always oriented.
+      controls.dollyToCursor = false;
+      controls.infinityDolly = false;
+      controls.minDistance = SHELL * 0.1;  // deep envelop (near centre, under the dome)
+      controls.maxDistance = SHELL * 3;    // orrery (the whole sphere in view)
       controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
-      controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY_TRUCK;
-      controls.touches.three = CameraControls.ACTION.TOUCH_TRUCK;
+      controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY; // pinch = in/out only
+      controls.touches.three = CameraControls.ACTION.NONE;
+      controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
+      controls.mouseButtons.wheel = CameraControls.ACTION.DOLLY;
+      controls.mouseButtons.right = CameraControls.ACTION.NONE;
       // camera-controls 2.x ignores the deprecated damping setters; these
       // explicit SmoothDamp values preserve its effective/default behaviour.
       controls.smoothTime = 0.25;
       controls.draggingSmoothTime = 0.125;
-      controls.setLookAt(0, 0, SPREAD * 2.15, 0, 0, 0, false);
+      // Arrival begins at the orrery (you see the globe) and frameBody eases you
+      // IN under the dome — the sky rises to envelop you.
+      controls.setLookAt(0, 0, SHELL * 2.4, 0, 0, 0, false);
       // Open FRAMING the cloud's BODY, not a fixed dolly and not its extremes:
       // centre = per-axis MEDIAN (a mean drifts toward outlier tendrils),
       // radius = the 80th-percentile distance — the far strays hang offscreen
@@ -776,19 +814,21 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       // called after the FIRST entries page lands (the most salient band —
       // already the body of the map), not per append (the camera must not
       // keep re-framing under the user).
+      // The dome centre is fixed at the origin, so framing is just a DISTANCE:
+      // ENVELOP (under the dome, the primary vantage) vs ORRERY (holding the
+      // globe). Both keep the target at the centre — you only ever move in/out.
+      const ENVELOP = SHELL * 0.55; // inside the shell, enveloped but not extreme
+      const ORRERY = SHELL * 2.4;   // the whole sphere in view
       let framed = false;
       const frameBody = (force = false): void => {
         if ((framed && !force) || !nodes.length) return;
         framed = true;
-        const med = (vals: number[]): number => { const s = [...vals].sort((a, b) => a - b); return s[s.length >> 1] ?? 0; };
-        const xs: number[] = [], ys: number[] = [], zs: number[] = [];
-        for (let i = 0; i < nodes.length; i++) { xs.push(posBuf[i * 3]); ys.push(posBuf[i * 3 + 1]); zs.push(posBuf[i * 3 + 2]); }
-        const c = new THREE.Vector3(med(xs), med(ys), med(zs));
-        const dists: number[] = [];
-        for (let i = 0; i < nodes.length; i++) dists.push(c.distanceTo(new THREE.Vector3(posBuf[i * 3], posBuf[i * 3 + 1], posBuf[i * 3 + 2])));
-        dists.sort((a, b) => a - b);
-        const r = (dists[Math.floor(dists.length * 0.8)] ?? SPREAD) * 1.1;
-        controls.fitToSphere(new THREE.Sphere(c, Math.max(r, SPREAD * 0.3)), force);
+        controls.setTarget(0, 0, 0, false);
+        controls.dollyTo(ENVELOP, true); // ease in under the dome
+      };
+      const toOrrery = (): void => {
+        controls.setTarget(0, 0, 0, true);
+        controls.dollyTo(ORRERY, true);
       };
       // Hold SPACE: left-drag TRUCKS (pans) instead of orbiting — the design-
       // tool convention, matching mobile's two-finger drag. Temporary while
@@ -990,13 +1030,17 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       renderer.domElement.addEventListener('pointerup', onUp);
       renderer.domElement.addEventListener('pointerleave', onLeave);
 
-      // Frame a point and re-anchor the orbit to it — camera-controls eases the
-      // whole transition (position + target) and rotation then pivots around it.
-      // A radius (~the local neighbourhood) sets how close it dollies in.
-      const frame = (x: number, y: number, z: number, radius: number): void => {
-        // fitToSphere eases position + target to frame the sphere; the target
-        // becomes the node, so orbit/dolly then pivot around it.
-        controls.fitToSphere(new THREE.Sphere(new THREE.Vector3(x, y, z), radius), true);
+      // TURN TO FACE a star (or a search-hit centroid): you don't fly TO a star
+      // — you can't, in a sky — you turn until it is dead ahead. The camera
+      // swings around the fixed centre to the seat OPPOSITE the star's
+      // direction, so the star sits centred across the dome; distance (how
+      // enveloped you are) is preserved. Its constellation then lights up
+      // around it. This replaces the old "fly to and reframe" — the target
+      // never leaves the centre, so you never lose your bearings.
+      const frame = (x: number, y: number, z: number, _radius: number): void => {
+        const len = Math.hypot(x, y, z) || 1;
+        const dist = controls.distance; // stay at the current envelop level
+        controls.setLookAt(-x / len * dist, -y / len * dist, -z / len * dist, 0, 0, 0, true);
         lastInput = performance.now();
       };
 
@@ -1033,7 +1077,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           showRing(null); showCrumb(null);
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
           selectRef.current(null);
-          frameBody(true);
+          // "Show me everything" = step back to the orrery and hold the whole
+          // sphere (the sky model's overview — you can't see the far side from
+          // under the dome, so overview is a step OUT, not a re-centre).
+          toOrrery();
         },
       };
 
@@ -2089,9 +2136,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
             deg: 0,
             deleted: false,
           };
-          const c = coordMap?.[n.id];
-          if (c) { n.x = c[0] * SPREAD; n.y = c[1] * SPREAD; n.z = (c[2] ?? 0) * SPREAD; }
-          else { const a = i * 2.3999; n.x = Math.cos(a) * SPREAD * 0.6; n.y = Math.sin(a) * SPREAD * 0.6; n.z = ((i % 13) - 6) * 14; }
+          // Seat the node on the celestial shell: embedding DIRECTION → sky
+          // position, salience → a whisper of nearness (brightness/size carry
+          // the rest). Uncharted nodes get a stable golden-spiral seat.
+          [n.x, n.y, n.z] = toShell(coordMap?.[n.id], i, n.score);
           posBuf[i * 3] = n.x; posBuf[i * 3 + 1] = n.y; posBuf[i * 3 + 2] = n.z;
           nodes.push(n);
           nodeById.set(n.id, n);
