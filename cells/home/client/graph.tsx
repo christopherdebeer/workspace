@@ -792,7 +792,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       // lose your bearings, the way the real sky is always oriented.
       controls.dollyToCursor = false;
       controls.infinityDolly = false;
-      controls.minDistance = SHELL * 0.1;  // deep envelop (near centre, under the dome)
+      // The orbit rig looks AT the centre, so it holds the sphere from outside
+      // (an orrery you can pull right up against) rather than standing inside it
+      // — a true "under the dome" vantage needs a first-person rig (a follow-up).
+      // Stay just outside the shell so the view is always full of stars, never
+      // the sparse far-cap "keyhole" you'd get looking at the centre from within.
+      controls.minDistance = SHELL * 1.05; // right up against the surface (immersive)
       controls.maxDistance = SHELL * 3;    // orrery (the whole sphere in view)
       controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
       controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY; // pinch = in/out only
@@ -817,8 +822,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       // The dome centre is fixed at the origin, so framing is just a DISTANCE:
       // ENVELOP (under the dome, the primary vantage) vs ORRERY (holding the
       // globe). Both keep the target at the centre — you only ever move in/out.
-      const ENVELOP = SHELL * 0.55; // inside the shell, enveloped but not extreme
-      const ORRERY = SHELL * 2.4;   // the whole sphere in view
+      const ENVELOP = SHELL * 1.2; // up against the surface — the sphere fills the view
+      const ORRERY = SHELL * 2.4;  // the whole sphere in view
       let framed = false;
       const frameBody = (force = false): void => {
         if ((framed && !force) || !nodes.length) return;
