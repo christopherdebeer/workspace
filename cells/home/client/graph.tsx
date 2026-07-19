@@ -779,83 +779,100 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       };
       if (useBloom()) ensureComposer();
 
-      // ── controls: damped orbit + idle auto-rotate (stops on touch, resumes) ──
-      // ── star-map camera (camera-controls) ──
+      // ── celestial camera (camera-controls): ONE sphere, TWO stances ──
       const controls = new CameraControls(camera, renderer.domElement);
-      // PLANETARIUM RIG: the target is LOCKED to the sphere centre (the origin).
-      // Two degrees of freedom, and only two — the sky's own controls:
-      //   ROTATE  = turn your gaze around the centre (which way you face).
-      //   DOLLY   = the ONE continuum from planetarium to orrery: pull IN to
-      //             stand enveloped under the dome, OUT to hold the whole globe.
-      // No truck/pan (that would unlock you from the centre), no dolly-to-cursor
-      // (the centre stays the centre) — so the frame is stable and you can never
-      // lose your bearings, the way the real sky is always oriented.
+      // The spatial model is a single celestial sphere; the two vantages are
+      // pure camera STANCES on it (the coupling the whole metaphor rests on):
+      //   SKY (planetarium — the primary vantage): you stand AT THE CENTRE and
+      //     look OUT. This is a true first-person rig — the orbit target sits
+      //     one eye-length in front of the camera and the orbit distance is
+      //     locked to it, so "orbiting the target" IS turning your head; the
+      //     rotate speeds are inverted so a drag pulls the SKY, the way you'd
+      //     drag a star chart. Wheel/pinch is a TELESCOPE (fov zoom): you
+      //     never travel, exactly as under the real night sky. (The previous
+      //     stopgap parked the camera just OUTSIDE the shell looking in —
+      //     "deceptively similar but wrong": you saw the far side through the
+      //     gaps, not the dome overhead.)
+      //   ORRERY: you step outside and hold the whole globe, orbiting it —
+      //     the classic look-at rig, dolly for near/far.
+      // No truck/pan in either stance: you can't slide a sky sideways. The
+      // frame stays oriented around the fixed centre, so you never lose your
+      // bearings.
       controls.dollyToCursor = false;
       controls.infinityDolly = false;
-      // The orbit rig looks AT the centre, so it holds the sphere from outside
-      // (an orrery you can pull right up against) rather than standing inside it
-      // — a true "under the dome" vantage needs a first-person rig (a follow-up).
-      // Stay just outside the shell so the view is always full of stars, never
-      // the sparse far-cap "keyhole" you'd get looking at the centre from within.
-      controls.minDistance = SHELL * 1.05; // right up against the surface (immersive)
-      controls.maxDistance = SHELL * 3;    // orrery (the whole sphere in view)
-      controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
-      controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY; // pinch = in/out only
-      controls.touches.three = CameraControls.ACTION.NONE;
       controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
-      controls.mouseButtons.wheel = CameraControls.ACTION.DOLLY;
       controls.mouseButtons.right = CameraControls.ACTION.NONE;
+      controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
+      controls.touches.three = CameraControls.ACTION.NONE;
       // camera-controls 2.x ignores the deprecated damping setters; these
       // explicit SmoothDamp values preserve its effective/default behaviour.
       controls.smoothTime = 0.25;
       controls.draggingSmoothTime = 0.125;
-      // Arrival begins at the orrery (you see the globe) and frameBody eases you
-      // IN under the dome — the sky rises to envelop you.
-      controls.setLookAt(0, 0, SHELL * 2.4, 0, 0, 0, false);
-      // Open FRAMING the cloud's BODY, not a fixed dolly and not its extremes:
-      // centre = per-axis MEDIAN (a mean drifts toward outlier tendrils),
-      // radius = the 80th-percentile distance — the far strays hang offscreen
-      // and the mass the eye reads as "the graph" fills the frame. Streaming:
-      // called after the FIRST entries page lands (the most salient band —
-      // already the body of the map), not per append (the camera must not
-      // keep re-framing under the user).
-      // The dome centre is fixed at the origin, so framing is just a DISTANCE:
-      // ENVELOP (under the dome, the primary vantage) vs ORRERY (holding the
-      // globe). Both keep the target at the centre — you only ever move in/out.
-      const ENVELOP = SHELL * 1.2; // up against the surface — the sphere fills the view
-      const ORRERY = SHELL * 2.4;  // the whole sphere in view
+      // First-person eye-length: tiny against SHELL (420), so the eye never
+      // measurably leaves the centre even as head-turns wobble it.
+      const EYE = 1;
+      const ORRERY = SHELL * 2.4; // the whole sphere held in view
+      let vantage: 'sky' | 'orrery' = 'orrery';
+      const gazeV = new THREE.Vector3();
+      /** Which way to FACE when stepping to the centre: from outside, face the
+       *  region you were holding (the near side of the globe); already at the
+       *  centre, keep the current gaze. */
+      const outwardDir = (): typeof gazeV => {
+        gazeV.copy(camera.position);
+        if (gazeV.lengthSq() > EYE * EYE * 9) return gazeV.normalize();
+        controls.getTarget(gazeV);
+        gazeV.sub(camera.position);
+        return gazeV.lengthSq() > 1e-9 ? gazeV.normalize() : gazeV.set(0, 0, 1);
+      };
+      const enterSky = (transition = true): void => {
+        vantage = 'sky';
+        // Inverted rotate = drag the SKY, not swing a camera around a model.
+        controls.azimuthRotateSpeed = -0.35;
+        controls.polarRotateSpeed = -0.35;
+        // Wheel/pinch become the telescope (fov zoom), never travel.
+        controls.mouseButtons.wheel = CameraControls.ACTION.ZOOM;
+        controls.touches.two = CameraControls.ACTION.TOUCH_ZOOM;
+        controls.minZoom = 0.7;
+        controls.maxZoom = 5;
+        // Free the distance clamps for the flight in, then LOCK to the
+        // eye-length on arrival (locking early would snap the transition).
+        controls.minDistance = EYE;
+        controls.maxDistance = transition ? ORRERY * 2 : EYE;
+        const d = outwardDir();
+        void controls
+          .setLookAt(0, 0, 0, d.x * EYE, d.y * EYE, d.z * EYE, transition)
+          .then(() => { if (vantage === 'sky') controls.maxDistance = EYE; });
+      };
+      const enterOrrery = (transition = true): void => {
+        vantage = 'orrery';
+        controls.azimuthRotateSpeed = 1;
+        controls.polarRotateSpeed = 1;
+        // Outside, wheel/pinch travel again (dolly toward/away from the globe)
+        controls.mouseButtons.wheel = CameraControls.ACTION.DOLLY;
+        controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY;
+        controls.zoomTo(1, transition); // stow the telescope
+        controls.minDistance = SHELL * 1.05;
+        controls.maxDistance = SHELL * 3;
+        // Step out ALONG your gaze: the patch of sky you were facing becomes
+        // the near side of the held globe, still centred in view.
+        const d = outwardDir();
+        void controls.setLookAt(d.x * ORRERY, d.y * ORRERY, d.z * ORRERY, 0, 0, 0, transition);
+      };
+      // Arrival: open OUTSIDE seeing the whole globe, then frameBody eases you
+      // to the centre — the sky rises to envelop you.
+      controls.minDistance = EYE;
+      controls.maxDistance = SHELL * 3;
+      controls.setLookAt(0, 0, ORRERY, 0, 0, 0, false);
       let framed = false;
       const frameBody = (force = false): void => {
         if ((framed && !force) || !nodes.length) return;
         framed = true;
-        controls.setTarget(0, 0, 0, false);
-        controls.dollyTo(ENVELOP, true); // ease in under the dome
+        enterSky(true);
       };
-      const toOrrery = (): void => {
-        controls.setTarget(0, 0, 0, true);
-        controls.dollyTo(ORRERY, true);
-      };
-      const toEnvelop = (): void => {
-        controls.setTarget(0, 0, 0, true);
-        controls.dollyTo(ENVELOP, true);
-      };
-      /** Are we pulled back toward the orrery (vs up close)? */
-      const isOrrery = (): boolean => controls.distance > (ENVELOP + ORRERY) / 2;
-      // Hold SPACE: left-drag TRUCKS (pans) instead of orbiting — the design-
-      // tool convention, matching mobile's two-finger drag. Temporary while
-      // held; skipped when the palette (or any field) has keyboard focus.
-      // No pan/truck: you can't slide a sky sideways. The only motions are
-      // TURN (drag / one finger) and IN-OUT (wheel / pinch) — two degrees of
-      // freedom, the sphere's own. (The old hold-SPACE-to-pan escape hatch
-      // belonged to the aerial cloud; it has no meaning against a globe locked
-      // at the centre, and it could drift you off-axis.)
-      const spaceHeld = false;
 
-      // Idle auto-rotate: resume a slow orbit ~5s after the last user gesture.
-      let interacting = false;
       let lastInput = performance.now();
-      controls.addEventListener('controlstart', () => { interacting = true; lastInput = performance.now(); });
-      controls.addEventListener('controlend', () => { interacting = false; lastInput = performance.now(); });
+      controls.addEventListener('controlstart', () => { lastInput = performance.now(); });
+      controls.addEventListener('controlend', () => { lastInput = performance.now(); });
       const focusVec = new THREE.Vector3();
 
       // ── picking: a tap (not a drag) selects the nearest node ON SCREEN ──
@@ -954,7 +971,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         hoverKey = key;
         if (key) hoverRetiredUntil.delete(key);
         showHover(n);
-        renderer.domElement.style.cursor = key ? 'pointer' : spaceHeld ? 'grab' : '';
+        renderer.domElement.style.cursor = key ? 'pointer' : '';
         // Geometry responds on the next render frame; text does not enter the
         // label pool until this target survives the dwell.
         applyNodeAlpha();
@@ -987,7 +1004,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           if (n) setHover(n);
           else {
             setHover(null);
-            renderer.domElement.style.cursor = constellationAt(x, y, false) ? 'pointer' : spaceHeld ? 'grab' : '';
+            renderer.domElement.style.cursor = constellationAt(x, y, false) ? 'pointer' : '';
           }
         });
       };
@@ -1030,16 +1047,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       renderer.domElement.addEventListener('pointerleave', onLeave);
 
       // TURN TO FACE a star (or a search-hit centroid): you don't fly TO a star
-      // — you can't, in a sky — you turn until it is dead ahead. The camera
-      // swings around the fixed centre to the seat OPPOSITE the star's
-      // direction, so the star sits centred across the dome; distance (how
-      // enveloped you are) is preserved. Its constellation then lights up
-      // around it. This replaces the old "fly to and reframe" — the target
-      // never leaves the centre, so you never lose your bearings.
+      // — you can't, in a sky — you turn until it is dead ahead. Under the
+      // dome that is literally a head-turn (and it quietly re-seats the eye at
+      // the exact centre — head-turns wobble it by an eye-length). From the
+      // orrery you swing around the globe until the star's region is the near
+      // side, facing you. Either way the fixed centre keeps your bearings.
       const frame = (x: number, y: number, z: number, _radius: number): void => {
         const len = Math.hypot(x, y, z) || 1;
-        const dist = controls.distance; // stay at the current envelop level
-        controls.setLookAt(-x / len * dist, -y / len * dist, -z / len * dist, 0, 0, 0, true);
+        if (vantage === 'sky') {
+          void controls.setLookAt(0, 0, 0, x / len * EYE, y / len * EYE, z / len * EYE, true);
+        } else {
+          void controls.setLookAt(x / len * ORRERY, y / len * ORRERY, z / len * ORRERY, 0, 0, 0, true);
+        }
         lastInput = performance.now();
       };
 
@@ -1076,11 +1095,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           showRing(null); showCrumb(null);
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
           selectRef.current(null);
-          // The vantage TOGGLE: pulled back → come in and hold the sphere up
-          // close; up close → step out to the whole-sky orrery. Clearing focus
-          // and switching vantage are one gesture, so the same control gets you
-          // both ways (you can always return to the close view).
-          if (isOrrery()) toEnvelop(); else toOrrery();
+          // The vantage TOGGLE: under the dome → step outside and hold the
+          // globe; outside → step back to the centre, under the sky. Clearing
+          // focus and switching stance are one gesture, so the same control
+          // gets you both ways.
+          if (vantage === 'sky') enterOrrery(); else enterSky();
         },
       };
 
@@ -2562,7 +2581,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
             <button
               type="button"
               onClick={() => { setVisible(1); setOverviewNonce((n) => n + 1); }}
-              title="Toggle vantage: step out to the whole sky, or come back and hold the sphere up close"
+              title="Toggle vantage: step outside to hold the whole globe, or return to the centre under the sky"
               style={{ ...button, color: ink.text, background: 'transparent', cursor: 'pointer' }}
             >
               vantage
