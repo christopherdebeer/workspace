@@ -96,13 +96,13 @@ interface GraphReach {
   paused: boolean;
 }
 
-function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, overviewNonce }: {
+function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   visible: number;
   onReach: (reach: GraphReach) => void;
   revealNonce: number;
-  overviewNonce: number;
+  vantageNonce: number;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
@@ -113,7 +113,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
     select: (key: string | null, fly?: boolean) => void;
     setVisible: (f: number) => void;
     reveal: () => void;
-    overview: () => void;
+    toggleVantage: () => void;
   } | null>(null);
   const lastExternal = useRef<string | null>(null);
   // Loading UX: 'fast' = the first pages are still in flight, 'full' = the
@@ -1164,17 +1164,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         },
         reveal: () => { /* installed once the initial page has mounted */ },
-        overview: () => {
-          lastExternal.current = null;
-          setHover(null);
-          selKey = null; nbr = null; hiSet = null;
-          showRing(null); showCrumb(null);
-          applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
-          selectRef.current(null);
-          // The vantage TOGGLE: under the dome → step outside and hold the
-          // globe; outside → step back to the centre, under the sky. Clearing
-          // focus and switching stance are one gesture, so the same control
-          // gets you both ways.
+        toggleVantage: () => {
+          // Under the dome → step outside and hold the globe; outside → step
+          // back to the centre, under the sky. Purely a change of STANCE: the
+          // selection (its ring, breadcrumb, lit neighbourhood) and your gaze
+          // are preserved across the move — a selected star stays selected and
+          // centred whether you are standing under it or holding it at arm's
+          // length. (Deselecting is its own gesture: tap empty sky.)
           if (vantage === 'sky') enterOrrery(); else enterSky();
         },
       };
@@ -2583,12 +2579,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
     api.current?.reveal();
   }, [revealNonce]);
 
-  const lastOverviewNonce = useRef(overviewNonce);
+  const lastVantageNonce = useRef(vantageNonce);
   useEffect(() => {
-    if (overviewNonce === lastOverviewNonce.current) return;
-    lastOverviewNonce.current = overviewNonce;
-    api.current?.overview();
-  }, [overviewNonce]);
+    if (vantageNonce === lastVantageNonce.current) return;
+    lastVantageNonce.current = vantageNonce;
+    api.current?.toggleVantage();
+  }, [vantageNonce]);
 
   return (
     <>
@@ -2635,7 +2631,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
   // salience filter from masquerading as a data boundary.
   const [visible, setVisible] = useState(1);
   const [revealNonce, setRevealNonce] = useState(0);
-  const [overviewNonce, setOverviewNonce] = useState(0);
+  const [vantageNonce, setVantageNonce] = useState(0);
   const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false, paused: false });
   const surface: React.CSSProperties = {
     fontFamily: ink.mono,
@@ -2670,7 +2666,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         visible={visible}
         onReach={setReach}
         revealNonce={revealNonce}
-        overviewNonce={overviewNonce}
+        vantageNonce={vantageNonce}
       />
       <section
         aria-label="Graph visibility"
@@ -2709,8 +2705,8 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
           <div style={{ display: 'flex', gap: '0.35rem' }}>
             <button
               type="button"
-              onClick={() => { setVisible(1); setOverviewNonce((n) => n + 1); }}
-              title="Toggle vantage: step outside to hold the whole globe, or return to the centre under the sky"
+              onClick={() => setVantageNonce((n) => n + 1)}
+              title="Toggle vantage: step outside to hold the whole globe, or return to the centre under the sky (your selection is kept)"
               style={{ ...button, color: ink.text, background: 'transparent', cursor: 'pointer' }}
             >
               vantage
