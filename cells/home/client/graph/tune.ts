@@ -80,6 +80,12 @@ export const TUNE_DEFAULTS = {
   // scene mode: 'dusk' = the luminous dark field; 'paper' = a cartographic
   // star ATLAS — ink stars and fine linework on warm paper, bloom off.
   sceneMode: 'dusk' as 'dusk' | 'paper',
+  // ATMOSPHERE (dusk only): the sky is not a flat void — a world-fixed dome
+  // darkens from a faint warm horizon glow up to a deep zenith, so the horizon
+  // stays level as you turn your head (the planetarium "which way is up" cue).
+  // 0 = flat sceneBg (the old void); 1 = full gradient. Dark by design — never
+  // blooms, never drowns a star.
+  atmosphere: 0.7,
   // places (cartography): constellation captions — COMPUTED from salience
   // hubs + dominant types, with registered VIEWS as the authored layer — and
   // resting orientation anchors (top-salience node per screen region).

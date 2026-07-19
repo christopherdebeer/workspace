@@ -30,9 +30,10 @@
  * The scene: a luminous additive point cloud (one draw call) with additive
  * backbone edges (`similarTo` dropped — proximity already says it), UnrealBloom
  * (desktop), ACES tone mapping, a camera-aimed TORCH falloff for atmosphere,
- * a celestial-sphere camera (camera-controls: planetarium↔orrery on one dolly
- * framing on select) with idle auto-rotate, and CSS2D labels lit by the beam
- * (plus the selection/highlight set, always).
+ * a celestial-sphere camera (a hand-rolled quaternion rig: planetarium↔orrery
+ * are one distance scalar, gimbal-free look, a field-of-view telescope, drag
+ * momentum), turn-to-face on select, and CSS2D labels lit by the beam (plus
+ * the selection/highlight set, always).
  */
 import * as React from 'react';
 import { mcpCall } from './lib';
@@ -51,7 +52,7 @@ import {
 } from './graph/style';
 import {
   type GEdge, type EntryPage, type ChangeEvent, type ChangePage, type GraphMeta,
-  INITIAL_ENTRY_LIMIT, LIVE_NODE_HEADROOM, LIVE_EDGE_CAPACITY, CHANGE_POLL_MS,
+  REVEAL_ENTRY_LIMIT, LIVE_NODE_HEADROOM, LIVE_EDGE_CAPACITY, CHANGE_POLL_MS,
   fetchEntryPage, fetchEdgesForKeys, fetchChangeHead, fetchGraphMeta,
   keysOfResult, isPlumbing,
 } from './graph/data';
@@ -87,13 +88,12 @@ function guard<A extends unknown[]>(fn: (...a: A) => void): (...a: A) => void {
 }
 
 
-let ccInstalled = false;
-
 interface GraphReach {
   charted: number;
   total: number;
   loading: boolean;
   hasMore: boolean;
+  paused: boolean;
 }
 
 function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, overviewNonce }: {
@@ -168,8 +168,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
         return null;
       }
-      const { CameraControls, EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject, TroikaText } = addons;
-      if (!ccInstalled) { CameraControls.install({ THREE }); ccInstalled = true; }
+      const { EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject, TroikaText } = addons;
       // Live, appendable model state — grown in place by the append API.
       const nodes: any[] = [];
       const links: any[] = [];
@@ -299,6 +298,36 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       let W = el.clientWidth || window.innerWidth, H = el.clientHeight || window.innerHeight;
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(PAL.bg);
+      // ── the ATMOSPHERE: a world-fixed sky dome behind the stars (dusk only) ──
+      // A night sky is not a flat void: it darkens from a faint warm horizon
+      // glow (dusk, the ground's airglow) up to a deep zenith. A big inward-
+      // facing sphere coloured by world ELEVATION paints that gradient — and
+      // because it is world-fixed, the horizon stays level as you turn your
+      // head, the planetarium cue for which way is up. Drawn first, depth-test
+      // off, so the additive stars glow straight over it; dark by construction
+      // so it never blooms or drowns them. Paper mode hides it (print is flat).
+      const skyUniforms = { uAtmo: { value: TUNE.atmosphere }, uBase: { value: new THREE.Color(PAL.bg) } };
+      const skyMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+        uniforms: skyUniforms,
+        vertexShader:
+          'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader:
+          'varying vec3 vDir; uniform float uAtmo; uniform vec3 uBase;' +
+          'void main(){ float up = clamp(vDir.y, -1.0, 1.0);' +
+          ' vec3 zenith = vec3(0.020, 0.023, 0.043);' +   // deep, faintly indigo overhead
+          ' vec3 horizon = vec3(0.115, 0.086, 0.058);' +  // warm dusk band at the equator
+          ' vec3 nadir = vec3(0.015, 0.013, 0.012);' +    // near-black underfoot
+          ' vec3 col = up >= 0.0 ? mix(horizon, zenith, smoothstep(0.0, 1.0, up)) : mix(horizon, nadir, smoothstep(0.0, 1.0, -up));' +
+          ' col += vec3(0.16, 0.10, 0.045) * exp(-abs(up) * 5.5);' + // amber airglow hugging the horizon
+          ' col = mix(uBase, col, uAtmo);' +
+          ' gl_FragColor = vec4(col, 1.0); }',
+      });
+      const skyDome = new THREE.Mesh(new THREE.SphereGeometry(SHELL * 8, 32, 24), skyMat);
+      skyDome.frustumCulled = false;
+      skyDome.renderOrder = -1;
+      skyDome.visible = !isPaper();
+      scene.add(skyDome);
       const camera = new THREE.PerspectiveCamera(55, W / H, 1, 8000);
       camera.position.set(0, 0, SPREAD * 2.15);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -779,101 +808,87 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       };
       if (useBloom()) ensureComposer();
 
-      // ── celestial camera (camera-controls): ONE sphere, TWO stances ──
-      const controls = new CameraControls(camera, renderer.domElement);
+      // ── celestial camera: a custom QUATERNION rig (ONE sphere, TWO stances) ──
       // The spatial model is a single celestial sphere; the two vantages are
-      // pure camera STANCES on it (the coupling the whole metaphor rests on):
-      //   SKY (planetarium — the primary vantage): you stand AT THE CENTRE and
-      //     look OUT. This is a true first-person rig — the orbit target sits
-      //     one eye-length in front of the camera and the orbit distance is
-      //     locked to it, so "orbiting the target" IS turning your head; the
-      //     rotate speeds are inverted so a drag pulls the SKY, the way you'd
-      //     drag a star chart. Wheel/pinch is a TELESCOPE (fov zoom): you
-      //     never travel, exactly as under the real night sky. (The previous
-      //     stopgap parked the camera just OUTSIDE the shell looking in —
-      //     "deceptively similar but wrong": you saw the far side through the
-      //     gaps, not the dome overhead.)
-      //   ORRERY: you step outside and hold the whole globe, orbiting it —
-      //     the classic look-at rig, dolly for near/far.
-      // No truck/pan in either stance: you can't slide a sky sideways. The
-      // frame stays oriented around the fixed centre, so you never lose your
-      // bearings.
-      controls.dollyToCursor = false;
-      controls.infinityDolly = false;
-      controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
-      controls.mouseButtons.right = CameraControls.ACTION.NONE;
-      controls.touches.one = CameraControls.ACTION.TOUCH_ROTATE;
-      controls.touches.three = CameraControls.ACTION.NONE;
-      // camera-controls 2.x ignores the deprecated damping setters; these
-      // explicit SmoothDamp values preserve its effective/default behaviour.
-      controls.smoothTime = 0.25;
-      controls.draggingSmoothTime = 0.125;
-      // First-person eye-length: tiny against SHELL (420), so the eye never
-      // measurably leaves the centre even as head-turns wobble it.
-      const EYE = 1;
-      const ORRERY = SHELL * 2.4; // the whole sphere held in view
+      // pure camera STANCES on it — and BOTH collapse to the same two numbers,
+      // an ORIENTATION (which way you face) and a DISTANCE from the origin:
+      //   SKY (planetarium, the primary vantage): distance 0 — the eye is AT the
+      //     centre, looking OUT. A drag turns your head; you never travel.
+      //   ORRERY: distance ORRERY — you step outside and that SAME orientation
+      //     now holds the whole globe out in front of you (camera parked at
+      //     −forward·distance, looking back down its own gaze at the origin).
+      // Orientation is yaw+pitch composed into a quaternion (Euler 'YXZ', no
+      // roll — a sky needs none), so there is NO polar gimbal: yaw spins freely
+      // at every pitch and pitch merely clamps a hair short of the zenith. This
+      // is why the rig is hand-rolled rather than camera-controls: that library
+      // orbits a target in spherical coords and locks/flips at the poles (the
+      // "gimbal" the owner hit). The TELESCOPE is field-of-view — a wide 82°
+      // down to a tight 4°, a real magnification range, not a timid dolly-zoom.
+      // Drag carries MOMENTUM; the vantage toggle and turn-to-face ease. No pan
+      // in either stance — you can't slide a sky sideways.
+      const ORRERY = SHELL * 2.4;         // holding the whole globe
+      const FOV_WIDE = 82, FOV_TELE = 4;  // the telescope's full throw
+      const PITCH_LIMIT = Math.PI / 2 - 0.015;
+      let yaw = 0, pitch = 0;             // orientation (radians)
+      let velYaw = 0, velPitch = 0;       // angular momentum (radians/frame)
+      let dist = ORRERY, distTarget = ORRERY;  // 0 = sky, ORRERY = orrery
+      let fov = FOV_WIDE, fovTarget = FOV_WIDE;
+      let turnYaw: number | null = null, turnPitch: number | null = null; // eased turn-to-face
       let vantage: 'sky' | 'orrery' = 'orrery';
-      const gazeV = new THREE.Vector3();
-      /** Which way to FACE when stepping to the centre: from outside, face the
-       *  region you were holding (the near side of the globe); already at the
-       *  centre, keep the current gaze. */
-      const outwardDir = (): typeof gazeV => {
-        gazeV.copy(camera.position);
-        if (gazeV.lengthSq() > EYE * EYE * 9) return gazeV.normalize();
-        controls.getTarget(gazeV);
-        gazeV.sub(camera.position);
-        return gazeV.lengthSq() > 1e-9 ? gazeV.normalize() : gazeV.set(0, 0, 1);
+      let lastInput = performance.now();
+      const camEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+      const fwdV = new THREE.Vector3();
+      const focusVec = new THREE.Vector3();
+      camera.rotation.order = 'YXZ';
+      const clampPitch = (p: number): number => Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p));
+      // Turn the gaze to a world DIRECTION (a star, a region), eased in tick().
+      // yaw 0 faces +Z; pitch is elevation. You don't fly to a star in a sky —
+      // you turn until it is dead ahead, and the fixed centre keeps your bearings.
+      const faceDir = (x: number, y: number, z: number): void => {
+        const len = Math.hypot(x, y, z) || 1;
+        turnYaw = Math.atan2(x / len, z / len);
+        turnPitch = clampPitch(Math.asin(y / len));
+        velYaw = velPitch = 0;
+        lastInput = performance.now();
       };
+      // The two stances are one animated scalar (distance) — orientation is
+      // shared, so stepping out keeps the very patch of sky you were studying
+      // centred, now as the near face of the held globe.
       const enterSky = (transition = true): void => {
-        vantage = 'sky';
-        // Inverted rotate = drag the SKY, not swing a camera around a model.
-        controls.azimuthRotateSpeed = -0.35;
-        controls.polarRotateSpeed = -0.35;
-        // Wheel/pinch become the telescope (fov zoom), never travel.
-        controls.mouseButtons.wheel = CameraControls.ACTION.ZOOM;
-        controls.touches.two = CameraControls.ACTION.TOUCH_ZOOM;
-        controls.minZoom = 0.7;
-        controls.maxZoom = 5;
-        // Free the distance clamps for the flight in, then LOCK to the
-        // eye-length on arrival (locking early would snap the transition).
-        controls.minDistance = EYE;
-        controls.maxDistance = transition ? ORRERY * 2 : EYE;
-        const d = outwardDir();
-        void controls
-          .setLookAt(0, 0, 0, d.x * EYE, d.y * EYE, d.z * EYE, transition)
-          .then(() => { if (vantage === 'sky') controls.maxDistance = EYE; });
+        vantage = 'sky'; distTarget = 0; fovTarget = FOV_WIDE;
+        if (!transition) { dist = 0; fov = FOV_WIDE; }
       };
       const enterOrrery = (transition = true): void => {
-        vantage = 'orrery';
-        controls.azimuthRotateSpeed = 1;
-        controls.polarRotateSpeed = 1;
-        // Outside, wheel/pinch travel again (dolly toward/away from the globe)
-        controls.mouseButtons.wheel = CameraControls.ACTION.DOLLY;
-        controls.touches.two = CameraControls.ACTION.TOUCH_DOLLY;
-        controls.zoomTo(1, transition); // stow the telescope
-        controls.minDistance = SHELL * 1.05;
-        controls.maxDistance = SHELL * 3;
-        // Step out ALONG your gaze: the patch of sky you were facing becomes
-        // the near side of the held globe, still centred in view.
-        const d = outwardDir();
-        void controls.setLookAt(d.x * ORRERY, d.y * ORRERY, d.z * ORRERY, 0, 0, 0, transition);
+        vantage = 'orrery'; distTarget = ORRERY; fovTarget = FOV_WIDE;
+        if (!transition) { dist = ORRERY; fov = FOV_WIDE; }
       };
-      // Arrival: open OUTSIDE seeing the whole globe, then frameBody eases you
+      // Arrival: open OUTSIDE holding the whole globe, then frameBody eases you
       // to the centre — the sky rises to envelop you.
-      controls.minDistance = EYE;
-      controls.maxDistance = SHELL * 3;
-      controls.setLookAt(0, 0, ORRERY, 0, 0, 0, false);
+      dist = distTarget = ORRERY;
       let framed = false;
       const frameBody = (force = false): void => {
         if ((framed && !force) || !nodes.length) return;
         framed = true;
         enterSky(true);
       };
-
-      let lastInput = performance.now();
-      controls.addEventListener('controlstart', () => { lastInput = performance.now(); });
-      controls.addEventListener('controlend', () => { lastInput = performance.now(); });
-      const focusVec = new THREE.Vector3();
+      // Rebuild the camera from (yaw, pitch, dist, fov) — called every frame.
+      const applyCamera = (): void => {
+        camEuler.set(pitch, yaw, 0);
+        camera.quaternion.setFromEuler(camEuler);
+        fwdV.set(0, 0, -1).applyQuaternion(camera.quaternion);
+        camera.position.copy(fwdV).multiplyScalar(-dist);
+        if (Math.abs(camera.fov - fov) > 1e-3) { camera.fov = fov; camera.updateProjectionMatrix(); }
+        // Focal point = where the view ray meets the shell dead ahead (screen
+        // centre) — this is what the torch/label selector aims at. Solve
+        // |camPos + t·fwd| = SHELL for the near root; from the centre that is
+        // simply fwd·SHELL, from outside it is the near cap of the globe.
+        const b = camera.position.dot(fwdV);
+        const c = camera.position.lengthSq() - SHELL * SHELL;
+        const disc = b * b - c;
+        const t = disc >= 0 ? (-b - Math.sqrt(disc) > 1e-3 ? -b - Math.sqrt(disc) : -b + Math.sqrt(disc)) : SHELL;
+        focusVec.copy(camera.position).addScaledVector(fwdV, t);
+      };
+      applyCamera();
 
       // ── picking: a tap (not a drag) selects the nearest node ON SCREEN ──
       // The raycaster is gone (2026-07-13 owner report: "really hard to select
@@ -985,17 +1000,60 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           }, HOVER_LABEL_DWELL_MS);
         }
       };
+      // ── camera input: drag = turn the gaze; pinch / wheel = the telescope ──
+      // Live pointers (for one-finger turn vs two-finger pinch), the last
+      // position of the rotating pointer, and the pinch baseline.
+      const pointers = new Map<number, { x: number; y: number }>();
+      let lastPX = 0, lastPY = 0, lastMoveT = 0;
+      let pinchDist0 = 0, pinchFov0 = 0;
+      // Radians per pixel that keeps the sky under the finger (drag-the-sky):
+      // a drag the height of the viewport turns you by ~one field-of-view, so
+      // the deeper you telescope in, the finer the turn — which is what makes a
+      // tight zoom usable. `frame()`/`applyCamera()` own the rest.
+      const rotPerPx = (): number => (fov * Math.PI / 180) / Math.max(H, 1);
       const onDown = (e: PointerEvent): void => {
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         downX = e.clientX; downY = e.clientY; moved = false; pointerDown = true;
-        dragThreshold = e.pointerType === 'touch' ? 14 : 6;
+        lastPX = e.clientX; lastPY = e.clientY;
+        velYaw = velPitch = 0; turnYaw = turnPitch = null; // a touch stops the glide
+        lastInput = performance.now();
+        if (pointers.size === 2) {
+          const [a, b] = [...pointers.values()];
+          pinchDist0 = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+          pinchFov0 = fov;
+        }
+        try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* */ }
         if (e.pointerType === 'touch') setHover(null);
       };
       const onMove = (e: PointerEvent): void => {
+        const tracked = pointers.get(e.pointerId);
+        if (tracked) { tracked.x = e.clientX; tracked.y = e.clientY; }
         if (pointerDown && Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) {
           moved = true;
           setHover(null);
         }
-        if (pointerDown || e.pointerType === 'touch' || hoverPickRaf) return;
+        // Two fingers → pinch the telescope (fov), never travel.
+        if (pointers.size >= 2) {
+          const [a, b] = [...pointers.values()];
+          const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_WIDE, pinchFov0 * pinchDist0 / d));
+          lastInput = performance.now();
+          return;
+        }
+        // One pointer down → turn the gaze (drag-the-sky: the point under the
+        // finger stays under the finger). Momentum picks up the last delta.
+        if (pointerDown && tracked) {
+          const dx = e.clientX - lastPX, dy = e.clientY - lastPY;
+          lastPX = e.clientX; lastPY = e.clientY;
+          if (moved) {
+            const k = rotPerPx();
+            velYaw = -dx * k; velPitch = dy * k;
+            yaw += velYaw; pitch = clampPitch(pitch + velPitch);
+            lastMoveT = lastInput = performance.now();
+          }
+          return;
+        }
+        if (e.pointerType === 'touch' || hoverPickRaf) return;
         const x = e.clientX, y = e.clientY;
         hoverPickRaf = requestAnimationFrame(() => {
           hoverPickRaf = 0;
@@ -1008,14 +1066,37 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           }
         });
       };
-      const onLeave = (): void => {
-        pointerDown = false;
+      // Wheel = the telescope (fov), eased. Scroll up/forward magnifies.
+      const onWheel = (e: WheelEvent): void => {
+        e.preventDefault();
+        fovTarget = Math.max(FOV_TELE, Math.min(FOV_WIDE, fovTarget * Math.exp(e.deltaY * 0.0016)));
+        lastInput = performance.now();
+      };
+      const clearPointer = (id: number): void => {
+        pointers.delete(id);
+        if (pointers.size < 2) pinchDist0 = 0;
+        // A remaining finger becomes the new rotation anchor (no jump).
+        const rest = pointers.values().next().value;
+        if (rest) { lastPX = rest.x; lastPY = rest.y; }
+      };
+      const onLeave = (e: PointerEvent): void => {
+        clearPointer(e.pointerId);
+        if (!pointers.size) pointerDown = false;
         setHover(null);
         renderer.domElement.style.cursor = '';
       };
       const onUp = (e: PointerEvent): void => {
+        clearPointer(e.pointerId);
+        if (pointers.size) return; // still pinching/turning with another finger
         pointerDown = false;
-        if (moved) return;
+        // A FLICK ends into a momentum glide (velYaw/velPitch decay in tick);
+        // a finger that came to rest before lifting (>90ms since the last move)
+        // carries no throw. Only a genuine TAP falls through to selection.
+        if (moved) {
+          if (performance.now() - lastMoveT > 90) velYaw = velPitch = 0;
+          return;
+        }
+        velYaw = velPitch = 0;
         const openConst = (c: Constellation): void => {
           // A caption is a DOOR: an AUTHORED place selects its container fact
           // (context panel: members as neighbours, open ↗ to the board/doc);
@@ -1045,21 +1126,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       renderer.domElement.addEventListener('pointermove', onMove);
       renderer.domElement.addEventListener('pointerup', onUp);
       renderer.domElement.addEventListener('pointerleave', onLeave);
+      renderer.domElement.addEventListener('pointercancel', onLeave);
+      renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
       // TURN TO FACE a star (or a search-hit centroid): you don't fly TO a star
-      // — you can't, in a sky — you turn until it is dead ahead. Under the
-      // dome that is literally a head-turn (and it quietly re-seats the eye at
-      // the exact centre — head-turns wobble it by an eye-length). From the
-      // orrery you swing around the globe until the star's region is the near
-      // side, facing you. Either way the fixed centre keeps your bearings.
+      // — you can't, in a sky — you turn until it is dead ahead. faceDir eases
+      // yaw/pitch to the star's DIRECTION; the same in both stances (under the
+      // dome it's a head-turn, from the orrery the globe swings so the region
+      // faces you), and the fixed centre keeps your bearings either way.
       const frame = (x: number, y: number, z: number, _radius: number): void => {
-        const len = Math.hypot(x, y, z) || 1;
-        if (vantage === 'sky') {
-          void controls.setLookAt(0, 0, 0, x / len * EYE, y / len * EYE, z / len * EYE, true);
-        } else {
-          void controls.setLookAt(x / len * ORRERY, y / len * ORRERY, z / len * ORRERY, 0, 0, 0, true);
-        }
-        lastInput = performance.now();
+        faceDir(x, y, z);
       };
 
       api.current = {
@@ -1481,6 +1557,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         renderer.toneMapping = paper ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = paper ? 1 : TUNE.exposure;
         scene.background = new THREE.Color(PAL.bg);
+        // The atmosphere is a dusk phenomenon — paper is a flat cream chart.
+        skyDome.visible = !paper;
+        skyUniforms.uBase.value.set(PAL.bg);
         ptMat.uniforms.uPaper.value = paper ? 1 : 0;
         ptMat.blending = paper ? THREE.NormalBlending : THREE.CustomBlending;
         // Different PRIMITIVE per mode, not just different constants: paper
@@ -1815,14 +1894,36 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         if (disposed) return;
         raf = requestAnimationFrame(tick);
         const delta = clock.getDelta();
-        // No idle auto-orbit: a place you inhabit holds still. (The old slow
-        // spin read as a screensaver, not as the sky wheeling — real diurnal
-        // motion is ~1600× slower, i.e. imperceptible, so a visible spin is
-        // just churn. The sphere waits for your hand.)
-        controls.update(delta);
+        // ── advance the camera rig (no idle auto-orbit: a place you inhabit
+        // holds still — a visible spin read as a screensaver, not the sky
+        // wheeling; real diurnal motion is imperceptible). ──
+        const dragging = pointerDown && moved;
+        if (turnYaw !== null && turnPitch !== null) {
+          // Eased turn-to-face: close the SHORT way round on yaw.
+          let dyaw = turnYaw - yaw;
+          while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
+          while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+          yaw += dyaw * 0.16;
+          pitch += (turnPitch - pitch) * 0.16;
+          if (Math.abs(dyaw) < 0.002 && Math.abs(turnPitch - pitch) < 0.002) {
+            yaw = turnYaw; pitch = turnPitch; turnYaw = turnPitch = null;
+          }
+        } else if (!dragging) {
+          // Momentum glide: carry the last drag velocity, decay it, and stop
+          // once it falls below a pixel-ish. A gentle, hand-thrown feel.
+          if (Math.abs(velYaw) > 1e-5 || Math.abs(velPitch) > 1e-5) {
+            yaw += velYaw; pitch = clampPitch(pitch + velPitch);
+            velYaw *= 0.92; velPitch *= 0.92;
+            if (Math.abs(velYaw) < 1e-5) velYaw = 0;
+            if (Math.abs(velPitch) < 1e-5) velPitch = 0;
+          }
+        }
+        // Ease the vantage distance (sky 0 ↔ orrery) and the telescope fov.
+        dist += (distTarget - dist) * Math.min(1, delta * 6);
+        fov += (fovTarget - fov) * Math.min(1, delta * 10);
+        applyCamera();
         // Feed the beam (camera + focal point) to the torch shaders + labels.
-        controls.getTarget(focusVec);
-        camera.getWorldPosition(camPos);
+        camPos.copy(camera.position);
         torchUniforms.uFocus.value.copy(focusVec);
         torchUniforms.uCam.value.copy(camPos);
         eMat.uniforms.uTime.value = clock.elapsedTime;
@@ -1922,6 +2023,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
             folder.add(TUNE, key, min, max, step).onChange(refresh);
           };
           gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
+          gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(() => { skyUniforms.uAtmo.value = TUNE.atmosphere; persist(); });
           const torchF = gui.addFolder('torch');
           // Mins go to TRUE zero — the owner's grade railed the old bottom stops
           // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
@@ -2035,6 +2137,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         renderer.domElement.removeEventListener('pointermove', onMove);
         renderer.domElement.removeEventListener('pointerup', onUp);
         renderer.domElement.removeEventListener('pointerleave', onLeave);
+        renderer.domElement.removeEventListener('pointercancel', onLeave);
+        renderer.domElement.removeEventListener('wheel', onWheel);
         if (hoverPickRaf) cancelAnimationFrame(hoverPickRaf);
         if (hoverLabelTimer) clearTimeout(hoverLabelTimer);
         for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); }
@@ -2043,7 +2147,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
         for (const c of constellations) { c.text.dispose?.(); c.pill.material.dispose?.(); }
         if (crumbTimer) clearTimeout(crumbTimer);
         crumb.remove();
-        controls.dispose?.(); geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
+        skyDome.geometry.dispose(); skyMat.dispose();
+        geo.dispose(); egeo.dispose(); ptMat.dispose(); eMat.dispose();
         disc.dispose?.(); stipple.dispose?.(); ringTex.dispose?.(); ringMat.dispose(); hoverMat.dispose(); composer?.dispose?.(); renderer.dispose();
       };
 
@@ -2328,11 +2433,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       let graphTotal = initial.total;
       let nextCursor = initial.nextCursor;
       let revealing = false;
+      let autoPaused = false;
+      let revealTimer: ReturnType<typeof setTimeout> | null = null;
       const reportReach = (loading = revealing): void => reachRef.current({
         charted,
         total: graphTotal,
         loading,
         hasMore: !!nextCursor,
+        paused: autoPaused,
       });
       setProgress({ got: charted, total: graphTotal });
       setLoadState('full');
@@ -2346,14 +2454,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
       setLoadState('done');
       reportReach(false);
 
-      const revealMore = async (): Promise<void> => {
-        if (disposed || revealing || !nextCursor) return;
+      // Fetch ONE small page and append it — the map accretes a couple hundred
+      // stars at a time. Returns true if there is more to chart.
+      const revealOnce = async (): Promise<boolean> => {
+        if (disposed || revealing || !nextCursor) return false;
         revealing = true;
         reportReach(true);
         const cursor = nextCursor;
         try {
-          const page = await fetchEntryPage(cursor);
-          if (disposed || !page.ok) return;
+          const page = await fetchEntryPage(cursor, REVEAL_ENTRY_LIMIT);
+          if (disposed || !page.ok) return false;
           graphTotal = page.total || graphTotal;
           nextCursor = page.nextCursor;
           const fresh = page.items.filter((entry) => !!entry?.key);
@@ -2362,14 +2472,33 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, over
           setProgress({ got: charted, total: graphTotal });
           reportReach(true);
           const moreEdges = await fetchEdgesForKeys(fresh.map((entry) => entry.key));
-          if (disposed) return;
-          stream.appendEdges(moreEdges.items);
+          if (!disposed) stream.appendEdges(moreEdges.items);
+          return !!nextCursor;
         } finally {
           revealing = false;
-          reportReach(false);
         }
       };
-      if (api.current) api.current.reveal = () => { void revealMore(); };
+      // The self-paced pump: after the fast orientation page, the rest fills in
+      // AUTOMATICALLY — small page, a breath for the GPU/DOM, next page — until
+      // the whole substrate is charted. No manual "+n" tap; the button is now a
+      // pause/resume for this trickle.
+      const REVEAL_GAP_MS = 140;
+      const pump = async (): Promise<void> => {
+        if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+        if (disposed || autoPaused) { reportReach(false); return; }
+        const more = await revealOnce();
+        if (disposed) return;
+        if (more && !autoPaused) revealTimer = setTimeout(() => { void pump(); }, REVEAL_GAP_MS);
+        else reportReach(false);
+      };
+      // The button toggles the trickle: pause it mid-fill, or resume/kick it.
+      if (api.current) api.current.reveal = () => {
+        autoPaused = !autoPaused;
+        if (!autoPaused) void pump();
+        else { if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; } reportReach(false); }
+      };
+      // Kick the auto-fill once the orientation page has settled.
+      if (nextCursor) void pump();
 
       let sinceSeq: number | null = initialHead;
       const pollChanges = async (): Promise<void> => {
@@ -2507,7 +2636,7 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
   const [visible, setVisible] = useState(1);
   const [revealNonce, setRevealNonce] = useState(0);
   const [overviewNonce, setOverviewNonce] = useState(0);
-  const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false });
+  const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false, paused: false });
   const surface: React.CSSProperties = {
     fontFamily: ink.mono,
     fontSize: '0.72rem',
@@ -2588,12 +2717,16 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
             </button>
             <button
               type="button"
-              disabled={reach.loading || !reach.hasMore}
+              disabled={!reach.hasMore}
               onClick={() => { setVisible(1); setRevealNonce((n) => n + 1); }}
-              title={reach.hasMore ? 'Chart the next salience-ranked region of the substrate' : 'All available facts are charted'}
-              style={{ ...button, opacity: reach.loading ? 0.58 : 1 }}
+              title={
+                !reach.hasMore ? 'All available facts are charted'
+                  : reach.paused ? 'Resume charting the rest of the substrate'
+                    : 'The substrate is charting itself — pause the fill-in'
+              }
+              style={{ ...button, opacity: reach.hasMore ? 1 : 0.58 }}
             >
-              {reach.loading ? 'mapping…' : reach.hasMore ? `+${Math.min(INITIAL_ENTRY_LIMIT, Math.max(0, reach.total - reach.charted)).toLocaleString()}` : 'complete'}
+              {!reach.hasMore ? 'complete' : reach.paused ? 'resume' : 'charting…'}
             </button>
           </div>
         </div>

@@ -41,6 +41,10 @@ export interface GEdge {
 // drawing itself in the order the knowledge accreted — needs a one-line
 // server rankBy:'seq' and is noted as a follow-up toggle.
 export const INITIAL_ENTRY_LIMIT = 800;
+// The fill-in after the fast orientation page trickles in SMALL pages, added
+// as they arrive (see the auto-reveal pump in graph.tsx) — the map accretes
+// continuously rather than jumping a whole 800-fact block on a manual tap.
+export const REVEAL_ENTRY_LIMIT = 220;
 export const LIVE_NODE_HEADROOM = 256;
 export const LIVE_EDGE_CAPACITY = 30000;
 export const CHANGE_POLL_MS = 12000;
@@ -51,11 +55,11 @@ export interface EntryPage {
   total: number;
   nextCursor: string | null;
 }
-export async function fetchEntryPage(cursor?: string | null): Promise<EntryPage> {
+export async function fetchEntryPage(cursor?: string | null, limit = INITIAL_ENTRY_LIMIT): Promise<EntryPage> {
   const r = await mcpCall('read', 'workspace.query', {
     rankBy: 'salience',
     shape: 'card',
-    limit: INITIAL_ENTRY_LIMIT,
+    limit,
     ...(cursor ? { cursor } : {}),
   });
   if (!r.ok) return { ok: false, items: [], total: 0, nextCursor: null };

@@ -22,7 +22,62 @@
 > describe the *superseded* vantage. This banner stays until the sky model is
 > felt-validated and the body is rewritten to match. See the conversation of
 > 2026-07-18/19 for the reasoning (surveyor → inhabitant; occlusion and "no
-> north" dissolve on a shell).
+> north" dissolve on a shell). §0 below records the sky model *as built* so far.
+
+---
+
+## 0. The sky, as built (2026-07-19)
+
+You are on the ground under your own night sky. Not above it — *inside* it.
+
+**Looking around.** You drag and your head turns; the stars wheel past the way
+the real sky does when you crane your neck. You can look to any horizon and tip
+your gaze all the way up toward the point straight overhead — and the motion
+never snarls, tumbles, or locks up at the top the way an early version did.
+There is a level horizon that stays level: no matter which way you have turned,
+"up" is still up. When you fling the sky and let go, it keeps drifting a moment
+and coasts to rest, like spinning a globe — a small physical courtesy, not a
+snap-back.
+
+**The telescope.** Rolling the wheel (or pinching) is not travel — you never
+leave the ground. It is *magnification*: the field narrows from a wide, whole-
+sky view down to a tight, deep crop that pulls faint far things into reading
+size, and as it narrows your dragging automatically gets finer, so a hard zoom
+stays steerable. The throw is generous — from "the whole dome at a glance" to
+"one quiet corner, enlarged."
+
+**Stepping out.** A single control lifts you off the ground and out into space,
+where the same sky becomes a globe you hold at arm's length (the orrery), and
+the same control sets you back down under it. The patch you were studying stays
+in front of you across the move; the two vantages are one place seen two ways.
+
+**The air itself.** The sky is not flat black. It deepens from a faint warm glow
+low on the horizon — the dusk-band, the ground's own light — up to a deep,
+faintly-blue zenith, and darkens again below. Because that gradient is fixed to
+the world and not to your eye, it reads as *atmosphere*: turning your head, the
+warm band stays at the horizon and the dark stays overhead, and that alone tells
+you which way is up before you have found a single landmark. (It is deliberately
+dim — it never glows, never competes with a star. It can be dialled from full
+gradient down to the old plain void.)
+
+**The map charts itself.** Arrival still lands the vital few brightest things
+first, fast. But you no longer tap "+more" to fill the rest in: once the first
+band has settled, the sky quietly keeps charting itself, a couple hundred stars
+at a time, accreting continuously outward from importance until your whole
+substrate is present. One control pauses that in-fill (and resumes it) if you
+want the field to hold still — but the default is a sky that finishes drawing
+itself while you watch.
+
+*Open questions being felt out:* whether the horizon-glow warmth is right or
+should be cooler/subtler; whether the self-charting should ever stop on its own
+at some "enough" threshold on a very large substrate; whether momentum wants
+more or less coast. And the **tune set** now has a few dials that went quiet
+under the shell — the torch's *depth* falloff (`depthIn/Out`) barely bites when
+every star sits at one radius and your eye is at the centre, so along-beam
+distance is nearly uniform; that budget could be reclaimed for the atmosphere
+and the angular (cone) falloff instead. The *nearness whisper* (louder stars
+seated a hair closer) still earns its keep as a size/parallax cue. `atmosphere`
+is the one genuinely new dial.
 
 ---
 

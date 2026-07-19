@@ -21,10 +21,10 @@ export const loadThree = (): Promise<any> =>
 let addonsMod: Promise<any> | null = null;
 export const loadThreeAddons = (): Promise<any> =>
   (addonsMod ??= Promise.all([
-    // camera-controls (yomotsu): the star-map camera — damped orbit, dolly-to-
-    // cursor, fly-through, and smooth fitToSphere/moveTo framing. Uses an
-    // injected THREE subset (no bundled three), so it shares our instance.
-    import(/* @vite-ignore */ esmURL(`camera-controls@2.9.0`)),
+    // The star-map camera is a hand-rolled quaternion rig now (see graph.tsx):
+    // camera-controls orbits a target in spherical coords and gimbals at the
+    // poles — no good for standing at the centre and looking OUT — so it was
+    // dropped rather than fought.
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/EffectComposer.js`)),
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/RenderPass.js`)),
     import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/UnrealBloomPass.js`)),
@@ -35,8 +35,7 @@ export const loadThreeAddons = (): Promise<any> =>
     // three to our version so the module graphs align.
     import(/* @vite-ignore */ esmURL(`troika-three-text@0.49.1?deps=three@${THREE_VER}`)),
   ])
-    .then(([cc, comp, rp, bloom, css, troika]) => ({
-      CameraControls: cc.default ?? cc,
+    .then(([comp, rp, bloom, css, troika]) => ({
       EffectComposer: comp.EffectComposer,
       RenderPass: rp.RenderPass,
       UnrealBloomPass: bloom.UnrealBloomPass,
