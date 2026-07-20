@@ -2822,36 +2822,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       {/* `host` is imperative-only territory below (innerHTML/appendChild
           straight to the DOM node for the three.js canvas + CSS2D labels) —
           React must never render children into it, or the two reconcilers
-          fight over the same subtree. The loading pill lives in a SIBLING
-          node instead, fully React-owned. */}
+          fight over the same subtree. No loading pill: the graph-controls bar
+          already reports charting state (owner, 5fe59d7). */}
       <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />
-      {loadState !== 'done' && (
-        <div
-          role="status"
-          aria-live="polite"
-          style={{
-            position: 'fixed', left: 12, top: 'calc(max(10px, env(safe-area-inset-top)) + 44px)', zIndex: 20,
-            fontFamily: ink.mono, fontSize: '0.72rem', color: ink.text,
-            background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
-            borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
-            display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.8rem',
-            pointerEvents: 'none',
-          }}
-        >
-          <span
-            style={{
-              width: 8, height: 8, borderRadius: '50%', background: ink.accent,
-              animation: 'parc-pulse 1.1s ease-in-out infinite',
-            }}
-          />
-          <span>
-            {loadState === 'fast'
-              ? 'loading graph…'
-              : 'mapping relationships…'}
-          </span>
-          <style>{'@keyframes parc-pulse{0%,100%{opacity:.3}50%{opacity:1}}'}</style>
-        </div>
-      )}
     </>
   );
 }
