@@ -926,9 +926,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (st.cur < 0.2) continue; // a barely-there label shouldn't catch taps
           const n = nodeById.get(id);
           if (!n) continue;
-          const camD = camPos.distanceTo(st.grp.position) || 1;
-          // Screen px per world unit at this depth × the near-field compression.
-          const pxPer = ((H / 2) / camD) * (st.scl || 1);
+          // True projected px per world unit × the label's own fixed-size scale.
+          const pxPer = pxPerWorld(st.grp.position) * (st.scl || 1);
           const b = st.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const fs = st.text.fontSize * pxPer;
           const [sx, sy] = screenXY(n);
@@ -1208,6 +1207,19 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
       const camPos = new THREE.Vector3();
+      // TRUE perspective screen-px per world-unit at a point. focalPx =
+      // (H/2)/tan(fov/2), and the scale falls off with CAMERA-SPACE DEPTH (the
+      // component along the view axis), not euclidean distance. The old
+      // (H/2)/dist silently assumed a 90° lens — so narrowing the telescope FOV
+      // ballooned every fixed-size label (~28× at the 4° limit) while the star
+      // sprites, whose size ignores FOV, stayed put. Routing all label/caption
+      // sizing, collision, and displacement through this keeps a label a fixed
+      // pixel size as you telescope — the zoom spreads the field, not the names.
+      // (Projection bug surfaced by Sol's investigation, 2026-07-20.)
+      const projDepthV = new THREE.Vector3();
+      const focalPx = (): number => (H / 2) / Math.tan(camera.fov * Math.PI / 360);
+      const camDepth = (pos: any): number => Math.max(1e-3, projDepthV.copy(pos).sub(camPos).dot(fwdV));
+      const pxPerWorld = (pos: any): number => focalPx() / camDepth(pos);
       // The label SELECTOR's cone, in JS (decoupled from the lighting torch —
       // the light can be a floodlight while admission stays a sharp beam).
       // axis = camera → focal point.
@@ -1458,11 +1470,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const constellationAt = (cx: number, cy: number, slop: boolean): Constellation | null => {
         for (const c of constellations) {
           if (c.cur < 0.15) continue;
-          const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
+          const pxPer = pxPerWorld(constV.set(c.ax, c.ay, c.az)) * (c.grp.scale?.x || 1);
           constV.set(c.ax, c.ay, c.az).project(camera);
           if (constV.z > 1) continue;
           const sx = ((constV.x + 1) / 2) * W, sy = ((1 - constV.y) / 2) * H;
-          const pxPer = ((H / 2) / camD) * (c.grp.scale?.x || 1);
           const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const rawH = b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer;
           const rawW = b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer;
@@ -1491,8 +1502,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (st.cur < 0.15 || st.dying) continue;
           const n = nodeById.get(id);
           if (!n) continue;
-          const ld = camPos.distanceTo(st.grp.position) || 1;
-          const pxPer = (H / 2) / ld * (st.scl || 1);
+          const pxPer = pxPerWorld(st.grp.position) * (st.scl || 1);
           const bounds = st.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const rawH = bounds ? (bounds[3] - bounds[1]) * pxPer : st.text.fontSize * pxPer * 1.3;
           const rawW = bounds ? (bounds[2] - bounds[0]) * pxPer : Math.min(16, String(n.label).length) * st.text.fontSize * pxPer * 0.62;
@@ -1507,9 +1517,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // yields to fact labels once the camera is inside it.
             target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
             if (target > 0.02) {
-              // World-proportional caption (fs = f(region radius)) — the
-              // declutter box uses its actual projected size.
-              const fontPx = c.fs * (H / 2) / Math.max(camD, 1);
+              // Captions render at a FIXED screen size (below), so the declutter
+              // box uses that size, not a depth-projected one.
+              const fontPx = TUNE.labelPx * 0.82;
               constV.set(c.ax, c.ay, c.az).project(camera);
               if (constV.z > 1) target = 0;
               else {
@@ -1530,14 +1540,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           }
           c.cur += (target - c.cur) * k;
           c.grp.quaternion.copy(camera.quaternion); // billboard
-          // Captions are fixed screen size too (a step above fact labels): a
-          // place-name reads at a steady size and only its approach-fade
-          // (opacity) carries distance — no depth shrink, no billboard.
-          const camD2 = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
-          const curPx = c.fs * (H / 2) / camD2;
-          // Captions are a QUIET map label, not a billboard: a hair under the
-          // fact-label size (owner: "all-caps captions too large"). The caps +
-          // letter-spacing already give them cartographic weight.
+          // Captions are fixed screen size too (via the true fov-aware
+          // projection, so the telescope doesn't zoom them): a place-name reads
+          // at a steady size and only its approach-fade (opacity) carries
+          // distance. A hair under the fact-label size (owner: "all-caps
+          // captions too large") — the caps + tracking give them their weight.
+          const curPx = c.fs * pxPerWorld(constV.set(c.ax, c.ay, c.az));
           const targetPx = TUNE.labelPx * 0.82;
           c.grp.scale.setScalar(curPx > 0.01 ? targetPx / curPx : 1);
           c.text.fillOpacity = c.cur;
@@ -1629,8 +1637,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // first sync, approximate from the same 10-em wrap used by makeLabel.
         const dimsOf = (n: any, role: LabelRole): [number, number] => {
           const st = labelObjs.get(n.id);
-          const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
-          const pxPer = (H / 2) / camD * (st?.scl ?? 1);
+          const pxPer = pxPerWorld(distV.set(n.x, n.y, n.z)) * (st?.scl ?? 1);
           const b = st?.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           if (b) {
             const rawW = (b[2] - b[0]) * pxPer;
@@ -1866,7 +1873,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // its target; the hairline leader spans node → displaced label.
           st.cox += (st.ox - st.cox) * k;
           st.coy += (st.oy - st.coy) * k;
-          const pxW = camD / (H / 2); // world units per screen px at this depth
+          const pxW = 1 / pxPerWorld(st.grp.position); // world units per screen px (fov-aware)
           const displaced = Math.abs(st.cox) + Math.abs(st.coy) > 1.5;
           st.inner.position.set(st.cox * pxW, -st.coy * pxW, 0);
           if (displaced) {
@@ -1888,12 +1895,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const clip = TUNE.pillClip > 0 && (st.role !== 'beam' || TUNE.beamPill > 0.5);
           st.pill.visible = clip && st.cur > 0.45;
           // FIXED SCREEN SIZE: scale the world-unit glyph so it lands at exactly
-          // labelPx × role-mult on screen, recomputed every frame and applied
-          // DIRECTLY (no easing) — the label never animates its size, it only
-          // fades (st.cur). The node-radius term in fontWorld cancels out here,
-          // so a big hub gets a big DOT, not a big name. (Was a near-field cap
-          // that eased toward its target, which read as a large→small shrink.)
-          const fsPx = st.text.fontSize * (H / 2) / camD; // current projected px
+          // labelPx × role-mult on screen — via the TRUE perspective (pxPerWorld,
+          // fov-aware), so it stays that pixel size as you telescope in. Applied
+          // DIRECTLY (no easing): a label never animates its size, it only fades
+          // (st.cur). The node-radius term in fontWorld cancels out here, so a
+          // big hub gets a big DOT, not a big name.
+          const fsPx = st.text.fontSize * pxPerWorld(st.grp.position); // true projected px
           const targetPx = TUNE.labelPx * st.mult;
           st.scl = fsPx > 0.01 ? targetPx / fsPx : 1;
           st.inner.scale.setScalar(st.scl);
