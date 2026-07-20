@@ -331,6 +331,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       skyDome.renderOrder = -1;
       skyDome.visible = !isPaper();
       scene.add(skyDome);
+      // ── WORLD GROUP (Inc 1, continuous-vantage) ──
+      // Stars, edges, labels, rings live in a rotating group; the CAMERA stays
+      // on a fixed axis (0,0,dist) looking at the origin. Drag rotates the
+      // group, not the camera — so drag sign is CONSTANT regardless of dist.
+      // The atmosphere dome stays in the scene root (world-fixed ground).
+      const worldGroup = new THREE.Group();
+      scene.add(worldGroup);
       const camera = new THREE.PerspectiveCamera(55, W / H, 1, 8000);
       camera.position.set(0, 0, SPREAD * 2.15);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -398,13 +405,31 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uDepthOut: { value: SPREAD * TUNE.depthOut },
         uFloor: { value: TUNE.torchFloor },
         uSizeBoost: { value: TUNE.boostSizeGain },
-        // 0 in the planetarium, →1 as you pull out to the orrery: fades the FAR
-        // hemisphere of the globe so the near surface reads (no seeing straight
-        // through to the back). Driven by vantage distance in tick.
         uFarFade: { value: 0 },
+        // ── Inc 2: equatorial fold ──
+        // u ∈ [0,1]: 0 = planetarium (everted sphere — near face inward),
+        // 0.5 = flat disc (equatorial spread), 1 = orrery (natural sphere).
+        // The vertex shader folds/unfolds the sphere along uPole.
+        uUnfold: { value: 1 },
+        uPole: { value: new THREE.Vector3(0, 0, 1) },
       };
       const TORCH_GLSL =
-        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFarFade;' +
+        'uniform vec3 uFocus; uniform vec3 uCam; uniform vec3 uPole; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFarFade; uniform float uUnfold;' +
+        // AZIMUTHAL UNROLL: the sphere unrolls around the gaze point like a map.
+        // κ = 2u−1: −1 = planetarium (surface curls AROUND the viewer), 0 = flat
+        // (arc length preserved — the far side lies at radial π·R, off-screen),
+        // +1 = orrery (surface curls AWAY, the held globe). The tangent point
+        // (uPole = the gaze patch) is FIXED at every κ; the far side sweeps from
+        // behind-you out past the viewport edge and onto the globe's back — it
+        // is never in view. θ = angle from the gaze direction; per-star radius r.
+        'vec3 morphPos(vec3 p){ float k = 2.0 * uUnfold - 1.0; float r = length(p); vec3 d = p / max(r, 1e-4);' +
+        ' float ct = clamp(dot(d, uPole), -1.0, 1.0); float th = acos(ct);' +
+        ' vec3 e = d - uPole * ct; float el = length(e);' +
+        ' e = el > 1e-4 ? e / el : normalize(cross(uPole, vec3(0.017, 0.994, 0.113)));' +
+        ' float axial; float radial;' +
+        ' if (abs(k) < 1e-3) { axial = r * k; radial = r * th; }' +
+        ' else { axial = r * k - r * (1.0 - cos(k * th)) / k; radial = r * sin(k * th) / k; }' +
+        ' return uPole * axial + e * radial; }' +
         'float torch(vec3 p){ vec3 d = uFocus - uCam; float td = length(d); vec3 axis = d / max(td, 1e-3);' +
         ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return uFloor;' +
         ' float radial = length(toP - axis*along);' +
@@ -422,15 +447,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           'attribute float size; attribute float alpha; attribute vec3 color; attribute float boost;' +
           'varying float vAlpha; varying vec3 vColor; uniform float uScale; uniform float uSizeBoost; uniform float uPaper;' +
           TORCH_GLSL +
-          'void main(){ vColor = color; vec4 mv = modelViewMatrix * vec4(position,1.0); float vd = -mv.z;' +
+          'void main(){ vColor = color; vec3 mp = morphPos(position); vec4 mv = modelViewMatrix * vec4(mp,1.0); float vd = -mv.z;' +
           // Focus points also grow a little — brightness alone undersold a
           // small match dot; size makes the hit read as an OBJECT.
           // PAPER: no torch — print has uniform lighting; ink weight comes
           // from salience (the DOI already baked into `alpha`), never from
           // where the camera happens to aim. And print dots are SMALL —
           // engraved stipple, not glow discs (×0.6).
-          'float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost);' +
-          'vAlpha = alpha * lit * farFade(position); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
+          'float lit = uPaper > 0.5 ? 1.0 : max(torch(mp), boost);' +
+          'vAlpha = alpha * lit * farFade(mp); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; uniform float uPaper; varying float vAlpha; varying vec3 vColor;' +
@@ -450,7 +475,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       });
       const points = new THREE.Points(geo, ptMat);
       points.frustumCulled = false;
-      scene.add(points);
+      worldGroup.add(points);
 
       // Selection highlight: a glowing accent ring parked on the selected node
       // (opacity alone washed out under the focal fade).
@@ -458,12 +483,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const ringMat = new THREE.SpriteMaterial({ map: ringTex, color: ink.accent, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
       const ring = new THREE.Sprite(ringMat);
       ring.visible = false;
-      scene.add(ring);
+      worldGroup.add(ring);
       const hoverMat = new THREE.SpriteMaterial({ map: ringTex, color: ink.text, transparent: true, opacity: 0.72, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
       const hoverRing = new THREE.Sprite(hoverMat);
       hoverRing.visible = false;
       hoverRing.renderOrder = 12;
-      scene.add(hoverRing);
+      worldGroup.add(hoverRing);
       let ringNode: any = null;
       const showRing = (n: any): void => {
         ringNode = n || null;
@@ -479,7 +504,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // scale S projects to S·focalPx/depth, so S = rad·k·tan(fov/2) holds the
       // ratio constant. k tuned so it matches the old snug fit at the wide FOV.
       const sizeRing = (): void => {
-        if (ring.visible && ringNode) ring.scale.setScalar(rad(ringNode) * 7.3 * Math.tan(camera.fov * Math.PI / 360));
+        if (ring.visible && ringNode) {
+          const [rx, ry, rz] = morphedPos(ringNode);
+          ring.position.set(rx, ry, rz);
+          ring.scale.setScalar(rad(ringNode) * 7.3 * Math.tan(camera.fov * Math.PI / 360));
+        }
       };
       const showHover = (n: any): void => {
         if (!n || n.id === selKey) { hoverRing.visible = false; return; }
@@ -592,7 +621,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // Paper skips the torch, same as the points: linework on a printed
           // map doesn't dim by camera aim — its weight hierarchy is carried
           // entirely by the per-rel alphas applyEdgeColor already grades.
-          'void main(){ float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost) * farFade(position); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          'void main(){ vec3 mp = morphPos(position); float lit = uPaper > 0.5 ? 1.0 : max(torch(mp), boost) * farFade(mp); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(mp,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
           'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
@@ -624,7 +653,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       });
       const lineSegs = new THREE.LineSegments(egeo, eMat);
       lineSegs.frustumCulled = false;
-      scene.add(lineSegs);
+      worldGroup.add(lineSegs);
       applyEdgeColor();
 
       // ── labels (CSS2D) — a role-typed pool with a FADE lifecycle. Roles:
@@ -765,7 +794,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           fit: () => fitPillTo(text, pill, text.position.y),
         };
         text.sync(st.fit);
-        scene.add(grp);
+        worldGroup.add(grp);
         return st;
       };
       /** Reconcile membership: departures FADE (dying → removed at ~0), not
@@ -883,10 +912,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // NEAR face (facing you) rather than the far side of the globe.
       const faceDir = (x: number, y: number, z: number): void => {
         const len = Math.hypot(x, y, z) || 1;
-        let nx = x / len, ny = y / len, nz = z / len;
-        if (vantage === 'orrery') { nx = -nx; ny = -ny; nz = -nz; }
-        turnYaw = Math.atan2(-nx, -nz);
-        turnPitch = clampPitch(Math.asin(ny));
+        const nx = x / len, ny = y / len, nz = z / len;
+        // World-rotation: the camera is fixed at +Z looking at origin. We rotate
+        // the worldGroup so the node at (nx,ny,nz) ends up on the −Z side of the
+        // group (facing the camera). The Euler that achieves this maps the
+        // camera's forward (0,0,−1) onto (nx,ny,nz), which in YXZ is:
+        turnYaw = Math.atan2(nx, nz);
+        turnPitch = clampPitch(Math.asin(-ny));
         velYaw = velPitch = 0;
         lastInput = performance.now();
       };
@@ -906,12 +938,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         velYaw = velPitch = 0;
       };
       const enterSky = (transition = true): void => {
-        if (vantage === 'orrery') flipGaze();
+        // No flipGaze — world-rotation model: the same orientation in both
+        // stances keeps the same patch near. The camera just moves in/out.
         vantage = 'sky'; distTarget = 0; fovTarget = FOV_WIDE;
         if (!transition) { dist = 0; fov = FOV_WIDE; if (turnYaw !== null) { yaw = turnYaw; turnYaw = null; } if (turnPitch !== null) { pitch = turnPitch; turnPitch = null; } }
       };
       const enterOrrery = (transition = true): void => {
-        if (vantage === 'sky') flipGaze();
         vantage = 'orrery'; distTarget = ORRERY; fovTarget = FOV_WIDE;
         if (!transition) { dist = ORRERY; fov = FOV_WIDE; if (turnYaw !== null) { yaw = turnYaw; turnYaw = null; } if (turnPitch !== null) { pitch = turnPitch; turnPitch = null; } }
       };
@@ -924,22 +956,36 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         framed = true;
         enterSky(true);
       };
-      // Rebuild the camera from (yaw, pitch, dist, fov) — called every frame.
+      // ── Inc 1: world-rotation camera rig ──
+      // The camera stays on a FIXED axis (0,0,dist) looking at the origin.
+      // yaw/pitch rotate the WORLD GROUP (the inverse viewpoint). This makes
+      // drag sign constant: rotating the group by +yaw always moves content
+      // the same screen direction, regardless of dist. The torch/label/picking
+      // code reads camPos and focusVec in worldGroup-LOCAL space so existing
+      // dot-product math on (n.x, n.y, n.z) works unchanged.
+      const worldInvQ = new THREE.Quaternion();
       const applyCamera = (): void => {
+        // World group rotates by (yaw, pitch) — same Euler as before.
         camEuler.set(pitch, yaw, 0);
-        camera.quaternion.setFromEuler(camEuler);
-        fwdV.set(0, 0, -1).applyQuaternion(camera.quaternion);
-        camera.position.copy(fwdV).multiplyScalar(-dist);
+        worldGroup.quaternion.setFromEuler(camEuler);
+        worldGroup.updateMatrixWorld(true);
+        // Camera: fixed on +Z axis at distance `dist`, looking at origin.
+        camera.position.set(0, 0, dist);
+        camera.lookAt(0, 0, 0);
         if (Math.abs(camera.fov - fov) > 1e-3) { camera.fov = fov; camera.updateProjectionMatrix(); }
-        // Focal point = where the view ray meets the shell dead ahead (screen
-        // centre) — this is what the torch/label selector aims at. Solve
-        // |camPos + t·fwd| = SHELL for the near root; from the centre that is
-        // simply fwd·SHELL, from outside it is the near cap of the globe.
-        const b = camera.position.dot(fwdV);
-        const c = camera.position.lengthSq() - SHELL * SHELL;
+        // Derive camPos/fwdV/focusVec in worldGroup-LOCAL space so all the
+        // node-space math (farFade, labelTorch, etc.) stays unchanged.
+        worldInvQ.copy(worldGroup.quaternion).invert();
+        fwdV.set(0, 0, -1).applyQuaternion(worldInvQ); // camera's forward in local
+        // camPos in local = inverse-rotate the world-space camera position.
+        // (filled in tick where camPos is declared; here we prepare fwdV.)
+        // Focal point: ray–sphere from local camPos along local fwdV.
+        const localCamPos = camera.position.clone().applyQuaternion(worldInvQ);
+        const b = localCamPos.dot(fwdV);
+        const c = localCamPos.lengthSq() - SHELL * SHELL;
         const disc = b * b - c;
         const t = disc >= 0 ? (-b - Math.sqrt(disc) > 1e-3 ? -b - Math.sqrt(disc) : -b + Math.sqrt(disc)) : SHELL;
-        focusVec.copy(camera.position).addScaledVector(fwdV, t);
+        focusVec.copy(localCamPos).addScaledVector(fwdV, t);
       };
       applyCamera();
 
@@ -1094,15 +1140,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           moved = true;
           setHover(null);
         }
-        // Two fingers → pinch the telescope (fov), never travel. Pinch OUT past
-        // the wide limit (in the sky) and you tip into the orrery — the mobile
-        // twin of the wheel's zoom-out-into-orrery.
+        // Two fingers → pinch the telescope (fov); past the limits, drive the
+        // unfold continuously. Bidirectional: spread past FOV_OUT → orrery;
+        // pinch past FOV_TELE from orrery → sky.
         if (pointers.size >= 2) {
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
           const raw = pinchFov0 * pinchDist0 / d;
-          if (raw > FOV_OUT * 1.06 && vantage === 'sky') { enterOrrery(); pointers.clear(); pointerDown = false; return; }
-          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_OUT, raw));
+          if (raw > FOV_OUT) {
+            const excess = (raw - FOV_OUT) / FOV_OUT; // 0→∞ overshoot ratio
+            distTarget = Math.min(ORRERY, distTarget + excess * ORRERY * 0.04);
+            vantage = distTarget > ORRERY * 0.5 ? 'orrery' : 'sky';
+          } else if (raw < FOV_TELE && distTarget > 0) {
+            const deficit = (FOV_TELE - raw) / FOV_TELE;
+            distTarget = Math.max(0, distTarget - deficit * ORRERY * 0.04);
+            vantage = distTarget > ORRERY * 0.5 ? 'orrery' : 'sky';
+          } else {
+            fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_OUT, raw));
+          }
           lastInput = performance.now();
           return;
         }
@@ -1113,14 +1168,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           lastPX = e.clientX; lastPY = e.clientY;
           if (moved) {
             const k = rotPerPx();
-            // Two mirror-image feels from one orientation. SKY (eye at centre):
-            // drag-the-sky — the point under the finger stays under the finger.
-            // ORRERY (holding the globe from outside): the pivot is in FRONT of
-            // you, so the same delta swings content the opposite screen way —
-            // invert both axes so it reads as grab-and-spin-the-globe (owner:
-            // "controls feel inverted in orrery").
-            const s = vantage === 'orrery' ? -1 : 1;
-            velYaw = s * dx * k; velPitch = s * dy * k;
+            // World-rotation: drag always rotates the world group with constant
+            // sign — the group rotates under the finger in both stances. No sign
+            // flip needed; the geometry is what moves, not the camera.
+            velYaw = dx * k; velPitch = dy * k;
             yaw += velYaw; pitch = clampPitch(pitch + velPitch);
             lastMoveT = lastInput = performance.now();
           }
@@ -1139,14 +1190,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           }
         });
       };
-      // Wheel = the telescope (fov), eased. Scroll up/forward magnifies. Widen
-      // all the way to FOV_OUT; keep pushing out at that limit (in the sky) and
-      // you TIP into the orrery — the extreme zoom-out becomes stepping outside.
+      // Wheel = telescope (fov) while within the FOV range; once at the limit,
+      // further scroll CONTINUOUSLY drives the unfold (dist). Bidirectional:
+      // zoom-out past FOV_OUT in sky → unfolds toward orrery; zoom-in past
+      // FOV_TELE in orrery → folds back toward sky.
       const onWheel = (e: WheelEvent): void => {
         e.preventDefault();
         const next = Math.max(FOV_TELE, Math.min(FOV_OUT, fovTarget * Math.exp(e.deltaY * 0.0016)));
-        if (e.deltaY > 0 && vantage === 'sky' && fovTarget >= FOV_OUT - 0.5 && next >= FOV_OUT - 0.5) enterOrrery();
-        else fovTarget = next;
+        if (e.deltaY > 0 && fovTarget >= FOV_OUT - 0.5 && next >= FOV_OUT - 0.5) {
+          // Zooming out at the wide limit → unfold toward orrery
+          distTarget = Math.min(ORRERY, distTarget + e.deltaY * 0.8);
+          vantage = distTarget > ORRERY * 0.5 ? 'orrery' : 'sky';
+        } else if (e.deltaY < 0 && fovTarget <= FOV_TELE + 0.5 && next <= FOV_TELE + 0.5) {
+          // Zooming in at the tele limit → fold back toward sky
+          distTarget = Math.max(0, distTarget + e.deltaY * 0.8);
+          vantage = distTarget > ORRERY * 0.5 ? 'orrery' : 'sky';
+        } else {
+          fovTarget = next;
+        }
         lastInput = performance.now();
       };
       const clearPointer = (id: number): void => {
@@ -1291,6 +1352,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
       const camPos = new THREE.Vector3();
+      // ── Inc 2: JS morph twin (azimuthal unroll — mirrors the GLSL morphPos) ──
+      // pole = the gaze direction (fwdV, updated in applyCamera); κ = 2u−1.
+      const morphedPos = (n: any): [number, number, number] => {
+        const k = 2 * (dist / ORRERY) - 1;
+        const px = -fwdV.x, py = -fwdV.y, pz = -fwdV.z; // pole = near-cap (−gaze)
+        const r = Math.hypot(n.x, n.y, n.z) || 1;
+        const dx = n.x / r, dy = n.y / r, dz = n.z / r;
+        const ct = Math.max(-1, Math.min(1, dx * px + dy * py + dz * pz));
+        const th = Math.acos(ct);
+        let ex = dx - px * ct, ey = dy - py * ct, ez = dz - pz * ct;
+        const el = Math.hypot(ex, ey, ez);
+        if (el > 1e-4) { ex /= el; ey /= el; ez /= el; }
+        else { ex = 1; ey = 0; ez = 0; } // degenerate: exactly on the pole — radial is 0 anyway
+        let axial: number, radial: number;
+        if (Math.abs(k) < 1e-3) { axial = r * k; radial = r * th; }
+        else { axial = r * k - r * (1 - Math.cos(k * th)) / k; radial = r * Math.sin(k * th) / k; }
+        return [px * axial + ex * radial, py * axial + ey * radial, pz * axial + ez * radial];
+      };
       // TRUE perspective screen-px per world-unit at a point. focalPx =
       // (H/2)/tan(fov/2), and the scale falls off with CAMERA-SPACE DEPTH (the
       // component along the view axis), not euclidean distance. The old
@@ -1352,7 +1431,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // Third element = NDC z (> 1 means behind the camera — anchor admission
       // must skip those; a behind-camera point still projects to plausible xy).
       const screenXY = (n: any): [number, number, number] => {
-        projV.set(n.x, n.y, n.z).project(camera);
+        const [mx, my, mz] = morphedPos(n);
+        projV.set(mx, my, mz).applyMatrix4(worldGroup.matrixWorld).project(camera);
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H, projV.z];
       };
       // Text never competes with persistent chrome. This keeps map names out
@@ -1376,7 +1456,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // Rebuild the whole set when the selection changes.
         if (edgeLabelSel !== selKey) {
           edgeLabelSel = selKey;
-          for (const [, obj] of edgeLabelObjs) { scene.remove(obj); obj.element.remove?.(); }
+          for (const [, obj] of edgeLabelObjs) { worldGroup.remove(obj); obj.element.remove?.(); }
           edgeLabelObjs.clear();
         }
         const want = new Set<number>();
@@ -1409,7 +1489,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         }
         for (const [i, obj] of edgeLabelObjs) {
           if (!want.has(i)) {
-            scene.remove(obj);
+            worldGroup.remove(obj);
             obj.element.remove?.();
             edgeLabelObjs.delete(i);
           }
@@ -1429,7 +1509,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const farKey = outgoing ? idOf(l.target) : idOf(l.source);
           div.addEventListener('click', (ev) => { ev.stopPropagation(); api.current?.select(farKey, true); });
           const obj = new CSS2DObject(div);
-          scene.add(obj);
+          worldGroup.add(obj);
           edgeLabelObjs.set(i, obj);
         }
         positionEdgeLabels();
@@ -1553,7 +1633,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         grp.add(text);
         const st: Constellation = { name, x: cx, y: cy, z: cz, ax, ay, az, r: cr, authored, key, grp, text, pill, fs: cr * 0.055, cur: 0 };
         text.sync(() => fitPillTo(text, pill, 0));
-        scene.add(grp);
+        worldGroup.add(grp);
         constellations.push(st);
       };
       // Places are computed ONCE, when the stream completes (finishStream) —
@@ -1689,7 +1769,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             }
           }
           c.cur += (target - c.cur) * k;
-          c.grp.quaternion.copy(camera.quaternion); // billboard
+          const [cmx, cmy, cmz] = morphedPos({ x: c.ax, y: c.ay, z: c.az });
+          c.grp.position.set(cmx, cmy, cmz); // morph position (equatorial fold)
+          c.grp.quaternion.copy(worldInvQ); // billboard: face camera in group-local space
           // Captions are fixed screen size too (via the true fov-aware
           // projection, so the telescope doesn't zoom them): a place-name reads
           // at a steady size and only its approach-fade (opacity) carries
@@ -1974,7 +2056,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const k = Math.min(1, dt * TUNE.labelFade); // ~150ms to settle — a fade, not a pop
         for (const [id, st] of labelObjs) {
           const n = nodeById.get(id);
-          st.grp.quaternion.copy(camera.quaternion); // billboard
+          const [mx, my, mz] = morphedPos(n);
+          st.grp.position.set(mx, my, mz); // morph position (equatorial fold)
+          st.grp.quaternion.copy(worldInvQ); // billboard: face camera in group-local space
           const camD = camPos.distanceTo(st.grp.position) || 1;
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
           const torch = labelTorchAt(st.grp.position);
@@ -2025,7 +2109,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const opacityK = st.dying && st.role === 'hover' ? Math.min(1, dt * 24) : k;
           st.cur += (target - st.cur) * opacityK;
           if (st.dying && st.cur < 0.03) {
-            scene.remove(st.grp);
+            worldGroup.remove(st.grp);
             st.text.dispose?.();
             st.pill.material.dispose?.();
             labelObjs.delete(id);
@@ -2106,11 +2190,20 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // The atmosphere belongs to the GROUND: full under the dome, gone by
         // the time you have stepped out to hold the globe (a sky seen from
         // space has no airglow). Fades with the vantage distance.
-        skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, 1 - dist / ORRERY);
-        // Far-side dimming ramps in as you cross the shell toward the orrery.
-        torchUniforms.uFarFade.value = smoothstep(0.4, 1, dist / ORRERY);
+        const unfold = dist / ORRERY;
+        skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, 1 - unfold / 0.3);
+        // Far-side dimming ramps in once you're well outside (Inc 2: based on unfold).
+        torchUniforms.uFarFade.value = smoothstep(0.7, 1, unfold);
+        torchUniforms.uUnfold.value = unfold;
+        // Unroll pole = the NEAR-cap direction (from origin toward the camera,
+        // = −gaze). This is the fixed tangent patch of the unroll: what you're
+        // looking at stays put; the far side sweeps out past the viewport edge.
+        torchUniforms.uPole.value.copy(fwdV).multiplyScalar(-1);
         // Feed the beam (camera + focal point) to the torch shaders + labels.
-        camPos.copy(camera.position);
+        // camPos/focusVec are in worldGroup-LOCAL space (computed in applyCamera)
+        // so the node-space math works unchanged. Torch uniforms need local too
+        // (the star positions in the shader are local to the group).
+        camPos.copy(camera.position).applyQuaternion(worldInvQ);
         torchUniforms.uFocus.value.copy(focusVec);
         torchUniforms.uCam.value.copy(camPos);
         eMat.uniforms.uTime.value = clock.elapsedTime;
@@ -2799,33 +2892,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           fight over the same subtree. The loading pill lives in a SIBLING
           node instead, fully React-owned. */}
       <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />
-      {loadState !== 'done' && (
-        <div
-          role="status"
-          aria-live="polite"
-          style={{
-            position: 'fixed', left: 12, top: 'calc(max(10px, env(safe-area-inset-top)) + 44px)', zIndex: 20,
-            fontFamily: ink.mono, fontSize: '0.72rem', color: ink.text,
-            background: 'rgba(24,21,17,0.78)', border: `1px solid ${ink.line}`,
-            borderRadius: 999, backdropFilter: 'blur(4px)', minHeight: 40,
-            display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.8rem',
-            pointerEvents: 'none',
-          }}
-        >
-          <span
-            style={{
-              width: 8, height: 8, borderRadius: '50%', background: ink.accent,
-              animation: 'parc-pulse 1.1s ease-in-out infinite',
-            }}
-          />
-          <span>
-            {loadState === 'fast'
-              ? 'loading graph…'
-              : 'mapping relationships…'}
-          </span>
-          <style>{'@keyframes parc-pulse{0%,100%{opacity:.3}50%{opacity:1}}'}</style>
-        </div>
-      )}
     </>
   );
 }
