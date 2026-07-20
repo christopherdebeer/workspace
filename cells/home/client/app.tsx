@@ -19,6 +19,7 @@ import { Landing, Wordmark } from './dashboard';
 import { FullGraph } from './graph';
 import { Palette } from './palette';
 import { setTypeDecls, loadTypeDecls, FactDetailHost } from './facts';
+import { readHashState, writeHashState } from './urlstate';
 import { ink } from './ink';
 
 // The public surface: index.ts (SSR) and main.tsx (hydration) import from here.
@@ -83,6 +84,21 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // and the graph's taps both funnel here, and the graph pans to any selection
   // it didn't originate (ADR-0047 v2).
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Selection is shareable view-state (urlstate.ts). We DON'T seed useState from
+  // the hash — that would diverge from the server's null and break hydration.
+  // Instead: after mount, read the hash once and apply it; from then on, mirror
+  // selection changes back into the hash (merged with zoom/query the graph and
+  // console own). The ref skips the write on that first restoring pass.
+  const hashSelHydrated = React.useRef(false);
+  useEffect(() => {
+    if (!hashSelHydrated.current) {
+      hashSelHydrated.current = true;
+      const s = readHashState().selected;
+      if (s) setSelectedKey(s);
+      return;
+    }
+    writeHashState({ selected: selectedKey ?? undefined });
+  }, [selectedKey]);
 
   if (!session.ready) return <Page>{null}</Page>;
 

@@ -43,6 +43,7 @@ import { ink } from './ink';
 
 // ── decomposition (2026-07-17): the closure-free helpers now live in graph/*.
 import { TUNE, TUNE_DEFAULTS, TUNE_LS, TUNE_SCHEMA, TUNE_EVENT, TUNE_RESET_EVENT, tuneEnabled } from './graph/tune';
+import { readHashState, writeHashState } from './urlstate';
 import {
   loadThree, loadThreeAddons, esmURL, hslToRgb, hexToRgb, paperInkFor,
   makeStarTexture, makeStippleTexture, makeRingTexture,
@@ -157,6 +158,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       removeEntries: (keys: string[]) => void;
       removeEdges: (items: GEdge[]) => void;
       finishStream: () => void;
+      frameInitial: () => void;
     }
     function mountScene(meta: GraphMeta, caps: { capN: number; capE: number }, THREE: any, addons: any): StreamApi | null {
       if (disposed) return null;
@@ -897,6 +899,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // so a gesture that crosses the seam changes gears at the seam.
       const zoomGain = (z: number): number => (z <= Z_DOME ? TUNE.zoomFov : TUNE.zoomCurl);
       let zoomZ = Z_BALL, zoomZT = Z_BALL;      // arrival opens on the held globe
+      let lastZoomHash = Z_BALL;                // last zoom written to the URL (view-state)
       let curlS = -1;                           // curvature, derived from zoomZ
       const shellQ = new THREE.Quaternion();    // the shell's orientation
       let shellQT: any = null;                  // eased turn-to-face target
@@ -2170,6 +2173,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (Math.abs(zoomZT - zoomZ) > 1e-4) {
           zoomZ += (zoomZT - zoomZ) * Math.min(1, delta * 6);
           if (Math.abs(zoomZT - zoomZ) < 1e-4) zoomZ = zoomZT;
+        } else if (Math.abs(zoomZ - lastZoomHash) > 0.02) {
+          // Zoom SETTLED at a new curl — record it in the URL (view-state). The
+          // 0.02 gate keeps the initial rest at the default from writing, so a
+          // fresh URL stays clean until you actually zoom.
+          lastZoomHash = zoomZ;
+          writeHashState({ zoom: zoomZ });
         }
         const zs = zoomOf(zoomZ);
         if (Math.abs(zs.s - curlS) > 1e-5) { curlS = zs.s; layoutDirty = true; }
@@ -2677,7 +2686,25 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         applyEdgeColor();
         syncBeamLabels();
       };
-      return { appendEntries, appendEdges, removeEntries, removeEdges, finishStream };
+      // The opening view. Called once, right after the first (salience-ranked)
+      // page lands. A deep-link in the URL hash (urlstate.ts) overrides the
+      // default: restore the curl (zoom); and only face the top-salience star if
+      // NEITHER a selection nor a query is being restored — those drive the view
+      // themselves (App re-selects `selected`; the console re-runs `q` and frames
+      // its hits). No hash → we always land looking at your most-alive thing.
+      const frameInitial = (): void => {
+        const h = readHashState();
+        if (h.zoom != null && Number.isFinite(h.zoom)) {
+          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, h.zoom));
+          lastZoomHash = zoomZ;
+          layoutDirty = true;
+        }
+        if (!h.selected && !h.q) {
+          const top = byRank[0];
+          if (top) faceCanon(top.cdx, top.cdy, top.cdz);
+        }
+      };
+      return { appendEntries, appendEdges, removeEntries, removeEdges, finishStream, frameInitial };
     }
 
     (async () => {
@@ -2708,6 +2735,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         return;
       }
       stream.appendEntries(initial.items);
+      // byRank is populated now (the first page is salience-ranked), so the
+      // opening view can face the top star — or restore a URL-hash deep-link.
+      stream.frameInitial();
       let charted = initial.items.length;
       let graphTotal = initial.total;
       let nextCursor = initial.nextCursor;

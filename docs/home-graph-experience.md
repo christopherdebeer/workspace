@@ -62,15 +62,29 @@ time, growing outward from importance until your whole substrate is present. One
 control pauses that in-fill (and resumes it) if you want the field to hold
 still — but the default is a sky that finishes drawing itself while you watch.
 
+You always land *looking at something*: as the first band settles, the sky turns
+to bring your single most-alive thing — the brightest star — to face you. You
+never open onto an unaimed field; the opening view is already pointed at what
+matters most.
+
+Unless you arrived by a **link**. The view is shareable: the address in the bar
+quietly records where you are — which star is selected, how curled the sky is,
+and any query you have running — so a link reopens exactly that view instead of
+the default. Come by a bare address and you get your most-alive thing; come by a
+shared one and you get the place it points to.
+
 The field does **not** drift on its own. A place you inhabit holds still; the
 sphere waits for your hand. (An earlier version turned slowly by itself — that
 idle rotation is gone. Stillness is the resting state.)
 
-- **IS**: importance-first arrival on the held globe; the world fills in visibly
-  and keeps filling without a manual step; at rest, nothing moves.
+- **IS**: importance-first arrival on the held globe, already turned to face the
+  top-salience star; the world fills in visibly and keeps filling without a
+  manual step; at rest, nothing moves. A URL can restore selection / zoom / query.
 - **ACCIDENT?**: the *amount* charted before the first pause (~800) is a budget,
-  not an intention. And arriving at the fully-uncurled *globe* end — rather than
-  under the dome — is a chosen opening posture, not a law.
+  not an intention. Arriving at the fully-uncurled *globe* end — rather than
+  under the dome — is a chosen opening posture, not a law. And whether the
+  default landing should merely *face* the top star or fully *select* it (ring,
+  neighbourhood, panel) is a live question — today it only faces.
 
 ## 2. What the picture says before you touch it
 

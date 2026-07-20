@@ -30,6 +30,7 @@ import { FederatedRendererFrame, FederatedFormFrame } from './federated';
 import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
 import { CONSOLE_RESULT_EVENT } from './graph';
 import { TunePanel } from './tune-panel';
+import { readHashState, writeHashState } from './urlstate';
 import { ink } from './ink';
 // Matching/ranking, MRU recents, and selection stepping come from the kernel's
 // headless command-surface engine — shared with the canvas cmd-palette.
@@ -353,6 +354,22 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   }, [authed]);
 
   const q = query.trim().toLowerCase();
+
+  // Query is shareable view-state (urlstate.ts). Like App's `selected`, we don't
+  // seed useState from the hash (SSR hydration must match the server's empty
+  // box) — instead restore it once after mount, then mirror it back. The restored
+  // query re-runs through the search effect below, which re-lights its hits.
+  const hashQHydrated = React.useRef(false);
+  useEffect(() => {
+    if (!hashQHydrated.current) {
+      hashQHydrated.current = true;
+      const hq = readHashState().q;
+      if (hq) { setQuery(hq); onCollapse?.(false); }
+      return;
+    }
+    writeHashState({ q: query.trim() || undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   // Search-first: free text runs a SEMANTIC query over the slice (ADR-0051
   // `query{text}` — meaning-ranked, salience-aware). Matches drive graph focus
