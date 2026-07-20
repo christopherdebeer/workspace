@@ -402,16 +402,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uFadeK: { value: 0 },
         uFadeNear: { value: 1 },
         uFadeFar: { value: 2 },
+        // Hard clip: −z beyond which a vertex is culled outright (0 = disabled).
+        // Additive glow can't be faded to nothing by opacity, so full occlusion
+        // needs a real clip. Driven by TUNE.farOcclude in tick.
+        uFarClip: { value: 0 },
       };
       const TORCH_GLSL =
-        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFadeK; uniform float uFadeNear; uniform float uFadeFar;' +
+        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFadeK; uniform float uFadeNear; uniform float uFadeFar; uniform float uFarClip;' +
         'float torch(vec3 p){ vec3 d = uFocus - uCam; float td = length(d); vec3 axis = d / max(td, 1e-3);' +
         ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return uFloor;' +
         ' float radial = length(toP - axis*along);' +
         ' float ang = 1.0 - smoothstep(uConeIn, uConeOut, radial / along);' +
         ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
         ' return max(uFloor, ang * dep); }' +
-        'float farFade(vec3 p){ return 1.0 - uFadeK * smoothstep(uFadeNear, uFadeFar, length(p)); }';
+        // Far-side fade keys on DEPTH along the gaze. The curl seats the ball
+        // ahead of the fixed camera (gaze = −Z), so −p.z runs from the near pole
+        // (small) to the far pole (large); −p.z is the clean near→far discriminant.
+        // uFadeNear is the front, uFadeFar the back; stars behind fade to (1−uFadeK).
+        'float farFade(vec3 p){ return 1.0 - uFadeK * smoothstep(uFadeNear, uFadeFar, -p.z); }';
       const ptMat = new THREE.ShaderMaterial({
         uniforms: { uTex: { value: isPaper() ? stipple : disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
         vertexShader:
@@ -426,8 +434,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // where the camera happens to aim. And print dots are SMALL —
           // engraved stipple, not glow discs (×0.6).
           'float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost);' +
-          'vAlpha = alpha * lit * farFade(position); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
-          'gl_Position = projectionMatrix * mv; }',
+          // Far-fade multiplies the alpha, but a SELECTED/boosted far node keeps
+          // a faint glow (floor rises with boost) so a target behind the globe
+          // still shows as a whisper — everything unselected on the far side dies.
+          'float ff = uPaper > 0.5 ? 1.0 : max(farFade(position), boost * 0.35);' +
+          'vAlpha = alpha * lit * ff; gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
+          // Hard occlusion: cull vertices past the rim outright (unless boosted —
+          // a selected far node keeps its whisper). Additive glow can't fade to
+          // zero, so clip. Zero uFarClip disables.
+          'if (uFarClip > 0.5 && -position.z > uFarClip && boost < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }' +
+          'else { gl_Position = projectionMatrix * mv; } }',
         fragmentShader:
           'uniform sampler2D uTex; uniform float uPaper; varying float vAlpha; varying vec3 vColor;' +
           'void main(){ float m = texture2D(uTex, gl_PointCoord).a;' +
@@ -941,6 +957,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           c.grp.position.set(c.ax, c.ay, c.az);
         }
         if (ringNode) ring.position.set(ringNode.x, ringNode.y, ringNode.z);
+        // The atmosphere dome rides the shell: the airglow/horizon stays locked
+        // to the same patch of sky as you drag, rather than floating free of the
+        // stars it belongs to (the fixed camera means only the shell turns).
+        skyDome.quaternion.copy(shellQ);
       };
       // Arrival: open on the held globe, then the chart unrolls toward you and
       // wraps around — the sky rises to envelop you, continuously through flat.
@@ -1297,7 +1317,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const farFadeAt = (n: any): number => {
         const k = torchUniforms.uFadeK.value;
         if (k <= 0) return 1;
-        return 1 - k * smoothstep(torchUniforms.uFadeNear.value, torchUniforms.uFadeFar.value, Math.hypot(n.x, n.y, n.z));
+        return 1 - k * smoothstep(torchUniforms.uFadeNear.value, torchUniforms.uFadeFar.value, -n.z);
       };
       // The label SELECTOR's cone, in JS (decoupled from the lighting torch —
       // the light can be a floodlight while admission stays a sharp beam).
@@ -2037,6 +2057,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // near/far fade the dots and edges use, so a name on the back of the
           // globe dims out (and, below ~0.2, stops catching taps via labelAt).
           target *= farFadeAt(st.grp.position);
+          // Hard cull past the rim when far-occlusion clip is engaged (matches
+          // the points' clip), unless this label's node is the selection/hit.
+          const clipZ = torchUniforms.uFarClip.value;
+          if (clipZ > 0.5 && -st.grp.position.z > clipZ && st.role !== 'sel' && st.role !== 'hit' && st.role !== 'nbr') target = 0;
           if (st.dying) target = 0;
           const opacityK = st.dying && st.role === 'hover' ? Math.min(1, dt * 24) : k;
           st.cur += (target - st.cur) * opacityK;
@@ -2121,15 +2145,30 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // around you, gone by the time it has unfurled flat (a chart has no
         // airglow). Rides the curvature.
         skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, curlS);
-        // Far-side fade: only the re-curled ball (s<0) has a back. Fade from
-        // its centre distance out to its far pole, ramping in with the curl.
+        // Far-side fade: only the re-curled ball (s<0) has a back. Keyed on gaze
+        // depth (−z): near pole ≈SHELL, equator ≈2·SHELL, far pole ≈3·SHELL (at
+        // s=−1). Additive glow reads through the shell even at 40%, so we kill
+        // the back HARD — fade to ~0 starting AT the equator (the visible rim),
+        // so at rest you see the near cap solid and the far hemisphere is gone;
+        // only edges trail off into the dark, and a selected far node keeps a
+        // faint glow (selection boost is applied AFTER farFade in the shader).
+        // −z spans r0 (near cap) to 3·r0 (far pole); the equator/rim is at 2·r0.
+        // TUNE.farOcclude ∈ [0,1] sets how hard the far hemisphere is hidden:
+        //   soft fade (uFadeK) always ramps up with the knob, AND at high values a
+        //   hard clip (uFarClip) culls everything past the rim — additive glow
+        //   can't be faded to nothing, so opacity alone never fully occludes.
         if (curlS < -0.05) {
-          const Rc = SHELL / Math.abs(curlS);            // curl-sphere radius
-          const zetaFar = 1 - (1 - Math.cos(curlS * Math.PI)) / curlS; // ζ(π)
-          torchUniforms.uFadeK.value = Math.min(1, -curlS * 1.1);
-          torchUniforms.uFadeNear.value = SHELL + Rc;    // the ball's centre
-          torchUniforms.uFadeFar.value = Math.max(SHELL + Rc + 1, SHELL * zetaFar);
-        } else torchUniforms.uFadeK.value = 0;
+          const occ = Math.max(0, Math.min(1, TUNE.farOcclude));
+          const rim = SHELL * (1 + 1 * -curlS);          // equator/rim −z (2·SHELL at s=−1)
+          torchUniforms.uFadeK.value = -curlS * occ;     // fade strength scales with the knob
+          torchUniforms.uFadeNear.value = rim * 0.78;    // start fading before the rim
+          torchUniforms.uFadeFar.value = rim * 1.0;      // fully faded by the rim
+          // Hard clip engages in the top of the knob's range (0.6→1), tightening
+          // from just past the rim down toward the rim itself at max.
+          torchUniforms.uFarClip.value = occ > 0.6
+            ? rim * (1.08 - 0.08 * ((occ - 0.6) / 0.4))   // 1.08·rim → 1.0·rim
+            : 0;
+        } else { torchUniforms.uFadeK.value = 0; torchUniforms.uFarClip.value = 0; }
         // Feed the beam (fixed camera + focal point) to the torch + labels.
         camPos.copy(camera.position);
         torchUniforms.uFocus.value.copy(focusVec);
@@ -2243,6 +2282,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           };
           gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
           gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(persist); // tick applies it (rides the curl)
+          gui.add(TUNE, 'farOcclude', 0, 1, 0.02).name('far occlude').onChange(persist); // orrery back-face hide; tick applies it
           const torchF = gui.addFolder('torch');
           // Mins go to TRUE zero — the owner's grade railed the old bottom stops
           // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
@@ -2275,7 +2315,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           add(labelsF, 'labelOutline', 0, 0.35, 0.005);
           add(labelsF, 'labelPx', 6, 40, 1); // fixed on-screen label size (× role mult)
           const nodesF = gui.addFolder('nodes');
-          add(nodesF, 'nodeDim', 0.2, 1.5);
+          add(nodesF, 'nodeDim', 0.1, 3);
           add(nodesF, 'nbrBoost', 0, 1);
           add(nodesF, 'boostSizeGain', 0, 1.5);
           add(nodesF, 'starSpike', 0, 1, 0.01); // 0 = soft disc, 1 = full diffraction star

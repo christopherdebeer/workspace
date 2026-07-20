@@ -83,7 +83,7 @@ export function edgeStyle(e: GEdge): EdgeStyle {
  */
 export function nodeDOI(n: any, selKey: string | null, nbr: Set<string> | null, hiSet: Set<string> | null, N: number): number {
   const salN = 1 - (n.rank ?? N) / Math.max(1, N); // 1 = most salient
-  const resting = 0.12 + 0.88 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
+  const resting = 0.3 + 0.6 * salN * salN; // salience-graded resting emphasis (steep, so the top pops)
   // Selection is ADDITIVE, not subtractive: the selected star and its
   // neighbours are lifted, but the rest of the field keeps its resting
   // brightness — a selection makes ONE thing prominent, it does not black out

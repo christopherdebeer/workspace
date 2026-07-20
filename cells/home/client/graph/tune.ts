@@ -86,6 +86,12 @@ export const TUNE_DEFAULTS = {
   // 0 = flat sceneBg (the old void); 1 = full gradient. Dark by design — never
   // blooms, never drowns a star.
   atmosphere: 0.7,
+  // FAR-SIDE occlusion (orrery / the re-curled ball): how hard the far hemisphere
+  // is hidden behind the near cap. 0 = the shell is fully transparent (see every
+  // back-side star through it); 1 = OPAQUE — nothing beyond the horizon rim is
+  // drawn at all (a hard clip past the rim, since additive glow can never be
+  // fully faded by opacity alone). Rides the curl: only active on the ball.
+  farOcclude: 1,
   // places (cartography): constellation captions — COMPUTED from salience
   // hubs + dominant types, with registered VIEWS as the authored layer — and
   // resting orientation anchors (top-salience node per screen region).
