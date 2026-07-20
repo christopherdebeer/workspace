@@ -26,7 +26,19 @@
 
 ---
 
-## 0. The sky, as built (2026-07-19)
+## 0. The sky, as built (2026-07-19; the CURL, 2026-07-20)
+
+> **The curl (2026-07-20).** The two vantages below are no longer two camera
+> stances with a transition — they are the two ends of ONE continuous zoom.
+> You never move. Zooming bends the *sky itself*: fully curled it surrounds
+> you (the planetarium); zoom out and it unrolls — peeling open around the
+> point you're facing, arc lengths preserved, until at the midpoint it is
+> exactly flat — a **planisphere**, the whole sky as a chart in front of you,
+> its rim (the point once behind your head) just out of view; keep going and
+> the chart re-curls the other way into a globe held at arm's length (the
+> orrery), the patch you were studying on its near face. One gesture
+> everywhere: drag spins the sky/chart/globe with the same hand feel — no
+> inverted controls, no far-side surprise, no seam.
 
 You are on the ground under your own night sky. Not above it — *inside* it.
 

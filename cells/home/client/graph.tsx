@@ -30,10 +30,11 @@
  * The scene: a luminous additive point cloud (one draw call) with additive
  * backbone edges (`similarTo` dropped — proximity already says it), UnrealBloom
  * (desktop), ACES tone mapping, a camera-aimed TORCH falloff for atmosphere,
- * a celestial-sphere camera (a hand-rolled quaternion rig: planetarium↔orrery
- * are one distance scalar, gimbal-free look, a field-of-view telescope, drag
- * momentum), turn-to-face on select, and CSS2D labels lit by the beam (plus
- * the selection/highlight set, always).
+ * THE CURL (a fixed camera; the shell morphs): one zoom axis runs telescope →
+ * planetarium dome → flat planisphere chart → held globe, by bending the
+ * shell's own curvature (sphere-unroll, arc lengths preserved); drag rotates
+ * the shell with momentum, turn-to-face slerps it, and CSS2D labels are lit
+ * by the beam (plus the selection/highlight set, always).
  */
 import * as React from 'react';
 import { mcpCall } from './lib';
@@ -183,35 +184,30 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
 
       const SPREAD = 420;
       // ── THE CELESTIAL SPHERE (docs/home-graph-experience.md §"night sky") ──
-      // The graph is a SHELL of stars around the origin, not a filled cloud.
-      // DIRECTION on the sphere = meaning (the semantic embedding's direction);
-      // salience is carried by brightness + size (and a whisper of nearness),
-      // NOT by radius — so the SAME model reads as a planetarium from inside
-      // (camera near centre, looking out — the primary vantage) and an orrery
-      // from outside (camera pulled back, holding the globe). One layout, the
-      // camera is the only difference. A shell also dissolves depth-occlusion:
-      // every star is a unique direction, so a tap is unambiguous.
+      // The graph is a SHELL of stars, not a filled cloud. DIRECTION on the
+      // sphere = meaning (the semantic embedding's direction); salience is
+      // carried by brightness + size (and a whisper of nearness), NOT by
+      // radius. The shell itself CURLS (see the camera block): fully curled it
+      // surrounds you (planetarium), unrolled flat it is a chart in front of
+      // you (planisphere), re-curled the other way it is a held globe (orrery)
+      // — one canonical layout, one zoom axis, the camera never moves.
       const SHELL = SPREAD;
       const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-      /** Place a node on the shell: keep the embedding's DIRECTION, set radius
-       *  to SHELL (louder stars sit a whisper nearer the enveloped observer).
+      /** A node's CANONICAL SEAT is a unit direction + a radius (louder stars a
+       *  whisper nearer). World position is derived from the seat by the CURL
+       *  transform (see the camera block): the shell morphs, the seat is fixed.
        *  A node with no embedding (uncharted) gets a stable golden-spiral seat
        *  by index, so it still lands on the sphere rather than collapsing to 0. */
-      const toShell = (c: number[] | undefined, i: number, score: number): [number, number, number] => {
-        let x: number, y: number, z: number;
+      const toDir = (c: number[] | undefined, i: number): [number, number, number] => {
         const len = c ? Math.hypot(c[0] ?? 0, c[1] ?? 0, c[2] ?? 0) : 0;
-        if (c && len > 1e-6) {
-          x = (c[0] ?? 0) / len; y = (c[1] ?? 0) / len; z = (c[2] ?? 0) / len;
-        } else {
-          const t = ((i % 997) + 0.5) / 997; // pseudo-uniform latitude
-          y = 1 - 2 * t;
-          const rr = Math.sqrt(Math.max(0, 1 - y * y));
-          const th = i * GOLDEN;
-          x = Math.cos(th) * rr; z = Math.sin(th) * rr;
-        }
-        const r = SHELL * (1 - 0.08 * Math.max(0, Math.min(1, score))); // loud = a whisper nearer
-        return [x * r, y * r, z * r];
+        if (c && len > 1e-6) return [(c[0] ?? 0) / len, (c[1] ?? 0) / len, (c[2] ?? 0) / len];
+        const t = ((i % 997) + 0.5) / 997; // pseudo-uniform latitude
+        const y = 1 - 2 * t;
+        const rr = Math.sqrt(Math.max(0, 1 - y * y));
+        const th = i * GOLDEN;
+        return [Math.cos(th) * rr, y, Math.sin(th) * rr];
       };
+      const seatRadius = (score: number): number => SHELL * (1 - 0.08 * Math.max(0, Math.min(1, score)));
 
       // ── selection / highlight state ──
       let selKey: string | null = null;
@@ -398,24 +394,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uDepthOut: { value: SPREAD * TUNE.depthOut },
         uFloor: { value: TUNE.torchFloor },
         uSizeBoost: { value: TUNE.boostSizeGain },
-        // 0 in the planetarium, →1 as you pull out to the orrery: fades the FAR
-        // hemisphere of the globe so the near surface reads (no seeing straight
-        // through to the back). Driven by vantage distance in tick.
-        uFarFade: { value: 0 },
+        // Far-side fade for the re-curled BALL end of the curl (s < 0): only
+        // there does the surface have a back. Distance-based (the camera is
+        // fixed at the origin): fade in over [uFadeNear, uFadeFar] — the ball's
+        // centre distance out to its far pole — by strength uFadeK. All three
+        // driven from the curl state in tick.
+        uFadeK: { value: 0 },
+        uFadeNear: { value: 1 },
+        uFadeFar: { value: 2 },
       };
       const TORCH_GLSL =
-        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFarFade;' +
+        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFadeK; uniform float uFadeNear; uniform float uFadeFar;' +
         'float torch(vec3 p){ vec3 d = uFocus - uCam; float td = length(d); vec3 axis = d / max(td, 1e-3);' +
         ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return uFloor;' +
         ' float radial = length(toP - axis*along);' +
         ' float ang = 1.0 - smoothstep(uConeIn, uConeOut, radial / along);' +
         ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
         ' return max(uFloor, ang * dep); }' +
-        // Nearness of a shell point to the camera side (1 = near cap, −1 = far):
-        // dims the far hemisphere by uFarFade. Safe-normalised so it never NaNs
-        // when the eye is at the centre (uFarFade is 0 there anyway).
-        'float farFade(vec3 p){ vec3 cd = uCam / max(length(uCam), 1.0); float near = dot(normalize(p), cd);' +
-        ' return mix(1.0, smoothstep(-0.9, 0.2, near), uFarFade); }';
+        'float farFade(vec3 p){ return 1.0 - uFadeK * smoothstep(uFadeNear, uFadeFar, length(p)); }';
       const ptMat = new THREE.ShaderMaterial({
         uniforms: { uTex: { value: isPaper() ? stipple : disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
         vertexShader:
@@ -834,114 +830,126 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       };
       if (useBloom()) ensureComposer();
 
-      // ── celestial camera: a custom QUATERNION rig (ONE sphere, TWO stances) ──
-      // The spatial model is a single celestial sphere; the two vantages are
-      // pure camera STANCES on it — and BOTH collapse to the same two numbers,
-      // an ORIENTATION (which way you face) and a DISTANCE from the origin:
-      //   SKY (planetarium, the primary vantage): distance 0 — the eye is AT the
-      //     centre, looking OUT. A drag turns your head; you never travel.
-      //   ORRERY: distance ORRERY — you step outside and that SAME orientation
-      //     now holds the whole globe out in front of you (camera parked at
-      //     −forward·distance, looking back down its own gaze at the origin).
-      // Orientation is yaw+pitch composed into a quaternion (Euler 'YXZ', no
-      // roll — a sky needs none), so there is NO polar gimbal: yaw spins freely
-      // at every pitch and pitch merely clamps a hair short of the zenith. This
-      // is why the rig is hand-rolled rather than camera-controls: that library
-      // orbits a target in spherical coords and locks/flips at the poles (the
-      // "gimbal" the owner hit). The TELESCOPE is field-of-view — a wide 82°
-      // down to a tight 4°, a real magnification range, not a timid dolly-zoom.
-      // Drag carries MOMENTUM; the vantage toggle and turn-to-face ease. No pan
-      // in either stance — you can't slide a sky sideways.
-      const ORRERY = SHELL * 2.4;         // holding the whole globe
-      // The telescope is field-of-view. FOV_WIDE is the RESTING zoom (arrival /
-      // reset); FOV_OUT is how far you may pull the wide end — an ultra-wide
-      // "almost the whole dome at once". A perspective lens has a hard ceiling
-      // below 180° (the edges fisheye and stars smear as it approaches it), so
-      // ~120° is about as wide as reads cleanly; past that it distorts, not
-      // breaks. Keep pulling out AT the wide limit and you tip into the orrery.
-      const FOV_WIDE = 82, FOV_TELE = 4, FOV_OUT = 120; // rest · telescope · zoom-out extent
-      const PITCH_LIMIT = Math.PI / 2 - 0.015;
-      let yaw = 0, pitch = 0;             // orientation (radians)
-      let velYaw = 0, velPitch = 0;       // angular momentum (radians/frame)
-      let dist = ORRERY, distTarget = ORRERY;  // 0 = sky, ORRERY = orrery
-      let fov = FOV_WIDE, fovTarget = FOV_WIDE;
-      let turnYaw: number | null = null, turnPitch: number | null = null; // eased turn-to-face
-      let vantage: 'sky' | 'orrery' = 'orrery';
+      // ── THE CURL: one zoom axis, a FIXED camera, a shell that bends ──
+      // (Owner proposal, 2026-07-20.) The camera sits at the origin looking
+      // down −Z, permanently — zoom is never camera motion. Drag ROTATES THE
+      // SHELL (shellQ): the sky slides around you, one gesture at every zoom.
+      // Zoom is one scalar zoomZ ∈ [0,3]:
+      //   [0,1]  telescope: fov 4°→82°, shell fully curled (s=+1).
+      //   [1,3]  the CURL: s = 2−zoomZ runs +1 → −1 at the resting fov.
+      // s is the shell's CURVATURE state — the sphere-unroll family. Each star
+      // keeps its azimuth and its ARC distance from the anchor point dead
+      // ahead, so the surface never stretches; it only bends:
+      //   s=+1  the sphere surrounds you — the PLANETARIUM.
+      //   s= 0  fully flat — the PLANISPHERE: the whole sky unfurled onto a
+      //         chart in front of you (its rim — the point once directly behind
+      //         your head — lands at atan(π)≈72° off-axis, just out of view).
+      //   s=−1  re-curled the other way: a globe held in front — the ORRERY —
+      //         with the patch you were studying on the near face.
+      //   p(s) = r·[ζ·g + ρ·u],  ρ = sin(s·α)/s,  ζ = 1 − (1−cos(s·α))/s
+      // (g = the fixed gaze −Z, α = a seat's angle off it, u = its azimuth;
+      // the s→0 limit ζ=1, ρ=α is the azimuthal equidistant projection.)
+      // The old two-stance machinery (camera distance, enterSky/enterOrrery,
+      // the gaze flip, the orrery drag inversion, tip-into-orrery) collapses
+      // into this one axis — and the drag SIGN is the same at both ends:
+      // rotating the shell reads as drag-the-sky inside and spin-the-globe
+      // outside, with no seam and nothing ever hidden behind a transition.
+      const FOV_WIDE = 82, FOV_TELE = 4;
+      const Z_DOME = 1, Z_FLAT = 2, Z_BALL = 3; // named stops on the zoom axis
+      let zoomZ = Z_BALL, zoomZT = Z_BALL;      // arrival opens on the held globe
+      let curlS = -1;                           // curvature, derived from zoomZ
+      const shellQ = new THREE.Quaternion();    // the shell's orientation
+      let shellQT: any = null;                  // eased turn-to-face target
+      let velRX = 0, velRY = 0;                 // shell angular momentum (rad/frame)
       let lastInput = performance.now();
-      const camEuler = new THREE.Euler(0, 0, 0, 'YXZ');
-      const fwdV = new THREE.Vector3();
-      const focusVec = new THREE.Vector3();
-      camera.rotation.order = 'YXZ';
-      const clampPitch = (p: number): number => Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p));
-      // Turn the gaze to a world DIRECTION (a star, a region), eased in tick().
-      // The camera's forward is R(yaw,pitch)·(0,0,-1) = (−cos·sin y, sin p,
-      // −cos·cos y), so to look AT a unit direction (nx,ny,nz) the solution is
-      // yaw = atan2(−nx,−nz), pitch = asin(ny). (The earlier atan2(nx,nz) faced
-      // the exact OPPOSITE — a 180° error that turned the second tap away from
-      // its star; caught by Sol, 2026-07-20.) In the ORRERY the eye is OUTSIDE
-      // looking IN, so we aim at the OPPOSITE direction to bring the star to the
-      // NEAR face (facing you) rather than the far side of the globe.
-      const faceDir = (x: number, y: number, z: number): void => {
-        const len = Math.hypot(x, y, z) || 1;
-        let nx = x / len, ny = y / len, nz = z / len;
-        if (vantage === 'orrery') { nx = -nx; ny = -ny; nz = -nz; }
-        turnYaw = Math.atan2(-nx, -nz);
-        turnPitch = clampPitch(Math.asin(ny));
-        velYaw = velPitch = 0;
+      const fwdV = new THREE.Vector3(0, 0, -1); // the fixed gaze
+      const focusVec = new THREE.Vector3(0, 0, -SHELL); // torch focal point, dead ahead
+      camera.position.set(0, 0, 0);
+      camera.quaternion.identity();
+      const zoomOf = (z: number): { fov: number; s: number } =>
+        z <= Z_DOME
+          ? { fov: FOV_TELE * Math.pow(FOV_WIDE / FOV_TELE, Math.max(0, z)), s: 1 }
+          : { fov: FOV_WIDE, s: 2 - z };
+      // Everything below the camera is derived, so a change to the shell's
+      // orientation or curvature marks the layout dirty; tick() re-seats.
+      let layoutDirty = true;
+      // World-axis shell rotation (premultiplied): drag and momentum.
+      const qRotX = new THREE.Quaternion(), qRotY = new THREE.Quaternion();
+      const AXIS_X = new THREE.Vector3(1, 0, 0), AXIS_Y = new THREE.Vector3(0, 1, 0);
+      const rotateShell = (ax: number, ay: number): void => {
+        qRotX.setFromAxisAngle(AXIS_X, ax);
+        qRotY.setFromAxisAngle(AXIS_Y, ay);
+        shellQ.premultiply(qRotX).premultiply(qRotY).normalize();
+        layoutDirty = true;
+      };
+      // TURN TO FACE: rotate the SHELL so a canonical seat direction arrives at
+      // the anchor, dead ahead — eased (slerp) in tick(). Works identically at
+      // every curl: under the dome it's the sky wheeling to centre a star; on
+      // the ball it's the globe spinning that face toward you.
+      const faceQ = new THREE.Quaternion(), faceV = new THREE.Vector3();
+      const faceCanon = (dx: number, dy: number, dz: number): void => {
+        const len = Math.hypot(dx, dy, dz) || 1;
+        faceV.set(dx / len, dy / len, dz / len).applyQuaternion(shellQ);
+        shellQT = faceQ.setFromUnitVectors(faceV, fwdV).clone().multiply(shellQ).normalize();
+        velRX = velRY = 0;
         lastInput = performance.now();
       };
-      // The two stances are one animated scalar (distance) — orientation is
-      // shared, so stepping out keeps the very patch of sky you were studying
-      // centred, now as the near face of the held globe.
-      // Crossing between stances FLIPS the gaze 180° (yaw+π, −pitch → look at
-      // −forward). Reason: the point centred-and-NEAR in one stance is the
-      // OPPOSITE shell direction in the other (in the sky you look OUT at
-      // +fwd·SHELL; from the orrery the near cap is −fwd·SHELL). Without the
-      // flip, toggling orrery→sky faced the FAR surface (owner report); with it,
-      // the very thing you were holding stays centred and near in both.
-      const flipGaze = (): void => {
-        let ny = yaw + Math.PI;
-        while (ny > Math.PI) ny -= 2 * Math.PI;
-        turnYaw = ny; turnPitch = clampPitch(-pitch);
-        velYaw = velPitch = 0;
+      // The CURL transform: canonical seat (unit dir + radius) → morphed world
+      // position at the current (shellQ, curlS). Writes x/y/z into `out`.
+      const curlV = new THREE.Vector3();
+      const curlPos = (dx: number, dy: number, dz: number, r0: number, out: { x: number; y: number; z: number }): void => {
+        curlV.set(dx, dy, dz).applyQuaternion(shellQ);
+        const ca = Math.max(-1, Math.min(1, -curlV.z)); // cos α (gaze = −Z)
+        const alpha = Math.acos(ca);
+        const sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+        const ux = sa > 1e-6 ? curlV.x / sa : 1, uy = sa > 1e-6 ? curlV.y / sa : 0;
+        const s = curlS;
+        let rho: number, zeta: number;
+        if (Math.abs(s) < 1e-3) { rho = alpha; zeta = 1; } // the flat limit
+        else { rho = Math.sin(s * alpha) / s; zeta = 1 - (1 - Math.cos(s * alpha)) / s; }
+        out.x = r0 * rho * ux;
+        out.y = r0 * rho * uy;
+        out.z = -r0 * zeta;
       };
-      const enterSky = (transition = true): void => {
-        if (vantage === 'orrery') flipGaze();
-        vantage = 'sky'; distTarget = 0; fovTarget = FOV_WIDE;
-        if (!transition) { dist = 0; fov = FOV_WIDE; if (turnYaw !== null) { yaw = turnYaw; turnYaw = null; } if (turnPitch !== null) { pitch = turnPitch; turnPitch = null; } }
+      // Re-seat EVERYTHING from canonical seats at the current shell state:
+      // nodes → posBuf, edge endpoints, labels, captions, the selection ring.
+      // Called only when the shell actually moved; static frames cost nothing.
+      const constAnchorScratch = { x: 0, y: 0, z: 0 };
+      const morphLayout = (): void => {
+        layoutDirty = false;
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          curlPos(n.cdx, n.cdy, n.cdz, n.cr0, n);
+          posBuf[i * 3] = n.x; posBuf[i * 3 + 1] = n.y; posBuf[i * 3 + 2] = n.z;
+        }
+        for (let i = 0; i < links.length; i++) {
+          const a = nodeById.get(idOf(links[i].source)), b = nodeById.get(idOf(links[i].target));
+          if (!a || !b) continue;
+          eposBuf[i * 6] = a.x; eposBuf[i * 6 + 1] = a.y; eposBuf[i * 6 + 2] = a.z;
+          eposBuf[i * 6 + 3] = b.x; eposBuf[i * 6 + 4] = b.y; eposBuf[i * 6 + 5] = b.z;
+        }
+        (geo.attributes.position as any).needsUpdate = true;
+        (egeo.attributes.position as any).needsUpdate = true;
+        for (const [id, st] of labelObjs) {
+          const n = nodeById.get(id);
+          if (n) st.grp.position.set(n.x, n.y, n.z);
+        }
+        for (const c of constellations) {
+          curlPos(c.cdx, c.cdy, c.cdz, c.cr0, c); // region centre (crumb / doors)
+          curlPos(c.adx, c.ady, c.adz, c.ar0, constAnchorScratch);
+          c.ax = constAnchorScratch.x; c.ay = constAnchorScratch.y; c.az = constAnchorScratch.z;
+          c.grp.position.set(c.ax, c.ay, c.az);
+        }
+        if (ringNode) ring.position.set(ringNode.x, ringNode.y, ringNode.z);
       };
-      const enterOrrery = (transition = true): void => {
-        if (vantage === 'sky') flipGaze();
-        vantage = 'orrery'; distTarget = ORRERY; fovTarget = FOV_WIDE;
-        if (!transition) { dist = ORRERY; fov = FOV_WIDE; if (turnYaw !== null) { yaw = turnYaw; turnYaw = null; } if (turnPitch !== null) { pitch = turnPitch; turnPitch = null; } }
-      };
-      // Arrival: open OUTSIDE holding the whole globe, then frameBody eases you
-      // to the centre — the sky rises to envelop you.
-      dist = distTarget = ORRERY;
+      // Arrival: open on the held globe, then the chart unrolls toward you and
+      // wraps around — the sky rises to envelop you, continuously through flat.
       let framed = false;
       const frameBody = (force = false): void => {
         if ((framed && !force) || !nodes.length) return;
         framed = true;
-        enterSky(true);
+        zoomZT = Z_DOME;
       };
-      // Rebuild the camera from (yaw, pitch, dist, fov) — called every frame.
-      const applyCamera = (): void => {
-        camEuler.set(pitch, yaw, 0);
-        camera.quaternion.setFromEuler(camEuler);
-        fwdV.set(0, 0, -1).applyQuaternion(camera.quaternion);
-        camera.position.copy(fwdV).multiplyScalar(-dist);
-        if (Math.abs(camera.fov - fov) > 1e-3) { camera.fov = fov; camera.updateProjectionMatrix(); }
-        // Focal point = where the view ray meets the shell dead ahead (screen
-        // centre) — this is what the torch/label selector aims at. Solve
-        // |camPos + t·fwd| = SHELL for the near root; from the centre that is
-        // simply fwd·SHELL, from outside it is the near cap of the globe.
-        const b = camera.position.dot(fwdV);
-        const c = camera.position.lengthSq() - SHELL * SHELL;
-        const disc = b * b - c;
-        const t = disc >= 0 ? (-b - Math.sqrt(disc) > 1e-3 ? -b - Math.sqrt(disc) : -b + Math.sqrt(disc)) : SHELL;
-        focusVec.copy(camera.position).addScaledVector(fwdV, t);
-      };
-      applyCamera();
 
       // ── picking: a tap (not a drag) selects the nearest node ON SCREEN ──
       // The raycaster is gone (2026-07-13 owner report: "really hard to select
@@ -1067,22 +1075,21 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // position of the rotating pointer, and the pinch baseline.
       const pointers = new Map<number, { x: number; y: number }>();
       let lastPX = 0, lastPY = 0, lastMoveT = 0;
-      let pinchDist0 = 0, pinchFov0 = 0;
-      // Radians per pixel that keeps the sky under the finger (drag-the-sky):
-      // a drag the height of the viewport turns you by ~one field-of-view, so
-      // the deeper you telescope in, the finer the turn — which is what makes a
-      // tight zoom usable. `frame()`/`applyCamera()` own the rest.
-      const rotPerPx = (): number => (fov * Math.PI / 180) / Math.max(H, 1);
+      let pinchDist0 = 0, pinchZ0 = 0;
+      // Radians per pixel that keeps the shell under the finger: a drag the
+      // height of the viewport rotates it by ~one field-of-view, so the deeper
+      // you telescope in, the finer the turn — a tight zoom stays steerable.
+      const rotPerPx = (): number => (camera.fov * Math.PI / 180) / Math.max(H, 1);
       const onDown = (e: PointerEvent): void => {
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         downX = e.clientX; downY = e.clientY; moved = false; pointerDown = true;
         lastPX = e.clientX; lastPY = e.clientY;
-        velYaw = velPitch = 0; turnYaw = turnPitch = null; // a touch stops the glide
+        velRX = velRY = 0; shellQT = null; // a touch stops the glide/turn
         lastInput = performance.now();
         if (pointers.size === 2) {
           const [a, b] = [...pointers.values()];
           pinchDist0 = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-          pinchFov0 = fov;
+          pinchZ0 = zoomZ;
         }
         try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* */ }
         if (e.pointerType === 'touch') setHover(null);
@@ -1094,34 +1101,27 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           moved = true;
           setHover(null);
         }
-        // Two fingers → pinch the telescope (fov), never travel. Pinch OUT past
-        // the wide limit (in the sky) and you tip into the orrery — the mobile
-        // twin of the wheel's zoom-out-into-orrery.
+        // Two fingers → pinch drives the ONE zoom axis: telescope, then the
+        // curl. Spread to magnify, pinch to unfurl the sky into the chart and
+        // on out to the held globe — a single continuous motion.
         if (pointers.size >= 2) {
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-          const raw = pinchFov0 * pinchDist0 / d;
-          if (raw > FOV_OUT * 1.06 && vantage === 'sky') { enterOrrery(); pointers.clear(); pointerDown = false; return; }
-          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_OUT, raw));
+          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, pinchZ0 + Math.log(pinchDist0 / d) * 1.9));
+          layoutDirty = true;
           lastInput = performance.now();
           return;
         }
-        // One pointer down → turn the gaze (drag-the-sky: the point under the
-        // finger stays under the finger). Momentum picks up the last delta.
+        // One pointer down → ROTATE THE SHELL (the point under the finger stays
+        // under the finger — the same sign at every curl: drag-the-sky under
+        // the dome, spin-the-globe on the ball). Momentum keeps the last delta.
         if (pointerDown && tracked) {
           const dx = e.clientX - lastPX, dy = e.clientY - lastPY;
           lastPX = e.clientX; lastPY = e.clientY;
           if (moved) {
             const k = rotPerPx();
-            // Two mirror-image feels from one orientation. SKY (eye at centre):
-            // drag-the-sky — the point under the finger stays under the finger.
-            // ORRERY (holding the globe from outside): the pivot is in FRONT of
-            // you, so the same delta swings content the opposite screen way —
-            // invert both axes so it reads as grab-and-spin-the-globe (owner:
-            // "controls feel inverted in orrery").
-            const s = vantage === 'orrery' ? -1 : 1;
-            velYaw = s * dx * k; velPitch = s * dy * k;
-            yaw += velYaw; pitch = clampPitch(pitch + velPitch);
+            velRY = -dx * k; velRX = -dy * k;
+            rotateShell(velRX, velRY);
             lastMoveT = lastInput = performance.now();
           }
           return;
@@ -1139,14 +1139,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           }
         });
       };
-      // Wheel = the telescope (fov), eased. Scroll up/forward magnifies. Widen
-      // all the way to FOV_OUT; keep pushing out at that limit (in the sky) and
-      // you TIP into the orrery — the extreme zoom-out becomes stepping outside.
+      // Wheel drives the same one zoom axis, eased: scroll forward magnifies
+      // (telescope); scroll back unfurls — dome → chart → globe, no seams.
       const onWheel = (e: WheelEvent): void => {
         e.preventDefault();
-        const next = Math.max(FOV_TELE, Math.min(FOV_OUT, fovTarget * Math.exp(e.deltaY * 0.0016)));
-        if (e.deltaY > 0 && vantage === 'sky' && fovTarget >= FOV_OUT - 0.5 && next >= FOV_OUT - 0.5) enterOrrery();
-        else fovTarget = next;
+        zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + e.deltaY * 0.0011));
         lastInput = performance.now();
       };
       const clearPointer = (id: number): void => {
@@ -1166,14 +1163,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         clearPointer(e.pointerId);
         if (pointers.size) return; // still pinching/turning with another finger
         pointerDown = false;
-        // A FLICK ends into a momentum glide (velYaw/velPitch decay in tick);
+        // A FLICK ends into a momentum glide (velRX/velRY decay in tick);
         // a finger that came to rest before lifting (>90ms since the last move)
         // carries no throw. Only a genuine TAP falls through to selection.
         if (moved) {
-          if (performance.now() - lastMoveT > 90) velYaw = velPitch = 0;
+          if (performance.now() - lastMoveT > 90) velRX = velRY = 0;
           return;
         }
-        velYaw = velPitch = 0;
+        velRX = velRY = 0;
         // TAP, THEN TAP AGAIN (owner choice, 2026-07-20): a FIRST tap on a star
         // selects it IN PLACE — the ring, its neighbourhood and labels light up
         // but the camera holds still (you don't get shoved around every touch).
@@ -1182,7 +1179,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const tapNode = (key: string): void => {
           if (key === selKey) {
             const nd = nodeById.get(key);
-            if (nd) { faceDir(nd.x, nd.y, nd.z); fovTarget = Math.max(FOV_TELE, fov * 0.6); }
+            if (nd) { faceCanon(nd.cdx, nd.cdy, nd.cdz); zoomZT = Math.max(0, Math.min(zoomZT, Z_DOME) - 0.3); }
           } else {
             api.current?.select(key, false);
           }
@@ -1190,9 +1187,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const openConst = (c: Constellation): void => {
           // A caption is a DOOR: an AUTHORED place selects its container fact
           // (context panel: members as neighbours, open ↗ to the board/doc);
-          // a computed place turns to frame its region.
+          // a computed place turns the shell to centre its region.
           if (c.key && nodeById.has(c.key)) tapNode(c.key);
-          else frame(c.x, c.y, c.z, c.r * 1.5);
+          else faceCanon(c.cdx, c.cdy, c.cdz);
         };
         // Precedence (owner: VISIBLE LABELS, all kinds, take precedence — the
         // orrery packs the near face with names, and a name is the deliberate
@@ -1220,15 +1217,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       renderer.domElement.addEventListener('pointercancel', onLeave);
       renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
-      // TURN TO FACE a star (or a search-hit centroid): you don't fly TO a star
-      // — you can't, in a sky — you turn until it is dead ahead. faceDir eases
-      // yaw/pitch to the star's DIRECTION; the same in both stances (under the
-      // dome it's a head-turn, from the orrery the globe swings so the region
-      // faces you), and the fixed centre keeps your bearings either way.
-      const frame = (x: number, y: number, z: number, _radius: number): void => {
-        faceDir(x, y, z);
-      };
-
       api.current = {
         select: (key: string | null, doFly = false) => {
           lastExternal.current = key;
@@ -1240,7 +1228,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const d = found && !found.deleted ? found : null;
           showRing(d);
           showCrumb(key);
-          if (d && doFly) frame(d.x, d.y, d.z, SPREAD * 0.42);
+          if (d && doFly) faceCanon(d.cdx, d.cdy, d.cdz);
           if (key && !d) void hydrateKey(key);
           // Selection completes its own local map: the bounded initial load
           // means a selected node's neighbours may not be in the scene yet —
@@ -1256,13 +1244,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         },
         reveal: () => { /* installed once the initial page has mounted */ },
         toggleVantage: () => {
-          // Under the dome → step outside and hold the globe; outside → step
-          // back to the centre, under the sky. Purely a change of STANCE: the
-          // selection (its ring, breadcrumb, lit neighbourhood) and your gaze
-          // are preserved across the move — a selected star stays selected and
-          // centred whether you are standing under it or holding it at arm's
-          // length. (Deselecting is its own gesture: tap empty sky.)
-          if (vantage === 'sky') enterOrrery(); else enterSky();
+          // One axis now: the button eases zoom between the two ends of the
+          // curl — under the dome ↔ holding the globe — passing THROUGH the
+          // flat chart on the way. Selection, shell orientation, everything
+          // else is untouched. (Deselecting is its own gesture: tap empty sky.)
+          zoomZT = zoomZT > (Z_DOME + Z_BALL) / 2 ? Z_DOME : Z_BALL;
         },
       };
 
@@ -1280,13 +1266,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         showRing(null);
         applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         for (const k of allKeys) if (!nodeById.has(k)) void hydrateKey(k);
-        // Turn to the hits already present (a centroid direction). Late arrivals
-        // land around it as they hydrate — no re-frame churn.
+        // Turn the shell to the hits already present (their centroid seat
+        // direction). Late arrivals land around it as they hydrate — no
+        // re-frame churn.
         const pts = allKeys.map((k) => nodeById.get(k)).filter(Boolean);
         if (!pts.length) return;
-        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length, cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
-        const rad = Math.max(SPREAD * 0.3, ...pts.map((p) => Math.hypot(p.x - cx, p.y - cy, p.z - cz))) + SPREAD * 0.1;
-        frame(cx, cy, cz, rad);
+        const cx = pts.reduce((s, p) => s + p.cdx, 0), cy = pts.reduce((s, p) => s + p.cdy, 0), cz = pts.reduce((s, p) => s + p.cdz, 0);
+        if (Math.hypot(cx, cy, cz) > 1e-6) faceCanon(cx, cy, cz);
       });
       window.addEventListener(CONSOLE_RESULT_EVENT, onResult);
 
@@ -1304,17 +1290,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const focalPx = (): number => (H / 2) / Math.tan(camera.fov * Math.PI / 360);
       const camDepth = (pos: any): number => Math.max(1e-3, projDepthV.copy(pos).sub(camPos).dot(fwdV));
       const pxPerWorld = (pos: any): number => focalPx() / camDepth(pos);
-      // The JS twin of the shader's farFade: 1 on the near hemisphere, →(1−fade)
-      // on the far side of the orrery globe. Drives label dimming and tap
-      // deprioritisation so the far side recedes for the whole scene, not just
-      // the dots/edges. Takes a node-like {x,y,z}.
+      // The JS twin of the shader's farFade: only the re-curled BALL (s < 0)
+      // has a far side; it fades by plain camera distance past the ball's
+      // centre. Drives label dimming and tap deprioritisation so the far side
+      // recedes for the whole scene, not just the dots/edges.
       const farFadeAt = (n: any): number => {
-        const ff = torchUniforms.uFarFade.value;
-        if (ff <= 0) return 1;
-        const cl = Math.hypot(camPos.x, camPos.y, camPos.z) || 1;
-        const pl = Math.hypot(n.x, n.y, n.z) || 1;
-        const near = (n.x * camPos.x + n.y * camPos.y + n.z * camPos.z) / (cl * pl);
-        return 1 - ff * (1 - smoothstep(-0.9, 0.2, near));
+        const k = torchUniforms.uFadeK.value;
+        if (k <= 0) return 1;
+        return 1 - k * smoothstep(torchUniforms.uFadeNear.value, torchUniforms.uFadeFar.value, Math.hypot(n.x, n.y, n.z));
       };
       // The label SELECTOR's cone, in JS (decoupled from the lighting torch —
       // the light can be a floodlight while admission stays a sharp beam).
@@ -1495,10 +1478,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // per-region, no tier boundaries to flicker across.
       interface Constellation {
         name: string;
-        // Region centre (x/y/z) stays truthful for framing/breadcrumbs; the
-        // caption anchor (ax/ay/az) sits toward the territory's outer rim.
+        // Region centre (x/y/z) and caption anchor (ax/ay/az) are MORPHED
+        // world positions, re-derived each layout pass from the CANONICAL
+        // seats below (unit dir + radius on the un-curled sphere) — captions
+        // ride the shell through dome ↔ chart ↔ ball like everything else.
         x: number; y: number; z: number;
         ax: number; ay: number; az: number;
+        cdx: number; cdy: number; cdz: number; cr0: number;
+        adx: number; ady: number; adz: number; ar0: number;
         r: number; authored: boolean; key?: string;
         grp: any; text: any; pill: any; fs: number; cur: number;
       }
@@ -1523,9 +1510,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         }
         // Place names sit on the outward shoulder of their territory. Detail
         // can then occupy the centre and emerge as the camera approaches.
+        // NOTE: cx/cy/cz arrive in CANONICAL (un-curled sphere) coordinates —
+        // computePlaces runs against canonical seats — and are stored as
+        // canonical dir+radius; morphLayout derives the world positions.
         const shift = Math.min(cr * 0.38, SPREAD * 0.2);
         const ax = cx + dx / dd * shift, ay = cy + dy / dd * shift, az = cz + dz / dd * shift;
-        grp.position.set(ax, ay, az);
         const text = new TroikaText();
         text.text = name.toUpperCase();
         text.font = FONT_BY_GROUP.kb; // the serif face
@@ -1551,7 +1540,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         pill.renderOrder = -1;
         grp.add(pill);
         grp.add(text);
-        const st: Constellation = { name, x: cx, y: cy, z: cz, ax, ay, az, r: cr, authored, key, grp, text, pill, fs: cr * 0.055, cur: 0 };
+        const clen = Math.hypot(cx, cy, cz) || 1;
+        const alen = Math.hypot(ax, ay, az) || 1;
+        const st: Constellation = {
+          name, x: cx, y: cy, z: cz, ax, ay, az, r: cr, authored, key, grp, text, pill, fs: cr * 0.055, cur: 0,
+          cdx: cx / clen, cdy: cy / clen, cdz: cz / clen, cr0: clen,
+          adx: ax / alen, ady: ay / alen, adz: az / alen, ar0: alen,
+        };
+        // Seat the caption at its MORPHED position for the current curl.
+        curlPos(st.cdx, st.cdy, st.cdz, st.cr0, st);
+        curlPos(st.adx, st.ady, st.adz, st.ar0, constAnchorScratch);
+        st.ax = constAnchorScratch.x; st.ay = constAnchorScratch.y; st.az = constAnchorScratch.z;
+        grp.position.set(st.ax, st.ay, st.az);
         text.sync(() => fitPillTo(text, pill, 0));
         scene.add(grp);
         constellations.push(st);
@@ -1561,6 +1561,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // and captions appearing/renaming mid-stream would read as churn.
       const computePlaces = (): void => {
       {
+        // Places are computed against CANONICAL seats: temporarily set every
+        // node's x/y/z to its un-curled sphere position (the layout helpers
+        // read those fields), then mark the layout dirty so the very next
+        // frame re-morphs everything back to the current curl.
+        for (const n of nodes) { n.x = n.cdx * n.cr0; n.y = n.cdy * n.cr0; n.z = n.cdz * n.cr0; }
+        layoutDirty = true;
         const active = nodes.filter((n) => !n.deleted);
         if (active.length) {
           placeOrigin.x = active.reduce((v, n) => v + n.x, 0) / active.length;
@@ -1578,7 +1584,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // cached (localStorage, 6h) — the sequential version kept the network
       // busy for ~25s per load — and the live pass runs the evals in parallel.
       void (async () => {
-        const VC_KEY = 'parc.home.viewplaces';
+        // v2: places are stored in CANONICAL (un-curled sphere) coordinates —
+        // older cached entries were world positions and would seat wrong.
+        const VC_KEY = 'parc.home.viewplaces.v2';
         try {
           const cached = JSON.parse(localStorage.getItem(VC_KEY) ?? 'null') as { at: number; places: Array<{ name: string; x: number; y: number; z: number; r: number }> } | null;
           if (cached && Date.now() - cached.at < 6 * 3600_000) {
@@ -1597,11 +1605,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             if (disposed || !r || !r.ok) return;
             const keys = keysOfResult(r.value).filter((k) => nodeById.has(k));
             if (keys.length < 3) return;
+            // Centroid in CANONICAL coordinates (seat dir × radius) — live
+            // node positions are morphed by whatever the curl is right now.
             const pts = keys.map((k) => nodeById.get(k));
-            const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-            const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-            const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
-            const dists = pts.map((p) => Math.hypot(p.x - cx, p.y - cy, p.z - cz)).sort((a, b) => a - b);
+            const cx = pts.reduce((s, p) => s + p.cdx * p.cr0, 0) / pts.length;
+            const cy = pts.reduce((s, p) => s + p.cdy * p.cr0, 0) / pts.length;
+            const cz = pts.reduce((s, p) => s + p.cdz * p.cr0, 0) / pts.length;
+            const dists = pts.map((p) => Math.hypot(p.cdx * p.cr0 - cx, p.cdy * p.cr0 - cy, p.cdz * p.cr0 - cz)).sort((a, b) => a - b);
             const cr = Math.max(SPREAD * 0.18, dists[Math.floor(dists.length * 0.8)] ?? SPREAD * 0.3);
             const vname = String(id);
             places.push({ name: vname.length > 24 ? vname.slice(0, 23) + '…' : vname, x: cx, y: cy, z: cz, r: cr });
@@ -1662,9 +1672,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         for (const c of constOrdered()) {
           let target = 0;
           if (shown < capTotal) {
-            const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az));
-            // Approach fade: a caption reads from OUTSIDE its region and
-            // yields to fact labels once the camera is inside it.
+            // Approach fade: a caption reads from AFAR and yields to fact
+            // labels as you close in. The camera never moves now, so "how
+            // close you are" is the TELESCOPE: scale the (fixed) distance by
+            // the fov's magnification so zooming into a region fades its
+            // caption out and hands over to the fact names.
+            const zoomMag = Math.tan(camera.fov * Math.PI / 360) / Math.tan(FOV_WIDE * Math.PI / 360);
+            const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) * zoomMag;
             target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
             if (target > 0.02) {
               // Captions render at a FIXED screen size (below), so the declutter
@@ -1756,8 +1770,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         let best: Constellation | null = null;
         let bestD = Infinity;
         if (n) {
+          // Region membership in CANONICAL coordinates — curl-independent.
+          const nx = n.cdx * n.cr0, ny = n.cdy * n.cr0, nz = n.cdz * n.cr0;
           for (const c of constellations) {
-            const d = Math.hypot(n.x - c.x, n.y - c.y, n.z - c.z);
+            const d = Math.hypot(nx - c.cdx * c.cr0, ny - c.cdy * c.cr0, nz - c.cdz * c.cr0);
             if (d < c.r * 1.6 && d < bestD) { best = c; bestD = d; }
           }
         }
@@ -2075,41 +2091,46 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (disposed) return;
         raf = requestAnimationFrame(tick);
         const delta = clock.getDelta();
-        // ── advance the camera rig (no idle auto-orbit: a place you inhabit
-        // holds still — a visible spin read as a screensaver, not the sky
-        // wheeling; real diurnal motion is imperceptible). ──
+        // ── advance the SHELL (the camera never moves; no idle auto-spin — a
+        // place you inhabit holds still, the sphere waits for your hand). ──
         const dragging = pointerDown && moved;
-        if (turnYaw !== null && turnPitch !== null) {
-          // Eased turn-to-face: close the SHORT way round on yaw.
-          let dyaw = turnYaw - yaw;
-          while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
-          while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-          yaw += dyaw * 0.16;
-          pitch += (turnPitch - pitch) * 0.16;
-          if (Math.abs(dyaw) < 0.002 && Math.abs(turnPitch - pitch) < 0.002) {
-            yaw = turnYaw; pitch = turnPitch; turnYaw = turnPitch = null;
-          }
-        } else if (!dragging) {
-          // Momentum glide: carry the last drag velocity, decay it, and stop
-          // once it falls below a pixel-ish. A gentle, hand-thrown feel.
-          if (Math.abs(velYaw) > 1e-5 || Math.abs(velPitch) > 1e-5) {
-            yaw += velYaw; pitch = clampPitch(pitch + velPitch);
-            velYaw *= 0.92; velPitch *= 0.92;
-            if (Math.abs(velYaw) < 1e-5) velYaw = 0;
-            if (Math.abs(velPitch) < 1e-5) velPitch = 0;
-          }
+        if (shellQT) {
+          // Eased turn-to-face: slerp the shell toward its target orientation.
+          shellQ.slerp(shellQT, Math.min(1, delta * 10));
+          layoutDirty = true;
+          if (shellQ.angleTo(shellQT) < 0.002) { shellQ.copy(shellQT); shellQT = null; }
+        } else if (!dragging && (Math.abs(velRX) > 1e-5 || Math.abs(velRY) > 1e-5)) {
+          // Momentum glide: carry the last drag's angular velocity, decay it —
+          // a hand-thrown globe coasting to rest.
+          rotateShell(velRX, velRY);
+          velRX *= 0.92; velRY *= 0.92;
+          if (Math.abs(velRX) < 1e-5) velRX = 0;
+          if (Math.abs(velRY) < 1e-5) velRY = 0;
         }
-        // Ease the vantage distance (sky 0 ↔ orrery) and the telescope fov.
-        dist += (distTarget - dist) * Math.min(1, delta * 6);
-        fov += (fovTarget - fov) * Math.min(1, delta * 10);
-        applyCamera();
-        // The atmosphere belongs to the GROUND: full under the dome, gone by
-        // the time you have stepped out to hold the globe (a sky seen from
-        // space has no airglow). Fades with the vantage distance.
-        skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, 1 - dist / ORRERY);
-        // Far-side dimming ramps in as you cross the shell toward the orrery.
-        torchUniforms.uFarFade.value = smoothstep(0.4, 1, dist / ORRERY);
-        // Feed the beam (camera + focal point) to the torch shaders + labels.
+        // Ease the one zoom axis; derive fov + curvature; re-seat if the shell
+        // moved or bent this frame.
+        if (Math.abs(zoomZT - zoomZ) > 1e-4) {
+          zoomZ += (zoomZT - zoomZ) * Math.min(1, delta * 6);
+          if (Math.abs(zoomZT - zoomZ) < 1e-4) zoomZ = zoomZT;
+        }
+        const zs = zoomOf(zoomZ);
+        if (Math.abs(zs.s - curlS) > 1e-5) { curlS = zs.s; layoutDirty = true; }
+        if (Math.abs(camera.fov - zs.fov) > 1e-3) { camera.fov = zs.fov; camera.updateProjectionMatrix(); }
+        if (layoutDirty) morphLayout();
+        // The atmosphere belongs to the DOME: full when the sky is curled
+        // around you, gone by the time it has unfurled flat (a chart has no
+        // airglow). Rides the curvature.
+        skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, curlS);
+        // Far-side fade: only the re-curled ball (s<0) has a back. Fade from
+        // its centre distance out to its far pole, ramping in with the curl.
+        if (curlS < -0.05) {
+          const Rc = SHELL / Math.abs(curlS);            // curl-sphere radius
+          const zetaFar = 1 - (1 - Math.cos(curlS * Math.PI)) / curlS; // ζ(π)
+          torchUniforms.uFadeK.value = Math.min(1, -curlS * 1.1);
+          torchUniforms.uFadeNear.value = SHELL + Rc;    // the ball's centre
+          torchUniforms.uFadeFar.value = Math.max(SHELL + Rc + 1, SHELL * zetaFar);
+        } else torchUniforms.uFadeK.value = 0;
+        // Feed the beam (fixed camera + focal point) to the torch + labels.
         camPos.copy(camera.position);
         torchUniforms.uFocus.value.copy(focusVec);
         torchUniforms.uCam.value.copy(camPos);
@@ -2221,7 +2242,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             folder.add(TUNE, key, min, max, step).onChange(refresh);
           };
           gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
-          gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(persist); // tick applies it (faded by vantage)
+          gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(persist); // tick applies it (rides the curl)
           const torchF = gui.addFolder('torch');
           // Mins go to TRUE zero — the owner's grade railed the old bottom stops
           // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
@@ -2439,6 +2460,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (existing) {
             existing.type = e._meta?.type ?? null;
             existing.score = Number(e._meta?.score) || 0;
+            existing.cr0 = seatRadius(existing.score);
+            layoutDirty = true; // radius whisper may have shifted
             existing.label = shortLabel(factTitle(e));
             existing.deleted = false;
             const label = labelObjs.get(e.key);
@@ -2456,10 +2479,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             deg: 0,
             deleted: false,
           };
-          // Seat the node on the celestial shell: embedding DIRECTION → sky
-          // position, salience → a whisper of nearness (brightness/size carry
-          // the rest). Uncharted nodes get a stable golden-spiral seat.
-          [n.x, n.y, n.z] = toShell(coordMap?.[n.id], i, n.score);
+          // CANONICAL SEAT: embedding DIRECTION + a salience whisper of radius.
+          // World position is the seat put through the current curl (the shell
+          // may be a dome, a chart, or a ball right now — new arrivals land
+          // wherever their seat currently sits).
+          [n.cdx, n.cdy, n.cdz] = toDir(coordMap?.[n.id], i);
+          n.cr0 = seatRadius(n.score);
+          curlPos(n.cdx, n.cdy, n.cdz, n.cr0, n);
           posBuf[i * 3] = n.x; posBuf[i * 3 + 1] = n.y; posBuf[i * 3 + 2] = n.z;
           nodes.push(n);
           nodeById.set(n.id, n);
