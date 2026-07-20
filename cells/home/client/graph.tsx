@@ -531,12 +531,23 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const ACCENT_RGB = hexToRgb(ink.accent);
       const applyEdgeColor = (): void => {
         const paper = isPaper();
+        const N = nodes.length;
         for (let i = 0; i < links.length; i++) {
-          const bo = edgeBoostOf(links[i]);
+          const l = links[i];
+          const bo = edgeBoostOf(l);
           let r: number, g: number, b: number, al: number;
           if (bo > 0) {
             [r, g, b] = ACCENT_RGB;
-            al = TUNE.focusEdgeAlpha;
+            // Weight the focus FAN by the connection's importance: the far
+            // node's salience (edges carry no numeric strength — only a rel
+            // type — so target salience is the signal), lifted a notch for
+            // AUTHORED assertions over derived/similar kinship. So the fan isn't
+            // a uniform starburst: the strongest, most-salient links read first.
+            const farId = idOf(l.source) === selKey ? idOf(l.target) : idOf(l.source);
+            const farN = nodeById.get(farId);
+            const farSal = farN ? 1 - (farN.rank ?? N) / Math.max(1, N) : 0.5;
+            const relW = l.derived ? 0.8 : MEMBER_RELS.has(l.rel) ? 0.9 : 1; // authored assertions fullest
+            al = TUNE.focusEdgeAlpha * (0.4 + 0.6 * farSal) * relW;
           } else {
             [r, g, b] = edgeRGB[i];
             al = edgeAlphaOf(links[i]);
@@ -953,7 +964,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (sz > 1) continue; // behind the camera
           const d = Math.hypot(sx - cx, sy - cy);
           if (d > maxPx) continue;
-          const score = d - (n.score || 0) * 16; // brighter → wider effective catch
+          // brighter → wider effective catch; a far-side star in the orrery is
+          // pushed DOWN the priority so the near face wins the tap.
+          const score = d - (n.score || 0) * 16 + (1 - farFadeAt(n)) * 80;
           if (score < bestScore) { bestScore = score; best = n; }
         }
         return best;
@@ -1290,6 +1303,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const focalPx = (): number => (H / 2) / Math.tan(camera.fov * Math.PI / 360);
       const camDepth = (pos: any): number => Math.max(1e-3, projDepthV.copy(pos).sub(camPos).dot(fwdV));
       const pxPerWorld = (pos: any): number => focalPx() / camDepth(pos);
+      // The JS twin of the shader's farFade: 1 on the near hemisphere, →(1−fade)
+      // on the far side of the orrery globe. Drives label dimming and tap
+      // deprioritisation so the far side recedes for the whole scene, not just
+      // the dots/edges. Takes a node-like {x,y,z}.
+      const farFadeAt = (n: any): number => {
+        const ff = torchUniforms.uFarFade.value;
+        if (ff <= 0) return 1;
+        const cl = Math.hypot(camPos.x, camPos.y, camPos.z) || 1;
+        const pl = Math.hypot(n.x, n.y, n.z) || 1;
+        const near = (n.x * camPos.x + n.y * camPos.y + n.z * camPos.z) / (cl * pl);
+        return 1 - ff * (1 - smoothstep(-0.9, 0.2, near));
+      };
       // The label SELECTOR's cone, in JS (decoupled from the lighting torch —
       // the light can be a floodlight while admission stays a sharp beam).
       // axis = camera → focal point.
@@ -1341,7 +1366,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // enough on screen for a word to sit on it. Fixed small size and dim
       // colour: these support the neighbourhood, they never compete with it.
       const edgeLabelObjs = new Map<number, any>();
+      let edgeLabelSel: string | null = null;
       const syncEdgeLabels = (): void => {
+        // A relation label is oriented to the CURRENT selection (its arrow, text
+        // and tap-target-far-node). The traversed edge survives across a
+        // selection change under the SAME link index, so a reused label would
+        // keep pointing at the node you just left — tapping "back" did nothing.
+        // Rebuild the whole set when the selection changes.
+        if (edgeLabelSel !== selKey) {
+          edgeLabelSel = selKey;
+          for (const [, obj] of edgeLabelObjs) { scene.remove(obj); obj.element.remove?.(); }
+          edgeLabelObjs.clear();
+        }
         const want = new Set<number>();
         if (selKey) {
           const cands: Array<[number, number]> = [];
@@ -1980,6 +2016,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // labels never did). Gains toward full ink as admission approaches
           // its own ceiling, instead of capping at a fraction of it.
           if (isPaper()) target = Math.min(target * 2.5, 1);
+          // Far side of the orrery recedes for LABELS too (owner) — the same
+          // near/far fade the dots and edges use, so a name on the back of the
+          // globe dims out (and, below ~0.2, stops catching taps via labelAt).
+          target *= farFadeAt(st.grp.position);
           if (st.dying) target = 0;
           const opacityK = st.dying && st.role === 'hover' ? Math.min(1, dt * 24) : k;
           st.cur += (target - st.cur) * opacityK;
