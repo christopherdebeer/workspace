@@ -96,12 +96,13 @@ export const TUNE_DEFAULTS = {
   // names — many, tiny, full-opacity (celestial-chart typography).
   constCap: 32, constOpacity: 1, constNear: 0.5, constFar: 1.2,
   anchorCap: 32, anchorOpacity: 1, anchorSizeMult: 0.1,
-  // in-scene label furniture. The dial is a real continuum: below ~0.95 the
-  // pill is a translucent VEIL rendered over the cloud (genuine gradient —
-  // dims what's behind); at ~1 it flips to the depth-writing OCCLUDER. Owner
-  // re-grade 2026-07-12: pillAlpha up to 0.61 (was 0.39) and pillFeather to
-  // the max 1 (was 0.65) — a heavier, more diffuse veil.
-  pillAlpha: 0.61, pillFeather: 1, labelOutline: 0.35,
+  // in-scene label furniture. The name's backing is a DEPTH-ONLY CLIP (owner
+  // 2026-07-20: "the observed background / just clipping") — it writes depth
+  // but no colour, knocking the busy cloud/edges/labels out of a tight box so
+  // the calm sky shows through behind the outlined glyphs. No veil, no chip.
+  // pillClip 1 = on, 0 = off (text then reads straight over whatever's behind).
+  // labelOutline gives the glyphs their edge definition over the cleared sky.
+  pillClip: 1, labelOutline: 0.35,
   // LABEL SIZE is a FIXED SCREEN quantity (owner 2026-07-20: "labels should
   // have fixed size and only fade in/out"). Each label renders at exactly
   // labelPx × its role multiplier, regardless of depth or the node's own

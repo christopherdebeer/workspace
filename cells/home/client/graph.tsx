@@ -645,60 +645,45 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // so the owner's size mults keep their meaning exactly.
       const fontWorld = (n: any, mult: number): number => rad(n) * 2.4 * 0.85 * mult;
       const pillGeo = new THREE.PlaneGeometry(1, 1);
-      // Rounded-rect SDF pill — pure black (owner direction; pillAlpha is the
-      // dial). Pills are REAL OCCLUDERS: they render FIRST (renderOrder −1)
-      // and WRITE DEPTH, so the additive cloud's points and edges behind a
-      // pill are culled by the depth test instead of shining through — while
-      // anything NEARER than the pill still passes in front, and overlapping
-      // labels resolve by true depth. Fully transparent fragments (rounded
-      // corners, faded-out labels) discard, so an invisible pill never blocks.
+      // The pill is a DEPTH-ONLY CLIP occluder (owner: "make them the observed
+      // background / just clipping"). It renders FIRST (renderOrder −1) and
+      // WRITES DEPTH but NO COLOUR, so the busy additive cloud, edges, and
+      // other labels behind a committed name are culled by the depth test —
+      // leaving the calm sky-dome background showing through a tight box around
+      // the glyphs. No veil, no chip: the text (with its outline) simply sits
+      // in a clean patch of sky. A rounded box hugging the layout bounds keeps
+      // the knock-out small; fragments outside it discard (no clip there).
       const mkPillMat = (): any =>
         new THREE.ShaderMaterial({
           uniforms: {
-            uAlpha: { value: 0 },
             uSize: { value: new THREE.Vector2(1, 1) },
-            // The TEXT box as a fraction of the (feather-padded) quad.
             uInner: { value: new THREE.Vector2(1, 1) },
-            uFeather: { value: 0 },
-            // Veil colour: black over the dusk field, paper over the chart.
-            uCol: { value: new THREE.Vector3(PAL.pill[0], PAL.pill[1], PAL.pill[2]) },
           },
           vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
           fragmentShader:
-            'uniform float uAlpha; uniform vec2 uSize; uniform vec2 uInner; uniform float uFeather; uniform vec3 uCol; varying vec2 vUv;' +
+            'uniform vec2 uSize; uniform vec2 uInner; varying vec2 vUv;' +
             'void main(){ vec2 p = (vUv - 0.5) * uSize;' +
-            ' vec2 ib = uSize * 0.5 * uInner; float r = ib.y * 0.6;' +
+            ' vec2 ib = uSize * 0.5 * uInner; float r = ib.y * 0.5;' +
             ' vec2 b = max(ib - vec2(r), vec2(0.0));' +
             ' float d = length(max(abs(p) - b, 0.0)) - r;' +
-            // feather 0: crisp chip edge; feather 1: the darkening exhales
-            // ~1.6 text-heights past the glyphs with no perceptible boundary.
-            ' float soft = ib.y * (0.12 + 3.2 * uFeather);' +
-            ' float a = uAlpha * (1.0 - smoothstep(-ib.y * 0.1, soft, d));' +
-            ' if (a < 0.03) discard;' +
-            ' gl_FragColor = vec4(uCol, a); }',
-          transparent: true,
+            ' if (d > 0.0) discard;' +      // outside the rounded box: nothing clipped
+            ' gl_FragColor = vec4(0.0); }', // inside: write DEPTH only (colorWrite off)
+          transparent: false,
+          depthTest: true,
           depthWrite: true,
+          colorWrite: false,
         });
-      /** Size a pill quad around its text's layout bounds, leaving room for
-       *  the feather to breathe (shared by labels and captions). */
+      /** Size the clip box tightly around the text's layout bounds. */
       const fitPillTo = (text: any, pill: any, centerY: number): void => {
         const b = text.textRenderInfo?.blockBounds;
         if (!b) return;
-        // Dial authority (2026-07-12 owner report: caption pills ignored the
-        // tuner in paper mode): the feather slider governs BOTH modes — the
-        // earlier paper-side clamp was a hardcoded judgment call sitting on
-        // top of the instrument the owner actually tunes with.
-        const feather = TUNE.pillFeather;
         const h = b[3] - b[1];
-        const tw = (b[2] - b[0]) + h;   // ~0.5em side padding
-        const th = h * 1.55;            // vertical padding
-        const grow = 1 + 2.4 * feather; // feather headroom
-        const qw = tw * ((tw < th * 2 ? grow : 1 + (grow - 1) * 0.6)); // long strips grow less in x
-        const qh = th * grow;
+        const qw = (b[2] - b[0]) + h * 0.6; // ~0.3em side padding
+        const qh = h * 1.35;                // a little vertical breathing room
         pill.scale.set(qw, qh, 1);
         pill.material.uniforms.uSize.value.set(qw, qh);
-        pill.material.uniforms.uInner.value.set(tw / qw, th / qh);
-        pill.material.uniforms.uFeather.value = feather;
+        // Inner box (the rounded rect) fills almost the whole quad.
+        pill.material.uniforms.uInner.value.set(0.98, 0.94);
         pill.position.set((b[0] + b[2]) / 2, centerY + (b[1] + b[3]) / 2, -1.5);
         pill.visible = true;
       };
@@ -904,14 +889,23 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // the threshold is honest — it never silently changes with dolly depth.
       let downX = 0, downY = 0, moved = false;
       const nearestNodeAt = (cx: number, cy: number, maxPx: number): any => {
+        // On the shell EVERY star is a distinct direction, so a finger often
+        // covers several — a bright foreground one and faint background ones at
+        // nearly the same screen point. Nearest-by-pixel alone grabbed the
+        // faint straggler you didn't mean. Give brighter stars a wider
+        // effective catch: rank by (pixel distance − salience bonus), still
+        // gated to the finger radius, so within reach the one that visually
+        // dominates wins — you select the star you were looking at.
         let best: any = null;
-        let bestD = maxPx;
+        let bestScore = Infinity;
         for (const n of nodes) {
           if (!isVis(n)) continue;
           const [sx, sy, sz] = screenXY(n);
           if (sz > 1) continue; // behind the camera
           const d = Math.hypot(sx - cx, sy - cy);
-          if (d < bestD) { bestD = d; best = n; }
+          if (d > maxPx) continue;
+          const score = d - (n.score || 0) * 16; // brighter → wider effective catch
+          if (score < bestScore) { bestScore = score; best = n; }
         }
         return best;
       };
@@ -947,10 +941,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             const textH = bot - top;
             let w: number;
             if (slop) {
-              const pillPad = textH * 1.2 * TUNE.pillFeather; // feather headroom, both axes
-              const vPad = Math.max(8, (36 - textH) / 2, pillPad / 2);
+              const vPad = Math.max(8, (36 - textH) / 2); // finger headroom
               top -= vPad; bot += vPad;
-              w = Math.max(56, (b[2] - b[0]) * pxPer + 24 + pillPad);
+              w = Math.max(56, (b[2] - b[0]) * pxPer + 24);
             } else {
               // The visible chip: fitPillTo's text box (~0.5em side pad,
               // ×1.55 height) — what the finger actually SEES as the label.
@@ -1362,7 +1355,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         text.text = name.toUpperCase();
         text.font = FONT_BY_GROUP.kb; // the serif face
         text.fontSize = cr * 0.055;
-        text.letterSpacing = 0.18;
+        text.letterSpacing = 0.12;
         text.anchorX = 'center';
         text.anchorY = 'middle';
         // Authored places carry a whisper of the accent — a view is intent.
@@ -1460,9 +1453,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const b = c.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
           const rawH = b ? (b[3] - b[1]) * pxPer : c.fs * 1.4 * pxPer;
           const rawW = b ? (b[2] - b[0]) * pxPer : c.name.length * c.fs * 0.85 * pxPer;
-          const pillPad = slop ? rawH * 1.2 * TUNE.pillFeather : 0;
-          const w = slop ? Math.max(56, rawW + 24 + pillPad) : rawW + rawH;
-          const h = slop ? Math.max(36, rawH + 16 + pillPad) : rawH * 1.55;
+          const w = slop ? Math.max(56, rawW + 24) : rawW + rawH;
+          const h = slop ? Math.max(36, rawH + 16) : rawH * 1.55;
           if (Math.abs(cx - sx) < w / 2 && Math.abs(cy - sy) < h / 2) return c;
         }
         return null;
@@ -1530,17 +1522,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // (opacity) carries distance — no depth shrink, no billboard.
           const camD2 = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
           const curPx = c.fs * (H / 2) / camD2;
-          const targetPx = TUNE.labelPx * 1.4;
+          // Captions are a QUIET map label, not a billboard: a hair under the
+          // fact-label size (owner: "all-caps captions too large"). The caps +
+          // letter-spacing already give them cartographic weight.
+          const targetPx = TUNE.labelPx * 0.82;
           c.grp.scale.setScalar(curPx > 0.01 ? targetPx / curPx : 1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
-          // Dial authority: pillAlpha governs captions exactly like labels,
-          // in both modes (an earlier paper-side 0.88 floor overrode the
-          // tuner — owner report 2026-07-12).
-          c.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * c.cur;
-          const cOccl = TUNE.pillAlpha > 0.95;
-          c.pill.renderOrder = cOccl ? -1 : 8;
-          c.pill.material.depthWrite = cOccl;
+          // Same depth-clip occluder as the labels: the caption clears a patch
+          // of sky behind itself once it is substantially present.
+          c.pill.visible = TUNE.pillClip > 0 && c.cur > 0.45;
         }
       };
       // Breadcrumb — "where am I": selecting a fact names its neighbourhood in
@@ -1577,13 +1568,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         hoverMat.color = new THREE.Color(PAL.text);
         for (const [, st] of labelObjs) {
           st.text.outlineColor = PAL.outline;
-          st.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
         }
         for (const c of constellations) {
           c.text.color = c.authored ? PAL.capAuth : PAL.capComp;
           c.text.outlineColor = PAL.outline;
           c.text.outlineWidth = paper ? '14%' : '4%'; // see addConstellation
-          c.pill.material.uniforms.uCol.value.set(PAL.pill[0], PAL.pill[1], PAL.pill[2]);
         }
         for (const [, o] of edgeLabelObjs) (o.element as HTMLElement).style.color = PAL.rel;
         crumb.style.color = PAL.capComp;
@@ -1878,17 +1867,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           st.text.color = color;
           st.text.fillOpacity = st.cur;
           st.text.outlineOpacity = st.cur;
-          // The pill rides the label's own opacity. Mode by strength:
-          // translucent veil (drawn over the cloud, real gradient) below
-          // ~0.95; hard depth-writing occluder at the top of the dial.
-          // SUGGESTIONS wear (almost) no pill — the register differentiator:
-          // a whisper carries no committed-name chip, so it can never be
-          // mistaken for a Focus/Landmark result even at the same size.
-          const pillMul = st.role === 'beam' ? TUNE.beamPill : 1;
-          st.pill.material.uniforms.uAlpha.value = TUNE.pillAlpha * pillMul * st.cur;
-          const occl = TUNE.pillAlpha * pillMul > 0.95;
-          st.pill.renderOrder = occl ? -1 : 8;
-          st.pill.material.depthWrite = occl;
+          // The clip occluder (renderOrder −1, depth-only) switches on once the
+          // label is substantially present — a faint whisper clips nothing, so
+          // the sky doesn't flicker with half-formed knock-outs. SUGGESTIONS
+          // clip only when beamPill is on: a whisper normally carries no
+          // committed-name clearing, the register differentiator.
+          const clip = TUNE.pillClip > 0 && (st.role !== 'beam' || TUNE.beamPill > 0.5);
+          st.pill.visible = clip && st.cur > 0.45;
           // FIXED SCREEN SIZE: scale the world-unit glyph so it lands at exactly
           // labelPx × role-mult on screen, recomputed every frame and applied
           // DIRECTLY (no easing) — the label never animates its size, it only
@@ -2041,7 +2026,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
               st.text.outlineWidth = `${Math.round(TUNE.labelOutline * 100)}%`;
               st.text.sync(st.fit);
             }
-            // Captions refit too (pillFeather changes their quad padding).
+            // Captions refit their clip box too.
             for (const c of constellations) c.text.sync(() => fitPillTo(c.text, c.pill, 0));
             persist();
           };
@@ -2078,8 +2063,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           add(labelsF, 'nbrOpFar', 0.1, 1);
           add(labelsF, 'nbrOpNear', 0.3, 1);
           add(labelsF, 'labelFade', 1, 20, 0.5);
-          add(labelsF, 'pillAlpha', 0, 1, 0.01);
-          add(labelsF, 'pillFeather', 0, 1, 0.01); // 0 = chip, 1 = soft knockout
+          add(labelsF, 'pillClip', 0, 1, 1); // depth-clip the busy field behind a name (0=off)
           add(labelsF, 'labelOutline', 0, 0.35, 0.005);
           add(labelsF, 'labelPx', 6, 40, 1); // fixed on-screen label size (× role mult)
           const nodesF = gui.addFolder('nodes');
