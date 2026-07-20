@@ -1099,11 +1099,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           return;
         }
         velYaw = velPitch = 0;
+        // TAP, THEN TAP AGAIN (owner choice, 2026-07-20): a FIRST tap on a star
+        // selects it IN PLACE — the ring, its neighbourhood and labels light up
+        // but the camera holds still (you don't get shoved around every touch).
+        // A SECOND tap on the SAME star is the "look at it" gesture: turn to
+        // face it and telescope in a step. So motion only happens when you ask.
+        const tapNode = (key: string): void => {
+          if (key === selKey) {
+            const nd = nodeById.get(key);
+            if (nd) { faceDir(nd.x, nd.y, nd.z); fovTarget = Math.max(FOV_TELE, fov * 0.6); }
+          } else {
+            api.current?.select(key, false);
+          }
+        };
         const openConst = (c: Constellation): void => {
           // A caption is a DOOR: an AUTHORED place selects its container fact
           // (context panel: members as neighbours, open ↗ to the board/doc);
-          // a computed place just flies to frame its region.
-          if (c.key && nodeById.has(c.key)) api.current?.select(c.key, true);
+          // a computed place turns to frame its region.
+          if (c.key && nodeById.has(c.key)) tapNode(c.key);
           else frame(c.x, c.y, c.z, c.r * 1.5);
         };
         // Precedence, refined across three live reports (2026-07-12/13): a tap
@@ -1113,13 +1126,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // see nearestNodeAt above). Only a tap that hits neither falls to the
         // labels' padded slop rects; and only then, empty space deselects.
         const lidT = labelAt(e.clientX, e.clientY, false);
-        if (lidT) { api.current?.select(lidT, true); return; }
+        if (lidT) { tapNode(lidT); return; }
         const cT = constellationAt(e.clientX, e.clientY, false);
         if (cT) { openConst(cT); return; }
         const n = nearestNodeAt(e.clientX, e.clientY, e.pointerType === 'touch' ? 36 : 24);
-        if (n) { api.current?.select(n.id); return; }
+        if (n) { tapNode(n.id); return; }
         const lid = labelAt(e.clientX, e.clientY, true);
-        if (lid) { api.current?.select(lid, true); return; }
+        if (lid) { tapNode(lid); return; }
         const c = constellationAt(e.clientX, e.clientY, true);
         if (c) { openConst(c); return; }
         api.current?.select(null);
