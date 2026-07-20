@@ -213,13 +213,11 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
 export const TUNE_GROUPS: readonly string[] = [...new Set(TUNE_SCHEMA.map((c) => c.group))];
 
 // Window-event bridge (the idiom used by CONSOLE_RESULT_EVENT / FACT_DETAIL_EVENT):
-// the palette panel and the graph's render closures live in sibling component
-// trees, so a value change hops across as a CustomEvent. TUNE_EVENT carries one
-// {key,value}; TUNE_RESET_EVENT restores defaults; TUNE_OPEN_EVENT asks the
-// palette to reveal its tune panel.
+// the palette's tune panel and the graph's render closures live in sibling
+// component trees, so a value change hops across as a CustomEvent. TUNE_EVENT
+// carries one {key,value}; TUNE_RESET_EVENT restores defaults.
 export const TUNE_EVENT = 'home:tune-set';
 export const TUNE_RESET_EVENT = 'home:tune-reset';
-export const TUNE_OPEN_EVENT = 'home:tune-open';
 try {
   const saved = JSON.parse(localStorage.getItem(TUNE_LS) ?? 'null');
   if (saved && typeof saved === 'object') Object.assign(TUNE, saved);

@@ -1,15 +1,16 @@
 /* ---------------------------------------------------------------------------
- * tune-panel.tsx — the graph tuner, INLINE in the command palette.
+ * tune-panel.tsx — the graph tuner, native to the command palette.
  *
- * The same TUNE_SCHEMA the ?tune=1 lil-gui panel renders, but drawn as a slim
- * strip INSIDE the palette (not a floating overlay that eats the viewport): a
- * curated `quick` subset — the few high-impact feel dials — shown by default,
- * with the full grouped set one "more" tap away. Each control dispatches
- * TUNE_EVENT {key,value}; graph.tsx applies it to the live scene and persists
- * (localStorage + the `_config/home.graph.tune` fact). No three.js import here —
- * TUNE is a pure data module — so the panel stays a light DOM control that
- * drives the render closures across the window bridge, keeping the live-drag
- * feel a submit-style form can't.
+ * Rendered as the `graph tune` command's working view INSIDE the console sheet
+ * (above the output tape) — no submit, no "changes substrate state" warning
+ * (nothing is written on open; each dial applies live). A SECTION enum at the
+ * head — `quick` (the curated high-impact subset) plus every schema group —
+ * swaps which knobs show, in place. Each control dispatches TUNE_EVENT
+ * {key,value}; graph.tsx applies it to the live scene and persists (localStorage
+ * + the `_config/home.graph.tune` fact). No three.js import here — TUNE is a
+ * pure data module — so the panel stays a light DOM control driving the render
+ * closures across the window bridge, keeping the live-drag feel a submit-style
+ * form can't.
  * ------------------------------------------------------------------------- */
 import * as React from 'react';
 import { TUNE, TUNE_DEFAULTS, TUNE_SCHEMA, TUNE_GROUPS, TUNE_EVENT, TUNE_RESET_EVENT, type TuneControl } from './graph/tune';
@@ -17,11 +18,13 @@ import { ink } from './ink';
 
 const { useState } = React;
 
+const QUICK = 'quick';
+
 /** Trim a slider value to a short, readable readout (no trailing-zero noise). */
 const fmt = (v: number): string => (Number.isInteger(v) ? String(v) : String(Math.round(v * 1000) / 1000));
 
 /** One knob on ONE line: name · slider · value (or a select for enums) — the
- *  compact form that lets a handful sit inline without dominating the palette. */
+ *  compact form that keeps a section legible without dominating the sheet. */
 function Row({ ctl, value, onChange }: { ctl: TuneControl; value: unknown; onChange: (v: unknown) => void }): React.JSX.Element {
   const name = ctl.label ?? ctl.key;
   const nameStyle: React.CSSProperties = { width: 96, flexShrink: 0, fontFamily: ink.mono, fontSize: '0.72rem', color: ink.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
@@ -57,12 +60,13 @@ function Row({ ctl, value, onChange }: { ctl: TuneControl; value: unknown; onCha
   );
 }
 
-/** The palette's inline tune strip. Seeded from the LIVE TUNE object (so it
- *  opens on whatever's loaded, incl. the config fact), it writes changes straight
- *  back across the window bridge — the strip never owns truth, it drives it. */
+/** The tuner's working view. Seeded from the LIVE TUNE object (so it opens on
+ *  whatever's loaded, incl. the config fact), it writes changes straight back
+ *  across the window bridge — it never owns truth, it drives it. The section
+ *  enum picks which knobs show and replaces them in place. */
 export function TunePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [vals, setVals] = useState<Record<string, unknown>>(() => ({ ...TUNE }));
-  const [showAll, setShowAll] = useState(false);
+  const [section, setSection] = useState<string>(QUICK);
   const setKey = (key: string, value: unknown): void => {
     setVals((s) => ({ ...s, [key]: value }));
     window.dispatchEvent(new CustomEvent(TUNE_EVENT, { detail: { key, value } }));
@@ -77,38 +81,24 @@ export function TunePanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
     background: 'none', border: `1px solid ${ink.line}`, color: ink.dim, borderRadius: 999,
     fontFamily: ink.mono, fontSize: '0.66rem', padding: '0.12rem 0.5rem', cursor: 'pointer', flexShrink: 0,
   };
-  const quick = TUNE_SCHEMA.filter((c) => c.quick);
+  const rows = section === QUICK ? TUNE_SCHEMA.filter((c) => c.quick) : TUNE_SCHEMA.filter((c) => c.group === section);
   return (
-    <div
-      style={{
-        display: 'grid',
-        gap: '0.1rem',
-        padding: '0.4rem 0.7rem 0.5rem',
-        borderBottom: `1px solid ${ink.line}`,
-        maxHeight: showAll ? 'min(44dvh, 360px)' : 'none',
-        overflowY: showAll ? 'auto' : 'visible',
-        overscrollBehavior: 'contain',
-      }}
-    >
-      <header style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', paddingBottom: '0.25rem' }}>
-        <span style={{ fontFamily: ink.mono, fontSize: '0.72rem', color: ink.text }}>tune</span>
-        <button style={{ ...btn, color: ink.accent, borderColor: ink.accent, marginLeft: 'auto' }} onClick={() => setShowAll((v) => !v)}>
-          {showAll ? 'less ▴' : 'more ▾'}
-        </button>
-        <button style={btn} onClick={copy}>copy</button>
+    <div style={{ display: 'grid', gap: '0.1rem', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.4rem 0.6rem 0.55rem', background: ink.bg }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', paddingBottom: '0.3rem' }}>
+        <select
+          value={section}
+          onChange={(e) => setSection(e.target.value)}
+          aria-label="tune section"
+          style={{ background: ink.bg, color: ink.accent, border: `1px solid ${ink.line}`, borderRadius: 6, fontSize: '0.74rem', padding: '0.18rem 0.4rem', fontFamily: ink.mono }}
+        >
+          <option value={QUICK}>quick</option>
+          {TUNE_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <button style={{ ...btn, marginLeft: 'auto' }} onClick={copy}>copy</button>
         <button style={btn} onClick={reset}>reset</button>
         <button style={{ ...btn, border: 'none' }} onClick={onClose} aria-label="close tuner">×</button>
       </header>
-      {!showAll
-        ? quick.map((c) => <Row key={c.key} ctl={c} value={vals[c.key]} onChange={(v) => setKey(c.key, v)} />)
-        : TUNE_GROUPS.map((g) => (
-            <div key={g} style={{ paddingTop: '0.25rem' }}>
-              <div style={{ fontFamily: ink.mono, fontSize: '0.7rem', color: ink.accent, padding: '0.1rem 0' }}>{g}</div>
-              {TUNE_SCHEMA.filter((c) => c.group === g).map((c) => (
-                <Row key={c.key} ctl={c} value={vals[c.key]} onChange={(v) => setKey(c.key, v)} />
-              ))}
-            </div>
-          ))}
+      {rows.map((c) => <Row key={c.key} ctl={c} value={vals[c.key]} onChange={(v) => setKey(c.key, v)} />)}
     </div>
   );
 }

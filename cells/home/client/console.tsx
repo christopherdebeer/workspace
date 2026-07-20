@@ -29,7 +29,7 @@ import { getJson, mcpCall } from './lib';
 import { FederatedRendererFrame, FederatedFormFrame } from './federated';
 import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
 import { CONSOLE_RESULT_EVENT } from './graph';
-import { TUNE_OPEN_EVENT } from './graph/tune';
+import { TunePanel } from './tune-panel';
 import { ink } from './ink';
 // Matching/ranking, MRU recents, and selection stepping come from the kernel's
 // headless command-surface engine — shared with the canvas cmd-palette.
@@ -200,15 +200,15 @@ const PROBE_CMDS: Cmd[] = [
     ns: 'graph',
     verb: 'tune',
     label: 'graph tune',
-    kind: 'act',
+    // 'read' — the tuner mutates only the LOCAL scene + its own _config fact as
+    // you drag; opening it writes nothing, so it earns no "changes substrate
+    // state" review gate. It opens straight into its live panel (no submit).
+    kind: 'read',
     scope: null,
-    description: 'Open the live graph tuner — torch, labels, edges, zoom feel, bloom…',
+    description: 'Live graph tuner — pick a section (quick, torch, labels, edges, zoom, bloom…) and dial it. Changes apply instantly; nothing is submitted.',
     needsArgs: false,
-    search: 'tune tuner graph adjust knobs sliders torch bloom zoom drag momentum labels feel dial',
-    run: async () => {
-      window.dispatchEvent(new CustomEvent(TUNE_OPEN_EVENT));
-      return { ok: true, value: 'graph tuner opened' };
-    },
+    search: 'tune tuner graph adjust knobs sliders torch bloom zoom drag momentum labels feel dial quick section',
+    run: async () => ({ ok: true, value: 'tuner' }),
   },
   {
     id: 'probe:whoami',
@@ -426,6 +426,9 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
       onSelectKey?.(it.e.key);
       return;
     }
+    // The tuner opens into its own live panel (see focusedView) — never a blind
+    // run, so it lands on the sliders, not a result line.
+    if (it.c.id === 'graph:tune') { openForm(it.c); return; }
     if (runsDirectly(it.c)) void invoke(it.c, {});
     else openForm(it.c);
   };
@@ -455,7 +458,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   };
 
   const runFocused = (): void => {
-    if (!focused) return;
+    if (!focused || focused.id === 'graph:tune') return; // the tuner has no submit
     if (requiresTypedConfirmation(focused) && confirmText !== focused.id) return;
     if (!rawJson) {
       void invoke(focused, formValue);
@@ -495,7 +498,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   const advancedCount = Object.keys((focusedSchema?.advanced as { properties?: object } | undefined)?.properties ?? {}).length;
   const confirmationTarget = focused && requiresTypedConfirmation(focused) ? focused.id : null;
   const confirmationReady = !confirmationTarget || confirmText === confirmationTarget;
-  const focusedView = focused && focusedSchema ? (
+  const focusedView = focused ? (
       <div style={{ display: 'grid', gap: '0.7rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
           <button
@@ -508,6 +511,10 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
           <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{focused.label}</code>
           <Pill tone={focused.kind === 'act' ? 'act' : 'dim'}>{focused.kind}</Pill>
         </div>
+        {focused.id === 'graph:tune' ? (
+          <TunePanel onClose={() => { setFocused(null); setConfirmText(''); }} />
+        ) : focusedSchema ? (
+        <>
         {focused.description ? (
           <span style={{ color: ink.dim, fontSize: '0.78rem', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as React.CSSProperties}>
             {focused.description}
@@ -597,6 +604,8 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             ) : null}
           </div>
         </div>
+        </>
+        ) : null}
       </div>
   ) : null;
 
