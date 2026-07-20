@@ -47,7 +47,7 @@ import {
   makeStarTexture, makeStippleTexture, makeRingTexture,
 } from './graph/scene';
 import {
-  hueOf, nodeColor, TYPE_SERIF, FONT_BY_GROUP, LABEL_FONT, LABEL_FONT_ITALIC, LABEL_HALO,
+  hueOf, TYPE_SERIF, FONT_BY_GROUP, LABEL_FONT, LABEL_HALO,
   placeworthy, MEMBER_RELS, edgeStyle, nodeDOI, shortLabel, type EdgeStyle,
 } from './graph/style';
 import {
@@ -455,14 +455,22 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       hoverRing.visible = false;
       hoverRing.renderOrder = 12;
       scene.add(hoverRing);
+      let ringNode: any = null;
       const showRing = (n: any): void => {
+        ringNode = n || null;
         if (!n) { ring.visible = false; return; }
         ring.position.set(n.x, n.y, n.z);
-        // A snug halo ~1.5× the node's on-screen dot (the sprite is world-scaled
-        // and the dot is perspective-scaled, so the ratio holds through dolly).
-        // No additive constant — that inflated the ring on small nodes.
-        ring.scale.setScalar(rad(n) * 2.1);
         ring.visible = true;
+        // Size is set per-frame (sizeRing) so it stays snug to the star's dot
+        // at any FOV — the sprite is fov-projected but the star dot is not, so a
+        // fixed world scale would balloon the ring under the telescope.
+      };
+      // Keep the ring the SAME apparent size as the star dot it hugs, through
+      // the telescope: dot px ∝ (H/2)/depth (fov-independent); a sprite of world
+      // scale S projects to S·focalPx/depth, so S = rad·k·tan(fov/2) holds the
+      // ratio constant. k tuned so it matches the old snug fit at the wide FOV.
+      const sizeRing = (): void => {
+        if (ring.visible && ringNode) ring.scale.setScalar(rad(ringNode) * 2.42 * Math.tan(camera.fov * Math.PI / 360));
       };
       const showHover = (n: any): void => {
         if (!n || n.id === selKey) { hoverRing.visible = false; return; }
@@ -624,7 +632,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       //      ├─ pill (rounded dark quad — legibility over the additive cloud)
       //      └─ text (troika SDF, font by type group, outline halo)
       interface LabelState {
-        grp: any; inner: any; text: any; pill: any; leader: any; dot: any;
+        grp: any; inner: any; text: any; pill: any; leader: any;
         cur: number; role: LabelRole; dying: boolean;
         /** Consecutive syncs this label has LOST its slot — stickiness: it
          *  only starts dying past a grace threshold, so admission churn at
@@ -696,12 +704,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         grp.add(inner);
         const text = new TroikaText();
         text.text = n.label;
-        // One voice for every fact name; the italic cut is the suggestion
-        // whisper. KIND is carried by colour/tracking (updateLabels), TYPE by
-        // the hue of the star and the leading dot below.
-        text.font = role === 'beam' ? LABEL_FONT_ITALIC : LABEL_FONT;
-        // Landmarks track wider — a map's engraved place-tick, not a fact name.
-        if (role === 'anchor') text.letterSpacing = 0.14;
+        // ONE consistent voice for every fact name (owner: label layout stays
+        // consistent — a selection changes only colour/opacity/visibility, never
+        // the glyph layout). KIND is read from colour/emphasis in updateLabels;
+        // TYPE is already carried by the star's own hue right beside the name.
+        text.font = LABEL_FONT;
         text.fontSize = fontWorld(n, roleMult(role));
         text.anchorX = 'center';
         text.anchorY = 'top';
@@ -722,16 +729,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         pill.renderOrder = -1; // depth-writing occluder — draws before the cloud
         inner.add(pill);
         inner.add(text);
-        // Leading TYPE DOT: a small disc in the fact's type hue, sitting just
-        // left of the name — carries "what kind of fact" now that the letterform
-        // no longer does, and stays with the name when it's displaced from its
-        // star. Positioned each frame in updateLabels (needs the text bounds).
-        const dot = new THREE.Mesh(pillGeo, new THREE.MeshBasicMaterial({
-          map: disc, color: new THREE.Color(nodeColor(n.type)),
-          transparent: true, depthWrite: false, opacity: 0,
-        }));
-        dot.renderOrder = 9;
-        inner.add(dot);
         const leader = new THREE.Line(
           new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
           new THREE.LineBasicMaterial({ color: 0x59503f, transparent: true, opacity: 0 }),
@@ -740,7 +737,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         leader.visible = false;
         grp.add(leader);
         const st: LabelState = {
-          grp, inner, text, pill, leader, dot,
+          grp, inner, text, pill, leader,
           cur: 0, role, dying: false, miss: 0, scl: 1, ox: 0, oy: 0, cox: 0, coy: 0, mult: roleMult(role),
           fit: () => fitPillTo(text, pill, text.position.y),
         };
@@ -767,13 +764,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // is born at its role's size and offset and FADES in. The cost —
             // a beam label promoted to 'sel' keeps its smaller size — is
             // carried by the accent colour and the selection ring instead.
-            // The VOICE (italic whisper / tracked landmark), however, does
-            // follow the role — one re-sync when it actually flips.
-            const wantFont = w.role === 'beam' ? LABEL_FONT_ITALIC : LABEL_FONT;
-            const wantLS = w.role === 'anchor' ? 0.14 : 0;
-            if (st.text.font !== wantFont || st.text.letterSpacing !== wantLS) {
-              st.text.font = wantFont; st.text.letterSpacing = wantLS; st.text.sync(st.fit);
-            }
+            // No font/tracking change on role flip: layout stays put, only the
+            // colour/opacity re-targets (owner: consistent label layout).
           } else if (st.role === 'hover') {
             // Hover-only labels do not inherit the ambient 0.7s grace: that
             // grace is useful for map labels during orbit, but makes tooltips
@@ -1936,7 +1928,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             target = TUNE.anchorOpacity;
             color = PAL.dim;
           } else {
-            // Suggestions: cream, italic (a different voice), torch-lit.
+            // Suggestions: cream but faintest of all — the torch's gentle slope
+            // keeps them a whisper; opacity, not a different cut, sets them apart.
             // The beam's GENTLE slope: opacity rises smoothly from ~0 at the
             // admission boundary to its ceiling as the beam centres a node —
             // no cliff where labels used to pop.
@@ -1956,7 +1949,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             scene.remove(st.grp);
             st.text.dispose?.();
             st.pill.material.dispose?.();
-            st.dot.material.dispose?.();
             labelObjs.delete(id);
             continue;
           }
@@ -1978,17 +1970,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           st.text.color = color;
           st.text.fillOpacity = st.cur;
           st.text.outlineOpacity = st.cur;
-          // Leading TYPE DOT — a small type-hued tick just left of the name,
-          // vertically centred, fading with the label. It, not the letterform,
-          // now says "what kind of fact."
-          const bb = st.text.textRenderInfo?.blockBounds as [number, number, number, number] | undefined;
-          if (bb) {
-            const dh = (bb[3] - bb[1]) * 0.4; // ~0.4 line-height
-            st.dot.scale.setScalar(dh);
-            st.dot.position.set(bb[0] - dh * 0.95, st.text.position.y + (bb[1] + bb[3]) / 2, 0.1);
-            st.dot.material.opacity = st.cur * 0.85;
-            st.dot.visible = st.cur > 0.04;
-          } else st.dot.visible = false;
           // The clip occluder (renderOrder −1, depth-only) switches on once the
           // label is substantially present — a faint whisper clips nothing, so
           // the sky doesn't flicker with half-formed knock-outs. SUGGESTIONS
@@ -2058,6 +2039,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         updateLabels(delta);
         updateConstellations(delta);
         positionEdgeLabels(); // keep selected relations inside the viewport
+        sizeRing();           // hold the selection ring snug to its star at any FOV
 
         if (useBloom()) {
           ensureComposer();
@@ -2274,7 +2256,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         renderer.domElement.removeEventListener('wheel', onWheel);
         if (hoverPickRaf) cancelAnimationFrame(hoverPickRaf);
         if (hoverLabelTimer) clearTimeout(hoverLabelTimer);
-        for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); st.dot.material.dispose?.(); }
+        for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); }
         pillGeo.dispose();
         for (const [, o] of edgeLabelObjs) o.element.remove?.();
         for (const c of constellations) { c.text.dispose?.(); c.pill.material.dispose?.(); }

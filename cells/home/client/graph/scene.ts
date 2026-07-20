@@ -170,10 +170,12 @@ export function makeRingTexture(THREE: any): any {
   const cv = document.createElement('canvas');
   cv.width = cv.height = s;
   const g = cv.getContext('2d')!;
+  // A FINE ring — a drawn line, not a glowing donut (owner: finer, consistent
+  // with the label hairline). Thin stroke, snug radius.
   g.strokeStyle = 'rgba(255,255,255,1)';
-  g.lineWidth = 7;
+  g.lineWidth = 3;
   g.beginPath();
-  g.arc(s / 2, s / 2, s / 2 - 10, 0, Math.PI * 2);
+  g.arc(s / 2, s / 2, s / 2 - 8, 0, Math.PI * 2);
   g.stroke();
   const tex = new THREE.CanvasTexture(cv);
   tex.needsUpdate = true;
