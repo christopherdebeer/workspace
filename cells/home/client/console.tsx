@@ -293,6 +293,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const [results, setResults] = useState<ListEntry[]>([]);
+  const [searchN, setSearchN] = useState(16); // page size — grows via "more results"
   const counter = React.useRef(0);
 
   // ADR-0049: a contextual verb chip (palette selection) seeds the search box —
@@ -347,16 +348,21 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     if (!semantic) { setResults([]); return; }
     let live = true;
     const t = setTimeout(() => {
-      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: 6, shape: 'card' }).then((r) => {
+      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: searchN, shape: 'card' }).then((r) => {
         if (!live || !r.ok) return;
         const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
-        setResults(entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, 6));
-        if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: r.value } }));
+        const shown = entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, searchN);
+        setResults(shown);
+        // The graph pulls in EVERY hit (hydrating off-scene ones), so pass the
+        // whole shown set, not just the first few.
+        if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: { entries: shown } } }));
       });
     }, 300);
     return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, authed]);
+  }, [q, authed, searchN]);
+  // A new query resets to the first page.
+  useEffect(() => { setSearchN(16); }, [query]);
 
   const filtered = React.useMemo(
     () => (q ? (rankItems(cmds ?? [], q, { textOf: (c: Cmd) => c.search, limit: 10 }) as Cmd[]) : []),
@@ -626,6 +632,15 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             </React.Fragment>
           ))}
         </div>
+      ) : null}
+
+      {q && results.length >= searchN ? (
+        <button
+          onClick={() => setSearchN((n) => n + 16)}
+          style={{ marginTop: '0.3rem', alignSelf: 'start', border: `1px solid ${ink.line}`, background: 'transparent', color: ink.dim, fontFamily: ink.mono, fontSize: '0.72rem', borderRadius: 999, padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+        >
+          + more results
+        </button>
       ) : null}
 
       {!q && cmds ? (

@@ -398,15 +398,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uDepthOut: { value: SPREAD * TUNE.depthOut },
         uFloor: { value: TUNE.torchFloor },
         uSizeBoost: { value: TUNE.boostSizeGain },
+        // 0 in the planetarium, →1 as you pull out to the orrery: fades the FAR
+        // hemisphere of the globe so the near surface reads (no seeing straight
+        // through to the back). Driven by vantage distance in tick.
+        uFarFade: { value: 0 },
       };
       const TORCH_GLSL =
-        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor;' +
+        'uniform vec3 uFocus; uniform vec3 uCam; uniform float uConeIn; uniform float uConeOut; uniform float uDepthIn; uniform float uDepthOut; uniform float uFloor; uniform float uFarFade;' +
         'float torch(vec3 p){ vec3 d = uFocus - uCam; float td = length(d); vec3 axis = d / max(td, 1e-3);' +
         ' vec3 toP = p - uCam; float along = dot(toP, axis); if (along <= 0.0) return uFloor;' +
         ' float radial = length(toP - axis*along);' +
         ' float ang = 1.0 - smoothstep(uConeIn, uConeOut, radial / along);' +
         ' float dep = 1.0 - smoothstep(uDepthIn, uDepthOut, abs(along - td));' +
-        ' return max(uFloor, ang * dep); }';
+        ' return max(uFloor, ang * dep); }' +
+        // Nearness of a shell point to the camera side (1 = near cap, −1 = far):
+        // dims the far hemisphere by uFarFade. Safe-normalised so it never NaNs
+        // when the eye is at the centre (uFarFade is 0 there anyway).
+        'float farFade(vec3 p){ vec3 cd = uCam / max(length(uCam), 1.0); float near = dot(normalize(p), cd);' +
+        ' return mix(1.0, smoothstep(-0.9, 0.2, near), uFarFade); }';
       const ptMat = new THREE.ShaderMaterial({
         uniforms: { uTex: { value: isPaper() ? stipple : disc }, uScale: { value: H / 2 }, uPaper: { value: isPaper() ? 1 : 0 }, ...torchUniforms },
         vertexShader:
@@ -421,7 +430,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // where the camera happens to aim. And print dots are SMALL —
           // engraved stipple, not glow discs (×0.6).
           'float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost);' +
-          'vAlpha = alpha * lit; gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
+          'vAlpha = alpha * lit * farFade(position); gl_PointSize = size * (1.0 + uSizeBoost * boost) * (uPaper > 0.5 ? 0.6 : 1.0) * (uScale / max(vd, 1.0));' +
           'gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform sampler2D uTex; uniform float uPaper; varying float vAlpha; varying vec3 vColor;' +
@@ -470,7 +479,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // scale S projects to S·focalPx/depth, so S = rad·k·tan(fov/2) holds the
       // ratio constant. k tuned so it matches the old snug fit at the wide FOV.
       const sizeRing = (): void => {
-        if (ring.visible && ringNode) ring.scale.setScalar(rad(ringNode) * 2.42 * Math.tan(camera.fov * Math.PI / 360));
+        if (ring.visible && ringNode) ring.scale.setScalar(rad(ringNode) * 7.3 * Math.tan(camera.fov * Math.PI / 360));
       };
       const showHover = (n: any): void => {
         if (!n || n.id === selKey) { hoverRing.visible = false; return; }
@@ -572,7 +581,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // Paper skips the torch, same as the points: linework on a printed
           // map doesn't dim by camera aim — its weight hierarchy is carried
           // entirely by the per-rel alphas applyEdgeColor already grades.
-          'void main(){ float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          'void main(){ float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost) * farFade(position); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
           'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
@@ -647,7 +656,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const roleMult = (role: LabelRole): number =>
         role === 'sel' ? TUNE.selSizeMult
         : role === 'hover' ? TUNE.hitSizeMult
-        : role === 'hit' ? TUNE.hitSizeMult
+        // Search HITS are a broad scan cohort, not committed names — small, so a
+        // whole result set can show without swamping the sky (owner: cyan hits
+        // far too large, esp. in orrery). Hover keeps the prominent preview size.
+        : role === 'hit' ? Math.min(0.55, TUNE.hitSizeMult)
         : role === 'nbr' ? TUNE.nbrSizeMult
         : role === 'anchor' ? TUNE.anchorSizeMult
         : TUNE.beamSizeMult;
@@ -864,13 +876,27 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // The two stances are one animated scalar (distance) — orientation is
       // shared, so stepping out keeps the very patch of sky you were studying
       // centred, now as the near face of the held globe.
+      // Crossing between stances FLIPS the gaze 180° (yaw+π, −pitch → look at
+      // −forward). Reason: the point centred-and-NEAR in one stance is the
+      // OPPOSITE shell direction in the other (in the sky you look OUT at
+      // +fwd·SHELL; from the orrery the near cap is −fwd·SHELL). Without the
+      // flip, toggling orrery→sky faced the FAR surface (owner report); with it,
+      // the very thing you were holding stays centred and near in both.
+      const flipGaze = (): void => {
+        let ny = yaw + Math.PI;
+        while (ny > Math.PI) ny -= 2 * Math.PI;
+        turnYaw = ny; turnPitch = clampPitch(-pitch);
+        velYaw = velPitch = 0;
+      };
       const enterSky = (transition = true): void => {
+        if (vantage === 'orrery') flipGaze();
         vantage = 'sky'; distTarget = 0; fovTarget = FOV_WIDE;
-        if (!transition) { dist = 0; fov = FOV_WIDE; }
+        if (!transition) { dist = 0; fov = FOV_WIDE; if (turnYaw !== null) { yaw = turnYaw; turnYaw = null; } if (turnPitch !== null) { pitch = turnPitch; turnPitch = null; } }
       };
       const enterOrrery = (transition = true): void => {
+        if (vantage === 'sky') flipGaze();
         vantage = 'orrery'; distTarget = ORRERY; fovTarget = FOV_WIDE;
-        if (!transition) { dist = ORRERY; fov = FOV_WIDE; }
+        if (!transition) { dist = ORRERY; fov = FOV_WIDE; if (turnYaw !== null) { yaw = turnYaw; turnYaw = null; } if (turnPitch !== null) { pitch = turnPitch; turnPitch = null; } }
       };
       // Arrival: open OUTSIDE holding the whole globe, then frameBody eases you
       // to the centre — the sky rises to envelop you.
@@ -1229,15 +1255,22 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       onResult = guard((ev: Event): void => {
         const detail = (ev as CustomEvent<{ ok: boolean; value: unknown }>).detail;
         if (!detail?.ok) return;
-        const keys = keysOfResult(detail.value).filter((k) => nodeById.has(k));
-        if (!keys.length) return;
+        const allKeys = keysOfResult(detail.value);
+        if (!allKeys.length) return;
         setHover(null);
-        hiSet = new Set(keys); selKey = null; nbr = null;
+        // The hit set is the WHOLE result — including facts not yet charted;
+        // like a selection pulls its neighbours, a search PULLS ITS HITS into
+        // the scene (owner), so they light up as they hydrate rather than being
+        // silently dropped for being off-scene.
+        hiSet = new Set(allKeys); selKey = null; nbr = null;
         showRing(null);
         applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
-        const pts = keys.map((k) => nodeById.get(k));
+        for (const k of allKeys) if (!nodeById.has(k)) void hydrateKey(k);
+        // Turn to the hits already present (a centroid direction). Late arrivals
+        // land around it as they hydrate — no re-frame churn.
+        const pts = allKeys.map((k) => nodeById.get(k)).filter(Boolean);
+        if (!pts.length) return;
         const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length, cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
-        // Frame the whole match set — radius covers the spread of the hits.
         const rad = Math.max(SPREAD * 0.3, ...pts.map((p) => Math.hypot(p.x - cx, p.y - cy, p.z - cz))) + SPREAD * 0.1;
         frame(cx, cy, cz, rad);
       });
@@ -1352,7 +1385,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // the source), ← points back (the sel is the target).
           const outgoing = idOf(l.source) === selKey;
           div.textContent = outgoing ? `${l.rel} →` : `← ${l.rel}`;
-          div.style.cssText = `font:500 8.5px ui-monospace,monospace;color:${PAL.rel};white-space:nowrap;pointer-events:none;user-select:none;opacity:0.9`;
+          // TAPPABLE: a relation is a door — tapping it travels to the fact at
+          // the OTHER end of the edge and looks at it. pointer-events:auto so
+          // the chip catches the tap; a real hit target padded for fingers.
+          div.style.cssText = `font:500 8.5px ui-monospace,monospace;color:${PAL.rel};white-space:nowrap;pointer-events:auto;cursor:pointer;user-select:none;opacity:0.9;padding:6px 8px;margin:-6px -8px`;
+          const farKey = outgoing ? idOf(l.target) : idOf(l.source);
+          div.addEventListener('click', (ev) => { ev.stopPropagation(); api.current?.select(farKey, true); });
           const obj = new CSS2DObject(div);
           scene.add(obj);
           edgeLabelObjs.set(i, obj);
@@ -2028,6 +2066,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // the time you have stepped out to hold the globe (a sky seen from
         // space has no airglow). Fades with the vantage distance.
         skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, 1 - dist / ORRERY);
+        // Far-side dimming ramps in as you cross the shell toward the orrery.
+        torchUniforms.uFarFade.value = smoothstep(0.4, 1, dist / ORRERY);
         // Feed the beam (camera + focal point) to the torch shaders + labels.
         camPos.copy(camera.position);
         torchUniforms.uFocus.value.copy(focusVec);
@@ -2757,31 +2797,23 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
   const [revealNonce, setRevealNonce] = useState(0);
   const [vantageNonce, setVantageNonce] = useState(0);
   const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false, paused: false });
-  const surface: React.CSSProperties = {
-    fontFamily: ink.mono,
-    fontSize: '0.72rem',
-    color: ink.text,
-    background: 'rgba(24,21,17,0.86)',
-    border: `1px solid ${ink.line}`,
-    borderRadius: 14,
-    backdropFilter: 'blur(7px)',
-    minWidth: 260,
-    padding: '0.55rem 0.65rem',
-    display: 'grid',
-    gap: '0.55rem',
-    boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+  // ONE compact, de-emphasised control bar (owner: the panels covered too much
+  // sky on mobile) — a single translucent pill: focus · vantage · charting.
+  const bar: React.CSSProperties = {
+    position: 'fixed', right: 10, top: 'calc(max(10px, env(safe-area-inset-top)) + 48px)', zIndex: 20,
+    maxWidth: 'calc(100vw - 20px)',
+    fontFamily: ink.mono, fontSize: '0.66rem', color: ink.text,
+    background: 'rgba(20,17,13,0.42)', border: `1px solid ${ink.line}`,
+    borderRadius: 999, backdropFilter: 'blur(6px)',
+    padding: '0.24rem 0.4rem 0.24rem 0.6rem',
+    display: 'flex', alignItems: 'center', gap: '0.45rem',
   };
-  const button: React.CSSProperties = {
-    appearance: 'none',
-    border: `1px solid ${ink.line}`,
-    background: reach.hasMore ? 'rgba(255,255,255,0.05)' : 'transparent',
-    color: reach.hasMore ? ink.text : ink.dim,
-    borderRadius: 999,
-    minHeight: 34,
-    padding: '0.25rem 0.65rem',
-    font: `600 0.7rem ${ink.mono}`,
-    cursor: reach.hasMore && !reach.loading ? 'pointer' : 'default',
+  const chip: React.CSSProperties = {
+    appearance: 'none', border: `1px solid ${ink.line}`, background: 'transparent',
+    color: ink.dim, borderRadius: 999, minHeight: 26, padding: '0.12rem 0.5rem',
+    font: `600 0.64rem ${ink.mono}`, cursor: 'pointer', whiteSpace: 'nowrap',
   };
+  const short = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${n}`);
   return (
     <>
       <ThreeGraph
@@ -2792,64 +2824,45 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         revealNonce={revealNonce}
         vantageNonce={vantageNonce}
       />
-      <section
-        aria-label="Graph visibility"
-        style={{
-          ...surface,
-          position: 'fixed',
-          right: 12,
-          top: 'calc(max(10px, env(safe-area-inset-top)) + 48px)',
-          zIndex: 20,
-        }}
-      >
-        <label title="Filter the charted facts by salience" style={{ display: 'grid', gridTemplateColumns: '42px 1fr 38px', alignItems: 'center', gap: '0.45rem' }}>
-          <span style={{ color: ink.dim }}>focus</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.02}
-            value={visible}
-            onChange={(e) => setVisible(Number(e.target.value))}
-            aria-label="Salience visibility"
-            style={{ width: '100%', accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
-          />
-          <span style={{ textAlign: 'right', color: visible >= 0.999 ? ink.text : ink.dim, fontVariantNumeric: 'tabular-nums' }}>
-            {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
-          </span>
-        </label>
-        <div style={{ height: 1, background: ink.line, opacity: 0.7 }} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '0.55rem' }}>
-          <div>
-            <div style={{ color: ink.dim, fontSize: '0.64rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>substrate reach</div>
-            <div aria-live="polite" style={{ marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
-              {reach.total ? `${reach.charted.toLocaleString()} / ${reach.total.toLocaleString()}` : 'mapping…'}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '0.35rem' }}>
-            <button
-              type="button"
-              onClick={() => setVantageNonce((n) => n + 1)}
-              title="Toggle vantage: step outside to hold the whole globe, or return to the centre under the sky (your selection is kept)"
-              style={{ ...button, color: ink.text, background: 'transparent', cursor: 'pointer' }}
-            >
-              vantage
-            </button>
-            <button
-              type="button"
-              disabled={!reach.hasMore}
-              onClick={() => { setVisible(1); setRevealNonce((n) => n + 1); }}
-              title={
-                !reach.hasMore ? 'All available facts are charted'
-                  : reach.paused ? 'Resume charting the rest of the substrate'
-                    : 'The substrate is charting itself — pause the fill-in'
-              }
-              style={{ ...button, opacity: reach.hasMore ? 1 : 0.58 }}
-            >
-              {!reach.hasMore ? 'complete' : reach.paused ? 'resume' : 'charting…'}
-            </button>
-          </div>
-        </div>
+      <section aria-label="Graph controls" style={bar}>
+        <span style={{ color: ink.dim }}>focus</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.02}
+          value={visible}
+          onChange={(e) => setVisible(Number(e.target.value))}
+          aria-label="Filter charted facts by salience"
+          title="Filter the charted facts by salience"
+          style={{ width: 60, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
+        />
+        <span style={{ color: visible >= 0.999 ? ink.text : ink.dim, fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>
+          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+        </span>
+        <span style={{ width: 1, height: 18, background: ink.line, opacity: 0.7 }} />
+        <button
+          type="button"
+          onClick={() => setVantageNonce((n) => n + 1)}
+          title="Toggle vantage: step outside to hold the whole globe, or back to the centre under the sky (selection kept)"
+          style={{ ...chip, color: ink.text }}
+        >
+          vantage
+        </button>
+        <button
+          type="button"
+          disabled={!reach.hasMore}
+          onClick={() => { setVisible(1); setRevealNonce((n) => n + 1); }}
+          aria-live="polite"
+          title={
+            !reach.hasMore ? 'All available facts are charted'
+              : reach.paused ? 'Resume charting the rest of the substrate'
+                : 'The substrate is charting itself — tap to pause the fill-in'
+          }
+          style={{ ...chip, color: reach.hasMore && !reach.paused ? ink.accent : ink.dim, fontVariantNumeric: 'tabular-nums' }}
+        >
+          {reach.total ? `${short(reach.charted)}/${short(reach.total)}${reach.hasMore ? (reach.paused ? ' ▸' : '…') : ''}` : '…'}
+        </button>
       </section>
     </>
   );
