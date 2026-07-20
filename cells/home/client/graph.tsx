@@ -991,7 +991,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // (see onUp's ordering below).
       const labelAt = (cx: number, cy: number, slop: boolean): string | null => {
         for (const [id, st] of labelObjs) {
-          if (st.cur < 0.2) continue; // a barely-there label shouldn't catch taps
+          if (st.cur < 0.12) continue; // only a barely-there label is skipped — any clearly visible name (all kinds) catches the tap
           const n = nodeById.get(id);
           if (!n) continue;
           // True projected px per world unit × the label's own fixed-size scale.
@@ -1094,11 +1094,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           moved = true;
           setHover(null);
         }
-        // Two fingers → pinch the telescope (fov), never travel.
+        // Two fingers → pinch the telescope (fov), never travel. Pinch OUT past
+        // the wide limit (in the sky) and you tip into the orrery — the mobile
+        // twin of the wheel's zoom-out-into-orrery.
         if (pointers.size >= 2) {
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_OUT, pinchFov0 * pinchDist0 / d));
+          const raw = pinchFov0 * pinchDist0 / d;
+          if (raw > FOV_OUT * 1.06 && vantage === 'sky') { enterOrrery(); pointers.clear(); pointerDown = false; return; }
+          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_OUT, raw));
           lastInput = performance.now();
           return;
         }
@@ -1190,26 +1194,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (c.key && nodeById.has(c.key)) tapNode(c.key);
           else frame(c.x, c.y, c.z, c.r * 1.5);
         };
-        // The SELECTED star owns the second tap: after a selection, its
-        // neighbourhood streams in and a fresh neighbour label can land right
-        // over it — without this, that label would intercept the tap and select
-        // the neighbour instead of triggering the look-at (Sol's regression #5).
-        // A tap within a finger of the selected star is always its look-at.
-        if (selKey) {
-          const sn = nodeById.get(selKey);
-          if (sn && isVis(sn)) {
-            const [ssx, ssy, ssz] = screenXY(sn);
-            if (ssz <= 1 && Math.hypot(ssx - e.clientX, ssy - e.clientY) <= (e.pointerType === 'touch' ? 34 : 22)) {
-              tapNode(selKey); return;
-            }
-          }
-        }
-        // Precedence, refined across three live reports (2026-07-12/13): a tap
-        // on a VISIBLE chip (label/caption) wins — a deliberate typographic
-        // target outranks ambient dots. Otherwise the NEAREST on-screen node
-        // within a finger-sized threshold wins (screen-space, depth-honest —
-        // see nearestNodeAt above). Only a tap that hits neither falls to the
-        // labels' padded slop rects; and only then, empty space deselects.
+        // Precedence (owner: VISIBLE LABELS, all kinds, take precedence — the
+        // orrery packs the near face with names, and a name is the deliberate
+        // target). A tap on a visible fact label or caption wins outright; the
+        // selected star's own label routes through tapNode → its look-at, so the
+        // "second tap" gesture still lives on the label/dot. Only if no label is
+        // hit does the NEAREST on-screen node (finger-sized, far-side-penalised)
+        // win; then the padded slop rects; then empty space deselects.
         const lidT = labelAt(e.clientX, e.clientY, false);
         if (lidT) { tapNode(lidT); return; }
         const cT = constellationAt(e.clientX, e.clientY, false);
