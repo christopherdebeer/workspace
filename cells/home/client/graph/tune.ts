@@ -102,13 +102,15 @@ export const TUNE_DEFAULTS = {
   // re-grade 2026-07-12: pillAlpha up to 0.61 (was 0.39) and pillFeather to
   // the max 1 (was 0.65) — a heavier, more diffuse veil.
   pillAlpha: 0.61, pillFeather: 1, labelOutline: 0.35,
-  // NEAR-FIELD ceiling (screen px). Depth-true sizing is the rule — but a
-  // label that flies close now carries an OPAQUE pill, and unbounded it
-  // becomes a viewport-eating billboard (the mis-step). Far labels still
-  // shrink honestly; only the near extreme compresses toward this cap.
-  // 0 = uncapped (the old behaviour). Owner re-grade 2026-07-12: tightened
-  // to 8px (was 24) — near labels compress much harder now.
-  labelMaxPx: 8,
+  // LABEL SIZE is a FIXED SCREEN quantity (owner 2026-07-20: "labels should
+  // have fixed size and only fade in/out"). Each label renders at exactly
+  // labelPx × its role multiplier, regardless of depth or the node's own
+  // radius — so a name never animates large→small and a salient hub doesn't
+  // grow a billboard. In the planetarium every star sits at one distance, so
+  // this reads as a steady, legible field that only fades in and out; in the
+  // orrery the whole set scales together with the globe. labelPx is the one
+  // global size dial; the per-role mults (sel/hit/nbr/anchor/beam) grade it.
+  labelPx: 17,
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 export const TUNE_LS = 'parc.home.tune';

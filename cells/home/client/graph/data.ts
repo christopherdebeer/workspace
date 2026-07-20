@@ -84,6 +84,29 @@ export async function fetchEdgesForKeys(keys: string[]): Promise<{ items: GEdge[
   return { items: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
 }
 
+// ── graph tuning as a CONFIG FACT (ADR-0078 `_config/*` namespace) ──────────
+// The tuner's overrides live in the substrate, not just localStorage, so they
+// are inspectable through the membrane (workspace.peek `_config/home.graph.tune`)
+// and follow the owner across devices. The `_`-prefix keeps the fact out of the
+// graph scene (isPlumbing). localStorage stays the fast local cache for first
+// paint; the fact is merged in before the scene mounts and is the source of
+// truth when present.
+export const TUNE_CONFIG_KEY = '_config/home.graph.tune';
+export async function fetchTuneConfig(): Promise<Record<string, unknown> | null> {
+  const r = await mcpCall('read', 'workspace.peek', { key: TUNE_CONFIG_KEY }).catch(() => null);
+  if (!r?.ok) return null;
+  const v = (r.value as { value?: unknown } | null)?.value;
+  return v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+}
+export async function saveTuneConfig(tune: Record<string, unknown>): Promise<boolean> {
+  const r = await mcpCall('act', 'workspace.remember', {
+    key: TUNE_CONFIG_KEY,
+    value: tune,
+    via: 'home.graph tuner',
+  }).catch(() => null);
+  return !!r?.ok;
+}
+
 export interface ChangeEvent {
   op: 'write' | 'supersede' | 'link' | 'unlink' | string;
   key: string | null;

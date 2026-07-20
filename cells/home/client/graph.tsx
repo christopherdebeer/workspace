@@ -54,6 +54,7 @@ import {
   type GEdge, type EntryPage, type ChangeEvent, type ChangePage, type GraphMeta,
   REVEAL_ENTRY_LIMIT, LIVE_NODE_HEADROOM, LIVE_EDGE_CAPACITY, CHANGE_POLL_MS,
   fetchEntryPage, fetchEdgesForKeys, fetchChangeHead, fetchGraphMeta,
+  fetchTuneConfig, saveTuneConfig,
   keysOfResult, isPlumbing,
 } from './graph/data';
 import { recomputeRanks as recomputeRanksImpl, salienceHubPlaces, membershipPlaces } from './graph/layout';
@@ -1048,10 +1049,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           lastPX = e.clientX; lastPY = e.clientY;
           if (moved) {
             const k = rotPerPx();
-            // Drag-the-sky: horizontal follows the finger (owner: left/right
-            // read inverted the other way); vertical tips the gaze up as the
-            // finger pulls down.
-            velYaw = dx * k; velPitch = dy * k;
+            // Two mirror-image feels from one orientation. SKY (eye at centre):
+            // drag-the-sky — the point under the finger stays under the finger.
+            // ORRERY (holding the globe from outside): the pivot is in FRONT of
+            // you, so the same delta swings content the opposite screen way —
+            // invert both axes so it reads as grab-and-spin-the-globe (owner:
+            // "controls feel inverted in orrery").
+            const s = vantage === 'orrery' ? -1 : 1;
+            velYaw = s * dx * k; velPitch = s * dy * k;
             yaw += velYaw; pitch = clampPitch(pitch + velPitch);
             lastMoveT = lastInput = performance.now();
           }
@@ -1520,13 +1525,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           }
           c.cur += (target - c.cur) * k;
           c.grp.quaternion.copy(camera.quaternion); // billboard
-          // Captions take the same near-field ceiling (a bit more headroom).
-          if (TUNE.labelMaxPx > 0) {
-            const camD2 = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
-            const px = c.fs * (H / 2) / camD2;
-            const capPx = TUNE.labelMaxPx * 1.2;
-            c.grp.scale.setScalar(px > capPx ? capPx / px : 1);
-          } else c.grp.scale.setScalar(1);
+          // Captions are fixed screen size too (a step above fact labels): a
+          // place-name reads at a steady size and only its approach-fade
+          // (opacity) carries distance — no depth shrink, no billboard.
+          const camD2 = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) || 1;
+          const curPx = c.fs * (H / 2) / camD2;
+          const targetPx = TUNE.labelPx * 1.4;
+          c.grp.scale.setScalar(curPx > 0.01 ? targetPx / curPx : 1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
           // Dial authority: pillAlpha governs captions exactly like labels,
@@ -1612,10 +1617,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         type Rect = [number, number, number, number];
         const placed: Rect[] = [];
         const pxOf = (n: any, role: LabelRole): number => {
-          const camD = camPos.distanceTo(distV.set(n.x, n.y, n.z)) || 1;
+          // Labels are a FIXED screen size (labelPx × role-mult), independent of
+          // depth and node radius — so admission ranks by the size it will
+          // actually render at, immediately (no first-frame estimate drift).
           const incumbent = labelObjs.get(n.id);
-          const mult = incumbent?.mult ?? roleMult(role);
-          return fontWorld(n, mult) * (H / 2) / camD * (incumbent?.scl ?? 1);
+          return TUNE.labelPx * (incumbent?.mult ?? roleMult(role));
         };
         // Prefer Troika's measured glyph bounds once available. Before its
         // first sync, approximate from the same 10-em wrap used by makeLabel.
@@ -1883,13 +1889,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const occl = TUNE.pillAlpha * pillMul > 0.95;
           st.pill.renderOrder = occl ? -1 : 8;
           st.pill.material.depthWrite = occl;
-          // One role-independent ceiling: selecting/hovering changes colour,
-          // opacity and the halo, never geometry. The former sel/hit ×1.35 cap
-          // made an incumbent label visibly “bounce in” when its role changed.
-          const fsPx = st.text.fontSize * (H / 2) / camD;
-          const capPx = TUNE.labelMaxPx;
-          const sTarget = TUNE.labelMaxPx > 0 && fsPx > capPx ? capPx / fsPx : 1;
-          st.scl += (sTarget - st.scl) * k;
+          // FIXED SCREEN SIZE: scale the world-unit glyph so it lands at exactly
+          // labelPx × role-mult on screen, recomputed every frame and applied
+          // DIRECTLY (no easing) — the label never animates its size, it only
+          // fades (st.cur). The node-radius term in fontWorld cancels out here,
+          // so a big hub gets a big DOT, not a big name. (Was a near-field cap
+          // that eased toward its target, which read as a large→small shrink.)
+          const fsPx = st.text.fontSize * (H / 2) / camD; // current projected px
+          const targetPx = TUNE.labelPx * st.mult;
+          st.scl = fsPx > 0.01 ? targetPx / fsPx : 1;
           st.inner.scale.setScalar(st.scl);
         }
       };
@@ -1973,7 +1981,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const GUI = m.default ?? m.GUI;
           gui = new GUI({ title: 'graph tune' });
           gui.domElement.style.cssText = 'position:fixed;top:164px;right:8px;z-index:60;max-height:calc(100dvh - 176px);overflow-y:auto';
-          const persist = (): void => { try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ } };
+          // Persist to BOTH the fast local cache (immediate, for next paint)
+          // and the substrate config fact (debounced — a drag fires onChange
+          // continuously; only write the fact once the dial settles).
+          let saveTimer: ReturnType<typeof setTimeout> | null = null;
+          const persist = (): void => {
+            try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ }
+            if (saveTimer) clearTimeout(saveTimer);
+            saveTimer = setTimeout(() => { void saveTuneConfig({ ...TUNE }); }, 700);
+          };
           let lastSpike = TUNE.starSpike;
           const refresh = (): void => {
             if (TUNE.starSpike !== lastSpike) {
@@ -2065,7 +2081,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           add(labelsF, 'pillAlpha', 0, 1, 0.01);
           add(labelsF, 'pillFeather', 0, 1, 0.01); // 0 = chip, 1 = soft knockout
           add(labelsF, 'labelOutline', 0, 0.35, 0.005);
-          add(labelsF, 'labelMaxPx', 0, 80, 1); // 0 = uncapped (depth-true everywhere)
+          add(labelsF, 'labelPx', 6, 40, 1); // fixed on-screen label size (× role mult)
           const nodesF = gui.addFolder('nodes');
           add(nodesF, 'nodeDim', 0.2, 1.5);
           add(nodesF, 'nbrBoost', 0, 1);
@@ -2421,14 +2437,19 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // A change cursor captured in parallel closes the race and keeps this
       // mounted scene reconciled without reloading the page.
       setLoadState('fast');
-      const [THREE, addons, meta, initial, initialHead] = await Promise.all([
+      const [THREE, addons, meta, initial, initialHead, tuneCfg] = await Promise.all([
         loadThree(),
         loadThreeAddons(),
         fetchGraphMeta(),
         fetchEntryPage(),
         fetchChangeHead(),
+        fetchTuneConfig(),
       ]);
       if (disposed) return;
+      // Merge the substrate-stored tuning BEFORE the scene builds its materials
+      // (they read TUNE at construction). The `_config` fact wins over the
+      // localStorage cache when present. Unknown keys are ignored downstream.
+      if (tuneCfg) Object.assign(TUNE, tuneCfg);
       const stream = mountScene(meta, {
         capN: Math.max(256, initial.total + LIVE_NODE_HEADROOM),
         capE: LIVE_EDGE_CAPACITY,
