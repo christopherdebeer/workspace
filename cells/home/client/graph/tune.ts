@@ -118,6 +118,13 @@ export const TUNE_DEFAULTS = {
   // orrery the whole set scales together with the globe. labelPx is the one
   // global size dial; the per-role mults (sel/hit/nbr/anchor/beam) grade it.
   labelPx: 17,
+  // ZOOM feel + drag momentum. Zoom is ONE continuous axis — telescope (fov) in
+  // [0,Z_DOME], un/furl (curl) beyond it — so the two halves get their OWN input
+  // sensitivity: magnifying can be geared apart from unfurling (a gesture
+  // crossing the seam changes gears there). Both are multipliers on the shipped
+  // pinch/wheel gains, so 1 = the current feel. dragMomentum is the glide's
+  // per-frame friction: higher = the flung shell coasts longer (0.92 shipped).
+  zoomFov: 1, zoomCurl: 1, dragMomentum: 0.92,
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 export const TUNE_LS = 'parc.home.tune';

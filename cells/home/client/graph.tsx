@@ -872,6 +872,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // outside, with no seam and nothing ever hidden behind a transition.
       const FOV_WIDE = 82, FOV_TELE = 4;
       const Z_DOME = 1, Z_FLAT = 2, Z_BALL = 3; // named stops on the zoom axis
+      const PINCH_BASE = 1.9, WHEEL_BASE = 0.0011; // shipped input→axis gains
+      // Zoom input sensitivity is split by region: the telescope half (≤Z_DOME)
+      // and the un/furl half beyond it each get their own multiplier, so the
+      // feel of magnifying is geared apart from unfurling. Keyed on the target
+      // so a gesture that crosses the seam changes gears at the seam.
+      const zoomGain = (z: number): number => (z <= Z_DOME ? TUNE.zoomFov : TUNE.zoomCurl);
       let zoomZ = Z_BALL, zoomZT = Z_BALL;      // arrival opens on the held globe
       let curlS = -1;                           // curvature, derived from zoomZ
       const shellQ = new THREE.Quaternion();    // the shell's orientation
@@ -1095,7 +1101,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // position of the rotating pointer, and the pinch baseline.
       const pointers = new Map<number, { x: number; y: number }>();
       let lastPX = 0, lastPY = 0, lastMoveT = 0;
-      let pinchDist0 = 0, pinchZ0 = 0;
+      let pinchDist0 = 0, pinchDistLast = 0;
       // Radians per pixel that keeps the shell under the finger: a drag the
       // height of the viewport rotates it by ~one field-of-view, so the deeper
       // you telescope in, the finer the turn — a tight zoom stays steerable.
@@ -1108,8 +1114,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         lastInput = performance.now();
         if (pointers.size === 2) {
           const [a, b] = [...pointers.values()];
-          pinchDist0 = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-          pinchZ0 = zoomZ;
+          pinchDist0 = pinchDistLast = Math.hypot(a.x - b.x, a.y - b.y) || 1;
         }
         try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* */ }
         if (e.pointerType === 'touch') setHover(null);
@@ -1127,7 +1132,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (pointers.size >= 2) {
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, pinchZ0 + Math.log(pinchDist0 / d) * 1.9));
+          // Accumulate incrementally (Σ log(prev/cur) = log(dist0/now)), so the
+          // per-region zoomGain applies across the seam within one gesture.
+          const dz = Math.log((pinchDistLast || d) / d) * PINCH_BASE * zoomGain(zoomZT);
+          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + dz));
+          pinchDistLast = d;
           layoutDirty = true;
           lastInput = performance.now();
           return;
@@ -1163,12 +1172,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // (telescope); scroll back unfurls — dome → chart → globe, no seams.
       const onWheel = (e: WheelEvent): void => {
         e.preventDefault();
-        zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + e.deltaY * 0.0011));
+        zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + e.deltaY * WHEEL_BASE * zoomGain(zoomZT)));
         lastInput = performance.now();
       };
       const clearPointer = (id: number): void => {
         pointers.delete(id);
-        if (pointers.size < 2) pinchDist0 = 0;
+        if (pointers.size < 2) pinchDist0 = pinchDistLast = 0;
         // A remaining finger becomes the new rotation anchor (no jump).
         const rest = pointers.values().next().value;
         if (rest) { lastPX = rest.x; lastPY = rest.y; }
@@ -2127,7 +2136,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // Momentum glide: carry the last drag's angular velocity, decay it —
           // a hand-thrown globe coasting to rest.
           rotateShell(velRX, velRY);
-          velRX *= 0.92; velRY *= 0.92;
+          velRX *= TUNE.dragMomentum; velRY *= TUNE.dragMomentum;
           if (Math.abs(velRX) < 1e-5) velRX = 0;
           if (Math.abs(velRY) < 1e-5) velRY = 0;
         }
@@ -2283,6 +2292,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
           gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(persist); // tick applies it (rides the curl)
           gui.add(TUNE, 'farOcclude', 0, 1, 0.02).name('far occlude').onChange(persist); // orrery back-face hide; tick applies it
+          // Zoom feel + momentum — all read live in the input handlers / tick,
+          // so persist only (no scene rebuild).
+          const zoomF = gui.addFolder('zoom & drag');
+          zoomF.add(TUNE, 'zoomFov', 0.2, 4, 0.05).name('fov sens').onChange(persist);      // telescope half
+          zoomF.add(TUNE, 'zoomCurl', 0.2, 4, 0.05).name('unfurl sens').onChange(persist);   // curl half
+          zoomF.add(TUNE, 'dragMomentum', 0.8, 0.99, 0.005).name('drag momentum').onChange(persist); // glide friction
           const torchF = gui.addFolder('torch');
           // Mins go to TRUE zero — the owner's grade railed the old bottom stops
           // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
