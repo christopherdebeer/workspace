@@ -18,6 +18,8 @@ import { Console } from './console';
 import { typeIcon, factTitle, factHref, factEdit, FactDetail, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
+import { TunePanel } from './tune-panel';
+import { TUNE_OPEN_EVENT } from './graph/tune';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -184,6 +186,13 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
   // let the sheet collapse while the query, selection, and graph highlights
   // persist, so a phone can see what a search lit up).
   const [open, setOpen] = useState(false);
+  // The graph tuner, opened by the palette's `graph tune` command (TUNE_OPEN_EVENT).
+  const [showTune, setShowTune] = useState(false);
+  useEffect(() => {
+    const onOpen = (): void => setShowTune(true);
+    window.addEventListener(TUNE_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(TUNE_OPEN_EVENT, onOpen);
+  }, []);
   // ADR-0049: a context-panel verb chip opens the console pre-searched to that
   // target (nonce so the same chip re-seeds after manual edits).
   const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
@@ -206,6 +215,8 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
   }, []);
 
   return (
+    <>
+    {showTune ? <TunePanel onClose={() => setShowTune(false)} /> : null}
     <div
       style={{
         position: 'fixed',
@@ -238,5 +249,6 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         }}
       />
     </div>
+    </>
   );
 }

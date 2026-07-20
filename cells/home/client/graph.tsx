@@ -42,7 +42,7 @@ import { factTitle, type ListEntry } from './facts';
 import { ink } from './ink';
 
 // ── decomposition (2026-07-17): the closure-free helpers now live in graph/*.
-import { TUNE, TUNE_DEFAULTS, TUNE_LS, tuneEnabled } from './graph/tune';
+import { TUNE, TUNE_DEFAULTS, TUNE_LS, TUNE_SCHEMA, TUNE_EVENT, TUNE_RESET_EVENT, tuneEnabled } from './graph/tune';
 import {
   loadThree, loadThreeAddons, esmURL, hslToRgb, hexToRgb, paperInkFor,
   makeStarTexture, makeStippleTexture, makeRingTexture,
@@ -2210,29 +2210,22 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       ro = new ResizeObserver(resize);
       ro.observe(el);
 
-      // ── the tuner (?tune=1, sticky; ?tune=0 clears): lil-gui over TUNE.
-      // Touch-friendly, loads from esm.sh like the rest of the 3D stack, and
-      // only ever mounts behind the flag — a field instrument for dialling the
-      // torch/beam/label/edge/bloom feel on live data. `copy values` puts the
-      // current JSON on the clipboard to send back for hard-coding.
+      // ── live TUNE application — SHARED by the ?tune=1 lil-gui panel and the
+      // command-palette tune panel (which drives the scene through TUNE_EVENT
+      // without the URL gate). Defined out here, not inside the gui import, so a
+      // value change from EITHER surface re-grades the same scene closures.
+      // Persist writes BOTH the fast local cache (immediate, for next paint) and
+      // the substrate config fact (debounced — a drag fires continuously; only
+      // write the fact once the dial settles).
       let gui: any = null;
-      if (tuneEnabled()) {
-        void import(/* @vite-ignore */ esmURL('lil-gui@0.19.2')).then((m: any) => {
-          if (disposed) return;
-          const GUI = m.default ?? m.GUI;
-          gui = new GUI({ title: 'graph tune' });
-          gui.domElement.style.cssText = 'position:fixed;top:164px;right:8px;z-index:60;max-height:calc(100dvh - 176px);overflow-y:auto';
-          // Persist to BOTH the fast local cache (immediate, for next paint)
-          // and the substrate config fact (debounced — a drag fires onChange
-          // continuously; only write the fact once the dial settles).
-          let saveTimer: ReturnType<typeof setTimeout> | null = null;
-          const persist = (): void => {
-            try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ }
-            if (saveTimer) clearTimeout(saveTimer);
-            saveTimer = setTimeout(() => { void saveTuneConfig({ ...TUNE }); }, 700);
-          };
-          let lastSpike = TUNE.starSpike;
-          const refresh = (): void => {
+      let saveTimer: ReturnType<typeof setTimeout> | null = null;
+      const persist = (): void => {
+        try { localStorage.setItem(TUNE_LS, JSON.stringify(TUNE)); } catch { /* */ }
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => { void saveTuneConfig({ ...TUNE }); }, 700);
+      };
+      let lastSpike = TUNE.starSpike;
+      const refresh = (): void => {
             if (TUNE.starSpike !== lastSpike) {
               lastSpike = TUNE.starSpike;
               const t = makeStarTexture(THREE, TUNE.starSpike);
@@ -2286,85 +2279,65 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             for (const c of constellations) c.text.sync(() => fitPillTo(c.text, c.pill, 0));
             persist();
           };
-          const add = (folder: any, key: keyof typeof TUNE, min: number, max: number, step = 0.01): void => {
-            folder.add(TUNE, key, min, max, step).onChange(refresh);
-          };
-          gui.add(TUNE, 'sceneMode', ['dusk', 'paper']).name('scene').onChange(() => { applyMode(); refresh(); });
-          gui.add(TUNE, 'atmosphere', 0, 1, 0.02).name('atmosphere').onChange(persist); // tick applies it (rides the curl)
-          gui.add(TUNE, 'farOcclude', 0, 1, 0.02).name('far occlude').onChange(persist); // orrery back-face hide; tick applies it
-          // Zoom feel + momentum — all read live in the input handlers / tick,
-          // so persist only (no scene rebuild).
-          const zoomF = gui.addFolder('zoom & drag');
-          zoomF.add(TUNE, 'zoomFov', 0.2, 4, 0.05).name('fov sens').onChange(persist);      // telescope half
-          zoomF.add(TUNE, 'zoomCurl', 0.2, 4, 0.05).name('unfurl sens').onChange(persist);   // curl half
-          zoomF.add(TUNE, 'dragMomentum', 0.8, 0.99, 0.005).name('drag momentum').onChange(persist); // glide friction
-          const torchF = gui.addFolder('torch');
-          // Mins go to TRUE zero — the owner's grade railed the old bottom stops
-          // (coneIn 0.02, depthIn 0.05), so the instrument was clipping intent.
-          add(torchF, 'coneIn', 0, 0.5);
-          add(torchF, 'coneOut', 0.1, 1.2);
-          add(torchF, 'depthIn', 0, 1.5);
-          add(torchF, 'depthOut', 0.3, 4);
-          add(torchF, 'torchFloor', 0, 0.2, 0.005);
-          // The ONE name budget + register split (coupled-workspace co-sizing).
-          const budgetF = gui.addFolder('name budget');
-          add(budgetF, 'focusBand', 0, 60, 1);     // 0 = viewport default (16/26)
-          add(budgetF, 'landmarkFrac', 0, 0.8, 0.05); // landmark share of the band
-          add(budgetF, 'beamPerCell', 1, 5, 1);    // suggestions per screen territory
-          add(budgetF, 'beamPill', 0, 1, 0.01);    // suggestion pill (0 = pill-less whisper)
-          const beamF = gui.addFolder('beam');
-          add(beamF, 'labelConeIn', 0.02, 0.5);
-          add(beamF, 'labelConeOut', 0.1, 1.2);
-          add(beamF, 'beamOn', 0.05, 0.9);
-          add(beamF, 'beamOff', 0.02, 0.8);
-          add(beamF, 'beamOpacity', 0, 1);
-          add(beamF, 'beamSizeMult', 0.3, 1.5);
-          const labelsF = gui.addFolder('labels');
-          add(labelsF, 'selSizeMult', 0.8, 2.5);
-          add(labelsF, 'hitSizeMult', 0.8, 2.5);
-          add(labelsF, 'nbrSizeMult', 0.6, 2);
-          add(labelsF, 'nbrOpFar', 0.1, 1);
-          add(labelsF, 'nbrOpNear', 0.3, 1);
-          add(labelsF, 'labelFade', 1, 20, 0.5);
-          add(labelsF, 'pillClip', 0, 1, 1); // depth-clip the busy field behind a name (0=off)
-          add(labelsF, 'labelOutline', 0, 0.35, 0.005);
-          add(labelsF, 'labelPx', 6, 40, 1); // fixed on-screen label size (× role mult)
-          const nodesF = gui.addFolder('nodes');
-          add(nodesF, 'nodeDim', 0.1, 3);
-          add(nodesF, 'nbrBoost', 0, 1);
-          add(nodesF, 'boostSizeGain', 0, 1.5);
-          add(nodesF, 'starSpike', 0, 1, 0.01); // 0 = soft disc, 1 = full diffraction star
-          const edgesF = gui.addFolder('edges');
-          add(edgesF, 'edgeSimilar', 0, 0.3, 0.005);
-          add(edgesF, 'edgeMember', 0, 0.5, 0.005);
-          add(edgesF, 'edgeDerived', 0, 0.5, 0.005);
-          add(edgesF, 'edgeAuthored', 0, 1, 0.005);
-          add(edgesF, 'focusEdgeAlpha', 0, 1);
-          add(edgesF, 'edgeFlowSpeed', 0, 2, 0.05); // cycles/sec along the edge
-          add(edgesF, 'edgeFlowWidth', 0.05, 0.5, 0.01); // pulse width (0..1 of the edge)
-          add(edgesF, 'edgeFlowGain', 0, 3, 0.05); // brightness added at the pulse's peak
-          add(edgesF, 'edgeFlowCycles', 1, 8, 1); // pulses per edge, source→target
-          // Ranges widened where the owner's grade railed the old stops
-          // (constCap/anchorCap max, anchorSizeMult min, labelOutline max).
-          const placesF = gui.addFolder('places');
-          add(placesF, 'constCap', 0, 32, 1);
-          add(placesF, 'constOpacity', 0, 1);
-          add(placesF, 'constNear', 0.2, 2.5);
-          add(placesF, 'constFar', 0.6, 5);
-          add(placesF, 'anchorCap', 0, 32, 1);
-          add(placesF, 'anchorOpacity', 0, 1);
-          add(placesF, 'anchorSizeMult', 0.1, 1.5);
-          const postF = gui.addFolder('bloom');
-          postF.add(TUNE, 'bloomMode', ['auto', 'on', 'off']).onChange(refresh);
-          add(postF, 'bloomStrength', 0, 2);
-          add(postF, 'bloomRadius', 0, 1.5);
-          add(postF, 'bloomThreshold', 0, 1);
-          add(postF, 'exposure', 0.4, 2.5);
+      // Apply ONE changed knob to the live scene: sceneMode also swaps the
+      // palette/primitives; 'persist' knobs are read per-frame so they need only
+      // a save; the rest re-grade through refresh() (which persists). Mirrors the
+      // change into the lil-gui controllers when that panel happens to be up.
+      const applyTuneKey = (key: keyof typeof TUNE): void => {
+        if (key === 'sceneMode') applyMode();
+        const ctl = TUNE_SCHEMA.find((c) => c.key === key);
+        if (ctl?.live === 'persist') persist();
+        else refresh();
+        gui?.controllersRecursive?.().forEach((c: any) => c.updateDisplay());
+      };
+      // The palette's tune panel lives in a sibling component tree; a knob change
+      // hops across as TUNE_EVENT {key,value} (same window-event idiom as
+      // CONSOLE_RESULT_EVENT). Ungated — the palette can dial the scene with no
+      // ?tune=1. TUNE_RESET_EVENT restores defaults from either surface.
+      const onTune = (ev: Event): void => {
+        const d = (ev as CustomEvent<{ key?: string; value?: unknown }>).detail;
+        const k = d?.key as keyof typeof TUNE | undefined;
+        if (!k || !(k in TUNE_DEFAULTS) || typeof d?.value !== typeof TUNE_DEFAULTS[k]) return;
+        (TUNE as any)[k] = d.value;
+        applyTuneKey(k);
+      };
+      const onTuneReset = (): void => {
+        Object.assign(TUNE, TUNE_DEFAULTS);
+        try { localStorage.removeItem(TUNE_LS); } catch { /* */ }
+        applyMode();
+        refresh();
+        gui?.controllersRecursive?.().forEach((c: any) => c.updateDisplay());
+      };
+      window.addEventListener(TUNE_EVENT, onTune);
+      window.addEventListener(TUNE_RESET_EVENT, onTuneReset);
+
+      // ── the ?tune=1 lil-gui panel (sticky; ?tune=0 clears): a fixed on-screen
+      // instrument over the SAME TUNE_SCHEMA the palette panel renders. Loads
+      // from esm.sh like the rest of the 3D stack and only mounts behind the
+      // flag. `copy values` puts the current JSON on the clipboard for
+      // hard-coding; `paste`/`reset` drop a grade back into the live instrument.
+      if (tuneEnabled()) {
+        void import(/* @vite-ignore */ esmURL('lil-gui@0.19.2')).then((m: any) => {
+          if (disposed) return;
+          const GUI = m.default ?? m.GUI;
+          gui = new GUI({ title: 'graph tune' });
+          gui.domElement.style.cssText = 'position:fixed;top:164px;right:8px;z-index:60;max-height:calc(100dvh - 176px);overflow-y:auto';
+          // Every knob comes from the one schema — no per-folder hand-wiring to
+          // drift from the palette. 'scene' sits at the root; each other group is
+          // a folder built on first use.
+          const folders: Record<string, any> = {};
+          const folderFor = (g: string): any => (g === 'scene' ? gui : (folders[g] ??= gui.addFolder(g)));
+          for (const ctl of TUNE_SCHEMA) {
+            const f = folderFor(ctl.group);
+            const c = ctl.options
+              ? f.add(TUNE, ctl.key, ctl.options as string[])
+              : f.add(TUNE, ctl.key, ctl.min, ctl.max, ctl.step ?? 0.01);
+            c.name(ctl.label ?? ctl.key).onChange(() => applyTuneKey(ctl.key));
+          }
           gui.add({ copy: () => { void navigator.clipboard?.writeText(JSON.stringify(TUNE, null, 2)); } }, 'copy').name('copy values');
-          // `paste values` closes the loop `copy values` opened: a grade JSON
-          // from another device/session (or hard-coded defaults under trial)
-          // drops straight back into the live instrument. Unknown keys are
-          // ignored; types are checked against the defaults' shapes.
+          // `paste values`: a grade JSON from another device/session (or hard-coded
+          // defaults under trial) drops straight back in. Unknown keys ignored;
+          // types checked against the defaults' shapes.
           const applyTune = (text: string | null | undefined): void => {
             let obj: Record<string, unknown>;
             try { obj = JSON.parse(text ?? ''); } catch { return; }
@@ -2391,15 +2364,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
               }
             },
           }, 'paste').name('paste values');
-          gui.add({
-            reset: () => {
-              Object.assign(TUNE, TUNE_DEFAULTS);
-              try { localStorage.removeItem(TUNE_LS); } catch { /* */ }
-              applyMode();
-              refresh();
-              gui.controllersRecursive().forEach((c: any) => c.updateDisplay());
-            },
-          }, 'reset').name('reset defaults');
+          gui.add({ reset: () => onTuneReset() }, 'reset').name('reset defaults');
         }).catch(() => null);
       }
 
@@ -2411,6 +2376,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         renderer.domElement.removeEventListener('pointerleave', onLeave);
         renderer.domElement.removeEventListener('pointercancel', onLeave);
         renderer.domElement.removeEventListener('wheel', onWheel);
+        window.removeEventListener(TUNE_EVENT, onTune);
+        window.removeEventListener(TUNE_RESET_EVENT, onTuneReset);
         if (hoverPickRaf) cancelAnimationFrame(hoverPickRaf);
         if (hoverLabelTimer) clearTimeout(hoverLabelTimer);
         for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); }

@@ -29,6 +29,7 @@ import { getJson, mcpCall } from './lib';
 import { FederatedRendererFrame, FederatedFormFrame } from './federated';
 import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
 import { CONSOLE_RESULT_EVENT } from './graph';
+import { TUNE_OPEN_EVENT } from './graph/tune';
 import { ink } from './ink';
 // Matching/ranking, MRU recents, and selection stepping come from the kernel's
 // headless command-surface engine — shared with the canvas cmd-palette.
@@ -194,6 +195,21 @@ interface Output {
 }
 
 const PROBE_CMDS: Cmd[] = [
+  {
+    id: 'graph:tune',
+    ns: 'graph',
+    verb: 'tune',
+    label: 'graph tune',
+    kind: 'act',
+    scope: null,
+    description: 'Open the live graph tuner — torch, labels, edges, zoom feel, bloom…',
+    needsArgs: false,
+    search: 'tune tuner graph adjust knobs sliders torch bloom zoom drag momentum labels feel dial',
+    run: async () => {
+      window.dispatchEvent(new CustomEvent(TUNE_OPEN_EVENT));
+      return { ok: true, value: 'graph tuner opened' };
+    },
+  },
   {
     id: 'probe:whoami',
     ns: 'probe',

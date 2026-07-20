@@ -128,6 +128,95 @@ export const TUNE_DEFAULTS = {
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 export const TUNE_LS = 'parc.home.tune';
+
+// ── ONE declarative control list (the tuning surface as DATA) ───────────────
+// Every knob's group + range + step, in one array both tuning surfaces read:
+// the ?tune=1 lil-gui panel (graph.tsx) AND the command-palette tune panel
+// (tune-panel.tsx). Adding a knob here lights it up in both places — no
+// per-surface wiring to keep in sync. `live:'persist'` marks a value that tick/
+// the input handlers read every frame (atmosphere, far-occlude, zoom feel), so
+// changing it needs only a save, not a full scene re-grade; everything else
+// routes through the renderer's refresh(). `options` makes it an enum select.
+export interface TuneControl {
+  key: keyof typeof TUNE_DEFAULTS;
+  group: string;
+  label?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: readonly string[];
+  live?: 'persist';
+}
+export const TUNE_SCHEMA: readonly TuneControl[] = [
+  { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
+  { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
+  // zoom feel + momentum — read live in the input handlers / tick.
+  { key: 'zoomFov', group: 'zoom & drag', label: 'fov sens', min: 0.2, max: 4, step: 0.05, live: 'persist' },
+  { key: 'zoomCurl', group: 'zoom & drag', label: 'unfurl sens', min: 0.2, max: 4, step: 0.05, live: 'persist' },
+  { key: 'dragMomentum', group: 'zoom & drag', label: 'drag momentum', min: 0.8, max: 0.99, step: 0.005, live: 'persist' },
+  { key: 'coneIn', group: 'torch', min: 0, max: 0.5 },
+  { key: 'coneOut', group: 'torch', min: 0.1, max: 1.2 },
+  { key: 'depthIn', group: 'torch', min: 0, max: 1.5 },
+  { key: 'depthOut', group: 'torch', min: 0.3, max: 4 },
+  { key: 'torchFloor', group: 'torch', min: 0, max: 0.2, step: 0.005 },
+  { key: 'focusBand', group: 'name budget', min: 0, max: 60, step: 1 },
+  { key: 'landmarkFrac', group: 'name budget', min: 0, max: 0.8, step: 0.05 },
+  { key: 'beamPerCell', group: 'name budget', min: 1, max: 5, step: 1 },
+  { key: 'beamPill', group: 'name budget', min: 0, max: 1 },
+  { key: 'labelConeIn', group: 'beam', min: 0.02, max: 0.5 },
+  { key: 'labelConeOut', group: 'beam', min: 0.1, max: 1.2 },
+  { key: 'beamOn', group: 'beam', min: 0.05, max: 0.9 },
+  { key: 'beamOff', group: 'beam', min: 0.02, max: 0.8 },
+  { key: 'beamOpacity', group: 'beam', min: 0, max: 1 },
+  { key: 'beamSizeMult', group: 'beam', min: 0.3, max: 1.5 },
+  { key: 'selSizeMult', group: 'labels', min: 0.8, max: 2.5 },
+  { key: 'hitSizeMult', group: 'labels', min: 0.8, max: 2.5 },
+  { key: 'nbrSizeMult', group: 'labels', min: 0.6, max: 2 },
+  { key: 'nbrOpFar', group: 'labels', min: 0.1, max: 1 },
+  { key: 'nbrOpNear', group: 'labels', min: 0.3, max: 1 },
+  { key: 'labelFade', group: 'labels', min: 1, max: 20, step: 0.5 },
+  { key: 'pillClip', group: 'labels', min: 0, max: 1, step: 1 },
+  { key: 'labelOutline', group: 'labels', min: 0, max: 0.35, step: 0.005 },
+  { key: 'labelPx', group: 'labels', min: 6, max: 40, step: 1 },
+  { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3 },
+  { key: 'nbrBoost', group: 'nodes', min: 0, max: 1 },
+  { key: 'boostSizeGain', group: 'nodes', min: 0, max: 1.5 },
+  { key: 'starSpike', group: 'nodes', min: 0, max: 1 },
+  { key: 'edgeSimilar', group: 'edges', min: 0, max: 0.3, step: 0.005 },
+  { key: 'edgeMember', group: 'edges', min: 0, max: 0.5, step: 0.005 },
+  { key: 'edgeDerived', group: 'edges', min: 0, max: 0.5, step: 0.005 },
+  { key: 'edgeAuthored', group: 'edges', min: 0, max: 1, step: 0.005 },
+  { key: 'focusEdgeAlpha', group: 'edges', min: 0, max: 1 },
+  { key: 'edgeFlowSpeed', group: 'edges', min: 0, max: 2, step: 0.05 },
+  { key: 'edgeFlowWidth', group: 'edges', min: 0.05, max: 0.5, step: 0.01 },
+  { key: 'edgeFlowGain', group: 'edges', min: 0, max: 3, step: 0.05 },
+  { key: 'edgeFlowCycles', group: 'edges', min: 1, max: 8, step: 1 },
+  { key: 'constCap', group: 'places', min: 0, max: 32, step: 1 },
+  { key: 'constOpacity', group: 'places', min: 0, max: 1 },
+  { key: 'constNear', group: 'places', min: 0.2, max: 2.5 },
+  { key: 'constFar', group: 'places', min: 0.6, max: 5 },
+  { key: 'anchorCap', group: 'places', min: 0, max: 32, step: 1 },
+  { key: 'anchorOpacity', group: 'places', min: 0, max: 1 },
+  { key: 'anchorSizeMult', group: 'places', min: 0.1, max: 1.5 },
+  { key: 'bloomMode', group: 'bloom', label: 'bloomMode', options: ['auto', 'on', 'off'] },
+  { key: 'bloomStrength', group: 'bloom', min: 0, max: 2 },
+  { key: 'bloomRadius', group: 'bloom', min: 0, max: 1.5 },
+  { key: 'bloomThreshold', group: 'bloom', min: 0, max: 1 },
+  { key: 'exposure', group: 'bloom', min: 0.4, max: 2.5 },
+];
+// The GROUP order as first seen in TUNE_SCHEMA — both panels render sections
+// in this order.
+export const TUNE_GROUPS: readonly string[] = [...new Set(TUNE_SCHEMA.map((c) => c.group))];
+
+// Window-event bridge (the idiom used by CONSOLE_RESULT_EVENT / FACT_DETAIL_EVENT):
+// the palette panel and the graph's render closures live in sibling component
+// trees, so a value change hops across as a CustomEvent. TUNE_EVENT carries one
+// {key,value}; TUNE_RESET_EVENT restores defaults; TUNE_OPEN_EVENT asks the
+// palette to reveal its tune panel.
+export const TUNE_EVENT = 'home:tune-set';
+export const TUNE_RESET_EVENT = 'home:tune-reset';
+export const TUNE_OPEN_EVENT = 'home:tune-open';
 try {
   const saved = JSON.parse(localStorage.getItem(TUNE_LS) ?? 'null');
   if (saved && typeof saved === 'object') Object.assign(TUNE, saved);
