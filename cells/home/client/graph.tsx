@@ -853,7 +853,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // Drag carries MOMENTUM; the vantage toggle and turn-to-face ease. No pan
       // in either stance — you can't slide a sky sideways.
       const ORRERY = SHELL * 2.4;         // holding the whole globe
-      const FOV_WIDE = 82, FOV_TELE = 4;  // the telescope's full throw
+      // The telescope is field-of-view. FOV_WIDE is the RESTING zoom (arrival /
+      // reset); FOV_OUT is how far you may pull the wide end — an ultra-wide
+      // "almost the whole dome at once". A perspective lens has a hard ceiling
+      // below 180° (the edges fisheye and stars smear as it approaches it), so
+      // ~120° is about as wide as reads cleanly; past that it distorts, not
+      // breaks. Keep pulling out AT the wide limit and you tip into the orrery.
+      const FOV_WIDE = 82, FOV_TELE = 4, FOV_OUT = 120; // rest · telescope · zoom-out extent
       const PITCH_LIMIT = Math.PI / 2 - 0.015;
       let yaw = 0, pitch = 0;             // orientation (radians)
       let velYaw = 0, velPitch = 0;       // angular momentum (radians/frame)
@@ -1092,7 +1098,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (pointers.size >= 2) {
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_WIDE, pinchFov0 * pinchDist0 / d));
+          fov = fovTarget = Math.max(FOV_TELE, Math.min(FOV_OUT, pinchFov0 * pinchDist0 / d));
           lastInput = performance.now();
           return;
         }
@@ -1129,10 +1135,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           }
         });
       };
-      // Wheel = the telescope (fov), eased. Scroll up/forward magnifies.
+      // Wheel = the telescope (fov), eased. Scroll up/forward magnifies. Widen
+      // all the way to FOV_OUT; keep pushing out at that limit (in the sky) and
+      // you TIP into the orrery — the extreme zoom-out becomes stepping outside.
       const onWheel = (e: WheelEvent): void => {
         e.preventDefault();
-        fovTarget = Math.max(FOV_TELE, Math.min(FOV_WIDE, fovTarget * Math.exp(e.deltaY * 0.0016)));
+        const next = Math.max(FOV_TELE, Math.min(FOV_OUT, fovTarget * Math.exp(e.deltaY * 0.0016)));
+        if (e.deltaY > 0 && vantage === 'sky' && fovTarget >= FOV_OUT - 0.5 && next >= FOV_OUT - 0.5) enterOrrery();
+        else fovTarget = next;
         lastInput = performance.now();
       };
       const clearPointer = (id: number): void => {
