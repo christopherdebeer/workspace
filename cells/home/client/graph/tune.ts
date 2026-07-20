@@ -50,6 +50,12 @@ export const TUNE_DEFAULTS = {
   // nodes — neighbours barely lift (0.2): selection lights the ANCHOR, the
   // neighbourhood whispers; the fan edges carry the structure.
   nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1,
+  // SELECTION REACH: how many hops of neighbours a selection brightens (1 = just
+  // the direct neighbours; 2 = neighbours-of-neighbours too). Capped internally
+  // so a hub can't ignite the whole field. edgeLabelCap is the other half of the
+  // fan — how many relation labels ride the selected node's edges at once (the
+  // old hard-coded 4; a densely-linked node wants more).
+  neighborHops: 1, edgeLabelCap: 4,
   // edges (owner re-grade 2026-07-12: brought back up from "all but erased" —
   // the resting lattice now reads at rest, authored edges especially (0.24,
   // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
@@ -184,6 +190,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'labelPx', group: 'labels', min: 6, max: 40, step: 1, quick: true },
   { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3, quick: true },
   { key: 'nbrBoost', group: 'nodes', min: 0, max: 1 },
+  { key: 'neighborHops', group: 'nodes', label: 'neighbour hops', min: 1, max: 3, step: 1 },
   { key: 'boostSizeGain', group: 'nodes', min: 0, max: 1.5 },
   { key: 'starSpike', group: 'nodes', min: 0, max: 1 },
   { key: 'edgeSimilar', group: 'edges', min: 0, max: 0.3, step: 0.005 },
@@ -191,6 +198,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'edgeDerived', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeAuthored', group: 'edges', min: 0, max: 1, step: 0.005 },
   { key: 'focusEdgeAlpha', group: 'edges', min: 0, max: 1 },
+  { key: 'edgeLabelCap', group: 'edges', label: 'rel labels', min: 0, max: 16, step: 1 },
   { key: 'edgeFlowSpeed', group: 'edges', min: 0, max: 2, step: 0.05 },
   { key: 'edgeFlowWidth', group: 'edges', min: 0.05, max: 0.5, step: 0.01 },
   { key: 'edgeFlowGain', group: 'edges', min: 0, max: 3, step: 0.05 },

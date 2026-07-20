@@ -231,9 +231,27 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         n.id === selKey || n.id === hoverKey || hiSet?.has(n.id) ||
         n.rank === undefined || n.rank < visCount
       );
+      // The selection's neighbourhood, out to TUNE.neighborHops hops (1 = direct
+      // neighbours, the old behaviour). BFS layer by layer; a hard cap keeps a
+      // hub's 2–3 hop shell from igniting the whole field (and blowing the label
+      // budget). hops=1 iterates links once, identical to before.
+      const NBR_CAP = 240;
       const neighborsOf = (k: string): Set<string> => {
+        const hops = Math.max(1, Math.round(TUNE.neighborHops || 1));
         const s = new Set<string>();
-        for (const l of links) { const a = idOf(l.source), b = idOf(l.target); if (a === k) s.add(b); else if (b === k) s.add(a); }
+        let frontier: string[] = [k];
+        for (let h = 0; h < hops && frontier.length && s.size < NBR_CAP; h++) {
+          const fset = new Set(frontier);
+          const next: string[] = [];
+          for (const l of links) {
+            const a = idOf(l.source), b = idOf(l.target);
+            if (a === b) continue;
+            if (fset.has(a) && b !== k && !s.has(b)) { s.add(b); next.push(b); }
+            if (fset.has(b) && a !== k && !s.has(a)) { s.add(a); next.push(a); }
+            if (s.size >= NBR_CAP) break;
+          }
+          frontier = next;
+        }
         return s;
       };
 
@@ -1406,7 +1424,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const placedMid: Array<[number, number]> = [];
           let added = 0;
           for (const [i] of cands) {
-            if (added >= 4) break;
+            if (added >= TUNE.edgeLabelCap) break;
             const l = links[i];
             const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
             const [ax, ay] = screenXY(aN);
@@ -1709,6 +1727,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             const zoomMag = Math.tan(camera.fov * Math.PI / 360) / Math.tan(FOV_WIDE * Math.PI / 360);
             const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) * zoomMag;
             target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
+            // A REGION is a place on the shell, so it fades and clips on the far
+            // side exactly like its stars and labels — a caption on the back of
+            // the held globe shouldn't read through the near face. (Mirrors the
+            // fact-label far-fade; the anchor's curled world pos is c.grp.position.)
+            target *= farFadeAt(c.grp.position);
+            const capClipZ = torchUniforms.uFarClip.value;
+            if (capClipZ > 0.5 && -c.grp.position.z > capClipZ) target = 0;
             if (target > 0.02) {
               // Captions render at a FIXED screen size (below), so the declutter
               // box uses that size, not a depth-projected one.
@@ -2262,8 +2287,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // this same refresh(), so it has to hold that line too, not just
             // the sceneMode toggle.
             renderer.toneMappingExposure = isPaper() ? 1 : TUNE.exposure;
+            // Selection reach is a tunable now, so re-derive the neighbourhood and
+            // the relation-label fan on any tuner change (neighbour hops / rel-
+            // label cap apply live, not only on the next selection).
+            if (selKey) nbr = neighborsOf(selKey);
             applyNodeAlpha();
             applyEdgeColor();
+            syncEdgeLabels();
             // Re-grade the live SDF labels (size mults / outline are layout
             // properties, applied at assignment — a tuner change re-syncs).
             for (const [id, st] of labelObjs) {
