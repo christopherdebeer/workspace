@@ -146,15 +146,18 @@ export interface TuneControl {
   step?: number;
   options?: readonly string[];
   live?: 'persist';
+  /** In the CURATED subset the palette shows inline by default (the few
+   *  high-impact feel dials). The full set is one "more" tap away. */
+  quick?: boolean;
 }
 export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
-  { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
   // zoom feel + momentum — read live in the input handlers / tick.
-  { key: 'zoomFov', group: 'zoom & drag', label: 'fov sens', min: 0.2, max: 4, step: 0.05, live: 'persist' },
-  { key: 'zoomCurl', group: 'zoom & drag', label: 'unfurl sens', min: 0.2, max: 4, step: 0.05, live: 'persist' },
-  { key: 'dragMomentum', group: 'zoom & drag', label: 'drag momentum', min: 0.8, max: 0.99, step: 0.005, live: 'persist' },
+  { key: 'zoomFov', group: 'zoom & drag', label: 'fov sens', min: 0.2, max: 4, step: 0.05, live: 'persist', quick: true },
+  { key: 'zoomCurl', group: 'zoom & drag', label: 'unfurl sens', min: 0.2, max: 4, step: 0.05, live: 'persist', quick: true },
+  { key: 'dragMomentum', group: 'zoom & drag', label: 'drag momentum', min: 0.8, max: 0.99, step: 0.005, live: 'persist', quick: true },
   { key: 'coneIn', group: 'torch', min: 0, max: 0.5 },
   { key: 'coneOut', group: 'torch', min: 0.1, max: 1.2 },
   { key: 'depthIn', group: 'torch', min: 0, max: 1.5 },
@@ -178,8 +181,8 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'labelFade', group: 'labels', min: 1, max: 20, step: 0.5 },
   { key: 'pillClip', group: 'labels', min: 0, max: 1, step: 1 },
   { key: 'labelOutline', group: 'labels', min: 0, max: 0.35, step: 0.005 },
-  { key: 'labelPx', group: 'labels', min: 6, max: 40, step: 1 },
-  { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3 },
+  { key: 'labelPx', group: 'labels', min: 6, max: 40, step: 1, quick: true },
+  { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3, quick: true },
   { key: 'nbrBoost', group: 'nodes', min: 0, max: 1 },
   { key: 'boostSizeGain', group: 'nodes', min: 0, max: 1.5 },
   { key: 'starSpike', group: 'nodes', min: 0, max: 1 },

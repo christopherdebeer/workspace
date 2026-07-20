@@ -215,8 +215,6 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
   }, []);
 
   return (
-    <>
-    {showTune ? <TunePanel onClose={() => setShowTune(false)} /> : null}
     <div
       style={{
         position: 'fixed',
@@ -235,6 +233,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         color: ink.text,
       }}
     >
+      {showTune ? <TunePanel onClose={() => setShowTune(false)} /> : null}
       {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
@@ -249,6 +248,5 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         }}
       />
     </div>
-    </>
   );
 }
