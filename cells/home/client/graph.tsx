@@ -853,12 +853,19 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       camera.rotation.order = 'YXZ';
       const clampPitch = (p: number): number => Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p));
       // Turn the gaze to a world DIRECTION (a star, a region), eased in tick().
-      // yaw 0 faces +Z; pitch is elevation. You don't fly to a star in a sky —
-      // you turn until it is dead ahead, and the fixed centre keeps your bearings.
+      // The camera's forward is R(yaw,pitch)·(0,0,-1) = (−cos·sin y, sin p,
+      // −cos·cos y), so to look AT a unit direction (nx,ny,nz) the solution is
+      // yaw = atan2(−nx,−nz), pitch = asin(ny). (The earlier atan2(nx,nz) faced
+      // the exact OPPOSITE — a 180° error that turned the second tap away from
+      // its star; caught by Sol, 2026-07-20.) In the ORRERY the eye is OUTSIDE
+      // looking IN, so we aim at the OPPOSITE direction to bring the star to the
+      // NEAR face (facing you) rather than the far side of the globe.
       const faceDir = (x: number, y: number, z: number): void => {
         const len = Math.hypot(x, y, z) || 1;
-        turnYaw = Math.atan2(x / len, z / len);
-        turnPitch = clampPitch(Math.asin(y / len));
+        let nx = x / len, ny = y / len, nz = z / len;
+        if (vantage === 'orrery') { nx = -nx; ny = -ny; nz = -nz; }
+        turnYaw = Math.atan2(-nx, -nz);
+        turnPitch = clampPitch(Math.asin(ny));
         velYaw = velPitch = 0;
         lastInput = performance.now();
       };
@@ -1142,6 +1149,20 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (c.key && nodeById.has(c.key)) tapNode(c.key);
           else frame(c.x, c.y, c.z, c.r * 1.5);
         };
+        // The SELECTED star owns the second tap: after a selection, its
+        // neighbourhood streams in and a fresh neighbour label can land right
+        // over it — without this, that label would intercept the tap and select
+        // the neighbour instead of triggering the look-at (Sol's regression #5).
+        // A tap within a finger of the selected star is always its look-at.
+        if (selKey) {
+          const sn = nodeById.get(selKey);
+          if (sn && isVis(sn)) {
+            const [ssx, ssy, ssz] = screenXY(sn);
+            if (ssz <= 1 && Math.hypot(ssx - e.clientX, ssy - e.clientY) <= (e.pointerType === 'touch' ? 34 : 22)) {
+              tapNode(selKey); return;
+            }
+          }
+        }
         // Precedence, refined across three live reports (2026-07-12/13): a tap
         // on a VISIBLE chip (label/caption) wins — a deliberate typographic
         // target outranks ambient dots. Otherwise the NEAREST on-screen node
