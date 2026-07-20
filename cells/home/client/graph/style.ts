@@ -40,6 +40,14 @@ export const FONT_BY_GROUP: Record<string, string> = {
   kb: 'https://cdn.jsdelivr.net/npm/@fontsource/source-serif-4@5.1.0/files/source-serif-4-latin-400-normal.woff',
   mono: 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.1.0/files/ibm-plex-mono-latin-500-normal.woff',
 };
+// FACT LABELS speak in ONE voice now: a fact's TYPE is carried by the star's
+// hue (nodeColor) and a small leading type-dot on the label, NOT by the
+// letterform — so the label's font is free to encode its KIND instead. One
+// humanist sans for every fact name (upright), with an italic cut reserved for
+// the suggestion whisper (the one kind that wants a different voice). Places
+// stay serif (FONT_BY_GROUP.kb) — sans facts vs serif places is the split.
+export const LABEL_FONT = 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.1.0/files/ibm-plex-sans-latin-500-normal.woff';
+export const LABEL_FONT_ITALIC = 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.1.0/files/ibm-plex-sans-latin-400-italic.woff';
 // Knockout halo: thin text must survive sitting over a bloom core.
 export const LABEL_HALO = 'text-shadow:0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
 
