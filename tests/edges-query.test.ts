@@ -148,3 +148,37 @@ describe('ADR-0069 — edge query parity', () => {
     expect(count.total).toBe(1100);
   });
 });
+
+describe('edges — grant fold (shared/public subgraphs)', () => {
+  const state = createObservedState(createMemoryStateStore());
+  const grants = createMemoryGrantStore();
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const alice = ctxFor('alice');
+  const bob = ctxFor('bob');
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'doc:pub', value: { n: 1 }, type: 'note' }, alice);
+    await cmds.remember({ key: 'doc:pub2', value: { n: 2 }, type: 'note' }, alice);
+    await cmds.remember({ key: 'secret', value: { n: 3 }, type: 'note' }, alice);
+    await cmds.link({ from: 'doc:pub', rel: 'relates', to: 'doc:pub2' }, alice); // public ↔ public
+    await cmds.link({ from: 'doc:pub', rel: 'leaks', to: 'secret' }, alice);     // public → PRIVATE
+    await cmds.share({ to: 'public', key: 'doc:*' }, alice);                      // only the doc: prefix
+  });
+
+  const pairs = (r: unknown): string[] =>
+    ((r as { edges: Array<{ from: string; rel: string; to: string }> }).edges).map((e) => `${e.from} -${e.rel}-> ${e.to}`);
+
+  it('folds a granted owner’s authored edges, re-prefixed owner/key', async () => {
+    expect(pairs(await cmds.edges({ derived: false }, bob))).toContain('alice/doc:pub -relates-> alice/doc:pub2');
+  });
+
+  it('excludes an edge whose far endpoint is NOT granted (no private-key leak)', async () => {
+    expect(pairs(await cmds.edges({ derived: false }, bob)).some((p) => p.includes('secret'))).toBe(false);
+  });
+
+  it('the owner’s own-slice read is unchanged (no foreign fold, bare keys)', async () => {
+    const own = pairs(await cmds.edges({ derived: false }, alice));
+    expect(own).toContain('doc:pub -relates-> doc:pub2');
+    expect(own.every((p) => !p.includes('alice/'))).toBe(true);
+  });
+});
