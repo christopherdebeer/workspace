@@ -212,19 +212,18 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // dissolves. The graph is a non-interactive BACKDROP while the trailhead is up
   // (the overlay owns input); it becomes interactive only once you've entered.
   // Two clean modes, no tangle of graph-spin ⇄ scroll ⇄ zoom.
-  const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const pullRef = React.useRef(0); pullRef.current = pull;
   const PULL_COMMIT = 140;                        // peel past this → enter
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !authed || entered || leaving) return;
-    // Snap back to rest whenever the trailhead (re)mounts — otherwise a committed
-    // peel survives entering and is still showing when you step back here (and any
-    // stale partial/aborted pull is cleared too). This effect only runs while the
-    // trailhead is live and not mid-leave, so it never fires during a real pull.
+    if (!authed || entered || leaving) return;
+    // Body-scroll model: the page scrolls natively (window), so pull-to-enter
+    // reads window.scrollY and binds to window. Snap back to rest on (re)mount —
+    // a committed peel must not survive entering. Also reset the document scroll
+    // so the trailhead always opens at the top (hero), not mid-content.
     setPull(0);
+    try { window.scrollTo(0, 0); } catch { /* SSR/none */ }
     const CAP = PULL_COMMIT * 1.4;
-    const atTop = (): boolean => el.scrollTop <= 0;
+    const atTop = (): boolean => window.scrollY <= 0;
     let touchY: number | null = null;
     let pulling = false;
     let wheelReset: ReturnType<typeof setTimeout> | null = null;
@@ -261,18 +260,20 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
         setPull((p) => Math.max(0, p - e.deltaY * 0.6));
       }
     };
-    el.addEventListener('touchstart', onTouchStart, { passive: true });
-    el.addEventListener('touchmove', onTouchMove, { passive: false });
-    el.addEventListener('touchend', release, { passive: true });
-    el.addEventListener('touchcancel', release, { passive: true });
-    el.addEventListener('wheel', onWheel, { passive: false });
+    // Body-scroll model: bind to WINDOW (the document scrolls), not an inner
+    // container. The pull-to-enter edge is over-scroll-UP at the document top.
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', release, { passive: true });
+    window.addEventListener('touchcancel', release, { passive: true });
+    window.addEventListener('wheel', onWheel, { passive: false });
     return () => {
       if (wheelReset) clearTimeout(wheelReset);
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove', onTouchMove);
-      el.removeEventListener('touchend', release);
-      el.removeEventListener('touchcancel', release);
-      el.removeEventListener('wheel', onWheel);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', release);
+      window.removeEventListener('touchcancel', release);
+      window.removeEventListener('wheel', onWheel);
     };
   }, [authed, entered, leaving, enter]);
 
@@ -305,7 +306,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           </div>
         )}
       >
-        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={false} heroHeight={!entered && !leaving ? HERO_VH : undefined} />
+        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={!entered && !leaving ? HERO_VH : undefined} />
         {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
@@ -341,29 +342,20 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           inside the overlay) so mix-blend-mode:screen tints the dark sky while
           the live stars punch through. Fades to clear night as you enter. */}
       {!entered && <SkyGradient fade={leaving ? 0 : 1} heroOnly={!leaving} />}
-      {/* The landing overlay (painted valley + content). A NATIVELY-scrolling
-          container that OWNS input while it's up (pointer-events:auto), so the
-          graph beneath is a non-interactive backdrop — no drag/scroll/zoom tangle.
-          On over-scroll UP at the top, `pull` peels it DOWN, revealing the live
-          sky through the gap at the top; past commit it dissolves (day → night). */}
+      {/* The landing content flows in the NORMAL DOCUMENT — the BODY scrolls
+          natively (hero → content below). iOS-robust: WebKit refuses to
+          native-scroll a pointer-events:none overflow:auto container, so we don't
+          use one; body scroll is immune. The wrapper is pointer-events:none so
+          bare-sky drags fall through to the fixed graph behind (ISLANDS model:
+          HeroContent/Content/top-bar re-enable pointer events) — nothing `auto`
+          sits between the hero and the graph. `pull` peels it DOWN on
+          over-scroll-up; past commit it dissolves (day → night). */}
       {!entered && (
         <div
           className='Landing'
-          ref={scrollRef}
           style={{
-            position: 'fixed',
-            inset: 0,
+            position: 'relative',
             zIndex: 20,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            overscrollBehavior: 'contain',
-            WebkitOverflowScrolling: 'touch',
-            // ISLANDS MODEL: the overlay chain is pointer-transparent so drags on
-            // the bare sky fall through to the live graph (spin + tap-select);
-            // only the content islands (HeroContent, Content) + top-bar re-enable
-            // pointer events. Scroll/pull still work — wheel/touch bind to this
-            // element's listeners regardless of pointer-events, and gestures over
-            // the content islands bubble here.
             pointerEvents: 'none',
             opacity: leaving ? 0 : 1,
             transform: pull ? `translateY(${pull}px)` : undefined,

@@ -401,7 +401,7 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
     <div style={{ display: 'grid', gap: compact ? '0.12rem' : '0.4rem', color: c.text, textShadow: shadow, minWidth: 0 }}>
       {head ? (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: compact ? '0.4rem' : '0.55rem', minWidth: 0 }}>
-          <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span>
+          { !onImage && <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span> }
           <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}>{factTitle(e)}</h2>
         </div>
       ) : null}

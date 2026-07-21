@@ -6,9 +6,12 @@
   <title>home — devtools</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
-    body { background: #1b1710; color: #efe9dc; font-family: system-ui, sans-serif; }
-    #root { height: 100%; }
+    /* Match the real cell index.html: NO fixed height / overflow:hidden — the
+       landing now flows in the document and the BODY scrolls natively (the
+       iOS-robust model). A height:100%/overflow:hidden harness would silently
+       block that (and mask the very bug we're testing). */
+    html, body { margin: 0; padding: 0; background: #1b1710; }
+    body { color: #efe9dc; font-family: system-ui, sans-serif; }
   </style>
 </head>
 <body>

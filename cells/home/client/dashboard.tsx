@@ -246,8 +246,8 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
       }}>
         {/* Painted landscape, pinned to this first screen only */}
         <div className='HeroLandscape'style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
-        <div className='HeroContent' style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem', pointerEvents: 'auto', paddingBottom: '11vh',
-    paddingTop: '3em' }}>
+        <div className='HeroContent' style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem', pointerEvents: 'auto', paddingBottom: '7vh',
+    paddingTop: '2em' }}>
           <div style={{ display: 'grid', gap: '0.6rem' }}>
             {reading ? (
               // The selected star, IN PLACE of the pitch — title + metadata, over

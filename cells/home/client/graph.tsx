@@ -3114,7 +3114,7 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
         preview={preview}
         heroHeight={heroHeight}
       />
-      <section aria-label="Graph controls" style={bar}>
+      { !preview && <section aria-label="Graph controls" style={bar}>
         <span style={{ color: ink.dim }}>focus</span>
         <input
           type="range"
@@ -3153,7 +3153,7 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
         >
           {reach.total ? `${short(reach.charted)}/${short(reach.total)}${reach.hasMore ? (reach.paused ? ' ▸' : '…') : ''}` : '…'}
         </button>
-      </section>
+      </section> }
     </>
   );
 }
