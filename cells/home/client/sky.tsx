@@ -14,7 +14,7 @@ import { TUNE } from './graph/tune';
 
 const { useEffect, useRef } = React;
 
-export function SkyBackdrop(): React.JSX.Element {
+export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -136,7 +136,9 @@ export function SkyBackdrop(): React.JSX.Element {
   return (
     <div
       ref={host}
-      style={{ position: 'fixed', inset: 0, background: ink.sceneBg, zIndex: 0 }}
+      // Hero-height on the landing (matches SkyGradient + the authed graph) so
+      // the content below sits on solid ground; full-viewport if unconstrained.
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, zIndex: 0 }}
     />
   );
 }

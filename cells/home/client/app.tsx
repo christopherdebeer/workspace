@@ -69,19 +69,20 @@ function LandingWithSky({ session, onEnter }: {
   }, [onEnter, entering, onExplore]);
   return (
     <>
-      <SkyBackdrop />
+      {/* Unauthed has no real graph, so a decorative star dome stands in — but it
+          gets the SAME dusk-gradient screen-treatment and BODY-SCROLL model as
+          the authed trailhead (both fixed behind the flowing content, hero-height;
+          the content scrolls the document natively — iOS-robust). */}
+      <SkyBackdrop heroHeight={entering ? undefined : HERO_VH} />
+      <SkyGradient fade={entering ? 0 : 1} heroOnly={!entering} />
       <div
         className='Landing'
         style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 1,
-          display: 'grid',
-          gridTemplateRows: '1fr auto',
-          overflow: 'hidden',
+          position: 'relative',
+          zIndex: 20,
+          pointerEvents: 'none',
           opacity: entering ? 0 : 1,
           transition: 'opacity 0.6s ease-out',
-          pointerEvents: entering ? 'none' : 'auto',
         }}
       >
         <Landing session={{ ...session, signIn: onExplore }} onExplore={onExplore} authed={!!onEnter} />
