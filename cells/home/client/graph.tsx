@@ -210,6 +210,91 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         return [Math.cos(th) * rr, y, Math.sin(th) * rr];
       };
       const seatRadius = (score: number): number => SHELL * (1 - 0.08 * Math.max(0, Math.min(1, score)));
+      // ── TWO seat arrangements + a blend (prototype, tuner: `layout mix`) ──────
+      // A node carries its SEMANTIC seat (sdx/y/z — the embedding direction, the
+      // default) AND an AUTHORED seat (ldx/y/z — a link-force layout on the shell),
+      // and its live seat cdx/y/z is the two blended by TUNE.layoutMix (0 = pure
+      // meaning, 1 = pure link structure). Everything downstream reads only cdx/y/z,
+      // so the curl/labels/edges/selection don't know or care which arrangement
+      // (or blend) is showing. nlerp (not slerp) for the morph — cheap, and a
+      // straight-line-then-renormalise path reads fine across a drag.
+      const nlerpDir = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, t: number): [number, number, number] => {
+        const x = ax + (bx - ax) * t, y = ay + (by - ay) * t, z = az + (bz - az) * t;
+        const len = Math.hypot(x, y, z) || 1;
+        return [x / len, y / len, z / len];
+      };
+      const applySeatBlend = (): void => {
+        const t = Math.max(0, Math.min(1, TUNE.layoutMix));
+        for (const n of nodes) {
+          if (t <= 0.001) { n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz; }
+          else [n.cdx, n.cdy, n.cdz] = nlerpDir(n.sdx, n.sdy, n.sdz, n.ldx, n.ldy, n.ldz, t);
+        }
+        layoutDirty = true;
+      };
+      // Which edges pull in the AUTHORED layout: authored assertions hardest,
+      // membership half, derived a quarter — and `similarTo` NOT AT ALL (that edge
+      // IS the semantic signal; letting it pull would just reproduce the embedding).
+      const linkForceW = (l: any): number => (l.rel === 'similarTo' ? 0 : l.derived ? 0.25 : MEMBER_RELS.has(l.rel) ? 0.5 : 1);
+      const AUTHORED_CAP = 320; // top-salience linked nodes get force-placed; the rest stay semantic
+      let authoredLaidOut = false;
+      let authoredLastN = 0;
+      // A small spherical force layout (Fruchterman–Reingold on the unit sphere,
+      // warm-started at the semantic seats so it PERTURBS meaning by link structure
+      // rather than teleporting — stable, and the morph stays legible). Capped to a
+      // few hundred salient linked nodes so the O(n²) repulsion is a sub-100ms burst.
+      const computeAuthoredSeats = (): void => {
+        for (const n of nodes) { n.ldx = n.sdx; n.ldy = n.sdy; n.ldz = n.sdz; }
+        const linked = new Set<string>();
+        for (const l of links) { if (linkForceW(l) > 0) { linked.add(idOf(l.source)); linked.add(idOf(l.target)); } }
+        const set: any[] = [];
+        for (const n of byRank) { if (!n.deleted && linked.has(n.id)) { set.push(n); if (set.length >= AUTHORED_CAP) break; } }
+        authoredLaidOut = true; authoredLastN = nodes.length;
+        const M = set.length;
+        if (M < 3) return;
+        const index = new Map<string, number>(set.map((n, i) => [n.id, i]));
+        const P = set.map((n) => [n.sdx, n.sdy, n.sdz]);
+        const E: Array<[number, number, number]> = [];
+        for (const l of links) { const w = linkForceW(l); if (w <= 0) continue; const ia = index.get(idOf(l.source)), ib = index.get(idOf(l.target)); if (ia == null || ib == null || ia === ib) continue; E.push([ia, ib, w]); }
+        const disp = P.map(() => [0, 0, 0]);
+        const KREP = 0.5, KATTR = 1.1, ITERS = 90;
+        for (let it = 0; it < ITERS; it++) {
+          const step = 0.06 * (1 - it / ITERS) + 0.004;
+          for (let i = 0; i < M; i++) { disp[i][0] = disp[i][1] = disp[i][2] = 0; }
+          for (let i = 0; i < M; i++) {
+            const pi = P[i];
+            for (let j = i + 1; j < M; j++) {
+              const pj = P[j];
+              let dx = pi[0] - pj[0], dy = pi[1] - pj[1], dz = pi[2] - pj[2];
+              let d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 < 1e-6) { dx = Math.cos(i * 1.1); dy = Math.sin(i * 1.7 + j); dz = Math.cos(j * 0.9); d2 = 1; }
+              const d = Math.sqrt(d2), f = KREP / (d2 + 0.04);
+              const ux = dx / d, uy = dy / d, uz = dz / d;
+              disp[i][0] += ux * f; disp[i][1] += uy * f; disp[i][2] += uz * f;
+              disp[j][0] -= ux * f; disp[j][1] -= uy * f; disp[j][2] -= uz * f;
+            }
+          }
+          for (const [ia, ib, w] of E) {
+            const pa = P[ia], pb = P[ib];
+            let dx = pb[0] - pa[0], dy = pb[1] - pa[1], dz = pb[2] - pa[2];
+            const d = Math.hypot(dx, dy, dz) || 1e-4, f = KATTR * w * d;
+            const ux = dx / d, uy = dy / d, uz = dz / d;
+            disp[ia][0] += ux * f; disp[ia][1] += uy * f; disp[ia][2] += uz * f;
+            disp[ib][0] -= ux * f; disp[ib][1] -= uy * f; disp[ib][2] -= uz * f;
+          }
+          for (let i = 0; i < M; i++) {
+            const p = P[i], dp = disp[i];
+            const rad = dp[0] * p[0] + dp[1] * p[1] + dp[2] * p[2]; // strip the radial component: stay ON the sphere
+            p[0] += (dp[0] - rad * p[0]) * step; p[1] += (dp[1] - rad * p[1]) * step; p[2] += (dp[2] - rad * p[2]) * step;
+            const len = Math.hypot(p[0], p[1], p[2]) || 1; p[0] /= len; p[1] /= len; p[2] /= len;
+          }
+        }
+        for (let i = 0; i < M; i++) { const n = set[i]; n.ldx = P[i][0]; n.ldy = P[i][1]; n.ldz = P[i][2]; }
+      };
+      // Lazily (re)build the authored layout when the blend is engaged and the set
+      // has grown meaningfully since the last pass (streaming keeps adding stars).
+      const ensureAuthoredLayout = (): void => {
+        if (TUNE.layoutMix > 0 && (!authoredLaidOut || nodes.length > authoredLastN + 60)) computeAuthoredSeats();
+      };
 
       // ── selection / highlight state ──
       let selKey: string | null = null;
@@ -2362,6 +2447,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // change into the lil-gui controllers when that panel happens to be up.
       const applyTuneKey = (key: keyof typeof TUNE): void => {
         if (key === 'sceneMode') applyMode();
+        if (key === 'layoutMix') { ensureAuthoredLayout(); applySeatBlend(); }
         const ctl = TUNE_SCHEMA.find((c) => c.key === key);
         if (ctl?.live === 'persist') persist();
         else refresh();
@@ -2582,7 +2668,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // World position is the seat put through the current curl (the shell
           // may be a dome, a chart, or a ball right now — new arrivals land
           // wherever their seat currently sits).
-          [n.cdx, n.cdy, n.cdz] = toDir(coordMap?.[n.id], i);
+          // Semantic seat is the base; authored + live seats start equal to it
+          // (a new star sits by meaning until an authored layout re-places it).
+          [n.sdx, n.sdy, n.sdz] = toDir(coordMap?.[n.id], i);
+          n.ldx = n.sdx; n.ldy = n.sdy; n.ldz = n.sdz;
+          n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz;
           n.cr0 = seatRadius(n.score);
           curlPos(n.cdx, n.cdy, n.cdz, n.cr0, n);
           posBuf[i * 3] = n.x; posBuf[i * 3 + 1] = n.y; posBuf[i * 3 + 2] = n.z;
@@ -2723,6 +2813,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         applyNodeAlpha();
         applyEdgeColor();
         syncBeamLabels();
+        // If the authored blend is engaged, re-lay it out over the full slice now
+        // that streaming is done (the burst pass earlier saw only a partial graph).
+        if (TUNE.layoutMix > 0) { authoredLaidOut = false; ensureAuthoredLayout(); applySeatBlend(); }
       };
       // The opening view. Called once, right after the first (salience-ranked)
       // page lands. A deep-link in the URL hash (urlstate.ts) overrides the

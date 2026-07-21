@@ -128,6 +128,11 @@ export const TUNE_DEFAULTS = {
   // orrery the whole set scales together with the globe. labelPx is the one
   // global size dial; the per-role mults (sel/hit/nbr/anchor/beam) grade it.
   labelPx: 17,
+  // LAYOUT blend (prototype): 0 = nodes seated by MEANING (the semantic
+  // embedding direction), 1 = seated by an authored-LINK force layout on the
+  // shell; in between, a per-node morph. Read live; drives a re-seat, not a
+  // re-grade. Excludes `similarTo` links (those are the semantic signal itself).
+  layoutMix: 0,
   // ZOOM feel + drag momentum. Zoom is ONE continuous axis — telescope (fov) in
   // [0,Z_DOME], un/furl (curl) beyond it — so the two halves get their OWN input
   // sensitivity: magnifying can be geared apart from unfurling (a gesture
@@ -164,6 +169,8 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
+  // 0 = meaning (semantic), 1 = authored-link force layout; the between morphs.
+  { key: 'layoutMix', group: 'layout', label: 'meaning ↔ links', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   // zoom feel + momentum — read live in the input handlers / tick.
   { key: 'zoomFov', group: 'zoom & drag', label: 'fov sens', min: 0.2, max: 4, step: 0.05, live: 'persist', quick: true },
   { key: 'zoomCurl', group: 'zoom & drag', label: 'unfurl sens', min: 0.2, max: 4, step: 0.05, live: 'persist', quick: true },
