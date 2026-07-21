@@ -291,6 +291,54 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
 }
 
 /**
+ * A WHOLE doc, assembled from its blocks. A `doc` fact holds only {title,summary}
+ * and a `doc-block` is one slice — so for either we read the doc's membership the
+ * same substrate-native way lit's own reader (loadDoc) does: one
+ * `workspace.edges({around, membership})` returns every member block with its
+ * content + placement.seq, already in narrative order. Sort by seq, concatenate,
+ * render one markdown body. No lit code, no iframe — the substrate does the join.
+ * Fails soft: a bad/empty read falls back to the fact's own body or summary.
+ */
+function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
+  const type = e._meta?.type;
+  // The parent doc key: a `doc` IS the doc; a `doc-block` points at its doc via a
+  // `doc:` tag (present on the block, so no extra edge read to resolve up).
+  const docKey = type === 'doc' || e.key.startsWith('doc:')
+    ? e.key
+    : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
+  const [md, setMd] = useState<string | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'fail'>('loading');
+  useEffect(() => {
+    if (!docKey) { setState('fail'); return; }
+    let live = true;
+    setState('loading');
+    setMd(null);
+    void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
+      .then((r) => {
+        if (!live) return;
+        const members = (r.ok ? (r.value as { members?: Array<{ value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
+        const text = members
+          .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: bodyText(m.value) }))
+          .sort((a, b) => a.seq - b.seq)
+          .map((m) => m.content)
+          .filter(Boolean)
+          .join('\n\n');
+        setMd(text);
+        setState(text ? 'ready' : 'fail');
+      })
+      .catch(() => { if (live) setState('fail'); });
+    return () => { live = false; };
+  }, [docKey]);
+  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
+  if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
+  // Assembly failed — the fact's own body (a block's content) or its summary.
+  const own = bodyText(e.value);
+  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} />;
+  const sum = strField(e.value, ['summary']);
+  return <span style={{ fontSize: '0.85rem', color: ink.text }}>{sum ?? factTitle(e)}</span>;
+}
+
+/**
  * A fact's inline body, from the type's declared default viewer: a built-in
  * `render` hint, or (when `embed` is allowed, e.g. a pinned single fact) the
  * cell's `embed` thumbnail — falling back to the heuristic text preview. Pure
@@ -301,6 +349,10 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * that the peek modal carries the full content.
  */
 export function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
+  // A doc (or a block of one) reads as the WHOLE assembled doc when fully open —
+  // the substrate joins membership+order; we just concatenate (see DocBody).
+  const t = e._meta?.type;
+  if (full && (t === 'doc' || t === 'doc-block')) return <DocBody e={e} />;
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
   // run it sandboxed (ADR-0041), the FieldsBody hint as the degrade-to placeholder
