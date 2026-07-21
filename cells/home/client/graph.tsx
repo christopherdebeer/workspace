@@ -214,6 +214,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // ── selection / highlight state ──
       let selKey: string | null = null;
       let nbr: Set<string> | null = null;
+      let nbrDist: Map<string, number> | null = null; // key → hop distance from selKey (1 = direct)
       let hiSet: Set<string> | null = null;
       // Ephemeral intent: unlike selection this never changes camera/focus or
       // persists into React state. It only says “this is what a click will hit”.
@@ -238,23 +239,33 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // hub's 2–3 hop shell from igniting the whole field (and blowing the label
       // budget). hops=1 iterates links once, identical to before.
       const NBR_CAP = 240;
-      const neighborsOf = (k: string): Set<string> => {
+      // BFS the neighbourhood, recording each node's HOP distance (1 = direct).
+      // The distance drives the edge fan's per-hop falloff (a 2-hop edge reads
+      // dimmer than a 1-hop spoke). hops=1 iterates links once, as before.
+      const neighborsOf = (k: string): Map<string, number> => {
         const hops = Math.max(1, Math.round(TUNE.neighborHops || 1));
-        const s = new Set<string>();
+        const dist = new Map<string, number>();
         let frontier: string[] = [k];
-        for (let h = 0; h < hops && frontier.length && s.size < NBR_CAP; h++) {
+        for (let h = 1; h <= hops && frontier.length && dist.size < NBR_CAP; h++) {
           const fset = new Set(frontier);
           const next: string[] = [];
           for (const l of links) {
             const a = idOf(l.source), b = idOf(l.target);
             if (a === b) continue;
-            if (fset.has(a) && b !== k && !s.has(b)) { s.add(b); next.push(b); }
-            if (fset.has(b) && a !== k && !s.has(a)) { s.add(a); next.push(a); }
-            if (s.size >= NBR_CAP) break;
+            if (fset.has(a) && b !== k && !dist.has(b)) { dist.set(b, h); next.push(b); }
+            if (fset.has(b) && a !== k && !dist.has(a)) { dist.set(a, h); next.push(a); }
+            if (dist.size >= NBR_CAP) break;
           }
           frontier = next;
         }
-        return s;
+        return dist;
+      };
+      // Set (or clear) the selection neighbourhood — both the flat set (DOI, edge
+      // membership) and the hop-distance map (edge falloff) stay in lockstep.
+      const setNbr = (k: string | null): void => {
+        if (!k) { nbr = null; nbrDist = null; return; }
+        nbrDist = neighborsOf(k);
+        nbr = new Set(nbrDist.keys());
       };
 
       // ── scene-mode palette (dusk = luminous dark field; paper = ink on a
@@ -547,18 +558,25 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // asked the graph about, visible even off the beam axis. A hit's whole
       // degree does NOT boost (that would re-paint the hairball).
       const eboostBuf = new Float32Array(caps.capE * 2);
-      const edgeBoostOf = (l: any): number => {
+      // The HOP LEVEL of a focus edge (1 = the star's own spokes, 2 = a link out
+      // in the second ring, …); 0 = not part of the fan. The accent fan is the
+      // whole selected NEIGHBOURHOOD, not just the star's spokes: an edge is in it
+      // if it touches the selection OR runs between two neighbourhood nodes. Its
+      // level is the deeper of its two endpoints, so the fan grades outward.
+      const edgeHopOf = (l: any): number => {
         const a = idOf(l.source), b = idOf(l.target);
-        // The accent fan is the whole selected NEIGHBOURHOOD, not just the star's
-        // own spokes: an edge lights if it touches the selection OR runs between
-        // two nodes both inside the neighbourhood. So raising `neighbour hops`
-        // visibly grows the lit structure (the induced subgraph), not only the
-        // first ring — the 2/3-hop edges were previously left at resting alpha.
-        if (selKey && (a === selKey || b === selKey)) return 1;
-        if (selKey && nbr && nbr.has(a) && nbr.has(b)) return 1;
+        if (selKey) {
+          const da = a === selKey ? 0 : (nbrDist?.get(a) ?? -1);
+          const db = b === selKey ? 0 : (nbrDist?.get(b) ?? -1);
+          if (da >= 0 && db >= 0) return Math.max(1, da, db);
+        }
         if (hiSet && hiSet.has(a) && hiSet.has(b)) return 1;
         return 0;
       };
+      // Boost (torch-bypass + flow) stays BINARY — every fan edge is fully "lit"
+      // (not depth-attenuated); the per-hop dimming rides the ALPHA instead, so a
+      // deep edge fades without also losing the accent's crispness.
+      const edgeBoostOf = (l: any): number => (edgeHopOf(l) > 0 ? 1 : 0);
       // Focus edges take the ACCENT — the same hue as the selection ring and
       // anchor label, so "this is the structure you asked about" is one visual
       // statement — at an alpha far above the resting bases (which exist to
@@ -572,7 +590,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const N = nodes.length;
         for (let i = 0; i < links.length; i++) {
           const l = links[i];
-          const bo = edgeBoostOf(l);
+          const hop = edgeHopOf(l);
+          const bo = hop > 0 ? 1 : 0;
           let r: number, g: number, b: number, al: number;
           if (bo > 0) {
             [r, g, b] = ACCENT_RGB;
@@ -585,7 +604,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             const farN = nodeById.get(farId);
             const farSal = farN ? 1 - (farN.rank ?? N) / Math.max(1, N) : 0.5;
             const relW = l.derived ? 0.8 : MEMBER_RELS.has(l.rel) ? 0.9 : 1; // authored assertions fullest
-            al = TUNE.focusEdgeAlpha * (0.4 + 0.6 * farSal) * relW;
+            // Per-hop falloff: each ring out is TUNE.hopFalloff as bright (0.5 →
+            // half). hop 1 = full. So the second ring reads as support, not a
+            // second starburst competing with the star's own spokes.
+            const hopFactor = Math.pow(TUNE.hopFalloff, Math.max(0, hop - 1));
+            al = TUNE.focusEdgeAlpha * (0.4 + 0.6 * farSal) * relW * hopFactor;
           } else {
             [r, g, b] = edgeRGB[i];
             al = edgeAlphaOf(links[i]);
@@ -1279,7 +1302,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       api.current = {
         select: (key: string | null, doFly = false) => {
           lastExternal.current = key;
-          selKey = key; nbr = key ? neighborsOf(key) : null;
+          selKey = key; setNbr(key);
           setHover(null);
           if (key) hiSet = null;
           applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
@@ -1321,7 +1344,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // like a selection pulls its neighbours, a search PULLS ITS HITS into
         // the scene (owner), so they light up as they hydrate rather than being
         // silently dropped for being off-scene.
-        hiSet = new Set(allKeys); selKey = null; nbr = null;
+        hiSet = new Set(allKeys); selKey = null; setNbr(null);
         showRing(null);
         applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         for (const k of allKeys) if (!nodeById.has(k)) void hydrateKey(k);
@@ -2314,7 +2337,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // Selection reach is a tunable now, so re-derive the neighbourhood and
             // the relation-label fan on any tuner change (neighbour hops / rel-
             // label cap apply live, not only on the next selection).
-            if (selKey) nbr = neighborsOf(selKey);
+            if (selKey) setNbr(selKey);
             applyNodeAlpha();
             applyEdgeColor();
             syncEdgeLabels();
@@ -2624,7 +2647,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (hoverKey && remove.has(hoverKey)) setHover(null);
         if (selKey && remove.has(selKey)) {
           selKey = null;
-          nbr = null;
+          setNbr(null);
           showRing(null);
           showCrumb(null);
           selectRef.current(null);
@@ -2687,7 +2710,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             .filter((e) => !e.from.startsWith('_') && !e.to.startsWith('_'));
           if (edges.length) appendEdges(edges);
           if ((fresh.length || edges.length) && selKey === key) {
-            nbr = neighborsOf(key);
+            setNbr(key);
             applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
           }
         } catch {

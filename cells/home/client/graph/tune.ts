@@ -56,6 +56,10 @@ export const TUNE_DEFAULTS = {
   // fan — how many relation labels ride the selected node's edges at once (the
   // old hard-coded 4; a densely-linked node wants more).
   neighborHops: 1, edgeLabelCap: 4,
+  // Each ring of the selection fan is this fraction as bright as the one inside
+  // it (0.5 = a 2-hop edge reads half a 1-hop spoke). Only matters when
+  // neighborHops > 1.
+  hopFalloff: 0.5,
   // edges (owner re-grade 2026-07-12: brought back up from "all but erased" —
   // the resting lattice now reads at rest, authored edges especially (0.24,
   // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
@@ -191,6 +195,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3, quick: true },
   { key: 'nbrBoost', group: 'nodes', min: 0, max: 1 },
   { key: 'neighborHops', group: 'nodes', label: 'neighbour hops', min: 1, max: 3, step: 1 },
+  { key: 'hopFalloff', group: 'nodes', label: 'hop falloff', min: 0.1, max: 1 },
   { key: 'boostSizeGain', group: 'nodes', min: 0, max: 1.5 },
   { key: 'starSpike', group: 'nodes', min: 0, max: 1 },
   { key: 'edgeSimilar', group: 'edges', min: 0, max: 0.3, step: 0.005 },
