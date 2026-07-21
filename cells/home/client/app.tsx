@@ -171,15 +171,21 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // overlay fades to 0 over ~0.9s (revealing the night graph beneath at full
   // strength), THEN unmounts. Not just an opacity pop — the sky washes away.
   const [leaving, setLeaving] = useState(false);
+  // How far the overlay is peeled DOWN on over-scroll-up (0 = rest). Declared up
+  // here so toLanding can snap it back synchronously with the re-mount.
+  const [pull, setPull] = useState(0);
   const enter = useCallback(() => {
     try { sessionStorage.setItem('parc.home.entered', '1'); } catch { /* private mode */ }
     setLeaving(true);
     setTimeout(() => setEntered(true), 900);
   }, []);
   // Return to the trailhead from the graph (wordmark click). Re-mounts the
-  // landing overlay + dusk sky over the still-live graph and clears the flag.
+  // landing overlay + dusk sky over the still-live graph and clears the flag —
+  // snapping the peel back to rest in the SAME batch so it never re-mounts mid-peel
+  // (a committed/partial pull was surviving the round-trip and staying peeled).
   const toLanding = useCallback(() => {
     try { sessionStorage.removeItem('parc.home.entered'); } catch { /* private mode */ }
+    setPull(0);
     setLeaving(false);
     setEntered(false);
   }, []);
@@ -193,12 +199,16 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // (the overlay owns input); it becomes interactive only once you've entered.
   // Two clean modes, no tangle of graph-spin ⇄ scroll ⇄ zoom.
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
-  const [pull, setPull] = useState(0);           // px the overlay is peeled DOWN (0 = rest)
   const pullRef = React.useRef(0); pullRef.current = pull;
   const PULL_COMMIT = 140;                        // peel past this → enter
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !authed || entered || leaving) return;
+    // Snap back to rest whenever the trailhead (re)mounts — otherwise a committed
+    // peel survives entering and is still showing when you step back here (and any
+    // stale partial/aborted pull is cleared too). This effect only runs while the
+    // trailhead is live and not mid-leave, so it never fires during a real pull.
+    setPull(0);
     const CAP = PULL_COMMIT * 1.4;
     const atTop = (): boolean => el.scrollTop <= 0;
     let touchY: number | null = null;
