@@ -211,20 +211,26 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     const touchMove = (e: TouchEvent): void => {
       const y = e.touches[0]?.clientY;
       if (touchY === null || y === undefined || lastTouchY === null) return;
-      const dyTotal = touchY - y;   // >0 = finger moved UP (pulling into the sky)
-      const dyStep = lastTouchY - y; // incremental; >0 = up this frame
+      // Match the wheel handler's metaphor: the SKY is up, so entering it is an
+      // OVER-SCROLL UP — at the top, a finger dragging DOWN (content follows the
+      // finger down, revealing more sky above) is the pull-to-enter. A finger
+      // dragging UP is the ordinary "scroll down to the content below the hero"
+      // gesture and must NOT enter (that was the bug: swipe-up fired the enter,
+      // so you could never reach the content below).
+      const downTotal = y - touchY;    // >0 = finger dragged DOWN from the start (into the sky)
+      const dyStep = y - lastTouchY;   // >0 = finger down this frame
       lastTouchY = y;
-      if (dyTotal > 0 && atTop() && pullRef.current === 0) {
-        // At the top, pulling UP → elastic lift (release-to-enter).
+      if (downTotal > 0 && atTop() && pullRef.current === 0) {
+        // At the top, dragging DOWN → elastic lift into the sky (release-to-enter).
         e.preventDefault();
-        setPull(Math.min(PULL_COMMIT * 1.4, dyTotal * 0.8));
+        setPull(Math.min(PULL_COMMIT * 1.4, downTotal * 0.8));
       } else if (pullRef.current > 0) {
-        // Continue/relax the pull as the finger moves.
+        // Continue (finger down) / relax (finger up) the pull.
         e.preventDefault();
         setPull((p) => Math.max(0, Math.min(PULL_COMMIT * 1.4, p + dyStep * 0.8)));
       } else {
-        // Otherwise scroll the (pointer-events:none) container manually.
-        el.scrollTop += dyStep;
+        // Finger up (dyStep<0) → scrollTop increases → scroll DOWN to the content.
+        el.scrollTop -= dyStep;
       }
     };
     const touchEnd = (): void => { touchY = null; commitOrSpring(); };
