@@ -309,18 +309,18 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           >
             <Wordmark light />
           </button>
-          {entered && (
-            <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-              {session.error ? <span title={session.error} role="status" style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.68rem' }}>session warning</span> : null}
-              <button
-                onClick={() => { try { sessionStorage.removeItem('parc.home.entered'); } catch {} session.signOut(); }}
-                title={session.user ? `signed in as ${session.user}` : 'sign out'}
-                style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
-              >
-                sign out
-              </button>
-            </div>
-          )}
+          {/* Sign-out sits top-right on BOTH the trailhead and the graph (consistent
+              chrome) — auth out is always here, never a CTA in the hero. */}
+          <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+            {session.error ? <span title={session.error} role="status" style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.68rem' }}>session warning</span> : null}
+            <button
+              onClick={() => { try { sessionStorage.removeItem('parc.home.entered'); } catch {} session.signOut(); }}
+              title={session.user ? `signed in as ${session.user}` : 'sign out'}
+              style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
+            >
+              sign out
+            </button>
+          </div>
         </div>
       </GraphBoundary>
       {/* The dusk-sky wash sits DIRECTLY over the graph canvas (sibling, not

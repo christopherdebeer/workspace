@@ -329,7 +329,7 @@ const READING_TONE = {
  * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
  * free (it just takes the tone's text colour).
  */
-export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false }: {
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false }: {
   e: ListEntry;
   tone?: 'light' | 'dark';
   onImage?: boolean;
@@ -337,6 +337,8 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
    *  when a heading already sits above it (e.g. the hero shows the title). */
   head?: boolean;
   showBody?: boolean;
+  /** Tight contexts (the palette row): smaller title, single-line ellipsis. */
+  compact?: boolean;
 }): React.JSX.Element {
   const c = READING_TONE[tone];
   const shadow = onImage ? '0 1px 12px rgba(8,29,36,0.6)' : undefined;
@@ -348,16 +350,19 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
   const when = relTime(m?.updatedAt);
   if (when) meta.push(when);
   const open = factHref(e);
+  const clip: React.CSSProperties = compact ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : { overflowWrap: 'anywhere' };
   return (
-    <div style={{ display: 'grid', gap: '0.4rem', color: c.text, textShadow: shadow, minWidth: 0 }}>
+    <div style={{ display: 'grid', gap: compact ? '0.12rem' : '0.4rem', color: c.text, textShadow: shadow, minWidth: 0 }}>
       {head ? (
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.55rem', minWidth: 0 }}>
-          <span aria-hidden style={{ fontSize: '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span>
-          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text }}>{factTitle(e)}</h2>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: compact ? '0.4rem' : '0.55rem', minWidth: 0 }}>
+          <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span>
+          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}>{factTitle(e)}</h2>
         </div>
       ) : null}
       {head && meta.length ? (
-        <div style={{ fontFamily: theme.mono, fontSize: '0.72rem', color: c.dim, overflowWrap: 'anywhere' }}>{meta.join('  ·  ')}</div>
+        // Over the painting the muted `dim` vanishes — use a bright cream (the
+        // inherited shadow carries the legibility), on paper/ink keep the dim.
+        <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
       {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full /></div> : null}
       {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}

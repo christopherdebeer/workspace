@@ -15,7 +15,7 @@
  */
 import * as React from 'react';
 import { Console } from './console';
-import { typeIcon, factTitle, factHref, factEdit, FactDetail, InlineFactEditor, type ListEntry } from './facts';
+import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
 
@@ -100,14 +100,20 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   return (
     <div style={{ display: 'grid', gap: '0.4rem', padding: '0.55rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-        <span aria-hidden>{typeIcon(e)}</span>
-        <button
+        {/* The SAME reading the trailhead shows, in dark tone (consistency): icon
+            + title + metadata. Clicking it toggles the body (a div, not a button,
+            so the reading's h2/meta nest legally). */}
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setShowBody((b) => !b)}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setShowBody((b) => !b); } }}
           title={factKey}
-          style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.8rem', cursor: 'pointer', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}
+          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
         >
-          {entry ? factTitle(e) : factKey} <span style={{ color: ink.dim }}>{showBody ? '▾' : '▸'}</span>
-        </button>
+          <FactReading e={e} tone="dark" compact />
+        </div>
+        <span aria-hidden style={{ color: ink.dim, flexShrink: 0, fontSize: '0.8rem' }}>{showBody ? '▾' : '▸'}</span>
         {/* Actions live on the panel FRAME (where peek used to be), not inside
             the scrolling body — owner feedback. */}
         {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}

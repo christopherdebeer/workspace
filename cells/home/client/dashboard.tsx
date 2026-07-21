@@ -230,13 +230,19 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
                 </p>
               </>
             )}
-            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
-              <div style={{ ...island, width: 'min(260px, 100%)' }}>
-                <Button onClick={session.signIn}>{authed ? 'Step into the sky' : 'Sign in with passkey'}</Button>
+            {/* The prominent CTA is reserved for AUTH IN. Signed in, entering the
+                sky is a gesture (pull down), not a button — so no CTA here. */}
+            {!authed ? (
+              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                <div style={{ ...island, width: 'min(260px, 100%)' }}>
+                  <Button onClick={session.signIn}>Sign in with passkey</Button>
+                </div>
               </div>
-            </div>
-            <span style={{ color: theme.cream, opacity: 0.75, fontSize: '0.75rem', textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
-              {authed ? (selectedKey ? 'Step in to open it — or scroll to read below.' : 'Pull up into the sky — or scroll to look around.') : 'New here? The same button registers a passkey.'}
+            ) : null}
+            <span style={{ color: theme.cream, opacity: 0.8, fontSize: '0.78rem', marginTop: authed ? '0.4rem' : 0, textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
+              {authed
+                ? `Pull down to enter the sky — scroll down to ${selectedKey ? 'read' : 'learn more'}.`
+                : 'New here? The same button registers a passkey.'}
             </span>
             {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>
