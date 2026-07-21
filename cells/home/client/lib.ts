@@ -45,6 +45,39 @@ async function timedAuthFetch(path: string, init: RequestInit, timeoutMs = 20000
   }
 }
 
+// ── the signed-out read credential (the @guest token) ──────────────────────
+// A long-lived, READ-ONLY token for the `@guest` system user, injected into the
+// anonymous boot by the server (home reads `_config/guest-token` over its own
+// IAM slice-read). `@guest` holds no private grants, so its view is EXACTLY the
+// owner's public slice — the token is public-safe by construction (a leak only
+// ever exposes what's already shared to `public`). We attach it ONLY to data
+// reads (mcpFetch below), never to identity resolution: whoami stays on
+// `authFetch`, so a signed-out visitor is still reported signed-out and the
+// landing/dashboard fork is unchanged — the guest token just makes the graph,
+// search, and doc-reads return live public content instead of 401.
+const MCP_ENDPOINT = 'https://parc.land/mcp';
+let guestToken: string | null = null;
+export function setGuestToken(token: string | null | undefined): void {
+  guestToken = token && typeof token === 'string' ? token : null;
+}
+/** The `/mcp` transport for DATA reads/acts: the session token when signed in,
+ *  else the public `@guest` bearer if present, else the (token-less) authFetch
+ *  path that 401s exactly as before. */
+async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response> {
+  if (isAuthed() || !guestToken) return timedAuthFetch('/mcp', init, timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(MCP_ENDPOINT, {
+      ...init,
+      headers: { ...(init.headers as Record<string, string>), authorization: `Bearer ${guestToken}` },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function decodeContent(content: Array<{ type?: string; text?: string; [key: string]: unknown }> | undefined): unknown {
   if (!content?.length) return null;
   const decoded = content.map((part) => {
@@ -166,7 +199,7 @@ export async function mcpCall(verb: 'read' | 'act', target: string, input?: unkn
   const requestId = nextRpcId();
   if (!target || target.length > 256) return { ok: false, value: 'invalid capability target' };
   try {
-    const res = await timedAuthFetch('/mcp', {
+    const res = await mcpFetch({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -207,7 +240,7 @@ export async function mcpCall(verb: 'read' | 'act', target: string, input?: unkn
 export async function mcpResourceRead(uri: string): Promise<string | null> {
   if (!uri.startsWith('ui://') || uri.length > 1024 || /[\u0000-\u0020]/.test(uri)) return null;
   try {
-    const res = await timedAuthFetch('/mcp', {
+    const res = await mcpFetch({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: nextRpcId(), method: 'resources/read', params: { uri } }),

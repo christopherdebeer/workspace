@@ -128,6 +128,11 @@ export interface Boot {
    *  visitors (see cells/home/index.ts). The signed-out trailhead shows these
    *  instead of the generic pitch — a real read-only slice of the substrate. */
   featured?: FeaturedDoc[];
+  /** The long-lived READ-ONLY `@guest` token, injected only for anonymous
+   *  visitors. The client attaches it to data reads (never identity) so the
+   *  signed-out graph/search/doc-reads return live public content. Public-safe:
+   *  `@guest` can only ever see the owner's public-granted slice. */
+  guestToken?: string;
 }
 
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {

@@ -129,6 +129,24 @@ async function loadFeaturedPublic(): Promise<FeaturedDoc[]> {
   }
 }
 
+/** The long-lived READ-ONLY `@guest` token the owner minted (stored at
+ *  `_config/guest-token`). We read it over the SAME IAM slice-read used above
+ *  (never emitted as public content — it's a credential, injected deliberately)
+ *  and hand it to the anonymous client so its live data reads run as `@guest`.
+ *  `@guest` holds only public grants, so the token can only ever surface the
+ *  owner's public slice — public-safe by construction, no private-leak path. */
+async function loadGuestToken(): Promise<string | undefined> {
+  try {
+    const facts = await queryPrefix('_config/guest-token');
+    const f = facts.find((x) => x.key === '_config/guest-token');
+    const token = (f?.value as { token?: unknown } | undefined)?.token;
+    return typeof token === 'string' && token ? token : undefined;
+  } catch (err) {
+    console.error('[home guest-token]', err);
+    return undefined;
+  }
+}
+
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 
 const BASE_SECURITY_HEADERS: Record<string, string> = {
@@ -212,9 +230,14 @@ export const handler = async (event: {
         error: null,
       };
       // Anonymous visitors get the curated PUBLIC slice (tokenless owner-slice
-      // read, `_public/`-filtered); signed-in visitors load their own live data.
-      const featured = authed ? [] : await loadFeaturedPublic();
+      // read, `_public/`-filtered) AND the public @guest read token, so the
+      // signed-out client can go live (graph/search/doc reads) as `@guest`.
+      // Signed-in visitors load their own live data with their own session.
+      let featured: FeaturedDoc[] = [];
+      let guestToken: string | undefined;
+      if (!authed) [featured, guestToken] = await Promise.all([loadFeaturedPublic(), loadGuestToken()]);
       const boot = buildBoot(vm, event.ssrData, featured);
+      if (guestToken) boot.guestToken = guestToken;
       installServerBridge(event.headers?.['x-forwarded-host']);
       const inner = renderToString(createElement(App, { initial: boot }));
       const state = JSON.stringify(boot).replace(/</g, '\\u003c');
