@@ -189,7 +189,7 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, selectedKey, selectedNode }: {
+export function Landing({ session, onExplore, authed, selectedKey, selectedNode, featured }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
