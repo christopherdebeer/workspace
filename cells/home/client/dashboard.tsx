@@ -8,64 +8,30 @@ import * as React from 'react';
 import { Card, Heading, Badge, Button, theme } from '@parc/ui';
 import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
-import { FactBody, factTitle, factHref, typeIcon, type ListEntry } from './facts';
-import { ink } from './ink';
+import { FactReading, type ListEntry } from './facts';
 
 const { useState, useEffect } = React;
 
-/**
- * The trailhead's "ground below the horizon" when a star is SELECTED: a calm
- * reading of that fact — its name, kind, and body, with one `open ↗`. Rendered
- * as a dark "night card" on the day-paper ground (FactBody is ink-styled, and it
- * reads as the selected star's content brought down to read). Reached when a
- * deep-link carries a selection, or when you step back to the trailhead from the
- * graph with something selected. Meta/edges are a deliberate LATER aside — this
- * view stays a quiet read. Default (nothing selected) is the pitch below.
- */
-function LandingReading({ factKey }: { factKey: string }): React.JSX.Element {
+/** Peek a fact by key (null when nothing's selected). The trailhead reads the
+ *  SELECTED star this way, to show it in place of the pitch — hero head, ground
+ *  body — via the shared, mode-aware FactReading. */
+function useFactPeek(key: string | null | undefined): ListEntry | null {
   const [entry, setEntry] = useState<ListEntry | null>(null);
-  const [state, setState] = useState<'loading' | 'ready' | 'missing'>('loading');
   useEffect(() => {
+    if (!key) { setEntry(null); return; }
     let live = true;
     setEntry(null);
-    setState('loading');
-    void mcpCall('read', 'workspace.peek', { key: factKey })
+    void mcpCall('read', 'workspace.peek', { key })
       .then((r) => {
         if (!live) return;
         const v = r.ok ? (r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null) : null;
-        if (v) { setEntry({ key: factKey, value: v.value, _meta: v._meta }); setState('ready'); }
-        else setState('missing');
+        setEntry(v ? { key, value: v.value, _meta: v._meta } : null);
       })
-      .catch(() => { if (live) setState('missing'); });
+      .catch(() => { if (live) setEntry(null); });
     return () => { live = false; };
-  }, [factKey]);
-  const open = entry ? factHref(entry) : null;
-  return (
-    <div style={{
-      width: '100%', maxWidth: 680, margin: '0 auto',
-      background: ink.bg, border: `1px solid ${ink.line}`, borderRadius: 14,
-      boxShadow: '0 14px 44px rgba(0,0,0,0.35)', color: ink.text,
-      padding: 'clamp(1rem, 4vw, 1.6rem)', display: 'grid', gap: '0.75rem',
-    }}>
-      {state === 'loading' ? (
-        <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.8rem' }}>reading…</span>
-      ) : !entry ? (
-        <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.78rem', wordBreak: 'break-all' }}>{factKey} — not found</span>
-      ) : (
-        <>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.55rem', minWidth: 0 }}>
-            <span aria-hidden style={{ fontSize: '1.1rem', flexShrink: 0 }}>{typeIcon(entry)}</span>
-            <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: 'clamp(1.1rem, 3.6vw, 1.5rem)', lineHeight: 1.25, color: ink.text }}>{factTitle(entry)}</h2>
-          </div>
-          {entry._meta?.type ? <div style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.68rem' }}>{entry._meta.type}</div> : null}
-          <div style={{ fontSize: '0.92rem', lineHeight: 1.6 }}><FactBody e={entry} full /></div>
-          {open ? (
-            <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: ink.accent, fontFamily: ink.mono, fontSize: '0.82rem', textDecoration: 'none', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.8rem' }}>open ↗</a>
-          ) : null}
-        </>
-      )}
-    </div>
-  );
+  }, [key]);
+  return entry;
+}
 }
 
 // ─── the scenery (the painted assets) ──────────────────────────────
@@ -225,6 +191,9 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
   // bare hero fall through to the live graph and spin it) — only the buttons,
   // links, and cards re-enable pointer events for themselves.
   const island: React.CSSProperties = { pointerEvents: 'auto' };
+  // The SELECTED star (deep-link or stepped-back): its head reads over the hero
+  // in place of the pitch, its body as paper on the ground below.
+  const reading = useFactPeek(selectedKey);
   return (
     <div style={{ position: 'relative', width: '100%' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
@@ -242,23 +211,33 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
         <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
         <div style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem' }}>
           <div style={{ display: 'grid', gap: '0.6rem' }}>
-            <h1 style={{
-              margin: 0, fontFamily: theme.serif, fontWeight: 600,
-              fontSize: 'clamp(1.3rem, 4vw, 1.9rem)', color: theme.cream,
-              maxWidth: '20ch', lineHeight: 1.25, textShadow: '0 1px 12px rgba(8,29,36,0.55)',
-            }}>
-              a personal substrate for exploring the world
-            </h1>
-            <p style={{ margin: 0, color: theme.cream, opacity: 0.9, maxWidth: '40ch', fontSize: '0.9rem', textShadow: '0 1px 8px rgba(8,29,36,0.55)' }}>
-              Your home for notes, plans, and discoveries.
-            </p>
+            {reading ? (
+              // The selected star, IN PLACE of the pitch — title + metadata, over
+              // the painting (mode-aware FactReading, dark tone + image shadow).
+              <FactReading e={reading} tone="dark" onImage />
+            ) : selectedKey ? (
+              <span style={{ color: theme.cream, opacity: 0.8, fontFamily: theme.mono, fontSize: '0.85rem', textShadow: '0 1px 8px rgba(8,29,36,0.55)' }}>reading…</span>
+            ) : (
+              <>
+                <h1 style={{
+                  margin: 0, fontFamily: theme.serif, fontWeight: 600,
+                  fontSize: 'clamp(1.3rem, 4vw, 1.9rem)', color: theme.cream,
+                  maxWidth: '20ch', lineHeight: 1.25, textShadow: '0 1px 12px rgba(8,29,36,0.55)',
+                }}>
+                  a personal substrate for exploring the world
+                </h1>
+                <p style={{ margin: 0, color: theme.cream, opacity: 0.9, maxWidth: '40ch', fontSize: '0.9rem', textShadow: '0 1px 8px rgba(8,29,36,0.55)' }}>
+                  Your home for notes, plans, and discoveries.
+                </p>
+              </>
+            )}
             <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
               <div style={{ ...island, width: 'min(260px, 100%)' }}>
                 <Button onClick={session.signIn}>{authed ? 'Step into the sky' : 'Sign in with passkey'}</Button>
               </div>
             </div>
             <span style={{ color: theme.cream, opacity: 0.75, fontSize: '0.75rem', textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
-              {authed ? 'Pull up into the sky — or scroll to look around.' : 'New here? The same button registers a passkey.'}
+              {authed ? (selectedKey ? 'Step in to open it — or scroll to read below.' : 'Pull up into the sky — or scroll to look around.') : 'New here? The same button registers a passkey.'}
             </span>
             {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>
@@ -279,8 +258,12 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
         background: theme.bg, // opaque day paper — the ground below the horizon
       }}>
         {selectedKey ? (
-          <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>
-            <LandingReading factKey={selectedKey} />
+          // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
+          // the head already reads in the hero above, so body-only here.
+          <div style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
+            {reading ? <FactReading e={reading} tone="light" head={false} showBody /> : (
+              <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.8rem' }}>reading…</span>
+            )}
           </div>
         ) : (
         <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>

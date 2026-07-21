@@ -299,6 +299,72 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   ) : null;
 }
 
+// A short relative time for the metadata line ("3d ago").
+function relTime(iso?: string): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const s = (Date.now() - t) / 1000;
+  if (s < 45) return 'just now';
+  const m = s / 60; if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m / 60; if (h < 24) return `${Math.floor(h)}h ago`;
+  const d = h / 24; if (d < 30) return `${Math.floor(d)}d ago`;
+  const mo = d / 30; if (mo < 12) return `${Math.floor(mo)}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+// Surface tones — the SAME reading rendered on paper (the cream trailhead ground)
+// or on ink (the dark palette field). Only colours differ; layout is one system.
+const READING_TONE = {
+  light: { text: theme.text, dim: theme.dim, accent: theme.accent },
+  dark: { text: ink.text, dim: ink.dim, accent: ink.accent },
+} as const;
+
+/**
+ * A mode-aware reading of ONE fact — icon, title, and some metadata — as FLAT
+ * text (paper, NOT a card; cards are for listings/query results). `tone` picks
+ * the surface it sits on: 'light' = ink on the cream ground (trailhead), 'dark'
+ * = light on the ink field (palette), so the two read as one system. `onImage`
+ * adds a legibility shadow for text over the painted hero. With `showBody`, the
+ * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
+ * free (it just takes the tone's text colour).
+ */
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false }: {
+  e: ListEntry;
+  tone?: 'light' | 'dark';
+  onImage?: boolean;
+  /** The icon + title + metadata line (default). Turn off for a body-only read
+   *  when a heading already sits above it (e.g. the hero shows the title). */
+  head?: boolean;
+  showBody?: boolean;
+}): React.JSX.Element {
+  const c = READING_TONE[tone];
+  const shadow = onImage ? '0 1px 12px rgba(8,29,36,0.6)' : undefined;
+  const m = e._meta;
+  const meta: string[] = [];
+  if (m?.type) meta.push(m.type);
+  if (m?.tags?.length) meta.push(...m.tags.slice(0, 4).map((t) => '#' + t));
+  if (m?.via) meta.push('via ' + m.via);
+  const when = relTime(m?.updatedAt);
+  if (when) meta.push(when);
+  const open = factHref(e);
+  return (
+    <div style={{ display: 'grid', gap: '0.4rem', color: c.text, textShadow: shadow, minWidth: 0 }}>
+      {head ? (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.55rem', minWidth: 0 }}>
+          <span aria-hidden style={{ fontSize: '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span>
+          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text }}>{factTitle(e)}</h2>
+        </div>
+      ) : null}
+      {head && meta.length ? (
+        <div style={{ fontFamily: theme.mono, fontSize: '0.72rem', color: c.dim, overflowWrap: 'anywhere' }}>{meta.join('  ·  ')}</div>
+      ) : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full /></div> : null}
+      {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
+    </div>
+  );
+}
+
 export interface Edge {
   from: string;
   rel: string;
