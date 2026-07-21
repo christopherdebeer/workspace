@@ -99,19 +99,25 @@ interface GraphReach {
   paused: boolean;
 }
 
-function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce }: {
+function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, preview = false, heroHeight }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   visible: number;
   onReach: (reach: GraphReach) => void;
   revealNonce: number;
   vantageNonce: number;
+  preview?: boolean;
+  heroHeight?: string;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
   const reachRef = useRef(onReach);
   reachRef.current = onReach;
+  // Live-updated flag the input closures read (mirrors selectRef) — so toggling
+  // preview never re-runs the mount effect. Preview gates zoom/curl only.
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
   const api = useRef<{
     select: (key: string | null, fly?: boolean) => void;
     setVisible: (f: number) => void;
@@ -1267,6 +1273,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // curl. Spread to magnify, pinch to unfurl the sky into the chart and
         // on out to the held globe — a single continuous motion.
         if (pointers.size >= 2) {
+          if (previewRef.current) return; // preview: no zoom/curl — spin + tap-select only
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
           // Accumulate incrementally (Σ log(prev/cur) = log(dist0/now)), so the
@@ -1309,6 +1316,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // Wheel drives the same one zoom axis, eased: scroll forward magnifies
       // (telescope); scroll back unfurls — dome → chart → globe, no seams.
       const onWheel = (e: WheelEvent): void => {
+        // Preview (trailhead): let wheel through so the landing page scrolls —
+        // no zoom/curl, no preventDefault (the graph is the sky, not the workspace).
+        if (previewRef.current) return;
         e.preventDefault();
         zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + e.deltaY * WHEEL_BASE * zoomGain(zoomZT)));
         lastInput = performance.now();
@@ -3051,12 +3061,23 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           React must never render children into it, or the two reconcilers
           fight over the same subtree. No loading pill: the graph-controls bar
           already reports charting state (owner, 5fe59d7). */}
-      <div ref={host} style={{ position: 'fixed', inset: 0, background: ink.sceneBg, overflow: 'hidden' }} />
+      {/* On the landing (heroHeight set) the host occupies only the hero band,
+          so the graph is the sky above the fold and the content below is solid
+          ground with nothing live behind it. Entered, it fills the viewport. */}
+      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden' }} />
     </>
   );
 }
 
-export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | null; onSelect: (n: GraphNode | null) => void }): React.JSX.Element {
+export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }: {
+  selectedKey: string | null;
+  onSelect: (n: GraphNode | null) => void;
+  /** Trailhead backdrop: gate zoom/curl (spin + tap-select stay live). */
+  preview?: boolean;
+  /** When set (the landing), the graph host occupies only this height (the hero
+   *  band) instead of the full viewport, so the content below is solid ground. */
+  heroHeight?: string;
+}): React.JSX.Element {
   // Two independent ideas: FOCUS filters what is already charted; REACH pages
   // more of the substrate into the chart. Keeping both visible prevents a
   // salience filter from masquerading as a data boundary.
@@ -3090,6 +3111,8 @@ export function FullGraph({ selectedKey, onSelect }: { selectedKey: string | nul
         onReach={setReach}
         revealNonce={revealNonce}
         vantageNonce={vantageNonce}
+        preview={preview}
+        heroHeight={heroHeight}
       />
       <section aria-label="Graph controls" style={bar}>
         <span style={{ color: ink.dim }}>focus</span>

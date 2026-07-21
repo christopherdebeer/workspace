@@ -111,13 +111,22 @@ export const DEFAULT_SKY = 'linear-gradient(rgb(26, 39, 64) 0%, rgb(58, 74, 107)
  * the daytime sky. `fade` drives the day→night dissolve (1 = full dusk, 0 = clear
  * night). Tunable live via window.__skyGradient.
  */
-export function SkyGradient({ fade = 1 }: { fade?: number }): React.JSX.Element {
+/** The hero band height — the graph + sky occupy only this on the landing, so
+ *  the content below sits on solid ground (nothing live behind it). Kept in
+ *  sync with the Hero section's minHeight. */
+export const HERO_VH = '66.67svh';
+export function SkyGradient({ fade = 1, heroOnly = false }: { fade?: number; heroOnly?: boolean }): React.JSX.Element {
   const g = (typeof window !== 'undefined' && (window as unknown as { __skyGradient?: string }).__skyGradient) || DEFAULT_SKY;
   return (
     <div
+      className='SkyGradient'
       aria-hidden
       style={{
-        position: 'fixed', inset: 0, zIndex: 1, pointerEvents: 'none',
+        // On the landing the wash covers only the hero band (matches the graph);
+        // entered, it's full-viewport (heroOnly=false) as the graph fills the page.
+        position: 'fixed', top: 0, left: 0, right: 0,
+        height: heroOnly ? HERO_VH : '100%',
+        zIndex: 1, pointerEvents: 'none',
         background: g,
         mixBlendMode: 'screen',
         opacity: fade,
@@ -222,7 +231,7 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
   // entry so the head is instant while the body streams in.
   const reading = peeked ?? nodeEntry;
   return (
-    <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
       <section className="Hero" style={{
         // ~2/3 viewport, not full-screen: the top of the content below sits
@@ -232,11 +241,13 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
         padding: 'clamp(1rem, 3vw, 2rem)',
         // Lifted off the bottom now that supplementary content lives below the
         // hero — the pitch sits over the valley/treeline, not the frame edge.
-        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10vh)',
+        //paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10vh)',
+        paddingBottom: 0,
       }}>
         {/* Painted landscape, pinned to this first screen only */}
         <div className='HeroLandscape'style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
-        <div className='HeroContent' style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem' }}>
+        <div className='HeroContent' style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem', pointerEvents: 'auto', paddingBottom: '11vh',
+    paddingTop: '3em' }}>
           <div style={{ display: 'grid', gap: '0.6rem' }}>
             {reading ? (
               // The selected star, IN PLACE of the pitch — title + metadata, over
@@ -290,6 +301,7 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
         gap: '1.4rem',
         flexGrow: 1,
         background: theme.bg, // opaque day paper — the ground below the horizon
+        pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
       }}>
         {selectedKey ? (
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —

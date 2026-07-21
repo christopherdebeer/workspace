@@ -15,7 +15,7 @@
 import * as React from 'react';
 import { Page, theme, type TypeDecl } from '@parc/ui';
 import { useAuth, type Session } from './lib';
-import { Landing, Wordmark, SkyGradient } from './dashboard';
+import { Landing, Wordmark, SkyGradient, HERO_VH } from './dashboard';
 import { FullGraph, type GraphNode } from './graph';
 import { Palette } from './palette';
 import { SkyBackdrop } from './sky';
@@ -305,12 +305,12 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           </div>
         )}
       >
-        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} />
+        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={false} heroHeight={!entered && !leaving ? HERO_VH : undefined} />
         {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
             trailhead. Sign-out + session chrome only once entered. */}
-        <div style={{ position: 'fixed', top: 'max(10px, env(safe-area-inset-top))', left: 12, right: 12, zIndex: 30, pointerEvents: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+        <div className="TopBar" style={{ position: 'fixed', top: 'max(10px, env(safe-area-inset-top))', left: 12, right: 12, zIndex: 30, pointerEvents: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
           <button
             onClick={entered ? toLanding : undefined}
             title={entered ? 'Back to the trailhead' : undefined}
@@ -340,7 +340,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {/* The dusk-sky wash sits DIRECTLY over the graph canvas (sibling, not
           inside the overlay) so mix-blend-mode:screen tints the dark sky while
           the live stars punch through. Fades to clear night as you enter. */}
-      {!entered && <SkyGradient fade={leaving ? 0 : 1} />}
+      {!entered && <SkyGradient fade={leaving ? 0 : 1} heroOnly={!leaving} />}
       {/* The landing overlay (painted valley + content). A NATIVELY-scrolling
           container that OWNS input while it's up (pointer-events:auto), so the
           graph beneath is a non-interactive backdrop — no drag/scroll/zoom tangle.
@@ -358,7 +358,13 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             overflowX: 'hidden',
             overscrollBehavior: 'contain',
             WebkitOverflowScrolling: 'touch',
-            pointerEvents: 'auto',
+            // ISLANDS MODEL: the overlay chain is pointer-transparent so drags on
+            // the bare sky fall through to the live graph (spin + tap-select);
+            // only the content islands (HeroContent, Content) + top-bar re-enable
+            // pointer events. Scroll/pull still work — wheel/touch bind to this
+            // element's listeners regardless of pointer-events, and gestures over
+            // the content islands bubble here.
+            pointerEvents: 'none',
             opacity: leaving ? 0 : 1,
             transform: pull ? `translateY(${pull}px)` : undefined,
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
