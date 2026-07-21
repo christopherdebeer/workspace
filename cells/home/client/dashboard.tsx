@@ -9,25 +9,38 @@ import { Card, Heading, Badge, Button, theme } from '@parc/ui';
 import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
 import { FactReading, type ListEntry } from './facts';
+import type { GraphNode } from './graph';
 
 const { useState, useEffect } = React;
 
 /** Peek a fact by key (null when nothing's selected). The trailhead reads the
  *  SELECTED star this way, to show it in place of the pitch — hero head, ground
- *  body — via the shared, mode-aware FactReading. */
+ *  body — via the shared, mode-aware FactReading.
+ *
+ *  Cached (module-level) so returning to the trailhead with a previously-read
+ *  star is INSTANT — no "reading…" flash on every round-trip. And while a NEW
+ *  key loads, the last entry stays on screen until the fetch resolves, so the
+ *  ground never blanks mid-transition. */
+const peekCache = new Map<string, ListEntry>();
 function useFactPeek(key: string | null | undefined): ListEntry | null {
-  const [entry, setEntry] = useState<ListEntry | null>(null);
+  // Seed synchronously from cache so a re-visit paints immediately (no flash).
+  const [entry, setEntry] = useState<ListEntry | null>(() => (key ? peekCache.get(key) ?? null : null));
   useEffect(() => {
     if (!key) { setEntry(null); return; }
+    const cached = peekCache.get(key);
+    if (cached) { setEntry(cached); return; } // instant — no refetch, no flash
+    // New key: keep showing whatever's on screen while the fetch runs (don't
+    // blank to null); swap in the result when it lands.
     let live = true;
-    setEntry(null);
     void mcpCall('read', 'workspace.peek', { key })
       .then((r) => {
         if (!live) return;
         const v = r.ok ? (r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null) : null;
-        setEntry(v ? { key, value: v.value, _meta: v._meta } : null);
+        const next = v ? { key, value: v.value, _meta: v._meta } as ListEntry : null;
+        if (next) peekCache.set(key, next);
+        setEntry(next);
       })
-      .catch(() => { if (live) setEntry(null); });
+      .catch(() => { /* keep the current entry on error rather than blanking */ });
     return () => { live = false; };
   }, [key]);
   return entry;
@@ -167,7 +180,7 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, selectedKey }: {
+export function Landing({ session, onExplore, authed, selectedKey, selectedNode }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
@@ -175,6 +188,10 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
   /** When set, the ground below the horizon reads THAT fact instead of the pitch
    *  (a deep-linked star, or one still selected when you stepped back here). */
   selectedKey?: string | null;
+  /** The graph already holds the selected node (title/type) — pass it so the
+   *  hero head paints INSTANTLY on the way back, no peek round-trip, no flash.
+   *  The body still streams from the peek (cached). */
+  selectedNode?: GraphNode | null;
 }): React.JSX.Element {
   const signCard: React.CSSProperties = {
     background: 'rgba(253,249,239,0.88)',
@@ -192,9 +209,20 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
   const island: React.CSSProperties = { pointerEvents: 'auto' };
   // The SELECTED star (deep-link or stepped-back): its head reads over the hero
   // in place of the pitch, its body as paper on the ground below.
-  const reading = useFactPeek(selectedKey);
+  const peeked = useFactPeek(selectedKey);
+  // Instant head: if the graph handed us the node, synthesize a head-only entry
+  // whose value IS the graph's own label — factTitle→heuristicTitle returns that
+  // string verbatim, so the hero head paints with NO round-trip. The peek
+  // (cached) then supplies the full value for the body once it lands.
+  const nodeEntry: ListEntry | null =
+    selectedNode && selectedNode.key === selectedKey
+      ? { key: selectedNode.key, value: selectedNode.label, _meta: { type: selectedNode.type } }
+      : null;
+  // Prefer the peeked entry (full value → real body); fall back to the node
+  // entry so the head is instant while the body streams in.
+  const reading = peeked ?? nodeEntry;
   return (
-    <div style={{ position: 'relative', width: '100%' }}>
+    <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
       <section style={{
         // ~2/3 viewport, not full-screen: the top of the content below sits
@@ -204,11 +232,11 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
         padding: 'clamp(1rem, 3vw, 2rem)',
         // Lifted off the bottom now that supplementary content lives below the
         // hero — the pitch sits over the valley/treeline, not the frame edge.
-        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 14vh)',
+        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10vh)',
       }}>
         {/* Painted landscape, pinned to this first screen only */}
-        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
-        <div style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem' }}>
+        <div className='HeroLandscape'style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
+        <div className='HeroContent' style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem' }}>
           <div style={{ display: 'grid', gap: '0.6rem' }}>
             {reading ? (
               // The selected star, IN PLACE of the pitch — title + metadata, over
@@ -235,14 +263,14 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
             {!authed ? (
               <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                 <div style={{ ...island, width: 'min(260px, 100%)' }}>
-                  <Button onClick={session.signIn}>Sign in with passkey</Button>
+                  <Button onClick={session.signIn}>Sign-in/Register</Button>
                 </div>
               </div>
             ) : null}
             <span style={{ color: theme.cream, opacity: 0.8, fontSize: '0.78rem', marginTop: authed ? '0.4rem' : 0, textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
               {authed
-                ? `Pull down to enter the sky — scroll down to ${selectedKey ? 'read' : 'learn more'}.`
-                : 'New here? The same button registers a passkey.'}
+                ? `Scroll up to enter the sky — scroll down to ${selectedKey ? 'read' : 'learn more'}.`
+                : 'New here? Sign-in with existing or register a passkey.'}
             </span>
             {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>
@@ -255,18 +283,19 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
 
       {/* ── CONTENT BELOW THE HERO ── OPAQUE ground: occludes the fixed graph +
           sky gradient so neither leaks past the horizon into the content. */}
-      <section style={{
+      <section className="Content" style={{
         position: 'relative', zIndex: 2,
         display: 'grid', justifyItems: 'center',
         padding: 'clamp(1.5rem, 5vw, 3.5rem) clamp(1rem, 3vw, 2rem)',
         gap: '1.4rem',
+        flexGrow: 1,
         background: theme.bg, // opaque day paper — the ground below the horizon
       }}>
         {selectedKey ? (
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
           // the head already reads in the hero above, so body-only here.
-          <div style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
-            {reading ? <FactReading e={reading} tone="light" head={false} showBody /> : (
+          <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
+            { reading ? <FactReading e={reading} tone="light" head={false} showBody /> : (
               <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.8rem' }}>reading…</span>
             )}
           </div>

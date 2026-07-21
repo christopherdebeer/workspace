@@ -3,6 +3,15 @@ import { marked } from 'marked';
 
 type Token = Record<string, any>;
 
+// Code/HTML blocks must not force the content body wider than its container.
+// WRAP rather than scroll: a scrolling <pre> only stays bounded if min-width:0
+// holds through EVERY flex/grid ancestor — one miss and it blows out again.
+// Wrapping never establishes a wide intrinsic width, so it's robust regardless
+// of the container stack. white-space:pre-wrap keeps indentation/newlines while
+// wrapping long lines; overflow-wrap:anywhere breaks unbreakable tokens (URLs,
+// long paths). (`text-wrap` is the newer spelling of the same intent.)
+const PRE_STYLE: React.CSSProperties = { maxWidth: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
+
 function cleanUrl(raw: unknown, mode: 'nav' | 'image' | 'frame'): string | null {
   const s = typeof raw === 'string' ? raw.trim() : '';
   if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null;
@@ -77,7 +86,11 @@ function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
       case 'blockquote':
         return <blockquote key={k}>{blocks(t.tokens, k)}</blockquote>;
       case 'code':
-        return <pre key={k}><code className={t.lang ? `language-${String(t.lang).replace(/[^a-z0-9_-]/gi, '')}` : undefined}>{String(t.text ?? '')}</code></pre>;
+        // A code block must not stretch its container: long lines scroll WITHIN
+        // the <pre> (max-width:100% + overflow-x) rather than forcing the whole
+        // content body wider than the viewport. Formatting is preserved (no
+        // forced wrap of code); only the box is bounded.
+        return <pre key={k} style={PRE_STYLE}><code className={t.lang ? `language-${String(t.lang).replace(/[^a-z0-9_-]/gi, '')}` : undefined}>{String(t.text ?? '')}</code></pre>;
       case 'hr':
         return <hr key={k} />;
       case 'list': {
@@ -103,7 +116,7 @@ function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
           </div>
         );
       case 'html':
-        return <pre key={k}><code>{String(t.raw ?? t.text ?? '')}</code></pre>;
+        return <pre key={k} style={PRE_STYLE}><code>{String(t.raw ?? t.text ?? '')}</code></pre>;
       case 'text':
         return t.tokens?.length ? <p key={k}>{inline(t.tokens, k)}</p> : <React.Fragment key={k}>{String(t.text ?? t.raw ?? '')}</React.Fragment>;
       default:
@@ -121,5 +134,8 @@ export function SafeMarkdown({ text }: { text: string }): React.JSX.Element {
   } catch {
     return <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text}</pre>;
   }
-  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }}>{blocks(tokens)}</div>;
+  // minWidth:0 lets this shrink below its content's intrinsic width inside a
+  // flex/grid parent — without it, a wide <pre> child forces the whole column
+  // (and the page) wider than the viewport instead of scrolling within itself.
+  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens)}</div>;
 }

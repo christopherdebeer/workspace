@@ -16,7 +16,7 @@ import * as React from 'react';
 import { Page, theme, type TypeDecl } from '@parc/ui';
 import { useAuth, type Session } from './lib';
 import { Landing, Wordmark, SkyGradient } from './dashboard';
-import { FullGraph } from './graph';
+import { FullGraph, type GraphNode } from './graph';
 import { Palette } from './palette';
 import { SkyBackdrop } from './sky';
 import { setTypeDecls, loadTypeDecls, FactDetailHost } from './facts';
@@ -145,6 +145,15 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // and the graph's taps both funnel here, and the graph pans to any selection
   // it didn't originate (ADR-0047 v2).
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // ALSO hold the selected NODE (title/type/score) the graph already has, so the
+  // trailhead can paint the head instantly on the way back — no peek round-trip,
+  // no "reading…" flash — while the body streams in. Cleared when selection is
+  // cleared or set by key alone (palette/deep-link, where we have no node yet).
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const selectByNode = useCallback((n: GraphNode | null) => {
+    setSelectedNode(n);
+    setSelectedKey(n?.key ?? null);
+  }, []);
   // Selection is shareable view-state (urlstate.ts). We DON'T seed useState from
   // the hash — that would diverge from the server's null and break hydration.
   // Instead: after mount, read the hash once and apply it; from then on, mirror
@@ -159,6 +168,10 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       return;
     }
     writeHashState({ selected: selectedKey ?? undefined });
+    // If the key no longer matches the held node (palette pick, deep-link, clear),
+    // drop the stale node so the trailhead peeks fresh rather than showing a
+    // mismatched head.
+    setSelectedNode((n) => (n && n.key === selectedKey ? n : null));
   }, [selectedKey]);
   // The landing is the trailhead for EVERYONE (owner direction 2026-07-20):
   // authed visitors see it too, and step through into the graph (scroll,
@@ -291,7 +304,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           </div>
         )}
       >
-        <FullGraph selectedKey={selectedKey} onSelect={(n) => setSelectedKey(n?.key ?? null)} />
+        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} />
         {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
@@ -349,7 +362,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed selectedKey={selectedKey} />
+          <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed selectedKey={selectedKey} selectedNode={selectedNode} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits
