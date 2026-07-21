@@ -91,21 +91,38 @@ function covers(pattern: string, key: string): boolean {
   if (pattern.endsWith('*')) return key.startsWith(pattern.slice(0, -1));
   return pattern === key;
 }
+/** The owner's editorial pick for the signed-out ground: `home/featured` holds
+ *  `{ keys: string[] }`, an ordered showcase. Raw storage carries no salience
+ *  `score` (that lives in the shaped projection the tokenless read can't reach),
+ *  so ranking-by-score would collapse to path order — an editorial fact is the
+ *  honest way to choose. Empty/absent → fall back to the first public docs. */
+async function curatedKeys(): Promise<string[]> {
+  const facts = await queryPrefix('home/featured');
+  const f = facts.find((x) => x.key === 'home/featured');
+  const keys = (f?.value as { keys?: unknown } | undefined)?.keys;
+  return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : [];
+}
 async function loadFeaturedPublic(): Promise<FeaturedDoc[]> {
   try {
     const patternFacts = await queryPrefix('_public/');
     const patterns = patternFacts.map((f) => (f.value as { pattern?: string } | undefined)?.pattern ?? f.key.slice('_public/'.length));
     if (!patterns.length) return [];
-    // Curated public DOCS (title+summary metadata) covered by a public share.
-    const docs = (await queryPrefix('doc:'))
-      .filter((f) => f._meta?.type === 'doc' && patterns.some((p) => covers(p, f.key)))
-      .sort((a, b) => (Number(b._meta?.score) || 0) - (Number(a._meta?.score) || 0))
-      .slice(0, 8)
-      .map((f) => {
-        const v = (f.value ?? {}) as { title?: string; summary?: string };
-        return { key: f.key, title: v.title || f.key.slice('doc:'.length), summary: v.summary };
-      });
-    return docs;
+    // Public DOCS (title+summary metadata). The `doc:` prefix already isolates
+    // doc headers (doc-block: is a distinct prefix), so — like lit's loadDocs —
+    // we gate on the public patterns alone rather than a nested `_meta.type` the
+    // raw table item may not carry. EVERY emitted key is re-checked against the
+    // public patterns, curated or not, so a stale `home/featured` entry can never
+    // leak a private fact.
+    const allDocs = (await queryPrefix('doc:')).filter((f) => patterns.some((p) => covers(p, f.key)));
+    const byKey = new Map(allDocs.map((f) => [f.key, f]));
+    const curated = await curatedKeys();
+    const picked = curated.length
+      ? curated.map((k) => byKey.get(k)).filter((f): f is SlFact => !!f)
+      : allDocs;
+    return picked.slice(0, 8).map((f) => {
+      const v = (f.value ?? {}) as { title?: string; summary?: string };
+      return { key: f.key, title: v.title || f.key.slice('doc:'.length), summary: v.summary };
+    });
   } catch (err) {
     console.error('[home public]', err);
     return [];
