@@ -201,6 +201,9 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
    *  hero head paints INSTANTLY on the way back, no peek round-trip, no flash.
    *  The body still streams from the peek (cached). */
   selectedNode?: GraphNode | null;
+  /** Curated PUBLIC docs, server-read for anonymous visitors — the signed-out
+   *  ground shows these (a real slice of the substrate) instead of the pitch. */
+  featured?: Array<{ key: string; title: string; summary?: string }>;
 }): React.JSX.Element {
   const signCard: React.CSSProperties = {
     background: 'rgba(253,249,239,0.88)',
@@ -312,7 +315,23 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
             )}
           </div>
         ) : (
-        <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>
+        <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
+          {featured && featured.length ? (
+            // The unauthed public slice: real curated docs (server-read, tokenless),
+            // shown in place of the generic pitch. Cards link out to the doc surface.
+            <div style={{ display: 'grid', gap: '0.6rem' }}>
+              <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>from the substrate</span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '0.8rem' }}>
+                {featured.map((d) => (
+                  <a key={d.key} href={localize('/r/' + d.key)} style={{ ...signCard, ...island, textDecoration: 'none', color: 'inherit' }}>
+                    <strong style={{ fontFamily: theme.serif, fontSize: '0.92rem', color: theme.text }}>{d.title}</strong>
+                    {d.summary ? <span style={{ color: theme.dim, fontSize: '0.82rem', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as React.CSSProperties}>{d.summary}</span> : null}
+                    <span style={{ color: theme.accent, fontSize: '0.78rem', marginTop: '0.1rem' }}>read →</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '0.8rem' }}>
             <div style={{ ...signCard, ...island }}>
               <strong style={{ fontFamily: theme.serif, fontSize: '0.9rem', color: theme.text }}>A workspace that remembers</strong>

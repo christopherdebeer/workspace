@@ -27,12 +27,89 @@ import { installBridge } from './client/bridge';
  *  dashboard is gone — home is the graph + the field computer, owner direction
  *  2026-07-10), so SSR reads collapse from eleven to one (ssr.json).
  */
-function buildBoot(session: Session, ssrData: Record<string, unknown> | undefined): Boot {
+function buildBoot(session: Session, ssrData: Record<string, unknown> | undefined, featured: FeaturedDoc[]): Boot {
   const boot: Boot = { session };
+  if (featured.length) boot.featured = featured;
   if (!session.user || !ssrData) return boot;
   const typesRaw = (ssrData.types as { types?: Record<string, unknown> } | undefined)?.types;
   if (typesRaw) boot.types = typeDeclsFrom(typesRaw);
   return boot;
+}
+
+// ── the UNAUTHED public slice (tokenless) ───────────────────────────────────
+// A signed-out visitor can't call /mcp (no token), and forge's SSR reads run
+// AS the caller — so a workspace read as anonymous is walled. Instead we read
+// the owner's slice DIRECTLY over DynamoDB, exactly the way lit/canvas do: the
+// cell's IAM role is LeadingKeys-scoped to STATE#<owner> (no token, the database
+// IS the boundary), and we emit ONLY keys the owner has shared to `public`
+// (`_public/<pattern>` reflections). So the apex shows real curated content to
+// anonymous visitors, and can never leak a private fact. AWS SDK loads lazily so
+// a missing module degrades SSR to the pitch rather than crashing import.
+const CELL_OWNER = process.env.CELL_OWNER || 'c15r';
+const SUBSTRATE_TABLE = process.env.SUBSTRATE_TABLE || '';
+interface FeaturedDoc { key: string; title: string; summary?: string }
+interface Ddb { send(cmd: unknown): Promise<{ Items?: Array<Record<string, unknown>>; LastEvaluatedKey?: unknown }> }
+let ddbDoc: Ddb | undefined;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let QueryCmd: any;
+function ddb(): Ddb | null {
+  if (!SUBSTRATE_TABLE) return null;
+  if (!ddbDoc) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const lib = require('@aws-sdk/lib-dynamodb');
+      QueryCmd = lib.QueryCommand;
+      ddbDoc = lib.DynamoDBDocumentClient.from(new DynamoDBClient({})) as Ddb;
+    } catch { return null; }
+  }
+  return ddbDoc;
+}
+interface SlFact { key: string; value?: unknown; superseded?: boolean; _meta?: { type?: string | null; score?: number } }
+async function queryPrefix(prefix: string): Promise<SlFact[]> {
+  const client = ddb();
+  if (!client) return [];
+  const out: SlFact[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const r = await client.send(new QueryCmd({
+      TableName: SUBSTRATE_TABLE,
+      KeyConditionExpression: 'pk = :pk AND begins_with(sk, :p)',
+      ExpressionAttributeValues: { ':pk': `STATE#${CELL_OWNER}`, ':p': `KEY#${prefix}` },
+      ExclusiveStartKey,
+    }));
+    for (const it of (r.Items ?? []) as SlFact[]) if (!it.superseded) out.push(it);
+    ExclusiveStartKey = r.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (ExclusiveStartKey);
+  return out;
+}
+/** `_public/<pattern>` = a key/prefix the owner shared to `public`. `*` = whole
+ *  slice, trailing `*` = prefix, else exact. The ONLY keys anonymous may see. */
+function covers(pattern: string, key: string): boolean {
+  if (pattern === '*') return true;
+  if (pattern.endsWith('*')) return key.startsWith(pattern.slice(0, -1));
+  return pattern === key;
+}
+async function loadFeaturedPublic(): Promise<FeaturedDoc[]> {
+  try {
+    const patternFacts = await queryPrefix('_public/');
+    const patterns = patternFacts.map((f) => (f.value as { pattern?: string } | undefined)?.pattern ?? f.key.slice('_public/'.length));
+    if (!patterns.length) return [];
+    // Curated public DOCS (title+summary metadata) covered by a public share.
+    const docs = (await queryPrefix('doc:'))
+      .filter((f) => f._meta?.type === 'doc' && patterns.some((p) => covers(p, f.key)))
+      .sort((a, b) => (Number(b._meta?.score) || 0) - (Number(a._meta?.score) || 0))
+      .slice(0, 8)
+      .map((f) => {
+        const v = (f.value ?? {}) as { title?: string; summary?: string };
+        return { key: f.key, title: v.title || f.key.slice('doc:'.length), summary: v.summary };
+      });
+    return docs;
+  } catch (err) {
+    console.error('[home public]', err);
+    return [];
+  }
 }
 
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
@@ -117,7 +194,10 @@ export const handler = async (event: {
         scopes: [],
         error: null,
       };
-      const boot = buildBoot(vm, event.ssrData);
+      // Anonymous visitors get the curated PUBLIC slice (tokenless owner-slice
+      // read, `_public/`-filtered); signed-in visitors load their own live data.
+      const featured = authed ? [] : await loadFeaturedPublic();
+      const boot = buildBoot(vm, event.ssrData, featured);
       installServerBridge(event.headers?.['x-forwarded-host']);
       const inner = renderToString(createElement(App, { initial: boot }));
       const state = JSON.stringify(boot).replace(/</g, '\\u003c');

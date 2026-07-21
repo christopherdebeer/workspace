@@ -37,9 +37,10 @@ const { useState, useEffect, useCallback } = React;
  * flow, signed in it steps through into the graph. Scroll/swipe also enters
  * (the "walk into the sky" gesture).
  */
-function LandingWithSky({ session, onEnter }: {
+function LandingWithSky({ session, onEnter, featured }: {
   session: Session & { signIn: () => void };
   onEnter?: () => void; // present when authed: fade out, then reveal the graph
+  featured?: FeaturedDoc[];
 }): React.JSX.Element {
   const [entering, setEntering] = useState(false);
   const onExplore = useCallback(() => {
@@ -85,7 +86,7 @@ function LandingWithSky({ session, onEnter }: {
           transition: 'opacity 0.6s ease-out',
         }}
       >
-        <Landing session={{ ...session, signIn: onExplore }} onExplore={onExplore} authed={!!onEnter} />
+        <Landing session={{ ...session, signIn: onExplore }} onExplore={onExplore} authed={!!onEnter} featured={featured} />
       </div>
     </>
   );
@@ -119,9 +120,14 @@ class GraphBoundary extends React.Component<
  * server-side identically to the client. The graph and the field computer load
  * their own data live (they are the interactive surface, not a snapshot).
  */
+export interface FeaturedDoc { key: string; title: string; summary?: string }
 export interface Boot {
   session: Session;
   types?: Record<string, TypeDecl>;
+  /** Curated PUBLIC docs (title+summary), server-read tokenlessly for anonymous
+   *  visitors (see cells/home/index.ts). The signed-out trailhead shows these
+   *  instead of the generic pitch — a real read-only slice of the substrate. */
+  featured?: FeaturedDoc[];
 }
 
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
@@ -281,7 +287,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   if (!session.ready) return <Page>{null}</Page>;
 
   if (!authed) {
-    return <LandingWithSky session={session} />;
+    return <LandingWithSky session={session} featured={initial?.featured} />;
   }
 
   // ── AUTHED: the graph IS the sky ──
