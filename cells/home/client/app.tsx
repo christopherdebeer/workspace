@@ -183,85 +183,72 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     setLeaving(false);
     setEntered(false);
   }, []);
-  // ── ELASTIC PULL-TO-ENTER (drag-to-refresh, inverted: pull UP at the top) ──
-  // The overlay is a scroll container: wheel/scrollbar scrolls the taller landing
-  // (hero → content-below). At the very top, pulling UP further (overscroll) does
-  // NOT scroll — it lifts the whole overlay elastically with a "release to enter"
-  // hint; past PULL_COMMIT it dissolves to the graph, otherwise it springs back.
-  // Bare pointer-drags aren't handled here at all — they fall through the
-  // pointer-events:none overlay to the live graph beneath, which spins natively.
+  // ── PULL-TO-ENTER, cleanly separated from scroll ──────────────────────────
+  // The trailhead scrolls NATIVELY (hero → content below) — no hijacked scroll,
+  // no capture-phase window handlers, no manual scrollTop. We intercept ONE edge
+  // only: an over-scroll UP at the very top. There, a finger dragging down (or
+  // wheel-up) peels the whole overlay DOWN, revealing the live sky/graph above
+  // through the gap — a TOP peep that grows to a "release to enter", then
+  // dissolves. The graph is a non-interactive BACKDROP while the trailhead is up
+  // (the overlay owns input); it becomes interactive only once you've entered.
+  // Two clean modes, no tangle of graph-spin ⇄ scroll ⇄ zoom.
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
-  const [pull, setPull] = useState(0);           // px the overlay is lifted (0 = rest)
+  const [pull, setPull] = useState(0);           // px the overlay is peeled DOWN (0 = rest)
   const pullRef = React.useRef(0); pullRef.current = pull;
-  const PULL_COMMIT = 140;                        // lift past this → enter
+  const PULL_COMMIT = 140;                        // peel past this → enter
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !authed || entered || leaving) return;
-    let touchY: number | null = null;
-    let springTimer: ReturnType<typeof setTimeout> | null = null;
+    const CAP = PULL_COMMIT * 1.4;
     const atTop = (): boolean => el.scrollTop <= 0;
-    const commitOrSpring = (): void => {
+    let touchY: number | null = null;
+    let pulling = false;
+    let wheelReset: ReturnType<typeof setTimeout> | null = null;
+    const release = (): void => {
+      pulling = false; touchY = null;
       if (pullRef.current >= PULL_COMMIT) enter();
       else setPull(0); // CSS transition springs it back
     };
-    let lastTouchY: number | null = null;
-    const touchStart = (e: TouchEvent): void => {
-      touchY = lastTouchY = e.touches[0]?.clientY ?? null;
-    };
-    const touchMove = (e: TouchEvent): void => {
+    const onTouchStart = (e: TouchEvent): void => { touchY = e.touches[0]?.clientY ?? null; };
+    const onTouchMove = (e: TouchEvent): void => {
       const y = e.touches[0]?.clientY;
-      if (touchY === null || y === undefined || lastTouchY === null) return;
-      // Match the wheel handler's metaphor: the SKY is up, so entering it is an
-      // OVER-SCROLL UP — at the top, a finger dragging DOWN (content follows the
-      // finger down, revealing more sky above) is the pull-to-enter. A finger
-      // dragging UP is the ordinary "scroll down to the content below the hero"
-      // gesture and must NOT enter (that was the bug: swipe-up fired the enter,
-      // so you could never reach the content below).
-      const downTotal = y - touchY;    // >0 = finger dragged DOWN from the start (into the sky)
-      const dyStep = y - lastTouchY;   // >0 = finger down this frame
-      lastTouchY = y;
-      if (downTotal > 0 && atTop() && pullRef.current === 0) {
-        // At the top, dragging DOWN → elastic lift into the sky (release-to-enter).
+      if (touchY === null || y === undefined) return;
+      const down = y - touchY; // >0 = dragged DOWN from where the touch began
+      if (pulling || (atTop() && down > 4)) {
+        // Over-scroll UP at the top → peel the overlay down (into the sky). Take
+        // the gesture from native scroll so iOS doesn't rubber-band underneath.
+        pulling = true;
         e.preventDefault();
-        setPull(Math.min(PULL_COMMIT * 1.4, downTotal * 0.8));
-      } else if (pullRef.current > 0) {
-        // Continue (finger down) / relax (finger up) the pull.
-        e.preventDefault();
-        setPull((p) => Math.max(0, Math.min(PULL_COMMIT * 1.4, p + dyStep * 0.8)));
-      } else {
-        // Finger up (dyStep<0) → scrollTop increases → scroll DOWN to the content.
-        el.scrollTop -= dyStep;
+        const p = Math.max(0, Math.min(CAP, down * 0.8));
+        setPull(p);
+        if (p === 0) pulling = false; // relaxed back to the top → hand input back to scroll
       }
+      // else: not at the top, or dragging up → NATIVE scroll handles it.
     };
-    const touchEnd = (): void => { touchY = null; commitOrSpring(); };
-    // CAPTURE-PHASE wheel on window: intercept BEFORE the graph canvas sees it
-    // (otherwise scroll would zoom the graph). We consume every wheel while the
-    // trailhead is up — driving page-scroll or the elastic pull ourselves — and
-    // stop it reaching the graph. Pointer-DRAGS still fall through (spin the sky);
-    // only wheel is intercepted.
-    const wheelWin = (e: WheelEvent): void => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.deltaY < 0 && atTop()) {
-        setPull((p) => Math.min(PULL_COMMIT * 1.4, p - e.deltaY * 0.6));
-        if (springTimer) clearTimeout(springTimer);
-        springTimer = setTimeout(commitOrSpring, 140);
+    // Wheel: same one edge; everything else is native scroll (we don't touch it).
+    const onWheel = (e: WheelEvent): void => {
+      if (atTop() && e.deltaY < 0) {
+        e.preventDefault();
+        setPull((p) => Math.min(CAP, p - e.deltaY * 0.6));
+        if (wheelReset) clearTimeout(wheelReset);
+        wheelReset = setTimeout(release, 160);
       } else if (pullRef.current > 0 && e.deltaY > 0) {
+        e.preventDefault();
         setPull((p) => Math.max(0, p - e.deltaY * 0.6));
-      } else {
-        el.scrollTop += e.deltaY; // scroll the (pointer-events:none) container
       }
     };
-    window.addEventListener('wheel', wheelWin, { passive: false, capture: true });
-    window.addEventListener('touchstart', touchStart, { passive: true, capture: true });
-    window.addEventListener('touchmove', touchMove, { passive: false, capture: true });
-    window.addEventListener('touchend', touchEnd, { passive: true, capture: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', release, { passive: true });
+    el.addEventListener('touchcancel', release, { passive: true });
+    el.addEventListener('wheel', onWheel, { passive: false });
     return () => {
-      if (springTimer) clearTimeout(springTimer);
-      window.removeEventListener('wheel', wheelWin, { capture: true } as EventListenerOptions);
-      window.removeEventListener('touchstart', touchStart, { capture: true } as EventListenerOptions);
-      window.removeEventListener('touchmove', touchMove, { capture: true } as EventListenerOptions);
-      window.removeEventListener('touchend', touchEnd, { capture: true } as EventListenerOptions);
+      if (wheelReset) clearTimeout(wheelReset);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', release);
+      el.removeEventListener('touchcancel', release);
+      el.removeEventListener('wheel', onWheel);
     };
   }, [authed, entered, leaving, enter]);
 
@@ -330,11 +317,11 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           inside the overlay) so mix-blend-mode:screen tints the dark sky while
           the live stars punch through. Fades to clear night as you enter. */}
       {!entered && <SkyGradient fade={leaving ? 0 : 1} />}
-      {/* The landing overlay (painted valley + content). It's a SCROLL CONTAINER
-          (wheel/scrollbar scrolls the taller page); bare areas are
-          pointer-events:none so drags fall through to the graph and spin it.
-          `pull` lifts it elastically on overscroll-up (release-to-enter); on
-          commit the whole thing dissolves (day → night) before unmounting. */}
+      {/* The landing overlay (painted valley + content). A NATIVELY-scrolling
+          container that OWNS input while it's up (pointer-events:auto), so the
+          graph beneath is a non-interactive backdrop — no drag/scroll/zoom tangle.
+          On over-scroll UP at the top, `pull` peels it DOWN, revealing the live
+          sky through the gap at the top; past commit it dissolves (day → night). */}
       {!entered && (
         <div
           ref={scrollRef}
@@ -345,26 +332,26 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             overflowY: 'auto',
             overflowX: 'hidden',
             overscrollBehavior: 'contain',
-            // pointer-events:none so a DRAG on the bare hero falls through to the
-            // graph (spin the sky); the Landing's islands (buttons/cards/links)
-            // re-enable pointer events for themselves. Scroll is driven by the
-            // window wheel/touch handlers above, not native scrolling.
-            pointerEvents: 'none',
+            WebkitOverflowScrolling: 'touch',
+            pointerEvents: 'auto',
             opacity: leaving ? 0 : 1,
-            transform: pull ? `translateY(${-pull}px)` : undefined,
+            transform: pull ? `translateY(${pull}px)` : undefined,
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
           <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed selectedKey={selectedKey} />
-          {/* Release-to-enter hint, revealed by the elastic lift */}
-          <div aria-hidden style={{
-            position: 'fixed', left: 0, right: 0, bottom: 8, textAlign: 'center',
-            fontFamily: ink.mono, fontSize: '0.72rem', color: ink.accent,
-            opacity: Math.min(1, pull / PULL_COMMIT), pointerEvents: 'none',
-            transition: 'opacity 0.15s',
-          }}>
-            {pull >= PULL_COMMIT ? 'release to enter ↑' : 'keep pulling to enter ↑'}
-          </div>
+        </div>
+      )}
+      {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits
+          in the peeled-open gap (the revealed sky) rather than riding the overlay
+          down with it. */}
+      {!entered && pull > 0 && (
+        <div aria-hidden style={{
+          position: 'fixed', left: 0, right: 0, top: 'max(10px, env(safe-area-inset-top))',
+          zIndex: 21, textAlign: 'center', fontFamily: ink.mono, fontSize: '0.72rem',
+          color: ink.accent, opacity: Math.min(1, pull / PULL_COMMIT), pointerEvents: 'none',
+        }}>
+          {pull >= PULL_COMMIT ? 'release to enter ↑' : 'keep pulling ↑'}
         </div>
       )}
       <FactDetailHost />
