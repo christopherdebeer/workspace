@@ -71,6 +71,7 @@ function LandingWithSky({ session, onEnter }: {
     <>
       <SkyBackdrop />
       <div
+        className='Landing'
         style={{
           position: 'fixed',
           inset: 0,
@@ -347,6 +348,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           sky through the gap at the top; past commit it dissolves (day → night). */}
       {!entered && (
         <div
+          className='Landing'
           ref={scrollRef}
           style={{
             position: 'fixed',

@@ -224,7 +224,7 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode 
   return (
     <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
-      <section style={{
+      <section className="Hero" style={{
         // ~2/3 viewport, not full-screen: the top of the content below sits
         // clearly above the fold, so it's obvious there's more to scroll to.
         position: 'relative', minHeight: '66.67svh',
