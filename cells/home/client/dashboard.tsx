@@ -8,8 +8,65 @@ import * as React from 'react';
 import { Card, Heading, Badge, Button, theme } from '@parc/ui';
 import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
+import { FactBody, factTitle, factHref, typeIcon, type ListEntry } from './facts';
+import { ink } from './ink';
 
 const { useState, useEffect } = React;
+
+/**
+ * The trailhead's "ground below the horizon" when a star is SELECTED: a calm
+ * reading of that fact — its name, kind, and body, with one `open ↗`. Rendered
+ * as a dark "night card" on the day-paper ground (FactBody is ink-styled, and it
+ * reads as the selected star's content brought down to read). Reached when a
+ * deep-link carries a selection, or when you step back to the trailhead from the
+ * graph with something selected. Meta/edges are a deliberate LATER aside — this
+ * view stays a quiet read. Default (nothing selected) is the pitch below.
+ */
+function LandingReading({ factKey }: { factKey: string }): React.JSX.Element {
+  const [entry, setEntry] = useState<ListEntry | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'missing'>('loading');
+  useEffect(() => {
+    let live = true;
+    setEntry(null);
+    setState('loading');
+    void mcpCall('read', 'workspace.peek', { key: factKey })
+      .then((r) => {
+        if (!live) return;
+        const v = r.ok ? (r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null) : null;
+        if (v) { setEntry({ key: factKey, value: v.value, _meta: v._meta }); setState('ready'); }
+        else setState('missing');
+      })
+      .catch(() => { if (live) setState('missing'); });
+    return () => { live = false; };
+  }, [factKey]);
+  const open = entry ? factHref(entry) : null;
+  return (
+    <div style={{
+      width: '100%', maxWidth: 680, margin: '0 auto',
+      background: ink.bg, border: `1px solid ${ink.line}`, borderRadius: 14,
+      boxShadow: '0 14px 44px rgba(0,0,0,0.35)', color: ink.text,
+      padding: 'clamp(1rem, 4vw, 1.6rem)', display: 'grid', gap: '0.75rem',
+    }}>
+      {state === 'loading' ? (
+        <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.8rem' }}>reading…</span>
+      ) : !entry ? (
+        <span style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.78rem', wordBreak: 'break-all' }}>{factKey} — not found</span>
+      ) : (
+        <>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.55rem', minWidth: 0 }}>
+            <span aria-hidden style={{ fontSize: '1.1rem', flexShrink: 0 }}>{typeIcon(entry)}</span>
+            <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: 'clamp(1.1rem, 3.6vw, 1.5rem)', lineHeight: 1.25, color: ink.text }}>{factTitle(entry)}</h2>
+          </div>
+          {entry._meta?.type ? <div style={{ color: ink.dim, fontFamily: ink.mono, fontSize: '0.68rem' }}>{entry._meta.type}</div> : null}
+          <div style={{ fontSize: '0.92rem', lineHeight: 1.6 }}><FactBody e={entry} full /></div>
+          {open ? (
+            <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: ink.accent, fontFamily: ink.mono, fontSize: '0.82rem', textDecoration: 'none', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.8rem' }}>open ↗</a>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
 
 // ─── the scenery (the painted assets) ──────────────────────────────
 
@@ -145,11 +202,14 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed }: {
+export function Landing({ session, onExplore, authed, selectedKey }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
   authed?: boolean;
+  /** When set, the ground below the horizon reads THAT fact instead of the pitch
+   *  (a deep-linked star, or one still selected when you stepped back here). */
+  selectedKey?: string | null;
 }): React.JSX.Element {
   const signCard: React.CSSProperties = {
     background: 'rgba(253,249,239,0.88)',
@@ -216,6 +276,11 @@ export function Landing({ session, onExplore, authed }: {
         gap: '1.4rem',
         background: theme.bg, // opaque day paper — the ground below the horizon
       }}>
+        {selectedKey ? (
+          <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>
+            <LandingReading factKey={selectedKey} />
+          </div>
+        ) : (
         <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '0.8rem' }}>
             <div style={{ ...signCard, ...island }}>
@@ -260,6 +325,7 @@ export function Landing({ session, onExplore, authed }: {
             <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
           </div>
         </div>
+        )}
       </section>
     </div>
   );

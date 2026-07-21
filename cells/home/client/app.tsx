@@ -355,7 +355,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed />
+          <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed selectedKey={selectedKey} />
           {/* Release-to-enter hint, revealed by the elastic lift */}
           <div aria-hidden style={{
             position: 'fixed', left: 0, right: 0, bottom: 8, textAlign: 'center',
