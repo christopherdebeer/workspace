@@ -313,12 +313,14 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             trailhead. Sign-out + session chrome only once entered. */}
         <div className="TopBar" style={{ position: 'fixed', top: 'max(10px, env(safe-area-inset-top))', left: 12, right: 12, zIndex: 30, pointerEvents: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
           <button
-            onClick={entered ? toLanding : undefined}
-            title={entered ? 'Back to the trailhead' : undefined}
+            // Entered: back to the trailhead. On the trailhead: deselect, so a
+            // selected star's read gives way to the default pitch (home = the top).
+            onClick={entered ? toLanding : (selectedKey ? () => selectByNode(null) : undefined)}
+            title={entered ? 'Back to the trailhead' : (selectedKey ? 'Back to the trailhead pitch' : undefined)}
             style={{
-              pointerEvents: entered ? 'auto' : 'none',
+              pointerEvents: entered || selectedKey ? 'auto' : 'none',
               background: 'none', border: 'none', padding: 0, margin: 0,
-              cursor: entered ? 'pointer' : 'default',
+              cursor: entered || selectedKey ? 'pointer' : 'default',
               filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))',
             }}
           >
