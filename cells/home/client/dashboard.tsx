@@ -229,7 +229,9 @@ export function Landing({ session, onExplore, authed, selectedKey }: {
     <div style={{ position: 'relative', width: '100%' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
       <section style={{
-        position: 'relative', minHeight: '100svh',
+        // 80svh, not full-screen: the top of the content below peeks above the
+        // fold, so it's clear there's more to scroll to (segue into the content).
+        position: 'relative', minHeight: '80svh',
         display: 'grid', alignContent: 'end', justifyItems: 'center',
         padding: 'clamp(1rem, 3vw, 2rem)',
         // Lifted off the bottom now that supplementary content lives below the
