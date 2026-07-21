@@ -189,11 +189,14 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, selectedKey, selectedNode, featured }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
   authed?: boolean;
+  /** Can walk into the sky even when signed out (a public @guest token is live) —
+   *  keeps the sign-in CTA but adds the enter-the-sky gesture hint. */
+  canEnter?: boolean;
   /** When set, the ground below the horizon reads THAT fact instead of the pitch
    *  (a deep-linked star, or one still selected when you stepped back here). */
   selectedKey?: string | null;
@@ -284,7 +287,9 @@ export function Landing({ session, onExplore, authed, selectedKey, selectedNode,
             <span style={{ color: theme.cream, opacity: 0.8, fontSize: '0.78rem', marginTop: authed ? '0.4rem' : 0, textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
               {authed
                 ? `Scroll up to enter the sky — scroll down to ${selectedKey ? 'read' : 'learn more'}.`
-                : 'New here? Sign-in with existing or register a passkey.'}
+                : canEnter
+                  ? 'Scroll up to explore the public sky — scroll down to read. Sign in to make it yours.'
+                  : 'New here? Sign-in with existing or register a passkey.'}
             </span>
             {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>

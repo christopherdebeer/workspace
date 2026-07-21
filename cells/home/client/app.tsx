@@ -145,15 +145,23 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   }
   const session = useAuth(initial?.session);
   const authed = !!session.user;
+  // A signed-out visitor with the public @guest token can ALSO walk into the sky
+  // — the graph reads live (read-only) public content through that token. So the
+  // trailhead's graph backdrop + pull-to-enter are gated on "can explore" (authed
+  // OR a guest token), while the hero CTA stays gated on `authed` alone (auth in
+  // is a button; entering the sky is a gesture — for everyone who can read).
+  const canExplore = authed || !!initial?.guestToken;
   const [, setTypeEpoch] = useState(0);
   useEffect(() => {
-    if (!authed) return;
+    // The type vocabulary ($types) is global + public, so an anonymous explorer
+    // needs it too (icons/labels for the public graph) — load whenever we can read.
+    if (!canExplore) return;
     let live = true;
     void loadTypeDecls().then(() => {
       if (live) setTypeEpoch((v) => v + 1);
     });
     return () => { live = false; };
-  }, [authed]);
+  }, [canExplore]);
   // App owns selection BY KEY (not node object): the palette's neighbour chips
   // and the graph's taps both funnel here, and the graph pans to any selection
   // it didn't originate (ADR-0047 v2).
@@ -227,7 +235,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const pullRef = React.useRef(0); pullRef.current = pull;
   const PULL_COMMIT = 140;                        // peel past this → enter
   useEffect(() => {
-    if (!authed || entered || leaving) return;
+    if (!canExplore || entered || leaving) return;
     // Body-scroll model: the page scrolls natively (window), so pull-to-enter
     // reads window.scrollY and binds to window. Snap back to rest on (re)mount —
     // a committed peel must not survive entering. Also reset the document scroll
@@ -287,15 +295,20 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       window.removeEventListener('touchcancel', release);
       window.removeEventListener('wheel', onWheel);
     };
-  }, [authed, entered, leaving, enter]);
+  }, [canExplore, entered, leaving, enter]);
 
   if (!session.ready) return <Page>{null}</Page>;
 
-  if (!authed) {
+  // Only when there's NOTHING live to show (signed out AND no guest token) do we
+  // fall back to the decorative star dome. Otherwise the real graph is the sky.
+  if (!canExplore) {
     return <LandingWithSky session={session} featured={initial?.featured} />;
   }
 
-  // ── AUTHED: the graph IS the sky ──
+  // ── CAN EXPLORE: the graph IS the sky ──
+  // Authed → their own live substrate. Signed-out-with-guest → the owner's public
+  // slice, read-only. Same trailhead, same enter gesture; the hero CTA still forks
+  // on `authed` (sign-in button for anon, gesture-only for authed).
   // The real graph mounts immediately (data starts streaming), behind the
   // landing overlay. "Entering" just fades the overlay away — no remount,
   // no loading flash, no second render. The user sees their live substrate
@@ -342,13 +355,25 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
               chrome) — auth out is always here, never a CTA in the hero. */}
           <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
             {session.error ? <span title={session.error} role="status" style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.68rem' }}>session warning</span> : null}
-            <button
-              onClick={() => { try { sessionStorage.removeItem('parc.home.entered'); } catch {} session.signOut(); }}
-              title={session.user ? `signed in as ${session.user}` : 'sign out'}
-              style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
-            >
-              sign out
-            </button>
+            {authed ? (
+              <button
+                onClick={() => { try { sessionStorage.removeItem('parc.home.entered'); } catch {} session.signOut(); }}
+                title={`signed in as ${session.user}`}
+                style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
+              >
+                sign out
+              </button>
+            ) : (
+              // Anonymous explorer (reading the public sky via the @guest token):
+              // offer sign-in, never sign-out — the consistent top-right chrome.
+              <button
+                onClick={() => session.signIn()}
+                title="Sign in or register a passkey"
+                style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
+              >
+                sign in
+              </button>
+            )}
           </div>
         </div>
       </GraphBoundary>
@@ -376,7 +401,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed selectedKey={selectedKey} selectedNode={selectedNode} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits
