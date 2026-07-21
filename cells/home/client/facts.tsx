@@ -188,6 +188,16 @@ function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Elemen
       const code = bodyText(v);
       return code ? <CodeBlock>{code.slice(0, 2000)}</CodeBlock> : null;
     }
+    // mermaid / csv / json / style: the shared @c15r/viewers pure viewers — the
+    // same implementations canvas and lit mount. A type declaring these hints
+    // now renders the real diagram/table/tree in home too, not a fallback.
+    case 'mermaid':
+    case 'csv':
+    case 'json':
+    case 'style': {
+      const code = kind === 'json' && typeof v !== 'string' ? JSON.stringify(v, null, 2) : bodyText(v);
+      return code ? <ViewerBody lang={kind} code={code} /> : null;
+    }
     case 'metric': {
       const n = typeof v === 'number' ? String(v) : (strField(v, ['value', 'count', 'n', 'total']) ?? bodyText(v));
       return n ? <strong style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>{n}</strong> : null;
@@ -247,6 +257,39 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
   );
 }
 
+// ─── the shared PURE VIEWERS (@c15r/viewers) ───────────────────────
+// json tree / csv table / mermaid / style — one validated implementation, the
+// same module canvas re-exports and lit's fences import. Home consumes it the
+// same way (dynamic import of the cell's ESM face), rather than re-hand-rolling
+// a JSON dump — so a structured/undeclared fact reads as a real tree, not a
+// raw stringify. Lazy + cached: the ~18KB module loads only when a viewer is
+// actually needed (never on the SSR path — this mounts in an effect).
+const VIEWERS_URL = 'https://parc.land/@c15r/viewers/app.js';
+type ViewersModule = { renderFence: (host: HTMLElement, lang: string, code: string) => boolean };
+let viewersMod: Promise<ViewersModule> | null = null;
+const loadViewers = (): Promise<ViewersModule> =>
+  (viewersMod ??= import(/* @vite-ignore */ VIEWERS_URL) as Promise<ViewersModule>);
+
+/** Mount a pure viewer (json/csv/mermaid/style) for a string body, via the
+ *  shared @c15r/viewers module. Imperative host (like the graph): React owns
+ *  the wrapper, the viewer owns the inner DOM. Degrades to a <pre> if the
+ *  module can't load (offline) so content is never lost. */
+function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.Element {
+  const host = React.useRef<HTMLDivElement | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    let live = true;
+    loadViewers()
+      .then((v) => { if (live && el) v.renderFence(el, lang, code); })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; if (el) el.innerHTML = ''; };
+  }, [lang, code]);
+  if (failed) return <pre style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '0.8rem' }}>{code}</pre>;
+  return <div ref={host} style={{ maxWidth: '100%', overflow: 'auto' }} />;
+}
+
 /**
  * A fact's inline body, from the type's declared default viewer: a built-in
  * `render` hint, or (when `embed` is allowed, e.g. a pinned single fact) the
@@ -291,7 +334,10 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
       return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
-    if (e.value != null && typeof e.value === 'object') return <CodeBlock>{JSON.stringify(e.value, null, 2)}</CodeBlock>;
+    // A structured value with no declared viewer reads as a collapsible JSON
+    // TREE (the shared @c15r/viewers `json` viewer), not a raw stringify — the
+    // same tree canvas and lit show. Degrades to a <pre> if viewers can't load.
+    if (e.value != null && typeof e.value === 'object') return <ViewerBody lang="json" code={JSON.stringify(e.value, null, 2)} />;
   }
   const preview = factPreview(e);
   return preview ? (
