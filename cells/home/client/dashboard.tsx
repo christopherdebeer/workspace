@@ -172,7 +172,9 @@ export function Landing({ session, onExplore, authed }: {
         position: 'relative', minHeight: '100svh',
         display: 'grid', alignContent: 'end', justifyItems: 'center',
         padding: 'clamp(1rem, 3vw, 2rem)',
-        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 2rem)',
+        // Lifted off the bottom now that supplementary content lives below the
+        // hero — the pitch sits over the valley/treeline, not the frame edge.
+        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 14vh)',
       }}>
         {/* Painted landscape, pinned to this first screen only */}
         <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
@@ -206,8 +208,7 @@ export function Landing({ session, onExplore, authed }: {
       </section>
 
       {/* ── CONTENT BELOW THE HERO ── OPAQUE ground: occludes the fixed graph +
-          sky gradient so neither leaks past the horizon into the content. A soft
-          top edge blends the transition from the painted valley into the paper. */}
+          sky gradient so neither leaks past the horizon into the content. */}
       <section style={{
         position: 'relative', zIndex: 2,
         display: 'grid', justifyItems: 'center',
@@ -215,8 +216,6 @@ export function Landing({ session, onExplore, authed }: {
         gap: '1.4rem',
         background: theme.bg, // opaque day paper — the ground below the horizon
       }}>
-        {/* Feathered top edge: the valley fades into the paper over ~64px */}
-        <div aria-hidden style={{ position: 'absolute', top: -64, left: 0, right: 0, height: 64, background: `linear-gradient(to bottom, transparent, ${theme.bg})`, pointerEvents: 'none' }} />
         <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '0.8rem' }}>
             <div style={{ ...signCard, ...island }}>
