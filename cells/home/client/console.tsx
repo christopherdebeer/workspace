@@ -761,7 +761,10 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
           placeholder="Search your workspace, or run a capability…"
           spellCheck={false}
           autoComplete="off"
-          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '0.9rem', minWidth: 0, minHeight: 34 }}
+          // fontSize MUST be ≥16px: below that, iOS Safari auto-zooms the page on
+          // focus (and never zooms back). 16px is the smallest that suppresses it
+          // without a viewport `maximum-scale` lock (which would kill pinch-zoom).
+          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '16px', minWidth: 0, minHeight: 34 }}
         />
         {query ? (
           <button onClick={() => setQuery('')} aria-label="clear search" style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1rem', padding: '0.3rem 0.4rem' }}>

@@ -549,7 +549,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const eboostBuf = new Float32Array(caps.capE * 2);
       const edgeBoostOf = (l: any): number => {
         const a = idOf(l.source), b = idOf(l.target);
+        // The accent fan is the whole selected NEIGHBOURHOOD, not just the star's
+        // own spokes: an edge lights if it touches the selection OR runs between
+        // two nodes both inside the neighbourhood. So raising `neighbour hops`
+        // visibly grows the lit structure (the induced subgraph), not only the
+        // first ring — the 2/3-hop edges were previously left at resting alpha.
         if (selKey && (a === selKey || b === selKey)) return 1;
+        if (selKey && nbr && nbr.has(a) && nbr.has(b)) return 1;
         if (hiSet && hiSet.has(a) && hiSet.has(b)) return 1;
         return 0;
       };
@@ -903,6 +909,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       let curlS = -1;                           // curvature, derived from zoomZ
       const shellQ = new THREE.Quaternion();    // the shell's orientation
       let shellQT: any = null;                  // eased turn-to-face target
+      const lastRotWritten = new THREE.Quaternion(); // last orientation put in the URL
+      let userMovedShell = false;               // a manual drag happened (gates rot → URL)
       let velRX = 0, velRY = 0;                 // shell angular momentum (rad/frame)
       let lastInput = performance.now();
       const fwdV = new THREE.Vector3(0, 0, -1); // the fixed gaze
@@ -1172,6 +1180,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             const k = rotPerPx();
             velRY = -dx * k; velRX = -dy * k;
             rotateShell(velRX, velRY);
+            userMovedShell = true; // manual look-around — worth recording in the URL
             lastMoveT = lastInput = performance.now();
           }
           return;
@@ -2167,6 +2176,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           velRX *= TUNE.dragMomentum; velRY *= TUNE.dragMomentum;
           if (Math.abs(velRX) < 1e-5) velRX = 0;
           if (Math.abs(velRY) < 1e-5) velRY = 0;
+        } else if (userMovedShell && !dragging && Math.abs(velRX) < 1e-5 && Math.abs(velRY) < 1e-5 && shellQ.angleTo(lastRotWritten) > 0.02) {
+          // Shell came to REST after a manual look-around — record the orientation
+          // in the URL (the other half of nav-state alongside zoom). Gated on a
+          // real drag so a default facing-top load leaves the URL clean.
+          lastRotWritten.copy(shellQ);
+          writeHashState({ rot: [shellQ.x, shellQ.y, shellQ.z, shellQ.w] });
         }
         // Ease the one zoom axis; derive fov + curvature; re-seat if the shell
         // moved or bent this frame.
@@ -2699,7 +2714,21 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           lastZoomHash = zoomZ;
           layoutDirty = true;
         }
-        if (!h.selected && !h.q) {
+        // Restore the shell orientation (free-look nav), if the link carried one.
+        if (h.rot && h.rot.length === 4) {
+          shellQ.set(h.rot[0], h.rot[1], h.rot[2], h.rot[3]).normalize();
+          lastRotWritten.copy(shellQ);
+          layoutDirty = true;
+        }
+        // Selection must be driven from HERE, not only App's prop effect: App can
+        // set selectedKey before the scene mounts (api.current still null), so that
+        // effect no-ops and the star is never faced — only the panel shows it. We
+        // run once the scene + first page are live, so select() lands. Fly-to-face
+        // it UNLESS a rot was restored (that already set the orientation) — and if
+        // it isn't charted yet, select()/hydrateKey re-faces it on arrival.
+        if (h.selected) {
+          api.current?.select(h.selected, !h.rot);
+        } else if (!h.q && !h.rot) {
           const top = byRank[0];
           if (top) faceCanon(top.cdx, top.cdy, top.cdz);
         }

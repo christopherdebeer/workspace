@@ -12,6 +12,10 @@
 export interface HashState {
   selected?: string;
   zoom?: number;
+  /** Shell orientation (quaternion x,y,z,w) — the other half of "where you are
+   *  looking": zoom is how curled the sky is, `rot` is which way it's turned.
+   *  Together they fully restore a free-look view; selection re-derives its own. */
+  rot?: number[];
   q?: string;
 }
 
@@ -25,6 +29,8 @@ export function readHashState(): HashState {
     if (sel) st.selected = sel;
     const z = p.get('zoom');
     if (z) { const n = Number(z); if (Number.isFinite(n)) st.zoom = n; }
+    const rot = p.get('rot');
+    if (rot) { const a = rot.split(',').map(Number); if (a.length === 4 && a.every(Number.isFinite)) st.rot = a; }
     const q = p.get('q');
     if (q) st.q = q;
     return st;
@@ -39,6 +45,7 @@ export function writeHashState(patch: Partial<HashState>): void {
     const p = new URLSearchParams();
     if (next.selected) p.set('selected', next.selected);
     if (next.zoom != null && Number.isFinite(next.zoom)) p.set('zoom', String(Math.round(next.zoom * 100) / 100));
+    if (next.rot && next.rot.length === 4) p.set('rot', next.rot.map((v) => Math.round(v * 1000) / 1000).join(','));
     if (next.q) p.set('q', next.q);
     const s = p.toString();
     history.replaceState(history.state, '', location.pathname + location.search + (s ? '#' + s : ''));
