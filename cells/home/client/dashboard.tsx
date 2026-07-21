@@ -32,7 +32,6 @@ function useFactPeek(key: string | null | undefined): ListEntry | null {
   }, [key]);
   return entry;
 }
-}
 
 // ─── the scenery (the painted assets) ──────────────────────────────
 
