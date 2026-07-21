@@ -6,7 +6,7 @@
  */
 import * as React from 'react';
 import { Card, Heading, Badge, Button, theme } from '@parc/ui';
-import { localize, heroUrl, stripUrl, mcpCall, type Session } from './lib';
+import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
 
 const { useState, useEffect } = React;
@@ -57,6 +57,84 @@ function DuskScene({ tall, children }: { tall?: boolean; children?: React.ReactN
   );
 }
 
+/**
+ * The trailhead's DUSK SKY — a painted-daytime gradient that shows through the
+ * chroma-keyed hero's transparent sky, sitting in FRONT of the live night graph
+ * so the graph reads as a faint pre-dawn starfield behind a dusk sky. On enter,
+ * this whole layer dissolves away (day → night), revealing the graph at full
+ * strength. Tunable live via window.__skyGradient for iterating on the palette.
+ *
+ * Default: the icon/scenery dusk ramp (theme.dusk vocabulary) — deep indigo
+ * zenith → warm horizon gold, matching both the painting's amber band and the
+ * graph atmosphere shader's own horizon glow.
+ */
+export const DEFAULT_SKY = 'linear-gradient(rgb(26, 39, 64) 0%, rgb(58, 74, 107) 39%, rgb(138, 122, 142) 52%, rgb(232, 180, 107) 62%, rgb(243, 210, 126) 100%)';
+/**
+ * The dusk-sky wash. Rendered as a SIBLING of the graph canvas (not inside the
+ * landing overlay), with mix-blend-mode:screen so the dark sky picks up the dusk
+ * tint while the bright stars punch straight through — the graph glows through
+ * the daytime sky. `fade` drives the day→night dissolve (1 = full dusk, 0 = clear
+ * night). Tunable live via window.__skyGradient.
+ */
+export function SkyGradient({ fade = 1 }: { fade?: number }): React.JSX.Element {
+  const g = (typeof window !== 'undefined' && (window as unknown as { __skyGradient?: string }).__skyGradient) || DEFAULT_SKY;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1, pointerEvents: 'none',
+        background: g,
+        mixBlendMode: 'screen',
+        opacity: fade,
+        transition: 'opacity 0.9s ease-in',
+      }}
+    />
+  );
+}
+
+/**
+ * HeroLandscape — the painted trailhead as a FULL-FRAME scene: valley, sun-lit
+ * mountains, the Visitor Centre sign, and a painted dusk sky whose own stars at
+ * the top edge dissolve into the live graph's star dome behind it. The mask
+ * fades only the top band to transparent, so the real starfield takes over
+ * exactly where the painting's sky would continue upward — a seamless handoff
+ * from painted sky to live sky.
+ */
+function HeroLandscape(): React.JSX.Element {
+  // Prod uses the chroma-keyed transparent plate (heroCutUrl): real alpha in the
+  // sky, so the live graph shows through the painted silhouette — no CSS mask.
+  // The harness can still override the image via window.__heroSrc for art
+  // iteration; if that override is NOT transparent, fall back to the top-band
+  // gradient mask so a flat painting still blends into the sky.
+  const w = typeof window !== 'undefined' ? (window as unknown as { __heroSrc?: string; __heroTransparent?: boolean }) : undefined;
+  const override = w?.__heroSrc;
+  const src = override || heroCutUrl;
+  const transparent = override ? !!w?.__heroTransparent : true; // published asset IS transparent
+  const mask = transparent
+    ? undefined
+    : 'linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.5) 14%, rgba(0,0,0,1) 34%)';
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          objectPosition: 'center bottom',
+          display: 'block',
+          maskImage: mask,
+          WebkitMaskImage: mask,
+        }}
+      />
+    </div>
+  );
+}
+
 export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
   return (
     <span style={{ fontFamily: theme.mono, fontWeight: 700, letterSpacing: '0.02em', color: light ? theme.cream : theme.text }}>
@@ -67,104 +145,123 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session }: { session: Session & { signIn: () => void } }): React.JSX.Element {
+export function Landing({ session, onExplore, authed }: {
+  session: Session & { signIn: () => void };
+  onExplore?: () => void;
+  /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
+  authed?: boolean;
+}): React.JSX.Element {
   const signCard: React.CSSProperties = {
-    background: 'rgba(253,249,239,0.94)',
+    background: 'rgba(253,249,239,0.88)',
     border: `1px solid ${theme.border}`,
     borderRadius: 10,
     padding: '0.8rem 0.95rem',
     boxShadow: theme.shadow,
     display: 'grid',
     gap: '0.25rem',
+    backdropFilter: 'blur(8px)',
   };
+  // The interactive islands sit in a pointer-events:none column (so drags on the
+  // bare hero fall through to the live graph and spin it) — only the buttons,
+  // links, and cards re-enable pointer events for themselves.
+  const island: React.CSSProperties = { pointerEvents: 'auto' };
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
-      <DuskScene tall>
-        <div style={{ padding: 'clamp(1.2rem, 4vw, 2.2rem)', display: 'grid', alignContent: 'start', gap: '0.6rem' }}>
-          <div style={{ fontSize: '1.5rem' }}>
-            <Wordmark light />
+    <div style={{ position: 'relative', width: '100%' }}>
+      {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
+      <section style={{
+        position: 'relative', minHeight: '100svh',
+        display: 'grid', alignContent: 'end', justifyItems: 'center',
+        padding: 'clamp(1rem, 3vw, 2rem)',
+        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 2rem)',
+      }}>
+        {/* Painted landscape, pinned to this first screen only */}
+        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
+        <div style={{ position: 'relative', width: '100%', maxWidth: 480, display: 'grid', gap: '0.8rem' }}>
+          <div style={{ display: 'grid', gap: '0.6rem' }}>
+            <h1 style={{
+              margin: 0, fontFamily: theme.serif, fontWeight: 600,
+              fontSize: 'clamp(1.3rem, 4vw, 1.9rem)', color: theme.cream,
+              maxWidth: '20ch', lineHeight: 1.25, textShadow: '0 1px 12px rgba(8,29,36,0.55)',
+            }}>
+              a personal substrate for exploring the world
+            </h1>
+            <p style={{ margin: 0, color: theme.cream, opacity: 0.9, maxWidth: '40ch', fontSize: '0.9rem', textShadow: '0 1px 8px rgba(8,29,36,0.55)' }}>
+              Your home for notes, plans, and discoveries.
+            </p>
+            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+              <div style={{ ...island, width: 'min(260px, 100%)' }}>
+                <Button onClick={session.signIn}>{authed ? 'Step into the sky' : 'Sign in with passkey'}</Button>
+              </div>
+            </div>
+            <span style={{ color: theme.cream, opacity: 0.75, fontSize: '0.75rem', textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
+              {authed ? 'Pull up into the sky — or scroll to look around.' : 'New here? The same button registers a passkey.'}
+            </span>
+            {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>
-          <h1
-            style={{
-              margin: 0,
-              fontFamily: theme.serif,
-              fontWeight: 600,
-              fontSize: 'clamp(1.5rem, 4.5vw, 2.2rem)',
-              color: theme.cream,
-              maxWidth: '18ch',
-              lineHeight: 1.2,
-              textShadow: '0 1px 12px rgba(8,29,36,0.6)',
-            }}
-          >
-            a personal substrate for exploring the world
-          </h1>
-          <p style={{ margin: 0, color: theme.cream, opacity: 0.85, maxWidth: '44ch', fontSize: '0.95rem', textShadow: '0 1px 8px rgba(8,29,36,0.6)' }}>
-            Your home for notes, plans, and discoveries. Remember what matters, share what helps,
-            and grow the tools as you go.
-          </p>
-          <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
-            <div style={{ width: 'min(260px, 100%)' }}>
-              <Button onClick={session.signIn}>Sign in with passkey</Button>
+        </div>
+        {/* Scroll cue */}
+        <div aria-hidden style={{ position: 'absolute', bottom: '0.6rem', left: 0, right: 0, textAlign: 'center', color: theme.cream, opacity: 0.55, fontSize: '0.7rem', fontFamily: theme.mono }}>
+          ↓ more below
+        </div>
+      </section>
+
+      {/* ── CONTENT BELOW THE HERO ── OPAQUE ground: occludes the fixed graph +
+          sky gradient so neither leaks past the horizon into the content. A soft
+          top edge blends the transition from the painted valley into the paper. */}
+      <section style={{
+        position: 'relative', zIndex: 2,
+        display: 'grid', justifyItems: 'center',
+        padding: 'clamp(1.5rem, 5vw, 3.5rem) clamp(1rem, 3vw, 2rem)',
+        gap: '1.4rem',
+        background: theme.bg, // opaque day paper — the ground below the horizon
+      }}>
+        {/* Feathered top edge: the valley fades into the paper over ~64px */}
+        <div aria-hidden style={{ position: 'absolute', top: -64, left: 0, right: 0, height: 64, background: `linear-gradient(to bottom, transparent, ${theme.bg})`, pointerEvents: 'none' }} />
+        <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '0.8rem' }}>
+            <div style={{ ...signCard, ...island }}>
+              <strong style={{ fontFamily: theme.serif, fontSize: '0.9rem', color: theme.text }}>A workspace that remembers</strong>
+              <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
+                Facts with provenance and history — nothing is lost, the important rises. What you save today is still legible in ten years.
+              </span>
+            </div>
+            <div style={{ ...signCard, ...island }}>
+              <strong style={{ fontFamily: theme.serif, fontSize: '0.9rem', color: theme.text }}>Tools you can grow</strong>
+              <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
+                Cells are small programs you deploy into the land — a tracker, a board, a feed — each with its own address and its own logs.
+              </span>
+            </div>
+            <div style={{ ...signCard, ...island }}>
+              <strong style={{ fontFamily: theme.serif, fontSize: '0.9rem', color: theme.text }}>Agents welcome</strong>
+              <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
+                One vocabulary for people and AI: <code style={{ fontFamily: theme.mono, fontSize: '0.78rem' }}>whoami · read · act</code> over MCP at <code style={{ fontFamily: theme.mono, fontSize: '0.78rem' }}>parc.land/mcp</code>.
+              </span>
             </div>
           </div>
-          <span style={{ color: theme.cream, opacity: 0.7, fontSize: '0.78rem' }}>
-            New here? The same button registers a passkey.
-          </span>
-          {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
-        </div>
-      </DuskScene>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(210px, 100%), 1fr))', gap: '0.8rem' }}>
-        <div style={signCard}>
-          <strong style={{ fontFamily: theme.serif }}>🌲 A workspace that remembers</strong>
-          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
-            Facts with provenance and history — nothing is lost, the important rises. What you save
-            today is still legible in ten years.
-          </span>
-        </div>
-        <div style={signCard}>
-          <strong style={{ fontFamily: theme.serif }}>🏕 Tools you can grow</strong>
-          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
-            Cells are small programs you deploy into the land — a tracker, a board, a feed — each
-            with its own address and its own logs.
-          </span>
-        </div>
-        <div style={signCard}>
-          <strong style={{ fontFamily: theme.serif }}>✨ Agents welcome</strong>
-          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
-            One vocabulary for people and AI: <code style={{ fontFamily: theme.mono }}>whoami · read · act</code> over
-            MCP at <code style={{ fontFamily: theme.mono }}>parc.land/mcp</code>. This page is the same client, rendered.
-          </span>
-        </div>
-      </div>
+          {/* Docs call-to-action */}
+          <div style={{ ...signCard, ...island, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+            <div style={{ display: 'grid', gap: '0.2rem' }}>
+              <strong style={{ fontFamily: theme.serif, color: theme.text }}>Public documentation</strong>
+              <span style={{ color: theme.dim, fontSize: '0.82rem' }}>Read the parc.land substrate docs — server-rendered, no sign-in needed.</span>
+            </div>
+            <a href={localize('/@c15r/lit')} style={{ display: 'inline-block', background: theme.pine, color: theme.cream, borderRadius: 8, padding: '0.4rem 0.9rem', fontSize: '0.85rem', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              Read the docs →
+            </a>
+          </div>
 
-      <div style={{ ...signCard, gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
-        <div style={{ display: 'grid', gap: '0.2rem' }}>
-          <strong style={{ fontFamily: theme.serif }}>📖 Public documentation</strong>
-          <span style={{ color: theme.dim, fontSize: '0.85rem' }}>
-            Read the parc.land substrate docs — server-rendered, no sign-in needed.
-          </span>
-        </div>
-        <a
-          href={localize('/@c15r/lit')}
-          style={{
-            display: 'inline-block',
-            background: theme.pine,
-            color: theme.cream,
-            borderRadius: 8,
-            padding: '0.4rem 0.9rem',
-            fontSize: '0.85rem',
-            textDecoration: 'none',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Read the docs →
-        </a>
-      </div>
+          <p style={{ margin: 0, textAlign: 'center', color: theme.dim, opacity: 0.85, fontSize: '0.8rem', fontStyle: 'italic' }}>
+            “A digital communal green space.” — the Visitor Centre, est. v1
+          </p>
 
-      <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.8rem', fontStyle: 'italic' }}>
-        “A digital communal green space.” — the Visitor Centre, est. v1 🏛
-      </p>
+          {/* Footer links — on the light paper ground now, so ink-on-paper */}
+          <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
+            <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
+            <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
+            <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>home — devtools</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body { background: #1b1710; color: #efe9dc; font-family: system-ui, sans-serif; }
+    #root { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // Devtools: skip auth, show the signed-in graph directly.
+    // Set a token in localStorage for live data: localStorage.setItem('parc.devtools.token', 'tok_...')
+    // Override the hero art locally (not committed to the asset URL yet).
+    window.__heroSrc = '/hero-cut.png';
+    window.__heroTransparent = true; // chroma-keyed: real alpha, no CSS mask needed
+  </script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

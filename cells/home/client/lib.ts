@@ -20,6 +20,10 @@ export function localize(href: string | null | undefined): string {
 // Painted assets (data URIs via the dataurl loader): the dusk-valley hero,
 // the dawn panorama strip, and the field computer.
 export const heroUrl = 'https://parc.land/@c15r/home/_data/c15r/public/assets/hero.jpg';
+// The chroma-keyed trailhead plate: a full-frame valley with a TRANSPARENT sky
+// (real alpha, cut from a green-screen render), so the live graph shows through
+// the exact painted silhouette. The dusk-sky gradient sits behind it.
+export const heroCutUrl = 'https://parc.land/@c15r/home/_data/c15r/public/assets/hero-cut.png';
 export const stripUrl = 'https://parc.land/@c15r/home/_data/c15r/public/assets/strip.jpg';
 export const computerUrl = 'https://parc.land/@c15r/home/_data/c15r/public/assets/computer.webp';
 

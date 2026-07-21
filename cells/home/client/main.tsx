@@ -27,8 +27,13 @@ function ssrSeed(): Boot | undefined {
 }
 
 const el = document.getElementById('root');
+
 if (el) {
   const initial = ssrSeed();
+  // NOTE: the trailhead's dusk-sky is a GRADIENT, and it lives in the landing
+  // (dashboard.tsx SkyGradient), not here — bootstrap shouldn't own visual
+  // theme, and the sky must dissolve to the night graph on enter (a color
+  // transition, not just an opacity pop), which this bootstrap can't drive.
   if (el.dataset.ssr === '1') hydrateRoot(el, <App initial={initial} />);
   else {
     el.textContent = '';

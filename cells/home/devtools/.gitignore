@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+# built bundle + local art overrides (not source)
+public/app.js
+public/*.png
+public/*.jpg
+public/*.webp

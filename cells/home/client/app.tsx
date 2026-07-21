@@ -15,9 +15,10 @@
 import * as React from 'react';
 import { Page, theme, type TypeDecl } from '@parc/ui';
 import { useAuth, type Session } from './lib';
-import { Landing, Wordmark } from './dashboard';
+import { Landing, Wordmark, SkyGradient } from './dashboard';
 import { FullGraph } from './graph';
 import { Palette } from './palette';
+import { SkyBackdrop } from './sky';
 import { setTypeDecls, loadTypeDecls, FactDetailHost } from './facts';
 import { readHashState, writeHashState } from './urlstate';
 import { ink } from './ink';
@@ -26,7 +27,67 @@ import { ink } from './ink';
 export type { Session } from './lib';
 export { typeDeclsFrom, setTypeDecls, loadTypeDecls, typeIcon } from './facts';
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useCallback } = React;
+
+/**
+ * The landing-with-sky — the trailhead EVERYONE arrives at, signed in or not.
+ * Renders the sky dome (stars + atmosphere) as a full-viewport backdrop behind
+ * the landing content; the hero painting sits at the bottom, fading upward
+ * into the live sky. The one CTA adapts: signed out it starts the passkey
+ * flow, signed in it steps through into the graph. Scroll/swipe also enters
+ * (the "walk into the sky" gesture).
+ */
+function LandingWithSky({ session, onEnter }: {
+  session: Session & { signIn: () => void };
+  onEnter?: () => void; // present when authed: fade out, then reveal the graph
+}): React.JSX.Element {
+  const [entering, setEntering] = useState(false);
+  const onExplore = useCallback(() => {
+    setEntering(true);
+    // Let the fade play before handing over (sign-in navigates away; enter unmounts us).
+    setTimeout(() => (onEnter ? onEnter() : session.signIn()), 600);
+  }, [session, onEnter]);
+  // Scroll or swipe also walks into the sky (authed only — signed-out visitors
+  // must deliberately tap the passkey button, not trip into WebAuthn).
+  useEffect(() => {
+    if (!onEnter || entering) return;
+    let startY: number | null = null;
+    const wheel = (e: WheelEvent): void => { if (e.deltaY > 24) onExplore(); };
+    const touchStart = (e: TouchEvent): void => { startY = e.touches[0]?.clientY ?? null; };
+    const touchMove = (e: TouchEvent): void => {
+      const y = e.touches[0]?.clientY;
+      if (startY !== null && y !== undefined && startY - y > 48) onExplore();
+    };
+    window.addEventListener('wheel', wheel, { passive: true });
+    window.addEventListener('touchstart', touchStart, { passive: true });
+    window.addEventListener('touchmove', touchMove, { passive: true });
+    return () => {
+      window.removeEventListener('wheel', wheel);
+      window.removeEventListener('touchstart', touchStart);
+      window.removeEventListener('touchmove', touchMove);
+    };
+  }, [onEnter, entering, onExplore]);
+  return (
+    <>
+      <SkyBackdrop />
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1,
+          display: 'grid',
+          gridTemplateRows: '1fr auto',
+          overflow: 'hidden',
+          opacity: entering ? 0 : 1,
+          transition: 'opacity 0.6s ease-out',
+          pointerEvents: entering ? 'none' : 'auto',
+        }}
+      >
+        <Landing session={{ ...session, signIn: onExplore }} onExplore={onExplore} authed={!!onEnter} />
+      </div>
+    </>
+  );
+}
 
 /**
  * The graph shell's parachute. A render error anywhere under the graph/palette
@@ -99,20 +160,116 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     }
     writeHashState({ selected: selectedKey ?? undefined });
   }, [selectedKey]);
+  // The landing is the trailhead for EVERYONE (owner direction 2026-07-20):
+  // authed visitors see it too, and step through into the graph (scroll,
+  // swipe, or the button). Session-sticky so an in-app reload after entering
+  // doesn't bounce back to the trailhead; a fresh visit (new tab) does land.
+  const [entered, setEntered] = useState(() => {
+    try { return sessionStorage.getItem('parc.home.entered') === '1'; } catch { return false; }
+  });
+  // `leaving` drives the day→night DISSOLVE: on enter, the dusk-sky + landing
+  // overlay fades to 0 over ~0.9s (revealing the night graph beneath at full
+  // strength), THEN unmounts. Not just an opacity pop — the sky washes away.
+  const [leaving, setLeaving] = useState(false);
+  const enter = useCallback(() => {
+    try { sessionStorage.setItem('parc.home.entered', '1'); } catch { /* private mode */ }
+    setLeaving(true);
+    setTimeout(() => setEntered(true), 900);
+  }, []);
+  // Return to the trailhead from the graph (wordmark click). Re-mounts the
+  // landing overlay + dusk sky over the still-live graph and clears the flag.
+  const toLanding = useCallback(() => {
+    try { sessionStorage.removeItem('parc.home.entered'); } catch { /* private mode */ }
+    setLeaving(false);
+    setEntered(false);
+  }, []);
+  // ── ELASTIC PULL-TO-ENTER (drag-to-refresh, inverted: pull UP at the top) ──
+  // The overlay is a scroll container: wheel/scrollbar scrolls the taller landing
+  // (hero → content-below). At the very top, pulling UP further (overscroll) does
+  // NOT scroll — it lifts the whole overlay elastically with a "release to enter"
+  // hint; past PULL_COMMIT it dissolves to the graph, otherwise it springs back.
+  // Bare pointer-drags aren't handled here at all — they fall through the
+  // pointer-events:none overlay to the live graph beneath, which spins natively.
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const [pull, setPull] = useState(0);           // px the overlay is lifted (0 = rest)
+  const pullRef = React.useRef(0); pullRef.current = pull;
+  const PULL_COMMIT = 140;                        // lift past this → enter
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !authed || entered || leaving) return;
+    let touchY: number | null = null;
+    let springTimer: ReturnType<typeof setTimeout> | null = null;
+    const atTop = (): boolean => el.scrollTop <= 0;
+    const commitOrSpring = (): void => {
+      if (pullRef.current >= PULL_COMMIT) enter();
+      else setPull(0); // CSS transition springs it back
+    };
+    let lastTouchY: number | null = null;
+    const touchStart = (e: TouchEvent): void => {
+      touchY = lastTouchY = e.touches[0]?.clientY ?? null;
+    };
+    const touchMove = (e: TouchEvent): void => {
+      const y = e.touches[0]?.clientY;
+      if (touchY === null || y === undefined || lastTouchY === null) return;
+      const dyTotal = touchY - y;   // >0 = finger moved UP (pulling into the sky)
+      const dyStep = lastTouchY - y; // incremental; >0 = up this frame
+      lastTouchY = y;
+      if (dyTotal > 0 && atTop() && pullRef.current === 0) {
+        // At the top, pulling UP → elastic lift (release-to-enter).
+        e.preventDefault();
+        setPull(Math.min(PULL_COMMIT * 1.4, dyTotal * 0.8));
+      } else if (pullRef.current > 0) {
+        // Continue/relax the pull as the finger moves.
+        e.preventDefault();
+        setPull((p) => Math.max(0, Math.min(PULL_COMMIT * 1.4, p + dyStep * 0.8)));
+      } else {
+        // Otherwise scroll the (pointer-events:none) container manually.
+        el.scrollTop += dyStep;
+      }
+    };
+    const touchEnd = (): void => { touchY = null; commitOrSpring(); };
+    // CAPTURE-PHASE wheel on window: intercept BEFORE the graph canvas sees it
+    // (otherwise scroll would zoom the graph). We consume every wheel while the
+    // trailhead is up — driving page-scroll or the elastic pull ourselves — and
+    // stop it reaching the graph. Pointer-DRAGS still fall through (spin the sky);
+    // only wheel is intercepted.
+    const wheelWin = (e: WheelEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.deltaY < 0 && atTop()) {
+        setPull((p) => Math.min(PULL_COMMIT * 1.4, p - e.deltaY * 0.6));
+        if (springTimer) clearTimeout(springTimer);
+        springTimer = setTimeout(commitOrSpring, 140);
+      } else if (pullRef.current > 0 && e.deltaY > 0) {
+        setPull((p) => Math.max(0, p - e.deltaY * 0.6));
+      } else {
+        el.scrollTop += e.deltaY; // scroll the (pointer-events:none) container
+      }
+    };
+    window.addEventListener('wheel', wheelWin, { passive: false, capture: true });
+    window.addEventListener('touchstart', touchStart, { passive: true, capture: true });
+    window.addEventListener('touchmove', touchMove, { passive: false, capture: true });
+    window.addEventListener('touchend', touchEnd, { passive: true, capture: true });
+    return () => {
+      if (springTimer) clearTimeout(springTimer);
+      window.removeEventListener('wheel', wheelWin, { capture: true } as EventListenerOptions);
+      window.removeEventListener('touchstart', touchStart, { capture: true } as EventListenerOptions);
+      window.removeEventListener('touchmove', touchMove, { capture: true } as EventListenerOptions);
+      window.removeEventListener('touchend', touchEnd, { capture: true } as EventListenerOptions);
+    };
+  }, [authed, entered, leaving, enter]);
 
   if (!session.ready) return <Page>{null}</Page>;
 
   if (!authed) {
-    return (
-      <Page>
-        <Landing session={session} />
-        <p style={{ margin: 0, textAlign: 'center', color: theme.dim, fontSize: '0.75rem' }}>
-          <Wordmark /> · a personal substrate · <a href="https://parc.land/mcp" style={{ color: theme.accent }}>agents start here</a>
-        </p>
-      </Page>
-    );
+    return <LandingWithSky session={session} />;
   }
 
+  // ── AUTHED: the graph IS the sky ──
+  // The real graph mounts immediately (data starts streaming), behind the
+  // landing overlay. "Entering" just fades the overlay away — no remount,
+  // no loading flash, no second render. The user sees their live substrate
+  // as the trailhead's starfield from the moment the page loads.
   return (
     <>
       <GraphBoundary
@@ -132,23 +289,78 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
         )}
       >
         <FullGraph selectedKey={selectedKey} onSelect={(n) => setSelectedKey(n?.key ?? null)} />
-        <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />
+        {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />}
+        {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
+            the graph (consistent anchor). In the graph it's a link back to the
+            trailhead. Sign-out + session chrome only once entered. */}
         <div style={{ position: 'fixed', top: 'max(10px, env(safe-area-inset-top))', left: 12, right: 12, zIndex: 30, pointerEvents: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-          {/* `light` — the parchment-on-dark variant; the default (theme.text,
-              near-black) vanished into the dusk canvas. */}
-          <span style={{ pointerEvents: 'auto', filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))' }}><Wordmark light /></span>
-          <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-            {session.error ? <span title={session.error} role="status" style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.68rem' }}>session warning</span> : null}
-            <button
-              onClick={session.signOut}
-              title={session.user ? `signed in as ${session.user}` : 'sign out'}
-              style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
-            >
-              sign out
-            </button>
-          </div>
+          <button
+            onClick={entered ? toLanding : undefined}
+            title={entered ? 'Back to the trailhead' : undefined}
+            style={{
+              pointerEvents: entered ? 'auto' : 'none',
+              background: 'none', border: 'none', padding: 0, margin: 0,
+              cursor: entered ? 'pointer' : 'default',
+              filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))',
+            }}
+          >
+            <Wordmark light />
+          </button>
+          {entered && (
+            <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+              {session.error ? <span title={session.error} role="status" style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.68rem' }}>session warning</span> : null}
+              <button
+                onClick={() => { try { sessionStorage.removeItem('parc.home.entered'); } catch {} session.signOut(); }}
+                title={session.user ? `signed in as ${session.user}` : 'sign out'}
+                style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
+              >
+                sign out
+              </button>
+            </div>
+          )}
         </div>
       </GraphBoundary>
+      {/* The dusk-sky wash sits DIRECTLY over the graph canvas (sibling, not
+          inside the overlay) so mix-blend-mode:screen tints the dark sky while
+          the live stars punch through. Fades to clear night as you enter. */}
+      {!entered && <SkyGradient fade={leaving ? 0 : 1} />}
+      {/* The landing overlay (painted valley + content). It's a SCROLL CONTAINER
+          (wheel/scrollbar scrolls the taller page); bare areas are
+          pointer-events:none so drags fall through to the graph and spin it.
+          `pull` lifts it elastically on overscroll-up (release-to-enter); on
+          commit the whole thing dissolves (day → night) before unmounting. */}
+      {!entered && (
+        <div
+          ref={scrollRef}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 20,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            overscrollBehavior: 'contain',
+            // pointer-events:none so a DRAG on the bare hero falls through to the
+            // graph (spin the sky); the Landing's islands (buttons/cards/links)
+            // re-enable pointer events for themselves. Scroll is driven by the
+            // window wheel/touch handlers above, not native scrolling.
+            pointerEvents: 'none',
+            opacity: leaving ? 0 : 1,
+            transform: pull ? `translateY(${-pull}px)` : undefined,
+            transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
+          }}
+        >
+          <Landing session={{ ...session, signIn: enter }} onExplore={enter} authed />
+          {/* Release-to-enter hint, revealed by the elastic lift */}
+          <div aria-hidden style={{
+            position: 'fixed', left: 0, right: 0, bottom: 8, textAlign: 'center',
+            fontFamily: ink.mono, fontSize: '0.72rem', color: ink.accent,
+            opacity: Math.min(1, pull / PULL_COMMIT), pointerEvents: 'none',
+            transition: 'opacity 0.15s',
+          }}>
+            {pull >= PULL_COMMIT ? 'release to enter ↑' : 'keep pulling to enter ↑'}
+          </div>
+        </div>
+      )}
       <FactDetailHost />
     </>
   );
