@@ -32,6 +32,37 @@ const KEY_PREFIX = 'file/docs/';
 const BATCH_MAX = 20; // facts per ingest call (handler cap is 100)
 const BATCH_BYTES = 80 * 1024; // …or until this much inline content, whichever first (keep the gateway body small)
 
+// The PUBLIC face is a CURATED subset — not the whole corpus. docs-sync used to
+// blanket-share `file/docs/*` to `public`, which exposed every ADR, trajectory
+// log, and protocol note (a builder's private reasoning) on the anonymous apex.
+// The public slice is now the user/integrator GUIDE plus a hand-picked set of
+// vision essays; the rest of the corpus stays ingested (queryable to the owner)
+// but private. Each entry is shared across all three fact framings a doc takes:
+// the raw `file/…md` mirror, the `doc:` header, and its `doc-block:…/*` sections.
+// To publish another doc, add its base here — nothing else blanket-shares.
+const PUBLIC_DOC_BASES = [
+  'guide/*', // the whole user/integrator guide (docs/guide/*)
+  // vision / thesis essays (general-reader-friendly):
+  'cognitive-substrate',
+  'the-coupled-workspace',
+  'ancestor/sync/the-substrate-thesis',
+  'ancestor/sync/pressure-field',
+  'ancestor/sync/what-becomes-true',
+];
+/** Every public grant pattern implied by PUBLIC_DOC_BASES (file + doc + doc-block). */
+function publicSharePatterns() {
+  const pats = [];
+  for (const base of PUBLIC_DOC_BASES) {
+    if (base.endsWith('*')) {
+      const b = base.slice(0, -1); // e.g. 'guide/'
+      pats.push(`file/docs/${b}*`, `doc:docs/${b}*`, `doc-block:docs/${b}*`);
+    } else {
+      pats.push(`file/docs/${base}.md`, `doc:docs/${base}`, `doc-block:docs/${base}/*`);
+    }
+  }
+  return pats;
+}
+
 const flags = process.argv.slice(2);
 const COMMIT = flags.includes('--commit');
 const SHARE = !flags.includes('--no-share');
@@ -143,7 +174,18 @@ async function liveShas() {
       cursor = res.nextCursor;
     } while (cursor);
   } catch (err) {
-    console.warn(`  ! live sha read failed (${(err && err.message) || err}) — falling back to full ingest`);
+    const msg = (err && err.message) || String(err);
+    // A SCOPE/auth failure is not "transient" — falling through would re-ingest
+    // AND re-decompose all ~194 docs (a slow, revision-polluting storm) purely
+    // because the token can't read. Bail hard so a scope mishap can't trigger a
+    // mass re-sync; the fix is a token with `read:workspace` (docs-sync needs
+    // both read + write), not a full ingest.
+    if (/scope_denied|invalid_token|unauthor/i.test(msg)) {
+      console.error(`\n  ✗ change-detection read failed on auth/scope: ${msg}`);
+      console.error(`  docs-sync needs a token with BOTH read:workspace AND write:workspace.`);
+      process.exit(1);
+    }
+    console.warn(`  ! live sha read failed transiently (${msg}) — falling back to full ingest`);
     return null;
   }
   return shas;
@@ -207,8 +249,16 @@ if (failedKeys.length) {
 }
 
 if (SHARE) {
-  await call('act', 'workspace.share', { key: `${KEY_PREFIX}*`, to: 'public', mode: 'read' });
-  console.log(`✓ shared ${KEY_PREFIX}* → public (read-only)`);
+  // Re-assert the CURATED public grants (idempotent — a re-share just refreshes
+  // the grant). Deliberately does NOT touch the blanket `file/docs/*` grant, and
+  // never UNSHARES: retracting a previously-public doc is an explicit owner act
+  // (workspace.unshare), not a side effect of sync — so removing a base here
+  // stops future publishing but won't silently revoke live access.
+  const patterns = publicSharePatterns();
+  for (const key of patterns) {
+    await call('act', 'workspace.share', { key, to: 'public', mode: 'read' });
+  }
+  console.log(`✓ re-asserted ${patterns.length} curated public grants (guide + vision docs)`);
 }
 console.log(`✓ docs corpus: ${ingested}/${facts.length} file facts upserted${failedKeys.length ? ` (${failedKeys.length} to retry)` : ''}`);
 

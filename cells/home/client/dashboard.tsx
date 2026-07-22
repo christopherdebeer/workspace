@@ -412,7 +412,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             <div style={{ ...signCard, ...island }}>
               <strong style={{ fontFamily: theme.serif, fontSize: '0.9rem', color: theme.text }}>A workspace that remembers</strong>
               <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
-                Facts with provenance and history — nothing is lost, the important rises. What you save today is still legible in ten years.
+                Facts with provenance and history — nothing is lost, the important rises. What you save stays where you can find it.
               </span>
             </div>
             <div style={{ ...signCard, ...island }}>
