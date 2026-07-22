@@ -389,9 +389,14 @@ export async function rebuildPublicProjection(store: StateStore, scope: string):
     Object.assign(coords, mv.coords);
   }
   // The current public patterns — the `_public/<pattern>` reflections
-  // (`share {to:"public"}` writes them; `unshare` supersedes). A rare-event
-  // whole-slice list, not a hot-path cost.
-  const records = await store.list(scope);
+  // (`share {to:"public"}` writes them; `unshare` supersedes). Read via the
+  // TYPE index (every reflection is written `type:"public-share"`), never a
+  // whole-slice `store.list`: this Lambda is memory-sized for stream batches,
+  // and materializing thousands of full fact values here (doc-block corpus,
+  // layout shards) is exactly the kind of load that killed the first live
+  // rebuild silently (2026-07-22 validation: probe embedded + atlas patched,
+  // rebuild never wrote).
+  const records = await store.listByType(scope, 'public-share');
   const patterns = records
     .filter((r) => r.key.startsWith('_public/') && !r.superseded)
     .map((r) => ((r.value as { pattern?: string } | null)?.pattern ?? r.key.slice('_public/'.length)));

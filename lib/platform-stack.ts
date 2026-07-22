@@ -192,7 +192,10 @@ export class PlatformStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       entry: path.join(__dirname, '..', '..', 'services', 'vector-indexer', 'handler.ts'),
       handler: 'handler',
-      memorySize: 512,
+      // 1024: the ADR-0092 public-projection rebuild reads the layout manifest
+      // + all shards in one invocation on top of the embed/edge pass — 512 left
+      // no headroom (and doubles CPU, so batches clear faster).
+      memorySize: 1024,
       timeout: cdk.Duration.seconds(60),
       logRetention: logs.RetentionDays.ONE_WEEK,
       // Plus SUBSTRATE_TABLE so the indexer can write inferred similarTo edges (ADR-0031).
