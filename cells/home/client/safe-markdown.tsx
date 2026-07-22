@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { marked } from 'marked';
+import { resolveDocHref } from './doc-links';
+export { resolveDocHref };
 
 type Token = Record<string, any>;
 
@@ -49,10 +51,11 @@ export interface MdOpts {
   base?: string;
   /** Open a fact key in place (e.g. home's openFact). Absent → href-only. */
   onFactLink?: (key: string) => void;
+  /** The href for a fact key. The default relative `/r/<key>` only resolves at
+   *  the apex — a host served from a cell subdomain passes an origin-aware
+   *  resolver (home: `localize`) so new-tab/middle-click stays navigable. */
+  factHref?: (key: string) => string;
 }
-
-import { resolveDocHref } from './doc-links';
-export { resolveDocHref };
 
 /** The `[[wiki-link]]` inline tokenizer, registered once. A marked extension
  *  (not a regex preprocess) so code spans/blocks keep their literal text. */
@@ -74,10 +77,11 @@ marked.use({
   ],
 });
 
-function FactLink({ factKey, children, onFactLink }: { factKey: string; children: React.ReactNode; onFactLink?: (key: string) => void }): React.JSX.Element {
+function FactLink({ factKey, children, o }: { factKey: string; children: React.ReactNode; o: MdOpts }): React.JSX.Element {
+  const { onFactLink, factHref } = o;
   return (
     <a
-      href={`/r/${factKey}`}
+      href={factHref ? factHref(factKey) : `/r/${factKey}`}
       title={factKey}
       style={{ textDecorationStyle: 'dotted', textUnderlineOffset: '2px' }}
       onClick={onFactLink ? (ev) => { ev.preventDefault(); onFactLink(factKey); } : undefined}
@@ -106,13 +110,13 @@ function inline(tokens: Token[] | undefined, key: string, o: MdOpts = {}): React
       case 'br':
         return <br key={k} />;
       case 'wikilink':
-        return <FactLink key={k} factKey={String(t.factKey ?? '')} onFactLink={o.onFactLink}>{String(t.label ?? t.factKey ?? '')}</FactLink>;
+        return <FactLink key={k} factKey={String(t.factKey ?? '')} o={o}>{String(t.label ?? t.factKey ?? '')}</FactLink>;
       case 'link': {
         const body = inline(t.tokens, k, o) ?? String(t.text ?? t.href ?? '');
         // A corpus-relative doc link becomes a fact link (usable in place);
         // everything else keeps the ordinary sanitized-href path.
         const docKey = typeof t.href === 'string' ? resolveDocHref(t.href, o.base) : null;
-        if (docKey) return <FactLink key={k} factKey={docKey} onFactLink={o.onFactLink}>{body}</FactLink>;
+        if (docKey) return <FactLink key={k} factKey={docKey} o={o}>{body}</FactLink>;
         const href = safeNavigationUrl(t.href);
         return href
           ? <a key={k} href={href} rel="noreferrer">{body}</a>
@@ -189,7 +193,7 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
   });
 }
 
-export function SafeMarkdown({ text, base, onFactLink }: { text: string } & MdOpts): React.JSX.Element {
+export function SafeMarkdown({ text, base, onFactLink, factHref }: { text: string } & MdOpts): React.JSX.Element {
   let tokens: Token[] = [];
   try {
     tokens = marked.lexer(text.replace(/\r\n/g, '\n')) as Token[];
@@ -199,5 +203,5 @@ export function SafeMarkdown({ text, base, onFactLink }: { text: string } & MdOp
   // minWidth:0 lets this shrink below its content's intrinsic width inside a
   // flex/grid parent — without it, a wide <pre> child forces the whole column
   // (and the page) wider than the viewport instead of scrolling within itself.
-  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens, 'b', { base, onFactLink })}</div>;
+  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens, 'b', { base, onFactLink, factHref })}</div>;
 }

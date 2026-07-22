@@ -178,7 +178,9 @@ function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Elemen
     case 'markdown': {
       const md = bodyText(v);
       if (!md) return null;
-      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
+      // Fact links ([[wiki]]s) in any markdown body open in place, with an
+      // origin-aware href for new-tab (`/r/` exists only at the apex).
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} />;
     }
     case 'image': {
       const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
@@ -386,11 +388,15 @@ export function DocBody({ e, initialMd, spec }: { e: ListEntry; initialMd?: stri
   // modal — docs are navigable on home, not just readable.
   const mdBase = dm ? `docs/${dm[2]}`.replace(/\/[^/]*$/, '') : undefined;
   const onFactLink = (k: string): void => openFact({ key: k });
-  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} />;
+  // Origin-aware fact hrefs: `/r/<key>` exists only at the apex, so localize
+  // (→ apex-absolute) keeps new-tab/middle-click navigable when home is
+  // served from its own cell subdomain.
+  const factHref = (k: string): string => localize(`/r/${k}`);
+  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} />;
   if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
   // Assembly failed — the fact's own body (a block's content) or its summary.
   const own = bodyText(e.value);
-  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} />;
+  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} />;
   const sum = strField(e.value, ['summary']);
   return <span style={{ fontSize: '0.85rem', color: ink.text }}>{sum ?? factTitle(e)}</span>;
 }
@@ -447,7 +453,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     // A structured value with no declared viewer reads as a collapsible JSON

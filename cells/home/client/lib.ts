@@ -14,6 +14,13 @@ import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSe
  */
 export function localize(href: string | null | undefined): string {
   if (!href) return href ?? '';
+  // `/r/<key>` is an APEX route (the ADR-0090 fact address; dispatch serves
+  // it) — it does not exist on a cell's own `*.on.parc.land` origin, where a
+  // relative href would 404 against the cell Lambda. Emit it apex-ABSOLUTE:
+  // origin-independent, so the SAME markup is navigable at the apex and on a
+  // cell subdomain, and server/client renders agree byte-for-byte (the server
+  // can't always know which host it's being viewed from).
+  if (href.startsWith('/r/')) return `https://parc.land${href}`;
   const m = href.match(/^\/@([^/]+)\/([^/?#]+)(.*)$/);
   return m ? cellUrl(decodeURIComponent(m[1]), decodeURIComponent(m[2]), m[3]) : href;
 }
