@@ -8,7 +8,7 @@ import * as React from 'react';
 import { Card, Heading, Badge, Button, theme } from '@parc/ui';
 import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
-import { FactReading, DocBody, type ListEntry } from './facts';
+import { FactReading, FactReadingFooter, DocBody, type ListEntry } from './facts';
 import type { GraphNode } from './graph';
 
 const { useState, useEffect } = React;
@@ -192,6 +192,23 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
   );
 }
 
+/**
+ * The persistent SITE FOOTER — wordmark + docs/agents nav. Rendered ONCE at the
+ * end of the Content section so every landing state (a selected fact, the
+ * landing doc, or the featured/pitch ground) ends on the same anchor, instead
+ * of the footer appearing only on some branches (the drift this consolidates).
+ * Landing-only: the immersive graph has the top wordmark + palette instead.
+ */
+function SiteFooter(): React.JSX.Element {
+  return (
+    <div style={{ pointerEvents: 'auto', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
+      <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
+      <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
+      <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
+    </div>
+  );
+}
+
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
 export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd }: {
@@ -325,7 +342,10 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
       </section>
 
       {/* ── CONTENT BELOW THE HERO ── OPAQUE ground: occludes the fixed graph +
-          sky gradient so neither leaks past the horizon into the content. */}
+          sky gradient so neither leaks past the horizon into the content. It's
+          shaped as a SHEET — rounded top edge, lifted over the hero horizon with
+          a soft top shadow — so a summoned peek (a second rounded sheet, same
+          14px radius + top shadow) reads as a growing STACK rising over it. */}
       <section className="Content" style={{
         position: 'relative', zIndex: 2,
         display: 'grid', justifyItems: 'center',
@@ -333,13 +353,23 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         gap: '1.4rem',
         flexGrow: 1,
         background: theme.bg, // opaque day paper — the ground below the horizon
+        borderTopLeftRadius: 14, borderTopRightRadius: 14,
+        marginTop: -18, // overlap the hero so the rounded lip sits ON the horizon
+        boxShadow: '0 -12px 40px rgba(8,29,36,0.28)', // the sheet's rising edge
         pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
       }}>
         {selectedKey ? (
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
-          // the head already reads in the hero above, so body-only here.
+          // the head already reads in the hero above, so body-only here, then the
+          // shared reading footer (provenance · relationships · actions) so the
+          // fact reads the same here as in the peek.
           <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
-            { reading ? <FactReading e={reading} tone="light" head={false} showBody initialMd={selectedMd} /> : selectedMd ? (
+            { reading ? (
+              <>
+                <FactReading e={reading} tone="light" head={false} showBody footer initialMd={selectedMd} />
+                <FactReadingFooter e={reading} tone="light" authed={!!authed} />
+              </>
+            ) : selectedMd ? (
               // No peeked entry yet (an anonymous /r/<key> first paint — SSR
               // reads run only for authed callers) but the server DID load the
               // public doc body: render it now, server and client alike, so
@@ -353,15 +383,11 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         ) : landingEntry ? (
           // DEFAULT GROUND = the landing doc, full body as paper (blocks when
           // authed, the public file markdown when signed out). The home page is a
-          // fact, editable in lit — not a hardcoded pitch. Footer nav stays below.
+          // fact, editable in lit — not a hardcoded pitch. SiteFooter renders once
+          // at the Content bottom (below), for every branch.
           <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
             <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem', margin: '0 auto' }}>
               <DocBody e={landingEntry} initialMd={landingBody} tone="light" />
-            </div>
-            <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
-              <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
-              <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
-              <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
             </div>
           </div>
         ) : (
@@ -417,15 +443,12 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           <p style={{ margin: 0, textAlign: 'center', color: theme.dim, opacity: 0.85, fontSize: '0.8rem', fontStyle: 'italic' }}>
             “A digital communal green space.” — the Visitor Centre, est. v1
           </p>
-
-          {/* Footer links — on the light paper ground now, so ink-on-paper */}
-          <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
-            <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
-            <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
-            <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
-          </div>
         </div>
         )}
+
+        {/* The persistent site footer — ONE copy, below whichever ground
+            rendered above (selected fact, landing doc, or pitch/featured). */}
+        <SiteFooter />
       </section>
     </div>
   );

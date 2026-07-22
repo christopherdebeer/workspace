@@ -434,7 +434,10 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           {pull >= PULL_COMMIT ? 'release to enter ↑' : 'keep pulling ↑'}
         </div>
       )}
-      <FactDetailHost />
+      {/* The peek sheet takes the SUMMONING surface's tone: paper on the
+          trailhead (stacks over the cream Content), ink once you've entered the
+          graph (a parchment sheet over the night scene reads as a theme flip). */}
+      <FactDetailHost tone={entered ? 'dark' : 'light'} />
     </>
   );
 }

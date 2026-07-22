@@ -488,6 +488,17 @@ const READING_TONE = {
   dark: { text: ink.text, dim: ink.dim, accent: ink.accent },
 } as const;
 
+// The full surface palette a peek SHEET (and its chrome — provenance line,
+// neighbourhood chips, editor, actions) speaks. 'dark' is the ink field (the
+// graph); 'light' is the cream trailhead, so a peek summoned from the landing
+// stacks as a matching paper sheet over the paper Content. Extends READING_TONE
+// with the container/hairline/panel tokens the chrome needs.
+export type Tone = 'light' | 'dark';
+const SHEET_TONE = {
+  light: { bg: theme.panel, panel: '#fffef9', line: theme.border, text: theme.text, dim: theme.dim, accent: theme.accent, danger: theme.danger, actionFill: 'rgba(46,94,67,0.08)', scrim: 'rgba(8,29,36,0.32)', shadow: '0 -12px 40px rgba(8,29,36,0.3)' },
+  dark: { bg: ink.bg, panel: ink.panel, line: ink.line, text: ink.text, dim: ink.dim, accent: ink.accent, danger: ink.danger, actionFill: 'rgba(245,196,83,0.08)', scrim: 'rgba(0,0,0,0.55)', shadow: '0 -12px 40px rgba(0,0,0,0.5)' },
+} as const;
+
 /**
  * A mode-aware reading of ONE fact — icon, title, and some metadata — as FLAT
  * text (paper, NOT a card; cards are for listings/query results). `tone` picks
@@ -497,7 +508,7 @@ const READING_TONE = {
  * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
  * free (it just takes the tone's text colour).
  */
-export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false, initialMd }: {
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false, initialMd, footer = false }: {
   e: ListEntry;
   tone?: 'light' | 'dark';
   onImage?: boolean;
@@ -510,6 +521,9 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
   showBody?: boolean;
   /** Tight contexts (the palette row): smaller title, single-line ellipsis. */
   compact?: boolean;
+  /** A FactReadingFooter follows (caller-rendered) — suppress the old inline
+   *  open-link so the trailer owns the actions. */
+  footer?: boolean;
 }): React.JSX.Element {
   const c = READING_TONE[tone];
   const shadow = onImage ? '0 1px 12px rgba(8,29,36,0.6)' : undefined;
@@ -536,7 +550,51 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
         <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
       {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} /></div> : null}
-      {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
+      {/* The trailer (provenance · relationships · actions) is the shared
+          FactReadingFooter — rendered by the caller AFTER the body, so the reading
+          reads the same wherever a fact is met. FactReading itself stays just
+          head+meta+body; `footer` suppresses the old inline open-link so the two
+          don't double up. */}
+      {showBody && open && !footer ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
+    </div>
+  );
+}
+
+/**
+ * The per-fact READING FOOTER: the consistent trailer of secondary details
+ * shown below any fact body — a quiet provenance line (type · when · via · by,
+ * plus a superseded flag), the neighbourhood chip row (the one exploration
+ * affordance worth having everywhere), and the actions (open, and edit when
+ * there's somewhere to edit). Tone-aware, so it reads pine-on-cream on the
+ * trailhead and amber-on-ink over the graph. The peek's own trailer (FactDetail)
+ * and this share the same primitives (Neighbourhood, actionStyle, SHEET_TONE),
+ * so a fact's secondary details never drift between surfaces.
+ */
+export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: ListEntry; tone?: Tone; authed?: boolean }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
+  const m = e._meta;
+  const open = factHref(e);
+  const edit = factEdit(e);
+  const system = e.key.startsWith('_');
+  const prov: string[] = [];
+  if (m?.type) prov.push(m.type);
+  const when = relTime(m?.updatedAt);
+  if (when) prov.push(when);
+  if (m?.via) prov.push('via ' + m.via);
+  if (m?.writer) prov.push('by ' + m.writer);
+  if (m?.superseded) prov.push('superseded');
+  return (
+    <div style={{ display: 'grid', gap: '0.55rem', marginTop: '0.3rem', paddingTop: '0.7rem', borderTop: `1px solid ${t.line}` }}>
+      {prov.length ? (
+        <div style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>{prov.join('  ·  ')}</div>
+      ) : null}
+      <Neighbourhood keyName={e.key} tone={tone} />
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        {open ? <a href={localize(open)} style={actionStyle(t)}>Open ↗</a> : null}
+        {edit ? <a href={localize(edit)} style={actionStyle(t)}>Edit in cell ↗</a>
+          : authed && !system ? <button onClick={() => openFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
+          : null}
+      </div>
     </div>
   );
 }
@@ -567,7 +625,8 @@ const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' 
 /** A fact's one-hop neighbourhood — authored edges plus the derived backbone
  *  (instanceOf → its type, managedBy → its cell, inView → views). Derived edges
  *  render dashed/dim; every chip is itself a peek into that neighbour. */
-function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
+function Neighbourhood({ keyName, tone = 'dark' }: { keyName: string; tone?: Tone }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
   const [n, setN] = useState<{ outbound: Edge[]; inbound: Edge[] } | null>(null);
   const [err, setErr] = useState(false);
   useEffect(() => {
@@ -583,8 +642,8 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       live = false;
     };
   }, [keyName]);
-  if (err) return <span style={{ color: ink.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
-  if (!n) return <span style={{ color: ink.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
+  if (err) return <span style={{ color: t.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
+  if (!n) return <span style={{ color: t.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
   const chip = (ed: Edge, other: string, label: string): React.JSX.Element => (
     <button
       key={`${ed.from}-${ed.rel}-${ed.to}`}
@@ -592,8 +651,8 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       title={`${ed.from} ${ed.rel} ${ed.to}`}
       style={{
         fontSize: '0.66rem',
-        color: ed.derived ? ink.dim : ink.accent,
-        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${ink.line}`,
+        color: ed.derived ? t.dim : t.accent,
+        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${t.line}`,
         borderRadius: 999,
         padding: '0.05rem 0.45rem',
         fontFamily: theme.mono,
@@ -612,7 +671,7 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
   return chips.length ? (
     <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>{chips}</div>
   ) : (
-    <span style={{ color: ink.dim, fontSize: '0.72rem' }}>No edges yet.</span>
+    <span style={{ color: t.dim, fontSize: '0.72rem' }}>No edges yet.</span>
   );
 }
 
@@ -627,31 +686,32 @@ interface FormField {
   description?: string;
 }
 
-/** An ink action (peek sheet buttons/links) — amber outline, quiet fill. */
-const inkAction: React.CSSProperties = {
+/** A peek-sheet action (buttons/links) — accent outline, quiet fill. Tone-aware
+ *  so the paper sheet's actions read pine-on-cream, the ink sheet's amber-on-ink. */
+const actionStyle = (t: typeof SHEET_TONE[Tone]): React.CSSProperties => ({
   display: 'inline-block',
   padding: '0.4rem 0.9rem',
   minHeight: 38,
   boxSizing: 'border-box',
   borderRadius: 8,
-  border: `1px solid ${ink.accent}`,
+  border: `1px solid ${t.accent}`,
   background: 'none',
-  color: ink.accent,
+  color: t.accent,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   fontSize: '0.8rem',
   textDecoration: 'none',
-};
+});
 
-const editInput: React.CSSProperties = {
+const inputStyle = (t: typeof SHEET_TONE[Tone]): React.CSSProperties => ({
   width: '100%',
   boxSizing: 'border-box',
   padding: '0.4rem 0.5rem',
   fontSize: '0.8rem',
-  border: `1px solid ${ink.line}`,
+  border: `1px solid ${t.line}`,
   borderRadius: 6,
-  background: ink.panel,
-  color: ink.text,
-};
+  background: t.panel,
+  color: t.text,
+});
 
 /** A `$types[type].fields` entry's `type` (a loose vocabulary: string/number/
  *  boolean/markdown/ref/array/object) isn't JSON-Schema — adapt it to the
@@ -684,12 +744,15 @@ function FactEditor({
   fields,
   onSaved,
   onCancel,
+  tone = 'dark',
 }: {
   e: ListEntry;
   fields?: FormField[];
   onSaved: (entry: ListEntry, hints?: string[]) => void;
   onCancel: () => void;
+  tone?: Tone;
 }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
   const isStr = typeof e.value === 'string';
   const base = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
   const schema = Array.isArray(fields) && fields.length > 0 ? fieldsToFormSchema(fields) : undefined;
@@ -736,7 +799,7 @@ function FactEditor({
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       {useForm ? (
-        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: ink.text, dim: ink.dim, border: ink.line, inputBg: ink.panel, accent: ink.accent, danger: ink.danger }} />
+        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }} />
       ) : (
         <>
           <textarea
@@ -744,15 +807,15 @@ function FactEditor({
             onChange={(ev) => setText(ev.target.value)}
             rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
             spellCheck={false}
-            style={{ ...editInput, padding: '0.55rem', fontFamily: theme.mono }}
+            style={{ ...inputStyle(t), padding: '0.55rem', fontFamily: theme.mono }}
           />
-          {!isStr ? <span style={{ color: ink.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
+          {!isStr ? <span style={{ color: t.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
         </>
       )}
-      {err ? <span style={{ color: ink.danger, fontSize: '0.78rem', fontFamily: theme.mono }}>{err}</span> : null}
+      {err ? <span style={{ color: t.danger, fontSize: '0.78rem', fontFamily: theme.mono }}>{err}</span> : null}
       <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button onClick={() => void save()} disabled={busy} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Saving…' : 'Save'}</button>
-        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${ink.line}`, borderRadius: 8, color: ink.dim, padding: '0.4rem 0.9rem', cursor: 'pointer', fontFamily: theme.mono, fontSize: '0.8rem' }}>Cancel</button>
+        <button onClick={() => void save()} disabled={busy} style={{ ...actionStyle(t), background: t.actionFill, cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Saving…' : 'Save'}</button>
+        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${t.line}`, borderRadius: 8, color: t.dim, padding: '0.4rem 0.9rem', cursor: 'pointer', fontFamily: theme.mono, fontSize: '0.8rem' }}>Cancel</button>
       </div>
     </div>
   );
@@ -761,15 +824,16 @@ function FactEditor({
 /** The generic in-place editor, usable OUTSIDE this module (the context
  *  panel's Edit action) — resolves the type's declared fields (ADR-0002
  *  shape.fields) exactly as FactDetail does. */
-export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (entry: ListEntry) => void }): React.JSX.Element {
+export function InlineFactEditor({ e, onCancel, onSaved, tone = 'dark' }: { e: ListEntry; onCancel: () => void; onSaved: (entry: ListEntry) => void; tone?: Tone }): React.JSX.Element {
   const fields = (declFor(e, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
-  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(entry) => onSaved(entry)} />;
+  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(entry) => onSaved(entry)} tone={tone} />;
 }
 
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }): React.JSX.Element {
+export function FactDetail({ e, compact, tone = 'dark' }: { e: ListEntry; compact?: boolean; tone?: Tone }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(false);
   const [hints, setHints] = useState<string[] | null>(null);
@@ -786,14 +850,15 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
   const fields = (declFor(entry, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
-      <div style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
+      <div style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
         {[meta?.type, entry.key].filter(Boolean).join(' · ')}
-        {meta?.tags?.length ? '  ·  ' + meta.tags.map((t) => '#' + t).join(' ') : ''}
+        {meta?.tags?.length ? '  ·  ' + meta.tags.map((tag) => '#' + tag).join(' ') : ''}
       </div>
       {editing ? (
         <FactEditor
           e={entry}
           fields={fields}
+          tone={tone}
           onCancel={() => setEditing(false)}
           onSaved={(savedEntry, h) => {
             setEntry(savedEntry);
@@ -804,27 +869,27 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-            <FactBody e={entry} full />
+            <FactBody e={entry} full tone={tone} />
           </div>
           {hints?.length ? (
-            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: ink.panel }}>
-              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
+            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${t.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: t.panel }}>
+              <span style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
               {hints.map((h, i) => (
-                <span key={i} style={{ fontSize: '0.76rem', color: ink.text }}>· {h}</span>
+                <span key={i} style={{ fontSize: '0.76rem', color: t.text }}>· {h}</span>
               ))}
             </div>
           ) : null}
           {!compact ? (
             <div style={{ display: 'grid', gap: '0.3rem' }}>
-              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
-              <Neighbourhood keyName={entry.key} />
+              <span style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
+              <Neighbourhood keyName={entry.key} tone={tone} />
             </div>
           ) : null}
           {!compact ? (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              {open ? <a href={open} style={inkAction}>Open ↗</a> : null}
-              {edit ? <a href={edit} style={inkAction}>Edit in cell ↗</a> : !system ? (
-                <button onClick={() => setEditing(true)} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: 'pointer' }}>Edit</button>
+              {open ? <a href={open} style={actionStyle(t)}>Open ↗</a> : null}
+              {edit ? <a href={edit} style={actionStyle(t)}>Edit in cell ↗</a> : !system ? (
+                <button onClick={() => setEditing(true)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
               ) : null}
             </div>
           ) : null}
@@ -836,7 +901,8 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
 
 /** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
  *  via peek, and renders the modal. Returns null when nothing is open. */
-export function FactDetailHost(): React.JSX.Element | null {
+export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.JSX.Element | null {
+  const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const activeKey = React.useRef<string | null>(null);
   const close = (): void => {
@@ -872,31 +938,33 @@ export function FactDetailHost(): React.JSX.Element | null {
   }, [entry]);
   if (!entry) return null;
   const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
-  // The peek is an INK bottom sheet — the same instrument language as the
-  // palette it was summoned from (it used to be the parchment Modal: a jarring
-  // theme flip mid-gesture — owner feedback 2026-07-10). Same width metric as
-  // the palette, so the two read as one system.
+  // A bottom sheet in the SUMMONING surface's tone — 'dark' (ink) over the
+  // graph (a parchment sheet over the night scene reads as a jarring theme flip
+  // — owner feedback 2026-07-10), 'light' (paper) over the trailhead, where it
+  // stacks over the paper Content as a second rounded sheet rising over it
+  // (same 14px lip + top shadow, so the two read as one growing stack). Same
+  // width metric as the palette, so peek + palette read as one system.
   return (
     <div
       role="dialog"
       aria-modal="true"
       onClick={() => close()}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
+      style={{ position: 'fixed', inset: 0, background: t.scrim, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
     >
       <div
         onClick={(ev) => ev.stopPropagation()}
         style={{
-          background: ink.bg,
-          color: ink.text,
+          background: t.bg,
+          color: t.text,
           width: 'min(720px, 100vw)',
           maxHeight: '86dvh',
           overflowY: 'auto',
           overscrollBehavior: 'contain',
           borderTopLeftRadius: 14,
           borderTopRightRadius: 14,
-          border: `1px solid ${ink.line}`,
+          border: `1px solid ${t.line}`,
           borderBottom: 'none',
-          boxShadow: '0 -12px 40px rgba(0,0,0,0.5)',
+          boxShadow: t.shadow,
           padding: '0.8rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))',
           display: 'grid',
           gap: '0.7rem',
@@ -908,12 +976,12 @@ export function FactDetailHost(): React.JSX.Element | null {
           <button
             onClick={() => close()}
             aria-label="close"
-            style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
+            style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
           >
             ×
           </button>
         </div>
-        <FactDetail e={entry} />
+        <FactDetail e={entry} tone={tone} />
       </div>
     </div>
   );
