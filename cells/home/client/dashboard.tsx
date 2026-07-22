@@ -339,7 +339,14 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
           // the head already reads in the hero above, so body-only here.
           <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
-            { reading ? <FactReading e={reading} tone="light" head={false} showBody initialMd={selectedMd} /> : (
+            { reading ? <FactReading e={reading} tone="light" head={false} showBody initialMd={selectedMd} /> : selectedMd ? (
+              // No peeked entry yet (an anonymous /r/<key> first paint — SSR
+              // reads run only for authed callers) but the server DID load the
+              // public doc body: render it now, server and client alike, so
+              // the deep link paints content instead of "reading…". The live
+              // peek still lands and upgrades to the full FactReading.
+              <DocBody e={{ key: selectedKey as string, value: {}, _meta: { type: 'doc', tags: [] } }} initialMd={selectedMd} tone="light" />
+            ) : (
               <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.8rem' }}>reading…</span>
             )}
           </div>
