@@ -320,7 +320,7 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec; tone?: 'light' | 'dark' }): React.JSX.Element {
+export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec; tone?: 'light' | 'dark'; anchor?: string }): React.JSX.Element {
   const type = e._meta?.type;
   // The CONTAINER key. Declared (ADR-0093): a container type assembles its own
   // key; a member type (`containerTagPrefix`) delegates via its container tag.
@@ -338,7 +338,12 @@ export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; i
   // "reading…" spinner. The live read still runs and replaces it when it
   // succeeds; a failed live read keeps the seed instead of blanking.
   const [md, setMd] = useState<string | null>(initialMd ?? null);
+  // Membership assembly keeps PER-MEMBER sections (not one joined string) so
+  // each member is an addressable target: `#<member-key>` deep links and the
+  // member banner's "part of" jump both scroll to their section.
+  const [sections, setSections] = useState<Array<{ key: string; content: string }> | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // The audience fallback (ADR-0093 / docs-sync ADR-0027): when membership
   // yields nothing for THIS viewer (e.g. `@guest` — members aren't public),
   // read the declared alternate source instead. A GRANT-FOLDED container
@@ -377,13 +382,18 @@ export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; i
     void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
       .then(async (r) => {
         if (!live) return;
-        const members = (r.ok ? (r.value as { members?: Array<{ value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
-        let text = members
-          .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: memberText(m.value) }))
+        const members = (r.ok ? (r.value as { members?: Array<{ key?: string; value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
+        const secs = members
+          .map((m) => ({ key: String(m.key ?? ''), seq: Number(m.placement?.seq ?? 0), content: memberText(m.value) }))
           .sort((a, b) => a.seq - b.seq)
-          .map((m) => m.content)
-          .filter(Boolean)
-          .join('\n\n');
+          .filter((m) => m.content);
+        if (secs.length) {
+          setSections(secs.map(({ key, content }) => ({ key, content })));
+          setMd(null);
+          setState('ready');
+          return;
+        }
+        let text = '';
         if (!text && fileKey) {
           const fr = await mcpCall('read', 'workspace.peek', { key: fileKey }).catch(() => null);
           if (!live) return;
@@ -411,6 +421,32 @@ export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; i
   // (→ apex-absolute) keeps new-tab/middle-click navigable when home is
   // served from its own cell subdomain.
   const factHref = (k: string): string => localize(`/r/${k}`);
+  // Scroll the assembled body to a member's section: an explicit `anchor` (the
+  // member banner's in-place jump) or the URL fragment (`/r/<doc>#<member>`,
+  // the shareable form). Folded members come back `owner/`-prefixed — match
+  // exact or by suffix so a bare fragment still lands.
+  useEffect(() => {
+    if (state !== 'ready' || !sections?.length) return;
+    let target = anchor ?? null;
+    if (!target && typeof location !== 'undefined' && location.hash.length > 1) {
+      try { target = decodeURIComponent(location.hash.slice(1)); } catch { target = location.hash.slice(1); }
+    }
+    if (!target) return;
+    const el = bodyRef.current?.querySelector(`[data-mkey="${(window.CSS?.escape ?? ((x: string) => x))(target)}"]`)
+      ?? bodyRef.current?.querySelector(`[data-mkey$="${(window.CSS?.escape ?? ((x: string) => x))('/' + target)}"]`);
+    if (el) setTimeout(() => el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+  }, [state, sections, anchor]);
+  if (state === 'ready' && sections?.length) {
+    return (
+      <div ref={bodyRef} style={{ display: 'grid', gap: '0.2rem' }}>
+        {sections.map((sec) => (
+          <section key={sec.key} data-mkey={sec.key} style={{ scrollMarginTop: '3.2rem' }}>
+            <SafeMarkdown text={sec.content.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />
+          </section>
+        ))}
+      </div>
+    );
+  }
   if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />;
   if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
   // Assembly failed — the fact's own body (a block's content) or its summary.
@@ -430,7 +466,42 @@ export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; i
  * card) a long-form body is clamped to a few lines — the card is a preview now
  * that the peek modal carries the full content.
  */
-export function FactBody({ e, embed = false, full = false, tone = 'dark', initialMd }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string }): React.JSX.Element | null {
+/** Is this fact an assembled CONTAINER on this surface (a doc, or a type
+ *  declaring container-side assembly)? Containers suppress member backlinks
+ *  in the neighbourhood — the members are already on the page as the body. */
+export function isAssembledContainer(e: ListEntry): boolean {
+  const asm = resolve(e, 'assemble', typeDecls)?.assemble;
+  if (asm) return !asm.containerTagPrefix;
+  return e._meta?.type === 'doc' || e.key.replace(/^[^/]+\//, '').startsWith('doc:');
+}
+
+/** The containment banner a MEMBER shows before its content: "⊂ part of
+ *  <container>" — click opens the whole, scrolled to this member's section;
+ *  the href is the container's canonical address with the member as the
+ *  fragment (deep-linkable in a new tab too). */
+function MemberContext({ e, tagPrefix, tone = 'dark' }: { e: ListEntry; tagPrefix: string; tone?: 'light' | 'dark' }): React.JSX.Element | null {
+  const t = SHEET_TONE[tone];
+  const bareTag = (e._meta?.tags ?? []).find((x) => x.startsWith(tagPrefix));
+  if (!bareTag) return null;
+  // A grant-folded member (`owner/doc-block:x`) points at its container with a
+  // BARE tag — re-apply the owner prefix so the whole resolves for this viewer.
+  const om = e.key.match(/^([^/:]+)\/(?=[^/]*:)/);
+  const containerKey = om ? `${om[1]}/${bareTag}` : bareTag;
+  const bareMemberKey = om ? e.key.slice(om[1].length + 1) : e.key;
+  const label = bareTag.includes(':') ? bareTag.slice(bareTag.indexOf(':') + 1) : bareTag;
+  return (
+    <a
+      href={`${localize(`/r/${containerKey}`)}#${encodeURIComponent(bareMemberKey)}`}
+      onClick={(ev) => { ev.preventDefault(); openFact({ key: containerKey }, bareMemberKey); }}
+      title={containerKey}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', justifySelf: 'start', padding: '0.2rem 0.6rem', borderRadius: 999, border: `1px dashed ${t.line}`, color: t.dim, fontFamily: theme.mono, fontSize: '0.7rem', textDecoration: 'none', marginBottom: '0.4rem' }}
+    >
+      ⊂ part of <span style={{ color: t.accent }}>{label}</span>
+    </a>
+  );
+}
+
+export function FactBody({ e, embed = false, full = false, tone = 'dark', initialMd, anchor }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
   // A composite fact reads as its WHOLE assembled body when fully open — the
   // substrate joins membership+order; we just concatenate (see DocBody).
   // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
@@ -440,7 +511,20 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark', initia
   const t = e._meta?.type;
   if (full) {
     const asm = resolve(e, 'assemble', typeDecls)?.assemble;
-    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} initialMd={initialMd} />;
+    // A MEMBER in isolation shows ITS OWN content — not the whole container
+    // (we may have arrived from the container itself) — with the containment
+    // banner BEFORE the content so the part→whole relation is explicit.
+    const memberTagPrefix = asm?.containerTagPrefix ?? (t === 'doc-block' ? 'doc:' : null);
+    if (memberTagPrefix) {
+      const own = bodyText(e.value);
+      return (
+        <div style={{ display: 'grid' }}>
+          <MemberContext e={e} tagPrefix={memberTagPrefix} tone={tone} />
+          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
+        </div>
+      );
+    }
+    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} initialMd={initialMd} anchor={anchor} />;
   }
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
@@ -607,7 +691,7 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
       {prov.length ? (
         <div style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>{prov.join('  ·  ')}</div>
       ) : null}
-      <Neighbourhood keyName={e.key} tone={tone} />
+      <Neighbourhood keyName={e.key} tone={tone} hideMembers={isAssembledContainer(e)} />
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {/* Actions name their DESTINATION cell — "Open in @c15r/lit" — so the
             jump isn't a bare arrow into the unknown (the managing cell is part
@@ -637,17 +721,28 @@ export interface Edge {
 
 const FACT_DETAIL_EVENT = 'home:fact-detail';
 
-/** Open the progressive detail modal for a fact (or a bare {key}; hydrated by peek). */
-export function openFact(e: ListEntry): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry>(FACT_DETAIL_EVENT, { detail: e }));
+/** Open the progressive detail modal for a fact (or a bare {key}; hydrated by
+ *  peek). `anchor` scrolls an assembled container to the named member's
+ *  section once the body renders (the member→whole deep link). */
+export function openFact(e: ListEntry, anchor?: string): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry & { anchor?: string }>(FACT_DETAIL_EVENT, { detail: anchor ? { ...e, anchor } : e }));
 }
 
 const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
 
+/** Membership rels (mirror of the server's MEMBERSHIP_RELS) — a container
+ *  viewing surface suppresses these as backlinks: the members are already ON
+ *  the page as the assembled body, chip-listing them twice is noise. */
+const MEMBERSHIP_RELS_UI = new Set(['inView', 'inDoc', 'onBoard', 'memberOf']);
+
 /** A fact's one-hop neighbourhood — authored edges plus the derived backbone
- *  (instanceOf → its type, managedBy → its cell, inView → views). Derived edges
- *  render dashed/dim; every chip is itself a peek into that neighbour. */
-function Neighbourhood({ keyName, tone = 'dark' }: { keyName: string; tone?: Tone }): React.JSX.Element {
+ *  (instanceOf → its type, managedBy → its cell, inView → views). Grouped by
+ *  relation and direction (links, then backlinks), so the row reads as
+ *  structure rather than a flat chip soup. Derived edges render dashed/dim;
+ *  every chip is itself a peek into that neighbour. `hideMembers` = the
+ *  surface already renders the members (an assembled doc) — drop the inbound
+ *  membership backlinks. */
+function Neighbourhood({ keyName, tone = 'dark', hideMembers = false }: { keyName: string; tone?: Tone; hideMembers?: boolean }): React.JSX.Element {
   const t = SHEET_TONE[tone];
   const [n, setN] = useState<{ outbound: Edge[]; inbound: Edge[] } | null>(null);
   const [err, setErr] = useState(false);
@@ -686,14 +781,33 @@ function Neighbourhood({ keyName, tone = 'dark' }: { keyName: string; tone?: Ton
       {label}
     </button>
   );
-  const chips = [
-    ...n.outbound.map((ed) => chip(ed, ed.to, `${ed.rel}→${shortKey(ed.to)}`)),
-    ...n.inbound.map((ed) => chip(ed, ed.from, `${shortKey(ed.from)}→${ed.rel}`)),
-  ];
-  return chips.length ? (
-    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>{chips}</div>
-  ) : (
-    <span style={{ color: t.dim, fontSize: '0.72rem' }}>No edges yet.</span>
+  // Group by (direction, rel): outbound first (this fact's own assertions),
+  // then backlinks. The rel lives in the GROUP header, so chips carry only
+  // their key — denser and scannable.
+  const inbound = hideMembers ? n.inbound.filter((ed) => !MEMBERSHIP_RELS_UI.has(ed.rel)) : n.inbound;
+  const groups = new Map<string, { label: string; items: Array<{ ed: Edge; other: string }> }>();
+  for (const ed of n.outbound) {
+    const gk = `out:${ed.rel}`;
+    const g = groups.get(gk) ?? { label: `${ed.rel} →`, items: [] };
+    g.items.push({ ed, other: ed.to });
+    groups.set(gk, g);
+  }
+  for (const ed of inbound) {
+    const gk = `in:${ed.rel}`;
+    const g = groups.get(gk) ?? { label: `← ${ed.rel}`, items: [] };
+    g.items.push({ ed, other: ed.from });
+    groups.set(gk, g);
+  }
+  if (!groups.size) return <span style={{ color: t.dim, fontSize: '0.72rem' }}>No edges yet.</span>;
+  return (
+    <div style={{ display: 'grid', gap: '0.35rem' }}>
+      {[...groups.entries()].map(([gk, g]) => (
+        <div key={gk} style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0, minWidth: '5.5em' }}>{g.label}</span>
+          {g.items.map(({ ed, other }) => chip(ed, other, shortKey(other)))}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -854,7 +968,7 @@ export function InlineFactEditor({ e, onCancel, onSaved, tone = 'dark' }: { e: L
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-export function FactDetail({ e, compact, tone = 'dark' }: { e: ListEntry; compact?: boolean; tone?: Tone }): React.JSX.Element {
+export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string }): React.JSX.Element {
   const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(false);
@@ -891,7 +1005,7 @@ export function FactDetail({ e, compact, tone = 'dark' }: { e: ListEntry; compac
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-            <FactBody e={entry} full tone={tone} />
+            <FactBody e={entry} full tone={tone} anchor={anchor} />
           </div>
           {hints?.length ? (
             <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${t.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: t.panel }}>
@@ -904,7 +1018,7 @@ export function FactDetail({ e, compact, tone = 'dark' }: { e: ListEntry; compac
           {!compact ? (
             <div style={{ display: 'grid', gap: '0.3rem' }}>
               <span style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
-              <Neighbourhood keyName={entry.key} tone={tone} />
+              <Neighbourhood keyName={entry.key} tone={tone} hideMembers={isAssembledContainer(entry)} />
             </div>
           ) : null}
           {!compact ? (
@@ -926,16 +1040,19 @@ export function FactDetail({ e, compact, tone = 'dark' }: { e: ListEntry; compac
 export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.JSX.Element | null {
   const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry | null>(null);
+  const [anchor, setAnchor] = useState<string | undefined>(undefined);
   const activeKey = React.useRef<string | null>(null);
   const close = (): void => {
     activeKey.current = null;
     setEntry(null);
+    setAnchor(undefined);
   };
   useEffect(() => {
     const onOpen = (ev: Event): void => {
-      const detail = (ev as CustomEvent<ListEntry>).detail;
+      const detail = (ev as CustomEvent<ListEntry & { anchor?: string }>).detail;
       if (!detail?.key) return;
       activeKey.current = detail.key;
+      setAnchor(detail.anchor);
       setEntry(detail);
       if (detail.value === undefined) {
         const requestedKey = detail.key;
@@ -980,20 +1097,19 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
           color: t.text,
           width: 'min(720px, 100vw)',
           maxHeight: '86dvh',
-          overflowY: 'auto',
-          overscrollBehavior: 'contain',
+          // The sheet is a COLUMN: pinned header, scrolling body — title and
+          // close stay reachable however deep the reading goes.
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
           borderTopLeftRadius: 14,
           borderTopRightRadius: 14,
           border: `1px solid ${t.line}`,
           borderBottom: 'none',
           boxShadow: t.shadow,
-          padding: '0.8rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))',
-          display: 'grid',
-          gap: '0.7rem',
-          alignContent: 'start',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flexShrink: 0, padding: '0.8rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}` }}>
           <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
           <button
             onClick={() => close()}
@@ -1003,7 +1119,9 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
             ×
           </button>
         </div>
-        <FactDetail e={entry} tone={tone} />
+        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))' }}>
+          <FactDetail e={entry} tone={tone} anchor={anchor} />
+        </div>
       </div>
     </div>
   );
