@@ -53,9 +53,14 @@ function LandingWithSky({ session, onEnter, featured }: {
   useEffect(() => {
     if (!onEnter || entering) return;
     let startY: number | null = null;
-    const wheel = (e: WheelEvent): void => { if (e.deltaY > 24) onExplore(); };
-    const touchStart = (e: TouchEvent): void => { startY = e.touches[0]?.clientY ?? null; };
+    // A peek sheet (or any modal) captures the gesture: scrolling/swiping to
+    // READ inside it must not trip the walk-into-the-sky. Bail whenever a
+    // dialog is mounted — robust regardless of event propagation.
+    const modalOpen = (): boolean => typeof document !== 'undefined' && !!document.querySelector('[role="dialog"]');
+    const wheel = (e: WheelEvent): void => { if (!modalOpen() && e.deltaY > 24) onExplore(); };
+    const touchStart = (e: TouchEvent): void => { startY = modalOpen() ? null : (e.touches[0]?.clientY ?? null); };
     const touchMove = (e: TouchEvent): void => {
+      if (modalOpen()) return;
       const y = e.touches[0]?.clientY;
       if (startY !== null && y !== undefined && startY - y > 48) onExplore();
     };

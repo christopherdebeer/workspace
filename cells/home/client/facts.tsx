@@ -1056,6 +1056,24 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
   // fact; only its intended top lip shows. Congruent cards, iOS-sheet-style.
   const [sheetH, setSheetH] = useState<number | undefined>(undefined);
   const roRef = React.useRef<ResizeObserver | null>(null);
+  // Drag the header DOWN to pop back a level (the tactile twin of the ‹ / Esc):
+  // the top sheet follows the finger; released past a threshold it pops,
+  // revealing the already-loaded sheet beneath; short of it, it springs back.
+  const [dragY, setDragY] = useState(0);
+  const onHeaderDown = React.useCallback((e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return; // let the ‹ / × buttons click
+    const startY = e.clientY;
+    let dy = 0;
+    const move = (me: PointerEvent): void => { dy = Math.max(0, me.clientY - startY); setDragY(dy); };
+    const up = (): void => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setDragY(0);
+      if (dy > 80) pop();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }, []);
   const topRef = React.useCallback((el: HTMLDivElement | null) => {
     roRef.current?.disconnect();
     if (!el || typeof ResizeObserver === 'undefined') { if (el) setSheetH(el.offsetHeight); return; }
@@ -1121,6 +1139,12 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
       role="dialog"
       aria-modal="true"
       onClick={() => closeAll()}
+      // The sheet OWNS its gestures: stop wheel/touch bubbling to the window
+      // listeners the landing (enter-the-sky) and the graph (zoom/curl) run,
+      // so scrolling to read inside the sheet never moves the world behind it.
+      onWheelCapture={(ev) => ev.stopPropagation()}
+      onTouchStartCapture={(ev) => ev.stopPropagation()}
+      onTouchMoveCapture={(ev) => ev.stopPropagation()}
       style={{ position: 'fixed', inset: 0, background: t.scrim, zIndex: 1000 }}
     >
       <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
@@ -1144,8 +1168,10 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
                 // measured; the ones behind match that height so they can't
                 // out-tower it — only their lip shows.
                 ...(isTop ? { maxHeight: '86dvh' } : { height: sheetH ? `${sheetH}px` : undefined, maxHeight: '86dvh' }),
-                transform: `translateY(${-lift}px)`,
-                transition: 'transform 0.18s ease',
+                transform: `translateY(${isTop ? dragY : -lift}px)`,
+                // No transition while the finger is actively dragging the top
+                // sheet (1:1 follow); on release dragY→0 springs it back.
+                transition: isTop && dragY > 0 ? 'none' : 'transform 0.18s ease',
                 zIndex: i,
                 // Only the front sheet takes input; the ones behind wait,
                 // mounted and scroll-intact, until a back pops down to them.
@@ -1162,7 +1188,12 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
                 boxShadow: t.shadow,
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.8rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}` }}>
+              <div
+                onPointerDown={isTop ? onHeaderDown : undefined}
+                style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.9rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}`, touchAction: isTop ? 'none' : undefined, userSelect: 'none', cursor: isTop ? 'grab' : 'default' }}
+              >
+                {/* A grab handle — the header is draggable DOWN to pop back. */}
+                {isTop ? <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} /> : null}
                 {/* Drilled in → a back chevron pops ONE level (reveals the
                     already-loaded sheet beneath); × dismisses the whole stack. */}
                 {i > 0 ? (
