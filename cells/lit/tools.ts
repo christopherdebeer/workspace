@@ -191,7 +191,7 @@ async function finishDecompose(token: string, plan: ReturnType<typeof planDecomp
   if (existingOrder.length > 0) {
     const results = await Promise.all(plan.blocks.map(async (b) => {
       const wanted: EdgeRef[] = plan.edges.filter((e) => e.from === b.key).map((e) => ({ to: e.to, rel: e.rel }));
-      const nb = (await gw(token, 'workspace.neighbors', { key: b.key }).catch(() => null)) as NeighborsResult | null;
+      const nb = (await gw(token, 'workspace.edges', { around: b.key }).catch(() => null)) as NeighborsResult | null;
       const existing = (nb?.outbound ?? []).filter((e) => e.rel === 'related' || e.rel === 'references');
       const { toAdd, toRemove } = diffEdges(existing, wanted);
       await Promise.all(toRemove.map((e) => gw(token, 'workspace.unlink', { from: b.key, to: e.to, rel: e.rel }).catch(() => undefined)));

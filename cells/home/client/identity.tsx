@@ -148,7 +148,7 @@ export function IdentityShell({ authed, user, scopes, seed }: { authed: boolean;
 
   if (!authed) return null;
 
-  const act = async (label: string, verb: string, target: string, input: unknown): Promise<void> => {
+  const act = async (label: string, verb: 'read' | 'act', target: string, input: unknown): Promise<void> => {
     setBusy(label);
     try {
       const r = await mcpCall(verb, target, input);

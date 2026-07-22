@@ -15,7 +15,7 @@
  */
 import * as React from 'react';
 import { Console } from './console';
-import { typeIcon, factTitle, factHref, factEdit, FactDetail, InlineFactEditor, type ListEntry } from './facts';
+import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
 
@@ -65,7 +65,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
     });
     // Chips need icons + titles, not bodies — card tier (ADR-0048); the content
     // preview comes from the full `peek` above.
-    void mcpCall('read', 'workspace.neighbors', { key: factKey, shape: 'card' }).then((r) => {
+    void mcpCall('read', 'workspace.edges', { around: factKey, shape: 'card' }).then((r) => {
       if (!live || !r.ok) return;
       const v = r.value as { outbound?: Array<{ to: string; rel: string }>; inbound?: Array<{ from: string; rel: string }>; entries?: Record<string, ListEntry> } | null;
       const seen = new Set<string>([factKey]);
@@ -100,14 +100,20 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   return (
     <div style={{ display: 'grid', gap: '0.4rem', padding: '0.55rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-        <span aria-hidden>{typeIcon(e)}</span>
-        <button
+        {/* The SAME reading the trailhead shows, in dark tone (consistency): icon
+            + title + metadata. Clicking it toggles the body (a div, not a button,
+            so the reading's h2/meta nest legally). */}
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setShowBody((b) => !b)}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setShowBody((b) => !b); } }}
           title={factKey}
-          style={{ background: 'none', border: 'none', color: ink.text, fontFamily: ink.mono, fontSize: '0.8rem', cursor: 'pointer', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}
+          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
         >
-          {entry ? factTitle(e) : factKey} <span style={{ color: ink.dim }}>{showBody ? '▾' : '▸'}</span>
-        </button>
+          <FactReading e={e} tone="dark" compact />
+        </div>
+        <span aria-hidden style={{ color: ink.dim, flexShrink: 0, fontSize: '0.8rem' }}>{showBody ? '▾' : '▸'}</span>
         {/* Actions live on the panel FRAME (where peek used to be), not inside
             the scrolling body — owner feedback. */}
         {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
@@ -131,8 +137,8 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
             <InlineFactEditor
               e={entry}
               onCancel={() => setEditing(false)}
-              onSaved={(v) => {
-                setEntry({ ...entry, value: v });
+              onSaved={(savedEntry) => {
+                setEntry(savedEntry);
                 setEditing(false);
               }}
             />
@@ -145,7 +151,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           as dense noise on a phone — owner feedback): a few readable verbs,
           then the neighbours that actually HAVE a name. Horizontal scroll. */}
       {verbs.length || namedNeighbors.length ? (
-        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 2, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 5, alignItems: 'center', scrollbarWidth: 'thin', scrollbarColor: `${ink.line} transparent` }}>
           {verbs.slice(0, 3).map((v) => (
             <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent, maxWidth: 220 }} title={v.target} onClick={() => onCommand(v.target)}>
               {v.target.slice(v.target.lastIndexOf('.') + 1)}

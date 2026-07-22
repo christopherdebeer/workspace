@@ -22,6 +22,32 @@ export interface WebAuthnConfig {
   rpId?: string;
 }
 
+/**
+ * Usernames the platform reserves — nobody may register them. A username becomes
+ * the owner segment of a cell's subdomain AND an identity other users share facts
+ * to, so a lookalike (`admin`, `support`, `official`) is a phishing/impersonation
+ * surface, and platform-role names (`guest`, `public`, `system`, `parc`) are
+ * claimed for platform use (the anonymous public reader, the grant audiences,
+ * held namespaces). Compared case-insensitively; the register regex already
+ * forces lowercase alnum, so this is the semantic layer on top of the syntactic
+ * one. Not a collision check — reserved names may be unregistered yet still barred.
+ */
+export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
+  // platform roles / audiences / held namespaces
+  'guest', 'public', 'anonymous', 'everyone', 'system', 'parc', 'owner', 'group', 'null', 'undefined', 'none',
+  // administrative / trust-signalling lookalikes
+  'admin', 'administrator', 'root', 'superuser', 'sysadmin', 'moderator', 'mod', 'staff', 'official', 'support',
+  'help', 'security', 'abuse', 'billing', 'team', 'operator',
+  // reserved infra / routing labels
+  'api', 'www', 'mail', 'smtp', 'ftp', 'ns', 'dns', 'cdn', 'app', 'apps', 'cell', 'cells', 'kernel', 'dispatch',
+  'auth', 'oauth', 'login', 'logout', 'register', 'mcp', 'well', 'static', 'assets',
+]);
+
+/** Is this username claimed by the platform (case-insensitive)? */
+export function isReservedUsername(username: string): boolean {
+  return RESERVED_USERNAMES.has(username.trim().toLowerCase());
+}
+
 function originOf(req: ServiceHttpRequest): string {
   const u = new URL(req.url);
   return `${u.protocol}//${u.host}`;
@@ -80,6 +106,9 @@ export async function handleRegisterOptions(
   // label on the first hyphen, reserving it as the owner/cell separator.
   if (!/^[a-z0-9]+$/.test(username)) {
     return json({ error: 'Username must be lowercase letters and digits only — no hyphens or symbols (it becomes part of your cells’ subdomain).' }, 400);
+  }
+  if (isReservedUsername(username)) {
+    return json({ error: 'That username is reserved by the platform. Please choose another.' }, 409);
   }
   if (await store.getUserByUsername(username)) {
     return json({ error: 'Username already taken. Try signing in instead.' }, 409);

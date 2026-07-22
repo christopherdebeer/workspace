@@ -18,6 +18,7 @@
 export * from './render-hints';
 export * from './wiki-link';
 export * from './vocab';
+export * from './present';
 export * from './federated-renderer';
 export * from './form';
 export * from './index';

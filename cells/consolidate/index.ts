@@ -345,7 +345,8 @@ async function observe(token: string): Promise<Observations & { contestedCandida
   const prevRatified = (prev?.actions ?? []).filter((a) => a.kind === 'ratify' && a.from && a.to).slice(0, CAPS.rewards);
   if (prevRatified.length) {
     try {
-      const links = (await gw(token, 'workspace.links', {
+      const links = (await gw(token, 'workspace.edges', {
+        derived: false,
         keys: [...new Set(prevRatified.map((a) => a.from!))],
         limit: 200,
       })) as { edges?: Array<{ from: string; to: string; rel: string }> };

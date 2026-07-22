@@ -137,12 +137,23 @@ function thinEdge<T extends { from: string; rel: string; to: string; derived?: b
   return e.derived ? { from: e.from, rel: e.rel, to: e.to, derived: true } : { from: e.from, rel: e.rel, to: e.to };
 }
 
+/** The default page for an edge read with no explicit `limit`. An UNBOUNDED
+ *  whole-projection read already failed live (ADR-0081: 29k edges → a silent
+ *  CloudFront 30s / Lambda 6MB ceiling with nothing in the logs), and `$graph`
+ *  is gateway-reachable with no other size guard — so "no limit" now means
+ *  "first page + `nextCursor` + `total`", never "everything". Bounded broadcast
+ *  is the invariant: every gateway-reachable read ships a bounded page. A
+ *  caller that wants the whole projection pages with the cursor (as the home
+ *  graph already does); `{limit: 0}` stays the idiomatic "just count them". */
+export const DEFAULT_EDGE_LIMIT = 1000;
+
 /** Scope an edge list by keys/rels and page it, reporting the pre-page total —
- *  `{limit: 0}` is the idiomatic "just count them". `state.graph`/`state.edges`
- *  still compute the WHOLE projection server-side (paging happens after, over
- *  the already-materialized array) — this bounds response SIZE, not compute
- *  cost; a caller with a projection large enough to time out the computation
- *  itself needs a different fix (streaming the state layer), not this. */
+ *  `{limit: 0}` is the idiomatic "just count them"; an omitted `limit` gets the
+ *  `DEFAULT_EDGE_LIMIT` page. `state.graph`/`state.edges` still compute the
+ *  WHOLE projection server-side (paging happens after, over the
+ *  already-materialized array) — this bounds response SIZE, not compute cost;
+ *  a caller with a projection large enough to time out the computation itself
+ *  needs a different fix (streaming the state layer), not this. */
 export function scopeEdges<T extends { from: string; rel: string; to: string; derived?: boolean }>(
   edges: T[],
   input: EdgeScopeInput | undefined,
@@ -159,8 +170,7 @@ export function scopeEdges<T extends { from: string; rel: string; to: string; de
   const total = out.length;
   const offset = Math.max(0, parseInt(input?.cursor ?? '0', 10) || 0);
   const shape = (page: T[]): T[] | ThinEdge[] => (input?.edgeShape === 'thin' ? page.map(thinEdge) : page);
-  if (input?.limit === undefined) return { edges: shape(out.slice(offset)), total };
-  const limit = Math.max(0, input.limit);
+  const limit = Math.max(0, input?.limit ?? DEFAULT_EDGE_LIMIT);
   const page = out.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
   return { edges: shape(page), total, ...(nextOffset < total ? { nextCursor: String(nextOffset) } : {}) };

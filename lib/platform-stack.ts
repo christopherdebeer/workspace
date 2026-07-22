@@ -140,7 +140,9 @@ export class PlatformStack extends cdk.Stack {
       entry: serviceEntry('workspace'),
       routes: ['/workspace/*'],
       commands: ['remember', 'ingest', 'recall', 'peek', 'query', 'search', 'reindex', 'pruneSimilar', 'suggestions', 'ratify', 'link', 'unlink', 'neighbors', 'links', 'changes', 'attention', 'tend', 'registerAction', 'actions', 'deleteAction', 'invoke', 'registerView', 'views', 'view', 'deleteView', 'registerSubscription', 'subscriptions', 'deleteSubscription', 'supersede', 'share', 'unshare', 'shared', 'group', 'groups', 'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena', 'describeTools'],
-      emits: ['workspace.fact.written', 'workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
+      // `workspace.fact.written` is NOT in this list: the FactFanout stream
+      // consumer below is its one origin (Source `workspace`), not this cell.
+      emits: ['workspace.shared', 'workspace.action.invoked', 'workspace.tended', 'workspace.ingested', 'workspace.grant.requested', 'workspace.grant.resolved'],
       eventBus,
       // The hot write path: each put recomputes salience, so ingest is CPU-bound.
       // Telemetry (2026-06-25) showed 256 MB → ~84% mem use and 6–15 s batches that
@@ -247,6 +249,33 @@ export class PlatformStack extends cdk.Stack {
       }),
     );
 
+    // The ONE physical origin of "a fact changed": a THIRD stream consumer that
+    // announces every genuine fact write as `workspace.fact.written` (Source
+    // `workspace` — the same envelope FactReactionRoute has always consumed).
+    // Before this, the event was hand-emitted at ~10 write sites and a new
+    // write path that forgot the emit silently broke reactions while the
+    // stream-riding consumers (indexer, archiver) kept working. Now whatever
+    // writes the table announces — the emit cannot be forgotten.
+    const factFanout = new NodejsFunction(this, 'FactFanout', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '..', '..', 'services', 'fact-fanout', 'handler.ts'),
+      handler: 'handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      logRetention: logs.RetentionDays.ONE_WEEK,
+      environment: { EVENT_BUS_NAME: eventBus.bus.eventBusName },
+      bundling: { externalModules: [] }, // bundle the SDK (not in the Node 20 image)
+    });
+    eventBus.grantPutEvents(factFanout);
+    factFanout.addEventSource(
+      new DynamoEventSource(substrate.table, {
+        startingPosition: lambda.StartingPosition.LATEST,
+        batchSize: 50, // reactions want promptness — no batching window
+        retryAttempts: 3,
+        bisectBatchOnError: true,
+      }),
+    );
+
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
     // cell-<id>) emit substrate.write.requested; the workspace applies the
     // fact in the owner's slice. See docs/substrate-storage.md.
@@ -263,9 +292,9 @@ export class PlatformStack extends cdk.Stack {
     );
     // The reaction reactor: deliver every fact change back to the workspace so
     // the slice's `_subscriptions/*` can invoke matching declared actions. The
-    // source is pinned to the workspace itself (it emits workspace.fact.written),
-    // so only first-party fact events drive reactions. This is the generic
-    // primitive reactive machines ride on.
+    // source is pinned to `workspace` — emitted by the FactFanout stream
+    // consumer above (the one origin), so only first-party fact events drive
+    // reactions. This is the generic primitive reactive machines ride on.
     eventBus.routeTo('FactReactionRoute', workspace.fn, ['workspace.fact.written'], 'workspace');
     // The async, chunked semantic-search reindex (ADR-0030/0031): the command dispatches
     // a `workspace.reindex.requested` event and the handler chains continuation events to

@@ -29,6 +29,8 @@ import { getJson, mcpCall } from './lib';
 import { FederatedRendererFrame, FederatedFormFrame } from './federated';
 import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
 import { CONSOLE_RESULT_EVENT } from './graph';
+import { TunePanel } from './tune-panel';
+import { readHashState, writeHashState } from './urlstate';
 import { ink } from './ink';
 // Matching/ranking, MRU recents, and selection stepping come from the kernel's
 // headless command-surface engine — shared with the canvas cmd-palette.
@@ -93,9 +95,9 @@ function Row({ active, onClick, onHover, children }: { active: boolean; onClick:
         textAlign: 'left',
         display: 'flex',
         alignItems: 'center',
-        gap: '0.5rem',
-        minHeight: 40,
-        padding: '0.3rem 0.55rem',
+        gap: '0.25rem',
+        minHeight: 20,
+        padding: '0.1rem 0.2rem',
         borderRadius: 8,
         border: `1px solid ${active ? ink.line : 'transparent'}`,
         background: active ? 'rgba(245,196,83,0.07)' : 'transparent',
@@ -195,6 +197,21 @@ interface Output {
 
 const PROBE_CMDS: Cmd[] = [
   {
+    id: 'graph:tune',
+    ns: 'graph',
+    verb: 'tune',
+    label: 'graph tune',
+    // 'read' — the tuner mutates only the LOCAL scene + its own _config fact as
+    // you drag; opening it writes nothing, so it earns no "changes substrate
+    // state" review gate. It opens straight into its live panel (no submit).
+    kind: 'read',
+    scope: null,
+    description: 'Live graph tuner — pick a section (quick, torch, labels, edges, zoom, bloom…) and dial it. Changes apply instantly; nothing is submitted.',
+    needsArgs: false,
+    search: 'tune tuner graph adjust knobs sliders torch bloom zoom drag momentum labels feel dial quick section',
+    run: async () => ({ ok: true, value: 'tuner' }),
+  },
+  {
     id: 'probe:whoami',
     ns: 'probe',
     verb: 'whoami',
@@ -257,9 +274,14 @@ function capToCmd(cap: Capability): Cmd {
  *  needs the form first: a required arg, a cell-authored form, or an `act`
  *  (whose run button is the explicit confirmation a mutation deserves). */
 function runsDirectly(c: Cmd): boolean {
-  if (!c.needsArgs) return true;
   if (c.kind === 'act' || c.ui?.form) return false;
+  if (!c.needsArgs) return true;
   return (c.schema?.required ?? []).length === 0;
+}
+
+const HIGH_RISK_ACT = /(delete|remove|revoke|supersede|unlink|unshare|undeclare|prune|deploy|configure|grant|updatetoken|reindex|project|bootstrap|reset|purge|destroy|rotate)/i;
+function requiresTypedConfirmation(c: Cmd): boolean {
+  return c.kind === 'act' && HIGH_RISK_ACT.test(c.id);
 }
 
 /** One list, two sources: workspace matches lead, capabilities follow — a
@@ -284,9 +306,11 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   const [args, setArgs] = useState('{}');
   const [formValue, setFormValue] = useState<Record<string, unknown>>({});
   const [rawJson, setRawJson] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const [results, setResults] = useState<ListEntry[]>([]);
+  const [searchN, setSearchN] = useState(16); // page size — grows via "more results"
   const counter = React.useRef(0);
 
   // ADR-0049: a contextual verb chip (palette selection) seeds the search box —
@@ -295,6 +319,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     if (!seed) return;
     setQuery(seed.q);
     setFocused(null);
+    setConfirmText('');
     setSel(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.n]);
@@ -330,6 +355,22 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
 
   const q = query.trim().toLowerCase();
 
+  // Query is shareable view-state (urlstate.ts). Like App's `selected`, we don't
+  // seed useState from the hash (SSR hydration must match the server's empty
+  // box) — instead restore it once after mount, then mirror it back. The restored
+  // query re-runs through the search effect below, which re-lights its hits.
+  const hashQHydrated = React.useRef(false);
+  useEffect(() => {
+    if (!hashQHydrated.current) {
+      hashQHydrated.current = true;
+      const hq = readHashState().q;
+      if (hq) { setQuery(hq); onCollapse?.(false); }
+      return;
+    }
+    writeHashState({ q: query.trim() || undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
   // Search-first: free text runs a SEMANTIC query over the slice (ADR-0051
   // `query{text}` — meaning-ranked, salience-aware). Matches drive graph focus
   // (highlight + fit, debounced). Skipped for capability-address-looking input
@@ -340,16 +381,21 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     if (!semantic) { setResults([]); return; }
     let live = true;
     const t = setTimeout(() => {
-      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: 6, shape: 'card' }).then((r) => {
+      void mcpCall('read', 'workspace.query', { text: query.trim(), limit: searchN, shape: 'card' }).then((r) => {
         if (!live || !r.ok) return;
         const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
-        setResults(entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, 6));
-        if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: r.value } }));
+        const shown = entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, searchN);
+        setResults(shown);
+        // The graph pulls in EVERY hit (hydrating off-scene ones), so pass the
+        // whole shown set, not just the first few.
+        if (entries.length) window.dispatchEvent(new CustomEvent(CONSOLE_RESULT_EVENT, { detail: { ok: true, value: { entries: shown } } }));
       });
     }, 300);
     return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, authed]);
+  }, [q, authed, searchN]);
+  // A new query resets to the first page.
+  useEffect(() => { setSearchN(16); }, [query]);
 
   const filtered = React.useMemo(
     () => (q ? (rankItems(cmds ?? [], q, { textOf: (c: Cmd) => c.search, limit: 10 }) as Cmd[]) : []),
@@ -383,6 +429,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
 
   const openForm = (cmd: Cmd): void => {
     setFocused(cmd);
+    setConfirmText('');
     const skeleton = argSkeletonObject(cmd.schema);
     setFormValue(skeleton);
     setArgs(JSON.stringify(skeleton, null, 2));
@@ -396,6 +443,9 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
       onSelectKey?.(it.e.key);
       return;
     }
+    // The tuner opens into its own live panel (see focusedView) — never a blind
+    // run, so it lands on the sliders, not a result line.
+    if (it.c.id === 'graph:tune') { openForm(it.c); return; }
     if (runsDirectly(it.c)) void invoke(it.c, {});
     else openForm(it.c);
   };
@@ -425,7 +475,8 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   };
 
   const runFocused = (): void => {
-    if (!focused) return;
+    if (!focused || focused.id === 'graph:tune') return; // the tuner has no submit
+    if (requiresTypedConfirmation(focused) && confirmText !== focused.id) return;
     if (!rawJson) {
       void invoke(focused, formValue);
       return;
@@ -462,11 +513,13 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   // ── focused: one command's arg entry (renders in the sheet area) ──
   const focusedSchema = focused ? splitSchema(focused.schema) : null;
   const advancedCount = Object.keys((focusedSchema?.advanced as { properties?: object } | undefined)?.properties ?? {}).length;
-  const focusedView = focused && focusedSchema ? (
+  const confirmationTarget = focused && requiresTypedConfirmation(focused) ? focused.id : null;
+  const confirmationReady = !confirmationTarget || confirmText === confirmationTarget;
+  const focusedView = focused ? (
       <div style={{ display: 'grid', gap: '0.7rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
           <button
-            onClick={() => setFocused(null)}
+            onClick={() => { setFocused(null); setConfirmText(''); }}
             aria-label="back to search"
             style={{ background: 'none', border: 'none', color: ink.dim, fontFamily: ink.mono, fontSize: '0.85rem', cursor: 'pointer', padding: '0.3rem 0.4rem 0.3rem 0', flexShrink: 0 }}
           >
@@ -475,6 +528,10 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
           <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{focused.label}</code>
           <Pill tone={focused.kind === 'act' ? 'act' : 'dim'}>{focused.kind}</Pill>
         </div>
+        {focused.id === 'graph:tune' ? (
+          <TunePanel onClose={() => { setFocused(null); setConfirmText(''); }} />
+        ) : focusedSchema ? (
+        <>
         {focused.description ? (
           <span style={{ color: ink.dim, fontSize: '0.78rem', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as React.CSSProperties}>
             {focused.description}
@@ -528,13 +585,31 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
               style={{ ...inset, width: '100%', boxSizing: 'border-box', padding: '0.55rem', fontSize: '0.8rem', color: ink.text, fontFamily: ink.mono }}
             />
           )}
+          {confirmationTarget ? (
+            <div style={{ ...inset, padding: '0.65rem', display: 'grid', gap: '0.45rem' }}>
+              <span style={{ color: ink.danger, fontSize: '0.75rem', lineHeight: 1.4 }}>
+                High-impact action. Type the exact capability address to confirm:
+              </span>
+              <code style={{ color: ink.text, fontFamily: ink.mono, fontSize: '0.76rem', overflowWrap: 'anywhere' }}>{confirmationTarget}</code>
+              <input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="type capability address to confirm"
+                style={{ ...inset, minHeight: 38, padding: '0.45rem 0.55rem', color: ink.text, fontFamily: ink.mono, fontSize: '0.78rem' }}
+              />
+            </div>
+          ) : focused.kind === 'act' ? (
+            <span style={{ color: ink.dim, fontSize: '0.74rem' }}>This action changes substrate state. Review its arguments before running.</span>
+          ) : null}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <button
               onClick={runFocused}
-              disabled={busy}
-              style={{ padding: '0.5rem 1rem', minHeight: 40, borderRadius: 8, border: `1px solid ${ink.accent}`, background: 'rgba(245,196,83,0.08)', color: ink.accent, fontFamily: ink.mono, fontSize: '0.8rem', cursor: busy ? 'wait' : 'pointer' }}
+              disabled={busy || !confirmationReady}
+              style={{ padding: '0.5rem 1rem', minHeight: 40, borderRadius: 8, border: `1px solid ${ink.accent}`, background: 'rgba(245,196,83,0.08)', color: ink.accent, fontFamily: ink.mono, fontSize: '0.8rem', cursor: busy || !confirmationReady ? 'not-allowed' : 'pointer', opacity: confirmationReady ? 1 : 0.55 }}
             >
-              {busy ? 'running…' : 'run ⌘↵'}
+              {busy ? 'running…' : focused.kind === 'act' ? 'run action' : 'run ⌘↵'}
             </button>
             {focused.ui?.form || isFormable(focused.schema) ? (
               <button
@@ -546,6 +621,8 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             ) : null}
           </div>
         </div>
+        </>
+        ) : null}
       </div>
   ) : null;
 
@@ -599,6 +676,15 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
         </div>
       ) : null}
 
+      {q && results.length >= searchN ? (
+        <button
+          onClick={() => setSearchN((n) => n + 16)}
+          style={{ marginTop: '0.3rem', alignSelf: 'start', border: `1px solid ${ink.line}`, background: 'transparent', color: ink.dim, fontFamily: ink.mono, fontSize: '0.72rem', borderRadius: 999, padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+        >
+          + more results
+        </button>
+      ) : null}
+
       {!q && cmds ? (
         // Idle, below recents: the vocabulary waits behind one quiet line —
         // commands shouldn't dominate the opening view (owner feedback).
@@ -645,6 +731,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             setQuery(e.target.value);
             setSel(0);
             setFocused(null);
+            setConfirmText('');
             onCollapse?.(false); // typing re-opens the sheet
           }}
           onFocus={() => onCollapse?.(false)}
@@ -674,7 +761,10 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
           placeholder="Search your workspace, or run a capability…"
           spellCheck={false}
           autoComplete="off"
-          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '0.9rem', minWidth: 0, minHeight: 34 }}
+          // fontSize MUST be ≥16px: below that, iOS Safari auto-zooms the page on
+          // focus (and never zooms back). 16px is the smallest that suppresses it
+          // without a viewport `maximum-scale` lock (which would kill pinch-zoom).
+          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: ink.text, fontFamily: ink.mono, fontSize: '16px', minWidth: 0, minHeight: 34 }}
         />
         {query ? (
           <button onClick={() => setQuery('')} aria-label="clear search" style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1rem', padding: '0.3rem 0.4rem' }}>

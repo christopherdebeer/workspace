@@ -122,7 +122,6 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   // ADR-0071 (C2): the one read by candidate source (recall/query/peek/changes
   // remain as ergonomic presets; `search` retires into read({source:'vector'})).
   read: CommandHandler<ComposedReadInput | undefined, ComposedReadResult>;
-  search: CommandHandler<SearchInput, SearchResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
   project: CommandHandler<undefined, { status: string; count?: number; method?: string; key?: string; hint?: string }>;
   pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
@@ -132,25 +131,16 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   contested: CommandHandler<ContestedInput | undefined, ContestedResult>;
   link: CommandHandler<LinkInput, LinkResult>;
   unlink: CommandHandler<UnlinkInput, { ok: true }>;
-  neighbors: CommandHandler<NeighborsInput, NeighborsResult>;
-  links: CommandHandler<LinksInput | undefined, { edges: (EdgeRecord | ThinEdge)[]; total: number; nextCursor?: string }>;
-  graph: CommandHandler<EdgeScopeInput | undefined, { edges: (EdgeRecord | ThinEdge)[]; total: number; nextCursor?: string }>;
-  members: CommandHandler<MembersInput, MembersResult>;
   // ADR-0069 (C3): the one edge query (neighbors/links/graph/members are aliases).
   // ADR-0075 (C4): `{around, depth ≥ 2, direction}` adds the directional walk.
   edges: CommandHandler<EdgesInput | undefined, NeighborsResult | MembersResult | { edges: (EdgeRecord | ThinEdge)[]; total: number; nextCursor?: string } | WalkResult>;
   changes: CommandHandler<ChangesInput | undefined, ChangesWithEntries>;
   attention: CommandHandler<AttentionInput | undefined, AttentionResult>;
-  registerAction: CommandHandler<RegisterActionInput, RegisterResult>;
   actions: CommandHandler<undefined, { actions: ActionDefinition[] }>;
   deleteAction: CommandHandler<DeleteActionInput, { ok: true }>;
-  invoke: CommandHandler<InvokeInput, InvokeResult>;
   tend: CommandHandler<undefined, TendReport>;
-  registerView: CommandHandler<RegisterViewInput, ViewDefinition>;
   views: CommandHandler<undefined, { views: ViewDefinition[] }>;
   deleteView: CommandHandler<DeleteViewInput, { ok: true }>;
-  view: CommandHandler<ViewInput, ViewResult>;
-  registerSubscription: CommandHandler<RegisterSubscriptionInput, SubscriptionDefinition>;
   subscriptions: CommandHandler<undefined, { subscriptions: SubscriptionDefinition[] }>;
   deleteSubscription: CommandHandler<DeleteSubscriptionInput, { ok: true }>;
   // ADR-0068 (C1): the one declaration surface (legacy verbs above are aliases).

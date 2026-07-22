@@ -46,10 +46,9 @@ describe('ADR-0075 — the directional walk on edges', () => {
     await cmds.link({ from: 'ev/c', rel: 'causes', to: 'ev/a', strength: 1.0 }, ctx);
   });
 
-  it('depth 1 / absent stays byte-identical to the one-hop framings (the gate)', async () => {
-    expect(await cmds.edges({ around: 'ev/a' }, ctx)).toEqual(await cmds.neighbors({ key: 'ev/a' }, ctx));
-    expect(await cmds.edges({ around: 'ev/a', depth: 1 }, ctx)).toEqual(await cmds.neighbors({ key: 'ev/a' }, ctx));
-    expect(await cmds.edges({ derived: false }, ctx)).toEqual(await cmds.links(undefined, ctx));
+  it('depth 1 / absent stays byte-identical to the one-hop framing (the gate)', async () => {
+    // depth:1 and absent-depth must be the SAME read — the walk only engages at depth ≥ 2.
+    expect(await cmds.edges({ around: 'ev/a', depth: 1 }, ctx)).toEqual(await cmds.edges({ around: 'ev/a' }, ctx));
   });
 
   it('walks downstream with compound confidence, sorted confidence-descending', async () => {

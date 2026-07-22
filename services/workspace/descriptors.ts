@@ -373,39 +373,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     resultSchema: { type: 'object', description: "Per source: the preset's envelope (recall overview/full · query projection · peek entry · changes feed), each entry optionally carrying `_context` refs when requested." },
   },
   {
-    name: 'search',
-    description:
-      'DEPRECATED alias (ADR-0051) — prefer `query({ text })`, which matches the same candidates by meaning but ranks salience-aware and composes with type/tag/prefix filters. This older surface ranks by raw cosine only (salience-blind): embeds your text, ranks by similarity across your slice + everything shared with you, then re-reads each hit authoritatively. If the deployment has no vector backend, returns empty with a `hint`.',
-    scope: null,
-    scopeFamily: 'read:type:*',
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'Natural-language query, matched by meaning' },
-        type: { type: 'string', description: 'Only facts of this type (also the granular read:type pin)' },
-        tag: { type: 'string', description: 'Only facts carrying this (primary) tag' },
-        limit: { type: 'number', description: 'Max results (1–50, default 10)' },
-      },
-      required: ['text'],
-      additionalProperties: false,
-    },
-    resultSchema: {
-      type: 'object',
-      properties: {
-        entries: {
-          type: 'array',
-          description: 'Ranked hits — { key, value, _meta, score } where score is cosine similarity (1 = closest)',
-          items: { type: 'object', properties: { key: { type: 'string' }, value: {}, _meta: META_SCHEMA, score: { type: 'number' } } },
-        },
-        count: { type: 'number' },
-        total: { type: 'number' },
-        types: TYPES_AFFORDANCE_SCHEMA,
-        hint: { type: 'string', description: 'Present only when semantic search is not configured (degraded to query/contains)' },
-      },
-    },
-  },
-  {
     name: 'link',
     description:
       'Add a typed, directed edge `from --rel--> to` between two fact keys in your slice (e.g. rel: "grounds", "refines", "relates"). The result carries `fromExists`/`toExists` hints — a dangling edge is allowed, but you learn at write time, not at the next tending pass.',
@@ -582,7 +549,9 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         prefix: { type: 'string', description: 'Authored-only: only edges whose from/to starts with this prefix' },
         keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end)' },
         rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
-        limit: { type: 'number', description: 'Cap returned edges; `total` still counts every match (0 = count only)' },
+        limit: { type: 'number', description: 'Page size for projection/authored framings (default 1000 — an omitted limit returns the FIRST PAGE + `nextCursor`, never the whole projection); `total` still counts every match (0 = count only)' },
+        cursor: { type: 'string', description: "A previous page's `nextCursor` (a plain offset into the scoped edge list)" },
+        edgeShape: { type: 'string', enum: ['thin', 'full'], description: 'Edge trim for projection/authored framings: `thin` = {from, rel, to, derived?} only (a rendering consumer needs nothing else); default full' },
         depth: { type: 'number', description: 'ADR-0075: walk this many hops from `around` (2–6). 1/absent = one-hop framings' },
         direction: { type: 'string', enum: ['out', 'in'], description: "Walk direction: 'out' = downstream of the root (what X leads to), 'in' = upstream (what leads to X). Default out" },
         shape: SHAPE_SCHEMA,
@@ -590,89 +559,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       additionalProperties: false,
     },
     resultSchema: { type: 'object', description: 'Per framing: `{ edges, total }` (projection / authored), `{ outbound, inbound, entries, types }` (around), the members result (membership), or `{ root, direction, depth, paths: [{nodes, steps, confidence}], total, truncated? }` (walk).' },
-  },
-  {
-    name: 'neighbors',
-    description: "DEPRECATED (ADR-0069) — prefer `edges({ around })`. The edges around a fact (outbound and/or inbound, optionally one rel) plus the neighbor entries — graph traversal, one hop. Includes the derived structural backbone (edges flagged `derived:true`): a fact `instanceOf` its `_types/<type>`, a type `managedBy` its cell and `rendersWith` its renderer, and a fact `inView` any view whose query selects it — so even an unlinked fact has a direction to explore.",
-    scope: null,
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        key: { type: 'string', description: 'The fact key to look around' },
-        dir: { type: 'string', enum: ['in', 'out', 'both'], description: 'Direction (default both)' },
-        rel: { type: 'string', description: 'Only edges of this type' },
-        shape: SHAPE_SCHEMA,
-      },
-      required: ['key'],
-      additionalProperties: false,
-    },
-    resultSchema: {
-      type: 'object',
-      properties: {
-        outbound: { type: 'array', items: EDGE_SCHEMA },
-        inbound: { type: 'array', items: EDGE_SCHEMA },
-        entries: { type: 'object', description: 'neighbor key → { value, _meta } for neighbors that exist (card-shaped preview values by default; `shape:"full"` for whole bodies)', additionalProperties: ENTRY_SCHEMA },
-        types: TYPES_AFFORDANCE_SCHEMA,
-      },
-    },
-  },
-  {
-    name: 'links',
-    description: 'DEPRECATED (ADR-0069) — prefer `edges({ derived: false })`. Every edge in your slice — boards and graph surfaces project their edges from this. Scope it (ADR-0048): `keys` = only edges touching those facts, `rels` = only those rel types, `prefix` = from/to key prefix, `limit` caps the list (`{limit: 0}` = just the `total` count). Bare calls return everything — prefer scoping.',
-    scope: null,
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        prefix: { type: 'string', description: 'Only edges whose from or to starts with this prefix' },
-        keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end)' },
-        rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
-        limit: { type: 'number', description: 'Cap the returned edges; `total` still counts every match (0 = count only)' },
-      },
-      additionalProperties: false,
-    },
-    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' } } },
-  },
-  {
-    name: 'graph',
-    description:
-      "DEPRECATED (ADR-0069) — prefer `edges({ derived: true })`. The full Reference projection (also `read(\"$graph\")`): authored edges plus the derived rule edges — the structural backbone (instanceOf/managedBy/rendersWith/inView), embedded `ref` fields (e.g. a claim's `support`), and key-encoded membership (e.g. `_doc/<doc>/<block>` → inDoc). Derived edges carry `derived:true`. The graph half of the self-model beside `$catalog` (capabilities) and `$types` (vocabulary).",
-    scope: null,
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        keys: { type: 'array', items: { type: 'string' }, description: 'Only edges touching ANY of these keys (either end) — "the edges around these facts" instead of the whole projection (ADR-0048)' },
-        rels: { type: 'array', items: { type: 'string' }, description: 'Only these rel types' },
-        limit: { type: 'number', description: 'Cap the returned edges; `total` still counts every match (0 = count only)' },
-      },
-      additionalProperties: false,
-    },
-    resultSchema: { type: 'object', properties: { edges: { type: 'array', items: EDGE_SCHEMA }, total: { type: 'number', description: 'matches before the limit cap' } } },
-  },
-  {
-    name: 'members',
-    description:
-      "DEPRECATED (ADR-0069) — prefer `edges({ around, membership: true })`. A collection's member facts (ADR-0005). **Intensional** when the fact carries a `query` (a view) — its query is evaluated (`order:\"query\"`); **extensional** otherwise — the facts with an inbound membership edge (`inView`/`inDoc`) in the Reference projection (e.g. a doc's blocks). Extensional members come back in **narrative order** when placed by an ordering decoration (a doc-order `seq` → `order:\"seq\"`), else salience-ranked (`order:\"salience\"`). One read for 'a view's facts' and 'a doc's members' alike.",
-    scope: null,
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: { key: { type: 'string', description: 'The collection fact key (a view, a doc, …)' }, shape: SHAPE_SCHEMA },
-      required: ['key'],
-      additionalProperties: false,
-    },
-    resultSchema: {
-      type: 'object',
-      properties: {
-        key: { type: 'string' },
-        membership: { type: 'string', enum: ['intensional', 'extensional'] },
-        order: { type: 'string', enum: ['seq', 'salience', 'query'], description: 'how members are ordered: narrative seq, salience rank, or the view query' },
-        members: { type: 'array', items: ENTRY_SCHEMA, description: 'member facts (key + value + _meta); extensional members also carry `placement` {seq, fold} from their ordering decoration' },
-        types: TYPES_AFFORDANCE_SCHEMA,
-      },
-    },
   },
   {
     name: 'changes',
@@ -762,44 +648,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
-    name: 'registerAction',
-    description:
-      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "action", def })`. Declare a no-code action: `{ id, if?, enabled?, writes[], params? }` stored as a fact at `_actions/<id>` and applied by the substrate when invoked. Writes are declared (bounded, auditable); competing write targets are surfaced, not blocked. Templates support ${params.x}/${self}/${now}; per-write ifAbsent + timer expresses an atomic lease (time-bounded exclusivity — a "claim" in this substrate is an epistemic assertion, ADR-0086).',
-    scope: null,
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'object',
-          description: 'The action definition',
-          properties: {
-            id: { type: 'string' },
-            description: { type: 'string' },
-            if: { type: 'array', description: 'Preconditions (AND): [{ key, path?, op: exists|absent|eq|ne|gt|lt, value? }]', items: { type: 'object' } },
-            enabled: { type: 'array', description: 'Availability conditions (same shape as if)', items: { type: 'object' } },
-            writes: {
-              type: 'array',
-              description: 'Declared writes: [{ key, value?, ifAbsent?, ifVersion?, timer?, type?, tags? }]. ifVersion is proof-of-read CAS (a content hash, "" = create-only); supports ${params.*} so the caller can pass a token they read.',
-              items: { type: 'object' },
-            },
-            params: { type: 'object', description: 'Param schema: { <name>: { type?, description?, enum?, required? } }' },
-          },
-          required: ['id', 'writes'],
-        },
-      },
-      required: ['action'],
-      additionalProperties: false,
-    },
-    resultSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'object', description: 'The registered definition, echoed' },
-        contested: { type: 'array', description: 'Other actions declaring writes to the same keys (surfaced, not blocked)' },
-      },
-    },
-  },
-  {
     name: 'actions',
     description: 'List the declared actions in your slice (the registered no-code vocabulary).',
     scope: null,
@@ -819,31 +667,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       additionalProperties: false,
     },
     resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
-  },
-  {
-    name: 'invoke',
-    description:
-      'DEPRECATED (ADR-0068) — prefer `evaluate({ kind: "action", id, params })`. Invoke a declared action by id with params. Checks enabled + if conditions (a failed precondition is a 409-style error), then applies the declared writes with substitution. The substrate interprets; no code runs.',
-    scope: null,
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', description: 'The action id' },
-        params: { type: 'object', description: 'Arguments for the action' },
-      },
-      required: ['action'],
-      additionalProperties: false,
-    },
-    resultSchema: {
-      type: 'object',
-      properties: {
-        invoked: { type: 'boolean' },
-        action: { type: 'string' },
-        params: { type: 'object' },
-        writes: { type: 'array', description: 'The applied writes, each `{ key, value, _meta }`', items: KEYED_ENTRY_SCHEMA },
-      },
-    },
   },
   {
     name: 'reindex',
@@ -933,62 +756,12 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
-    name: 'registerView',
-    description:
-      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "view", def })`. Register a named view: `{ id, query, reduce?, path?, render? }` stored as a fact at `_views/<id>`. A view is a stored projection (the query primitive as data) with an optional reduction (list|count|latest|sum) and a render hint — the same declaration is a dashboard surface for humans and an affordance for agents.',
-    scope: null,
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        view: {
-          type: 'object',
-          description: 'The view definition',
-          properties: {
-            id: { type: 'string' },
-            description: { type: 'string' },
-            query: { type: 'object', description: 'Query options: { type?, tag?, prefix?, rankBy?, limit?, includeSuperseded? }' },
-            reduce: { type: 'string', enum: ['list', 'count', 'latest', 'sum'] },
-            path: { type: 'string', description: 'Dot-path into each value, for sum' },
-            render: { type: 'object', description: 'Render hint: { type: metric|table|feed|list|markdown, label?, ... }' },
-          },
-          required: ['id', 'query'],
-        },
-      },
-      required: ['view'],
-      additionalProperties: false,
-    },
-    resultSchema: { type: 'object', description: 'The registered view definition, echoed' },
-  },
-  {
     name: 'views',
     description: 'List the registered views in your slice.',
     scope: null,
     kind: 'read',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     resultSchema: { type: 'object', properties: { views: { type: 'array', items: { type: 'object', description: 'View definitions' } } } },
-  },
-  {
-    name: 'view',
-    description: 'DEPRECATED (ADR-0068) — prefer `evaluate({ kind: "view", id })`. Evaluate a registered view against the current slice — returns its value, count, and render hint.',
-    scope: null,
-    kind: 'read',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string', description: 'The view id' } },
-      required: ['id'],
-      additionalProperties: false,
-    },
-    resultSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        description: { type: 'string' },
-        render: { type: ['object', 'null'], description: 'The render hint' },
-        value: { description: 'The evaluated value, per the view’s reduce' },
-        count: { type: 'number' },
-      },
-    },
   },
   {
     name: 'deleteView',
@@ -1002,35 +775,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       additionalProperties: false,
     },
     resultSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
-  },
-  {
-    name: 'registerSubscription',
-    description:
-      'DEPRECATED (ADR-0068) — prefer `declare({ kind: "subscription", def })`. Register a reaction: `{ id, match:{type?,keyPrefix?,cel?}, invoke|deliver, params?, maxDepth? }` stored as a fact at `_subscriptions/<id>`. When a fact write matches `match`, the reactor fires — either `invoke` (a declared action id, in-process) or `deliver` (a cell tool "@owner/name.tool", called AS you, for reactions that need a cell, e.g. a model deciding an agent rail) — with `params` templated from the event (${key} ${keySuffix} ${scope} ${value.<path>}). The generic primitive behind reactive machines — a tier-2 cell makes a process reactive by registering subscriptions, no platform change needed.',
-    scope: null,
-    kind: 'act',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        subscription: {
-          type: 'object',
-          description: 'The subscription definition',
-          properties: {
-            id: { type: 'string' },
-            match: { type: 'object', description: 'Predicate over the changed fact: { type?, keyPrefix?, cel? }' },
-            invoke: { type: 'string', description: 'Declared action id to invoke when matched (exactly one of invoke/deliver)' },
-            deliver: { type: 'string', description: 'Cell tool address "@owner/name.tool" to call as the slice owner (exactly one of invoke/deliver)' },
-            params: { type: 'object', description: 'Arg templates over the event: { name: "${keySuffix}" | "${value.x}" | … }' },
-            maxDepth: { type: 'number', description: 'Loop bound: skip when the triggering fact revision exceeds this (default 50)' },
-            label: { type: 'string' },
-          },
-          required: ['id', 'match'],
-        },
-      },
-      required: ['subscription'],
-      additionalProperties: false,
-    },
-    resultSchema: { type: 'object', description: 'The registered subscription definition, echoed' },
   },
   {
     name: 'subscriptions',

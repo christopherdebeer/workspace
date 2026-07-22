@@ -87,7 +87,7 @@ async function renderTourBar(frameId: string): Promise<void> {
   const selfKey = `frame:${frameId}`;
   let prev: string | null = null, next: string | null = null, label = frameId;
   try {
-    const nb = await read<Neighbors>('workspace.neighbors', { key: selfKey, rel: 'navNext' });
+    const nb = await read<Neighbors>('workspace.edges', { around: selfKey, rel: 'navNext' });
     for (const e of nb.outbound ?? []) {
       if (e.rel === 'navNext' && e.to.startsWith('frame:')) { next = e.to.slice('frame:'.length); break; }
     }
@@ -133,7 +133,7 @@ async function renderTourBar(frameId: string): Promise<void> {
 async function installNavTo(): Promise<void> {
   const map = new Map<string, string>();
   try {
-    const r = await read<{ edges?: Edge[] }>('workspace.links', {});
+    const r = await read<{ edges?: Edge[] }>('workspace.edges', { derived: false });
     for (const e of r.edges ?? []) {
       if (e.rel === 'navTo' && e.from.startsWith('el:') && e.to.startsWith('frame:')) {
         map.set(e.from.slice('el:'.length), e.to.slice('frame:'.length));

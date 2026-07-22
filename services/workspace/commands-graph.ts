@@ -2,10 +2,42 @@
  * Workspace command group (ADR-0044 Inc 5): links/edges/graph — link, unlink,
  * neighbors, links, graph, members (the Reference projection).
  */
-import { requireUser, type StateStore } from '../../platform/runtime';
+import { requireUser, type StateStore, type ObservedState } from '../../platform/runtime';
 import { type DepsBuilder, typeDeclsFor, typeRulesFor, affordancesForTypes, typesOf } from './shared';
 import { shapeEntryList, shapeEntryMap, scopeEdges, type ReadShape, type EdgeScopeInput } from './shape';
+import { applicableGrants, grantCovers, type GrantStore } from './grants';
 import type { WorkspaceCommands } from './handlers';
+
+type Edge = Awaited<ReturnType<ObservedState['edges']>>[number];
+
+/** The authored edges a viewer reaches through GRANTS — the graph twin of the
+ *  recall fold (commands-read.ts). For each owner who shared to the viewer
+ *  (directly, via `public`, or a group), read that owner's authored edges and
+ *  keep only those whose BOTH endpoints fall under the viewer's grant patterns
+ *  for that owner — a public→private edge would otherwise leak the private key.
+ *  Kept edges are re-prefixed `owner/key`, matching how the recall fold keys the
+ *  granted facts, so the client's node keys and these edge keys line up. Owner
+ *  viewing their own slice gets `[]` (no foreign grants) — behaviour-preserving. */
+async function grantedEdges(state: Pick<ObservedState, 'edges'>, viewer: string, grants: GrantStore): Promise<Edge[]> {
+  const grantList = await applicableGrants(grants, viewer);
+  const byOwner = new Map<string, string[]>();
+  for (const g of grantList) {
+    if (g.owner === viewer) continue;
+    const pats = byOwner.get(g.owner) ?? [];
+    pats.push(g.key);
+    byOwner.set(g.owner, pats);
+  }
+  if (!byOwner.size) return [];
+  const covered = (pats: string[], key: string): boolean => pats.some((p) => grantCovers(p, key));
+  const out: Edge[] = [];
+  for (const [owner, pats] of byOwner) {
+    const es = await state.edges(owner);
+    for (const e of es) {
+      if (covered(pats, e.from) && covered(pats, e.to)) out.push({ ...e, from: `${owner}/${e.from}`, to: `${owner}/${e.to}` });
+    }
+  }
+  return out;
+}
 
 export interface LinkInput {
   from: string;
@@ -157,7 +189,7 @@ async function walkFrom(
 
 /** The links/edges/graph command handlers (ADR-0044 Inc 5) + the composed `edges`
  *  query (ADR-0069). */
-export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'link' | 'unlink' | 'neighbors' | 'links' | 'graph' | 'members' | 'edges'> {
+export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands, 'link' | 'unlink' | 'edges'> {
   return {
     async link(input, ctx) {
       const scope = requireUser(ctx.identity);
@@ -175,57 +207,11 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       return state.unlink(scope, input.from, input.rel, input.to, ctx.identity);
     },
 
-    async neighbors(input, ctx) {
-      const scope = requireUser(ctx.identity);
-      if (!input?.key) throw new Error('key is required');
-      const { state } = build(ctx);
-      const result = await state.neighbors(scope, input.key, { dir: input.dir, rel: input.rel, typeRules: await typeRulesFor(ctx) }, ctx.identity);
-      const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx)); // R1 (ADR-0029)
-      // A neighbourhood read is a topology question ("what's connected, and what
-      // is each one?"), not a body dump — default the hydrated entries to `card`
-      // (key + type + salience + a value preview), matching recall's default.
-      // The full neighbour bodies are one `shape:'full'` away; an agent asking
-      // "does this have edges?" no longer pays for every neighbour's whole value.
-      const shaped = { ...result, entries: shapeEntryMap(result.entries, input.shape ?? 'card') };
-      return Object.keys(types).length ? { ...shaped, types } : shaped;
-    },
-
-    async links(input, ctx) {
-      const started = Date.now();
-      const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
-      const all = await state.edges(scope);
-      const prefix = input?.prefix;
-      const prefixed = prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all;
-      const scoped = scopeEdges(prefixed, input); // ADR-0048: keys/rels scope + limit cap; total always counts
-      logEdgeRead(ctx, 'links', scope, input, scoped, started);
-      return scoped;
-    },
-
-    async graph(input, ctx) {
-      const started = Date.now();
-      const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
-      const result = await state.graph(scope, { typeRules: await typeRulesFor(ctx) });
-      const scoped = scopeEdges(result.edges, input); // ADR-0048: `{keys}` = "edges around these facts", not the whole projection
-      logEdgeRead(ctx, 'graph', scope, input, scoped, started);
-      return scoped;
-    },
-
-    async members(input, ctx) {
-      const scope = requireUser(ctx.identity);
-      if (!input?.key) throw new Error('key is required');
-      const { state } = build(ctx);
-      const result = await state.members(scope, input.key, { typeRules: await typeRulesFor(ctx) });
-      const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx)); // R1 (ADR-0029)
-      const shaped = { ...result, members: shapeEntryList(result.members, input.shape ?? 'card') };
-      return Object.keys(types).length ? { ...shaped, types } : shaped;
-    },
 
     // ── ADR-0069 (C3): one edge query over the four framings ──────────────
     async edges(input, ctx) {
       const scope = requireUser(ctx.identity);
-      const { state } = build(ctx);
+      const { state, grants } = build(ctx);
       // W4d (wave-4, 3 drivers): `around` is the key-scoped anchor, but drivers
       // reached for `key` (the peek/neighbors spelling) and `edges({key, depth})`
       // fell through to the WHOLE-graph projection or errored. Honor `key` as the
@@ -257,9 +243,14 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
         return Object.keys(types).length ? { ...shaped, types } : shaped;
       }
       // derived:false → the authored-only `links` framing (+ optional prefix).
+      // Fold in edges reached through grants (public/shared subgraphs), keyed
+      // `owner/key` like the recall fold — so a viewer sees the CONSTELLATIONS of
+      // the slices shared to them, not just isolated shared stars.
       if (input?.derived === false) {
         const started = Date.now();
-        const all = await state.edges(scope);
+        const own = await state.edges(scope);
+        const granted = await grantedEdges(state, scope, grants);
+        const all = granted.length ? [...own, ...granted] : own;
         const prefix = input?.prefix;
         const prefixed = prefix ? all.filter((e) => e.from.startsWith(prefix) || e.to.startsWith(prefix)) : all;
         const scoped = scopeEdges(prefixed, edgeScope(input));

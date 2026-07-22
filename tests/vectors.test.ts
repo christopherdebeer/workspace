@@ -12,6 +12,7 @@ import {
   cosineSimilarity,
   normalize,
   embeddableText,
+  indexableText,
   metadataForFact,
   isTextLikeContentType,
   indexForScope,
@@ -435,8 +436,8 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
         // a `_`-prefixed plumbing fact — no embeddable text, skipped
         { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', '_config/salience', { value: { focusThreshold: 0.6 } })) } },
       ],
-    });
-    expect([...plans.keys()]).toEqual(['slice-alice-d256']); // DIM defaults to 256 (no VECTOR_* env in tests)
+    }, 256);
+    expect([...plans.keys()]).toEqual(['slice-alice-d256']); // dim is threaded from the embedder (the one source)
     const p = plans.get('slice-alice-d256')!;
     expect(p.puts.map((x) => x.key)).toEqual(['d1']);
     expect(p.puts[0].meta).toMatchObject({ type: 'decision', tag: 'storage' });
@@ -448,7 +449,7 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
         { eventName: 'MODIFY', dynamodb: { NewImage: M(fact('bob', 'g1', { value: 'x', superseded: true })), OldImage: M(fact('bob', 'g1', { value: 'x' })) } },
         { eventName: 'REMOVE', dynamodb: { OldImage: M(fact('bob', 'g2', { value: 'y' })) } },
       ],
-    });
+    }, 256);
     const p = plans.get('slice-bob-d256')!;
     expect([...p.removes].sort()).toEqual(['g1', 'g2']);
     expect(p.puts).toHaveLength(0);
@@ -460,7 +461,7 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
       Records: [
         { eventName: 'MODIFY', dynamodb: { NewImage: M(fact('alice', 'k', { ...same, tags: ['new-tag'] })), OldImage: M(fact('alice', 'k', { ...same, tags: ['old-tag'] })) } },
       ],
-    });
+    }, 256);
     expect(plans.size).toBe(0); // text unchanged → no re-embed
   });
 
@@ -473,9 +474,35 @@ describe('planStreamWork (ADR-0030 Inc 2 — DDB-stream record → per-index wor
       Records: [
         { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'lease/suggestion/abc', { value: { holder: 'judge/alpha' }, type: 'lease', timerEffect: 'delete', timerExpiresAt: '2026-07-16T21:42:00Z' })) } },
       ],
-    });
+    }, 256);
     const p = plans.get('slice-alice-d256')!;
     expect(p.puts).toHaveLength(0);
     expect([...p.removes]).toEqual(['lease/suggestion/abc']);
+  });
+
+  it('the index name follows the threaded dimension — no second env-derived source', () => {
+    const plans = planStreamWork(
+      { Records: [{ eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'd1', { value: { title: 'титул' } })) } }] },
+      1024,
+    );
+    expect([...plans.keys()]).toEqual(['slice-alice-d1024']);
+  });
+});
+
+describe('indexableText — the ONE index-membership rule (both vector writers)', () => {
+  it('admits a live embeddable fact and returns its text', () => {
+    expect(indexableText({ key: 'note/1', value: { title: 'a durable note' } })).toBe('a durable note');
+  });
+
+  it('rejects superseded facts, delete-timer ephemera, and unembeddable values', () => {
+    expect(indexableText({ key: 'note/1', value: { title: 't' }, superseded: true })).toBeNull();
+    // The reindex regression: a LIVE (unexpired) delete-timer lease passes
+    // query() but must never be re-embedded by the backfill.
+    expect(indexableText({ key: 'lease/run/abc', value: { holder: 'judge' }, timerEffect: 'delete' })).toBeNull();
+    expect(indexableText({ key: '_config/salience', value: { focusThreshold: 0.6 } })).toBeNull();
+  });
+
+  it('an enable-timer (reveal) fact stays indexable', () => {
+    expect(indexableText({ key: 'note/2', value: 'revealed later', timerEffect: 'enable' })).toBe('revealed later');
   });
 });

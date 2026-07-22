@@ -5,9 +5,9 @@
  * fact detail (peek modal, generic editor), and the workspace window itself.
  */
 import * as React from 'react';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
-import { marked } from 'marked';
+import { SafeMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -20,7 +20,7 @@ const { useState, useEffect } = React;
 export interface ListEntry {
   key: string;
   value?: unknown;
-  _meta?: { type?: string | null; tags?: string[]; updatedAt?: string };
+  _meta?: { type?: string | null; tags?: string[]; updatedAt?: string; version?: number; revision?: number; writer?: string; via?: string; seq?: number; score?: number; superseded?: boolean; supersededBy?: string };
 }
 
 /**
@@ -36,8 +36,9 @@ interface LegacyTypeDecl { icon?: string; titlePath?: string; href?: string; man
 function normalizeDecl(d: LegacyTypeDecl): TypeDecl {
   // Prefer the gateway-resolved `present` facet (ADR-0012/0014 row 3): the legacy
   // {icon,titlePath} → {icon,label} normalisation now happens once, server-side via
-  // resolveType, so home consumes it instead of re-deriving. (The per-fact label is still
-  // applied client-side by `pathInto` — Present runs where the fact's value is.)
+  // resolveType, so home consumes it instead of re-deriving. (The per-fact label is
+  // still applied client-side, by the shared @parc/ui `titleOf` — Present runs where
+  // the fact's value is.)
   const icon = d.present?.icon ?? d.icon;
   const label = d.present?.label ?? d.label ?? d.titlePath;
   if (d.handlers || !d.href) return { ...(d as TypeDecl), icon, label }; // new-shape (+ served present)
@@ -69,39 +70,16 @@ export async function loadTypeDecls(): Promise<void> {
     /* defaults still apply */
   }
 }
-function pathInto(value: unknown, path: string): unknown {
-  let cur: unknown = value;
-  for (const p of path.split('.')) {
-    if (cur === null || typeof cur !== 'object') return undefined;
-    cur = (cur as Record<string, unknown>)[p];
-  }
-  return cur;
-}
-
 export function typeIcon(e: ListEntry): string {
-  return declFor(e, typeDecls)?.icon ?? '';
+  return iconOf(declFor(e, typeDecls));
 }
 
-/** A fact's one-line presentation: title from its value (its declared label path), not its key. */
+/** A fact's one-line presentation, via the ONE shared resolver (@parc/ui
+ *  `titleOf`): declared label path (envelope-rooted, so `value.title` reads
+ *  the entry's value — the local fork rooted it at the value and broke every
+ *  declared `value.*` label) → value heuristic → key. */
 export function factTitle(e: ListEntry): string {
-  const label = declFor(e, typeDecls)?.label;
-  if (label) {
-    const v = pathInto(e.value, label);
-    if (typeof v === 'string' && v) return v.slice(0, 80);
-  }
-  const v = e.value;
-  if (typeof v === 'string') return v.slice(0, 80) || e.key;
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    if (typeof o.title === 'string' && o.title) return o.title.slice(0, 80);
-    if (typeof o.name === 'string' && o.name) return o.name.slice(0, 80);
-    if (typeof o.content === 'string' && o.content) {
-      const line = o.content.match(/^#+\s*(.+)$/m)?.[1] ?? o.content.split('\n').find((l) => l.trim()) ?? '';
-      const clean = line.replace(/^[-*]\s*\[[ x]\]\s*/, '').replace(/[#*_`>\\[\]()]/g, '').trim();
-      if (clean) return clean.slice(0, 80);
-    }
-  }
-  return e.key;
+  return titleOf(e, declFor(e, typeDecls));
 }
 
 /**
@@ -113,8 +91,10 @@ export function factTitle(e: ListEntry): string {
  */
 function handlerUrl(r: ReturnType<typeof resolve>): string | null {
   if (!r) return null;
-  if (r.cellRef && r.path !== undefined) return cellUrl(r.cellRef.owner, r.cellRef.name, r.path);
-  return r.surface ? localize(r.surface) : null;
+  const candidate = r.cellRef && r.path !== undefined
+    ? cellUrl(r.cellRef.owner, r.cellRef.name, r.path)
+    : r.surface ? localize(r.surface) : null;
+  return safeNavigationUrl(candidate);
 }
 
 /** Where a fact opens — resolved from the type vocabulary, no hardcoded cells. */
@@ -175,8 +155,6 @@ function factPreview(e: ListEntry): string {
 // enforce. `marked` is isomorphic (same pin server+client, like starter), so
 // markdown bodies hydrate without a flash.
 
-marked.setOptions({ gfm: true, breaks: false });
-
 /** First present string field among `keys` of an object value. */
 function strField(v: unknown, keys: string[]): string | undefined {
   if (v && typeof v === 'object') {
@@ -200,16 +178,25 @@ function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Elemen
     case 'markdown': {
       const md = bodyText(v);
       if (!md) return null;
-      const html = marked.parse(md.replace(/\r\n/g, '\n'), { async: false }) as string;
-      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
     }
     case 'image': {
-      const src = strField(v, ['src', 'url', 'href', 'image']);
-      return src ? <img src={src} alt={factTitle(e)} loading="lazy" style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} /> : null;
+      const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
+      return src ? <img src={src} alt={factTitle(e)} loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} /> : null;
     }
     case 'code': {
       const code = bodyText(v);
       return code ? <CodeBlock>{code.slice(0, 2000)}</CodeBlock> : null;
+    }
+    // mermaid / csv / json / style: the shared @c15r/viewers pure viewers — the
+    // same implementations canvas and lit mount. A type declaring these hints
+    // now renders the real diagram/table/tree in home too, not a fallback.
+    case 'mermaid':
+    case 'csv':
+    case 'json':
+    case 'style': {
+      const code = kind === 'json' && typeof v !== 'string' ? JSON.stringify(v, null, 2) : bodyText(v);
+      return code ? <ViewerBody lang={kind} code={code} /> : null;
     }
     case 'metric': {
       const n = typeof v === 'number' ? String(v) : (strField(v, ['value', 'count', 'n', 'total']) ?? bodyText(v));
@@ -244,11 +231,14 @@ function FieldsBody({ value }: { value: unknown }): React.JSX.Element | null {
 /** A cell-SSR'd embed: the managing cell renders a zero-JS thumbnail on its own
  *  origin; home shows it in a pointer-inert iframe (origin-isolated — the cell's
  *  code never touches home). Lazy-loaded; a transparent overlay link opens it. */
-function FactEmbed({ src, href, title }: { src: string; href: string | null; title: string }): React.JSX.Element {
+function FactEmbed({ src, href, title }: { src: string; href: string | null; title: string }): React.JSX.Element | null {
+  const frameSrc = safeFrameUrl(src);
+  const openHref = safeNavigationUrl(href);
+  if (!frameSrc) return null;
   return (
     <div style={{ position: 'relative', height: 200, borderRadius: 8, overflow: 'hidden', border: `1px solid ${ink.line}`, background: '#fff' }}>
-      <iframe src={src} title={title} loading="lazy" scrolling="no" tabIndex={-1} aria-hidden style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', pointerEvents: 'none' }} />
-      {href ? <a href={href} title={`Open ${title}`} aria-label={`Open ${title}`} style={{ position: 'absolute', inset: 0, display: 'block' }} /> : null}
+      <iframe src={frameSrc} title={title} loading="lazy" scrolling="no" tabIndex={-1} aria-hidden sandbox="" referrerPolicy="no-referrer" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: 'block', pointerEvents: 'none' }} />
+      {openHref ? <a href={openHref} title={`Open ${title}`} aria-label={`Open ${title}`} rel="noopener noreferrer" style={{ position: 'absolute', inset: 0, display: 'block' }} /> : null}
     </div>
   );
 }
@@ -267,6 +257,99 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
   );
 }
 
+// ─── the shared PURE VIEWERS (@c15r/viewers) ───────────────────────
+// json tree / csv table / mermaid / style — one validated implementation, the
+// same module canvas re-exports and lit's fences import. Home consumes it the
+// same way (dynamic import of the cell's ESM face), rather than re-hand-rolling
+// a JSON dump — so a structured/undeclared fact reads as a real tree, not a
+// raw stringify. Lazy + cached: the ~18KB module loads only when a viewer is
+// actually needed (never on the SSR path — this mounts in an effect).
+const VIEWERS_URL = 'https://parc.land/@c15r/viewers/app.js';
+type ViewersModule = { renderFence: (host: HTMLElement, lang: string, code: string) => boolean };
+let viewersMod: Promise<ViewersModule> | null = null;
+const loadViewers = (): Promise<ViewersModule> =>
+  (viewersMod ??= import(/* @vite-ignore */ VIEWERS_URL) as Promise<ViewersModule>);
+
+/** Mount a pure viewer (json/csv/mermaid/style) for a string body, via the
+ *  shared @c15r/viewers module. Imperative host (like the graph): React owns
+ *  the wrapper, the viewer owns the inner DOM. Degrades to a <pre> if the
+ *  module can't load (offline) so content is never lost. */
+function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.Element {
+  const host = React.useRef<HTMLDivElement | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    let live = true;
+    loadViewers()
+      .then((v) => { if (live && el) v.renderFence(el, lang, code); })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; if (el) el.innerHTML = ''; };
+  }, [lang, code]);
+  if (failed) return <pre style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '0.8rem' }}>{code}</pre>;
+  return <div ref={host} style={{ maxWidth: '100%', overflow: 'auto' }} />;
+}
+
+/**
+ * A WHOLE doc, assembled from its blocks. A `doc` fact holds only {title,summary}
+ * and a `doc-block` is one slice — so for either we read the doc's membership the
+ * same substrate-native way lit's own reader (loadDoc) does: one
+ * `workspace.edges({around, membership})` returns every member block with its
+ * content + placement.seq, already in narrative order. Sort by seq, concatenate,
+ * render one markdown body. No lit code, no iframe — the substrate does the join.
+ * Fails soft: a bad/empty read falls back to the fact's own body or summary.
+ */
+export function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
+  const type = e._meta?.type;
+  // The parent doc key: a `doc` IS the doc; a `doc-block` points at its doc via a
+  // `doc:` tag (present on the block, so no extra edge read to resolve up).
+  const docKey = type === 'doc' || e.key.startsWith('doc:')
+    ? e.key
+    : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
+  const [md, setMd] = useState<string | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'fail'>('loading');
+  useEffect(() => {
+    if (!docKey) { setState('fail'); return; }
+    let live = true;
+    setState('loading');
+    setMd(null);
+    // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
+    // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
+    // doc-block membership (blocks aren't shared to `public`), but the file IS —
+    // so the whole body is readable either way: assemble from blocks when we can,
+    // else fall back to the public markdown source. (Authed owners get blocks.)
+    const fileKey = docKey.startsWith('doc:docs/') ? `file/${docKey.slice('doc:'.length)}.md` : null;
+    void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
+      .then(async (r) => {
+        if (!live) return;
+        const members = (r.ok ? (r.value as { members?: Array<{ value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
+        let text = members
+          .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: bodyText(m.value) }))
+          .sort((a, b) => a.seq - b.seq)
+          .map((m) => m.content)
+          .filter(Boolean)
+          .join('\n\n');
+        if (!text && fileKey) {
+          const fr = await mcpCall('read', 'workspace.peek', { key: fileKey }).catch(() => null);
+          if (!live) return;
+          const fv = fr?.ok ? (fr.value as { value?: unknown } | null)?.value : null;
+          text = bodyText(fv) || '';
+        }
+        setMd(text);
+        setState(text ? 'ready' : 'fail');
+      })
+      .catch(() => { if (live) setState('fail'); });
+    return () => { live = false; };
+  }, [docKey]);
+  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
+  if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
+  // Assembly failed — the fact's own body (a block's content) or its summary.
+  const own = bodyText(e.value);
+  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} />;
+  const sum = strField(e.value, ['summary']);
+  return <span style={{ fontSize: '0.85rem', color: ink.text }}>{sum ?? factTitle(e)}</span>;
+}
+
 /**
  * A fact's inline body, from the type's declared default viewer: a built-in
  * `render` hint, or (when `embed` is allowed, e.g. a pinned single fact) the
@@ -278,6 +361,10 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
  * that the peek modal carries the full content.
  */
 export function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
+  // A doc (or a block of one) reads as the WHOLE assembled doc when fully open —
+  // the substrate joins membership+order; we just concatenate (see DocBody).
+  const t = e._meta?.type;
+  if (full && (t === 'doc' || t === 'doc-block')) return <DocBody e={e} />;
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
   // run it sandboxed (ADR-0041), the FieldsBody hint as the degrade-to placeholder
@@ -308,16 +395,89 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      const html = marked.parse(body.replace(/\r\n/g, '\n'), { async: false }) as string;
-      return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: html }} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
-    if (e.value != null && typeof e.value === 'object') return <CodeBlock>{JSON.stringify(e.value, null, 2)}</CodeBlock>;
+    // A structured value with no declared viewer reads as a collapsible JSON
+    // TREE (the shared @c15r/viewers `json` viewer), not a raw stringify — the
+    // same tree canvas and lit show. Degrades to a <pre> if viewers can't load.
+    if (e.value != null && typeof e.value === 'object') return <ViewerBody lang="json" code={JSON.stringify(e.value, null, 2)} />;
   }
   const preview = factPreview(e);
   return preview ? (
     <span style={{ color: ink.text, fontSize: '0.8rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{preview}</span>
   ) : null;
+}
+
+// A short relative time for the metadata line ("3d ago").
+function relTime(iso?: string): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const s = (Date.now() - t) / 1000;
+  if (s < 45) return 'just now';
+  const m = s / 60; if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m / 60; if (h < 24) return `${Math.floor(h)}h ago`;
+  const d = h / 24; if (d < 30) return `${Math.floor(d)}d ago`;
+  const mo = d / 30; if (mo < 12) return `${Math.floor(mo)}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+// Surface tones — the SAME reading rendered on paper (the cream trailhead ground)
+// or on ink (the dark palette field). Only colours differ; layout is one system.
+const READING_TONE = {
+  light: { text: theme.text, dim: theme.dim, accent: theme.accent },
+  dark: { text: ink.text, dim: ink.dim, accent: ink.accent },
+} as const;
+
+/**
+ * A mode-aware reading of ONE fact — icon, title, and some metadata — as FLAT
+ * text (paper, NOT a card; cards are for listings/query results). `tone` picks
+ * the surface it sits on: 'light' = ink on the cream ground (trailhead), 'dark'
+ * = light on the ink field (palette), so the two read as one system. `onImage`
+ * adds a legibility shadow for text over the painted hero. With `showBody`, the
+ * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
+ * free (it just takes the tone's text colour).
+ */
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false }: {
+  e: ListEntry;
+  tone?: 'light' | 'dark';
+  onImage?: boolean;
+  /** The icon + title + metadata line (default). Turn off for a body-only read
+   *  when a heading already sits above it (e.g. the hero shows the title). */
+  head?: boolean;
+  showBody?: boolean;
+  /** Tight contexts (the palette row): smaller title, single-line ellipsis. */
+  compact?: boolean;
+}): React.JSX.Element {
+  const c = READING_TONE[tone];
+  const shadow = onImage ? '0 1px 12px rgba(8,29,36,0.6)' : undefined;
+  const m = e._meta;
+  const meta: string[] = [];
+  if (m?.type) meta.push(m.type);
+  if (m?.tags?.length) meta.push(...m.tags.slice(0, 4).map((t) => '#' + t));
+  if (m?.via) meta.push('via ' + m.via);
+  const when = relTime(m?.updatedAt);
+  if (when) meta.push(when);
+  const open = factHref(e);
+  const clip: React.CSSProperties = compact ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : { overflowWrap: 'anywhere' };
+  return (
+    <div style={{ display: 'grid', gap: compact ? '0.12rem' : '0.4rem', color: c.text, textShadow: shadow, minWidth: 0 }}>
+      {head ? (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: compact ? '0.4rem' : '0.55rem', minWidth: 0 }}>
+          { !onImage && <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span> }
+          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}>{factTitle(e)}</h2>
+        </div>
+      ) : null}
+      {head && meta.length ? (
+        // Over the painting the muted `dim` vanishes — use a bright cream (the
+        // inherited shadow carries the legibility), on paper/ink keep the dim.
+        <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
+      ) : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full /></div> : null}
+      {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
+    </div>
+  );
 }
 
 export interface Edge {
@@ -351,7 +511,7 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
   const [err, setErr] = useState(false);
   useEffect(() => {
     let live = true;
-    mcpCall('read', 'workspace.neighbors', { key: keyName })
+    mcpCall('read', 'workspace.edges', { around: keyName })
       .then((r) => {
         if (!live) return;
         if (r.ok) setN(r.value as { outbound: Edge[]; inbound: Edge[] });
@@ -466,7 +626,7 @@ function FactEditor({
 }: {
   e: ListEntry;
   fields?: FormField[];
-  onSaved: (v: unknown, hints?: string[]) => void;
+  onSaved: (entry: ListEntry, hints?: string[]) => void;
   onCancel: () => void;
 }): React.JSX.Element {
   const isStr = typeof e.value === 'string';
@@ -495,14 +655,21 @@ function FactEditor({
     }
     setBusy(true);
     setErr(null);
-    const r = await mcpCall('act', 'workspace.remember', { key: e.key, value, ...(e._meta?.type ? { type: e._meta.type } : {}) });
+    const r = await mcpCall('act', 'workspace.remember', {
+      key: e.key,
+      value,
+      ...(e._meta?.type ? { type: e._meta.type } : {}),
+      ...(typeof e._meta?.version === 'number' ? { ifVersion: e._meta.version } : {}),
+    });
     setBusy(false);
     if (!r.ok) {
       setErr(typeof r.value === 'string' ? r.value : 'Save failed');
       return;
     }
-    const hints = (r.value as { hints?: string[] })?.hints;
-    onSaved(value, Array.isArray(hints) ? hints : undefined);
+    const saved = (r.value && typeof r.value === 'object' ? r.value : {}) as { value?: unknown; _meta?: ListEntry['_meta']; hints?: string[] };
+    const nextValue = Object.prototype.hasOwnProperty.call(saved, 'value') ? saved.value : value;
+    const hints = saved.hints;
+    onSaved({ ...e, value: nextValue, _meta: saved._meta ?? e._meta }, Array.isArray(hints) ? hints : undefined);
   };
 
   return (
@@ -533,9 +700,9 @@ function FactEditor({
 /** The generic in-place editor, usable OUTSIDE this module (the context
  *  panel's Edit action) — resolves the type's declared fields (ADR-0002
  *  shape.fields) exactly as FactDetail does. */
-export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (v: unknown) => void }): React.JSX.Element {
+export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (entry: ListEntry) => void }): React.JSX.Element {
   const fields = (declFor(e, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
-  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(v) => onSaved(v)} />;
+  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(entry) => onSaved(entry)} />;
 }
 
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
@@ -567,8 +734,8 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
           e={entry}
           fields={fields}
           onCancel={() => setEditing(false)}
-          onSaved={(v, h) => {
-            setEntry({ ...entry, value: v });
+          onSaved={(savedEntry, h) => {
+            setEntry(savedEntry);
             setHints(h ?? null);
             setEditing(false);
           }}
@@ -610,16 +777,23 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
  *  via peek, and renders the modal. Returns null when nothing is open. */
 export function FactDetailHost(): React.JSX.Element | null {
   const [entry, setEntry] = useState<ListEntry | null>(null);
+  const activeKey = React.useRef<string | null>(null);
+  const close = (): void => {
+    activeKey.current = null;
+    setEntry(null);
+  };
   useEffect(() => {
     const onOpen = (ev: Event): void => {
       const detail = (ev as CustomEvent<ListEntry>).detail;
       if (!detail?.key) return;
+      activeKey.current = detail.key;
       setEntry(detail);
       if (detail.value === undefined) {
-        mcpCall('read', 'workspace.peek', { key: detail.key })
+        const requestedKey = detail.key;
+        mcpCall('read', 'workspace.peek', { key: requestedKey })
           .then((r) => {
             const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
-            if (r.ok && f) setEntry({ key: detail.key, value: f.value, _meta: f._meta });
+            if (r.ok && f && activeKey.current === requestedKey) setEntry({ key: requestedKey, value: f.value, _meta: f._meta });
           })
           .catch(() => undefined);
       }
@@ -630,7 +804,7 @@ export function FactDetailHost(): React.JSX.Element | null {
   useEffect(() => {
     if (!entry) return;
     const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === 'Escape') setEntry(null);
+      if (ev.key === 'Escape') close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -645,7 +819,7 @@ export function FactDetailHost(): React.JSX.Element | null {
     <div
       role="dialog"
       aria-modal="true"
-      onClick={() => setEntry(null)}
+      onClick={() => close()}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
     >
       <div
@@ -671,7 +845,7 @@ export function FactDetailHost(): React.JSX.Element | null {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
           <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
           <button
-            onClick={() => setEntry(null)}
+            onClick={() => close()}
             aria-label="close"
             style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
           >
@@ -800,7 +974,7 @@ export function WorkspaceWindow({ authed, seed }: { authed: boolean; seed?: Work
   useEffect(() => {
     if (!authed || !facts?.length) return;
     let live = true;
-    void mcpCall('read', 'workspace.links', { keys: facts.map((f) => f.key) }).then((r) => {
+    void mcpCall('read', 'workspace.edges', { derived: false, keys: facts.map((f) => f.key) }).then((r) => {
       if (live && r.ok) setEdges(edgeMap((r.value as { edges?: Edge[] }).edges ?? []));
     });
     return () => {

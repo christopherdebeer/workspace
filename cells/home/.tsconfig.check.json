@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "jsx": "react-jsx",
+    "strict": false,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": [
+      "react",
+      "react-dom",
+      "node"
+    ],
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@parc/ui": [
+        "../../platform/ui/parc-ui.ts"
+      ],
+      "https://parc.land/@c15r/kernel/app.js": [
+        "./kernel-shim.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "client/**/*.ts",
+    "client/**/*.tsx"
+  ]
+}
