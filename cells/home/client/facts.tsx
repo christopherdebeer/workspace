@@ -1047,10 +1047,23 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
   // nests), the back chevron / Escape POPS one level, and × / scrim-tap
   // dismisses the whole stack. So walking A→B→C and stepping back returns to
   // B, then A — instead of collapsing straight to the graph on the first close.
-  const [stack, setStack] = useState<Array<{ entry: ListEntry; anchor?: string }>>([]);
-  const top = stack.length ? stack[stack.length - 1] : null;
+  const [stack, setStack] = useState<Array<{ id: number; entry: ListEntry; anchor?: string }>>([]);
+  const nextId = React.useRef(1);
   const closeAll = (): void => setStack([]);
   const pop = (): void => setStack((s) => s.slice(0, -1));
+  // The sheets beneath the top are held to the SAME height as the front sheet
+  // (measured live) — so a taller underlying doc can't tower over a short front
+  // fact; only its intended top lip shows. Congruent cards, iOS-sheet-style.
+  const [sheetH, setSheetH] = useState<number | undefined>(undefined);
+  const roRef = React.useRef<ResizeObserver | null>(null);
+  const topRef = React.useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    if (!el || typeof ResizeObserver === 'undefined') { if (el) setSheetH(el.offsetHeight); return; }
+    const ro = new ResizeObserver(() => setSheetH(el.offsetHeight));
+    ro.observe(el);
+    roRef.current = ro;
+    setSheetH(el.offsetHeight);
+  }, []);
   useEffect(() => {
     const onOpen = (ev: Event): void => {
       const detail = (ev as CustomEvent<ListEntry & { anchor?: string }>).detail;
@@ -1061,7 +1074,7 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
         // A re-open of the current top (a double-fire, or clicking the fact you
         // are already reading) is a no-op — don't push a duplicate frame.
         if (s.length && s[s.length - 1].entry.key === entry.key) return s;
-        return [...s, { entry, anchor }];
+        return [...s, { id: nextId.current++, entry, anchor }];
       });
       if (detail.value === undefined) {
         const requestedKey = detail.key;
@@ -1093,83 +1106,91 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [stack.length]);
-  if (!top) return null;
-  const entry = top.entry;
-  const anchor = top.anchor;
+  if (!stack.length) return null;
   const depth = stack.length;
-  const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
+  // Every frame stays MOUNTED and layered — so back is instant (no reload) and
+  // each level keeps its own scroll. Depth reads physically: each sheet BELOW
+  // the top peeks a few px of its rounded top edge above the one in front
+  // (capped so a deep stack stays tidy), the top sheet fully covering the rest.
+  const LIP = 7; // px of each underlying sheet's top edge that shows
+  const MAX_LIPS = 3; // beyond this the offset stops growing (all still in DOM)
   // A bottom sheet in the SUMMONING surface's tone — 'dark' (ink) over the
-  // graph (a parchment sheet over the night scene reads as a jarring theme flip
-  // — owner feedback 2026-07-10), 'light' (paper) over the trailhead, where it
-  // stacks over the paper Content as a second rounded sheet rising over it
-  // (same 14px lip + top shadow, so the two read as one growing stack). Same
-  // width metric as the palette, so peek + palette read as one system.
+  // graph, 'light' (paper) over the trailhead. Same width metric as the palette.
   return (
     <div
       role="dialog"
       aria-modal="true"
       onClick={() => closeAll()}
-      style={{ position: 'fixed', inset: 0, background: t.scrim, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
+      style={{ position: 'fixed', inset: 0, background: t.scrim, zIndex: 1000 }}
     >
-      {/* The depth is VISIBLE as a shallow stack of lips behind the top sheet
-          (one edge per level below), so "you've drilled in" reads at a glance
-          and the back affordance isn't the only cue. */}
-      {depth > 1 ? (
-        <div aria-hidden style={{ position: 'absolute', bottom: 0, width: 'min(720px, 100vw)', display: 'flex', flexDirection: 'column', alignItems: 'stretch', pointerEvents: 'none' }}>
-          {Array.from({ length: Math.min(depth - 1, 2) }, (_, i) => (
-            <div key={i} style={{ height: 8, margin: `0 ${(i + 1) * 8}px`, background: t.bg, opacity: 0.55 - i * 0.18, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none' }} />
-          ))}
-        </div>
-      ) : null}
-      <div
-        onClick={(ev) => ev.stopPropagation()}
-        style={{
-          position: 'relative',
-          background: t.bg,
-          color: t.text,
-          width: 'min(720px, 100vw)',
-          maxHeight: '86dvh',
-          // The sheet is a COLUMN: pinned header, scrolling body — title and
-          // close stay reachable however deep the reading goes.
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          borderTopLeftRadius: 14,
-          borderTopRightRadius: 14,
-          border: `1px solid ${t.line}`,
-          borderBottom: 'none',
-          boxShadow: t.shadow,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.8rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}` }}>
-          {/* Drilled in → a back chevron pops ONE level (returns to the fact you
-              came from); × always dismisses the whole stack. */}
-          {depth > 1 ? (
-            <button
-              onClick={() => pop()}
-              aria-label="back"
-              title="Back"
-              style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+        {stack.map((frame, i) => {
+          const isTop = i === depth - 1;
+          const behind = depth - 1 - i; // 0 = the top (front) sheet
+          const lift = Math.min(behind, MAX_LIPS) * LIP;
+          const fEntry = frame.entry;
+          const fTitle = `${typeIcon(fEntry) ? typeIcon(fEntry) + ' ' : ''}${factTitle(fEntry)}`;
+          return (
+            <div
+              key={frame.id}
+              ref={isTop ? topRef : undefined}
+              onClick={(ev) => ev.stopPropagation()}
+              aria-hidden={!isTop}
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                width: 'min(720px, 100vw)',
+                // The front sheet sizes to its content (up to 86dvh) and is
+                // measured; the ones behind match that height so they can't
+                // out-tower it — only their lip shows.
+                ...(isTop ? { maxHeight: '86dvh' } : { height: sheetH ? `${sheetH}px` : undefined, maxHeight: '86dvh' }),
+                transform: `translateY(${-lift}px)`,
+                transition: 'transform 0.18s ease',
+                zIndex: i,
+                // Only the front sheet takes input; the ones behind wait,
+                // mounted and scroll-intact, until a back pops down to them.
+                pointerEvents: isTop ? 'auto' : 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                borderTopLeftRadius: 14,
+                borderTopRightRadius: 14,
+                border: `1px solid ${t.line}`,
+                borderBottom: 'none',
+                background: t.bg,
+                color: t.text,
+                boxShadow: t.shadow,
+              }}
             >
-              ‹
-            </button>
-          ) : null}
-          <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
-          {depth > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{depth}</span> : null}
-          <button
-            onClick={() => closeAll()}
-            aria-label="close"
-            style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
-          >
-            ×
-          </button>
-        </div>
-        {/* Keyed by the frame's key so each drill level gets its OWN scroll
-            container (a new frame starts at the top; popping back re-renders
-            the parent frame fresh). */}
-        <div key={entry.key} style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))' }}>
-          <FactDetail e={entry} tone={tone} anchor={anchor} />
-        </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.8rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}` }}>
+                {/* Drilled in → a back chevron pops ONE level (reveals the
+                    already-loaded sheet beneath); × dismisses the whole stack. */}
+                {i > 0 ? (
+                  <button
+                    onClick={() => pop()}
+                    aria-label="back"
+                    title="Back"
+                    style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}
+                  >
+                    ‹
+                  </button>
+                ) : null}
+                <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{fTitle}</strong>
+                {depth > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{i + 1}/{depth}</span> : null}
+                <button
+                  onClick={() => closeAll()}
+                  aria-label="close"
+                  style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
+                >
+                  ×
+                </button>
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))' }}>
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
