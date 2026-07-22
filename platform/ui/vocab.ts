@@ -16,7 +16,25 @@
  * shares. Pure (no DOM, no cells hardcoded): callers supply the declarations.
  */
 
-export type Intent = 'open' | 'edit' | 'create' | 'render' | 'embed' | 'preview';
+export type Intent = 'open' | 'edit' | 'create' | 'render' | 'embed' | 'preview' | 'assemble';
+
+/** Declarative composite-body assembly (ADR-0093 Inc 1): "my body assembles
+ *  from my member facts". The v1 semantic is deliberately the one proven shape:
+ *  membership edges around the container, ordered by `placement.seq`, `field`
+ *  concatenated. The spec is DECLARATION DATA — `resolve` passes it through
+ *  verbatim (no templating: `fallbackKey`'s `${match}` is substituted RAW by
+ *  the consumer, because it names a fact key, not a URL). */
+export interface AssembleSpec {
+  /** Member value field to concatenate (default: the host's text heuristic). */
+  field?: string;
+  /** MEMBER types: resolve the container fact via this tag prefix (`doc:`). */
+  containerTagPrefix?: string;
+  /** Audience fallback: when membership yields nothing for this viewer, read
+   *  this key instead. `${match}` = the container key's suffix after its
+   *  `type:` prefix. A grant-folded container re-applies its `owner/` prefix
+   *  consumer-side — the fold is the host's concern, never the type's. */
+  fallbackKey?: string;
+}
 
 export interface TypeHandler {
   /** Path within the surface cell (templated), e.g. `?doc=${match}`. The cell is
@@ -37,6 +55,8 @@ export interface TypeHandler {
   hint?: string;
   /** Resolved target cell for `path` (set by `resolve`; consumer → `cellUrl`). */
   cellRef?: { owner: string; name: string };
+  /** Declarative composite assembly (ADR-0093) — passed through verbatim. */
+  assemble?: AssembleSpec;
 }
 
 export interface TypeDecl {
@@ -202,7 +222,9 @@ export function resolve(fact: VocabFact, intent: Intent, decls: Record<string, T
       }
       if (ok && h.renderer !== undefined) resolved.renderer = h.renderer;
       if (ok && h.hint !== undefined) resolved.hint = h.hint;
-      if (ok && (resolved.cellRef || resolved.surface || resolved.act || resolved.renderer || resolved.hint)) return resolved;
+      // Declaration data, not an address: passed through verbatim (ADR-0093).
+      if (ok && h.assemble !== undefined) resolved.assemble = h.assemble;
+      if (ok && (resolved.cellRef || resolved.surface || resolved.act || resolved.renderer || resolved.hint || resolved.assemble)) return resolved;
     }
   }
   return null;

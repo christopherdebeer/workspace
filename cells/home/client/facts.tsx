@@ -5,7 +5,7 @@
  * fact detail (peek modal, generic editor), and the workspace window itself.
  */
 import * as React from 'react';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
 import { SafeMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
@@ -299,30 +299,53 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }): React.JSX.Element {
+export function DocBody({ e, initialMd, spec }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec }): React.JSX.Element {
   const type = e._meta?.type;
-  // The parent doc key: a `doc` IS the doc; a `doc-block` points at its doc via a
-  // `doc:` tag (present on the block, so no extra edge read to resolve up).
-  const docKey = type === 'doc' || e.key.startsWith('doc:')
-    ? e.key
-    : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
+  // The CONTAINER key. Declared (ADR-0093): a container type assembles its own
+  // key; a member type (`containerTagPrefix`) delegates via its container tag.
+  // Undeclared: the compiled doc floor — a `doc` IS the doc; a `doc-block`
+  // points at its doc via a `doc:` tag.
+  const docKey = spec
+    ? spec.containerTagPrefix
+      ? (e._meta?.tags ?? []).find((t) => t.startsWith(spec.containerTagPrefix as string)) ?? null
+      : e.key
+    : type === 'doc' || e.key.startsWith('doc:')
+      ? e.key
+      : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
   // `initialMd` is an SSR-provided body (the landing doc's public file mirror):
   // the first paint — server AND hydration — renders the doc itself, never a
   // "reading…" spinner. The live read still runs and replaces it when it
   // succeeds; a failed live read keeps the seed instead of blanking.
   const [md, setMd] = useState<string | null>(initialMd ?? null);
   const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
-  // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
-  // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
-  // doc-block membership (blocks aren't shared to `public`), but the file IS —
-  // so the whole body is readable either way: assemble from blocks when we can,
-  // else fall back to the public markdown source. (Authed owners get blocks.)
-  // A GRANT-FOLDED doc key (`owner/doc:docs/x` — how a guest's graph keys a
-  // foreign node) falls back the same way, to the owner-addressed file
-  // (`owner/file/docs/x.md`, resolved by peek's owner/key addressing) —
-  // before this, folded docs rendered EMPTY for guests: membership edges
-  // don't fold (blocks aren't public) and the bare-prefix check missed.
-  const dm = docKey?.match(/^(?:([^/]+)\/)?doc:docs\/(.+)$/) ?? null;
+  // The audience fallback (ADR-0093 / docs-sync ADR-0027): when membership
+  // yields nothing for THIS viewer (e.g. `@guest` — members aren't public),
+  // read the declared alternate source instead. A GRANT-FOLDED container
+  // (`owner/doc:docs/x`) re-applies its `owner/` prefix here — the fold is the
+  // host's concern (peek's owner/key addressing resolves it), never the
+  // type's. Undeclared vocabularies keep the compiled corpus-mirror floor.
+  const slash = docKey?.indexOf('/') ?? -1;
+  const colon = docKey?.indexOf(':') ?? -1;
+  const owner = docKey && slash > 0 && (colon < 0 || slash < colon) ? docKey.slice(0, slash) : null;
+  const bare = docKey ? (owner ? docKey.slice(slash + 1) : docKey) : null;
+  // `${match}` = the container key's suffix after its type prefix (vocab deriveId).
+  const bc = bare?.indexOf(':') ?? -1;
+  const bs = bare?.indexOf('/') ?? -1;
+  const cut = bc >= 0 && (bs < 0 || bc < bs) ? bc : bs;
+  const matchPart = bare && cut > 0 ? bare.slice(cut + 1) : null;
+  const dm = docKey?.match(/^(?:([^/]+)\/)?doc:docs\/(.+)$/) ?? null; // the compiled floor (+ link base)
+  const fileKey = spec?.fallbackKey && matchPart
+    ? `${owner ? `${owner}/` : ''}${spec.fallbackKey.split('${match}').join(matchPart)}`
+    : dm
+      ? `${dm[1] ? `${dm[1]}/` : ''}file/docs/${dm[2]}.md`
+      : null;
+  const memberText = (v: unknown): string => {
+    if (spec?.field && v && typeof v === 'object') {
+      const f = (v as Record<string, unknown>)[spec.field];
+      if (typeof f === 'string' && f) return f;
+    }
+    return bodyText(v);
+  };
   useEffect(() => {
     if (!docKey) { if (!initialMd) setState('fail'); return; }
     let live = true;
@@ -330,13 +353,12 @@ export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }):
       setState('loading');
       setMd(null);
     }
-    const fileKey = dm ? `${dm[1] ? `${dm[1]}/` : ''}file/docs/${dm[2]}.md` : null;
     void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
       .then(async (r) => {
         if (!live) return;
         const members = (r.ok ? (r.value as { members?: Array<{ value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
         let text = members
-          .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: bodyText(m.value) }))
+          .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: memberText(m.value) }))
           .sort((a, b) => a.seq - b.seq)
           .map((m) => m.content)
           .filter(Boolean)
@@ -357,7 +379,8 @@ export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }):
       })
       .catch(() => { if (live && !initialMd) setState('fail'); });
     return () => { live = false; };
-  }, [docKey, initialMd]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fileKey/memberText derive from docKey+the static decl
+  }, [docKey, initialMd, fileKey, spec?.field]);
   // Link context (ADR-0092 follow-on): relative `*.md` hrefs resolve against
   // THIS doc's corpus directory, and fact links open in place via the peek
   // modal — docs are navigable on home, not just readable.
@@ -383,10 +406,17 @@ export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }):
  * that the peek modal carries the full content.
  */
 export function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
-  // A doc (or a block of one) reads as the WHOLE assembled doc when fully open —
-  // the substrate joins membership+order; we just concatenate (see DocBody).
+  // A composite fact reads as its WHOLE assembled body when fully open — the
+  // substrate joins membership+order; we just concatenate (see DocBody).
+  // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
+  // cell's composite type gets this without home changes; the hardcoded
+  // `doc`/`doc-block` check is only the compiled floor for a vocabulary that
+  // hasn't declared yet (Inc 2 retires it).
   const t = e._meta?.type;
-  if (full && (t === 'doc' || t === 'doc-block')) return <DocBody e={e} />;
+  if (full) {
+    const asm = resolve(e, 'assemble', typeDecls)?.assemble;
+    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} />;
+  }
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
   // run it sandboxed (ADR-0041), the FieldsBody hint as the degrade-to placeholder

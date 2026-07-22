@@ -26,6 +26,14 @@
           {
             "hint": "markdown"
           }
+        ],
+        "assemble": [
+          {
+            "assemble": {
+              "field": "content",
+              "fallbackKey": "file/${match}.md"
+            }
+          }
         ]
       }
     },
@@ -42,6 +50,15 @@
         "render": [
           {
             "hint": "markdown"
+          }
+        ],
+        "assemble": [
+          {
+            "assemble": {
+              "field": "content",
+              "containerTagPrefix": "doc:",
+              "fallbackKey": "file/${match}.md"
+            }
           }
         ]
       }
@@ -81,8 +98,17 @@
         "title": "string — the date label"
       },
       "handlers": {
-        "open": [{ "cell": "/lit", "path": "/r/log:${value.date}" }],
-        "render": [{ "hint": "markdown" }]
+        "open": [
+          {
+            "cell": "/lit",
+            "path": "/r/log:${value.date}"
+          }
+        ],
+        "render": [
+          {
+            "hint": "markdown"
+          }
+        ]
       }
     }
   ]
