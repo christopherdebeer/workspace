@@ -290,7 +290,15 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         width: 'min(720px, calc(100vw - 12px))',
         zIndex: 40,
         display: 'grid',
-        background: ink.bg,
+        // FROSTED GLASS over the live graph (owner exploration): one translucent
+        // dark pane with a backdrop blur, so the field computer + the context
+        // panel read as a SINGLE sheet of glass — the console's old lighter
+        // `ink.panel` fill is gone, both sections now sit on this one surface —
+        // and the graph stays faintly visible, blurred, behind it. ink.bg
+        // (#181511) at ~0.62 alpha; the blur keeps text legible over bright stars.
+        background: 'rgba(24,21,17,0.62)',
+        backdropFilter: 'blur(20px) saturate(1.4)',
+        WebkitBackdropFilter: 'blur(20px) saturate(1.4)',
         border: `1px solid ${ink.line}`,
         borderRadius: 14,
         boxShadow: '0 12px 40px rgba(0,0,0,0.5)',

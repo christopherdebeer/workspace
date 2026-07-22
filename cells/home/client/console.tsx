@@ -718,23 +718,23 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   return (
     <div style={{ display: 'grid' }}>
       {!collapsed ? (
-        <div style={{ background: ink.panel, maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem', display: 'grid', gap: '0.6rem', borderBottom: `1px solid ${ink.line}`, alignContent: 'start' }}>
+        <div style={{ background: 'transparent', maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem', display: 'grid', gap: '0.6rem', borderBottom: `1px solid ${ink.line}`, alignContent: 'start' }}>
           {focusedView ?? browseView}
           <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
         </div>
       ) : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem', minHeight: 50 }}>
-        {/* Collapse caret on the LEFT (owner feedback) — the expand/collapse
-            control lives away from the × (clear query) on the right, so the
-            two axes don't share an edge. */}
+        {/* The prompt marker IS the caret (owner feedback): `›` when collapsed —
+            the console's own search-prompt glyph — and an up-caret when expanded.
+            One left-side control, no redundant chevron, and away from the × on
+            the right so the resize and clear axes don't share an edge. */}
         <button
           onClick={() => onCollapse?.(!collapsed)}
           aria-label={collapsed ? 'expand the console' : 'collapse the console'}
-          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.85rem', padding: '0.3rem 0.45rem', flexShrink: 0 }}
+          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.95rem', lineHeight: 1, padding: '0.3rem 0.45rem', flexShrink: 0 }}
         >
-          {collapsed ? '▴' : '▾'}
+          {collapsed ? '›' : '▴'}
         </button>
-        <span aria-hidden style={{ color: ink.accent, fontFamily: ink.mono }}>›</span>
         <input
           value={query}
           onChange={(e) => {
