@@ -14,6 +14,27 @@ type Token = Record<string, any>;
 // long paths). (`text-wrap` is the newer spelling of the same intent.)
 const PRE_STYLE: React.CSSProperties = { maxWidth: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
 
+// marked emits HTML-ESCAPED text on its leaf tokens (`text`, `codespan`,
+// image alt) — `agent's` becomes `agent&#39;s`, `a & b` becomes `a &amp; b`.
+// React renders a string verbatim (it does NOT decode entities in text
+// content), so those escapes would show literally. We decode the fixed set
+// marked produces, plus the common named/numeric forms, so authored punctuation
+// reads correctly. SSR-safe (pure string work — no DOM). NOT applied to fenced
+// code blocks (marked leaves those raw, so a literal `&amp;` there is intended)
+// nor to raw HTML passthrough. `&amp;` is decoded LAST so `&amp;lt;` → `&lt;`.
+function decodeEntities(s: string): string {
+  if (!s || s.indexOf('&') === -1) return s;
+  return s
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
+}
+
 function cleanUrl(raw: unknown, mode: 'nav' | 'image' | 'frame'): string | null {
   const s = typeof raw === 'string' ? raw.trim() : '';
   if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null;
@@ -102,7 +123,7 @@ function inline(tokens: Token[] | undefined, key: string, o: MdOpts = {}): React
     switch (t.type) {
       case 'text':
       case 'escape':
-        return t.tokens?.length ? <React.Fragment key={k}>{inline(t.tokens, k, o)}</React.Fragment> : <React.Fragment key={k}>{String(t.text ?? t.raw ?? '')}</React.Fragment>;
+        return t.tokens?.length ? <React.Fragment key={k}>{inline(t.tokens, k, o)}</React.Fragment> : <React.Fragment key={k}>{decodeEntities(String(t.text ?? t.raw ?? ''))}</React.Fragment>;
       case 'strong':
         return <strong key={k}>{inline(t.tokens, k, o)}</strong>;
       case 'em':
@@ -110,7 +131,7 @@ function inline(tokens: Token[] | undefined, key: string, o: MdOpts = {}): React
       case 'del':
         return <del key={k}>{inline(t.tokens, k, o)}</del>;
       case 'codespan':
-        return <code key={k}>{String(t.text ?? '')}</code>;
+        return <code key={k}>{decodeEntities(String(t.text ?? ''))}</code>;
       case 'br':
         return <br key={k} />;
       case 'wikilink':
@@ -128,14 +149,17 @@ function inline(tokens: Token[] | undefined, key: string, o: MdOpts = {}): React
       }
       case 'image': {
         const src = safeImageUrl(t.href);
+        const alt = decodeEntities(String(t.text ?? ''));
         return src
-          ? <img key={k} src={src} alt={String(t.text ?? '')} title={typeof t.title === 'string' ? t.title : undefined} loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: '100%', height: 'auto' }} />
-          : <React.Fragment key={k}>{String(t.text ?? '')}</React.Fragment>;
+          ? <img key={k} src={src} alt={alt} title={typeof t.title === 'string' ? t.title : undefined} loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: '100%', height: 'auto' }} />
+          : <React.Fragment key={k}>{alt}</React.Fragment>;
       }
       case 'html':
+        // Raw HTML passthrough — marked leaves `raw` unescaped, so render as-is
+        // (no entity decode; the text is already literal source).
         return <React.Fragment key={k}>{String(t.raw ?? t.text ?? '')}</React.Fragment>;
       default:
-        return <React.Fragment key={k}>{t.tokens?.length ? inline(t.tokens, k, o) : String(t.text ?? t.raw ?? '')}</React.Fragment>;
+        return <React.Fragment key={k}>{t.tokens?.length ? inline(t.tokens, k, o) : decodeEntities(String(t.text ?? t.raw ?? ''))}</React.Fragment>;
     }
   });
 }
@@ -174,7 +198,7 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
           if (!tokens?.length) return null;
           return tokens.map((tk: Token, m: number) =>
             tk.type === 'text'
-              ? <React.Fragment key={`${ik}:t${m}`}>{tk.tokens?.length ? inline(tk.tokens, `${ik}:t${m}`, o) : String(tk.text ?? tk.raw ?? '')}</React.Fragment>
+              ? <React.Fragment key={`${ik}:t${m}`}>{tk.tokens?.length ? inline(tk.tokens, `${ik}:t${m}`, o) : decodeEntities(String(tk.text ?? tk.raw ?? ''))}</React.Fragment>
               : <React.Fragment key={`${ik}:b${m}`}>{blocks([tk], `${ik}:b${m}`, o)}</React.Fragment>,
           );
         };
@@ -194,19 +218,21 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
         return (
           <div key={k} style={{ overflowX: 'auto' }}>
             <table>
-              <thead><tr>{(t.header ?? []).map((c: Token, j: number) => <th key={j}>{inline(c.tokens ?? c, `${k}:h:${j}`, o) ?? String(c.text ?? '')}</th>)}</tr></thead>
-              <tbody>{(t.rows ?? []).map((row: Token[], r: number) => <tr key={r}>{row.map((c: Token, j: number) => <td key={j}>{inline(c.tokens ?? c, `${k}:${r}:${j}`, o) ?? String(c.text ?? '')}</td>)}</tr>)}</tbody>
+              <thead><tr>{(t.header ?? []).map((c: Token, j: number) => <th key={j}>{inline(c.tokens ?? c, `${k}:h:${j}`, o) ?? decodeEntities(String(c.text ?? ''))}</th>)}</tr></thead>
+              <tbody>{(t.rows ?? []).map((row: Token[], r: number) => <tr key={r}>{row.map((c: Token, j: number) => <td key={j}>{inline(c.tokens ?? c, `${k}:${r}:${j}`, o) ?? decodeEntities(String(c.text ?? ''))}</td>)}</tr>)}</tbody>
             </table>
           </div>
         );
       case 'html':
+        // Block-level raw HTML — shown as literal source in a code box (not
+        // executed), so no entity decode.
         return <pre key={k} style={PRE_STYLE}><code>{String(t.raw ?? t.text ?? '')}</code></pre>;
       case 'text':
-        return t.tokens?.length ? <p key={k}>{inline(t.tokens, k)}</p> : <React.Fragment key={k}>{String(t.text ?? t.raw ?? '')}</React.Fragment>;
+        return t.tokens?.length ? <p key={k}>{inline(t.tokens, k, o)}</p> : <React.Fragment key={k}>{decodeEntities(String(t.text ?? t.raw ?? ''))}</React.Fragment>;
       default:
         return t.tokens?.length
           ? <React.Fragment key={k}>{blocks(t.tokens, k, o) ?? inline(t.tokens, k, o)}</React.Fragment>
-          : <React.Fragment key={k}>{String(t.text ?? '')}</React.Fragment>;
+          : <React.Fragment key={k}>{decodeEntities(String(t.text ?? ''))}</React.Fragment>;
     }
   });
 }
