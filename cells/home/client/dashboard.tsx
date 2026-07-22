@@ -22,13 +22,18 @@ const { useState, useEffect } = React;
  *  key loads, the last entry stays on screen until the fetch resolves, so the
  *  ground never blanks mid-transition. */
 const peekCache = new Map<string, ListEntry>();
-function useFactPeek(key: string | null | undefined): ListEntry | null {
-  // Seed synchronously from cache so a re-visit paints immediately (no flash).
-  const [entry, setEntry] = useState<ListEntry | null>(() => (key ? peekCache.get(key) ?? null : null));
+function useFactPeek(key: string | null | undefined, seed?: ListEntry): ListEntry | null {
+  // Seed synchronously from cache — or the server's SSR-peeked entry (a
+  // /r/<key> deep link) — so the first paint shows the fact, no flash. The
+  // seed is per-request boot data, NEVER primed into the module cache from
+  // the server side (a Lambda-global cache would leak one caller's fact into
+  // another's render).
+  const [entry, setEntry] = useState<ListEntry | null>(() => (key ? peekCache.get(key) ?? (seed && seed.key === key ? seed : null) ?? null : null));
   useEffect(() => {
     if (!key) { setEntry(null); return; }
     const cached = peekCache.get(key);
     if (cached) { setEntry(cached); return; } // instant — no refetch, no flash
+    if (seed && seed.key === key) setEntry(seed); // SSR seed paints; live read still refreshes below
     // New key: keep showing whatever's on screen while the fetch runs (don't
     // blank to null); swap in the result when it lands.
     let live = true;
@@ -189,7 +194,7 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
@@ -204,6 +209,11 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
   /** SSR'd markdown for the landing doc (the public file mirror) — first paint
    *  renders the doc itself; the live read then refreshes it in place. */
   landingBody?: string;
+  /** SSR-seeded entry for a /r/<key> deep link (ADR-0090): the server peeked
+   *  the fact as the caller, so the head paints server-side — no peek flash. */
+  initialFact?: ListEntry;
+  /** SSR'd markdown body for the deep-linked doc (public file mirror). */
+  selectedMd?: string;
   /** When set, the ground below the horizon reads THAT fact instead of the pitch
    *  (a deep-linked star, or one still selected when you stepped back here). */
   selectedKey?: string | null;
@@ -231,7 +241,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
   const island: React.CSSProperties = { pointerEvents: 'auto' };
   // The SELECTED star (deep-link or stepped-back): its head reads over the hero
   // in place of the pitch, its body as paper on the ground below.
-  const peeked = useFactPeek(selectedKey);
+  const peeked = useFactPeek(selectedKey, initialFact);
   // Instant head: if the graph handed us the node, synthesize a head-only entry
   // whose value IS the graph's own label — factTitle→heuristicTitle returns that
   // string verbatim, so the hero head paints with NO round-trip. The peek
@@ -329,7 +339,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
           // the head already reads in the hero above, so body-only here.
           <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
-            { reading ? <FactReading e={reading} tone="light" head={false} showBody /> : (
+            { reading ? <FactReading e={reading} tone="light" head={false} showBody initialMd={selectedMd} /> : (
               <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.8rem' }}>reading…</span>
             )}
           </div>

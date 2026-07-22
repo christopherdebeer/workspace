@@ -3,7 +3,14 @@
     {
       "as": "types",
       "target": "cells.describeTypes",
-      "input": {}
+      "input": {},
+      "paths": ["/", "/r/*key"]
+    },
+    {
+      "as": "fact",
+      "target": "workspace.peek",
+      "input": { "key": "${key}" },
+      "paths": ["/r/*key"]
     }
   ]
 }

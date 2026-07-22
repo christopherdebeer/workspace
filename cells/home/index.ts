@@ -19,6 +19,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { App, typeDeclsFrom, type Session, type Boot } from './client/app';
 import { installBridge } from './client/bridge';
+import { decodeKeyPath } from './client/urlstate';
 
 /** Assemble the first-paint seed: session + the canonical type vocabulary
  *  (describeTypes), assembled the same way the client's loadTypeDecls does — so
@@ -170,9 +171,20 @@ async function loadLandingKey(): Promise<string> {
  *  client-fetched behind a "reading…" spinner — so the landing never truly
  *  SSR'd, and any /mcp failure froze it loading forever. */
 async function loadLandingBody(landingKey: string): Promise<string | undefined> {
+  return loadDocBodyPublic(landingKey);
+}
+
+/** A doc's body from the public corpus mirror, for ANY `doc:docs/*` key —
+ *  including the SELF-folded spelling (`<owner>/doc:docs/*`, how a grant-folded
+ *  graph keys this cell owner's own facts): the owner prefix strips to the bare
+ *  key our IAM slice-read can reach. A FOREIGN owner's key is skipped (the
+ *  client loads it live through its own grants). `_public/` coverage gates the
+ *  emit exactly as everywhere else in tokenless SSR. */
+async function loadDocBodyPublic(docKey: string): Promise<string | undefined> {
   try {
-    if (!landingKey.startsWith('doc:docs/')) return undefined;
-    const fileKey = `file/${landingKey.slice('doc:'.length)}.md`;
+    const key = docKey.startsWith(`${CELL_OWNER}/`) ? docKey.slice(CELL_OWNER.length + 1) : docKey;
+    if (!key.startsWith('doc:docs/')) return undefined;
+    const fileKey = `file/${key.slice('doc:'.length)}.md`;
     const patternFacts = await queryPrefix('_public/');
     const patterns = patternFacts.map((f) => (f.value as { pattern?: string } | undefined)?.pattern ?? f.key.slice('_public/'.length));
     if (!patterns.some((p) => covers(p, fileKey))) return undefined;
@@ -181,7 +193,7 @@ async function loadLandingBody(landingKey: string): Promise<string | undefined> 
     const content = (f?.value as { content?: unknown } | undefined)?.content;
     return typeof content === 'string' && content ? content : undefined;
   } catch (err) {
-    console.error('[home landing-body]', err);
+    console.error('[home doc-body]', err);
     return undefined;
   }
 }
@@ -257,7 +269,11 @@ export const handler = async (event: {
   if (method !== 'GET' && method !== 'HEAD') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'), { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=0, must-revalidate' });
-    if (path === '/' || path === '') {
+    // ADR-0090: `/r/<key>` is the canonical fact address — the SAME page, with
+    // the selection seeded server-side (path segments percent-decoded; `/` and
+    // `:` literal). `/` is the trailhead (no fact).
+    const selectedKey = path.startsWith('/r/') && path.length > 3 ? decodeKeyPath(path.slice(3)) : '';
+    if (path === '/' || path === '' || selectedKey) {
       // `x-cell-caller` is the dispatch-validated session identity (from the
       // `parc_session` cookie on a top-level navigation), or 'anonymous'.
       const caller = event.headers?.['x-cell-caller'];
@@ -284,6 +300,16 @@ export const handler = async (event: {
       if (guestToken) boot.guestToken = guestToken;
       if (landingKey) boot.landingKey = landingKey;
       if (landingBody) boot.landingBody = landingBody;
+      // A /r/<key> deep link: seed the selection (+ the dispatch-peeked entry
+      // when the caller could read it, + the public doc body for the fast
+      // anonymous paint). Selection survives refresh; hydration matches.
+      if (selectedKey) {
+        boot.selectedKey = selectedKey;
+        const fact = event.ssrData?.fact as { value?: unknown; _meta?: Record<string, unknown> } | null | undefined;
+        if (fact && typeof fact === 'object') boot.selectedFact = { key: selectedKey, value: fact.value, _meta: fact._meta };
+        const selectedMd = await loadDocBodyPublic(selectedKey);
+        if (selectedMd) boot.selectedMd = selectedMd;
+      }
       installServerBridge(event.headers?.['x-forwarded-host']);
       const inner = renderToString(createElement(App, { initial: boot }));
       const state = JSON.stringify(boot).replace(/</g, '\\u003c');
@@ -297,7 +323,7 @@ export const handler = async (event: {
     // SSR is best-effort: a render failure falls back to the cold-mount shell
     // (the client still boots the full app) rather than a hard 500.
     try {
-      if (path === '/' || path === '') return respond(200, 'text/html; charset=utf-8', read('static/index.html'), htmlHeaders(debug));
+      if (path === '/' || path === '' || path.startsWith('/r/')) return respond(200, 'text/html; charset=utf-8', read('static/index.html'), htmlHeaders(debug));
     } catch {
       /* shell unreadable — fall through to 404 */
     }

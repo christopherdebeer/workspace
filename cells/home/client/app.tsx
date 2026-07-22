@@ -141,6 +141,14 @@ export interface Boot {
   /** The landing doc's markdown body, SSR'd from the PUBLIC `file/docs/*.md`
    *  mirror — the first paint renders the real doc, not a "reading…" spinner. */
   landingBody?: string;
+  /** ADR-0090: a `/r/<key>` visit — the fact address from the PATH, seeded
+   *  server-side so selection survives refresh and hydration matches. */
+  selectedKey?: string;
+  /** The SSR-peeked entry for `selectedKey` (dispatch ran it as the caller). */
+  selectedFact?: { key: string; value?: unknown; _meta?: Record<string, unknown> };
+  /** The deep-linked doc's markdown body (public file mirror) — anonymous
+   *  visitors get a server-painted body too. */
+  selectedMd?: string;
 }
 
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
@@ -173,7 +181,9 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // App owns selection BY KEY (not node object): the palette's neighbour chips
   // and the graph's taps both funnel here, and the graph pans to any selection
   // it didn't originate (ADR-0047 v2).
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // ADR-0090: seeded from the /r/<key> PATH via boot — the server rendered
+  // with the same value, so this is hydration-safe (unlike the old hash).
+  const [selectedKey, setSelectedKey] = useState<string | null>(initial?.selectedKey ?? null);
   // ALSO hold the selected NODE (title/type/score) the graph already has, so the
   // trailhead can paint the head instantly on the way back — no peek round-trip,
   // no "reading…" flash — while the body streams in. Cleared when selection is
@@ -409,7 +419,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits

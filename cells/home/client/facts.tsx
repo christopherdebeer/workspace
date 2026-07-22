@@ -411,7 +411,7 @@ export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; i
  * card) a long-form body is clamped to a few lines — the card is a preview now
  * that the peek modal carries the full content.
  */
-export function FactBody({ e, embed = false, full = false, tone = 'dark' }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark' }): React.JSX.Element | null {
+export function FactBody({ e, embed = false, full = false, tone = 'dark', initialMd }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string }): React.JSX.Element | null {
   // A composite fact reads as its WHOLE assembled body when fully open — the
   // substrate joins membership+order; we just concatenate (see DocBody).
   // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
@@ -421,7 +421,7 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark' }: { e:
   const t = e._meta?.type;
   if (full) {
     const asm = resolve(e, 'assemble', typeDecls)?.assemble;
-    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} />;
+    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} initialMd={initialMd} />;
   }
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
@@ -497,10 +497,13 @@ const READING_TONE = {
  * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
  * free (it just takes the tone's text colour).
  */
-export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false }: {
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false, initialMd }: {
   e: ListEntry;
   tone?: 'light' | 'dark';
   onImage?: boolean;
+  /** SSR-provided markdown body (a /r/<key> deep link) — first paint renders
+   *  the doc, the live read refreshes in place (see DocBody). */
+  initialMd?: string;
   /** The icon + title + metadata line (default). Turn off for a body-only read
    *  when a heading already sits above it (e.g. the hero shows the title). */
   head?: boolean;
@@ -532,7 +535,7 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
         // inherited shadow carries the legibility), on paper/ink keep the dim.
         <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
-      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} /></div> : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} /></div> : null}
       {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
     </div>
   );

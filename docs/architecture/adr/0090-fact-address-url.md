@@ -1,6 +1,14 @@
 # ADR-0090 — The fact address is a path (`/r/<key>`); view-config is query; SSR seeds the read
 
-- **Status:** Proposed 2026-07-21 (home increment 1 in progress).
+- **Status:** Accepted — increment 1 implemented 2026-07-22 (route + query
+  migration, `/r/*key` SSR seed, trailhead deep-link reading; the hash is
+  read-only legacy). The two deferred items largely closed by the ADR-0091/0092
+  sprint: **slice-encoding** is the grant fold's `owner/key` spelling used
+  verbatim in the path (`/r/<owner>/<key>`, resolved through peek's grant
+  checks — plus a peek fix so the SELF-folded spelling works for the owner);
+  **anonymous SSR** of public docs comes from the `_public/`-gated corpus
+  mirror (the landing-body machinery), with the client's @guest reads covering
+  the rest live.
 - **Depends on:** ADR-0040 ("the URL IS the key" — path-as-key routing), the
   dispatch SSR-read machinery (`ssr.json` `paths`/`*key` capture, `${param}`
   substitution, `where` validation, `SSR_READ_TARGETS` allowlist running

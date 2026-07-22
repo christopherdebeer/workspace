@@ -640,6 +640,18 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       if (slash > 0) {
         const owner = input.key.slice(0, slash);
         const rest = input.key.slice(slash + 1);
+        // SELF-folded spelling (`<me>/key`): the canonical /r/<owner>/<key>
+        // address a grant-folded surface mints works for the owner too —
+        // `applicableGrants` excludes own grants, so without this the owner
+        // refreshing their own folded deep link got a false null (ADR-0090).
+        // A LITERAL own key that happens to start `<me>/` still wins first.
+        if (owner === caller) {
+          const literal = await state.get(caller, input.key, ctx.identity);
+          const own = literal ?? (await state.get(caller, rest, ctx.identity));
+          const ownKey = literal ? input.key : rest;
+          enforceTypeRead(ctx.identity, own?._meta.type ?? undefined, ownKey);
+          return withAffordance(own, await typeDeclsFor(ctx));
+        }
         if (foreign.some((g) => g.owner === owner && grantCovers(g.key, rest))) {
           const granted = await state.get(owner, rest, ctx.identity);
           enforceTypeRead(ctx.identity, granted?._meta.type ?? undefined, rest);
