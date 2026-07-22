@@ -2231,3 +2231,50 @@ describe('machine tick: wait resume + the stale-run reaper', () => {
     expect(((await cmds.peek({ key: 'machine/m/run/finished' }, me()))?.value as { status: string }).status).toBe('done');
   });
 });
+
+describe('query & peek — grant fold (public/shared reach)', () => {
+  const grants = createMemoryGrantStore();
+  const state = createObservedState(createMemoryStateStore());
+  const cmds = createWorkspaceCommands(() => ({ state, grants }));
+  const alice = () => ctxFor('alice').ctx;
+  const bob = () => ctxFor('bob').ctx;
+
+  beforeAll(async () => {
+    await cmds.remember({ key: 'doc:pub', value: { title: 'Public' }, type: 'doc' }, alice());
+    await cmds.remember({ key: 'file/docs/x.md', value: { content: '# Hello' }, type: 'markdown' }, alice());
+    await cmds.remember({ key: 'secret', value: { title: 'Private' }, type: 'doc' }, alice());
+    await cmds.share({ to: 'public', key: 'doc:*' }, alice());
+    await cmds.share({ to: 'public', key: 'file/docs/*' }, alice());
+  });
+
+  it('query folds granted facts into a viewer’s results, keyed owner/key', async () => {
+    const r = await cmds.query({ limit: 50 }, bob()) as { entries: Array<{ key: string }> };
+    const keys = r.entries.map((e) => e.key);
+    expect(keys).toContain('alice/doc:pub');
+    expect(keys).toContain('alice/file/docs/x.md');
+    expect(keys.some((k) => k.includes('secret'))).toBe(false); // ungranted stays private
+  });
+
+  it('peek resolves an owner/key granted fact (graph node → body)', async () => {
+    const r = await cmds.peek({ key: 'alice/doc:pub' }, bob()) as { value: { title: string } } | null;
+    expect(r?.value?.title).toBe('Public');
+  });
+
+  it('peek resolves a BARE granted key (the file-body fallback)', async () => {
+    const r = await cmds.peek({ key: 'file/docs/x.md' }, bob()) as { value: { content: string } } | null;
+    expect(r?.value?.content).toBe('# Hello');
+  });
+
+  it('peek still refuses an ungranted key', async () => {
+    expect(await cmds.peek({ key: 'secret' }, bob())).toBeNull();
+    expect(await cmds.peek({ key: 'alice/secret' }, bob())).toBeNull();
+  });
+
+  it('the owner’s own query is unchanged (bare keys, no owner/ prefix)', async () => {
+    const r = await cmds.query({ limit: 50 }, alice()) as { entries: Array<{ key: string }> };
+    const keys = r.entries.map((e) => e.key);
+    expect(keys).toContain('doc:pub');
+    expect(keys).toContain('secret');
+    expect(keys.every((k) => !k.startsWith('alice/'))).toBe(true);
+  });
+});

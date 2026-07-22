@@ -613,7 +613,37 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         enforceTypeRead(ctx.identity, granted?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
         return withAffordance(granted, await typeDeclsFor(ctx));
       }
+      // Grant-aware key resolution (the peek twin of recall's fold): a viewer
+      // reading someone else's public/shared fact addresses it EITHER as the
+      // recall-style `owner/key` (how folded reads key foreign facts) OR bare
+      // (a known public key like `file/docs/x.md`). Resolve both through grants —
+      // `owner/key` when the leading segment is a granting owner, else a bare key
+      // a grant covers — so query→node→peek and the file-body fallback all work
+      // for a signed-out `@guest`. Own-slice keys (no matching owner/grant) are
+      // untouched — this only ever *adds* reach a grant already permits.
+      const held = await applicableGrants(grants, caller);
+      const foreign = held.filter((g) => g.owner !== caller);
+      const slash = input.key.indexOf('/');
+      if (slash > 0) {
+        const owner = input.key.slice(0, slash);
+        const rest = input.key.slice(slash + 1);
+        if (foreign.some((g) => g.owner === owner && grantCovers(g.key, rest))) {
+          const granted = await state.get(owner, rest, ctx.identity);
+          enforceTypeRead(ctx.identity, granted?._meta.type ?? undefined, rest);
+          return withAffordance(granted, await typeDeclsFor(ctx));
+        }
+      }
       const own = await state.get(caller, input.key, ctx.identity);
+      if (!own) {
+        for (const g of foreign) {
+          if (!grantCovers(g.key, input.key)) continue;
+          const e = await state.get(g.owner, input.key, ctx.identity);
+          if (e && !e._meta.superseded) {
+            enforceTypeRead(ctx.identity, e._meta.type ?? undefined, input.key);
+            return withAffordance(e, await typeDeclsFor(ctx));
+          }
+        }
+      }
       enforceTypeRead(ctx.identity, own?._meta.type ?? undefined, input.key); // granular read-scope (§B); inert for coarse tokens
       return withAffordance(own, await typeDeclsFor(ctx));
     },
@@ -621,7 +651,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
     async query(input, ctx) {
       const started = Date.now();
       const scope = requireUser(ctx.identity);
-      const { state, vectors } = build(ctx);
+      const { state, vectors, grants } = build(ctx);
       enforceTypeRead(ctx.identity, input?.type, ''); // granular read-scope (§B): a type-scoped token must pin `type`; inert for coarse tokens
       // A stated intent (ADR-0051): `query({text})` alone is semantic search
       // that still respects earned salience; with filters it's the hybrid
@@ -653,26 +683,51 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // ratify" for a ratification goal). An explicit rankBy still wins, and
       // without a semantic backend the ranking degrades to salience unchanged.
       const rankBy = input?.rankBy ?? (relevance && Object.keys(relevance).length ? 'relevance' : undefined);
-      const result = await state.query(
-        scope,
-        {
-          type: input?.type,
-          tag: input?.tag,
-          tags: input?.tags,
-          prefix: input?.prefix,
-          rankBy,
-          lens: input?.lens,
-          salience: text ? intentSalience(input?.salience) : input?.salience,
-          explain: input?.explain,
-          limit,
-          cursor,
-          includeSuperseded: input?.includeSuperseded,
-          contains: input?.contains,
-          typeRules: await typeRulesFor(ctx),
-          relevance,
-        },
-        ctx.identity,
-      );
+      const typeRules = await typeRulesFor(ctx);
+      const qOpts = {
+        type: input?.type,
+        tag: input?.tag,
+        tags: input?.tags,
+        prefix: input?.prefix,
+        rankBy,
+        lens: input?.lens,
+        salience: text ? intentSalience(input?.salience) : input?.salience,
+        explain: input?.explain,
+        includeSuperseded: input?.includeSuperseded,
+        contains: input?.contains,
+        typeRules,
+      };
+      // Grant fold (the query twin of recall's fan-out): a viewer's query also
+      // ranges over the slices shared to them — public/shared facts keyed
+      // `owner/key`, exactly as recall and the edges fold key them — so a
+      // signed-out `@guest` gets the owner's public slice as graph nodes, not an
+      // empty own-slice. Own-slice-only callers skip the fold (behaviour-preserved).
+      const foreignGrants = (await applicableGrants(grants, scope)).filter((g) => g.owner !== scope);
+      let result: Awaited<ReturnType<typeof state.query>>;
+      if (!foreignGrants.length) {
+        result = await state.query(scope, { ...qOpts, relevance, limit, cursor }, ctx.identity);
+      } else {
+        // Merge own + each granted owner's matching facts, re-rank across the
+        // union, then offset-page (query's cursor IS an offset). Bounded per
+        // partition so a large shared slice can't blow the payload.
+        const FOLD_CAP = 1200;
+        const rankVal = (e: { _meta: unknown }): number => {
+          const m = (e._meta ?? {}) as { score?: number; relevance?: number };
+          return Number((text ? (m.relevance ?? m.score) : m.score) ?? 0);
+        };
+        const byOwner = new Map<string, string[]>();
+        for (const g of foreignGrants) { const a = byOwner.get(g.owner) ?? []; a.push(g.key); byOwner.set(g.owner, a); }
+        const own = await state.query(scope, { ...qOpts, limit: FOLD_CAP }, ctx.identity);
+        const merged = own.entries.slice();
+        for (const [owner, pats] of byOwner) {
+          const oRel = text ? await relevanceFor(vectors, owner, text) : undefined;
+          const fq = await state.query(owner, { ...qOpts, relevance: oRel, limit: FOLD_CAP }, ctx.identity);
+          for (const e of fq.entries) if (pats.some((p) => grantCovers(p, e.key))) merged.push({ ...e, key: `${owner}/${e.key}` });
+        }
+        merged.sort((a, b) => rankVal(b) - rankVal(a));
+        const offset = Number(cursor ?? 0) || 0;
+        result = { ...own, entries: merged.slice(offset, offset + limit), total: merged.length, nextCursor: offset + limit < merged.length ? String(offset + limit) : undefined };
+      }
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
       // Intent queries also default to the ORIENTATION entry shape (card value
