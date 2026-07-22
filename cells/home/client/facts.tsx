@@ -1043,27 +1043,41 @@ export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry
  *  via peek, and renders the modal. Returns null when nothing is open. */
 export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.JSX.Element | null {
   const t = SHEET_TONE[tone];
-  const [entry, setEntry] = useState<ListEntry | null>(null);
-  const [anchor, setAnchor] = useState<string | undefined>(undefined);
-  const activeKey = React.useRef<string | null>(null);
-  const close = (): void => {
-    activeKey.current = null;
-    setEntry(null);
-    setAnchor(undefined);
-  };
+  // A drill-down STACK, not a single entry: openFact PUSHES a frame (entering
+  // nests), the back chevron / Escape POPS one level, and × / scrim-tap
+  // dismisses the whole stack. So walking A→B→C and stepping back returns to
+  // B, then A — instead of collapsing straight to the graph on the first close.
+  const [stack, setStack] = useState<Array<{ entry: ListEntry; anchor?: string }>>([]);
+  const top = stack.length ? stack[stack.length - 1] : null;
+  const closeAll = (): void => setStack([]);
+  const pop = (): void => setStack((s) => s.slice(0, -1));
   useEffect(() => {
     const onOpen = (ev: Event): void => {
       const detail = (ev as CustomEvent<ListEntry & { anchor?: string }>).detail;
       if (!detail?.key) return;
-      activeKey.current = detail.key;
-      setAnchor(detail.anchor);
-      setEntry(detail);
+      const { anchor, ...rest } = detail;
+      const entry = rest as ListEntry;
+      setStack((s) => {
+        // A re-open of the current top (a double-fire, or clicking the fact you
+        // are already reading) is a no-op — don't push a duplicate frame.
+        if (s.length && s[s.length - 1].entry.key === entry.key) return s;
+        return [...s, { entry, anchor }];
+      });
       if (detail.value === undefined) {
         const requestedKey = detail.key;
         mcpCall('read', 'workspace.peek', { key: requestedKey })
           .then((r) => {
             const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
-            if (r.ok && f && activeKey.current === requestedKey) setEntry({ key: requestedKey, value: f.value, _meta: f._meta });
+            if (!r.ok || !f) return;
+            // Hydrate the (still-bare) frame IN PLACE — it may no longer be the
+            // top if the reader drilled onward while the peek was in flight.
+            setStack((s) => {
+              const i = s.findIndex((fr) => fr.entry.key === requestedKey && fr.entry.value === undefined);
+              if (i < 0) return s;
+              const next = s.slice();
+              next[i] = { ...next[i], entry: { key: requestedKey, value: f.value, _meta: f._meta } };
+              return next;
+            });
           })
           .catch(() => undefined);
       }
@@ -1072,14 +1086,17 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
     return () => window.removeEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
   }, []);
   useEffect(() => {
-    if (!entry) return;
+    if (!stack.length) return;
     const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === 'Escape') close();
+      if (ev.key === 'Escape') pop(); // step back one level; the last Escape closes
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [entry]);
-  if (!entry) return null;
+  }, [stack.length]);
+  if (!top) return null;
+  const entry = top.entry;
+  const anchor = top.anchor;
+  const depth = stack.length;
   const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
   // A bottom sheet in the SUMMONING surface's tone — 'dark' (ink) over the
   // graph (a parchment sheet over the night scene reads as a jarring theme flip
@@ -1091,12 +1108,23 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
     <div
       role="dialog"
       aria-modal="true"
-      onClick={() => close()}
+      onClick={() => closeAll()}
       style={{ position: 'fixed', inset: 0, background: t.scrim, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
     >
+      {/* The depth is VISIBLE as a shallow stack of lips behind the top sheet
+          (one edge per level below), so "you've drilled in" reads at a glance
+          and the back affordance isn't the only cue. */}
+      {depth > 1 ? (
+        <div aria-hidden style={{ position: 'absolute', bottom: 0, width: 'min(720px, 100vw)', display: 'flex', flexDirection: 'column', alignItems: 'stretch', pointerEvents: 'none' }}>
+          {Array.from({ length: Math.min(depth - 1, 2) }, (_, i) => (
+            <div key={i} style={{ height: 8, margin: `0 ${(i + 1) * 8}px`, background: t.bg, opacity: 0.55 - i * 0.18, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none' }} />
+          ))}
+        </div>
+      ) : null}
       <div
         onClick={(ev) => ev.stopPropagation()}
         style={{
+          position: 'relative',
           background: t.bg,
           color: t.text,
           width: 'min(720px, 100vw)',
@@ -1113,17 +1141,33 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
           boxShadow: t.shadow,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flexShrink: 0, padding: '0.8rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.8rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}` }}>
+          {/* Drilled in → a back chevron pops ONE level (returns to the fact you
+              came from); × always dismisses the whole stack. */}
+          {depth > 1 ? (
+            <button
+              onClick={() => pop()}
+              aria-label="back"
+              title="Back"
+              style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}
+            >
+              ‹
+            </button>
+          ) : null}
           <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
+          {depth > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{depth}</span> : null}
           <button
-            onClick={() => close()}
+            onClick={() => closeAll()}
             aria-label="close"
             style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
           >
             ×
           </button>
         </div>
-        <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))' }}>
+        {/* Keyed by the frame's key so each drill level gets its OWN scroll
+            container (a new frame starts at the top; popping back re-renders
+            the parent frame fresh). */}
+        <div key={entry.key} style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))' }}>
           <FactDetail e={entry} tone={tone} anchor={anchor} />
         </div>
       </div>
