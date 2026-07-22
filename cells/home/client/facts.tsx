@@ -299,20 +299,26 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-export function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
+export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }): React.JSX.Element {
   const type = e._meta?.type;
   // The parent doc key: a `doc` IS the doc; a `doc-block` points at its doc via a
   // `doc:` tag (present on the block, so no extra edge read to resolve up).
   const docKey = type === 'doc' || e.key.startsWith('doc:')
     ? e.key
     : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
-  const [md, setMd] = useState<string | null>(null);
-  const [state, setState] = useState<'loading' | 'ready' | 'fail'>('loading');
+  // `initialMd` is an SSR-provided body (the landing doc's public file mirror):
+  // the first paint — server AND hydration — renders the doc itself, never a
+  // "reading…" spinner. The live read still runs and replaces it when it
+  // succeeds; a failed live read keeps the seed instead of blanking.
+  const [md, setMd] = useState<string | null>(initialMd ?? null);
+  const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
   useEffect(() => {
-    if (!docKey) { setState('fail'); return; }
+    if (!docKey) { if (!initialMd) setState('fail'); return; }
     let live = true;
-    setState('loading');
-    setMd(null);
+    if (!initialMd) {
+      setState('loading');
+      setMd(null);
+    }
     // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
     // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
     // doc-block membership (blocks aren't shared to `public`), but the file IS —
@@ -335,12 +341,17 @@ export function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
           const fv = fr?.ok ? (fr.value as { value?: unknown } | null)?.value : null;
           text = bodyText(fv) || '';
         }
-        setMd(text);
-        setState(text ? 'ready' : 'fail');
+        if (text) {
+          setMd(text);
+          setState('ready');
+        } else if (!initialMd) {
+          setMd(text);
+          setState('fail');
+        } // else: keep the SSR seed — an empty live read must not blank the doc
       })
-      .catch(() => { if (live) setState('fail'); });
+      .catch(() => { if (live && !initialMd) setState('fail'); });
     return () => { live = false; };
-  }, [docKey]);
+  }, [docKey, initialMd]);
   if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
   if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
   // Assembly failed — the fact's own body (a block's content) or its summary.

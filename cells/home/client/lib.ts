@@ -60,11 +60,16 @@ let guestToken: string | null = null;
 export function setGuestToken(token: string | null | undefined): void {
   guestToken = token && typeof token === 'string' ? token : null;
 }
-/** The `/mcp` transport for DATA reads/acts: the session token when signed in,
- *  else the public `@guest` bearer if present, else the (token-less) authFetch
- *  path that 401s exactly as before. */
-async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response> {
-  if (isAuthed() || !guestToken) return timedAuthFetch('/mcp', init, timeoutMs);
+/** The kernel session has been DISPROVEN this page-life: its token drew a
+ *  definitive 401/403 from /mcp. `isAuthed()` is presence-of-token, not
+ *  validity — a stored access token whose refresh is gone/expired 401s forever
+ *  and the kernel never clears it (the daily "normal tab broken, incognito
+ *  fine" state: the dead credential shadows the injected guest token). Once
+ *  disproven, data reads go straight to the guest path; a real sign-in
+ *  navigates/reloads, which resets this. */
+let sessionDisproven = false;
+
+async function guestFetch(init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -76,6 +81,23 @@ async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response>
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The `/mcp` transport for DATA reads/acts: the session token when signed in,
+ *  else the public `@guest` bearer if present, else the (token-less) authFetch
+ *  path that 401s exactly as before. A definitive 401/403 on the session path
+ *  RETRIES ONCE as `@guest` and marks the session disproven — degrading to the
+ *  public view (guest reads are public-only by construction) instead of a page
+ *  of dead-token 401s. */
+async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response> {
+  const authedPath = isAuthed() && !sessionDisproven;
+  if (!authedPath && guestToken) return guestFetch(init, timeoutMs);
+  const res = await timedAuthFetch('/mcp', init, timeoutMs);
+  if ((res.status === 401 || res.status === 403) && guestToken) {
+    sessionDisproven = true;
+    return guestFetch(init, timeoutMs);
+  }
+  return res;
 }
 
 function decodeContent(content: Array<{ type?: string; text?: string; [key: string]: unknown }> | undefined): unknown {

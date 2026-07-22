@@ -128,14 +128,19 @@ export interface Boot {
    *  visitors (see cells/home/index.ts). The signed-out trailhead shows these
    *  instead of the generic pitch — a real read-only slice of the substrate. */
   featured?: FeaturedDoc[];
-  /** The long-lived READ-ONLY `@guest` token, injected only for anonymous
-   *  visitors. The client attaches it to data reads (never identity) so the
-   *  signed-out graph/search/doc-reads return live public content. Public-safe:
-   *  `@guest` can only ever see the owner's public-granted slice. */
+  /** The long-lived READ-ONLY `@guest` token, injected on EVERY boot (it is
+   *  public-safe by construction — `@guest` can only ever see the owner's
+   *  public-granted slice). The client attaches it to data reads (never
+   *  identity) so the signed-out graph/search/doc-reads return live public
+   *  content, and so a stale session credential disproven mid-page degrades
+   *  to the public view instead of a page of 401s. */
   guestToken?: string;
   /** The default ground fact — a landing doc rendered in place of the pitch for
    *  BOTH authed and anon (configurable via `_config/home-landing`). */
   landingKey?: string;
+  /** The landing doc's markdown body, SSR'd from the PUBLIC `file/docs/*.md`
+   *  mirror — the first paint renders the real doc, not a "reading…" spinner. */
+  landingBody?: string;
 }
 
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
@@ -404,7 +409,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits

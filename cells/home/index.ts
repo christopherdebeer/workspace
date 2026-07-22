@@ -163,6 +163,29 @@ async function loadLandingKey(): Promise<string> {
   }
 }
 
+/** The landing doc's BODY for the first paint — the public `file/docs/<path>.md`
+ *  mirror (docs-sync, ADR-0027), read over the same IAM slice-read and emitted
+ *  ONLY when a `_public/` pattern covers it (the tokenless-SSR boundary,
+ *  unchanged). Before this the boot carried only the KEY and the body always
+ *  client-fetched behind a "reading…" spinner — so the landing never truly
+ *  SSR'd, and any /mcp failure froze it loading forever. */
+async function loadLandingBody(landingKey: string): Promise<string | undefined> {
+  try {
+    if (!landingKey.startsWith('doc:docs/')) return undefined;
+    const fileKey = `file/${landingKey.slice('doc:'.length)}.md`;
+    const patternFacts = await queryPrefix('_public/');
+    const patterns = patternFacts.map((f) => (f.value as { pattern?: string } | undefined)?.pattern ?? f.key.slice('_public/'.length));
+    if (!patterns.some((p) => covers(p, fileKey))) return undefined;
+    const facts = await queryPrefix(fileKey);
+    const f = facts.find((x) => x.key === fileKey);
+    const content = (f?.value as { content?: unknown } | undefined)?.content;
+    return typeof content === 'string' && content ? content : undefined;
+  } catch (err) {
+    console.error('[home landing-body]', err);
+    return undefined;
+  }
+}
+
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 
 const BASE_SECURITY_HEADERS: Record<string, string> = {
@@ -246,18 +269,21 @@ export const handler = async (event: {
         error: null,
       };
       // Anonymous visitors get the curated PUBLIC slice (tokenless owner-slice
-      // read, `_public/`-filtered) AND the public @guest read token, so the
-      // signed-out client can go live (graph/search/doc reads) as `@guest`.
-      // Signed-in visitors load their own live data with their own session.
+      // read, `_public/`-filtered); featured cards are anon-only. The @guest
+      // read token + the SSR'd landing body ship on EVERY boot: the token is
+      // public-safe by construction (a leak only surfaces the public slice),
+      // and carrying it always gives the client a live fallback when a stale
+      // session credential is disproven mid-page (the "normal tab 401s,
+      // incognito fine" failure — a dead localStorage token with a live-ish
+      // cookie left the authed boot with no working read path at all).
       let featured: FeaturedDoc[] = [];
-      let guestToken: string | undefined;
-      // The landing doc key is for EVERYONE (authed reads it via their session,
-      // anon via the guest token); featured cards + guest token are anon-only.
       const landingKey = await loadLandingKey();
-      if (!authed) [featured, guestToken] = await Promise.all([loadFeaturedPublic(), loadGuestToken()]);
+      const [guestToken, landingBody] = await Promise.all([loadGuestToken(), loadLandingBody(landingKey)]);
+      if (!authed) featured = await loadFeaturedPublic();
       const boot = buildBoot(vm, event.ssrData, featured);
       if (guestToken) boot.guestToken = guestToken;
       if (landingKey) boot.landingKey = landingKey;
+      if (landingBody) boot.landingBody = landingBody;
       installServerBridge(event.headers?.['x-forwarded-host']);
       const inner = renderToString(createElement(App, { initial: boot }));
       const state = JSON.stringify(boot).replace(/</g, '\\u003c');

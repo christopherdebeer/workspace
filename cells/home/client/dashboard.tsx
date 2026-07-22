@@ -189,7 +189,7 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
@@ -201,6 +201,9 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
    *  ground renders THIS doc's full body instead of the pitch/featured cards —
    *  the home page IS a fact, editable in lit. Configurable via _config/home-landing. */
   landingKey?: string;
+  /** SSR'd markdown for the landing doc (the public file mirror) — first paint
+   *  renders the doc itself; the live read then refreshes it in place. */
+  landingBody?: string;
   /** When set, the ground below the horizon reads THAT fact instead of the pitch
    *  (a deep-linked star, or one still selected when you stepped back here). */
   selectedKey?: string | null;
@@ -336,7 +339,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           // fact, editable in lit — not a hardcoded pitch. Footer nav stays below.
           <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
             <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem', margin: '0 auto' }}>
-              <DocBody e={landingEntry} />
+              <DocBody e={landingEntry} initialMd={landingBody} />
             </div>
             <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
               <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
