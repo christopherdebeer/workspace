@@ -310,6 +310,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const [results, setResults] = useState<ListEntry[]>([]);
+  const [searching, setSearching] = useState(false); // a semantic query is in flight
   const [searchN, setSearchN] = useState(16); // page size — grows via "more results"
   const counter = React.useRef(0);
 
@@ -325,7 +326,12 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   }, [seed?.n]);
 
   useEffect(() => {
-    if (!authed) return;
+    // NOT gated on `authed`: a signed-out visitor reaches this console only via
+    // the @guest token (the Palette mounts only once `entered`, which needs a
+    // read-capable session), and $catalog is grant-aware — a guest gets exactly
+    // the public read capabilities they may invoke. Gating on `authed` left
+    // guests on "Loading capabilities…" forever. Reloads on auth change (a
+    // sign-in widens the catalog).
     let live = true;
     // `{detail:'full'}` returns the flat { capabilities:[…] } the console maps; a
     // bare $catalog returns the ADR-0033 grouped summary — flatten that too so a
@@ -376,13 +382,18 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   // (highlight + fit, debounced). Skipped for capability-address-looking input
   // (has a dot, no space), which is a command.
   useEffect(() => {
-    if (!authed) { setResults([]); return; }
+    // NOT gated on `authed` — a guest reads the public slice (same @guest token
+    // the graph already queries). A non-semantic query (a command address) runs
+    // no fact search, so it is never "searching".
     const semantic = q.length >= 2 && (query.includes(' ') || !query.includes('.'));
-    if (!semantic) { setResults([]); return; }
+    if (!semantic) { setResults([]); setSearching(false); return; }
     let live = true;
+    setSearching(true); // in-flight: distinguishes "still loading" from "no match"
     const t = setTimeout(() => {
       void mcpCall('read', 'workspace.query', { text: query.trim(), limit: searchN, shape: 'card' }).then((r) => {
-        if (!live || !r.ok) return;
+        if (!live) return;
+        setSearching(false);
+        if (!r.ok) { setResults([]); return; }
         const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
         const shown = entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, searchN);
         setResults(shown);
@@ -631,7 +642,13 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     <>
       {err && !cmds?.length ? <span style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.78rem' }}>{err}</span> : null}
 
-      {q && items.length === 0 ? (
+      {/* "Searching…" while a fact query is in flight; "No match" ONLY once it
+          has SETTLED (results back, capabilities loaded) — otherwise the loading
+          gap between keystroke and response printed a false "No match" (the bug
+          seen behind the guest's endless "Loading capabilities…" too). */}
+      {q && searching ? (
+        <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>Searching…</p>
+      ) : q && !searching && cmds && items.length === 0 ? (
         <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>No match for “{query}”.</p>
       ) : null}
 

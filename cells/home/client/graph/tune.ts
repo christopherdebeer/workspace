@@ -144,6 +144,13 @@ export const TUNE_DEFAULTS = {
   // pinch/wheel gains, so 1 = the current feel. dragMomentum is the glide's
   // per-frame friction: higher = the flung shell coasts longer (0.92 shipped).
   zoomFov: 0.2, zoomCurl: 1, dragMomentum: 0.9,
+  // FIELD-COMPUTER GLASS (the palette/context sheet over the graph): the frosted
+  // pane's blur radius (px) and dark-fill opacity. Not scene render state — the
+  // Palette reads these on TUNE_EVENT and re-renders — so they're `live:'persist'`
+  // (a tuner change just saves, no graph re-grade). Lower opacity / higher blur =
+  // more of the graph shows through; raise opacity if text loses legibility over
+  // a bright patch.
+  glassBlur: 20, glassOpacity: 0.62,
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 export const TUNE_LS = 'parc.home.tune';
@@ -173,6 +180,9 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
+  // the field-computer's frosted glass (Palette-side; read on TUNE_EVENT).
+  { key: 'glassBlur', group: 'glass', label: 'blur', min: 0, max: 40, step: 1, live: 'persist', quick: true },
+  { key: 'glassOpacity', group: 'glass', label: 'opacity', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   // 0 = meaning (semantic), 1 = authored-link force layout; the between morphs.
   { key: 'layoutMix', group: 'layout', label: 'meaning ↔ links', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   // zoom feel + momentum — read live in the input handlers / tick.

@@ -18,6 +18,7 @@ import { Console } from './console';
 import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
+import { TUNE, TUNE_EVENT, TUNE_RESET_EVENT } from './graph/tune';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -225,6 +226,19 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     setOpen(true);
   }, []);
 
+  // The frosted-glass knobs (blur/opacity) are tunable (TUNE) — re-render when a
+  // tuner change (or reset) fires, so dialling them updates the pane live.
+  const [, bumpGlass] = useState(0);
+  useEffect(() => {
+    const onTune = (): void => bumpGlass((v) => v + 1);
+    window.addEventListener(TUNE_EVENT, onTune);
+    window.addEventListener(TUNE_RESET_EVENT, onTune);
+    return () => {
+      window.removeEventListener(TUNE_EVENT, onTune);
+      window.removeEventListener(TUNE_RESET_EVENT, onTune);
+    };
+  }, []);
+
   // THE SHEET LADDER (owner feedback): the drag handle drives a peek-first
   // ordered ladder, not just the console. UP expands the fact body first, then
   // the console; DOWN collapses the fact body first, then the console; it
@@ -295,10 +309,11 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         // panel read as a SINGLE sheet of glass — the console's old lighter
         // `ink.panel` fill is gone, both sections now sit on this one surface —
         // and the graph stays faintly visible, blurred, behind it. ink.bg
-        // (#181511) at ~0.62 alpha; the blur keeps text legible over bright stars.
-        background: 'rgba(24,21,17,0.62)',
-        backdropFilter: 'blur(20px) saturate(1.4)',
-        WebkitBackdropFilter: 'blur(20px) saturate(1.4)',
+        // (#181511) filled at TUNE.glassOpacity; the blur keeps text legible over
+        // bright stars. Both dials are tunable (group 'glass', live on TUNE_EVENT).
+        background: `rgba(24,21,17,${TUNE.glassOpacity})`,
+        backdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
+        WebkitBackdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
         border: `1px solid ${ink.line}`,
         borderRadius: 14,
         boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
