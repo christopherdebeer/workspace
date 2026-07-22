@@ -724,6 +724,16 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
         </div>
       ) : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem', minHeight: 50 }}>
+        {/* Collapse caret on the LEFT (owner feedback) — the expand/collapse
+            control lives away from the × (clear query) on the right, so the
+            two axes don't share an edge. */}
+        <button
+          onClick={() => onCollapse?.(!collapsed)}
+          aria-label={collapsed ? 'expand the console' : 'collapse the console'}
+          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.85rem', padding: '0.3rem 0.45rem', flexShrink: 0 }}
+        >
+          {collapsed ? '▴' : '▾'}
+        </button>
         <span aria-hidden style={{ color: ink.accent, fontFamily: ink.mono }}>›</span>
         <input
           value={query}
@@ -771,13 +781,6 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             ×
           </button>
         ) : null}
-        <button
-          onClick={() => onCollapse?.(!collapsed)}
-          aria-label={collapsed ? 'expand the console' : 'collapse the console'}
-          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.85rem', padding: '0.3rem 0.45rem' }}
-        >
-          {collapsed ? '▴' : '▾'}
-        </button>
       </div>
     </div>
   );

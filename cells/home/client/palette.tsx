@@ -36,11 +36,13 @@ interface NeighborRef { key: string; rel: string; entry: ListEntry }
 /** The selected fact's context: peeked content + its neighbourhood as chips +
  *  the verbs that can act on it (ADR-0049 — `$catalog {for}`; tapping one
  *  seeds the console). */
-function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: string; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
+function ContextPanel({ factKey, bodyOpen, setBodyOpen, onSelectKey, onClear, onCommand }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
-  const [showBody, setShowBody] = useState(false);
+  // `bodyOpen` (the peek's fact-body expansion) is LIFTED to Palette so the
+  // drag handle can drive it as the first rung of the sheet ladder; the title
+  // tap and the caret still toggle it locally through the passed setter.
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
@@ -48,7 +50,6 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
     setEntry(null);
     setNeighbors([]);
     setVerbs([]);
-    setShowBody(false);
     setEditing(false);
     // The contextual capability menu — what can ACT on this fact, inferred
     // from its type signals (ADR-0049). Type-specific tools lead; the
@@ -106,17 +107,26 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           Tapping the name toggles the body (a div, not a button, so the
           reading's h2/meta nest legally). */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', minWidth: 0 }}>
+        {/* Caret on the LEFT (owner feedback) — the expand/collapse control sits
+            away from the × (dismiss), so the two axes don't share an edge. It
+            toggles the body too; the drag handle drives the same state. */}
+        <button
+          aria-label={bodyOpen ? 'collapse fact' : 'expand fact'}
+          onClick={() => setBodyOpen((b) => !b)}
+          style={{ background: 'none', border: 'none', color: ink.dim, flexShrink: 0, fontSize: '0.8rem', cursor: 'pointer', padding: '0.15rem 0.2rem', marginTop: '0.1rem' }}
+        >
+          {bodyOpen ? '▾' : '▸'}
+        </button>
         <div
           role="button"
           tabIndex={0}
-          onClick={() => setShowBody((b) => !b)}
-          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setShowBody((b) => !b); } }}
+          onClick={() => setBodyOpen((b) => !b)}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setBodyOpen((b) => !b); } }}
           title={factKey}
           style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
         >
           <FactReading e={e} tone="dark" />
         </div>
-        <span aria-hidden style={{ color: ink.dim, flexShrink: 0, fontSize: '0.8rem', marginTop: '0.15rem' }}>{showBody ? '▾' : '▸'}</span>
         <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none', padding: '0.15rem 0.4rem' }} onClick={onClear} aria-label="clear selection">×</button>
       </div>
       {/* Actions on their OWN quiet row — the panel FRAME (where peek used to be),
@@ -129,7 +139,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
               style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
               onClick={() => {
                 setEditing((v) => !v);
-                setShowBody(true);
+                setBodyOpen(true);
               }}
             >
               edit
@@ -138,7 +148,7 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
         </div>
       ) : null}
-      {showBody && entry ? (
+      {bodyOpen && entry ? (
         <div style={{ maxHeight: 'min(42dvh, 340px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.6rem 0.7rem', fontSize: '0.82rem' }}>
           {editing ? (
             <InlineFactEditor
@@ -202,6 +212,11 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
   // let the sheet collapse while the query, selection, and graph highlights
   // persist, so a phone can see what a search lit up).
   const [open, setOpen] = useState(false);
+  // The peek's fact-body expansion, LIFTED here (from ContextPanel) so the drag
+  // handle can drive it as the FIRST rung of the sheet ladder. Reset whenever
+  // the selection changes — a freshly-peeked fact opens collapsed (header only).
+  const [bodyOpen, setBodyOpen] = useState(false);
+  useEffect(() => { setBodyOpen(false); }, [selectedKey]);
   // ADR-0049: a context-panel verb chip opens the console pre-searched to that
   // target (nonce so the same chip re-seeds after manual edits).
   const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
@@ -210,11 +225,23 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     setOpen(true);
   }, []);
 
-  // DRAG HANDLE (owner feedback): a touch-native way to size the sheet — drag
-  // UP to expand the console, DOWN to collapse it, DOWN again (already
-  // collapsed) to dismiss the current selection. It lives on a dedicated grip
-  // strip that OWNS the vertical gesture (touchAction:none), so dragging the
-  // sheet never leaks through to the graph's enter/scroll — the phone
+  // THE SHEET LADDER (owner feedback): the drag handle drives a peek-first
+  // ordered ladder, not just the console. UP expands the fact body first, then
+  // the console; DOWN collapses the fact body first, then the console; it
+  // bottoms out at the collapsed peek (drag never dismisses — × does that).
+  const expandStep = useCallback((): void => {
+    if (selectedKey && !bodyOpen) setBodyOpen(true); // ① the peek's body
+    else setOpen(true); //                              ② the console
+  }, [selectedKey, bodyOpen]);
+  const collapseStep = useCallback((): void => {
+    if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
+    else if (open) setOpen(false); //                   ② the console
+    // else: already at the collapsed peek — do NOT dismiss (× owns that).
+  }, [selectedKey, bodyOpen, open]);
+
+  // DRAG HANDLE: a touch-native way to walk the ladder. It lives on a dedicated
+  // grip strip that OWNS the vertical gesture (touchAction:none), so dragging
+  // the sheet never leaks through to the graph's enter/scroll — the phone
   // scroll-conflict the ▴/▾ tap couldn't solve. `drag` is the live pointer
   // delta in px; the container rubber-bands by it and snaps back on release.
   const [drag, setDrag] = useState(0);
@@ -235,8 +262,8 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     const dy = dragStart.current == null ? 0 : e.clientY - dragStart.current;
     dragStart.current = null;
     setDrag(0);
-    if (dy <= -DRAG_THRESH) setOpen(true);
-    else if (dy >= DRAG_THRESH) { if (open) setOpen(false); else if (selectedKey) onClear(); }
+    if (dy <= -DRAG_THRESH) expandStep();
+    else if (dy >= DRAG_THRESH) collapseStep();
   };
 
   useEffect(() => {
@@ -282,16 +309,16 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         onPointerCancel={endDrag}
         role="button"
         tabIndex={0}
-        aria-label={open ? 'collapse the palette (drag down)' : 'expand the palette (drag up)'}
+        aria-label="resize the palette (drag up to expand, down to collapse)"
         onKeyDown={(e) => {
-          if (e.key === 'ArrowUp') { e.preventDefault(); setOpen(true); }
-          else if (e.key === 'ArrowDown') { e.preventDefault(); if (open) setOpen(false); else if (selectedKey) onClear(); }
+          if (e.key === 'ArrowUp') { e.preventDefault(); expandStep(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); collapseStep(); }
         }}
         style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0.4rem 0 0.2rem', cursor: 'grab', touchAction: 'none' }}
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
-      {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
       <Console
