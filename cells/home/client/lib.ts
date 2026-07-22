@@ -4,7 +4,7 @@
  * origin-aware link localisation, and the painted-asset URLs.
  */
 import * as React from 'react';
-import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSessionCookie, cellUrl } from './bridge';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSessionCookie, cellUrl, localSignOut } from './bridge';
 
 /**
  * Make an apex-style `/@owner/name<rest>` link origin-aware. Home now runs as a
@@ -95,6 +95,10 @@ async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response>
   const res = await timedAuthFetch('/mcp', init, timeoutMs);
   if ((res.status === 401 || res.status === 403) && guestToken) {
     sessionDisproven = true;
+    // Clear the dead credential everywhere (tokens + cookie mirror) — not just
+    // this page-life's flag — so isAuthed() stops lying and the next SSR boots
+    // honestly anonymous.
+    try { localSignOut(); } catch { /* bridge stub */ }
     return guestFetch(init, timeoutMs);
   }
   return res;
@@ -181,7 +185,12 @@ export function useAuth(initial?: Session): Session & { signIn: () => void; sign
           return;
         }
       }
-      // No client token, or whoami said 401/403: genuinely signed out.
+      // No client token, or whoami said 401/403: genuinely signed out. If a
+      // stored token got us here, it is DISPROVEN — clear it (tokens + cookie
+      // mirror) so data reads take the @guest path instead of riding a corpse.
+      if (isAuthed()) {
+        try { localSignOut(); } catch { /* bridge stub */ }
+      }
       if (live) setS({ ready: true, user: null, scopes: [], error });
     })();
     return () => {

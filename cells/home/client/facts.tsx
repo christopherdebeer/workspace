@@ -312,6 +312,17 @@ export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }):
   // succeeds; a failed live read keeps the seed instead of blanking.
   const [md, setMd] = useState<string | null>(initialMd ?? null);
   const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
+  // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
+  // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
+  // doc-block membership (blocks aren't shared to `public`), but the file IS —
+  // so the whole body is readable either way: assemble from blocks when we can,
+  // else fall back to the public markdown source. (Authed owners get blocks.)
+  // A GRANT-FOLDED doc key (`owner/doc:docs/x` — how a guest's graph keys a
+  // foreign node) falls back the same way, to the owner-addressed file
+  // (`owner/file/docs/x.md`, resolved by peek's owner/key addressing) —
+  // before this, folded docs rendered EMPTY for guests: membership edges
+  // don't fold (blocks aren't public) and the bare-prefix check missed.
+  const dm = docKey?.match(/^(?:([^/]+)\/)?doc:docs\/(.+)$/) ?? null;
   useEffect(() => {
     if (!docKey) { if (!initialMd) setState('fail'); return; }
     let live = true;
@@ -319,12 +330,7 @@ export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }):
       setState('loading');
       setMd(null);
     }
-    // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
-    // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
-    // doc-block membership (blocks aren't shared to `public`), but the file IS —
-    // so the whole body is readable either way: assemble from blocks when we can,
-    // else fall back to the public markdown source. (Authed owners get blocks.)
-    const fileKey = docKey.startsWith('doc:docs/') ? `file/${docKey.slice('doc:'.length)}.md` : null;
+    const fileKey = dm ? `${dm[1] ? `${dm[1]}/` : ''}file/docs/${dm[2]}.md` : null;
     void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
       .then(async (r) => {
         if (!live) return;
@@ -352,11 +358,16 @@ export function DocBody({ e, initialMd }: { e: ListEntry; initialMd?: string }):
       .catch(() => { if (live && !initialMd) setState('fail'); });
     return () => { live = false; };
   }, [docKey, initialMd]);
-  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
+  // Link context (ADR-0092 follow-on): relative `*.md` hrefs resolve against
+  // THIS doc's corpus directory, and fact links open in place via the peek
+  // modal — docs are navigable on home, not just readable.
+  const mdBase = dm ? `docs/${dm[2]}`.replace(/\/[^/]*$/, '') : undefined;
+  const onFactLink = (k: string): void => openFact({ key: k });
+  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} />;
   if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
   // Assembly failed — the fact's own body (a block's content) or its summary.
   const own = bodyText(e.value);
-  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} />;
+  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} />;
   const sum = strField(e.value, ['summary']);
   return <span style={{ fontSize: '0.85rem', color: ink.text }}>{sum ?? factTitle(e)}</span>;
 }

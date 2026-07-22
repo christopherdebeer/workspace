@@ -31,27 +31,89 @@ export const safeNavigationUrl = (raw: unknown): string | null => cleanUrl(raw, 
 export const safeImageUrl = (raw: unknown): string | null => cleanUrl(raw, 'image');
 export const safeFrameUrl = (raw: unknown): string | null => cleanUrl(raw, 'frame');
 
-function inline(tokens: Token[] | undefined, key: string): React.ReactNode {
+// ── substrate links (ADR-0092 follow-on: docs are USABLE on home) ───────────
+// Two authored forms resolve to FACT links instead of dead hrefs:
+//   [[key]] / [[key|label]]      — a wiki-link straight to a fact key
+//   [text](relative/path.md)     — a corpus-relative doc link, resolved against
+//                                  the rendering doc's own path (`base`)
+// A fact link renders as <a href="/r/<key>"> (the ADR-0090 fact address — real
+// URL, works in a new tab / for crawlers) and, when the host passes
+// `onFactLink`, intercepts the click to open the fact IN PLACE (the home
+// peek modal / graph selection) instead of navigating away.
+
+/** Options threaded through the renderer (all optional — plain rendering
+ *  without them is byte-identical to before). */
+export interface MdOpts {
+  /** The rendering doc's corpus directory (e.g. `docs/architecture/adr`) —
+   *  what relative `*.md` hrefs resolve against. */
+  base?: string;
+  /** Open a fact key in place (e.g. home's openFact). Absent → href-only. */
+  onFactLink?: (key: string) => void;
+}
+
+import { resolveDocHref } from './doc-links';
+export { resolveDocHref };
+
+/** The `[[wiki-link]]` inline tokenizer, registered once. A marked extension
+ *  (not a regex preprocess) so code spans/blocks keep their literal text. */
+marked.use({
+  extensions: [
+    {
+      name: 'wikilink',
+      level: 'inline',
+      start(src: string) {
+        const i = src.indexOf('[[');
+        return i < 0 ? undefined : i;
+      },
+      tokenizer(src: string) {
+        const m = /^\[\[([^[\]|]+?)(?:\|([^[\]]+?))?\]\]/.exec(src);
+        if (!m) return undefined;
+        return { type: 'wikilink', raw: m[0], factKey: m[1].trim(), label: (m[2] ?? m[1]).trim() };
+      },
+    },
+  ],
+});
+
+function FactLink({ factKey, children, onFactLink }: { factKey: string; children: React.ReactNode; onFactLink?: (key: string) => void }): React.JSX.Element {
+  return (
+    <a
+      href={`/r/${factKey}`}
+      title={factKey}
+      style={{ textDecorationStyle: 'dotted', textUnderlineOffset: '2px' }}
+      onClick={onFactLink ? (ev) => { ev.preventDefault(); onFactLink(factKey); } : undefined}
+    >
+      {children}
+    </a>
+  );
+}
+
+function inline(tokens: Token[] | undefined, key: string, o: MdOpts = {}): React.ReactNode {
   if (!tokens?.length) return null;
   return tokens.map((t, i) => {
     const k = `${key}:${i}`;
     switch (t.type) {
       case 'text':
       case 'escape':
-        return t.tokens?.length ? <React.Fragment key={k}>{inline(t.tokens, k)}</React.Fragment> : <React.Fragment key={k}>{String(t.text ?? t.raw ?? '')}</React.Fragment>;
+        return t.tokens?.length ? <React.Fragment key={k}>{inline(t.tokens, k, o)}</React.Fragment> : <React.Fragment key={k}>{String(t.text ?? t.raw ?? '')}</React.Fragment>;
       case 'strong':
-        return <strong key={k}>{inline(t.tokens, k)}</strong>;
+        return <strong key={k}>{inline(t.tokens, k, o)}</strong>;
       case 'em':
-        return <em key={k}>{inline(t.tokens, k)}</em>;
+        return <em key={k}>{inline(t.tokens, k, o)}</em>;
       case 'del':
-        return <del key={k}>{inline(t.tokens, k)}</del>;
+        return <del key={k}>{inline(t.tokens, k, o)}</del>;
       case 'codespan':
         return <code key={k}>{String(t.text ?? '')}</code>;
       case 'br':
         return <br key={k} />;
+      case 'wikilink':
+        return <FactLink key={k} factKey={String(t.factKey ?? '')} onFactLink={o.onFactLink}>{String(t.label ?? t.factKey ?? '')}</FactLink>;
       case 'link': {
+        const body = inline(t.tokens, k, o) ?? String(t.text ?? t.href ?? '');
+        // A corpus-relative doc link becomes a fact link (usable in place);
+        // everything else keeps the ordinary sanitized-href path.
+        const docKey = typeof t.href === 'string' ? resolveDocHref(t.href, o.base) : null;
+        if (docKey) return <FactLink key={k} factKey={docKey} onFactLink={o.onFactLink}>{body}</FactLink>;
         const href = safeNavigationUrl(t.href);
-        const body = inline(t.tokens, k) ?? String(t.text ?? t.href ?? '');
         return href
           ? <a key={k} href={href} rel="noreferrer">{body}</a>
           : <React.Fragment key={k}>{body}</React.Fragment>;
@@ -65,12 +127,12 @@ function inline(tokens: Token[] | undefined, key: string): React.ReactNode {
       case 'html':
         return <React.Fragment key={k}>{String(t.raw ?? t.text ?? '')}</React.Fragment>;
       default:
-        return <React.Fragment key={k}>{t.tokens?.length ? inline(t.tokens, k) : String(t.text ?? t.raw ?? '')}</React.Fragment>;
+        return <React.Fragment key={k}>{t.tokens?.length ? inline(t.tokens, k, o) : String(t.text ?? t.raw ?? '')}</React.Fragment>;
     }
   });
 }
 
-function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
+function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.ReactNode {
   if (!tokens?.length) return null;
   return tokens.map((t, i) => {
     const k = `${key}:${i}`;
@@ -78,13 +140,13 @@ function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
       case 'space':
         return null;
       case 'paragraph':
-        return <p key={k}>{inline(t.tokens, k) ?? String(t.text ?? '')}</p>;
+        return <p key={k}>{inline(t.tokens, k, o) ?? String(t.text ?? '')}</p>;
       case 'heading': {
         const depth = Math.max(1, Math.min(6, Number(t.depth) || 1));
-        return React.createElement(`h${depth}`, { key: k }, inline(t.tokens, k) ?? String(t.text ?? ''));
+        return React.createElement(`h${depth}`, { key: k }, inline(t.tokens, k, o) ?? String(t.text ?? ''));
       }
       case 'blockquote':
-        return <blockquote key={k}>{blocks(t.tokens, k)}</blockquote>;
+        return <blockquote key={k}>{blocks(t.tokens, k, o)}</blockquote>;
       case 'code':
         // A code block must not stretch its container: long lines scroll WITHIN
         // the <pre> (max-width:100% + overflow-x) rather than forcing the whole
@@ -100,7 +162,7 @@ function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
             {(t.items ?? []).map((it: Token, j: number) => (
               <li key={`${k}:${j}`}>
                 {typeof it.task === 'boolean' ? <input type="checkbox" checked={!!it.checked} readOnly aria-label="task status" /> : null}
-                {blocks(it.tokens, `${k}:${j}`) ?? inline(it.tokens, `${k}:${j}`) ?? String(it.text ?? '')}
+                {blocks(it.tokens, `${k}:${j}`, o) ?? inline(it.tokens, `${k}:${j}`, o) ?? String(it.text ?? '')}
               </li>
             ))}
           </Tag>
@@ -110,8 +172,8 @@ function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
         return (
           <div key={k} style={{ overflowX: 'auto' }}>
             <table>
-              <thead><tr>{(t.header ?? []).map((c: Token, j: number) => <th key={j}>{inline(c.tokens ?? c, `${k}:h:${j}`) ?? String(c.text ?? '')}</th>)}</tr></thead>
-              <tbody>{(t.rows ?? []).map((row: Token[], r: number) => <tr key={r}>{row.map((c: Token, j: number) => <td key={j}>{inline(c.tokens ?? c, `${k}:${r}:${j}`) ?? String(c.text ?? '')}</td>)}</tr>)}</tbody>
+              <thead><tr>{(t.header ?? []).map((c: Token, j: number) => <th key={j}>{inline(c.tokens ?? c, `${k}:h:${j}`, o) ?? String(c.text ?? '')}</th>)}</tr></thead>
+              <tbody>{(t.rows ?? []).map((row: Token[], r: number) => <tr key={r}>{row.map((c: Token, j: number) => <td key={j}>{inline(c.tokens ?? c, `${k}:${r}:${j}`, o) ?? String(c.text ?? '')}</td>)}</tr>)}</tbody>
             </table>
           </div>
         );
@@ -121,13 +183,13 @@ function blocks(tokens: Token[] | undefined, key = 'b'): React.ReactNode {
         return t.tokens?.length ? <p key={k}>{inline(t.tokens, k)}</p> : <React.Fragment key={k}>{String(t.text ?? t.raw ?? '')}</React.Fragment>;
       default:
         return t.tokens?.length
-          ? <React.Fragment key={k}>{blocks(t.tokens, k) ?? inline(t.tokens, k)}</React.Fragment>
+          ? <React.Fragment key={k}>{blocks(t.tokens, k, o) ?? inline(t.tokens, k, o)}</React.Fragment>
           : <React.Fragment key={k}>{String(t.text ?? '')}</React.Fragment>;
     }
   });
 }
 
-export function SafeMarkdown({ text }: { text: string }): React.JSX.Element {
+export function SafeMarkdown({ text, base, onFactLink }: { text: string } & MdOpts): React.JSX.Element {
   let tokens: Token[] = [];
   try {
     tokens = marked.lexer(text.replace(/\r\n/g, '\n')) as Token[];
@@ -137,5 +199,5 @@ export function SafeMarkdown({ text }: { text: string }): React.JSX.Element {
   // minWidth:0 lets this shrink below its content's intrinsic width inside a
   // flex/grid parent — without it, a wide <pre> child forces the whole column
   // (and the page) wider than the viewport instead of scrolling within itself.
-  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens)}</div>;
+  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens, 'b', { base, onFactLink })}</div>;
 }

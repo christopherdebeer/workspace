@@ -12,9 +12,9 @@ import { hydrateRoot, createRoot } from 'react-dom/client';
 import { App, type Boot } from './app';
 import { installBridge } from './bridge';
 import { setGuestToken } from './lib';
-import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl, refreshSessionCookie } from './auth';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl, refreshSessionCookie, localSignOut } from './auth';
 
-installBridge({ login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl, refreshSessionCookie });
+installBridge({ login, logout, completeLoginIfReturning, authFetch, isAuthed, cellUrl, refreshSessionCookie, localSignOut });
 
 /** The server's first-paint seed (session + layout + dashboard), if it SSR'd. */
 function ssrSeed(): Boot | undefined {

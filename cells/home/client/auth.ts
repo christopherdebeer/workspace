@@ -26,6 +26,16 @@ export async function logout(): Promise<void> {
   signOut();
 }
 
+/** Clear the DISPROVEN session locally — the kernel's signOut is already
+ *  navigation-free and server-free (drops the localStorage tokens AND the
+ *  `parc_session` cookie mirror). Called when /mcp definitively 401/403s the
+ *  stored token: `isAuthed()` then reports false, data reads fall through to
+ *  the public @guest path, and the NEXT top-level navigation SSRs the honest
+ *  anonymous boot instead of a half-authed one. */
+export function localSignOut(): void {
+  signOut();
+}
+
 export async function completeLoginIfReturning(): Promise<boolean> {
   if (new URLSearchParams(location.search).has('code')) await ensureAuth();
   return isAuthed();
