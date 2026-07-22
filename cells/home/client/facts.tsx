@@ -379,7 +379,11 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: List
       setState('loading');
       setMd(null);
     }
-    void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
+    // `shape:'full'` — a doc's WHOLE body assembles from its members, so each
+    // member's content must come back UNCLAMPED (the default 'card' shape
+    // truncates long string values to previews — fine for a chip, wrong for
+    // reading the doc). Truncation stays the caller's choice elsewhere.
+    void mcpCall('read', 'workspace.edges', { around: docKey, membership: true, shape: 'full' })
       .then(async (r) => {
         if (!live) return;
         const members = (r.ok ? (r.value as { members?: Array<{ key?: string; value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
