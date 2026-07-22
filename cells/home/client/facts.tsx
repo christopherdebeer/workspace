@@ -171,7 +171,7 @@ function bodyText(v: unknown): string {
 
 /** Render a fact body by a built-in `hint` kind. SSR-safe: deterministic, no
  *  browser globals. Returns null when there's nothing to draw (caller falls back). */
-function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Element | null {
+function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone?: 'light' | 'dark' }): React.JSX.Element | null {
   const v = e.value;
   switch (kind) {
     case 'md':
@@ -180,7 +180,7 @@ function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Elemen
       if (!md) return null;
       // Fact links ([[wiki]]s) in any markdown body open in place, with an
       // origin-aware href for new-tab (`/r/` exists only at the apex).
-      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} />;
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     case 'image': {
       const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
@@ -301,7 +301,7 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-export function DocBody({ e, initialMd, spec }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec }): React.JSX.Element {
+export function DocBody({ e, initialMd, spec, tone = 'dark' }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec; tone?: 'light' | 'dark' }): React.JSX.Element {
   const type = e._meta?.type;
   // The CONTAINER key. Declared (ADR-0093): a container type assembles its own
   // key; a member type (`containerTagPrefix`) delegates via its container tag.
@@ -392,11 +392,11 @@ export function DocBody({ e, initialMd, spec }: { e: ListEntry; initialMd?: stri
   // (→ apex-absolute) keeps new-tab/middle-click navigable when home is
   // served from its own cell subdomain.
   const factHref = (k: string): string => localize(`/r/${k}`);
-  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} />;
+  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />;
   if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
   // Assembly failed — the fact's own body (a block's content) or its summary.
   const own = bodyText(e.value);
-  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} />;
+  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />;
   const sum = strField(e.value, ['summary']);
   return <span style={{ fontSize: '0.85rem', color: ink.text }}>{sum ?? factTitle(e)}</span>;
 }
@@ -411,7 +411,7 @@ export function DocBody({ e, initialMd, spec }: { e: ListEntry; initialMd?: stri
  * card) a long-form body is clamped to a few lines — the card is a preview now
  * that the peek modal carries the full content.
  */
-export function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
+export function FactBody({ e, embed = false, full = false, tone = 'dark' }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark' }): React.JSX.Element | null {
   // A composite fact reads as its WHOLE assembled body when fully open — the
   // substrate joins membership+order; we just concatenate (see DocBody).
   // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
@@ -421,7 +421,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   const t = e._meta?.type;
   if (full) {
     const asm = resolve(e, 'assemble', typeDecls)?.assemble;
-    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} />;
+    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} />;
   }
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
@@ -441,7 +441,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   }
   const hint = resolved?.hint;
   if (hint) {
-    const el = HintBody({ kind: hint, e });
+    const el = HintBody({ kind: hint, e, tone });
     if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
   }
   if (embed) {
@@ -453,7 +453,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     // A structured value with no declared viewer reads as a collapsible JSON
@@ -532,7 +532,7 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
         // inherited shadow carries the legibility), on paper/ink keep the dim.
         <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
-      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full /></div> : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} /></div> : null}
       {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
     </div>
   );

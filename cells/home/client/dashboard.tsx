@@ -339,7 +339,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           // fact, editable in lit — not a hardcoded pitch. Footer nav stays below.
           <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
             <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem', margin: '0 auto' }}>
-              <DocBody e={landingEntry} initialMd={landingBody} />
+              <DocBody e={landingEntry} initialMd={landingBody} tone="light" />
             </div>
             <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
               <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>

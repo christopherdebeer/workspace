@@ -55,6 +55,10 @@ export interface MdOpts {
    *  the apex — a host served from a cell subdomain passes an origin-aware
    *  resolver (home: `localize`) so new-tab/middle-click stays navigable. */
   factHref?: (key: string) => string;
+  /** The surface this reads on. 'dark' (default) = the ink palette (graph
+   *  palette, bottom-sheet peek); 'light' = the cream trailhead (`.on-paper`
+   *  palette variables). Only swaps colours — the layout is one system. */
+  tone?: 'light' | 'dark';
 }
 
 /** The `[[wiki-link]]` inline tokenizer, registered once. A marked extension
@@ -193,7 +197,7 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
   });
 }
 
-export function SafeMarkdown({ text, base, onFactLink, factHref }: { text: string } & MdOpts): React.JSX.Element {
+export function SafeMarkdown({ text, base, onFactLink, factHref, tone = 'light' }: { text: string } & MdOpts): React.JSX.Element {
   let tokens: Token[] = [];
   try {
     tokens = marked.lexer(text.replace(/\r\n/g, '\n')) as Token[];
@@ -203,5 +207,7 @@ export function SafeMarkdown({ text, base, onFactLink, factHref }: { text: strin
   // minWidth:0 lets this shrink below its content's intrinsic width inside a
   // flex/grid parent — without it, a wide <pre> child forces the whole column
   // (and the page) wider than the viewport instead of scrolling within itself.
-  return <div className="fact-md" style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens, 'b', { base, onFactLink, factHref })}</div>;
+  // `on-paper` swaps the palette's link/code/border colours to the cream-ground
+  // variants (see static/index.html); dark is the default (byte-identical).
+  return <div className={tone === 'light' ? 'fact-md on-paper' : 'fact-md'} style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>{blocks(tokens, 'b', { base, onFactLink, factHref })}</div>;
 }
