@@ -59,6 +59,7 @@ import {
   fetchTuneConfig, saveTuneConfig,
   keysOfResult, isPlumbing,
 } from './graph/data';
+import { lookupCoord } from './graph/seats';
 import { recomputeRanks as recomputeRanksImpl, salienceHubPlaces, membershipPlaces } from './graph/layout';
 
 const { useEffect, useRef, useState } = React;
@@ -184,6 +185,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const links: any[] = [];
       const nodeById = new Map<string, any>();
       const coordMap = meta.coordMap;
+      const pubMaps = meta.pubMaps;
       const focusKeys = new Set<string>();
       const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
       const inFocus = (n: any): boolean => !!n && focusKeys.has(n.id);
@@ -2680,7 +2682,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // wherever their seat currently sits).
           // Semantic seat is the base; authored + live seats start equal to it
           // (a new star sits by meaning until an authored layout re-places it).
-          [n.sdx, n.sdy, n.sdz] = toDir(coordMap?.[n.id], i);
+          // Owner-scoped lookup (ADR-0092 Inc 1): own atlas exact-first, else a
+          // grant-folded `owner/key` seats from THAT owner's public map.
+          [n.sdx, n.sdy, n.sdz] = toDir(lookupCoord(n.id, coordMap, pubMaps), i);
           n.ldx = n.sdx; n.ldy = n.sdy; n.ldz = n.sdz;
           n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz;
           n.cr0 = seatRadius(n.score);

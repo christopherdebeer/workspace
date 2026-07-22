@@ -4,7 +4,7 @@
  * (requestGrant, grantRequests, approveGrant, denyGrant).
  */
 import { requireUser, grantScopesOf, type Identity, type ObservedState, ServiceContext } from '../../platform/runtime';
-import { PUBLIC, GROUPS_NS, PUBLIC_NS, WHOLE_SLICE, type Grant, type GrantMode } from './grants';
+import { PUBLIC, GROUPS_NS, PUBLIC_NS, WHOLE_SLICE, applicableGrants, type Grant, type GrantMode } from './grants';
 import {
   parseResource,
   requestKey,
@@ -216,7 +216,13 @@ export function createSharingCommands(build: DepsBuilder): Pick<WorkspaceCommand
     async shared(_input, ctx) {
       const me = requireUser(ctx.identity);
       const { grants } = build(ctx);
-      const [shared, receiving] = await Promise.all([grants.listByOwner(me), grants.listForGrantee(me)]);
+      // `receiving` is the APPLICABLE set (direct + `public` + group grants) —
+      // the same fold every read uses (ADR-0091), not just direct grants. This
+      // is what lets a viewer (incl. `@guest`, who holds only `public` grants)
+      // learn WHICH owners' slices fold into their view — e.g. to fetch each
+      // owner's public layout artifact (ADR-0092 Inc 2). Direct grants are a
+      // subset, so existing consumers only ever see MORE, never less.
+      const [shared, receiving] = await Promise.all([grants.listByOwner(me), applicableGrants(grants, me)]);
       return { shared, receiving };
     },
 

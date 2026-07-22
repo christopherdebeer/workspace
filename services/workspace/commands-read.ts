@@ -40,19 +40,32 @@ const INTENT_TOP_K = 200;
  * scope's vector index top-K as `{ key: cosine }`. `undefined` when no semantic
  * backend is configured — the read proceeds unweighted (the index is a candidate
  * generator, never an authority; ADR-0030 Decision 1 unchanged).
+ *
+ * `cover` (ADR-0092 A4 — the granted-owner call): the viewer's grant patterns
+ * for this owner. Without it, a granted owner's top-K is taken over their WHOLE
+ * index, so a viewer covering 8 public facts among 3,000 gets a candidate set
+ * dominated by keys they can't see — the covered facts score relevance 0 and
+ * rank as if irrelevant (topK starvation; ranking degrades, nothing leaks — the
+ * entry fold enforces coverage regardless). With `cover`: widen the k-NN and
+ * keep only covered candidates before building the relevance map. Coverage on
+ * the returned ENTRIES stays enforced downstream exactly as before.
  */
 async function relevanceFor(
   vectors: WorkspaceDeps['vectors'],
   scope: string,
   text: string,
+  cover?: string[],
 ): Promise<Record<string, number> | undefined> {
   if (!vectors) return undefined;
   const [queryVector] = await vectors.embedder.embed([text]);
   const matches = await vectors.store
-    .query(indexForScope(scope, vectors.embedder.dimension), queryVector, { topK: INTENT_TOP_K })
+    .query(indexForScope(scope, vectors.embedder.dimension), queryVector, { topK: cover ? INTENT_TOP_K * 3 : INTENT_TOP_K })
     .catch(() => []);
   const rel: Record<string, number> = {};
-  for (const m of matches) rel[m.key] = m.score;
+  for (const m of matches) {
+    if (cover && !cover.some((p) => grantCovers(p, m.key))) continue;
+    rel[m.key] = m.score;
+  }
   return rel;
 }
 
@@ -539,7 +552,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       for (const g of grantList) {
         if (g.owner === viewer) continue;
         if (g.key === WHOLE_SLICE || g.key.endsWith('*')) {
-          const gRelevance = text ? await relevanceFor(vectors, g.owner, text) : undefined;
+          const gRelevance = text ? await relevanceFor(vectors, g.owner, text, [g.key]) : undefined;
           const slice = await state.read(
             g.owner,
             { elision: 'none', includeSuperseded, lens, salience, explain, salienceConfig, lensesConfig, typeRules, relevance: gRelevance },
@@ -720,7 +733,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         const own = await state.query(scope, { ...qOpts, limit: FOLD_CAP }, ctx.identity);
         const merged = own.entries.slice();
         for (const [owner, pats] of byOwner) {
-          const oRel = text ? await relevanceFor(vectors, owner, text) : undefined;
+          const oRel = text ? await relevanceFor(vectors, owner, text, pats) : undefined;
           const fq = await state.query(owner, { ...qOpts, relevance: oRel, limit: FOLD_CAP }, ctx.identity);
           for (const e of fq.entries) if (pats.some((p) => grantCovers(p, e.key))) merged.push({ ...e, key: `${owner}/${e.key}` });
         }

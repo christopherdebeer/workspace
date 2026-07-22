@@ -123,7 +123,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   // remain as ergonomic presets; `search` retires into read({source:'vector'})).
   read: CommandHandler<ComposedReadInput | undefined, ComposedReadResult>;
   reindex: CommandHandler<ReindexInput | undefined, { status: string; poll?: string; hint?: string }>;
-  project: CommandHandler<undefined, { status: string; count?: number; method?: string; key?: string; hint?: string }>;
+  project: CommandHandler<undefined, { status: string; count?: number; method?: string; key?: string; hint?: string; publicCount?: number }>;
   pruneSimilar: CommandHandler<PruneSimilarInput | undefined, { status: string; scanned: number; pruned: number; remaining: number }>;
   suggestions: CommandHandler<SuggestionsInput | undefined, SuggestionsResult>;
   ratify: CommandHandler<RatifyInput, RatifyResult>;

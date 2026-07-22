@@ -23,12 +23,16 @@ import {
   LAYOUT_KEY,
   layoutShardKey,
   layoutShardOf,
+  PUB_LAYOUT_KEY,
+  publicLayout,
+  publicPatternCovers,
   StatePreconditionError,
   type VectorRecord,
   type StateStore,
   type ProjectionFact,
   type LayoutManifest,
   type LayoutShard,
+  type PublicLayout,
 } from '../../platform/runtime';
 import { vectorsFromEnv } from '../../platform/runtime/s3-vectors-store';
 import { createDynamoStateStoreV3 as createDynamoStateStore } from '../../platform/runtime/dynamo-state-store-v3';
@@ -120,6 +124,24 @@ export function planStreamWork(event: StreamEvent, dim: number): Map<string, Ind
   return plans;
 }
 
+/** Pure: the scopes whose `_public/` share reflections changed in this batch
+ *  (ADR-0092 A3). `share {to:"public"}` writes `_public/<pattern>`; `unshare`
+ *  supersedes it — both are ordinary facts on the stream, so this IS the
+ *  share/unshare trigger. `planStreamWork` deliberately never plans work for
+ *  them (`indexableText` skips `_` keys); this companion scan is what turns
+ *  them into a public-projection rebuild. */
+export function publicShareChanges(event: StreamEvent): Set<string> {
+  const scopes = new Set<string>();
+  for (const r of event.Records ?? []) {
+    const img = r.dynamodb?.NewImage ? (unmarshall(r.dynamodb.NewImage as DynamoDB.DocumentClient.AttributeMap) as FactItem) : null;
+    const old = r.dynamodb?.OldImage ? (unmarshall(r.dynamodb.OldImage as DynamoDB.DocumentClient.AttributeMap) as FactItem) : null;
+    const item = img ?? old;
+    if (!item || typeof item.sk !== 'string' || !item.sk.startsWith('KEY#_public/')) continue;
+    if (typeof item.scope === 'string') scopes.add(item.scope);
+  }
+  return scopes;
+}
+
 export async function handler(event: StreamEvent): Promise<void> {
   const vectors = vectorsFromEnv();
   if (!vectors) return; // backend not configured → no-op (safe)
@@ -128,12 +150,17 @@ export async function handler(event: StreamEvent): Promise<void> {
   // derive from the same value, so they cannot skew.
   const dim = vectors.embedder.dimension;
   const plans = planStreamWork(event, dim);
-  if (!plans.size) return;
+  const pubScopes = publicShareChanges(event);
+  if (!plans.size && !pubScopes.size) return;
   // ADR-0031: inferred similarTo edges live in the substrate table; the indexer writes
   // them directly through the raw store (no trajectory/resolve side effects).
+  // `stateStore` is the layout-work handle (projection patches + the ADR-0092
+  // public projection) — needed whether or not similarTo inference is enabled;
+  // `edgeStore` remains the sim-gated alias for the edge pass.
   const sim = similarConfig();
   const table = process.env.SUBSTRATE_TABLE;
-  const edgeStore: StateStore | null = sim.enabled && table ? createDynamoStateStore(table) : null;
+  const stateStore: StateStore | null = table ? createDynamoStateStore(table) : null;
+  const edgeStore: StateStore | null = sim.enabled ? stateStore : null;
 
   for (const [index, { scope, puts, removes }] of plans) {
     await vectors.store.ensureIndex(index, { dimension: dim });
@@ -170,11 +197,35 @@ export async function handler(event: StreamEvent): Promise<void> {
     // next write, or the next full `project()`, catches it up); a missing/basis-
     // less fact (project() never run yet) is silently skipped — there is no map
     // to place a point on until the first batch run creates one.
-    if (edgeStore && (puts.length || removes.size)) {
+    if (stateStore && (puts.length || removes.size)) {
       try {
-        await patchProjection(edgeStore, scope, puts.map((p, i) => ({ key: p.key, vector: putVecs[i] })), [...removes]);
+        await patchProjection(stateStore, scope, puts.map((p, i) => ({ key: p.key, vector: putVecs[i] })), [...removes]);
       } catch (err) {
         console.warn('vector-indexer projection patch failed (vectors indexed)', { scope, error: (err as Error).message });
+      }
+      // ADR-0092 Inc 2: keep the audience-safe public projection fresh too — a
+      // covered fact's coord patches in beside the main atlas; an uncovered one
+      // never enters. Best-effort, same as the main patch.
+      try {
+        await patchPublicProjection(stateStore, scope, puts.map((p, i) => ({ key: p.key, vector: putVecs[i] })), [...removes]);
+      } catch (err) {
+        console.warn('vector-indexer public projection patch failed (vectors indexed)', { scope, error: (err as Error).message });
+      }
+    }
+  }
+
+  // ADR-0092 A3: a `_public/` share/unshare in this batch → wholesale rebuild of
+  // that scope's public projection from the existing layout atlas + the CURRENT
+  // patterns. Runs LAST so it reads this batch's own coord patches; complete-
+  // state (no delta), so a lost race self-heals on the next rebuild. This is
+  // also where an unshared key's name leaves `.pub` (the bounded staleness
+  // window the ADR states honestly).
+  if (stateStore) {
+    for (const scope of pubScopes) {
+      try {
+        await rebuildPublicProjection(stateStore, scope);
+      } catch (err) {
+        console.warn('vector-indexer public projection rebuild failed', { scope, error: (err as Error).message });
       }
     }
   }
@@ -261,6 +312,91 @@ export async function patchProjection(
       await new Promise((r) => setTimeout(r, 40 + Math.random() * 160));
     }
   }
+}
+
+/** ADR-0092 Inc 2 (incremental lane): patch `_home/embed2d.pub` for the keys
+ *  this batch touched. Coverage is tested against the PATTERNS STORED ON the
+ *  `.pub` fact itself (A2) — no slice scan on the hot path; a pattern change
+ *  refreshes them via {@link rebuildPublicProjection}. A missing `.pub`
+ *  (project() never ran / nothing public yet) or a basis-less manifest is a
+ *  silent skip, exactly like {@link patchProjection}. Exported for tests. */
+export async function patchPublicProjection(
+  store: StateStore,
+  scope: string,
+  puts: Array<{ key: string; vector: number[] }>,
+  removes: string[],
+): Promise<void> {
+  const state = createObservedState(store);
+  const manifest = await state.get(scope, LAYOUT_KEY);
+  const mv = manifest?.value as (Partial<LayoutManifest> & Partial<ProjectionFact>) | undefined;
+  if (!mv?.basis || !mv?.norm) return; // no basis → nothing to project on
+  const basis = mv.basis, norm = mv.norm;
+  for (let attempt = 0; attempt < PATCH_ATTEMPTS; attempt++) {
+    const cur = await state.get(scope, PUB_LAYOUT_KEY);
+    if (!cur) return; // project()/rebuild creates it; until then there is no public artifact
+    const pub = cur.value as PublicLayout;
+    const patterns = Array.isArray(pub?.patterns) ? pub.patterns : [];
+    const coords = { ...(pub?.coords ?? {}) };
+    let changed = false;
+    for (const { key, vector } of puts) {
+      if (!patterns.some((p) => publicPatternCovers(p, key))) continue; // the write-time boundary
+      coords[key] = projectVector(vector, basis, norm);
+      changed = true;
+    }
+    for (const key of removes) {
+      if (key in coords) {
+        delete coords[key];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    try {
+      await state.put({
+        scope,
+        key: PUB_LAYOUT_KEY,
+        value: { ...pub, patterns, coords, count: Object.keys(coords).length },
+        via: 'vector-indexer',
+        type: 'graph-layout-public',
+        ifVersion: cur._meta.version,
+      });
+      return;
+    } catch (err) {
+      if (!(err instanceof StatePreconditionError) || attempt === PATCH_ATTEMPTS - 1) throw err;
+      await new Promise((r) => setTimeout(r, 40 + Math.random() * 160));
+    }
+  }
+}
+
+/** ADR-0092 A3 (rebuild lane): recompute `_home/embed2d.pub` wholesale — merge
+ *  the existing layout atlas's coords (shards, or the legacy monolith), read
+ *  the scope's CURRENT `_public/` patterns, filter, write. No re-projection
+ *  (the coords already exist) and no CAS (complete state — last writer
+ *  converges; a racing incremental patch is re-derived next batch). Called on
+ *  any `_public/` share/unshare seen on the stream. Exported for tests. */
+export async function rebuildPublicProjection(store: StateStore, scope: string): Promise<void> {
+  const state = createObservedState(store);
+  const manifest = await state.get(scope, LAYOUT_KEY);
+  const mv = manifest?.value as (Partial<LayoutManifest> & Partial<ProjectionFact>) | undefined;
+  if (!mv) return; // no atlas yet → nothing to filter into a public view
+  const coords: Record<string, [number, number, number]> = {};
+  if (typeof mv.shards === 'number' && mv.shards > 0) {
+    for (let i = 0; i < mv.shards; i++) {
+      const shard = await state.get(scope, layoutShardKey(i));
+      const sc = (shard?.value as LayoutShard | undefined)?.coords;
+      if (sc) Object.assign(coords, sc);
+    }
+  } else if (mv.coords) {
+    Object.assign(coords, mv.coords);
+  }
+  // The current public patterns — the `_public/<pattern>` reflections
+  // (`share {to:"public"}` writes them; `unshare` supersedes). A rare-event
+  // whole-slice list, not a hot-path cost.
+  const records = await store.list(scope);
+  const patterns = records
+    .filter((r) => r.key.startsWith('_public/') && !r.superseded)
+    .map((r) => ((r.value as { pattern?: string } | null)?.pattern ?? r.key.slice('_public/'.length)));
+  const value = publicLayout(coords, patterns, new Date().toISOString());
+  await state.put({ scope, key: PUB_LAYOUT_KEY, value, via: 'vector-indexer', type: 'graph-layout-public' });
 }
 
 /** CAS+retry read-modify-write of ONE coord shard. A shard that doesn't
