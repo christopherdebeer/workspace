@@ -8,7 +8,7 @@ import * as React from 'react';
 import { Card, Heading, Badge, Button, theme } from '@parc/ui';
 import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
-import { FactReading, type ListEntry } from './facts';
+import { FactReading, DocBody, type ListEntry } from './facts';
 import type { GraphNode } from './graph';
 
 const { useState, useEffect } = React;
@@ -189,7 +189,7 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
@@ -197,6 +197,10 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
   /** Can walk into the sky even when signed out (a public @guest token is live) —
    *  keeps the sign-in CTA but adds the enter-the-sky gesture hint. */
   canEnter?: boolean;
+  /** The default ground fact (a landing doc): when nothing is selected, the
+   *  ground renders THIS doc's full body instead of the pitch/featured cards —
+   *  the home page IS a fact, editable in lit. Configurable via _config/home-landing. */
+  landingKey?: string;
   /** When set, the ground below the horizon reads THAT fact instead of the pitch
    *  (a deep-linked star, or one still selected when you stepped back here). */
   selectedKey?: string | null;
@@ -236,6 +240,13 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
   // Prefer the peeked entry (full value → real body); fall back to the node
   // entry so the head is instant while the body streams in.
   const reading = peeked ?? nodeEntry;
+  // The default ground: with nothing selected, the ground reads the landing doc
+  // (a real fact, editable in lit) rather than the pitch/featured cards. DocBody
+  // needs only the key + type to assemble (blocks when authed, the public file
+  // markdown when signed out), so a synthetic entry avoids an extra peek.
+  const landingEntry: ListEntry | null = landingKey
+    ? { key: landingKey, value: {}, _meta: { type: landingKey.startsWith('doc:') ? 'doc' : undefined, tags: [] } }
+    : null;
   return (
     <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
@@ -318,6 +329,20 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             { reading ? <FactReading e={reading} tone="light" head={false} showBody /> : (
               <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.8rem' }}>reading…</span>
             )}
+          </div>
+        ) : landingEntry ? (
+          // DEFAULT GROUND = the landing doc, full body as paper (blocks when
+          // authed, the public file markdown when signed out). The home page is a
+          // fact, editable in lit — not a hardcoded pitch. Footer nav stays below.
+          <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
+            <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem', margin: '0 auto' }}>
+              <DocBody e={landingEntry} />
+            </div>
+            <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
+              <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
+              <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
+              <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
+            </div>
           </div>
         ) : (
         <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>

@@ -133,6 +133,9 @@ export interface Boot {
    *  signed-out graph/search/doc-reads return live public content. Public-safe:
    *  `@guest` can only ever see the owner's public-granted slice. */
   guestToken?: string;
+  /** The default ground fact — a landing doc rendered in place of the pitch for
+   *  BOTH authed and anon (configurable via `_config/home-landing`). */
+  landingKey?: string;
 }
 
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
@@ -401,7 +404,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits

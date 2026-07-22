@@ -299,7 +299,7 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
+export function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
   const type = e._meta?.type;
   // The parent doc key: a `doc` IS the doc; a `doc-block` points at its doc via a
   // `doc:` tag (present on the block, so no extra edge read to resolve up).
@@ -313,16 +313,28 @@ function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
     let live = true;
     setState('loading');
     setMd(null);
+    // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
+    // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
+    // doc-block membership (blocks aren't shared to `public`), but the file IS —
+    // so the whole body is readable either way: assemble from blocks when we can,
+    // else fall back to the public markdown source. (Authed owners get blocks.)
+    const fileKey = docKey.startsWith('doc:docs/') ? `file/${docKey.slice('doc:'.length)}.md` : null;
     void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
-      .then((r) => {
+      .then(async (r) => {
         if (!live) return;
         const members = (r.ok ? (r.value as { members?: Array<{ value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
-        const text = members
+        let text = members
           .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: bodyText(m.value) }))
           .sort((a, b) => a.seq - b.seq)
           .map((m) => m.content)
           .filter(Boolean)
           .join('\n\n');
+        if (!text && fileKey) {
+          const fr = await mcpCall('read', 'workspace.peek', { key: fileKey }).catch(() => null);
+          if (!live) return;
+          const fv = fr?.ok ? (fr.value as { value?: unknown } | null)?.value : null;
+          text = bodyText(fv) || '';
+        }
         setMd(text);
         setState(text ? 'ready' : 'fail');
       })

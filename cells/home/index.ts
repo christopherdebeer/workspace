@@ -147,6 +147,22 @@ async function loadGuestToken(): Promise<string | undefined> {
   }
 }
 
+/** The default ground fact — a landing doc the home page renders in place of the
+ *  pitch. Configurable via `_config/home-landing` `{key}`; defaults to the
+ *  substrate foundations doc. Read over the same IAM slice-read; the key itself
+ *  is harmless to emit (the CLIENT reads the doc, gated by its own token/grants). */
+const DEFAULT_LANDING_KEY = 'doc:docs/substrate';
+async function loadLandingKey(): Promise<string> {
+  try {
+    const facts = await queryPrefix('_config/home-landing');
+    const f = facts.find((x) => x.key === '_config/home-landing');
+    const key = (f?.value as { key?: unknown } | undefined)?.key;
+    return typeof key === 'string' && key ? key : DEFAULT_LANDING_KEY;
+  } catch {
+    return DEFAULT_LANDING_KEY;
+  }
+}
+
 const read = (rel: string): string => readFileSync(join(__dirname, rel), 'utf8');
 
 const BASE_SECURITY_HEADERS: Record<string, string> = {
@@ -235,9 +251,13 @@ export const handler = async (event: {
       // Signed-in visitors load their own live data with their own session.
       let featured: FeaturedDoc[] = [];
       let guestToken: string | undefined;
+      // The landing doc key is for EVERYONE (authed reads it via their session,
+      // anon via the guest token); featured cards + guest token are anon-only.
+      const landingKey = await loadLandingKey();
       if (!authed) [featured, guestToken] = await Promise.all([loadFeaturedPublic(), loadGuestToken()]);
       const boot = buildBoot(vm, event.ssrData, featured);
       if (guestToken) boot.guestToken = guestToken;
+      if (landingKey) boot.landingKey = landingKey;
       installServerBridge(event.headers?.['x-forwarded-host']);
       const inner = renderToString(createElement(App, { initial: boot }));
       const state = JSON.stringify(boot).replace(/</g, '\\u003c');
