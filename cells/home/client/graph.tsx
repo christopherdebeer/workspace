@@ -1553,18 +1553,40 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             cands.push([i, farN.rank ?? nodes.length]);
           }
           cands.sort((x, y) => x[1] - y[1]); // label the salient connections first
-          const placedMid: Array<[number, number]> = [];
+          // Anti-crowd admission. THREE guards, each earned by a real failure of
+          // the old single 70×14 midpoint box:
+          //   1. dedup identical oriented relations — a doc with three members
+          //      printed `inDoc →` three times; keep only the most-salient
+          //      instance (cands are salience-sorted, so first occurrence wins).
+          //   2. reject on the VISIBLE-SPAN midpoint (same clip positionEdge-
+          //      Labels uses to draw), not the raw a↔b midpoint — the old guard
+          //      spaced labels by a coordinate the renderer then overrode, so
+          //      "spread" labels still stacked once clipped to the viewport.
+          //   3. width-aware overlap — the reject box scales with the rel text
+          //      (~mono 5px/char + arrow) instead of a fixed 70px, so a long
+          //      verb can't sit on top of its neighbour just because their
+          //      centres are >70px apart.
+          const mX = 40, mTop = 100, mBot = 150; // must match positionEdgeLabels
+          const placed: Array<[number, number, number]> = []; // mx, my, halfWidth
+          const seenRel = new Set<string>();
           let added = 0;
           for (const [i] of cands) {
             if (added >= TUNE.edgeLabelCap) break;
             const l = links[i];
+            const outgoing = idOf(l.source) === selKey;
+            const relTag = outgoing ? `${l.rel}>` : `<${l.rel}`;
+            if (seenRel.has(relTag)) continue; // (1) identical-rel dedup
             const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
             const [ax, ay] = screenXY(aN);
             const [bx, by] = screenXY(bN);
             if (Math.hypot(bx - ax, by - ay) < 120) continue; // no room for a word
-            const mx = (ax + bx) / 2, my = (ay + by) / 2;
-            if (placedMid.some(([px, py]) => Math.abs(px - mx) < 70 && Math.abs(py - my) < 14)) continue;
-            placedMid.push([mx, my]);
+            const span = clipSpan(ax, ay, bx, by, mX, mTop, W - mX, H - mBot);
+            const t = span ? (span[0] + span[1]) / 2 : 0.5; // (2) visible-span mid
+            const mx = ax + (bx - ax) * t, my = ay + (by - ay) * t;
+            const halfW = (l.rel.length + 2) * 2.6 + 8; // (3) est. half label width
+            if (placed.some(([px, py, phw]) => Math.abs(px - mx) < halfW + phw && Math.abs(py - my) < 14)) continue;
+            placed.push([mx, my, halfW]);
+            seenRel.add(relTag);
             want.add(i);
             added++;
           }

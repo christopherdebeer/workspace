@@ -98,11 +98,14 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   // neighbours with a resolvable TITLE earn a chip.
   const namedNeighbors = neighbors.filter((n) => !!factTitle(n.entry));
   return (
-    <div style={{ display: 'grid', gap: '0.4rem', padding: '0.55rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-        {/* The SAME reading the trailhead shows, in dark tone (consistency): icon
-            + title + metadata. Clicking it toggles the body (a div, not a button,
-            so the reading's h2/meta nest legally). */}
+    <div style={{ display: 'grid', gap: '0.45rem', padding: '0.6rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
+      {/* TITLE FIRST (owner feedback #5/#3): the fact's name owns the top line at
+          full reading size and WRAPS — no more "The Substrate T…" ellipsis. The
+          only control on this line is × (clear), pinned right; edit/open moved to
+          their own quiet row below so nothing competes with the name for the eye.
+          Tapping the name toggles the body (a div, not a button, so the
+          reading's h2/meta nest legally). */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', minWidth: 0 }}>
         <div
           role="button"
           tabIndex={0}
@@ -111,26 +114,30 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           title={factKey}
           style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
         >
-          <FactReading e={e} tone="dark" compact />
+          <FactReading e={e} tone="dark" />
         </div>
-        <span aria-hidden style={{ color: ink.dim, flexShrink: 0, fontSize: '0.8rem' }}>{showBody ? '▾' : '▸'}</span>
-        {/* Actions live on the panel FRAME (where peek used to be), not inside
-            the scrolling body — owner feedback. */}
-        {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
-        {canEditInline ? (
-          <button
-            style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
-            onClick={() => {
-              setEditing((v) => !v);
-              setShowBody(true);
-            }}
-          >
-            edit
-          </button>
-        ) : null}
-        {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
-        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none' }} onClick={onClear} aria-label="clear selection">×</button>
+        <span aria-hidden style={{ color: ink.dim, flexShrink: 0, fontSize: '0.8rem', marginTop: '0.15rem' }}>{showBody ? '▾' : '▸'}</span>
+        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none', padding: '0.15rem 0.4rem' }} onClick={onClear} aria-label="clear selection">×</button>
       </div>
+      {/* Actions on their OWN quiet row — the panel FRAME (where peek used to be),
+          not inside the scrolling body, and no longer crowding the title. */}
+      {editHref || canEditInline || href ? (
+        <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
+          {canEditInline ? (
+            <button
+              style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
+              onClick={() => {
+                setEditing((v) => !v);
+                setShowBody(true);
+              }}
+            >
+              edit
+            </button>
+          ) : null}
+          {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
+        </div>
+      ) : null}
       {showBody && entry ? (
         <div style={{ maxHeight: 'min(42dvh, 340px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.6rem 0.7rem', fontSize: '0.82rem' }}>
           {editing ? (
@@ -152,9 +159,14 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           then the neighbours that actually HAVE a name. Horizontal scroll. */}
       {verbs.length || namedNeighbors.length ? (
         <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 5, alignItems: 'center', scrollbarWidth: 'thin', scrollbarColor: `${ink.line} transparent` }}>
+          {/* Verbs QUIETED (owner feedback #5): they used to shout in gold and
+              outrank the title. Now neutral like neighbour chips, marked as
+              actions by a dim leading `›` (run-this) rather than by colour, so
+              the title wins the hierarchy. */}
           {verbs.slice(0, 3).map((v) => (
-            <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent, maxWidth: 220 }} title={v.target} onClick={() => onCommand(v.target)}>
-              {v.target.slice(v.target.lastIndexOf('.') + 1)}
+            <button key={v.target} style={{ ...chip, maxWidth: 220, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }} title={v.target} onClick={() => onCommand(v.target)}>
+              <span aria-hidden style={{ color: ink.dim, flexShrink: 0 }}>›</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{v.target.slice(v.target.lastIndexOf('.') + 1)}</span>
             </button>
           ))}
           {verbs.length && namedNeighbors.length ? <span aria-hidden style={{ color: ink.line, flexShrink: 0 }}>·</span> : null}
@@ -198,6 +210,35 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     setOpen(true);
   }, []);
 
+  // DRAG HANDLE (owner feedback): a touch-native way to size the sheet — drag
+  // UP to expand the console, DOWN to collapse it, DOWN again (already
+  // collapsed) to dismiss the current selection. It lives on a dedicated grip
+  // strip that OWNS the vertical gesture (touchAction:none), so dragging the
+  // sheet never leaks through to the graph's enter/scroll — the phone
+  // scroll-conflict the ▴/▾ tap couldn't solve. `drag` is the live pointer
+  // delta in px; the container rubber-bands by it and snaps back on release.
+  const [drag, setDrag] = useState(0);
+  const dragStart = React.useRef<number | null>(null);
+  const DRAG_THRESH = 44;
+  const onHandleDown = (e: React.PointerEvent): void => {
+    dragStart.current = e.clientY;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
+  };
+  const onHandleMove = (e: React.PointerEvent): void => {
+    if (dragStart.current == null) return;
+    const dy = e.clientY - dragStart.current;
+    // Downward rubber-bands the whole sheet; upward gives a small lift hint
+    // (expansion grows the sheet, it doesn't slide it).
+    setDrag(dy > 0 ? Math.min(dy, 160) : Math.max(dy, -60));
+  };
+  const endDrag = (e: React.PointerEvent): void => {
+    const dy = dragStart.current == null ? 0 : e.clientY - dragStart.current;
+    dragStart.current = null;
+    setDrag(0);
+    if (dy <= -DRAG_THRESH) setOpen(true);
+    else if (dy >= DRAG_THRESH) { if (open) setOpen(false); else if (selectedKey) onClear(); }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -228,8 +269,28 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
         overflow: 'hidden',
         color: ink.text,
+        transform: drag ? `translateY(${drag}px)` : undefined,
+        transition: drag ? 'none' : 'transform 0.18s ease',
       }}
     >
+      {/* The grip: drag up to expand, down to collapse/dismiss (see onHandleDown).
+          A wide, thumb-sized target owning the vertical gesture. */}
+      <div
+        onPointerDown={onHandleDown}
+        onPointerMove={onHandleMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        role="button"
+        tabIndex={0}
+        aria-label={open ? 'collapse the palette (drag down)' : 'expand the palette (drag up)'}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp') { e.preventDefault(); setOpen(true); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); if (open) setOpen(false); else if (selectedKey) onClear(); }
+        }}
+        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0.4rem 0 0.2rem', cursor: 'grab', touchAction: 'none' }}
+      >
+        <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
+      </div>
       {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
