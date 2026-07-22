@@ -165,12 +165,26 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
         return <hr key={k} />;
       case 'list': {
         const Tag = t.ordered ? 'ol' : 'ul';
+        // A TIGHT list item's content is a `text` token, which `blocks()` wraps
+        // in <p> — a block, so a task checkbox sat on its own line above the
+        // prose. Render item-level `text` tokens INLINE (no <p>) so the
+        // checkbox and its label share a line; nested blocks (sublists, code)
+        // still render as blocks after it.
+        const itemContent = (tokens: Token[] | undefined, ik: string): React.ReactNode => {
+          if (!tokens?.length) return null;
+          return tokens.map((tk: Token, m: number) =>
+            tk.type === 'text'
+              ? <React.Fragment key={`${ik}:t${m}`}>{tk.tokens?.length ? inline(tk.tokens, `${ik}:t${m}`, o) : String(tk.text ?? tk.raw ?? '')}</React.Fragment>
+              : <React.Fragment key={`${ik}:b${m}`}>{blocks([tk], `${ik}:b${m}`, o)}</React.Fragment>,
+          );
+        };
         return (
           <Tag key={k} start={t.ordered && Number.isFinite(t.start) ? Number(t.start) : undefined}>
             {(t.items ?? []).map((it: Token, j: number) => (
-              <li key={`${k}:${j}`}>
-                {typeof it.task === 'boolean' ? <input type="checkbox" checked={!!it.checked} readOnly aria-label="task status" /> : null}
-                {blocks(it.tokens, `${k}:${j}`, o) ?? inline(it.tokens, `${k}:${j}`, o) ?? String(it.text ?? '')}
+              // Task items hide the bullet (the checkbox IS the marker).
+              <li key={`${k}:${j}`} style={typeof it.task === 'boolean' ? { listStyle: 'none', marginLeft: '-1.1em' } : undefined}>
+                {typeof it.task === 'boolean' ? <input type="checkbox" checked={!!it.checked} readOnly aria-label="task status" style={{ verticalAlign: 'baseline', marginRight: '0.45em' }} /> : null}
+                {itemContent(it.tokens, `${k}:${j}`) ?? inline(it.tokens, `${k}:${j}`, o) ?? String(it.text ?? '')}
               </li>
             ))}
           </Tag>

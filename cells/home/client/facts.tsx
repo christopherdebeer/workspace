@@ -107,6 +107,25 @@ export function factEdit(e: ListEntry): string | null {
   return handlerUrl(resolve(e, 'edit', typeDecls));
 }
 
+/** The CELL a resolved handler lands in, as a display handle (`@owner/name`) —
+ *  from the handler's own cellRef when it names one, else the type's declared
+ *  manager. Lets an action say WHERE it goes ("Open in @c15r/lit") instead of
+ *  a bare arrow into the unknown. Normalises both manager spellings
+ *  (`@c15r/lit` and the registry's path form `/@c15r/lit`). */
+function handlerCell(r: ReturnType<typeof resolve>, e: ListEntry): string | null {
+  if (r?.cellRef) return `@${r.cellRef.owner}/${r.cellRef.name}`;
+  const manager = declFor(e, typeDecls)?.manager;
+  if (typeof manager !== 'string' || !manager) return null;
+  const clean = manager.replace(/^\/?@?/, '');
+  return clean.includes('/') ? `@${clean}` : null; // 'platform' etc. → no cell handle
+}
+/** `{href, cell}` for a fact's open/edit action — the footer's label source. */
+export function factAction(e: ListEntry, intent: 'open' | 'edit'): { href: string; cell: string | null } | null {
+  const r = resolve(e, intent, typeDecls);
+  const href = handlerUrl(r);
+  return href ? { href, cell: handlerCell(r, e) } : null;
+}
+
 /** A small "✎ edit" link, shown only when the fact's type declares an edit surface. */
 export function EditLink({ e }: { e: ListEntry }): React.JSX.Element | null {
   const to = factEdit(e);
@@ -573,8 +592,8 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
 export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: ListEntry; tone?: Tone; authed?: boolean }): React.JSX.Element {
   const t = SHEET_TONE[tone];
   const m = e._meta;
-  const open = factHref(e);
-  const edit = factEdit(e);
+  const open = factAction(e, 'open');
+  const edit = factAction(e, 'edit');
   const system = e.key.startsWith('_');
   const prov: string[] = [];
   if (m?.type) prov.push(m.type);
@@ -590,8 +609,11 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
       ) : null}
       <Neighbourhood keyName={e.key} tone={tone} />
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        {open ? <a href={localize(open)} style={actionStyle(t)}>Open ↗</a> : null}
-        {edit ? <a href={localize(edit)} style={actionStyle(t)}>Edit in cell ↗</a>
+        {/* Actions name their DESTINATION cell — "Open in @c15r/lit" — so the
+            jump isn't a bare arrow into the unknown (the managing cell is part
+            of the affordance, resolved from the handler's own cellRef). */}
+        {open ? <a href={localize(open.href)} style={actionStyle(t)}>Open{open.cell ? ` in ${open.cell}` : ''} ↗</a> : null}
+        {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a>
           : authed && !system ? <button onClick={() => openFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
           : null}
       </div>

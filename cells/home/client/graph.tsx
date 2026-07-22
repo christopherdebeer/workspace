@@ -2644,11 +2644,35 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         geo.setDrawRange(0, nodes.length);
         syncBeamLabels();
       };
+      // ── doc/file twin dedupe (ADR-0027's corpus mirror meets the graph) ──
+      // Every synced doc exists TWICE in the substrate: the `file/docs/X.md`
+      // source mirror and its `doc:docs/X` view. Both are public, so both fold
+      // into the band and every document rendered as a twin pair of stars
+      // (guest probe: 210 nodes, 66 duplicated docs). One document = one star:
+      // the doc: header is the canonical node; its file mirror is source
+      // material (still read by the body fallback — just not a separate star).
+      const fileTwinOf = (id: string): string | null => {
+        const m = id.match(/^(?:([^/]+)\/)?doc:(docs\/.+)$/);
+        return m ? `${m[1] ? `${m[1]}/` : ''}file/${m[2]}.md` : null;
+      };
+      const docTwinOf = (id: string): string | null => {
+        const m = id.match(/^(?:([^/]+)\/)?file\/(docs\/.+)\.md$/);
+        return m ? `${m[1] ? `${m[1]}/` : ''}doc:${m[2]}` : null;
+      };
       const appendEntries = (items: ListEntry[]): void => {
         let changed = false;
         let added = false;
         for (const e of items) {
           if (!e?.key || isPlumbing(e)) continue;
+          // A file mirror whose doc twin is on the map never becomes a node; a
+          // doc arriving after its mirror retires the mirror's star in place.
+          const docTwin = docTwinOf(e.key);
+          if (docTwin && nodeById.get(docTwin) && !nodeById.get(docTwin).deleted) continue;
+          const fileTwin = fileTwinOf(e.key);
+          if (fileTwin) {
+            const twin = nodeById.get(fileTwin);
+            if (twin && !twin.deleted) { twin.deleted = true; changed = true; }
+          }
           const existing = nodeById.get(e.key);
           if (e._meta?.superseded) {
             if (existing && !existing.deleted) { existing.deleted = true; changed = true; }
