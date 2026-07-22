@@ -442,7 +442,11 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {/* The peek sheet takes the SUMMONING surface's tone: paper on the
           trailhead (stacks over the cream Content), ink once you've entered the
           graph (a parchment sheet over the night scene reads as a theme flip). */}
-      <FactDetailHost tone={entered ? 'dark' : 'light'} />
+      {/* Selection sync (owner direction): the fact you're reading in the sheet
+          IS the selection, so the graph re-orients to it behind the sheet and
+          closing leaves you there. Folded `owner/key` sheet keys match the
+          graph's folded node ids, so the pan lands. */}
+      <FactDetailHost tone={entered ? 'dark' : 'light'} onCurrent={(k) => { if (k) setSelectedKey(k); }} />
     </>
   );
 }

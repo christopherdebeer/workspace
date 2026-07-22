@@ -1041,46 +1041,59 @@ export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry
 
 /** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
  *  via peek, and renders the modal. Returns null when nothing is open. */
-export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.JSX.Element | null {
+export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCurrent?: (key: string | null) => void } = {}): React.JSX.Element | null {
   const t = SHEET_TONE[tone];
-  // A drill-down STACK, not a single entry: openFact PUSHES a frame (entering
-  // nests), the back chevron / Escape POPS one level, and × / scrim-tap
-  // dismisses the whole stack. So walking A→B→C and stepping back returns to
-  // B, then A — instead of collapsing straight to the graph on the first close.
-  const [stack, setStack] = useState<Array<{ id: number; entry: ListEntry; anchor?: string }>>([]);
+  // A drill HISTORY with a cursor — not a plain stack. openFact pushes at the
+  // cursor (truncating any forward history); back moves the cursor DOWN and the
+  // current sheet slides into a "forward pile" peeking at the BOTTOM edge;
+  // forward (drag/tap the pile up) moves the cursor back UP. So back is
+  // non-destructive: what you stepped out of waits at the bottom to be pulled
+  // back in. × / scrim dismiss the whole thing.
+  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string }>; cursor: number }>({ frames: [], cursor: -1 });
   const nextId = React.useRef(1);
-  const closeAll = (): void => setStack([]);
-  const pop = (): void => setStack((s) => s.slice(0, -1));
-  // The sheets beneath the top are held to the SAME height as the front sheet
-  // (measured live) — so a taller underlying doc can't tower over a short front
-  // fact; only its intended top lip shows. Congruent cards, iOS-sheet-style.
+  const { frames, cursor } = hist;
+  const current = cursor >= 0 ? frames[cursor] : null;
+  const closeAll = (): void => setHist({ frames: [], cursor: -1 });
+  const back = (): void => setHist((h) => (h.cursor > 0 ? { ...h, cursor: h.cursor - 1 } : h));
+  const forward = (): void => setHist((h) => (h.cursor < h.frames.length - 1 ? { ...h, cursor: h.cursor + 1 } : h));
   const [sheetH, setSheetH] = useState<number | undefined>(undefined);
   const roRef = React.useRef<ResizeObserver | null>(null);
-  // Drag the header DOWN to pop back a level (the tactile twin of the ‹ / Esc):
-  // the top sheet follows the finger; released past a threshold it pops,
-  // revealing the already-loaded sheet beneath; short of it, it springs back.
-  const [dragY, setDragY] = useState(0);
-  const onHeaderDown = React.useCallback((e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return; // let the ‹ / × buttons click
-    const startY = e.clientY;
-    let dy = 0;
+  const [dragY, setDragY] = useState(0);   // front sheet drag-down (→ back)
+  const [pileY, setPileY] = useState(0);   // forward-pile drag-up  (→ forward)
+  // Selection sync (owner direction): the current fact IS the selection, so the
+  // graph re-orients to it behind the sheet. Push on every current-key change;
+  // never on close (closing leaves the graph on the last fact you read).
+  const onCurRef = React.useRef(onCurrent);
+  onCurRef.current = onCurrent;
+  const curKey = current?.entry.key ?? null;
+  useEffect(() => { if (curKey) onCurRef.current?.(curKey); }, [curKey]);
+
+  // Drag the front header DOWN → back(); a forward-pile lip UP (or a tap) →
+  // forward(). Both follow the finger and commit past ~80px.
+  const dragBack = React.useCallback((e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    const startY = e.clientY; let dy = 0;
     const move = (me: PointerEvent): void => { dy = Math.max(0, me.clientY - startY); setDragY(dy); };
     const up = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      setDragY(0);
-      if (dy > 80) pop();
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+      setDragY(0); if (dy > 80) back();
     };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  }, []);
+  const dragForward = React.useCallback((e: React.PointerEvent) => {
+    const startY = e.clientY; let dy = 0; let moved = false;
+    const move = (me: PointerEvent): void => { dy = me.clientY - startY; if (Math.abs(dy) > 4) moved = true; setPileY(Math.min(0, dy)); };
+    const up = (): void => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+      setPileY(0); if (dy < -80 || !moved) forward(); // dragged up enough, or a tap
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   }, []);
   const topRef = React.useCallback((el: HTMLDivElement | null) => {
     roRef.current?.disconnect();
     if (!el || typeof ResizeObserver === 'undefined') { if (el) setSheetH(el.offsetHeight); return; }
     const ro = new ResizeObserver(() => setSheetH(el.offsetHeight));
-    ro.observe(el);
-    roRef.current = ro;
-    setSheetH(el.offsetHeight);
+    ro.observe(el); roRef.current = ro; setSheetH(el.offsetHeight);
   }, []);
   useEffect(() => {
     const onOpen = (ev: Event): void => {
@@ -1088,11 +1101,12 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
       if (!detail?.key) return;
       const { anchor, ...rest } = detail;
       const entry = rest as ListEntry;
-      setStack((s) => {
-        // A re-open of the current top (a double-fire, or clicking the fact you
-        // are already reading) is a no-op — don't push a duplicate frame.
-        if (s.length && s[s.length - 1].entry.key === entry.key) return s;
-        return [...s, { id: nextId.current++, entry, anchor }];
+      setHist((h) => {
+        // Re-opening the fact you're already on is a no-op.
+        if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) return h;
+        // A new path truncates any forward history (browser-nav semantics).
+        const kept = h.frames.slice(0, h.cursor + 1);
+        return { frames: [...kept, { id: nextId.current++, entry, anchor }], cursor: kept.length };
       });
       if (detail.value === undefined) {
         const requestedKey = detail.key;
@@ -1100,14 +1114,12 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
           .then((r) => {
             const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
             if (!r.ok || !f) return;
-            // Hydrate the (still-bare) frame IN PLACE — it may no longer be the
-            // top if the reader drilled onward while the peek was in flight.
-            setStack((s) => {
-              const i = s.findIndex((fr) => fr.entry.key === requestedKey && fr.entry.value === undefined);
-              if (i < 0) return s;
-              const next = s.slice();
+            setHist((h) => {
+              const i = h.frames.findIndex((fr) => fr.entry.key === requestedKey && fr.entry.value === undefined);
+              if (i < 0) return h;
+              const next = h.frames.slice();
               next[i] = { ...next[i], entry: { key: requestedKey, value: f.value, _meta: f._meta } };
-              return next;
+              return { ...h, frames: next };
             });
           })
           .catch(() => undefined);
@@ -1117,23 +1129,17 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
     return () => window.removeEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
   }, []);
   useEffect(() => {
-    if (!stack.length) return;
-    const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === 'Escape') pop(); // step back one level; the last Escape closes
-    };
+    if (cursor < 0) return;
+    const onKey = (ev: KeyboardEvent): void => { if (ev.key === 'Escape') { if (cursor > 0) back(); else closeAll(); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [stack.length]);
-  if (!stack.length) return null;
-  const depth = stack.length;
-  // Every frame stays MOUNTED and layered — so back is instant (no reload) and
-  // each level keeps its own scroll. Depth reads physically: each sheet BELOW
-  // the top peeks a few px of its rounded top edge above the one in front
-  // (capped so a deep stack stays tidy), the top sheet fully covering the rest.
-  const LIP = 7; // px of each underlying sheet's top edge that shows
-  const MAX_LIPS = 3; // beyond this the offset stops growing (all still in DOM)
-  // A bottom sheet in the SUMMONING surface's tone — 'dark' (ink) over the
-  // graph, 'light' (paper) over the trailhead. Same width metric as the palette.
+  }, [cursor]);
+  if (cursor < 0) return null;
+  const LIP = 7;        // px each back-stack sheet's top edge peeks above the front
+  const MAX_LIPS = 3;   // capped so a deep stack stays tidy (all still mounted)
+  const PEEK = 30;      // px of a forward-pile sheet's top that shows at the bottom
+  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.7) : 600;
+  const total = frames.length;
   return (
     <div
       role="dialog"
@@ -1148,34 +1154,33 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
       style={{ position: 'fixed', inset: 0, background: t.scrim, zIndex: 1000 }}
     >
       <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-        {stack.map((frame, i) => {
-          const isTop = i === depth - 1;
-          const behind = depth - 1 - i; // 0 = the top (front) sheet
-          const lift = Math.min(behind, MAX_LIPS) * LIP;
+        {frames.map((frame, i) => {
+          const rel = i - cursor; // 0 = front, <0 = back-stack (top lips), >0 = forward pile (bottom)
+          const isFront = rel === 0;
+          const isPileFront = rel === 1; // the re-advanceable one
           const fEntry = frame.entry;
           const fTitle = `${typeIcon(fEntry) ? typeIcon(fEntry) + ' ' : ''}${factTitle(fEntry)}`;
+          const h = sheetH ?? hFallback;
+          let translateY: number; let zIndex: number; let interactive: boolean;
+          if (rel === 0) { translateY = dragY; zIndex = 500; interactive = true; }
+          else if (rel < 0) { translateY = -Math.min(-rel, MAX_LIPS) * LIP; zIndex = 100 + i; interactive = false; }
+          else { translateY = (h - PEEK) + Math.min(rel - 1, MAX_LIPS) * LIP + (isPileFront ? pileY : 0); zIndex = 1000 + i; interactive = isPileFront; }
+          const dragging = (isFront && dragY > 0) || (isPileFront && pileY < 0);
           return (
             <div
               key={frame.id}
-              ref={isTop ? topRef : undefined}
+              ref={isFront ? topRef : undefined}
               onClick={(ev) => ev.stopPropagation()}
-              aria-hidden={!isTop}
+              aria-hidden={!isFront}
               style={{
                 position: 'absolute',
                 bottom: 0,
                 width: 'min(720px, 100vw)',
-                // The front sheet sizes to its content (up to 86dvh) and is
-                // measured; the ones behind match that height so they can't
-                // out-tower it — only their lip shows.
-                ...(isTop ? { maxHeight: '86dvh' } : { height: sheetH ? `${sheetH}px` : undefined, maxHeight: '86dvh' }),
-                transform: `translateY(${isTop ? dragY : -lift}px)`,
-                // No transition while the finger is actively dragging the top
-                // sheet (1:1 follow); on release dragY→0 springs it back.
-                transition: isTop && dragY > 0 ? 'none' : 'transform 0.18s ease',
-                zIndex: i,
-                // Only the front sheet takes input; the ones behind wait,
-                // mounted and scroll-intact, until a back pops down to them.
-                pointerEvents: isTop ? 'auto' : 'none',
+                ...(isFront ? { maxHeight: '86dvh' } : { height: sheetH ? `${sheetH}px` : `${hFallback}px`, maxHeight: '86dvh' }),
+                transform: `translateY(${translateY}px)`,
+                transition: dragging ? 'none' : 'transform 0.2s ease',
+                zIndex,
+                pointerEvents: interactive ? 'auto' : 'none',
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
@@ -1189,34 +1194,23 @@ export function FactDetailHost({ tone = 'dark' }: { tone?: Tone } = {}): React.J
               }}
             >
               <div
-                onPointerDown={isTop ? onHeaderDown : undefined}
-                style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.9rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}`, touchAction: isTop ? 'none' : undefined, userSelect: 'none', cursor: isTop ? 'grab' : 'default' }}
+                onPointerDown={isFront ? dragBack : isPileFront ? dragForward : undefined}
+                title={isPileFront ? 'Forward' : undefined}
+                style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.9rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}`, touchAction: interactive ? 'none' : undefined, userSelect: 'none', cursor: isFront ? 'grab' : isPileFront ? 'pointer' : 'default' }}
               >
-                {/* A grab handle — the header is draggable DOWN to pop back. */}
-                {isTop ? <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} /> : null}
-                {/* Drilled in → a back chevron pops ONE level (reveals the
-                    already-loaded sheet beneath); × dismisses the whole stack. */}
-                {i > 0 ? (
-                  <button
-                    onClick={() => pop()}
-                    aria-label="back"
-                    title="Back"
-                    style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}
-                  >
-                    ‹
-                  </button>
+                {/* Grab handle — front: drag down to go back; pile: drag/tap up to go forward. */}
+                {interactive ? <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} /> : null}
+                {isFront && cursor > 0 ? (
+                  <button onClick={() => back()} aria-label="back" title="Back" style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}>‹</button>
                 ) : null}
+                {isPileFront ? <span aria-hidden style={{ color: t.accent, fontSize: '0.9rem', flexShrink: 0 }}>⌃</span> : null}
                 <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{fTitle}</strong>
-                {depth > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{i + 1}/{depth}</span> : null}
-                <button
-                  onClick={() => closeAll()}
-                  aria-label="close"
-                  style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
-                >
-                  ×
-                </button>
+                {isFront && total > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{cursor + 1}/{total}</span> : null}
+                {isFront ? (
+                  <button onClick={() => closeAll()} aria-label="close" style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}>×</button>
+                ) : null}
               </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))' }}>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: `0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom)${isFront && cursor < total - 1 ? ` + ${PEEK}px` : ''})` }}>
                 <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
               </div>
             </div>
