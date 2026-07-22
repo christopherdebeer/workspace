@@ -1553,40 +1553,20 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             cands.push([i, farN.rank ?? nodes.length]);
           }
           cands.sort((x, y) => x[1] - y[1]); // label the salient connections first
-          // Anti-crowd admission. THREE guards, each earned by a real failure of
-          // the old single 70×14 midpoint box:
-          //   1. dedup identical oriented relations — a doc with three members
-          //      printed `inDoc →` three times; keep only the most-salient
-          //      instance (cands are salience-sorted, so first occurrence wins).
-          //   2. reject on the VISIBLE-SPAN midpoint (same clip positionEdge-
-          //      Labels uses to draw), not the raw a↔b midpoint — the old guard
-          //      spaced labels by a coordinate the renderer then overrode, so
-          //      "spread" labels still stacked once clipped to the viewport.
-          //   3. width-aware overlap — the reject box scales with the rel text
-          //      (~mono 5px/char + arrow) instead of a fixed 70px, so a long
-          //      verb can't sit on top of its neighbour just because their
-          //      centres are >70px apart.
-          const mX = 40, mTop = 100, mBot = 150; // must match positionEdgeLabels
-          const placed: Array<[number, number, number]> = []; // mx, my, halfWidth
-          const seenRel = new Set<string>();
+          // Admission is ONLY: salience order, the cap, and "the edge is long
+          // enough on screen to hold a word". NO dedup — identical relations are
+          // kept (three `inDoc` edges show three labels) — and NO overlap
+          // rejection here: collision is resolved at PLACEMENT time, where each
+          // label slides along its own visible span into free space rather than
+          // being dropped (positionEdgeLabels). So every admitted relation draws.
           let added = 0;
           for (const [i] of cands) {
             if (added >= TUNE.edgeLabelCap) break;
             const l = links[i];
-            const outgoing = idOf(l.source) === selKey;
-            const relTag = outgoing ? `${l.rel}>` : `<${l.rel}`;
-            if (seenRel.has(relTag)) continue; // (1) identical-rel dedup
             const aN = nodeById.get(idOf(l.source)), bN = nodeById.get(idOf(l.target));
             const [ax, ay] = screenXY(aN);
             const [bx, by] = screenXY(bN);
             if (Math.hypot(bx - ax, by - ay) < 120) continue; // no room for a word
-            const span = clipSpan(ax, ay, bx, by, mX, mTop, W - mX, H - mBot);
-            const t = span ? (span[0] + span[1]) / 2 : 0.5; // (2) visible-span mid
-            const mx = ax + (bx - ax) * t, my = ay + (by - ay) * t;
-            const halfW = (l.rel.length + 2) * 2.6 + 8; // (3) est. half label width
-            if (placed.some(([px, py, phw]) => Math.abs(px - mx) < halfW + phw && Math.abs(py - my) < 14)) continue;
-            placed.push([mx, my, halfW]);
-            seenRel.add(relTag);
             want.add(i);
             added++;
           }
@@ -1623,6 +1603,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // screen the verb is pulled just inside the margin, still tethered by the
       // line, instead of vanishing with its far star. Runs every frame (≤4).
       const EL_V = new THREE.Vector3();
+      // Each endpoint's clip-w (positive camera-space depth). A SCREEN-space
+      // fraction along the edge only maps back to the right WORLD-space t through
+      // these: world-lerping by a screen fraction lands OFF the screen midpoint
+      // once the two ends sit at different depths — the zoomed-in drift.
+      const ELW_V = new THREE.Vector3();
+      const depthW = (n: any): number => { ELW_V.set(n.x, n.y, n.z).applyMatrix4(camera.matrixWorldInverse); return -ELW_V.z; };
       const clipSpan = (sx: number, sy: number, fx: number, fy: number, xmin: number, ymin: number, xmax: number, ymax: number): [number, number] | null => {
         const dx = fx - sx, dy = fy - sy;
         const p = [-dx, dx, -dy, dy], q = [sx - xmin, xmax - sx, sy - ymin, ymax - sy];
@@ -1633,9 +1619,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         }
         return [t0, t1];
       };
+      const placedRects: Array<[number, number, number, number]> = []; // x,y,halfW,halfH
       const positionEdgeLabels = (): void => {
         if (!edgeLabelObjs.size) return;
         const mX = 40, mTop = 100, mBot = 150; // viewport margins (header / palette)
+        placedRects.length = 0;
+        // Stable iteration (Map insertion order) so a slot doesn't swap owners
+        // frame to frame — a placed label stays put as the camera moves.
         for (const [i, obj] of edgeLabelObjs) {
           const l = links[i];
           const selN = l && nodeById.get(selKey ?? '');
@@ -1644,14 +1634,53 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const [sx, sy, ssz] = screenXY(selN);
           const [fx, fy, fsz] = screenXY(farN);
           if (ssz > 1) { obj.visible = false; continue; } // anchor end behind camera
-          obj.visible = true;
-          let tMid = 0.5;
-          if (fsz > 1) tMid = 0.14; // neighbour behind camera — hug the selected end
+          // The visible SCREEN span of the edge as fractions [s0,s1] along the
+          // straight screen segment sel→far. A projected line is a line, so
+          // interpolating IN SCREEN SPACE is exact; perspective only bit the old
+          // world-lerp (which is why the midpoint drifted when zoomed).
+          let s0 = 0, s1 = 1;
+          if (fsz > 1) { s0 = 0; s1 = 0.28; } // neighbour behind camera — hug the selected end
           else {
             const span = clipSpan(sx, sy, fx, fy, mX, mTop, W - mX, H - mBot);
-            tMid = span ? (span[0] + span[1]) / 2 : 0.14;
+            if (!span) { obj.visible = false; continue; } // edge fully off-screen
+            [s0, s1] = span;
           }
-          obj.position.copy(EL_V.set(selN.x, selN.y, selN.z)).lerp(EL_V.set(farN.x, farN.y, farN.z), tMid);
+          // Label box half-extents in screen px (rel + arrow, mono 8.5px).
+          const halfW = (l.rel.length + 2) * 2.6 + 8, halfH = 9;
+          const sax = fx - sx, say = fy - sy;
+          const screenAt = (s: number): [number, number] => [sx + sax * s, sy + say * s];
+          const hits = (x: number, y: number): boolean =>
+            placedRects.some(([px, py, pw, ph]) => Math.abs(px - x) < pw + halfW && Math.abs(py - y) < ph + halfH);
+          // Ideal spot: the MIDPOINT of the visible span. If it's taken, WALK
+          // OUTWARD along the line (staying within [s0,s1], hence on-screen) to
+          // the nearest free slot — utilise the empty line rather than drop the
+          // label or let it stack.
+          const smid = (s0 + s1) / 2;
+          let chosen = smid;
+          const [mxp, myp] = screenAt(smid);
+          if (hits(mxp, myp)) {
+            const reach = (s1 - s0) / 2;
+            const STEPS = 10;
+            let done = false;
+            for (let k = 1; k <= STEPS && !done; k++) {
+              for (const dir of [1, -1]) {
+                const s = smid + dir * (k / STEPS) * reach;
+                if (s < s0 || s > s1) continue;
+                const [x, y] = screenAt(s);
+                if (!hits(x, y)) { chosen = s; done = true; break; }
+              }
+            }
+          }
+          obj.visible = true; // best-effort slot; never dropped for crowding
+          const [cx, cy] = screenAt(chosen);
+          placedRects.push([cx, cy, halfW, halfH]);
+          // SCREEN fraction → WORLD t (perspective-correct via the endpoint depths)
+          // so the label lands at the screen point we chose, not a drifting lerp.
+          const wA = depthW(selN), wB = depthW(farN);
+          const t = (fsz > 1 || wA <= 0 || wB <= 0)
+            ? Math.min(chosen, 0.28) // degenerate depth — hug the selected end
+            : (chosen / wB) / ((1 - chosen) / wA + chosen / wB);
+          obj.position.copy(EL_V.set(selN.x, selN.y, selN.z)).lerp(EL_V.set(farN.x, farN.y, farN.z), Math.max(0, Math.min(1, t)));
         }
       };
 
@@ -3135,14 +3164,27 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
   const [revealNonce, setRevealNonce] = useState(0);
   const [vantageNonce, setVantageNonce] = useState(0);
   const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false, paused: false });
+  // The frosted-glass knobs (blur/opacity) are tunable (TUNE) — re-render the bar
+  // when a tuner change or reset fires, so it stays in step with the palette pane.
+  const [, bumpGlass] = useState(0);
+  useEffect(() => {
+    const onTune = (): void => bumpGlass((v) => v + 1);
+    window.addEventListener(TUNE_EVENT, onTune);
+    window.addEventListener(TUNE_RESET_EVENT, onTune);
+    return () => { window.removeEventListener(TUNE_EVENT, onTune); window.removeEventListener(TUNE_RESET_EVENT, onTune); };
+  }, []);
   // ONE compact, de-emphasised control bar (owner: the panels covered too much
-  // sky on mobile) — a single translucent pill: focus · vantage · charting.
+  // sky on mobile) — a single translucent pill: focus · vantage · charting. It
+  // wears the SAME frosted glass as the palette (owner: apply the glass here
+  // too), driven by the same tunable blur/opacity.
   const bar: React.CSSProperties = {
     position: 'fixed', right: 10, top: 'calc(max(10px, env(safe-area-inset-top)) + 48px)', zIndex: 20,
     maxWidth: 'calc(100vw - 20px)',
     fontFamily: ink.mono, fontSize: '0.66rem', color: ink.text,
-    background: 'rgba(20,17,13,0.42)', border: `1px solid ${ink.line}`,
-    borderRadius: 999, backdropFilter: 'blur(6px)',
+    background: `rgba(24,21,17,${TUNE.glassOpacity})`, border: `1px solid ${ink.line}`,
+    borderRadius: 999,
+    backdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
+    WebkitBackdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
     padding: '0.24rem 0.4rem 0.24rem 0.6rem',
     display: 'flex', alignItems: 'center', gap: '0.45rem',
   };
