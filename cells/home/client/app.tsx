@@ -189,6 +189,11 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // ADR-0090: seeded from the /r/<key> PATH via boot — the server rendered
   // with the same value, so this is hydration-safe (unlike the old hash).
   const [selectedKey, setSelectedKey] = useState<string | null>(initial?.selectedKey ?? null);
+  // The trailhead GROUND content is a SEPARATE selection from the graph's.
+  // Direct trailhead selection (tap a star) fills the ground AND the graph; but
+  // the peek SHEET drives only the graph (so drilling in the sheet re-orients
+  // the map without hijacking the main content behind it — owner direction).
+  const [groundKey, setGroundKey] = useState<string | null>(initial?.selectedKey ?? null);
   // ALSO hold the selected NODE (title/type/score) the graph already has, so the
   // trailhead can paint the head instantly on the way back — no peek round-trip,
   // no "reading…" flash — while the body streams in. Cleared when selection is
@@ -197,6 +202,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const selectByNode = useCallback((n: GraphNode | null) => {
     setSelectedNode(n);
     setSelectedKey(n?.key ?? null);
+    setGroundKey(n?.key ?? null);
   }, []);
   // Selection is shareable view-state (urlstate.ts). We DON'T seed useState from
   // the hash — that would diverge from the server's null and break hydration.
@@ -208,7 +214,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     if (!hashSelHydrated.current) {
       hashSelHydrated.current = true;
       const s = readHashState().selected;
-      if (s) setSelectedKey(s);
+      if (s) { setSelectedKey(s); setGroundKey(s); }
       return;
     }
     writeHashState({ selected: selectedKey ?? undefined });
@@ -363,12 +369,12 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           <button
             // Entered: back to the trailhead. On the trailhead: deselect, so a
             // selected star's read gives way to the default pitch (home = the top).
-            onClick={entered ? toLanding : (selectedKey ? () => selectByNode(null) : undefined)}
-            title={entered ? 'Back to the trailhead' : (selectedKey ? 'Back to the trailhead pitch' : undefined)}
+            onClick={entered ? toLanding : (groundKey ? () => selectByNode(null) : undefined)}
+            title={entered ? 'Back to the trailhead' : (groundKey ? 'Back to the trailhead pitch' : undefined)}
             style={{
-              pointerEvents: entered || selectedKey ? 'auto' : 'none',
+              pointerEvents: entered || groundKey ? 'auto' : 'none',
               background: 'none', border: 'none', padding: 0, margin: 0,
-              cursor: entered || selectedKey ? 'pointer' : 'default',
+              cursor: entered || groundKey ? 'pointer' : 'default',
               filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.6))',
             }}
           >
@@ -424,7 +430,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={selectedKey} selectedNode={selectedNode} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={groundKey} selectedNode={groundKey === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits

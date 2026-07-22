@@ -1138,7 +1138,12 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
   const LIP = 7;        // px each back-stack sheet's top edge peeks above the front
   const MAX_LIPS = 3;   // capped so a deep stack stays tidy (all still mounted)
   const PEEK = 30;      // px of a forward-pile sheet's top that shows at the bottom
-  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.7) : 600;
+  // The sheet is CONTENT, not a modal blackout: it occupies the lower band and
+  // leaves a CONSISTENT area above where the graph shows THROUGH and reacts to
+  // selection (the fact you read IS the selection). So no dimming scrim — the
+  // wrapper is a transparent click-catcher (tap the graph area to dismiss).
+  const SHEET_MAX = '60dvh';
+  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.58) : 480;
   const total = frames.length;
   return (
     <div
@@ -1151,9 +1156,9 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
       onWheelCapture={(ev) => ev.stopPropagation()}
       onTouchStartCapture={(ev) => ev.stopPropagation()}
       onTouchMoveCapture={(ev) => ev.stopPropagation()}
-      style={{ position: 'fixed', inset: 0, background: t.scrim, zIndex: 1000 }}
+      style={{ position: 'fixed', inset: 0, background: 'transparent', zIndex: 1000 }}
     >
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
         {frames.map((frame, i) => {
           const rel = i - cursor; // 0 = front, <0 = back-stack (top lips), >0 = forward pile (bottom)
           const isFront = rel === 0;
@@ -1176,7 +1181,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
                 position: 'absolute',
                 bottom: 0,
                 width: 'min(720px, 100vw)',
-                ...(isFront ? { maxHeight: '86dvh' } : { height: sheetH ? `${sheetH}px` : `${hFallback}px`, maxHeight: '86dvh' }),
+                ...(isFront ? { maxHeight: SHEET_MAX } : { height: sheetH ? `${sheetH}px` : `${hFallback}px`, maxHeight: SHEET_MAX }),
                 transform: `translateY(${translateY}px)`,
                 transition: dragging ? 'none' : 'transform 0.2s ease',
                 zIndex,
