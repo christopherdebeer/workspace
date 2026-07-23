@@ -238,11 +238,14 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore,
   );
 }
 
-export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull, onExitCommit, exitProgress = 0 }: {
+export function Palette({ authed, selectedKey, onSelectKey, onClear, overlaid = false, onExitPull, onExitCommit, exitProgress = 0 }: {
   authed: boolean;
   selectedKey: string | null;
   onSelectKey: (k: string) => void;
   onClear: () => void;
+  /** A peek stack is open above the palette — render minimized under it (the
+   *  stack floats above the slim strip; restores when the stack closes). */
+  overlaid?: boolean;
   /** MIRROR EXIT (gesture-tracked): live px of the upward grip drag while a fact
    *  is peeked — the app rewinds the enter transition by it. 0 cancels. */
   onExitPull?: (px: number) => void;
@@ -266,6 +269,9 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   // changes — the point is watching the graph with the instrument out of the
   // way, so tapping star to star keeps the slim look-at strip (title updates).
   const [mini, setMini] = useState(false);
+  // A peek stack overlays the palette: collapse the console sheet so the
+  // instrument fits the strip zone the stack leaves below it.
+  useEffect(() => { if (overlaid) setOpen(false); }, [overlaid]);
   // SELECTION-BACK TRAIL (owner: the peek stack's affordance, on the palette):
   // drilling FROM the palette — a neighbour chip, a search pick — pushes the
   // fact you were reading; ‹ steps back through them. Graph star taps REPLACE
@@ -450,7 +456,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
-      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini} onRestore={() => setMini(false)} onSelectKey={drillTo} onClear={clearAll} onCommand={onCommand} onBack={trailBack} trailCount={trail.length} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini || overlaid} onRestore={() => setMini(false)} onSelectKey={drillTo} onClear={clearAll} onCommand={onCommand} onBack={trailBack} trailCount={trail.length} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
       <Console

@@ -199,6 +199,9 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // no "reading…" flash — while the body streams in. Cleared when selection is
   // cleared or set by key alone (palette/deep-link, where we have no node yet).
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  // A peek stack is up (FactDetailHost): the palette minimizes under it in the
+  // graph (the dark stack floats above the slim strip instead of burying it).
+  const [peekOpen, setPeekOpen] = useState(false);
   const selectByNode = useCallback((n: GraphNode | null) => {
     setSelectedNode(n);
     setSelectedKey(n?.key ?? null);
@@ -506,6 +509,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             selectedKey={selectedKey}
             onSelectKey={setSelectedKey}
             onClear={() => setSelectedKey(null)}
+            overlaid={peekOpen}
             exitProgress={returning ? 1 : exitP}
             onExitPull={onExitPull}
             onExitCommit={() => {
@@ -644,7 +648,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           IS the selection, so the graph re-orients to it behind the sheet and
           closing leaves you there. Folded `owner/key` sheet keys match the
           graph's folded node ids, so the pan lands. */}
-      <FactDetailHost tone={entered ? 'dark' : 'light'} onCurrent={(k) => { if (k) setSelectedKey(k); }} />
+      <FactDetailHost tone={entered ? 'dark' : 'light'} onCurrent={(k) => { if (k) setSelectedKey(k); }} onOpenChange={setPeekOpen} />
     </>
   );
 }

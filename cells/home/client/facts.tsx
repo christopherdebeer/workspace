@@ -1046,7 +1046,7 @@ export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry
 
 /** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
  *  via peek, and renders the modal. Returns null when nothing is open. */
-export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCurrent?: (key: string | null) => void } = {}): React.JSX.Element | null {
+export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { tone?: Tone; onCurrent?: (key: string | null) => void; /** Fires when the stack opens/closes — the app minimizes the palette under it. */ onOpenChange?: (open: boolean) => void } = {}): React.JSX.Element | null {
   const t = SHEET_TONE[tone];
   // A drill HISTORY with a cursor — not a plain stack. openFact pushes at the
   // cursor (truncating any forward history); back moves the cursor DOWN and the
@@ -1072,6 +1072,30 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
   onCurRef.current = onCurrent;
   const curKey = current?.entry.key ?? null;
   useEffect(() => { if (curKey) onCurRef.current?.(curKey); }, [curKey]);
+  const isOpen = frames.length > 0;
+  const onOpenRef = React.useRef(onOpenChange);
+  onOpenRef.current = onOpenChange;
+  useEffect(() => { onOpenRef.current?.(isOpen); }, [isOpen]);
+  // THE DOCKED COMPOSITION (owner, landing): opening a peek INSTANTLY scrolls
+  // the page to the top so the canonical stack composition always holds — hero
+  // + live graph above, the ground sheet's lip, the peek docked just below it.
+  // The scroll position is REMEMBERED and instantly restored on close, so you
+  // land back exactly where you were reading — UNLESS you scrolled the ground
+  // while the peek was up (the background stays live now), in which case your
+  // new place wins and no restore happens. Both jumps are instant: the sheet
+  // rising/leaving masks them; a smooth scroll would be a visible double-move.
+  const isLight = tone === 'light';
+  const prevScroll = React.useRef<number | null>(null);
+  useEffect(() => {
+    if (!isLight || typeof window === 'undefined') return;
+    if (isOpen && prevScroll.current == null) {
+      prevScroll.current = window.scrollY;
+      window.scrollTo(0, 0);
+    } else if (!isOpen && prevScroll.current != null) {
+      if (window.scrollY <= 4) window.scrollTo(0, prevScroll.current); // skip if the reader moved mid-peek
+      prevScroll.current = null;
+    }
+  }, [isOpen, isLight]);
 
   // Drag the front header DOWN → back(); a forward-pile lip UP (or a tap) →
   // forward(). Both follow the finger and commit past ~80px.
@@ -1147,8 +1171,15 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
   // leaves a CONSISTENT area above where the graph shows THROUGH and reacts to
   // selection (the fact you read IS the selection). So no dimming scrim — the
   // wrapper is a transparent click-catcher (tap the graph area to dismiss).
-  const SHEET_MAX = '60dvh';
-  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.58) : 480;
+  // DOCK GEOMETRY. Landing (light): tall content stops exactly at the dock line
+  // just below the ground sheet's lip (66.67svh mirrors HERO_VH in dashboard.tsx
+  // — keep in sync; the 2.2rem ≈ the sheet's 2.6rem hero overlap minus the stack
+  // offset), so the peek reads as a layer OF the ground stack. Graph (dark): the
+  // stack floats ABOVE the minimized palette strip (BOTTOM offset) instead of
+  // burying the instrument — the look-at strip + search stay visible below.
+  const SHEET_MAX = isLight ? 'calc(100dvh - 66.67svh + 2.2rem)' : '60dvh';
+  const SHEET_BOTTOM = isLight ? 0 : 132;
+  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * (isLight ? 0.66 : 0.58)) : 480;
   const total = frames.length;
   return (
     // NOT a modal (owner: "same mechanics, more cohesive, not so modal" — both
@@ -1189,7 +1220,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
               aria-hidden={!isFront}
               style={{
                 position: 'absolute',
-                bottom: 0,
+                bottom: SHEET_BOTTOM,
                 // CONTINUATION of the ground (owner): on the landing the sheet
                 // matches the content column's width and cream, wears only a
                 // hairline lip + a soft rise — a layer OF the content sheet, not
