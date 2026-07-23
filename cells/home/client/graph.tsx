@@ -100,7 +100,7 @@ interface GraphReach {
   paused: boolean;
 }
 
-function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, preview = false, heroHeight }: {
+function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, preview = false, heroHeight, heroSpring = false }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   visible: number;
@@ -109,6 +109,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
   vantageNonce: number;
   preview?: boolean;
   heroHeight?: string;
+  /** Spring the host HEIGHT on change (release/rest); false while a pull is
+   *  actively dragging so the graph tracks the finger frame-for-frame. */
+  heroSpring?: boolean;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
@@ -3143,19 +3146,23 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       {/* On the landing (heroHeight set) the host occupies only the hero band,
           so the graph is the sky above the fold and the content below is solid
           ground with nothing live behind it. Entered, it fills the viewport. */}
-      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden' }} />
+      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden', transition: heroSpring ? 'height 0.4s cubic-bezier(.22,1,.36,1)' : 'none' }} />
     </>
   );
 }
 
-export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }: {
+export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight, heroSpring = false }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   /** Trailhead backdrop: gate zoom/curl (spin + tap-select stay live). */
   preview?: boolean;
   /** When set (the landing), the graph host occupies only this height (the hero
-   *  band) instead of the full viewport, so the content below is solid ground. */
+   *  band) instead of the full viewport, so the content below is solid ground.
+   *  During pull-to-enter it GROWS toward full so the commit finds it already
+   *  full-height (no snap). */
   heroHeight?: string;
+  /** Spring the height on change (rest/release) vs track a live pull (no anim). */
+  heroSpring?: boolean;
 }): React.JSX.Element {
   // Two independent ideas: FOCUS filters what is already charted; REACH pages
   // more of the substrate into the chart. Keeping both visible prevents a
@@ -3236,6 +3243,7 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
         vantageNonce={vantageNonce}
         preview={preview}
         heroHeight={heroHeight}
+        heroSpring={heroSpring}
       />
       { !preview && <section aria-label="Graph controls" style={bar}>
         {/* FOCUS icon — tap toggles focus ↔ all, drag scrubs. The conic ring is a

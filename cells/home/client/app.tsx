@@ -326,6 +326,22 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     };
   }, [canExplore, entered, leaving, enter]);
 
+  // Pull-to-enter GROWS the graph from the hero band toward full height, so a
+  // commit finds it already full (no snap). Height eases out with the pull (an
+  // elastic feel); an active drag tracks the finger (no CSS transition) while
+  // rest/release springs the height. During the dissolve (`leaving`) it holds
+  // full; once `entered` the graph owns the whole viewport (bottom:0 / 100%).
+  const HERO_N = parseFloat(HERO_VH); // 66.67 (svh)
+  const pullGrow = 1 - Math.pow(1 - Math.min(1, pull / PULL_COMMIT), 3); // easeOutCubic
+  const graphHeroHeight = entered
+    ? undefined
+    : leaving
+      ? '100svh'
+      : pull > 0
+        ? `${(HERO_N + (100 - HERO_N) * pullGrow).toFixed(2)}svh`
+        : HERO_VH;
+  const graphHeroSpring = pull === 0; // track the finger while pulling; spring at rest
+
   if (!session.ready) return <Page>{null}</Page>;
 
   // Only when there's NOTHING live to show (signed out AND no guest token) do we
@@ -360,7 +376,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           </div>
         )}
       >
-        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={!entered && !leaving ? HERO_VH : undefined} />
+        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={graphHeroHeight} heroSpring={graphHeroSpring} />
         {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
