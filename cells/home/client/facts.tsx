@@ -5,6 +5,7 @@
  * fact detail (peek modal, generic editor), and the workspace window itself.
  */
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
 import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
@@ -1054,13 +1055,23 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
   // forward (drag/tap the pile up) moves the cursor back UP. So back is
   // non-destructive: what you stepped out of waits at the bottom to be pulled
   // back in. × / scrim dismiss the whole thing.
-  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string }>; cursor: number }>({ frames: [], cursor: -1 });
+  // Each frame remembers the PAGE SCROLL it was read at (`scrollY`) — the
+  // docked landing stack reads by MAIN page scroll, so back/forward restore
+  // where you were in the frame you return to (owner: "remembered scrolls on
+  // pop"). The dark (graph) stack scrolls internally and ignores these.
+  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>; cursor: number }>({ frames: [], cursor: -1 });
   const nextId = React.useRef(1);
   const { frames, cursor } = hist;
   const current = cursor >= 0 ? frames[cursor] : null;
   const closeAll = (): void => setHist({ frames: [], cursor: -1 });
-  const back = (): void => setHist((h) => (h.cursor > 0 ? { ...h, cursor: h.cursor - 1 } : h));
-  const forward = (): void => setHist((h) => (h.cursor < h.frames.length - 1 ? { ...h, cursor: h.cursor + 1 } : h));
+  const saveScroll = (fr: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>, i: number): typeof fr => {
+    if (i < 0 || typeof window === 'undefined') return fr;
+    const next = fr.slice();
+    next[i] = { ...next[i], scrollY: window.scrollY };
+    return next;
+  };
+  const back = (): void => setHist((h) => (h.cursor > 0 ? { frames: saveScroll(h.frames, h.cursor), cursor: h.cursor - 1 } : h));
+  const forward = (): void => setHist((h) => (h.cursor < h.frames.length - 1 ? { frames: saveScroll(h.frames, h.cursor), cursor: h.cursor + 1 } : h));
   const [sheetH, setSheetH] = useState<number | undefined>(undefined);
   const roRef = React.useRef<ResizeObserver | null>(null);
   const [dragY, setDragY] = useState(0);   // front sheet drag-down (→ back)
@@ -1096,6 +1107,16 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
       prevScroll.current = null;
     }
   }, [isOpen, isLight]);
+  // Frame changes (push/back/forward) in the DOCKED stack: the page scroll is
+  // the reading position, so arriving at a frame restores where you were in it
+  // (a fresh push starts at the top — hero + lip + sheet head in view).
+  const curId = current?.id ?? null;
+  const curScrollRef = React.useRef<number | undefined>(undefined);
+  curScrollRef.current = current?.scrollY;
+  useEffect(() => {
+    if (!isLight || curId == null || typeof window === 'undefined') return;
+    window.scrollTo(0, curScrollRef.current ?? 0);
+  }, [curId, isLight]);
 
   // Drag the front header DOWN → back(); a forward-pile lip UP (or a tap) →
   // forward(). Both follow the finger and commit past ~80px.
@@ -1134,7 +1155,8 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
         // Re-opening the fact you're already on is a no-op.
         if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) return h;
         // A new path truncates any forward history (browser-nav semantics).
-        const kept = h.frames.slice(0, h.cursor + 1);
+        // The departing frame remembers its page scroll (docked-stack pop).
+        const kept = saveScroll(h.frames.slice(0, h.cursor + 1), h.cursor);
         return { frames: [...kept, { id: nextId.current++, entry, anchor }], cursor: kept.length };
       });
       if (detail.value === undefined) {
@@ -1167,20 +1189,79 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
   const LIP = 7;        // px each back-stack sheet's top edge peeks above the front
   const MAX_LIPS = 3;   // capped so a deep stack stays tidy (all still mounted)
   const PEEK = 30;      // px of a forward-pile sheet's top that shows at the bottom
-  // The sheet is CONTENT, not a modal blackout: it occupies the lower band and
-  // leaves a CONSISTENT area above where the graph shows THROUGH and reacts to
-  // selection (the fact you read IS the selection). So no dimming scrim — the
-  // wrapper is a transparent click-catcher (tap the graph area to dismiss).
-  // DOCK GEOMETRY. Landing (light): tall content stops exactly at the dock line
-  // just below the ground sheet's lip (66.67svh mirrors HERO_VH in dashboard.tsx
-  // — keep in sync; the 2.2rem ≈ the sheet's 2.6rem hero overlap minus the stack
-  // offset), so the peek reads as a layer OF the ground stack. Graph (dark): the
-  // stack floats ABOVE the minimized palette strip (BOTTOM offset) instead of
-  // burying the instrument — the look-at strip + search stay visible below.
-  const SHEET_MAX = isLight ? 'calc(100dvh - 66.67svh + 2.2rem)' : '60dvh';
-  const SHEET_BOTTOM = isLight ? 0 : 132;
-  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * (isLight ? 0.66 : 0.58)) : 480;
   const total = frames.length;
+
+  // ── LANDING (light): the DOCKED IN-FLOW stack ─────────────────────────────
+  // The sheet is DOCUMENT CONTENT, not a fixed box (owner): it renders into the
+  // Landing's #peek-dock slot just below the ground sheet's tip-lip, its content
+  // flows (no maxHeight, no inner scrollbox), and the PAGE's scroll height
+  // becomes the frame's content — reading is always a main page scroll, exactly
+  // like the ground content it replaces. Back-stack lips stack above the sheet
+  // in flow; the forward pile stays pinned to the viewport bottom. Per-frame
+  // scroll memory (see saveScroll) restores your place on back/forward/close.
+  if (isLight) {
+    const dock = typeof document !== 'undefined' ? document.getElementById('peek-dock') : null;
+    if (!dock || !current) return null;
+    const backCount = Math.min(cursor, MAX_LIPS);
+    const pileFront = cursor < frames.length - 1 ? frames[cursor + 1] : null;
+    const pileTitle = pileFront ? `${typeIcon(pileFront.entry) ? typeIcon(pileFront.entry) + ' ' : ''}${factTitle(pileFront.entry)}` : '';
+    const curTitle = `${typeIcon(current.entry) ? typeIcon(current.entry) + ' ' : ''}${factTitle(current.entry)}`;
+    return createPortal(
+      <div style={{ position: 'relative' }}>
+        {/* Back-stack lips — the drilled-past frames peeking above the sheet,
+            same idiom as the ground's own tip-lip above them. */}
+        {Array.from({ length: backCount }, (_, k) => backCount - k).map((depth) => (
+          <div key={depth} aria-hidden style={{ height: 10, margin: `0 ${depth * 12}px -2px`, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg }} />
+        ))}
+        <section
+          style={{
+            position: 'relative', background: t.bg, color: t.text,
+            borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+            boxShadow: t.shadow, minHeight: '60dvh',
+            transform: dragY ? `translateY(${dragY}px)` : undefined,
+            transition: dragY ? 'none' : 'transform 0.2s ease',
+            paddingBottom: pileFront ? `${PEEK + 20}px` : undefined,
+          }}
+        >
+          <div
+            onPointerDown={dragBack}
+            style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: '0.9rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}`, touchAction: 'none', userSelect: 'none', cursor: 'grab' }}
+          >
+            <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} />
+            {cursor > 0 ? (
+              <button onClick={() => back()} aria-label="back" title="Back" style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}>‹</button>
+            ) : null}
+            <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{curTitle}</strong>
+            {total > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{cursor + 1}/{total}</span> : null}
+            <button onClick={() => closeAll()} aria-label="close" style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}>×</button>
+          </div>
+          <div style={{ padding: '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' }}>
+            <FactDetail e={current.entry} tone={tone} anchor={current.anchor} />
+          </div>
+        </section>
+        {/* Forward pile — pinned to the viewport bottom (it re-advances; it is
+            an affordance, not content, so it doesn't ride the page scroll). */}
+        {pileFront ? (
+          <div
+            onPointerDown={dragForward}
+            title="Forward"
+            style={{ position: 'fixed', bottom: 0, left: 0, right: 0, margin: '0 auto', width: 'min(780px, 100vw)', height: PEEK + 10, transform: pileY ? `translateY(${pileY}px)` : undefined, transition: pileY ? 'none' : 'transform 0.2s ease', zIndex: 40, background: t.bg, color: t.text, borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`, boxShadow: t.shadow, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0 0.9rem', cursor: 'pointer', touchAction: 'none', userSelect: 'none', pointerEvents: 'auto' }}
+          >
+            <span aria-hidden style={{ color: t.accent, fontSize: '0.9rem', flexShrink: 0 }}>⌃</span>
+            <strong style={{ fontFamily: theme.serif, fontSize: '0.92rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pileTitle}</strong>
+          </div>
+        ) : null}
+      </div>,
+      dock,
+    );
+  }
+
+  // ── GRAPH (dark): the fixed floating stack above the minimized palette ────
+  // Internal scroll stays here — there is no document to flow into over the
+  // fixed canvas; the stack floats above the palette strip (SHEET_BOTTOM).
+  const SHEET_MAX = '60dvh';
+  const SHEET_BOTTOM = 132;
+  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.58) : 480;
   return (
     // NOT a modal (owner: "same mechanics, more cohesive, not so modal" — both
     // tones): no dialog role, no full-viewport click-catcher, no outside-tap

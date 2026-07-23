@@ -611,7 +611,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
                     : 'transform 0.35s cubic-bezier(.22,1,.36,1)',
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={exitActive && selectedKey ? selectedKey : groundKey} selectedNode={(exitActive && selectedKey ? selectedKey : groundKey) === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp,
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter peekDocked={peekOpen && !entered} selectedKey={exitActive && selectedKey ? selectedKey : groundKey} selectedNode={(exitActive && selectedKey ? selectedKey : groundKey) === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp,
             // During the mirror exit the landing is REWINDING the enter pull, so
             // its internal pull-driven styling (hero fade, sheet parallax, grip
             // pill) runs at the virtual pull position — the painting brightens

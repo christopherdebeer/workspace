@@ -223,9 +223,13 @@ function SiteFooter(): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd, enterGrip }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd, enterGrip, peekDocked }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
+  /** A docked peek stack (FactDetailHost, light) has taken the ground: the
+   *  Content section collapses to its TIP-LIP (still part of the composition)
+   *  and the stack renders into the #peek-dock slot just below it. */
+  peekDocked?: boolean;
   /** The pull-to-explore GRIP on the content sheet's top edge (owner): drag it
    *  DOWN to peel the overlay and grow the graph → enter. Enter lives here now,
    *  not on a window over-scroll, so the graph itself is free for spin. `progress`
@@ -374,6 +378,18 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           shaped as a SHEET — rounded top edge, lifted over the hero horizon with
           a soft top shadow — so a summoned peek (a second rounded sheet, same
           14px radius + top shadow) reads as a growing STACK rising over it. */}
+      {peekDocked ? (
+        // A docked peek has taken the ground: the Content collapses to its bare
+        // TIP-LIP — the sheet's rounded edge stays in the composition (the peek
+        // stacks just below it, like the drill stack's own lips), but the body
+        // waits unrendered until the stack closes.
+        <section className="Content" aria-hidden style={{
+          position: 'relative', zIndex: 2, height: 14, overflow: 'hidden',
+          background: theme.bg, borderTopLeftRadius: 14, borderTopRightRadius: 14,
+          marginTop: '-2.6rem', boxShadow: '0 -12px 40px rgba(8,29,36,0.28)',
+          pointerEvents: 'none',
+        }} />
+      ) : (
       <section className="Content" style={{
         position: 'relative', zIndex: 2,
         display: 'grid', justifyItems: 'center',
@@ -510,6 +526,12 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             rendered above (selected fact, landing doc, or pitch/featured). */}
         <SiteFooter />
       </section>
+      )}
+      {/* The docked peek stack's PORTAL SLOT (FactDetailHost, light tone): the
+          stack renders HERE, in the document flow just below the ground's lip —
+          so reading a peek is a main page scroll, not an inner scrollbox. Empty
+          (zero-height) whenever no peek is docked. */}
+      <div id="peek-dock" style={{ position: 'relative', zIndex: 3, pointerEvents: 'auto', marginTop: peekDocked ? -6 : 0 }} />
     </div>
   );
 }
