@@ -247,7 +247,11 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const enter = useCallback(() => {
     try { sessionStorage.setItem('parc.home.entered', '1'); } catch { /* private mode */ }
     setLeaving(true);
-    setTimeout(() => setEntered(true), 900);
+    // `leaving` must CLEAR once entered — it lingered true through the whole
+    // stay in the graph, and the overlay's style chains checked it first, so
+    // the mirror-exit gesture rendered the arriving landing at opacity 0 (the
+    // painting "popped" only at release — owner screenshot IMG_0373).
+    setTimeout(() => { setEntered(true); setLeaving(false); }, 900);
   }, []);
   // Return to the trailhead from the graph (wordmark click). Re-mounts the
   // landing overlay + dusk sky over the still-live graph and clears the flag —
@@ -468,11 +472,13 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {/* NIGHT BACKDROP behind the graph host (owner: "the hero landscape needs a
           back background"): the graph canvas is only the preview strip on the
           landing, so when the painted hero fades during a pull its bottom edge
-          showed as a hard seam against the page. A hero-band strip of the SAME
-          night colour sits behind everything — the canvas edge lands on identical
-          ink and disappears. Behind the graph via DOM order (painted first). */}
+          showed as a hard seam against the page. FULL-VIEWPORT night behind
+          everything — a hero-band strip left a washed band where the pull
+          translated the painting past it (IMG_0371); full-height, every
+          translucent layer sits over the same ink, and the opaque content sheet
+          covers it wherever the day should read. Behind the graph via DOM order. */}
       {(!entered || returning || exitActive || exitGhost) && (
-        <div aria-hidden style={{ position: 'fixed', top: 0, left: 0, right: 0, height: HERO_VH, background: ink.sceneBg, pointerEvents: 'none' }} />
+        <div aria-hidden style={{ position: 'fixed', inset: 0, background: ink.sceneBg, pointerEvents: 'none' }} />
       )}
       <GraphBoundary
         fallback={(err) => (
@@ -578,22 +584,24 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             // the shared SETTLE clock; CSS transitions pick up mid-flight values,
             // so a gesture-commit never restarts from dark. A canceled gesture
             // (entered, ghost beat) springs back out the way it came.
-            opacity: leaving ? 0 : returning ? (returnLit ? 1 : 0) : exitActive ? exitP : entered ? 0 : 1,
-            transform: pull
-              ? `translateY(${pull}px)`
-              : returning
-                ? (returnLit ? 'translateY(0px)' : 'translateY(90px)')
-                : exitActive
-                  ? `translateY(${((1 - exitP) * 90).toFixed(1)}px)`
+            // The LIVE GESTURE branch leads every chain — a stale dissolve flag
+            // must never mute the arriving landing again (IMG_0373).
+            opacity: exitActive ? exitP : leaving ? 0 : returning ? (returnLit ? 1 : 0) : entered ? 0 : 1,
+            transform: exitActive
+              ? `translateY(${((1 - exitP) * 90).toFixed(1)}px)`
+              : pull
+                ? `translateY(${pull}px)`
+                : returning
+                  ? (returnLit ? 'translateY(0px)' : 'translateY(90px)')
                   : entered
                     ? 'translateY(90px)' // ghost — receding back down
                     : undefined,
-            transition: leaving
-              ? 'opacity 0.9s ease-in'
-              : returning
-                ? `opacity ${SETTLE}, transform ${SETTLE}`
-                : exitActive || pull
-                  ? 'none'
+            transition: exitActive || pull
+              ? 'none'
+              : leaving
+                ? 'opacity 0.9s ease-in'
+                : returning
+                  ? `opacity ${SETTLE}, transform ${SETTLE}`
                   : entered
                     ? 'opacity 0.35s ease, transform 0.35s ease' // the cancel spring-back
                     : 'transform 0.35s cubic-bezier(.22,1,.36,1)',

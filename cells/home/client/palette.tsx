@@ -358,10 +358,13 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
         overflow: 'hidden',
         color: ink.text,
         // MIRROR EXIT: the palette dissolves and settles downward as the
-        // trailhead arrives (exitProgress 0→1) — tracked live during the
-        // gesture (no transition while dragging), eased through the settle.
-        opacity: 1 - exitProgress,
-        pointerEvents: exitProgress >= 0.7 ? 'none' : undefined,
+        // trailhead arrives — tracked live during the gesture (no transition
+        // while dragging), eased through the settle. It fades at DOUBLE speed
+        // (gone by ~half the gesture): its frosted glass over the arriving
+        // cream sheet read as mush when both sat half-faded (owner IMG_0372) —
+        // the instrument leaves early, then the trailhead arrives clean.
+        opacity: 1 - Math.min(1, exitProgress * 2.2),
+        pointerEvents: exitProgress >= 0.3 ? 'none' : undefined,
         transform: drag || exitProgress ? `translateY(${(drag + exitProgress * 24).toFixed(1)}px)` : undefined,
         transition: drag ? 'none' : 'transform 0.18s ease, opacity 0.45s ease',
       }}
