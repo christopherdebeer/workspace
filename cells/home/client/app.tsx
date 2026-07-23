@@ -651,7 +651,19 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           IS the selection, so the graph re-orients to it behind the sheet and
           closing leaves you there. Folded `owner/key` sheet keys match the
           graph's folded node ids, so the pan lands. */}
-      <FactDetailHost tone={entered ? 'dark' : 'light'} onCurrent={(k) => { if (k) setSelectedKey(k); }} onOpenChange={setPeekOpen} onRevealGround={setGroundReveal} />
+      <FactDetailHost
+        tone={entered ? 'dark' : 'light'}
+        onCurrent={(k) => { if (k) setSelectedKey(k); }}
+        onOpenChange={(open) => {
+          setPeekOpen(open);
+          // Dismissing the LAST sheet re-aims the sky at the GROUND fact
+          // (owner): the stack's selections are aim-only and end with the
+          // stack — the graph returns to what the ground is actually showing
+          // (the last scene-born selection), not the last thing drilled.
+          if (!open) setSelectedKey(groundKey);
+        }}
+        onRevealGround={setGroundReveal}
+      />
     </>
   );
 }
