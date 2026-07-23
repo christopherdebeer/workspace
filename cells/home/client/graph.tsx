@@ -125,7 +125,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
   const previewRef = useRef(preview);
   previewRef.current = preview;
   const api = useRef<{
-    select: (key: string | null, fly?: boolean) => void;
+    select: (key: string | null, fly?: boolean, notify?: boolean) => void;
     setVisible: (f: number) => void;
     reveal: () => void;
     toggleVantage: () => void;
@@ -1407,7 +1407,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
       api.current = {
-        select: (key: string | null, doFly = false) => {
+        select: (key: string | null, doFly = false, notify = true) => {
           lastExternal.current = key;
           selKey = key; setNbr(key);
           setHover(null);
@@ -1423,7 +1423,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // means a selected node's neighbours may not be in the scene yet —
           // pull them in (see pullNeighbours below).
           if (key) void pullNeighbours(key);
-          selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
+          // `notify` distinguishes the DIRECTION of a selection. Selections born
+          // IN the scene (star tap, edge-label travel, crumb) notify the app —
+          // they fill the trailhead ground too. An EXTERNAL selection (peek
+          // sheet, palette drill — arriving via the selectedKey prop) must NOT
+          // echo back through onSelect: the echo re-entered selectByNode and
+          // stomped groundKey, so peeking in the sheet changed the ground
+          // content behind it (owner bug).
+          if (notify) selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
         setVisible: (f: number) => {
           visFrac = f;
@@ -3142,7 +3149,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
   useEffect(() => {
     if (selectedKey === lastExternal.current) return;
     lastExternal.current = selectedKey;
-    api.current?.select(selectedKey, true);
+    api.current?.select(selectedKey, true, false); // external — re-orient silently, no onSelect echo
   }, [selectedKey]);
 
   useEffect(() => { api.current?.setVisible(visible); }, [visible]);
