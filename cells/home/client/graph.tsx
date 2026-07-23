@@ -2331,9 +2331,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
 
       const clock = new THREE.Clock();
       let beamFrame = 0;
+      let pendingResize = false; // set by the ResizeObserver, drained in tick()
       const tick = (): void => {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
+        // Coalesce resize INTO the frame. The host height animates every frame
+        // during pull-to-enter; a ResizeObserver that calls resize() synchronously
+        // reallocates the GL buffer + bloom targets MID-FRAME, stalling the loop
+        // (the pull jank). Instead RO just flags, and we do the one realloc here at
+        // frame start — at most once per rendered frame, never mid-render.
+        if (pendingResize) { pendingResize = false; resize(); }
         const delta = clock.getDelta();
         // ── advance the SHELL (the camera never moves; no idle auto-spin — a
         // place you inhabit holds still, the sphere waits for your hand). ──
@@ -2430,7 +2437,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         renderer.setSize(W, H); labelRenderer.setSize(W, H); composer?.setSize(W, H);
         ptMat.uniforms.uScale.value = H / 2;
       };
-      ro = new ResizeObserver(resize);
+      // Flag only — the actual realloc is drained at the top of tick() so it
+      // never lands mid-render (see the pull-to-enter jank note there).
+      ro = new ResizeObserver(() => { pendingResize = true; });
       ro.observe(el);
 
       // ── live TUNE application — SHARED by the ?tune=1 lil-gui panel and the

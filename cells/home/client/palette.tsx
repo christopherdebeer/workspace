@@ -239,17 +239,16 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
     };
   }, []);
 
-  // THE SHEET LADDER (owner feedback): the drag handle drives a peek-first
-  // ordered ladder, not just the console. UP expands the fact body first, then
-  // the console; DOWN collapses the fact body first, then the console; it
-  // bottoms out at the collapsed peek (drag never dismisses — × does that).
-  // Past the TOP of the ladder (peek open + console open), one more pull-up
-  // leaves the graph entirely — the reverse of pull-to-enter (onExit).
+  // THE SHEET LADDER. Pull-UP on a PEEKED fact is a COMMIT to reading it: the
+  // graph leaves and the fact opens FULL on the trailhead (onExit) — expanding
+  // the peek and leaving the graph are the SAME motion (owner). The console is
+  // NOT in the exit path; with nothing peeked, pull-up just opens it (search).
+  // (The caret/title tap still expands the peek body INLINE for a quick look
+  // without leaving.) Pull-DOWN collapses the inline body, then the console.
   const expandStep = useCallback((): void => {
-    if (selectedKey && !bodyOpen) { setBodyOpen(true); return; } // ① the peek's body
-    if (!open) { setOpen(true); return; } //                        ② the console
-    onExit?.(); //                                                  ③ fully expanded → exit the graph
-  }, [selectedKey, bodyOpen, open, onExit]);
+    if (selectedKey) { onExit?.(); return; } // peeked → full fact view (leave the graph)
+    if (!open) setOpen(true); //                no peek → open the console
+  }, [selectedKey, open, onExit]);
   const collapseStep = useCallback((): void => {
     if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
     else if (open) setOpen(false); //                   ② the console

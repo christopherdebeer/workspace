@@ -397,7 +397,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
         )}
       >
         <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={graphHeroHeight} heroSpring={graphHeroSpring} />
-        {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} onExit={toLanding} />}
+        {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} onExit={() => { if (selectedKey) setGroundKey(selectedKey); toLanding(); }} />}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
             trailhead. Sign-out + session chrome only once entered. */}
