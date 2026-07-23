@@ -1541,12 +1541,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         projV.set(n.x, n.y, n.z).project(camera);
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H, projV.z];
       };
-      // Text never competes with persistent chrome. This keeps map names out
-      // from under the header, the graph controls, and the bottom palette.
+      // Text never competes with persistent chrome — but only the chrome that
+      // EXISTS. Entered: the header (92), the palette (142), and the top-right
+      // graph-controls pill (292×168). Preview (the trailhead strip): only the
+      // wordmark/sign-in row up top — the entered reserves confined every node
+      // label to the middle third of the short strip, and reserved a corner
+      // for a controls pill that isn't even rendered there (owner).
       const screenReserved = (sx: number, sy: number, w: number, h: number): boolean =>
-        sy - h / 2 < 92 ||
-        sy + h / 2 > H - 142 ||
-        (sx + w / 2 > W - 292 && sy - h / 2 < 168);
+        previewRef.current
+          ? (sy - h / 2 < 48 || sy + h / 2 > H - 10)
+          : (sy - h / 2 < 92 ||
+            sy + h / 2 > H - 142 ||
+            (sx + w / 2 > W - 292 && sy - h / 2 < 168));
       // TERTIARY layer: the selection fan's REL labels, at edge midpoints —
       // what each connection IS, not just that it exists. Selection-only
       // (search-hit pairs stay unlabelled), capped, and an edge must be long
