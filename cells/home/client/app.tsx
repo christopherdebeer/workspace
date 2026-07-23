@@ -350,6 +350,23 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           ? `${(HERO_N + (100 - HERO_N) * pullGrow).toFixed(2)}svh`
           : HERO_VH;
   const graphHeroSpring = pull === 0; // track the finger while pulling; spring at rest (incl. the return)
+  // The sky wash GROWS with the pull too (owner): its height rides down with the
+  // descending landscape (which translates by `pull`), so the horizon stays put
+  // against the painting, and its opacity DEEPENS toward the night graph as you
+  // pull. `instant` while a live pull is on so the deepen tracks the finger; the
+  // commit dissolve (`leaving`) then completes the fade with its own transition.
+  const pullProgress = Math.min(1, pull / PULL_COMMIT);
+  const skyHeroHeight = entered
+    ? undefined
+    : leaving
+      ? '100svh'
+      : returning
+        ? (returnLit ? HERO_VH : '100svh')
+        : pull > 0
+          ? `calc(${HERO_VH} + ${pull.toFixed(1)}px)`
+          : HERO_VH;
+  const skyFade = leaving ? 0 : returning ? (returnLit ? 1 : 0) : (1 - 0.55 * pullProgress);
+  const skyInstant = pull > 0 && !leaving && !returning;
 
   if (!session.ready) return <Page>{null}</Page>;
 
@@ -434,7 +451,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {/* The dusk-sky wash sits DIRECTLY over the graph canvas (sibling, not
           inside the overlay) so mix-blend-mode:screen tints the dark sky while
           the live stars punch through. Fades to clear night as you enter. */}
-      {!entered && <SkyGradient fade={leaving ? 0 : returning ? (returnLit ? 1 : 0) : 1} heroOnly={!leaving} />}
+      {!entered && <SkyGradient fade={skyFade} height={skyHeroHeight} instant={skyInstant} />}
       {/* The landing content flows in the NORMAL DOCUMENT — the BODY scrolls
           natively (hero → content below). iOS-robust: WebKit refuses to
           native-scroll a pointer-events:none overflow:auto container, so we don't

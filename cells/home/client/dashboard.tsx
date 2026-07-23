@@ -120,7 +120,7 @@ export const DEFAULT_SKY = 'linear-gradient(rgb(26, 39, 64) 0%, rgb(58, 74, 107)
  *  the content below sits on solid ground (nothing live behind it). Kept in
  *  sync with the Hero section's minHeight. */
 export const HERO_VH = '66.67svh';
-export function SkyGradient({ fade = 1, heroOnly = false }: { fade?: number; heroOnly?: boolean }): React.JSX.Element {
+export function SkyGradient({ fade = 1, heroOnly = false, height, instant = false }: { fade?: number; heroOnly?: boolean; height?: string; instant?: boolean }): React.JSX.Element {
   const g = (typeof window !== 'undefined' && (window as unknown as { __skyGradient?: string }).__skyGradient) || DEFAULT_SKY;
   return (
     <div
@@ -129,13 +129,17 @@ export function SkyGradient({ fade = 1, heroOnly = false }: { fade?: number; her
       style={{
         // On the landing the wash covers only the hero band (matches the graph);
         // entered, it's full-viewport (heroOnly=false) as the graph fills the page.
+        // `height` overrides both: during pull-to-enter it GROWS with the pull so
+        // the wash's horizon rides down with the descending landscape, and its
+        // opacity deepens toward the night graph. `instant` kills the transition
+        // while a pull is live so it tracks the finger (the deepen mustn't lag).
         position: 'fixed', top: 0, left: 0, right: 0,
-        height: heroOnly ? HERO_VH : '100%',
+        height: height ?? (heroOnly ? HERO_VH : '100%'),
         zIndex: 1, pointerEvents: 'none',
         background: g,
         mixBlendMode: 'screen',
         opacity: fade,
-        transition: 'opacity 0.9s ease-in',
+        transition: instant ? 'none' : 'opacity 0.9s ease-in',
       }}
     />
   );
@@ -358,7 +362,9 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
       <section className="Content" style={{
         position: 'relative', zIndex: 2,
         display: 'grid', justifyItems: 'center',
-        padding: 'clamp(1.5rem, 5vw, 3.5rem) clamp(1rem, 3vw, 2rem)',
+        // Reduced top padding (owner): less dead space between the grip/sheet lip
+        // and the first content; sides + bottom keep their comfortable breathing.
+        padding: '0.7rem clamp(1rem, 3vw, 2rem) clamp(1.5rem, 5vw, 3.5rem)',
         gap: '1.4rem',
         flexGrow: 1,
         background: theme.bg, // opaque day paper — the ground below the horizon
@@ -368,10 +374,10 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
       }}>
         {/* PULL-TO-EXPLORE GRIP (owner): the sheet's own handle, mirroring the
-            palette grip. Drag it DOWN to peel the sheet and grow the graph — enter
-            lives here, so the graph above is free to spin. A generous full-width
-            hit strip (touchAction:none owns the vertical gesture); the pill + label
-            firm up as the pull nears the commit. */}
+            palette grip — pill only, no label (the hero copy carries the words).
+            A generous full-width hit strip (touchAction:none owns the vertical
+            gesture); the pill firms up as the pull nears the commit. Negative
+            bottom margin pulls the content up under it (little dead space). */}
         {enterGrip && canEnter ? (
           <div
             onPointerDown={enterGrip.onDown}
@@ -381,15 +387,12 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             role="button"
             aria-label="pull down to explore the graph"
             style={{
-              justifySelf: 'stretch', display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: '0.4rem', padding: '0.5rem 0 0.9rem', marginTop: '-0.4rem', marginBottom: '0.2rem',
+              justifySelf: 'stretch', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '0.5rem 0 0.55rem', marginTop: '-0.3rem', marginBottom: '-0.8rem',
               cursor: 'grab', touchAction: 'none', userSelect: 'none',
             }}
           >
-            <span aria-hidden style={{ width: 40, height: 5, borderRadius: 999, background: theme.border, opacity: 0.5 + 0.5 * enterGrip.progress, transform: `scaleX(${1 + 0.25 * enterGrip.progress})` }} />
-            <span style={{ fontFamily: theme.mono, fontSize: '0.72rem', color: theme.dim, opacity: 0.7 + 0.3 * enterGrip.progress }}>
-              {enterGrip.progress >= 1 ? 'release to explore ↓' : '↓ pull down to explore'}
-            </span>
+            <span aria-hidden style={{ width: 40, height: 5, borderRadius: 999, background: theme.border, opacity: 0.5 + 0.5 * enterGrip.progress, transform: `scaleX(${1 + 0.3 * enterGrip.progress})` }} />
           </div>
         ) : null}
         {selectedKey ? (
