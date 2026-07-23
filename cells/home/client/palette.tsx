@@ -326,7 +326,8 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
       }}
     >
       {/* The grip: drag up to expand, down to collapse/dismiss (see onHandleDown).
-          A wide, thumb-sized target owning the vertical gesture. */}
+          A wide, thumb-sized target — generous vertical padding gives it a ~44px
+          hit strip across the full width, though the visible pill stays small. */}
       <div
         onPointerDown={onHandleDown}
         onPointerMove={onHandleMove}
@@ -339,7 +340,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
           if (e.key === 'ArrowUp') { e.preventDefault(); expandStep(); }
           else if (e.key === 'ArrowDown') { e.preventDefault(); collapseStep(); }
         }}
-        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0.4rem 0 0.2rem', cursor: 'grab', touchAction: 'none' }}
+        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1.25rem 0 1.1rem', cursor: 'grab', touchAction: 'none' }}
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
