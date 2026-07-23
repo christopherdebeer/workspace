@@ -38,7 +38,7 @@ interface NeighborRef { key: string; rel: string; entry: ListEntry }
 /** The selected fact's context: peeked content + its neighbourhood as chips +
  *  the verbs that can act on it (ADR-0049 — `$catalog {for}`; tapping one
  *  seeds the console). */
-function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore, onSelectKey, onClear, onCommand }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; /** Minimized: a slim look-at strip (icon + title + ×) instead of the full panel. */ mini?: boolean; onRestore?: () => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
+function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore, onSelectKey, onClear, onCommand, onBack, trailCount = 0 }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; /** Minimized: a slim look-at strip (icon + title + ×) instead of the full panel. */ mini?: boolean; onRestore?: () => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void; /** Selection-back trail (drills through chips/search push it) — ‹ steps back. */ onBack?: () => void; trailCount?: number }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
@@ -108,6 +108,9 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore,
     // stays (owner choice).
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: '0.3rem 0.7rem 0.4rem', borderBottom: `1px solid ${ink.line}` }}>
+        {trailCount > 0 ? (
+          <button onClick={onBack} aria-label="back to previous fact" title="Back" style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0.1rem 0.25rem', flexShrink: 0 }}>‹</button>
+        ) : null}
         <button
           onClick={onRestore}
           title={factKey}
@@ -130,6 +133,12 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore,
           Tapping the name toggles the body (a div, not a button, so the
           reading's h2/meta nest legally). */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', minWidth: 0 }}>
+        {/* Selection-back (mirrors the peek stack's ‹): drills through neighbour
+            chips / search picks push the trail; ‹ walks back through what you
+            were reading. Graph star taps REPLACE, they don't push (owner). */}
+        {trailCount > 0 ? (
+          <button onClick={onBack} aria-label="back to previous fact" title={`Back (${trailCount})`} style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontSize: '1.05rem', lineHeight: 1, padding: '0.12rem 0.25rem', marginTop: '0.05rem', flexShrink: 0 }}>‹</button>
+        ) : null}
         {/* Caret on the LEFT (owner feedback) — the expand/collapse control sits
             away from the × (dismiss), so the two axes don't share an edge. It
             toggles the body too; the drag handle drives the same state. */}
@@ -257,6 +266,24 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   // changes — the point is watching the graph with the instrument out of the
   // way, so tapping star to star keeps the slim look-at strip (title updates).
   const [mini, setMini] = useState(false);
+  // SELECTION-BACK TRAIL (owner: the peek stack's affordance, on the palette):
+  // drilling FROM the palette — a neighbour chip, a search pick — pushes the
+  // fact you were reading; ‹ steps back through them. Graph star taps REPLACE
+  // the selection without pushing (back means "return to what I was reading",
+  // not "undo every look"). Capped; cleared when the selection is cleared.
+  const [trail, setTrail] = useState<string[]>([]);
+  const drillTo = useCallback((k: string): void => {
+    if (selectedKey && selectedKey !== k) setTrail((t) => [...t.slice(-19), selectedKey]);
+    onSelectKey(k);
+  }, [selectedKey, onSelectKey]);
+  const trailBack = useCallback((): void => {
+    setTrail((t) => {
+      const prev = t[t.length - 1];
+      if (prev) onSelectKey(prev);
+      return t.slice(0, -1);
+    });
+  }, [onSelectKey]);
+  const clearAll = useCallback((): void => { setTrail([]); onClear(); }, [onClear]);
   // ADR-0049: a context-panel verb chip opens the console pre-searched to that
   // target (nonce so the same chip re-seeds after manual edits).
   const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
@@ -423,7 +450,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
-      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini} onRestore={() => setMini(false)} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini} onRestore={() => setMini(false)} onSelectKey={drillTo} onClear={clearAll} onCommand={onCommand} onBack={trailBack} trailCount={trail.length} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
       <Console
@@ -432,7 +459,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
         collapsed={!open}
         onCollapse={(c) => setOpen(!c)}
         onSelectKey={(k) => {
-          onSelectKey(k);
+          drillTo(k); // a search pick is a DRILL — it pushes the back trail
           setOpen(false); // reveal the graph focus the selection just drove
         }}
       />
