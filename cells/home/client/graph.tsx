@@ -1646,7 +1646,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const placedRects: Array<[number, number, number, number]> = []; // x,y,halfW,halfH
       const positionEdgeLabels = (): void => {
         if (!edgeLabelObjs.size) return;
-        const mX = 40, mTop = 100, mBot = 150; // viewport margins (header / palette)
+        // Viewport margins reserve the CHROME THAT EXISTS. Entered: the header
+        // bar (100) and the palette (150). Preview (the trailhead strip): only
+        // the wordmark up top and nothing below — the old entered margins ate
+        // ~2/3 of the short canvas, collapsing every downward edge's visible
+        // span to a sliver so its label piled onto the node (owner IMG_0403).
+        const mX = 40;
+        const mTop = previewRef.current ? 48 : 100;
+        const mBot = previewRef.current ? 14 : 150;
         placedRects.length = 0;
         // Stable iteration (Map insertion order) so a slot doesn't swap owners
         // frame to frame — a placed label stays put as the camera moves.
