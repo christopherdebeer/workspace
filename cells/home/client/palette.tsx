@@ -360,21 +360,24 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
         boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
         overflow: 'hidden',
         color: ink.text,
-        // MIRROR EXIT: the palette dissolves and settles downward as the
-        // trailhead arrives — tracked live during the gesture (no transition
-        // while dragging), eased through the settle. It fades at DOUBLE speed
-        // (gone by ~half the gesture): its frosted glass over the arriving
-        // cream sheet read as mush when both sat half-faded (owner IMG_0372) —
-        // the instrument leaves early, then the trailhead arrives clean.
+        // MIRROR EXIT: the palette RIDES the drag upward while dissolving
+        // (owner: fade AND ride, so it still feels like a drag-up) — ~1/3 of
+        // the finger's travel, continuing up through the settle. It fades at
+        // DOUBLE speed (gone by ~half the gesture): its frosted glass over the
+        // arriving cream sheet read as mush when both sat half-faded (owner
+        // IMG_0372) — the instrument leaves early, then the trailhead arrives.
         opacity: 1 - Math.min(1, exitProgress * 2.2),
         pointerEvents: exitProgress >= 0.3 ? 'none' : undefined,
-        transform: drag || exitProgress ? `translateY(${(drag + exitProgress * 24).toFixed(1)}px)` : undefined,
+        transform: drag || exitProgress ? `translateY(${(drag - exitProgress * 48).toFixed(1)}px)` : undefined,
         transition: drag ? 'none' : 'transform 0.18s ease, opacity 0.45s ease',
       }}
     >
       {/* The grip: drag up to expand, down to collapse/dismiss (see onHandleDown).
-          A wide, thumb-sized target — generous vertical padding gives it a ~44px
-          hit strip across the full width, though the visible pill stays small. */}
+          A wide, thumb-sized target — generous vertical padding keeps the ~44px
+          hit strip, but the NEGATIVE bottom margin tucks the content up
+          underneath it (owner: the full-height strip read as dead space between
+          the pill and the peek/console). zIndex keeps the strip on top, so
+          touches in the overlap still grab the handle. */}
       <div
         onPointerDown={onHandleDown}
         onPointerMove={onHandleMove}
@@ -387,7 +390,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
           if (e.key === 'ArrowUp') { e.preventDefault(); expandStep(); }
           else if (e.key === 'ArrowDown') { e.preventDefault(); collapseStep(); }
         }}
-        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '1.25rem 0 1.1rem', cursor: 'grab', touchAction: 'none' }}
+        style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.55rem 0 1.3rem', marginBottom: '-1.15rem', position: 'relative', zIndex: 1, cursor: 'grab', touchAction: 'none' }}
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
