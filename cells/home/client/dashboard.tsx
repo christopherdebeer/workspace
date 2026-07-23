@@ -119,7 +119,7 @@ export const DEFAULT_SKY = 'linear-gradient(rgb(26, 39, 64) 0%, rgb(58, 74, 107)
 /** The hero band height — the graph + sky occupy only this on the landing, so
  *  the content below sits on solid ground (nothing live behind it). Kept in
  *  sync with the Hero section's minHeight. */
-export const HERO_VH = '66.67svh';
+export const HERO_VH = '44.44svh'; // the graph-preview band at rest (2/3 of the old 66.67svh)
 export function SkyGradient({ fade = 1, heroOnly = false, height, instant = false }: { fade?: number; heroOnly?: boolean; height?: string; instant?: boolean }): React.JSX.Element {
   const g = (typeof window !== 'undefined' && (window as unknown as { __skyGradient?: string }).__skyGradient) || DEFAULT_SKY;
   return (
@@ -295,9 +295,10 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
     <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
       <section className="Hero" style={{
-        // ~2/3 viewport, not full-screen: the top of the content below sits
-        // clearly above the fold, so it's obvious there's more to scroll to.
-        position: 'relative', minHeight: '66.67svh',
+        // The graph-preview band — kept in sync with HERO_VH (the graph host + sky
+        // wash height). Reduced to ~4/9 viewport (owner: 2/3 of the old 2/3) so
+        // the content below sits higher and the graph reads as a preview strip.
+        position: 'relative', minHeight: HERO_VH,
         display: 'grid', alignContent: 'end', justifyItems: 'center',
         padding: 'clamp(1rem, 3vw, 2rem)',
         // Lifted off the bottom now that supplementary content lives below the
@@ -369,9 +370,14 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         flexGrow: 1,
         background: theme.bg, // opaque day paper — the ground below the horizon
         borderTopLeftRadius: 14, borderTopRightRadius: 14,
-        marginTop: -18, // overlap the hero so the rounded lip sits ON the horizon
+        marginTop: '-2.6rem', // overlap the hero more (owner: was -18px) — the lip sits deeper on the horizon
         boxShadow: '0 -12px 40px rgba(8,29,36,0.28)', // the sheet's rising edge
         pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
+        // Subtle PARALLAX on pull (owner): the sheet drifts a touch faster than the
+        // hero above it as you pull down — foreground depth. Tracks the finger while
+        // pulling (no transition), springs back at rest.
+        transform: enterGrip && enterGrip.progress > 0 ? `translateY(${(enterGrip.progress * 16).toFixed(1)}px)` : undefined,
+        transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'transform 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
         {/* PULL-TO-EXPLORE GRIP (owner): the sheet's own handle, mirroring the
             palette grip — pill only, no label (the hero copy carries the words).

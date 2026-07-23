@@ -338,7 +338,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // elastic feel); an active drag tracks the finger (no CSS transition) while
   // rest/release springs the height. During the dissolve (`leaving`) it holds
   // full; once `entered` the graph owns the whole viewport (bottom:0 / 100%).
-  const HERO_N = parseFloat(HERO_VH); // 66.67 (svh)
+  const HERO_N = parseFloat(HERO_VH); // the hero band as a bare number (svh)
   const pullGrow = 1 - Math.pow(1 - Math.min(1, pull / PULL_COMMIT), 3); // easeOutCubic
   const graphHeroHeight = entered
     ? undefined
