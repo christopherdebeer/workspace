@@ -1203,54 +1203,89 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
     const dock = typeof document !== 'undefined' ? document.getElementById('peek-dock') : null;
     if (!dock || !current) return null;
     const backCount = Math.min(cursor, MAX_LIPS);
-    const pileFront = cursor < frames.length - 1 ? frames[cursor + 1] : null;
-    const pileTitle = pileFront ? `${typeIcon(pileFront.entry) ? typeIcon(pileFront.entry) + ' ' : ''}${factTitle(pileFront.entry)}` : '';
-    const curTitle = `${typeIcon(current.entry) ? typeIcon(current.entry) + ' ' : ''}${factTitle(current.entry)}`;
+    const pileCount = frames.length - 1 - cursor;
+    const pileLips = Math.min(Math.max(pileCount - 1, 0), MAX_LIPS);
+    const pileGrow = Math.max(0, -pileY);
+    const stripH = PEEK + 10; // the pile strip's rest height
+    const prevFrame = cursor > 0 ? frames[cursor - 1] : null;
+    // EVERY frame keeps ONE stable <section> shell whose STYLE changes by role
+    // (current / pile-front / hidden) — same element type, same child shape —
+    // so React never remounts a frame's content across back/forward flips
+    // (owner: "it should already be present in the DOM", no reload).
     return createPortal(
       <div style={{ position: 'relative' }}>
-        {/* Back-stack lips — the drilled-past frames peeking above the sheet,
-            same idiom as the ground's own tip-lip above them. */}
-        {Array.from({ length: backCount }, (_, k) => backCount - k).map((depth) => (
-          <div key={depth} aria-hidden style={{ height: 10, margin: `0 ${depth * 12}px -2px`, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg }} />
+        {/* Back-stack lips — FULL-width vertical peeks (owner IMG_0386: the old
+            inset lips doubled the corner radii against the full-width sheet;
+            same-width layers nest their corners cleanly, like the ground tip). */}
+        {Array.from({ length: backCount }).map((_, k) => (
+          <div key={k} aria-hidden style={{ height: 9, margin: '0 0 -1px', borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg }} />
         ))}
-        <section
-          style={{
-            position: 'relative', background: t.bg, color: t.text,
-            borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
-            boxShadow: t.shadow, minHeight: '60dvh',
-            transform: dragY ? `translateY(${dragY}px)` : undefined,
-            transition: dragY ? 'none' : 'transform 0.2s ease',
-            paddingBottom: pileFront ? `${PEEK + 20}px` : undefined,
-          }}
-        >
-          <div
-            onPointerDown={dragBack}
-            style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: '0.9rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}`, touchAction: 'none', userSelect: 'none', cursor: 'grab' }}
-          >
-            <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} />
-            {cursor > 0 ? (
-              <button onClick={() => back()} aria-label="back" title="Back" style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}>‹</button>
+        {/* Drag-back REVEAL (owner IMG_0387): pulling the header down uncovers
+            what you're returning TO — the previous frame's head, or the bare
+            ground cream at 1/1 — never the night backdrop void. */}
+        {dragY > 0 ? (
+          <div aria-hidden style={{ position: 'absolute', left: 0, right: 0, top: backCount * 8, height: dragY + 64, zIndex: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, color: t.text, overflow: 'hidden', padding: '0.9rem' }}>
+            {prevFrame ? (
+              <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', opacity: 0.7 }}>{`${typeIcon(prevFrame.entry) ? typeIcon(prevFrame.entry) + ' ' : ''}${factTitle(prevFrame.entry)}`}</strong>
             ) : null}
-            <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{curTitle}</strong>
-            {total > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{cursor + 1}/{total}</span> : null}
-            <button onClick={() => closeAll()} aria-label="close" style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}>×</button>
-          </div>
-          <div style={{ padding: '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' }}>
-            <FactDetail e={current.entry} tone={tone} anchor={current.anchor} />
-          </div>
-        </section>
-        {/* Forward pile — pinned to the viewport bottom (it re-advances; it is
-            an affordance, not content, so it doesn't ride the page scroll). */}
-        {pileFront ? (
-          <div
-            onPointerDown={dragForward}
-            title="Forward"
-            style={{ position: 'fixed', bottom: 0, left: 0, right: 0, margin: '0 auto', width: 'min(780px, 100vw)', height: PEEK + 10, transform: pileY ? `translateY(${pileY}px)` : undefined, transition: pileY ? 'none' : 'transform 0.2s ease', zIndex: 40, background: t.bg, color: t.text, borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`, boxShadow: t.shadow, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0 0.9rem', cursor: 'pointer', touchAction: 'none', userSelect: 'none', pointerEvents: 'auto' }}
-          >
-            <span aria-hidden style={{ color: t.accent, fontSize: '0.9rem', flexShrink: 0 }}>⌃</span>
-            <strong style={{ fontFamily: theme.serif, fontSize: '0.92rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pileTitle}</strong>
           </div>
         ) : null}
+        {frames.map((frame, i) => {
+          const rel = i - cursor;
+          const isCur = rel === 0;
+          const isPileF = rel === 1;
+          const fEntry = frame.entry;
+          const fTitle = `${typeIcon(fEntry) ? typeIcon(fEntry) + ' ' : ''}${factTitle(fEntry)}`;
+          const sectionStyle: React.CSSProperties = isCur
+            ? {
+                position: 'relative', zIndex: 1, background: t.bg, color: t.text,
+                borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+                boxShadow: t.shadow, minHeight: '60dvh',
+                transform: dragY ? `translateY(${dragY}px)` : undefined,
+                transition: dragY ? 'none' : 'transform 0.2s ease',
+                paddingBottom: pileCount > 0 ? `${stripH + 20}px` : undefined,
+              }
+            : isPileF
+              ? {
+                  // The forward pile GROWS with the drag (owner: not a bar sliding
+                  // over the wrong text) — its own sheet, its own content, rising
+                  // from the bottom edge until the release commits the advance.
+                  position: 'fixed', bottom: 0, left: 0, right: 0, margin: '0 auto',
+                  width: 'min(780px, 100vw)', height: stripH + pileGrow, maxHeight: '75dvh',
+                  overflow: 'hidden', zIndex: 40, background: t.bg, color: t.text,
+                  borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+                  boxShadow: t.shadow, transition: pileY ? 'none' : 'height 0.2s ease',
+                  cursor: 'pointer', userSelect: 'none', pointerEvents: 'auto',
+                }
+              : { display: 'none' };
+          return (
+            <section key={frame.id} aria-hidden={!isCur} style={sectionStyle}>
+              <div
+                onPointerDown={isCur ? dragBack : isPileF ? dragForward : undefined}
+                style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: isCur ? '0.9rem 0.9rem 0.6rem' : '0.55rem 0.9rem 0.45rem', borderBottom: isCur ? `1px solid ${t.line}` : undefined, touchAction: isCur || isPileF ? 'none' : undefined, userSelect: 'none', cursor: isCur ? 'grab' : isPileF ? 'pointer' : 'default' }}
+              >
+                {isCur ? <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} /> : null}
+                {isCur && cursor > 0 ? (
+                  <button onClick={() => back()} aria-label="back" title="Back" style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}>‹</button>
+                ) : null}
+                {isPileF ? <span aria-hidden style={{ color: t.accent, fontSize: '0.9rem', flexShrink: 0 }}>⌃</span> : null}
+                <strong style={{ fontFamily: theme.serif, fontSize: isCur ? '1.02rem' : '0.92rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{fTitle}</strong>
+                {isCur && total > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{cursor + 1}/{total}</span> : null}
+                {isCur ? (
+                  <button onClick={() => closeAll()} aria-label="close" style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}>×</button>
+                ) : null}
+              </div>
+              <div style={{ padding: isCur ? '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' : '0.45rem 0.9rem 0.9rem' }}>
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+              </div>
+            </section>
+          );
+        })}
+        {/* Pile TIP-STACKS (owner): deeper waiting sheets peek above the strip,
+            riding its top edge as it grows — the forward mirror of the back lips. */}
+        {pileCount > 0 ? Array.from({ length: pileLips }).map((_, k) => (
+          <div key={k} aria-hidden style={{ position: 'fixed', bottom: stripH + pileGrow - 2 + (k + 1) * 7, left: 0, right: 0, margin: '0 auto', width: 'min(780px, 100vw)', height: 9, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, zIndex: 39, pointerEvents: 'none' }} />
+        )) : null}
       </div>,
       dock,
     );
