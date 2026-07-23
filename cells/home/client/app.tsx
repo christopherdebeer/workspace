@@ -339,23 +339,27 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // rest/release springs the height. During the dissolve (`leaving`) it holds
   // full; once `entered` the graph owns the whole viewport (bottom:0 / 100%).
   const HERO_N = parseFloat(HERO_VH); // the hero band as a bare number (svh)
-  const pullGrow = 1 - Math.pow(1 - Math.min(1, pull / PULL_COMMIT), 3); // easeOutCubic
+  // The live GRAPH is a smaller preview than the hero band — 2/3 of it at rest —
+  // and it grows to FULL tracking the drag DIRECTLY: a linear percent between the
+  // rest height and full (owner: no easing, the graph follows the finger 1:1).
+  const GRAPH_REST_N = HERO_N * (2 / 3); // ≈ 44.44svh
+  const GRAPH_REST = `${GRAPH_REST_N.toFixed(2)}svh`;
+  const pullProgress = Math.min(1, pull / PULL_COMMIT);
   const graphHeroHeight = entered
     ? undefined
     : leaving
       ? '100svh'
       : returning
-        ? (returnLit ? HERO_VH : '100svh') // exit: shrink full→hero (svh both ends → smooth)
+        ? (returnLit ? GRAPH_REST : '100svh') // exit: shrink full→preview strip
         : pull > 0
-          ? `${(HERO_N + (100 - HERO_N) * pullGrow).toFixed(2)}svh`
-          : HERO_VH;
+          ? `${(GRAPH_REST_N + (100 - GRAPH_REST_N) * pullProgress).toFixed(2)}svh` // LINEAR track
+          : GRAPH_REST;
   const graphHeroSpring = pull === 0; // track the finger while pulling; spring at rest (incl. the return)
   // The sky wash GROWS with the pull too (owner): its height rides down with the
   // descending landscape (which translates by `pull`), so the horizon stays put
   // against the painting, and its opacity DEEPENS toward the night graph as you
   // pull. `instant` while a live pull is on so the deepen tracks the finger; the
   // commit dissolve (`leaving`) then completes the fade with its own transition.
-  const pullProgress = Math.min(1, pull / PULL_COMMIT);
   const skyHeroHeight = entered
     ? undefined
     : leaving
