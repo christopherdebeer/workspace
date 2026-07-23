@@ -1220,11 +1220,12 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
         {Array.from({ length: backCount }).map((_, k) => (
           <div key={k} aria-hidden style={{ height: 9, margin: '0 0 -1px', borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg }} />
         ))}
-        {/* Drag-back REVEAL (owner IMG_0387): pulling the header down uncovers
-            what you're returning TO — the previous frame's head, or the bare
-            ground cream at 1/1 — never the night backdrop void. */}
+        {/* Drag-back REVEAL (owner IMG_0387/0395): pulling the header down
+            uncovers what you're returning TO — a FULL sheet reaching the bottom
+            of the viewport (the previous frame's head, or the bare ground cream
+            at 1/1), never a floating strip over the night backdrop. */}
         {dragY > 0 ? (
-          <div aria-hidden style={{ position: 'absolute', left: 0, right: 0, top: backCount * 8, height: dragY + 64, zIndex: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, color: t.text, overflow: 'hidden', padding: '0.9rem' }}>
+          <div aria-hidden style={{ position: 'absolute', left: 0, right: 0, top: backCount * 8, height: '100dvh', zIndex: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, color: t.text, overflow: 'hidden', padding: '0.9rem' }}>
             {prevFrame ? (
               <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', opacity: 0.7 }}>{`${typeIcon(prevFrame.entry) ? typeIcon(prevFrame.entry) + ' ' : ''}${factTitle(prevFrame.entry)}`}</strong>
             ) : null}
@@ -1243,14 +1244,17 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
                 boxShadow: t.shadow, minHeight: '60dvh',
                 transform: dragY ? `translateY(${dragY}px)` : undefined,
                 transition: dragY ? 'none' : 'transform 0.2s ease',
-                paddingBottom: pileCount > 0 ? `${stripH + 20}px` : undefined,
+                paddingBottom: pileCount > 0 ? `${stripH + pileLips * 7 + 20}px` : undefined,
               }
             : isPileF
               ? {
                   // The forward pile GROWS with the drag (owner: not a bar sliding
                   // over the wrong text) — its own sheet, its own content, rising
-                  // from the bottom edge until the release commits the advance.
-                  position: 'fixed', bottom: 0, left: 0, right: 0, margin: '0 auto',
+                  // until the release commits the advance. It sits ON TOP of the
+                  // pile (owner IMG_0395: "dragging up next, not last") — the
+                  // deeper lips peek BELOW it toward the viewport edge, so the
+                  // rising sheet clearly comes off the top of the waiting stack.
+                  position: 'fixed', bottom: pileLips * 7, left: 0, right: 0, margin: '0 auto',
                   width: 'min(780px, 100vw)', height: stripH + pileGrow, maxHeight: '75dvh',
                   overflow: 'hidden', zIndex: 40, background: t.bg, color: t.text,
                   borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
@@ -1281,11 +1285,16 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
             </section>
           );
         })}
-        {/* Pile TIP-STACKS (owner): deeper waiting sheets peek above the strip,
-            riding its top edge as it grows — the forward mirror of the back lips. */}
-        {pileCount > 0 ? Array.from({ length: pileLips }).map((_, k) => (
-          <div key={k} aria-hidden style={{ position: 'fixed', bottom: stripH + pileGrow - 2 + (k + 1) * 7, left: 0, right: 0, margin: '0 auto', width: 'min(780px, 100vw)', height: 9, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, zIndex: 39, pointerEvents: 'none' }} />
-        )) : null}
+        {/* Pile TIP-STACKS (owner IMG_0395): the deeper waiting sheets peek
+            BELOW the strip toward the viewport edge — slightly inset (behind),
+            flush against it (no slits of page text between the layers) — so
+            the full-width strip on top clearly reads as "next". */}
+        {pileCount > 0 ? Array.from({ length: pileLips }).map((_, k) => {
+          const j = k + 1; // 1 = just under the strip, deeper follow
+          return (
+            <div key={k} aria-hidden style={{ position: 'fixed', bottom: (pileLips - j) * 7, left: 0, right: 0, margin: '0 auto', width: `min(${780 - j * 22}px, calc(100vw - ${j * 22}px))`, height: 9, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, zIndex: 39, pointerEvents: 'none' }} />
+          );
+        }) : null}
       </div>,
       dock,
     );
