@@ -3194,6 +3194,37 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
     font: `600 0.64rem ${ink.mono}`, cursor: 'pointer', whiteSpace: 'nowrap',
   };
   const short = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${n}`);
+  // FOCUS + VANTAGE collapse to ICONS (owner). Focus: a plain TAP toggles the
+  // extremes (0 focus ↔ 1 full); a press-and-DRAG scrubs the scalar in place (no
+  // separate slider mode) — the ring gauge in the icon shows the level, and a
+  // transient % readout shows while scrubbing. Vantage stays a toggle; a local
+  // mirror of its state only picks the glyph (the graph owns the truth).
+  const focusDrag = useRef<{ x: number; v: number; moved: boolean } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [vantageOn, setVantageOn] = useState(false);
+  const onFocusDown = (e: React.PointerEvent): void => {
+    focusDrag.current = { x: e.clientX, v: visible, moved: false };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
+  };
+  const onFocusMove = (e: React.PointerEvent): void => {
+    const d = focusDrag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    if (Math.abs(dx) > 4) { d.moved = true; if (!scrubbing) setScrubbing(true); }
+    if (d.moved) setVisible(Math.max(0, Math.min(1, d.v + dx / 130))); // ~130px = full sweep
+  };
+  const onFocusUp = (): void => {
+    const d = focusDrag.current;
+    focusDrag.current = null;
+    setScrubbing(false);
+    if (d && !d.moved) setVisible(visible > 0 ? 0 : 1); // tap toggles 0 ↔ full
+  };
+  const iconBtn: React.CSSProperties = {
+    appearance: 'none', border: `1px solid ${ink.line}`, background: 'transparent',
+    color: ink.text, borderRadius: 999, minHeight: 28, minWidth: 28,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', padding: 0, position: 'relative', flexShrink: 0,
+  };
   return (
     <>
       <ThreeGraph
@@ -3207,29 +3238,38 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
         heroHeight={heroHeight}
       />
       { !preview && <section aria-label="Graph controls" style={bar}>
-        <span style={{ color: ink.dim }}>focus</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.02}
-          value={visible}
-          onChange={(e) => setVisible(Number(e.target.value))}
-          aria-label="Filter charted facts by salience"
-          title="Filter the charted facts by salience"
-          style={{ width: 60, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
-        />
-        <span style={{ color: visible >= 0.999 ? ink.text : ink.dim, fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>
-          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
-        </span>
-        <span style={{ width: 1, height: 18, background: ink.line, opacity: 0.7 }} />
+        {/* FOCUS icon — tap toggles focus ↔ all, drag scrubs. The conic ring is a
+            level gauge (accent sweep = how much is shown); the inner dot masks it
+            to a ring. A % readout floats to the left only while scrubbing. */}
         <button
           type="button"
-          onClick={() => setVantageNonce((n) => n + 1)}
-          title="Toggle vantage: step outside to hold the whole globe, or back to the centre under the sky (selection kept)"
-          style={{ ...chip, color: ink.text }}
+          aria-label={`Focus ${visible >= 0.999 ? 'all' : Math.round(visible * 100) + '%'} — tap to toggle, drag to scrub`}
+          title="Focus: tap toggles focus ↔ all; drag to scrub the salience filter"
+          onPointerDown={onFocusDown}
+          onPointerMove={onFocusMove}
+          onPointerUp={onFocusUp}
+          onPointerCancel={onFocusUp}
+          style={{ ...iconBtn, touchAction: 'none' }}
         >
-          vantage
+          <span aria-hidden style={{ width: 15, height: 15, borderRadius: 999, display: 'block', background: `conic-gradient(${ink.accent} ${Math.max(visible, 0.0001) * 360}deg, ${ink.line} 0)` }} />
+          <span aria-hidden style={{ position: 'absolute', inset: 0, margin: 'auto', width: 7, height: 7, borderRadius: 999, background: ink.bg }} />
+          {scrubbing ? (
+            <span style={{ position: 'absolute', right: '112%', whiteSpace: 'nowrap', color: ink.text, fontVariantNumeric: 'tabular-nums', background: 'rgba(24,21,17,0.92)', border: `1px solid ${ink.line}`, borderRadius: 6, padding: '0.1rem 0.4rem' }}>
+              {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+            </span>
+          ) : null}
+        </button>
+        <span style={{ width: 1, height: 18, background: ink.line, opacity: 0.7 }} />
+        {/* VANTAGE icon — a toggle; the glyph fills when stepped outside. */}
+        <button
+          type="button"
+          onClick={() => { setVantageNonce((n) => n + 1); setVantageOn((v) => !v); }}
+          aria-label="Toggle vantage"
+          aria-pressed={vantageOn}
+          title="Toggle vantage: step outside to hold the whole globe, or back to the centre under the sky (selection kept)"
+          style={{ ...iconBtn, fontSize: '0.92rem', color: vantageOn ? ink.accent : ink.text }}
+        >
+          {vantageOn ? '◉' : '◎'}
         </button>
         <button
           type="button"
