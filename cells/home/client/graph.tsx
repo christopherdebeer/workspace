@@ -1278,13 +1278,17 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // curl. Spread to magnify, pinch to unfurl the sky into the chart and
         // on out to the held globe — a single continuous motion.
         if (pointers.size >= 2) {
-          if (previewRef.current) return; // preview: no zoom/curl — spin + tap-select only
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
           // Accumulate incrementally (Σ log(prev/cur) = log(dist0/now)), so the
           // per-region zoomGain applies across the seam within one gesture.
           const dz = Math.log((pinchDistLast || d) / d) * PINCH_BASE * zoomGain(zoomZT);
-          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + dz));
+          // Preview (trailhead): pinch zoom is RE-ENABLED now that the pull gesture
+          // lives on the content grip — but the axis is clamped to the PLANETARIUM
+          // (the dome, ≤Z_DOME): telescope in/out under the sky, never unfurling to
+          // the chart/ball. Entered, the full axis (out to the held globe) returns.
+          const zMax = previewRef.current ? Z_DOME : Z_BALL;
+          zoomZ = zoomZT = Math.max(0, Math.min(zMax, zoomZT + dz));
           pinchDistLast = d;
           layoutDirty = true;
           lastInput = performance.now();
@@ -2927,7 +2931,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const frameInitial = (): void => {
         const h = readHashState();
         if (h.zoom != null && Number.isFinite(h.zoom)) {
-          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, h.zoom));
+          // Preview stays in the planetarium — a restored zoom can't put the
+          // trailhead into the chart/ball vantage.
+          zoomZ = zoomZT = Math.max(0, Math.min(previewRef.current ? Z_DOME : Z_BALL, h.zoom));
           lastZoomHash = zoomZ;
           layoutDirty = true;
         }

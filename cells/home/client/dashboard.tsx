@@ -305,6 +305,12 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         // hero — the pitch sits over the valley/treeline, not the frame edge.
         //paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10vh)',
         paddingBottom: 0,
+        // FADE OUT with the pull (owner): the painted day-hero dissolves toward
+        // the night graph growing behind it as you pull down — the day→night
+        // handoff made continuous, not just a commit-time flip. Tracks the finger
+        // while pulling; springs back at rest.
+        opacity: enterGrip ? 1 - 0.72 * enterGrip.progress : 1,
+        transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'opacity 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
         {/* Painted landscape, pinned to this first screen only */}
         <div className='HeroLandscape'style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
