@@ -264,6 +264,56 @@ export function layoutShardOf(key: string, shards = LAYOUT_SHARDS): number {
   return h % shards;
 }
 
+// ── the PUBLIC projection (ADR-0092 Inc 2) ──────────────────────────────────
+// A second, audience-safe coordMap beside `_home/embed2d`: ONLY the owner's
+// `_public/`-covered keys, in the owner's existing basis, and COORDS-ONLY —
+// no basis/norm (ADR-0092 A2: the basis is fit over the whole slice, private
+// facts included; a viewer never projects new vectors, so serving it would
+// leak a statistical artifact of private content for no benefit). The owner
+// shares this one fact to `public`; a viewer seats folded `owner/key` nodes
+// from it (ADR-0092 Inc 1's owner-scoped lookup).
+
+export const PUB_LAYOUT_KEY = '_home/embed2d.pub';
+
+/** Does a `_public/<pattern>` share pattern cover a key? Same grammar as the
+ *  grant axis (`grantCovers`) and the cells' `_public/` gates: `*` = whole
+ *  slice, trailing `*` = prefix, else exact. Duplicated here (three lines)
+ *  rather than importing services/workspace — platform/runtime must not
+ *  depend on a service. */
+export function publicPatternCovers(pattern: string, key: string): boolean {
+  if (pattern === '*') return true;
+  if (pattern.endsWith('*')) return key.startsWith(pattern.slice(0, -1));
+  return pattern === key;
+}
+
+/** `_home/embed2d.pub`'s value: the public-covered coords plus the patterns
+ *  they were filtered by. `patterns` are the owner's `_public/` share patterns
+ *  — world-readable by definition (the reflections exist to be served) — and
+ *  carrying them here lets the incremental patcher test coverage without a
+ *  slice scan. NO basis/norm, by construction (A2). */
+export interface PublicLayout {
+  patterns: string[];
+  /** bare key → [x, y, z] — only keys a pattern covers. */
+  coords: Record<string, [number, number, number]>;
+  count: number;
+  generatedAt: string;
+}
+
+/** Filter a full coordMap down to the audience-safe public layout. The one
+ *  place the ADR-0092 invariant is enforced at write time for this artifact:
+ *  a key no pattern covers cannot enter the value. */
+export function publicLayout(
+  coords: Record<string, [number, number, number]>,
+  patterns: string[],
+  generatedAt: string,
+): PublicLayout {
+  const out: Record<string, [number, number, number]> = {};
+  for (const [k, xyz] of Object.entries(coords)) {
+    if (patterns.some((p) => publicPatternCovers(p, k))) out[k] = xyz;
+  }
+  return { patterns: [...patterns].sort(), coords: out, count: Object.keys(out).length, generatedAt };
+}
+
 /** `_home/embed2d`'s value in the sharded shape: everything EXCEPT coords —
  *  those live in `shards` sibling facts (`_home/embed2d/s<i>`). A value with
  *  `coords` and no `shards` is the legacy monolith; readers and the

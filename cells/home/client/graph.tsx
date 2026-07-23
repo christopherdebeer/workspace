@@ -59,6 +59,7 @@ import {
   fetchTuneConfig, saveTuneConfig,
   keysOfResult, isPlumbing,
 } from './graph/data';
+import { lookupCoord } from './graph/seats';
 import { recomputeRanks as recomputeRanksImpl, salienceHubPlaces, membershipPlaces } from './graph/layout';
 
 const { useEffect, useRef, useState } = React;
@@ -99,15 +100,20 @@ interface GraphReach {
   paused: boolean;
 }
 
-function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, preview = false, heroHeight }: {
+function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, domeNonce = 0, preview = false, heroHeight, heroSpring = false }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   visible: number;
   onReach: (reach: GraphReach) => void;
   revealNonce: number;
   vantageNonce: number;
+  /** Bumped on exit-to-trailhead: glide the vantage back under the dome. */
+  domeNonce?: number;
   preview?: boolean;
   heroHeight?: string;
+  /** Spring the host HEIGHT on change (release/rest); false while a pull is
+   *  actively dragging so the graph tracks the finger frame-for-frame. */
+  heroSpring?: boolean;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef(onSelect);
@@ -119,10 +125,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
   const previewRef = useRef(preview);
   previewRef.current = preview;
   const api = useRef<{
-    select: (key: string | null, fly?: boolean) => void;
+    select: (key: string | null, fly?: boolean, notify?: boolean) => void;
     setVisible: (f: number) => void;
     reveal: () => void;
     toggleVantage: () => void;
+    toDome: () => void;
   } | null>(null);
   const lastExternal = useRef<string | null>(null);
   // Loading UX: 'fast' = the first pages are still in flight, 'full' = the
@@ -184,6 +191,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const links: any[] = [];
       const nodeById = new Map<string, any>();
       const coordMap = meta.coordMap;
+      const pubMaps = meta.pubMaps;
       const focusKeys = new Set<string>();
       const idOf = (x: any): string => (x && typeof x === 'object' ? x.id : x);
       const inFocus = (n: any): boolean => !!n && focusKeys.has(n.id);
@@ -1273,13 +1281,17 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // curl. Spread to magnify, pinch to unfurl the sky into the chart and
         // on out to the held globe — a single continuous motion.
         if (pointers.size >= 2) {
-          if (previewRef.current) return; // preview: no zoom/curl — spin + tap-select only
           const [a, b] = [...pointers.values()];
           const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
           // Accumulate incrementally (Σ log(prev/cur) = log(dist0/now)), so the
           // per-region zoomGain applies across the seam within one gesture.
           const dz = Math.log((pinchDistLast || d) / d) * PINCH_BASE * zoomGain(zoomZT);
-          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, zoomZT + dz));
+          // Preview (trailhead): pinch zoom is RE-ENABLED now that the pull gesture
+          // lives on the content grip — but the axis is clamped to the PLANETARIUM
+          // (the dome, ≤Z_DOME): telescope in/out under the sky, never unfurling to
+          // the chart/ball. Entered, the full axis (out to the held globe) returns.
+          const zMax = previewRef.current ? Z_DOME : Z_BALL;
+          zoomZ = zoomZT = Math.max(0, Math.min(zMax, zoomZT + dz));
           pinchDistLast = d;
           layoutDirty = true;
           lastInput = performance.now();
@@ -1395,7 +1407,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
       api.current = {
-        select: (key: string | null, doFly = false) => {
+        select: (key: string | null, doFly = false, notify = true) => {
           lastExternal.current = key;
           selKey = key; setNbr(key);
           setHover(null);
@@ -1411,7 +1423,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // means a selected node's neighbours may not be in the scene yet —
           // pull them in (see pullNeighbours below).
           if (key) void pullNeighbours(key);
-          selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
+          // `notify` distinguishes the DIRECTION of a selection. Selections born
+          // IN the scene (star tap, edge-label travel, crumb) notify the app —
+          // they fill the trailhead ground too. An EXTERNAL selection (peek
+          // sheet, palette drill — arriving via the selectedKey prop) must NOT
+          // echo back through onSelect: the echo re-entered selectByNode and
+          // stomped groundKey, so peeking in the sheet changed the ground
+          // content behind it (owner bug).
+          if (notify) selectRef.current(d ? { key: d.id, type: d.type, score: d.score, label: d.label } : key ? { key, type: null, score: 0, label: key } : null);
         },
         setVisible: (f: number) => {
           visFrac = f;
@@ -1426,6 +1445,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // flat chart on the way. Selection, shell orientation, everything
           // else is untouched. (Deselecting is its own gesture: tap empty sky.)
           zoomZT = zoomZT > (Z_DOME + Z_BALL) / 2 ? Z_DOME : Z_BALL;
+        },
+        toDome: () => {
+          // Exit-to-trailhead (the mirror transition): glide the vantage back
+          // under the dome — the trailhead preview is planetarium-only, so the
+          // sky must re-curl around you as the valley returns. Eased by tick()
+          // like every zoom change; a no-op if already under the dome.
+          zoomZT = Math.min(zoomZT, Z_DOME);
         },
       };
 
@@ -1515,12 +1541,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         projV.set(n.x, n.y, n.z).project(camera);
         return [((projV.x + 1) / 2) * W, ((1 - projV.y) / 2) * H, projV.z];
       };
-      // Text never competes with persistent chrome. This keeps map names out
-      // from under the header, the graph controls, and the bottom palette.
+      // Text never competes with persistent chrome — but only the chrome that
+      // EXISTS. Entered: the header (92), the palette (142), and the top-right
+      // graph-controls pill (292×168). Preview (the trailhead strip): only the
+      // wordmark/sign-in row up top — the entered reserves confined every node
+      // label to the middle third of the short strip, and reserved a corner
+      // for a controls pill that isn't even rendered there (owner).
       const screenReserved = (sx: number, sy: number, w: number, h: number): boolean =>
-        sy - h / 2 < 92 ||
-        sy + h / 2 > H - 142 ||
-        (sx + w / 2 > W - 292 && sy - h / 2 < 168);
+        previewRef.current
+          ? (sy - h / 2 < 48 || sy + h / 2 > H - 10)
+          : (sy - h / 2 < 92 ||
+            sy + h / 2 > H - 142 ||
+            (sx + w / 2 > W - 292 && sy - h / 2 < 168));
       // TERTIARY layer: the selection fan's REL labels, at edge midpoints —
       // what each connection IS, not just that it exists. Selection-only
       // (search-hit pairs stay unlabelled), capped, and an edge must be long
@@ -1551,7 +1583,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             cands.push([i, farN.rank ?? nodes.length]);
           }
           cands.sort((x, y) => x[1] - y[1]); // label the salient connections first
-          const placedMid: Array<[number, number]> = [];
+          // Admission is ONLY: salience order, the cap, and "the edge is long
+          // enough on screen to hold a word". NO dedup — identical relations are
+          // kept (three `inDoc` edges show three labels) — and NO overlap
+          // rejection here: collision is resolved at PLACEMENT time, where each
+          // label slides along its own visible span into free space rather than
+          // being dropped (positionEdgeLabels). So every admitted relation draws.
           let added = 0;
           for (const [i] of cands) {
             if (added >= TUNE.edgeLabelCap) break;
@@ -1560,9 +1597,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             const [ax, ay] = screenXY(aN);
             const [bx, by] = screenXY(bN);
             if (Math.hypot(bx - ax, by - ay) < 120) continue; // no room for a word
-            const mx = (ax + bx) / 2, my = (ay + by) / 2;
-            if (placedMid.some(([px, py]) => Math.abs(px - mx) < 70 && Math.abs(py - my) < 14)) continue;
-            placedMid.push([mx, my]);
             want.add(i);
             added++;
           }
@@ -1599,6 +1633,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // screen the verb is pulled just inside the margin, still tethered by the
       // line, instead of vanishing with its far star. Runs every frame (≤4).
       const EL_V = new THREE.Vector3();
+      // Each endpoint's clip-w (positive camera-space depth). A SCREEN-space
+      // fraction along the edge only maps back to the right WORLD-space t through
+      // these: world-lerping by a screen fraction lands OFF the screen midpoint
+      // once the two ends sit at different depths — the zoomed-in drift.
+      const ELW_V = new THREE.Vector3();
+      const depthW = (n: any): number => { ELW_V.set(n.x, n.y, n.z).applyMatrix4(camera.matrixWorldInverse); return -ELW_V.z; };
       const clipSpan = (sx: number, sy: number, fx: number, fy: number, xmin: number, ymin: number, xmax: number, ymax: number): [number, number] | null => {
         const dx = fx - sx, dy = fy - sy;
         const p = [-dx, dx, -dy, dy], q = [sx - xmin, xmax - sx, sy - ymin, ymax - sy];
@@ -1609,9 +1649,20 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         }
         return [t0, t1];
       };
+      const placedRects: Array<[number, number, number, number]> = []; // x,y,halfW,halfH
       const positionEdgeLabels = (): void => {
         if (!edgeLabelObjs.size) return;
-        const mX = 40, mTop = 100, mBot = 150; // viewport margins (header / palette)
+        // Viewport margins reserve the CHROME THAT EXISTS. Entered: the header
+        // bar (100) and the palette (150). Preview (the trailhead strip): only
+        // the wordmark up top and nothing below — the old entered margins ate
+        // ~2/3 of the short canvas, collapsing every downward edge's visible
+        // span to a sliver so its label piled onto the node (owner IMG_0403).
+        const mX = 40;
+        const mTop = previewRef.current ? 48 : 100;
+        const mBot = previewRef.current ? 14 : 150;
+        placedRects.length = 0;
+        // Stable iteration (Map insertion order) so a slot doesn't swap owners
+        // frame to frame — a placed label stays put as the camera moves.
         for (const [i, obj] of edgeLabelObjs) {
           const l = links[i];
           const selN = l && nodeById.get(selKey ?? '');
@@ -1620,14 +1671,53 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const [sx, sy, ssz] = screenXY(selN);
           const [fx, fy, fsz] = screenXY(farN);
           if (ssz > 1) { obj.visible = false; continue; } // anchor end behind camera
-          obj.visible = true;
-          let tMid = 0.5;
-          if (fsz > 1) tMid = 0.14; // neighbour behind camera — hug the selected end
+          // The visible SCREEN span of the edge as fractions [s0,s1] along the
+          // straight screen segment sel→far. A projected line is a line, so
+          // interpolating IN SCREEN SPACE is exact; perspective only bit the old
+          // world-lerp (which is why the midpoint drifted when zoomed).
+          let s0 = 0, s1 = 1;
+          if (fsz > 1) { s0 = 0; s1 = 0.28; } // neighbour behind camera — hug the selected end
           else {
             const span = clipSpan(sx, sy, fx, fy, mX, mTop, W - mX, H - mBot);
-            tMid = span ? (span[0] + span[1]) / 2 : 0.14;
+            if (!span) { obj.visible = false; continue; } // edge fully off-screen
+            [s0, s1] = span;
           }
-          obj.position.copy(EL_V.set(selN.x, selN.y, selN.z)).lerp(EL_V.set(farN.x, farN.y, farN.z), tMid);
+          // Label box half-extents in screen px (rel + arrow, mono 8.5px).
+          const halfW = (l.rel.length + 2) * 2.6 + 8, halfH = 9;
+          const sax = fx - sx, say = fy - sy;
+          const screenAt = (s: number): [number, number] => [sx + sax * s, sy + say * s];
+          const hits = (x: number, y: number): boolean =>
+            placedRects.some(([px, py, pw, ph]) => Math.abs(px - x) < pw + halfW && Math.abs(py - y) < ph + halfH);
+          // Ideal spot: the MIDPOINT of the visible span. If it's taken, WALK
+          // OUTWARD along the line (staying within [s0,s1], hence on-screen) to
+          // the nearest free slot — utilise the empty line rather than drop the
+          // label or let it stack.
+          const smid = (s0 + s1) / 2;
+          let chosen = smid;
+          const [mxp, myp] = screenAt(smid);
+          if (hits(mxp, myp)) {
+            const reach = (s1 - s0) / 2;
+            const STEPS = 10;
+            let done = false;
+            for (let k = 1; k <= STEPS && !done; k++) {
+              for (const dir of [1, -1]) {
+                const s = smid + dir * (k / STEPS) * reach;
+                if (s < s0 || s > s1) continue;
+                const [x, y] = screenAt(s);
+                if (!hits(x, y)) { chosen = s; done = true; break; }
+              }
+            }
+          }
+          obj.visible = true; // best-effort slot; never dropped for crowding
+          const [cx, cy] = screenAt(chosen);
+          placedRects.push([cx, cy, halfW, halfH]);
+          // SCREEN fraction → WORLD t (perspective-correct via the endpoint depths)
+          // so the label lands at the screen point we chose, not a drifting lerp.
+          const wA = depthW(selN), wB = depthW(farN);
+          const t = (fsz > 1 || wA <= 0 || wB <= 0)
+            ? Math.min(chosen, 0.28) // degenerate depth — hug the selected end
+            : (chosen / wB) / ((1 - chosen) / wA + chosen / wB);
+          obj.position.copy(EL_V.set(selN.x, selN.y, selN.z)).lerp(EL_V.set(farN.x, farN.y, farN.z), Math.max(0, Math.min(1, t)));
         }
       };
 
@@ -2275,9 +2365,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
 
       const clock = new THREE.Clock();
       let beamFrame = 0;
+      let pendingResize = false; // set by the ResizeObserver, drained in tick()
       const tick = (): void => {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
+        // Coalesce resize INTO the frame. The host height animates every frame
+        // during pull-to-enter; a ResizeObserver that calls resize() synchronously
+        // reallocates the GL buffer + bloom targets MID-FRAME, stalling the loop
+        // (the pull jank). Instead RO just flags, and we do the one realloc here at
+        // frame start — at most once per rendered frame, never mid-render.
+        if (pendingResize) { pendingResize = false; resize(); }
         const delta = clock.getDelta();
         // ── advance the SHELL (the camera never moves; no idle auto-spin — a
         // place you inhabit holds still, the sphere waits for your hand). ──
@@ -2374,7 +2471,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         renderer.setSize(W, H); labelRenderer.setSize(W, H); composer?.setSize(W, H);
         ptMat.uniforms.uScale.value = H / 2;
       };
-      ro = new ResizeObserver(resize);
+      // Flag only — the actual realloc is drained at the top of tick() so it
+      // never lands mid-render (see the pull-to-enter jank note there).
+      ro = new ResizeObserver(() => { pendingResize = true; });
       ro.observe(el);
 
       // ── live TUNE application — SHARED by the ?tune=1 lil-gui panel and the
@@ -2642,11 +2741,35 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         geo.setDrawRange(0, nodes.length);
         syncBeamLabels();
       };
+      // ── doc/file twin dedupe (ADR-0027's corpus mirror meets the graph) ──
+      // Every synced doc exists TWICE in the substrate: the `file/docs/X.md`
+      // source mirror and its `doc:docs/X` view. Both are public, so both fold
+      // into the band and every document rendered as a twin pair of stars
+      // (guest probe: 210 nodes, 66 duplicated docs). One document = one star:
+      // the doc: header is the canonical node; its file mirror is source
+      // material (still read by the body fallback — just not a separate star).
+      const fileTwinOf = (id: string): string | null => {
+        const m = id.match(/^(?:([^/]+)\/)?doc:(docs\/.+)$/);
+        return m ? `${m[1] ? `${m[1]}/` : ''}file/${m[2]}.md` : null;
+      };
+      const docTwinOf = (id: string): string | null => {
+        const m = id.match(/^(?:([^/]+)\/)?file\/(docs\/.+)\.md$/);
+        return m ? `${m[1] ? `${m[1]}/` : ''}doc:${m[2]}` : null;
+      };
       const appendEntries = (items: ListEntry[]): void => {
         let changed = false;
         let added = false;
         for (const e of items) {
           if (!e?.key || isPlumbing(e)) continue;
+          // A file mirror whose doc twin is on the map never becomes a node; a
+          // doc arriving after its mirror retires the mirror's star in place.
+          const docTwin = docTwinOf(e.key);
+          if (docTwin && nodeById.get(docTwin) && !nodeById.get(docTwin).deleted) continue;
+          const fileTwin = fileTwinOf(e.key);
+          if (fileTwin) {
+            const twin = nodeById.get(fileTwin);
+            if (twin && !twin.deleted) { twin.deleted = true; changed = true; }
+          }
           const existing = nodeById.get(e.key);
           if (e._meta?.superseded) {
             if (existing && !existing.deleted) { existing.deleted = true; changed = true; }
@@ -2680,7 +2803,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // wherever their seat currently sits).
           // Semantic seat is the base; authored + live seats start equal to it
           // (a new star sits by meaning until an authored layout re-places it).
-          [n.sdx, n.sdy, n.sdz] = toDir(coordMap?.[n.id], i);
+          // Owner-scoped lookup (ADR-0092 Inc 1): own atlas exact-first, else a
+          // grant-folded `owner/key` seats from THAT owner's public map.
+          [n.sdx, n.sdy, n.sdz] = toDir(lookupCoord(n.id, coordMap, pubMaps), i);
           n.ldx = n.sdx; n.ldy = n.sdy; n.ldz = n.sdz;
           n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz;
           n.cr0 = seatRadius(n.score);
@@ -2836,7 +2961,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const frameInitial = (): void => {
         const h = readHashState();
         if (h.zoom != null && Number.isFinite(h.zoom)) {
-          zoomZ = zoomZT = Math.max(0, Math.min(Z_BALL, h.zoom));
+          // Preview stays in the planetarium — a restored zoom can't put the
+          // trailhead into the chart/ball vantage.
+          zoomZ = zoomZT = Math.max(0, Math.min(previewRef.current ? Z_DOME : Z_BALL, h.zoom));
           lastZoomHash = zoomZ;
           layoutDirty = true;
         }
@@ -3035,7 +3162,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
   useEffect(() => {
     if (selectedKey === lastExternal.current) return;
     lastExternal.current = selectedKey;
-    api.current?.select(selectedKey, true);
+    api.current?.select(selectedKey, true, false); // external — re-orient silently, no onSelect echo
   }, [selectedKey]);
 
   useEffect(() => { api.current?.setVisible(visible); }, [visible]);
@@ -3054,6 +3181,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
     api.current?.toggleVantage();
   }, [vantageNonce]);
 
+  const lastDomeNonce = useRef(domeNonce);
+  useEffect(() => {
+    if (domeNonce === lastDomeNonce.current) return;
+    lastDomeNonce.current = domeNonce;
+    api.current?.toDome();
+  }, [domeNonce]);
+
   return (
     <>
       {/* `host` is imperative-only territory below (innerHTML/appendChild
@@ -3064,19 +3198,25 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       {/* On the landing (heroHeight set) the host occupies only the hero band,
           so the graph is the sky above the fold and the content below is solid
           ground with nothing live behind it. Entered, it fills the viewport. */}
-      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden' }} />
+      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden', transition: heroSpring ? 'height 0.55s cubic-bezier(.22,1,.36,1)' : 'none' }} />
     </>
   );
 }
 
-export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }: {
+export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight, heroSpring = false, domeNonce = 0 }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   /** Trailhead backdrop: gate zoom/curl (spin + tap-select stay live). */
   preview?: boolean;
+  /** Bumped on exit-to-trailhead: glide the vantage back under the dome. */
+  domeNonce?: number;
   /** When set (the landing), the graph host occupies only this height (the hero
-   *  band) instead of the full viewport, so the content below is solid ground. */
+   *  band) instead of the full viewport, so the content below is solid ground.
+   *  During pull-to-enter it GROWS toward full so the commit finds it already
+   *  full-height (no snap). */
   heroHeight?: string;
+  /** Spring the height on change (rest/release) vs track a live pull (no anim). */
+  heroSpring?: boolean;
 }): React.JSX.Element {
   // Two independent ideas: FOCUS filters what is already charted; REACH pages
   // more of the substrate into the chart. Keeping both visible prevents a
@@ -3085,14 +3225,27 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
   const [revealNonce, setRevealNonce] = useState(0);
   const [vantageNonce, setVantageNonce] = useState(0);
   const [reach, setReach] = useState<GraphReach>({ charted: 0, total: 0, loading: true, hasMore: false, paused: false });
+  // The frosted-glass knobs (blur/opacity) are tunable (TUNE) — re-render the bar
+  // when a tuner change or reset fires, so it stays in step with the palette pane.
+  const [, bumpGlass] = useState(0);
+  useEffect(() => {
+    const onTune = (): void => bumpGlass((v) => v + 1);
+    window.addEventListener(TUNE_EVENT, onTune);
+    window.addEventListener(TUNE_RESET_EVENT, onTune);
+    return () => { window.removeEventListener(TUNE_EVENT, onTune); window.removeEventListener(TUNE_RESET_EVENT, onTune); };
+  }, []);
   // ONE compact, de-emphasised control bar (owner: the panels covered too much
-  // sky on mobile) — a single translucent pill: focus · vantage · charting.
+  // sky on mobile) — a single translucent pill: focus · vantage · charting. It
+  // wears the SAME frosted glass as the palette (owner: apply the glass here
+  // too), driven by the same tunable blur/opacity.
   const bar: React.CSSProperties = {
     position: 'fixed', right: 10, top: 'calc(max(10px, env(safe-area-inset-top)) + 48px)', zIndex: 20,
     maxWidth: 'calc(100vw - 20px)',
     fontFamily: ink.mono, fontSize: '0.66rem', color: ink.text,
-    background: 'rgba(20,17,13,0.42)', border: `1px solid ${ink.line}`,
-    borderRadius: 999, backdropFilter: 'blur(6px)',
+    background: `rgba(24,21,17,${TUNE.glassOpacity})`, border: `1px solid ${ink.line}`,
+    borderRadius: 999,
+    backdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
+    WebkitBackdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
     padding: '0.24rem 0.4rem 0.24rem 0.6rem',
     display: 'flex', alignItems: 'center', gap: '0.45rem',
   };
@@ -3102,6 +3255,37 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
     font: `600 0.64rem ${ink.mono}`, cursor: 'pointer', whiteSpace: 'nowrap',
   };
   const short = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k` : `${n}`);
+  // FOCUS + VANTAGE collapse to ICONS (owner). Focus: a plain TAP toggles the
+  // extremes (0 focus ↔ 1 full); a press-and-DRAG scrubs the scalar in place (no
+  // separate slider mode) — the ring gauge in the icon shows the level, and a
+  // transient % readout shows while scrubbing. Vantage stays a toggle; a local
+  // mirror of its state only picks the glyph (the graph owns the truth).
+  const focusDrag = useRef<{ x: number; v: number; moved: boolean } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [vantageOn, setVantageOn] = useState(false);
+  const onFocusDown = (e: React.PointerEvent): void => {
+    focusDrag.current = { x: e.clientX, v: visible, moved: false };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
+  };
+  const onFocusMove = (e: React.PointerEvent): void => {
+    const d = focusDrag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    if (Math.abs(dx) > 4) { d.moved = true; if (!scrubbing) setScrubbing(true); }
+    if (d.moved) setVisible(Math.max(0, Math.min(1, d.v + dx / 130))); // ~130px = full sweep
+  };
+  const onFocusUp = (): void => {
+    const d = focusDrag.current;
+    focusDrag.current = null;
+    setScrubbing(false);
+    if (d && !d.moved) setVisible(visible > 0 ? 0 : 1); // tap toggles 0 ↔ full
+  };
+  const iconBtn: React.CSSProperties = {
+    appearance: 'none', border: `1px solid ${ink.line}`, background: 'transparent',
+    color: ink.text, borderRadius: 999, minHeight: 28, minWidth: 28,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', padding: 0, position: 'relative', flexShrink: 0,
+  };
   return (
     <>
       <ThreeGraph
@@ -3113,31 +3297,42 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight }
         vantageNonce={vantageNonce}
         preview={preview}
         heroHeight={heroHeight}
+        heroSpring={heroSpring}
+        domeNonce={domeNonce}
       />
       { !preview && <section aria-label="Graph controls" style={bar}>
-        <span style={{ color: ink.dim }}>focus</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.02}
-          value={visible}
-          onChange={(e) => setVisible(Number(e.target.value))}
-          aria-label="Filter charted facts by salience"
-          title="Filter the charted facts by salience"
-          style={{ width: 60, accentColor: ink.accent, cursor: 'pointer', margin: 0 }}
-        />
-        <span style={{ color: visible >= 0.999 ? ink.text : ink.dim, fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>
-          {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
-        </span>
-        <span style={{ width: 1, height: 18, background: ink.line, opacity: 0.7 }} />
+        {/* FOCUS icon — tap toggles focus ↔ all, drag scrubs. The conic ring is a
+            level gauge (accent sweep = how much is shown); the inner dot masks it
+            to a ring. A % readout floats to the left only while scrubbing. */}
         <button
           type="button"
-          onClick={() => setVantageNonce((n) => n + 1)}
-          title="Toggle vantage: step outside to hold the whole globe, or back to the centre under the sky (selection kept)"
-          style={{ ...chip, color: ink.text }}
+          aria-label={`Focus ${visible >= 0.999 ? 'all' : Math.round(visible * 100) + '%'} — tap to toggle, drag to scrub`}
+          title="Focus: tap toggles focus ↔ all; drag to scrub the salience filter"
+          onPointerDown={onFocusDown}
+          onPointerMove={onFocusMove}
+          onPointerUp={onFocusUp}
+          onPointerCancel={onFocusUp}
+          style={{ ...iconBtn, touchAction: 'none' }}
         >
-          vantage
+          <span aria-hidden style={{ width: 15, height: 15, borderRadius: 999, display: 'block', background: `conic-gradient(${ink.accent} ${Math.max(visible, 0.0001) * 360}deg, ${ink.line} 0)` }} />
+          <span aria-hidden style={{ position: 'absolute', inset: 0, margin: 'auto', width: 7, height: 7, borderRadius: 999, background: ink.bg }} />
+          {scrubbing ? (
+            <span style={{ position: 'absolute', right: '112%', whiteSpace: 'nowrap', color: ink.text, fontVariantNumeric: 'tabular-nums', background: 'rgba(24,21,17,0.92)', border: `1px solid ${ink.line}`, borderRadius: 6, padding: '0.1rem 0.4rem' }}>
+              {visible >= 0.999 ? 'all' : `${Math.round(visible * 100)}%`}
+            </span>
+          ) : null}
+        </button>
+        <span style={{ width: 1, height: 18, background: ink.line, opacity: 0.7 }} />
+        {/* VANTAGE icon — a toggle; the glyph fills when stepped outside. */}
+        <button
+          type="button"
+          onClick={() => { setVantageNonce((n) => n + 1); setVantageOn((v) => !v); }}
+          aria-label="Toggle vantage"
+          aria-pressed={vantageOn}
+          title="Toggle vantage: step outside to hold the whole globe, or back to the centre under the sky (selection kept)"
+          style={{ ...iconBtn, fontSize: '0.92rem', color: vantageOn ? ink.accent : ink.text }}
+        >
+          {vantageOn ? '◉' : '◎'}
         </button>
         <button
           type="button"

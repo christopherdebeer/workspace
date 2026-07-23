@@ -1,7 +1,10 @@
 # ADR-0092 — Cross-slice public embedding & indexing: semantic layout and search for shared/public views
 
-- **Status:** Proposed 2026-07-22 (draft; no code yet). Successor problem opened
-  by ADR-0091's "known gap".
+- **Status:** Accepted 2026-07-22 — Inc 1 + Inc 2 implemented (as amended
+  below: owner-scoped lookup, coords-only `.pub`, stream-driven refresh), plus
+  the A4 short-term search-coverage fix. Inc 3's `PUBLIC_INDEX` endgame and
+  Inc 4 (shared public basis) remain open. Successor problem opened by
+  ADR-0091's "known gap".
 - **Depends on:** ADR-0091 (the public read path + the `owner/key` grant fold
   across query/peek/edges), ADR-0030 (semantic search over S3 Vectors — the
   per-scope vector index + `workspace.search`/`query{text}` relevance), ADR-0047
@@ -140,6 +143,66 @@ served to anyone but the owner.
 - A new artifact class — **audience-scoped derived data** (`*.pub`, or a platform
   public aggregate) — enters the model; it must ride the same `_public/` boundary
   as raw facts, and refresh with them (stream-driven, like the vector indexer).
+
+## Amendments (2026-07-22, pre-implementation review — multi-user sprint)
+
+A second review pass, grounded line-by-line in the implementations, made four
+corrections before code. They amend the increments above; where they conflict,
+the amendment wins.
+
+**A1 — Inc 1 is owner-scoped lookup, not a flat key strip.** The proposed
+`coordMap[strip(node.id)]` fallback has a mis-seat hazard for an *authenticated*
+viewer with grants: the client loads the viewer's OWN layout, the stripped
+foreign key (`c15r/file/docs/x.md` → `file/docs/x.md`) can collide with an
+unrelated own fact of that name, and the foreign node seats at a meaningless
+position in the viewer's basis. And with multiple public owners (this sprint),
+two owners' coordMaps are in incomparable bases and collide on bare keys, so a
+flat merged map is wrong twice over. The client instead keeps **per-owner
+maps**: a folded node `owner/key` is seated ONLY from that owner's public map
+under the bare key; own-slice nodes only from the own map. Per-owner
+constellations render as islands — Inc 4(b)-lite, the honest interim — and
+Inc 4(a) later becomes "swap the map source", not a re-key.
+
+**A2 — `_home/embed2d.pub` is coords-only (no basis/norm).** The coords are in
+the owner's basis, fine — but the basis itself (corpus mean + principal axes)
+is fit over the WHOLE slice including private facts: a statistical artifact of
+private content. Viewers never project new vectors, so `.pub` carries only
+`{ patterns, coords, count, generatedAt }`. This extends the invariant from
+keys to derived aggregates at zero cost. (`patterns` — the `_public/` share
+patterns the artifact was filtered by — are world-readable by definition and
+let the incremental patcher test coverage without a slice scan.)
+
+**A3 — Refresh is stream-driven; the trigger already exists.** `_public/<pattern>`
+reflections are ordinary facts, so share/unshare flows through the DDB stream
+the vector-indexer already consumes (it currently no-ops on them —
+`indexableText` skips `_` keys). Two lanes: a `_public/` write/supersede →
+**wholesale rebuild** of `.pub` from the existing layout shards + current
+patterns (no re-projection — the coords already exist); a covered regular fact
+write → **incremental patch** beside the existing `patchProjection`, projecting
+on the persisted basis. Batch `project` also writes `.pub` (the replay path)
+and performs the one-time `share {to:"public"}` of the artifact. Stated
+honestly: **unshare → removal from `.pub` is eventually consistent** (a
+retracted key name lingers until the stream batch lands — bounded seconds).
+
+**A4 — Inc 3's real defect is topK starvation, not membership.** Coverage is
+already enforced on the folded entries (`grantCovers` post-filter); nothing
+leaks. But `relevanceFor` takes the granted owner's index top-K (200) over the
+WHOLE slice, so an owner with 8 public facts among 3,000 yields a top-K
+dominated by private hits — the covered facts score relevance 0 and rank as if
+irrelevant. Short-term fix (this sprint): for granted-owner queries, widen the
+top-K and filter candidates to the viewer's covered keys BEFORE building the
+relevance map. The endgame is the dormant `PUBLIC_INDEX` seam (ADR-0030 §2a) —
+a real public-only index — decided when guest search quality is measurably
+inadequate, not preemptively.
+
+**Serving `.pub` (resolves the "where does it live" question):** the owner
+shares it once — `share {to:"public", key:"_home/embed2d.pub"}` (done by
+`project` when public patterns exist). The client fetches it per-owner through
+**peek's existing `owner/key` addressing** (`peek {key:"<owner>/_home/embed2d.pub"}`
+resolves through the grant fold today, unmodified), discovering granting owners
+from `workspace.shared`'s `receiving` list. No new read plumbing. The folded
+`.pub`/`_public/` reflection facts must stay out of the node band client-side
+(the plumbing filter learns the folded `owner/_…` spelling).
 
 ## Open questions
 

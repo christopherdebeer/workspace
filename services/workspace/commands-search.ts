@@ -28,12 +28,14 @@ import {
   projectionArtifacts,
   layoutShardKey,
   LAYOUT_KEY,
+  PUB_LAYOUT_KEY,
+  publicLayout,
   contentHash,
   isTimerLive,
 } from '../../platform/runtime';
 import type { EventBridgeHandler } from '../../platform/runtime';
 import { shapeEntryList, type ReadShape } from './shape';
-import { applicableGrants, grantCovers } from './grants';
+import { applicableGrants, grantCovers, PUBLIC, PUBLIC_NS } from './grants';
 import {
   type DepsBuilder,
   type WorkspaceDeps,
@@ -379,8 +381,33 @@ export function createSearchCommands(build: DepsBuilder): Pick<WorkspaceCommands
       await Promise.all(shards.map((s, i) =>
         state.put({ scope, key: layoutShardKey(i), value: s, via: 'project', type: 'graph-layout-shard' }, ctx.identity)));
       await state.put({ scope, key: LAYOUT_KEY, value: manifest, via: 'project', type: 'graph-layout' }, ctx.identity);
-      ctx.logger.info('semantic projection written', { scope, count: manifest.count, method: manifest.method, shards: manifest.shards });
-      return { status: 'ok', count: manifest.count, method: manifest.method, key: LAYOUT_KEY };
+
+      // ADR-0092 Inc 2: the audience-safe PUBLIC projection beside the atlas —
+      // only `_public/`-covered keys, coords-only (no basis/norm: the basis is
+      // fit over the whole slice, private facts included — A2). Written on
+      // every project() (the batch/replay path; the stream indexer keeps it
+      // fresh between runs), and auto-shared to `public` the first time public
+      // patterns exist — the owner ran project() themselves, and the artifact
+      // is safe to expose by construction, so this is the ADR's "reflected/
+      // served like other public reads" made concrete.
+      const pubFacts = await state.query(scope, { prefix: PUBLIC_NS, limit: 500 }, ctx.identity);
+      const patterns = pubFacts.entries.map(
+        (e) => ((e.value as { pattern?: string } | null)?.pattern ?? e.key.slice(PUBLIC_NS.length)),
+      );
+      const merged: Record<string, [number, number, number]> = {};
+      for (const s of shards) Object.assign(merged, s.coords);
+      const pub = publicLayout(merged, patterns, manifest.generatedAt);
+      await state.put({ scope, key: PUB_LAYOUT_KEY, value: pub, via: 'project', type: 'graph-layout-public' }, ctx.identity);
+      if (patterns.length && !patterns.includes(PUB_LAYOUT_KEY)) {
+        const { grants } = build(ctx);
+        await grants.put({ owner: scope, grantee: PUBLIC, key: PUB_LAYOUT_KEY, mode: 'read', createdAt: new Date().toISOString() });
+        await state.put(
+          { scope, key: `${PUBLIC_NS}${PUB_LAYOUT_KEY}`, value: { pattern: PUB_LAYOUT_KEY, sharedAt: new Date().toISOString() }, via: 'share:public', type: 'public-share', tags: ['public'] },
+          ctx.identity,
+        );
+      }
+      ctx.logger.info('semantic projection written', { scope, count: manifest.count, method: manifest.method, shards: manifest.shards, publicCount: pub.count });
+      return { status: 'ok', count: manifest.count, method: manifest.method, key: LAYOUT_KEY, publicCount: pub.count };
     },
 
     async pruneSimilar(input, ctx) {

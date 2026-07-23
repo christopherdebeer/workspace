@@ -14,10 +14,12 @@
  * to the type's declared surface.
  */
 import * as React from 'react';
+import { theme } from '@parc/ui';
 import { Console } from './console';
 import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
+import { TUNE, TUNE_EVENT, TUNE_RESET_EVENT } from './graph/tune';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -36,11 +38,13 @@ interface NeighborRef { key: string; rel: string; entry: ListEntry }
 /** The selected fact's context: peeked content + its neighbourhood as chips +
  *  the verbs that can act on it (ADR-0049 — `$catalog {for}`; tapping one
  *  seeds the console). */
-function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: string; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
+function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore, onSelectKey, onClear, onCommand, onBack, trailCount = 0 }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; /** Minimized: a slim look-at strip (icon + title + ×) instead of the full panel. */ mini?: boolean; onRestore?: () => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void; /** Selection-back trail (drills through chips/search push it) — ‹ steps back. */ onBack?: () => void; trailCount?: number }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
-  const [showBody, setShowBody] = useState(false);
+  // `bodyOpen` (the peek's fact-body expansion) is LIFTED to Palette so the
+  // drag handle can drive it as the first rung of the sheet ladder; the title
+  // tap and the caret still toggle it locally through the passed setter.
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
@@ -48,7 +52,6 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
     setEntry(null);
     setNeighbors([]);
     setVerbs([]);
-    setShowBody(false);
     setEditing(false);
     // The contextual capability menu — what can ACT on this fact, inferred
     // from its type signals (ADR-0049). Type-specific tools lead; the
@@ -97,41 +100,87 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   // A chip whose label is an icon and an ellipsis says nothing — only
   // neighbours with a resolvable TITLE earn a chip.
   const namedNeighbors = neighbors.filter((n) => !!factTitle(n.entry));
+  if (mini) {
+    // MINIMIZED (owner: drag-down past the console collapses to tiny): a slim
+    // look-at strip — icon + one-line title + × — the fact stays SELECTED (the
+    // graph keeps looking at it) while the instrument gets out of the sky.
+    // Tap the strip (or drag up) to restore the full panel. Search input below
+    // stays (owner choice).
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: '0.3rem 0.7rem 0.4rem', borderBottom: `1px solid ${ink.line}` }}>
+        {trailCount > 0 ? (
+          <button onClick={onBack} aria-label="back to previous fact" title="Back" style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0.1rem 0.25rem', flexShrink: 0 }}>‹</button>
+        ) : null}
+        <button
+          onClick={onRestore}
+          title={factKey}
+          style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.45rem', background: 'none', border: 'none', color: ink.text, cursor: 'pointer', padding: '0.15rem 0', textAlign: 'left' }}
+        >
+          <span aria-hidden style={{ fontSize: '0.85rem', flexShrink: 0 }}>{typeIcon(e)}</span>
+          <span style={{ fontFamily: theme.serif, fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{factTitle(e)}</span>
+          <span aria-hidden style={{ color: ink.dim, fontSize: '0.7rem', flexShrink: 0 }}>▸</span>
+        </button>
+        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none', padding: '0.15rem 0.4rem' }} onClick={onClear} aria-label="clear selection">×</button>
+      </div>
+    );
+  }
   return (
-    <div style={{ display: 'grid', gap: '0.4rem', padding: '0.55rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-        {/* The SAME reading the trailhead shows, in dark tone (consistency): icon
-            + title + metadata. Clicking it toggles the body (a div, not a button,
-            so the reading's h2/meta nest legally). */}
+    <div style={{ display: 'grid', gap: '0.45rem', padding: '0.6rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
+      {/* TITLE FIRST (owner feedback #5/#3): the fact's name owns the top line at
+          full reading size and WRAPS — no more "The Substrate T…" ellipsis. The
+          only control on this line is × (clear), pinned right; edit/open moved to
+          their own quiet row below so nothing competes with the name for the eye.
+          Tapping the name toggles the body (a div, not a button, so the
+          reading's h2/meta nest legally). */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', minWidth: 0 }}>
+        {/* Selection-back (mirrors the peek stack's ‹): drills through neighbour
+            chips / search picks push the trail; ‹ walks back through what you
+            were reading. Graph star taps REPLACE, they don't push (owner). */}
+        {trailCount > 0 ? (
+          <button onClick={onBack} aria-label="back to previous fact" title={`Back (${trailCount})`} style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontSize: '1.05rem', lineHeight: 1, padding: '0.12rem 0.25rem', marginTop: '0.05rem', flexShrink: 0 }}>‹</button>
+        ) : null}
+        {/* Caret on the LEFT (owner feedback) — the expand/collapse control sits
+            away from the × (dismiss), so the two axes don't share an edge. It
+            toggles the body too; the drag handle drives the same state. */}
+        <button
+          aria-label={bodyOpen ? 'collapse fact' : 'expand fact'}
+          onClick={() => setBodyOpen((b) => !b)}
+          style={{ background: 'none', border: 'none', color: ink.dim, flexShrink: 0, fontSize: '0.8rem', cursor: 'pointer', padding: '0.15rem 0.2rem', marginTop: '0.1rem' }}
+        >
+          {bodyOpen ? '▾' : '▸'}
+        </button>
         <div
           role="button"
           tabIndex={0}
-          onClick={() => setShowBody((b) => !b)}
-          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setShowBody((b) => !b); } }}
+          onClick={() => setBodyOpen((b) => !b)}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setBodyOpen((b) => !b); } }}
           title={factKey}
           style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
         >
-          <FactReading e={e} tone="dark" compact />
+          <FactReading e={e} tone="dark" />
         </div>
-        <span aria-hidden style={{ color: ink.dim, flexShrink: 0, fontSize: '0.8rem' }}>{showBody ? '▾' : '▸'}</span>
-        {/* Actions live on the panel FRAME (where peek used to be), not inside
-            the scrolling body — owner feedback. */}
-        {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
-        {canEditInline ? (
-          <button
-            style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
-            onClick={() => {
-              setEditing((v) => !v);
-              setShowBody(true);
-            }}
-          >
-            edit
-          </button>
-        ) : null}
-        {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
-        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none' }} onClick={onClear} aria-label="clear selection">×</button>
+        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none', padding: '0.15rem 0.4rem' }} onClick={onClear} aria-label="clear selection">×</button>
       </div>
-      {showBody && entry ? (
+      {/* Actions on their OWN quiet row — the panel FRAME (where peek used to be),
+          not inside the scrolling body, and no longer crowding the title. */}
+      {editHref || canEditInline || href ? (
+        <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {editHref ? <a style={chip} href={localize(editHref)}>edit ↗</a> : null}
+          {canEditInline ? (
+            <button
+              style={{ ...chip, borderColor: editing ? ink.accent : ink.line, color: editing ? ink.accent : ink.text }}
+              onClick={() => {
+                setEditing((v) => !v);
+                setBodyOpen(true);
+              }}
+            >
+              edit
+            </button>
+          ) : null}
+          {href ? <a style={chip} href={localize(href)}>open ↗</a> : null}
+        </div>
+      ) : null}
+      {bodyOpen && entry ? (
         <div style={{ maxHeight: 'min(42dvh, 340px)', overflowY: 'auto', overscrollBehavior: 'contain', background: ink.panel, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.6rem 0.7rem', fontSize: '0.82rem' }}>
           {editing ? (
             <InlineFactEditor
@@ -152,9 +201,14 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
           then the neighbours that actually HAVE a name. Horizontal scroll. */}
       {verbs.length || namedNeighbors.length ? (
         <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', overscrollBehavior: 'contain', paddingBottom: 5, alignItems: 'center', scrollbarWidth: 'thin', scrollbarColor: `${ink.line} transparent` }}>
+          {/* Verbs QUIETED (owner feedback #5): they used to shout in gold and
+              outrank the title. Now neutral like neighbour chips, marked as
+              actions by a dim leading `›` (run-this) rather than by colour, so
+              the title wins the hierarchy. */}
           {verbs.slice(0, 3).map((v) => (
-            <button key={v.target} style={{ ...chip, borderColor: ink.accent, color: ink.accent, maxWidth: 220 }} title={v.target} onClick={() => onCommand(v.target)}>
-              {v.target.slice(v.target.lastIndexOf('.') + 1)}
+            <button key={v.target} style={{ ...chip, maxWidth: 220, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }} title={v.target} onClick={() => onCommand(v.target)}>
+              <span aria-hidden style={{ color: ink.dim, flexShrink: 0 }}>›</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{v.target.slice(v.target.lastIndexOf('.') + 1)}</span>
             </button>
           ))}
           {verbs.length && namedNeighbors.length ? <span aria-hidden style={{ color: ink.line, flexShrink: 0 }}>·</span> : null}
@@ -184,12 +238,58 @@ function ContextPanel({ factKey, onSelectKey, onClear, onCommand }: { factKey: s
   );
 }
 
-export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
+export function Palette({ authed, selectedKey, onSelectKey, onClear, overlaid = false, onExitPull, onExitCommit, exitProgress = 0 }: {
+  authed: boolean;
+  selectedKey: string | null;
+  onSelectKey: (k: string) => void;
+  onClear: () => void;
+  /** A peek stack is open above the palette — render minimized under it (the
+   *  stack floats above the slim strip; restores when the stack closes). */
+  overlaid?: boolean;
+  /** MIRROR EXIT (gesture-tracked): live px of the upward grip drag while a fact
+   *  is peeked — the app rewinds the enter transition by it. 0 cancels. */
+  onExitPull?: (px: number) => void;
+  /** Commit the exit (drag past threshold released, or keyboard/discrete). */
+  onExitCommit?: () => void;
+  /** The app's exit progress (0–1) — fades the palette away as the trailhead
+   *  arrives, both during the gesture and through the settle beat. */
+  exitProgress?: number;
+}): React.JSX.Element {
   // `open` = the results sheet is expanded. The SEARCH INPUT is always visible
   // (it IS the bottom bar now — owner feedback: fix the input to the bottom and
   // let the sheet collapse while the query, selection, and graph highlights
   // persist, so a phone can see what a search lit up).
   const [open, setOpen] = useState(false);
+  // The peek's fact-body expansion, LIFTED here (from ContextPanel) so the drag
+  // handle can drive it as the FIRST rung of the sheet ladder. Reset whenever
+  // the selection changes — a freshly-peeked fact opens collapsed (header only).
+  const [bodyOpen, setBodyOpen] = useState(false);
+  useEffect(() => { setBodyOpen(false); }, [selectedKey]);
+  // MINIMIZED palette (owner): the third down-rung. PERSISTS across selection
+  // changes — the point is watching the graph with the instrument out of the
+  // way, so tapping star to star keeps the slim look-at strip (title updates).
+  const [mini, setMini] = useState(false);
+  // A peek stack overlays the palette: collapse the console sheet so the
+  // instrument fits the strip zone the stack leaves below it.
+  useEffect(() => { if (overlaid) setOpen(false); }, [overlaid]);
+  // SELECTION-BACK TRAIL (owner: the peek stack's affordance, on the palette):
+  // drilling FROM the palette — a neighbour chip, a search pick — pushes the
+  // fact you were reading; ‹ steps back through them. Graph star taps REPLACE
+  // the selection without pushing (back means "return to what I was reading",
+  // not "undo every look"). Capped; cleared when the selection is cleared.
+  const [trail, setTrail] = useState<string[]>([]);
+  const drillTo = useCallback((k: string): void => {
+    if (selectedKey && selectedKey !== k) setTrail((t) => [...t.slice(-19), selectedKey]);
+    onSelectKey(k);
+  }, [selectedKey, onSelectKey]);
+  const trailBack = useCallback((): void => {
+    setTrail((t) => {
+      const prev = t[t.length - 1];
+      if (prev) onSelectKey(prev);
+      return t.slice(0, -1);
+    });
+  }, [onSelectKey]);
+  const clearAll = useCallback((): void => { setTrail([]); onClear(); }, [onClear]);
   // ADR-0049: a context-panel verb chip opens the console pre-searched to that
   // target (nonce so the same chip re-seeds after manual edits).
   const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
@@ -197,6 +297,91 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
     setSeed((s) => ({ q: target, n: (s?.n ?? 0) + 1 }));
     setOpen(true);
   }, []);
+
+  // The frosted-glass knobs (blur/opacity) are tunable (TUNE) — re-render when a
+  // tuner change (or reset) fires, so dialling them updates the pane live.
+  const [, bumpGlass] = useState(0);
+  useEffect(() => {
+    const onTune = (): void => bumpGlass((v) => v + 1);
+    window.addEventListener(TUNE_EVENT, onTune);
+    window.addEventListener(TUNE_RESET_EVENT, onTune);
+    return () => {
+      window.removeEventListener(TUNE_EVENT, onTune);
+      window.removeEventListener(TUNE_RESET_EVENT, onTune);
+    };
+  }, []);
+
+  // THE SHEET LADDER. Pull-UP on a PEEKED fact is a COMMIT to reading it: the
+  // graph leaves and the fact opens FULL on the trailhead — expanding the peek
+  // and leaving the graph are the SAME motion (owner). The drag TRACKS the exit
+  // live (onExitPull, the mirror of pull-to-enter); keyboard/tap commits
+  // discretely (onExitCommit). The console is NOT in the exit path; with
+  // nothing peeked, pull-up just opens it (search). (The caret/title tap still
+  // expands the peek body INLINE for a quick look without leaving.) Pull-DOWN
+  // collapses the inline body, then the console.
+  const expandStep = useCallback((): void => {
+    if (mini) { setMini(false); return; } //          minimized → restore the peek panel first
+    if (selectedKey) { onExitCommit?.(); return; } // peeked → full fact view (leave the graph)
+    if (!open) { setOpen(true); return; } //          no peek → open the console first
+    onExitCommit?.(); //                              console already open → the top of the ladder is the exit
+  }, [mini, selectedKey, open, onExitCommit]);
+  const collapseStep = useCallback((): void => {
+    if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
+    else if (open) setOpen(false); //                   ② the console
+    else if (selectedKey && !mini) setMini(true); //    ③ minimize to the look-at strip
+    // else: already minimized (or nothing peeked) — do NOT dismiss (× owns that).
+  }, [selectedKey, bodyOpen, open, mini]);
+
+  // DRAG HANDLE: a touch-native way to walk the ladder. It lives on a dedicated
+  // grip strip that OWNS the vertical gesture (touchAction:none), so dragging
+  // the sheet never leaks through to the graph's enter/scroll — the phone
+  // scroll-conflict the ▴/▾ tap couldn't solve. `drag` is the live pointer
+  // delta in px; the container rubber-bands by it and snaps back on release.
+  const [drag, setDrag] = useState(0);
+  const dragStart = React.useRef<number | null>(null);
+  const DRAG_THRESH = 44;
+  // The exit gesture commits at the SAME distance as pull-to-enter (140px) —
+  // the two transitions are mirrors, so their gestures weigh the same.
+  const EXIT_COMMIT = 140;
+  const onHandleDown = (e: React.PointerEvent): void => {
+    dragStart.current = e.clientY;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
+  };
+  const onHandleMove = (e: React.PointerEvent): void => {
+    if (dragStart.current == null) return;
+    const dy = e.clientY - dragStart.current;
+    if (dy < 0 && !mini && (selectedKey || open) && onExitPull) {
+      // Upward at the TOP of the ladder = the MIRROR EXIT, tracked live: with a
+      // fact peeked (commit to reading it) OR with the console already open (no
+      // peek needed to leave — owner). Minimized is BELOW the ladder top — its
+      // up-drag restores the panel instead (endDrag → expandStep). The app
+      // rewinds the enter transition by this pull. The palette itself doesn't
+      // ride the finger — it dissolves/settles via exitProgress (the motion
+      // belongs to the world, not the sheet); the token -1px drag just keeps
+      // the CSS transition off so the fade tracks frame-for-frame.
+      setDrag(-1);
+      onExitPull(-dy);
+      return;
+    }
+    if (onExitPull) onExitPull(0); // crossed back below the start — cancel the exit
+    // Downward rubber-bands the whole sheet; upward gives a small lift hint
+    // (expansion grows the sheet, it doesn't slide it).
+    setDrag(dy > 0 ? Math.min(dy, 160) : Math.max(dy, -60));
+  };
+  const endDrag = (e: React.PointerEvent): void => {
+    const dy = dragStart.current == null ? 0 : e.clientY - dragStart.current;
+    dragStart.current = null;
+    setDrag(0);
+    if (dy < 0 && !mini && (selectedKey || open) && onExitPull) {
+      // Release the exit gesture: past the commit → step back to the trailhead;
+      // short → cancel, everything springs back to the graph.
+      if (-dy >= EXIT_COMMIT) onExitCommit?.();
+      else onExitPull(0);
+      return;
+    }
+    if (dy <= -DRAG_THRESH) expandStep();
+    else if (dy >= DRAG_THRESH) collapseStep();
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -222,15 +407,56 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         width: 'min(720px, calc(100vw - 12px))',
         zIndex: 40,
         display: 'grid',
-        background: ink.bg,
+        // FROSTED GLASS over the live graph (owner exploration): one translucent
+        // dark pane with a backdrop blur, so the field computer + the context
+        // panel read as a SINGLE sheet of glass — the console's old lighter
+        // `ink.panel` fill is gone, both sections now sit on this one surface —
+        // and the graph stays faintly visible, blurred, behind it. ink.bg
+        // (#181511) filled at TUNE.glassOpacity; the blur keeps text legible over
+        // bright stars. Both dials are tunable (group 'glass', live on TUNE_EVENT).
+        background: `rgba(24,21,17,${TUNE.glassOpacity})`,
+        backdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
+        WebkitBackdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
         border: `1px solid ${ink.line}`,
         borderRadius: 14,
         boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
         overflow: 'hidden',
         color: ink.text,
+        // MIRROR EXIT: the palette RIDES the drag upward while dissolving
+        // (owner: fade AND ride, so it still feels like a drag-up) — ~1/3 of
+        // the finger's travel, continuing up through the settle. It fades at
+        // DOUBLE speed (gone by ~half the gesture): its frosted glass over the
+        // arriving cream sheet read as mush when both sat half-faded (owner
+        // IMG_0372) — the instrument leaves early, then the trailhead arrives.
+        opacity: 1 - Math.min(1, exitProgress * 2.2),
+        pointerEvents: exitProgress >= 0.3 ? 'none' : undefined,
+        transform: drag || exitProgress ? `translateY(${(drag - exitProgress * 48).toFixed(1)}px)` : undefined,
+        transition: drag ? 'none' : 'transform 0.18s ease, opacity 0.45s ease',
       }}
     >
-      {selectedKey ? <ContextPanel factKey={selectedKey} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
+      {/* The grip: drag up to expand, down to collapse/dismiss (see onHandleDown).
+          A wide, thumb-sized target — generous vertical padding keeps the ~44px
+          hit strip, but the NEGATIVE bottom margin tucks the content up
+          underneath it (owner: the full-height strip read as dead space between
+          the pill and the peek/console). zIndex keeps the strip on top, so
+          touches in the overlap still grab the handle. */}
+      <div
+        onPointerDown={onHandleDown}
+        onPointerMove={onHandleMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        role="button"
+        tabIndex={0}
+        aria-label="resize the palette (drag up to expand, down to collapse)"
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp') { e.preventDefault(); expandStep(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); collapseStep(); }
+        }}
+        style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.55rem 0 1.3rem', marginBottom: '-1.15rem', position: 'relative', zIndex: 1, cursor: 'grab', touchAction: 'none' }}
+      >
+        <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
+      </div>
+      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini || overlaid} onRestore={() => setMini(false)} onSelectKey={drillTo} onClear={clearAll} onCommand={onCommand} onBack={trailBack} trailCount={trail.length} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
       <Console
@@ -239,7 +465,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
         collapsed={!open}
         onCollapse={(c) => setOpen(!c)}
         onSelectKey={(k) => {
-          onSelectKey(k);
+          drillTo(k); // a search pick is a DRILL — it pushes the back trail
           setOpen(false); // reveal the graph focus the selection just drove
         }}
       />

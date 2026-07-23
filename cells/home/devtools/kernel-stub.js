@@ -13,6 +13,7 @@ export const completeLoginIfReturning = async () => false;
 export const isAuthed = () => true;
 export const cellUrl = (owner, name, rest = '') => `/@${owner}/${name}${rest}`;
 export const refreshSessionCookie = () => {};
+export const localSignOut = () => {};
 
 // authFetch goes through the local serve.mjs proxy — the device token lives
 // server-side in /tmp/parc-token.json, never in the page.

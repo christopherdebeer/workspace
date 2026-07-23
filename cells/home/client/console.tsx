@@ -179,6 +179,10 @@ interface Cmd {
   schema?: Capability['inputSchema'];
   ui?: Capability['ui'];
   needsArgs: boolean;
+  /** Schema/ui/scope are loaded LAZILY (the whole catalog's schemas exceed the
+   *  read budget — see the load effect). false until `resolveCmd` has fetched
+   *  this one's full contract; probes are born resolved. */
+  resolved: boolean;
   run: (input: unknown) => Promise<{ ok: boolean; value: unknown }>;
   search: string;
 }
@@ -208,6 +212,7 @@ const PROBE_CMDS: Cmd[] = [
     scope: null,
     description: 'Live graph tuner — pick a section (quick, torch, labels, edges, zoom, bloom…) and dial it. Changes apply instantly; nothing is submitted.',
     needsArgs: false,
+    resolved: true,
     search: 'tune tuner graph adjust knobs sliders torch bloom zoom drag momentum labels feel dial quick section',
     run: async () => ({ ok: true, value: 'tuner' }),
   },
@@ -220,6 +225,7 @@ const PROBE_CMDS: Cmd[] = [
     scope: null,
     description: 'Who the session is — GET /mcp/whoami.',
     needsArgs: false,
+    resolved: true,
     search: 'probe whoami identity who am i',
     run: async () => {
       const res = await authFetch('/mcp/whoami');
@@ -237,6 +243,7 @@ const PROBE_CMDS: Cmd[] = [
     scope: null,
     description: 'The RFC 8414 authorization-server metadata.',
     needsArgs: false,
+    resolved: true,
     search: 'probe oauth discovery metadata well-known issuer',
     run: async () => {
       const r = await getJson('/.well-known/oauth-authorization-server');
@@ -249,25 +256,50 @@ const PROBE_CMDS: Cmd[] = [
   },
 ];
 
-function capToCmd(cap: Capability): Cmd {
+/** The GROUPED $catalog line (target · kind · summary) — enough to list, search,
+ *  and run a command. Its schema/ui/scope are filled in later by resolveCmd (the
+ *  full contract is a per-capability fetch — the whole catalog's schemas blow the
+ *  read budget). */
+interface GroupedCap { target: string; kind: 'read' | 'act'; summary?: string }
+function groupedCapToCmd(cap: GroupedCap): Cmd {
   const dot = cap.target.lastIndexOf('.');
   const ns = dot > 0 ? cap.target.slice(0, dot) : cap.target;
   const verb = cap.target.slice(dot + 1);
-  const needsArgs = Object.keys(cap.inputSchema?.properties ?? {}).length > 0 || !!cap.ui?.form;
+  const desc = cap.summary ?? '';
   return {
     id: cap.target,
     ns,
     verb,
     label: cap.target,
     kind: cap.kind,
-    scope: cap.scope,
-    description: cap.description,
-    schema: cap.inputSchema,
-    ui: cap.ui,
-    needsArgs,
-    search: `${cap.target} ${cap.description} ${cap.scope ?? ''}`.toLowerCase(),
+    scope: null,
+    description: desc,
+    schema: undefined,
+    ui: undefined,
+    needsArgs: false, // unknown until resolved; activate()/openForm() resolve first
+    resolved: false,
+    search: `${cap.target} ${desc}`.toLowerCase(),
     run: (input) => mcpCall(cap.kind === 'read' ? 'read' : 'act', cap.target, input),
   };
+}
+
+/** Fill in ONE command's full contract ({resolve:target}) — schema, ui, scope —
+ *  in place, the first time it's opened or run. No-op for probes and anything
+ *  already resolved; marks resolved even on error so a tap doesn't re-fetch. */
+async function resolveCmd(cmd: Cmd): Promise<Cmd> {
+  if (cmd.resolved) return cmd;
+  const r = await mcpCall('read', '$catalog', { resolve: cmd.id });
+  if (r.ok) {
+    const val = r.value as { capability?: { inputSchema?: Capability['inputSchema']; ui?: Capability['ui']; description?: string }; scope?: string | null };
+    const cap = val.capability;
+    cmd.schema = cap?.inputSchema;
+    cmd.ui = cap?.ui;
+    cmd.scope = val.scope ?? cmd.scope;
+    if (cap?.description) cmd.description = cap.description;
+    cmd.needsArgs = Object.keys(cap?.inputSchema?.properties ?? {}).length > 0 || !!cap?.ui?.form;
+  }
+  cmd.resolved = true;
+  return cmd;
 }
 
 /** Enter (or a row tap) RUNS a read/probe outright unless something genuinely
@@ -310,6 +342,7 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   const [busy, setBusy] = useState(false);
   const [outputs, setOutputs] = useState<Output[]>([]);
   const [results, setResults] = useState<ListEntry[]>([]);
+  const [searching, setSearching] = useState(false); // a semantic query is in flight
   const [searchN, setSearchN] = useState(16); // page size — grows via "more results"
   const counter = React.useRef(0);
 
@@ -325,12 +358,20 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   }, [seed?.n]);
 
   useEffect(() => {
-    if (!authed) return;
+    // NOT gated on `authed`: a signed-out visitor reaches this console only via
+    // the @guest token (the Palette mounts only once `entered`, which needs a
+    // read-capable session), and $catalog is grant-aware — a guest gets exactly
+    // the public read capabilities they may invoke. Gating on `authed` left
+    // guests on "Loading capabilities…" forever. Reloads on auth change (a
+    // sign-in widens the catalog).
     let live = true;
-    // `{detail:'full'}` returns the flat { capabilities:[…] } the console maps; a
-    // bare $catalog returns the ADR-0033 grouped summary — flatten that too so a
-    // future default change can't re-break this.
-    mcpCall('read', '$catalog', { detail: 'full' })
+    // The GROUPED $catalog (target · kind · summary) only — it fits the read
+    // budget where `{detail:'full'}` no longer does (122 caps for the owner, 47
+    // for a guest overflow it and return an ERROR, which silently dropped the
+    // console to probes-only for everyone). Enough to list, search, and run;
+    // each command's full schema is fetched lazily by resolveCmd when it's
+    // opened. Both the grouped array and the ADR-0033 cells[] shape are handled.
+    mcpCall('read', '$catalog', {})
       .then((r) => {
         if (!live) return;
         if (!r.ok) {
@@ -338,9 +379,9 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
           setCmds([...PROBE_CMDS]);
           return;
         }
-        const v = r.value as { capabilities?: Capability[]; cells?: Array<{ capabilities?: Capability[] }> };
+        const v = r.value as { capabilities?: GroupedCap[]; cells?: Array<{ capabilities?: GroupedCap[] }> };
         const caps = v.capabilities ?? (v.cells ?? []).flatMap((c) => c.capabilities ?? []);
-        setCmds([...caps.map(capToCmd), ...PROBE_CMDS]);
+        setCmds([...caps.map(groupedCapToCmd), ...PROBE_CMDS]);
       })
       .catch((e) => {
         if (live) {
@@ -376,13 +417,18 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   // (highlight + fit, debounced). Skipped for capability-address-looking input
   // (has a dot, no space), which is a command.
   useEffect(() => {
-    if (!authed) { setResults([]); return; }
+    // NOT gated on `authed` — a guest reads the public slice (same @guest token
+    // the graph already queries). A non-semantic query (a command address) runs
+    // no fact search, so it is never "searching".
     const semantic = q.length >= 2 && (query.includes(' ') || !query.includes('.'));
-    if (!semantic) { setResults([]); return; }
+    if (!semantic) { setResults([]); setSearching(false); return; }
     let live = true;
+    setSearching(true); // in-flight: distinguishes "still loading" from "no match"
     const t = setTimeout(() => {
       void mcpCall('read', 'workspace.query', { text: query.trim(), limit: searchN, shape: 'card' }).then((r) => {
-        if (!live || !r.ok) return;
+        if (!live) return;
+        setSearching(false);
+        if (!r.ok) { setResults([]); return; }
         const entries = ((r.value as { entries?: ListEntry[] })?.entries ?? []) as ListEntry[];
         const shown = entries.filter((x) => !x.key.startsWith('_') && x._meta?.type !== 'canvas-placement').slice(0, searchN);
         setResults(shown);
@@ -427,27 +473,31 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [cmds]);
 
-  const openForm = (cmd: Cmd): void => {
-    setFocused(cmd);
+  const openForm = async (cmd: Cmd): Promise<void> => {
+    const c = await resolveCmd(cmd); // fill schema/ui/scope on first open
+    setFocused(c);
     setConfirmText('');
-    const skeleton = argSkeletonObject(cmd.schema);
+    const skeleton = argSkeletonObject(c.schema);
     setFormValue(skeleton);
     setArgs(JSON.stringify(skeleton, null, 2));
     // A schema the form floor can't walk (no object/properties) starts in raw
     // JSON unless a cell-authored form covers it regardless of declared shape.
-    setRawJson(!cmd.ui?.form && !isFormable(cmd.schema));
+    setRawJson(!c.ui?.form && !isFormable(c.schema));
   };
 
-  const activate = (it: Item): void => {
+  const activate = async (it: Item): Promise<void> => {
     if (it.kind === 'fact') {
       onSelectKey?.(it.e.key);
       return;
     }
     // The tuner opens into its own live panel (see focusedView) — never a blind
     // run, so it lands on the sliders, not a result line.
-    if (it.c.id === 'graph:tune') { openForm(it.c); return; }
-    if (runsDirectly(it.c)) void invoke(it.c, {});
-    else openForm(it.c);
+    if (it.c.id === 'graph:tune') { void openForm(it.c); return; }
+    // Resolve the full contract FIRST — needsArgs / required args (hence whether
+    // this runs directly or wants the form) are only known once the schema is in.
+    const c = await resolveCmd(it.c);
+    if (runsDirectly(c)) void invoke(c, {});
+    else void openForm(c);
   };
 
   const invoke = async (cmd: Cmd, input: unknown): Promise<void> => {
@@ -631,7 +681,13 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
     <>
       {err && !cmds?.length ? <span style={{ color: ink.danger, fontFamily: ink.mono, fontSize: '0.78rem' }}>{err}</span> : null}
 
-      {q && items.length === 0 ? (
+      {/* "Searching…" while a fact query is in flight; "No match" ONLY once it
+          has SETTLED (results back, capabilities loaded) — otherwise the loading
+          gap between keystroke and response printed a false "No match" (the bug
+          seen behind the guest's endless "Loading capabilities…" too). */}
+      {q && searching ? (
+        <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>Searching…</p>
+      ) : q && !searching && cmds && items.length === 0 ? (
         <p style={{ color: ink.dim, margin: 0, fontSize: '0.8rem' }}>No match for “{query}”.</p>
       ) : null}
 
@@ -718,13 +774,23 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
   return (
     <div style={{ display: 'grid' }}>
       {!collapsed ? (
-        <div style={{ background: ink.panel, maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem', display: 'grid', gap: '0.6rem', borderBottom: `1px solid ${ink.line}`, alignContent: 'start' }}>
+        <div style={{ background: 'transparent', maxHeight: 'min(60dvh, 560px)', overflowY: 'auto', overscrollBehavior: 'contain', padding: '0.7rem', display: 'grid', gap: '0.6rem', borderBottom: `1px solid ${ink.line}`, alignContent: 'start' }}>
           {focusedView ?? browseView}
           <OutputStack outputs={outputs} onClear={() => setOutputs([])} />
         </div>
       ) : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.7rem', minHeight: 50 }}>
-        <span aria-hidden style={{ color: ink.accent, fontFamily: ink.mono }}>›</span>
+        {/* The prompt marker IS the caret (owner feedback): `›` when collapsed —
+            the console's own search-prompt glyph — and an up-caret when expanded.
+            One left-side control, no redundant chevron, and away from the × on
+            the right so the resize and clear axes don't share an edge. */}
+        <button
+          onClick={() => onCollapse?.(!collapsed)}
+          aria-label={collapsed ? 'expand the console' : 'collapse the console'}
+          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.95rem', lineHeight: 1, padding: '0.3rem 0.45rem', flexShrink: 0 }}
+        >
+          {collapsed ? '›' : '▴'}
+        </button>
         <input
           value={query}
           onChange={(e) => {
@@ -771,13 +837,6 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
             ×
           </button>
         ) : null}
-        <button
-          onClick={() => onCollapse?.(!collapsed)}
-          aria-label={collapsed ? 'expand the console' : 'collapse the console'}
-          style={{ background: 'none', border: 'none', color: ink.accent, cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.85rem', padding: '0.3rem 0.45rem' }}
-        >
-          {collapsed ? '▴' : '▾'}
-        </button>
       </div>
     </div>
   );

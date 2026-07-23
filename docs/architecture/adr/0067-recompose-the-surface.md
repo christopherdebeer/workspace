@@ -5,8 +5,8 @@
   feedback welcome before build). A distillation ADR (à la ADR-0044): it decides
   *the cut and the sequence*, not the implementation of any one contraction.
 - **Context doc:** [`docs/architecture/compose.md`](../compose.md) — the full
-  reasoning; upstream [`cognitive-substrate.md`](../cognitive-substrate.md) (what
-  the stack is) and [`cerebellar-loop.md`](../cerebellar-loop.md) (C7/C8).
+  reasoning; upstream [`cognitive-substrate.md`](../../cognitive-substrate.md) (what
+  the stack is) and [`cerebellar-loop.md`](../../cerebellar-loop.md) (C7/C8).
 - **Depends on:** ADR-0001 (the declaration registry — the storage this completes
   the surface of), ADR-0044 (the first corpus distillation; this is the second).
 - **Sequence:** this ADR sequences **contractions C1–C8** of the second wave. C1

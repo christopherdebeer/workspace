@@ -5,9 +5,10 @@
  * fact detail (peek modal, generic editor), and the workspace window itself.
  */
 import * as React from 'react';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { createPortal } from 'react-dom';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
-import { SafeMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
+import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -107,6 +108,25 @@ export function factEdit(e: ListEntry): string | null {
   return handlerUrl(resolve(e, 'edit', typeDecls));
 }
 
+/** The CELL a resolved handler lands in, as a display handle (`@owner/name`) —
+ *  from the handler's own cellRef when it names one, else the type's declared
+ *  manager. Lets an action say WHERE it goes ("Open in @c15r/lit") instead of
+ *  a bare arrow into the unknown. Normalises both manager spellings
+ *  (`@c15r/lit` and the registry's path form `/@c15r/lit`). */
+function handlerCell(r: ReturnType<typeof resolve>, e: ListEntry): string | null {
+  if (r?.cellRef) return `@${r.cellRef.owner}/${r.cellRef.name}`;
+  const manager = declFor(e, typeDecls)?.manager;
+  if (typeof manager !== 'string' || !manager) return null;
+  const clean = manager.replace(/^\/?@?/, '');
+  return clean.includes('/') ? `@${clean}` : null; // 'platform' etc. → no cell handle
+}
+/** `{href, cell}` for a fact's open/edit action — the footer's label source. */
+export function factAction(e: ListEntry, intent: 'open' | 'edit'): { href: string; cell: string | null } | null {
+  const r = resolve(e, intent, typeDecls);
+  const href = handlerUrl(r);
+  return href ? { href, cell: handlerCell(r, e) } : null;
+}
+
 /** A small "✎ edit" link, shown only when the fact's type declares an edit surface. */
 export function EditLink({ e }: { e: ListEntry }): React.JSX.Element | null {
   const to = factEdit(e);
@@ -171,14 +191,16 @@ function bodyText(v: unknown): string {
 
 /** Render a fact body by a built-in `hint` kind. SSR-safe: deterministic, no
  *  browser globals. Returns null when there's nothing to draw (caller falls back). */
-function HintBody({ kind, e }: { kind: string; e: ListEntry }): React.JSX.Element | null {
+function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone?: 'light' | 'dark' }): React.JSX.Element | null {
   const v = e.value;
   switch (kind) {
     case 'md':
     case 'markdown': {
       const md = bodyText(v);
       if (!md) return null;
-      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
+      // Fact links ([[wiki]]s) in any markdown body open in place, with an
+      // origin-aware href for new-tab (`/r/` exists only at the apex).
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     case 'image': {
       const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
@@ -299,53 +321,142 @@ function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.E
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-export function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
+export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec; tone?: 'light' | 'dark'; anchor?: string }): React.JSX.Element {
   const type = e._meta?.type;
-  // The parent doc key: a `doc` IS the doc; a `doc-block` points at its doc via a
-  // `doc:` tag (present on the block, so no extra edge read to resolve up).
-  const docKey = type === 'doc' || e.key.startsWith('doc:')
-    ? e.key
-    : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
-  const [md, setMd] = useState<string | null>(null);
-  const [state, setState] = useState<'loading' | 'ready' | 'fail'>('loading');
+  // The CONTAINER key. Declared (ADR-0093): a container type assembles its own
+  // key; a member type (`containerTagPrefix`) delegates via its container tag.
+  // Undeclared: the compiled doc floor — a `doc` IS the doc; a `doc-block`
+  // points at its doc via a `doc:` tag.
+  const docKey = spec
+    ? spec.containerTagPrefix
+      ? (e._meta?.tags ?? []).find((t) => t.startsWith(spec.containerTagPrefix as string)) ?? null
+      : e.key
+    : type === 'doc' || e.key.startsWith('doc:')
+      ? e.key
+      : (e._meta?.tags ?? []).find((t) => t.startsWith('doc:')) ?? null;
+  // `initialMd` is an SSR-provided body (the landing doc's public file mirror):
+  // the first paint — server AND hydration — renders the doc itself, never a
+  // "reading…" spinner. The live read still runs and replaces it when it
+  // succeeds; a failed live read keeps the seed instead of blanking.
+  const [md, setMd] = useState<string | null>(initialMd ?? null);
+  // Membership assembly keeps PER-MEMBER sections (not one joined string) so
+  // each member is an addressable target: `#<member-key>` deep links and the
+  // member banner's "part of" jump both scroll to their section.
+  const [sections, setSections] = useState<Array<{ key: string; content: string }> | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  // The audience fallback (ADR-0093 / docs-sync ADR-0027): when membership
+  // yields nothing for THIS viewer (e.g. `@guest` — members aren't public),
+  // read the declared alternate source instead. A GRANT-FOLDED container
+  // (`owner/doc:docs/x`) re-applies its `owner/` prefix here — the fold is the
+  // host's concern (peek's owner/key addressing resolves it), never the
+  // type's. Undeclared vocabularies keep the compiled corpus-mirror floor.
+  const slash = docKey?.indexOf('/') ?? -1;
+  const colon = docKey?.indexOf(':') ?? -1;
+  const owner = docKey && slash > 0 && (colon < 0 || slash < colon) ? docKey.slice(0, slash) : null;
+  const bare = docKey ? (owner ? docKey.slice(slash + 1) : docKey) : null;
+  // `${match}` = the container key's suffix after its type prefix (vocab deriveId).
+  const bc = bare?.indexOf(':') ?? -1;
+  const bs = bare?.indexOf('/') ?? -1;
+  const cut = bc >= 0 && (bs < 0 || bc < bs) ? bc : bs;
+  const matchPart = bare && cut > 0 ? bare.slice(cut + 1) : null;
+  const dm = docKey?.match(/^(?:([^/]+)\/)?doc:docs\/(.+)$/) ?? null; // the compiled floor (+ link base)
+  const fileKey = spec?.fallbackKey && matchPart
+    ? `${owner ? `${owner}/` : ''}${spec.fallbackKey.split('${match}').join(matchPart)}`
+    : dm
+      ? `${dm[1] ? `${dm[1]}/` : ''}file/docs/${dm[2]}.md`
+      : null;
+  const memberText = (v: unknown): string => {
+    if (spec?.field && v && typeof v === 'object') {
+      const f = (v as Record<string, unknown>)[spec.field];
+      if (typeof f === 'string' && f) return f;
+    }
+    return bodyText(v);
+  };
   useEffect(() => {
-    if (!docKey) { setState('fail'); return; }
+    if (!docKey) { if (!initialMd) setState('fail'); return; }
     let live = true;
-    setState('loading');
-    setMd(null);
-    // The `docs/*` corpus mirrors each doc's full source as a PUBLIC `file/docs/
-    // <path>.md` fact (docs-sync, ADR-0027). A signed-out reader can't reach the
-    // doc-block membership (blocks aren't shared to `public`), but the file IS —
-    // so the whole body is readable either way: assemble from blocks when we can,
-    // else fall back to the public markdown source. (Authed owners get blocks.)
-    const fileKey = docKey.startsWith('doc:docs/') ? `file/${docKey.slice('doc:'.length)}.md` : null;
-    void mcpCall('read', 'workspace.edges', { around: docKey, membership: true })
+    if (!initialMd) {
+      setState('loading');
+      setMd(null);
+    }
+    // `shape:'full'` — a doc's WHOLE body assembles from its members, so each
+    // member's content must come back UNCLAMPED (the default 'card' shape
+    // truncates long string values to previews — fine for a chip, wrong for
+    // reading the doc). Truncation stays the caller's choice elsewhere.
+    void mcpCall('read', 'workspace.edges', { around: docKey, membership: true, shape: 'full' })
       .then(async (r) => {
         if (!live) return;
-        const members = (r.ok ? (r.value as { members?: Array<{ value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
-        let text = members
-          .map((m) => ({ seq: Number(m.placement?.seq ?? 0), content: bodyText(m.value) }))
+        const members = (r.ok ? (r.value as { members?: Array<{ key?: string; value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
+        const secs = members
+          .map((m) => ({ key: String(m.key ?? ''), seq: Number(m.placement?.seq ?? 0), content: memberText(m.value) }))
           .sort((a, b) => a.seq - b.seq)
-          .map((m) => m.content)
-          .filter(Boolean)
-          .join('\n\n');
+          .filter((m) => m.content);
+        if (secs.length) {
+          setSections(secs.map(({ key, content }) => ({ key, content })));
+          setMd(null);
+          setState('ready');
+          return;
+        }
+        let text = '';
         if (!text && fileKey) {
           const fr = await mcpCall('read', 'workspace.peek', { key: fileKey }).catch(() => null);
           if (!live) return;
           const fv = fr?.ok ? (fr.value as { value?: unknown } | null)?.value : null;
           text = bodyText(fv) || '';
         }
-        setMd(text);
-        setState(text ? 'ready' : 'fail');
+        if (text) {
+          setMd(text);
+          setState('ready');
+        } else if (!initialMd) {
+          setMd(text);
+          setState('fail');
+        } // else: keep the SSR seed — an empty live read must not blank the doc
       })
-      .catch(() => { if (live) setState('fail'); });
+      .catch(() => { if (live && !initialMd) setState('fail'); });
     return () => { live = false; };
-  }, [docKey]);
-  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} />;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fileKey/memberText derive from docKey+the static decl
+  }, [docKey, initialMd, fileKey, spec?.field]);
+  // Link context (ADR-0092 follow-on): relative `*.md` hrefs resolve against
+  // THIS doc's corpus directory, and fact links open in place via the peek
+  // modal — docs are navigable on home, not just readable.
+  const mdBase = dm ? `docs/${dm[2]}`.replace(/\/[^/]*$/, '') : undefined;
+  const onFactLink = (k: string): void => openFact({ key: k });
+  // Origin-aware fact hrefs: `/r/<key>` exists only at the apex, so localize
+  // (→ apex-absolute) keeps new-tab/middle-click navigable when home is
+  // served from its own cell subdomain.
+  const factHref = (k: string): string => localize(`/r/${k}`);
+  // Scroll the assembled body to a member's section: an explicit `anchor` (the
+  // member banner's in-place jump) or the URL fragment (`/r/<doc>#<member>`,
+  // the shareable form). Folded members come back `owner/`-prefixed — match
+  // exact or by suffix so a bare fragment still lands.
+  useEffect(() => {
+    if (state !== 'ready' || !sections?.length) return;
+    let target = anchor ?? null;
+    if (!target && typeof location !== 'undefined' && location.hash.length > 1) {
+      try { target = decodeURIComponent(location.hash.slice(1)); } catch { target = location.hash.slice(1); }
+    }
+    if (!target) return;
+    const el = bodyRef.current?.querySelector(`[data-mkey="${(window.CSS?.escape ?? ((x: string) => x))(target)}"]`)
+      ?? bodyRef.current?.querySelector(`[data-mkey$="${(window.CSS?.escape ?? ((x: string) => x))('/' + target)}"]`);
+    if (el) setTimeout(() => el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+  }, [state, sections, anchor]);
+  if (state === 'ready' && sections?.length) {
+    return (
+      <div ref={bodyRef} style={{ display: 'grid', gap: '0.2rem' }}>
+        {sections.map((sec) => (
+          <section key={sec.key} data-mkey={sec.key} style={{ scrollMarginTop: '3.2rem' }}>
+            <SafeMarkdown text={sec.content.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />
+          </section>
+        ))}
+      </div>
+    );
+  }
+  if (state === 'ready' && md) return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />;
   if (state === 'loading') return <span style={{ color: ink.dim, fontSize: '0.8rem', fontFamily: theme.mono }}>reading…</span>;
   // Assembly failed — the fact's own body (a block's content) or its summary.
   const own = bodyText(e.value);
-  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} />;
+  if (own) return <SafeMarkdown text={own.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />;
   const sum = strField(e.value, ['summary']);
   return <span style={{ fontSize: '0.85rem', color: ink.text }}>{sum ?? factTitle(e)}</span>;
 }
@@ -360,11 +471,66 @@ export function DocBody({ e }: { e: ListEntry }): React.JSX.Element {
  * card) a long-form body is clamped to a few lines — the card is a preview now
  * that the peek modal carries the full content.
  */
-export function FactBody({ e, embed = false, full = false }: { e: ListEntry; embed?: boolean; full?: boolean }): React.JSX.Element | null {
-  // A doc (or a block of one) reads as the WHOLE assembled doc when fully open —
-  // the substrate joins membership+order; we just concatenate (see DocBody).
+/** Is this fact an assembled CONTAINER on this surface (a doc, or a type
+ *  declaring container-side assembly)? Containers suppress member backlinks
+ *  in the neighbourhood — the members are already on the page as the body. */
+export function isAssembledContainer(e: ListEntry): boolean {
+  const asm = resolve(e, 'assemble', typeDecls)?.assemble;
+  if (asm) return !asm.containerTagPrefix;
+  return e._meta?.type === 'doc' || e.key.replace(/^[^/]+\//, '').startsWith('doc:');
+}
+
+/** The containment banner a MEMBER shows before its content: "⊂ part of
+ *  <container>" — click opens the whole, scrolled to this member's section;
+ *  the href is the container's canonical address with the member as the
+ *  fragment (deep-linkable in a new tab too). */
+function MemberContext({ e, tagPrefix, tone = 'dark' }: { e: ListEntry; tagPrefix: string; tone?: 'light' | 'dark' }): React.JSX.Element | null {
+  const t = SHEET_TONE[tone];
+  const bareTag = (e._meta?.tags ?? []).find((x) => x.startsWith(tagPrefix));
+  if (!bareTag) return null;
+  // A grant-folded member (`owner/doc-block:x`) points at its container with a
+  // BARE tag — re-apply the owner prefix so the whole resolves for this viewer.
+  const om = e.key.match(/^([^/:]+)\/(?=[^/]*:)/);
+  const containerKey = om ? `${om[1]}/${bareTag}` : bareTag;
+  const bareMemberKey = om ? e.key.slice(om[1].length + 1) : e.key;
+  const label = bareTag.includes(':') ? bareTag.slice(bareTag.indexOf(':') + 1) : bareTag;
+  return (
+    <a
+      href={`${localize(`/r/${containerKey}`)}#${encodeURIComponent(bareMemberKey)}`}
+      onClick={(ev) => { ev.preventDefault(); openFact({ key: containerKey }, bareMemberKey); }}
+      title={containerKey}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', justifySelf: 'start', padding: '0.2rem 0.6rem', borderRadius: 999, border: `1px dashed ${t.line}`, color: t.dim, fontFamily: theme.mono, fontSize: '0.7rem', textDecoration: 'none', marginBottom: '0.4rem' }}
+    >
+      ⊂ part of <span style={{ color: t.accent }}>{label}</span>
+    </a>
+  );
+}
+
+export function FactBody({ e, embed = false, full = false, tone = 'dark', initialMd, anchor }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
+  // A composite fact reads as its WHOLE assembled body when fully open — the
+  // substrate joins membership+order; we just concatenate (see DocBody).
+  // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
+  // cell's composite type gets this without home changes; the hardcoded
+  // `doc`/`doc-block` check is only the compiled floor for a vocabulary that
+  // hasn't declared yet (Inc 2 retires it).
   const t = e._meta?.type;
-  if (full && (t === 'doc' || t === 'doc-block')) return <DocBody e={e} />;
+  if (full) {
+    const asm = resolve(e, 'assemble', typeDecls)?.assemble;
+    // A MEMBER in isolation shows ITS OWN content — not the whole container
+    // (we may have arrived from the container itself) — with the containment
+    // banner BEFORE the content so the part→whole relation is explicit.
+    const memberTagPrefix = asm?.containerTagPrefix ?? (t === 'doc-block' ? 'doc:' : null);
+    if (memberTagPrefix) {
+      const own = bodyText(e.value);
+      return (
+        <div style={{ display: 'grid' }}>
+          <MemberContext e={e} tagPrefix={memberTagPrefix} tone={tone} />
+          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
+        </div>
+      );
+    }
+    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} initialMd={initialMd} anchor={anchor} />;
+  }
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
   // run it sandboxed (ADR-0041), the FieldsBody hint as the degrade-to placeholder
@@ -383,7 +549,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   }
   const hint = resolved?.hint;
   if (hint) {
-    const el = HintBody({ kind: hint, e });
+    const el = HintBody({ kind: hint, e, tone });
     if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
   }
   if (embed) {
@@ -395,7 +561,7 @@ export function FactBody({ e, embed = false, full = false }: { e: ListEntry; emb
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     // A structured value with no declared viewer reads as a collapsible JSON
@@ -430,6 +596,20 @@ const READING_TONE = {
   dark: { text: ink.text, dim: ink.dim, accent: ink.accent },
 } as const;
 
+// The full surface palette a peek SHEET (and its chrome — provenance line,
+// neighbourhood chips, editor, actions) speaks. 'dark' is the ink field (the
+// graph); 'light' is the cream trailhead, so a peek summoned from the landing
+// stacks as a matching paper sheet over the paper Content. Extends READING_TONE
+// with the container/hairline/panel tokens the chrome needs.
+export type Tone = 'light' | 'dark';
+const SHEET_TONE = {
+  // light.bg = theme.bg (the GROUND's cream, not theme.panel): the landing peek
+  // reads as a continuation of the content sheet — a second cream shade made
+  // every stacked sheet look "two-toned" against the ground (owner).
+  light: { bg: theme.bg, panel: '#fffef9', line: theme.border, text: theme.text, dim: theme.dim, accent: theme.accent, danger: theme.danger, actionFill: 'rgba(46,94,67,0.08)', scrim: 'rgba(8,29,36,0.32)', shadow: '0 -10px 32px rgba(8,29,36,0.16)' },
+  dark: { bg: ink.bg, panel: ink.panel, line: ink.line, text: ink.text, dim: ink.dim, accent: ink.accent, danger: ink.danger, actionFill: 'rgba(245,196,83,0.08)', scrim: 'rgba(0,0,0,0.55)', shadow: '0 -12px 40px rgba(0,0,0,0.5)' },
+} as const;
+
 /**
  * A mode-aware reading of ONE fact — icon, title, and some metadata — as FLAT
  * text (paper, NOT a card; cards are for listings/query results). `tone` picks
@@ -439,16 +619,22 @@ const READING_TONE = {
  * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
  * free (it just takes the tone's text colour).
  */
-export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false }: {
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false, initialMd, footer = false }: {
   e: ListEntry;
   tone?: 'light' | 'dark';
   onImage?: boolean;
+  /** SSR-provided markdown body (a /r/<key> deep link) — first paint renders
+   *  the doc, the live read refreshes in place (see DocBody). */
+  initialMd?: string;
   /** The icon + title + metadata line (default). Turn off for a body-only read
    *  when a heading already sits above it (e.g. the hero shows the title). */
   head?: boolean;
   showBody?: boolean;
   /** Tight contexts (the palette row): smaller title, single-line ellipsis. */
   compact?: boolean;
+  /** A FactReadingFooter follows (caller-rendered) — suppress the old inline
+   *  open-link so the trailer owns the actions. */
+  footer?: boolean;
 }): React.JSX.Element {
   const c = READING_TONE[tone];
   const shadow = onImage ? '0 1px 12px rgba(8,29,36,0.6)' : undefined;
@@ -466,7 +652,9 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
       {head ? (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: compact ? '0.4rem' : '0.55rem', minWidth: 0 }}>
           { !onImage && <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span> }
-          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}>{factTitle(e)}</h2>
+          {/* Titles may be markdown (bold/italic/inline code/link) — render the
+              inline marks, not the raw `**…**`. Plain titles are unchanged. */}
+          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}><InlineMarkdown text={factTitle(e)} /></h2>
         </div>
       ) : null}
       {head && meta.length ? (
@@ -474,8 +662,55 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
         // inherited shadow carries the legibility), on paper/ink keep the dim.
         <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
-      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full /></div> : null}
-      {showBody && open ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} /></div> : null}
+      {/* The trailer (provenance · relationships · actions) is the shared
+          FactReadingFooter — rendered by the caller AFTER the body, so the reading
+          reads the same wherever a fact is met. FactReading itself stays just
+          head+meta+body; `footer` suppresses the old inline open-link so the two
+          don't double up. */}
+      {showBody && open && !footer ? <a href={localize(open)} style={{ justifySelf: 'start', marginTop: '0.15rem', color: c.accent, fontFamily: theme.mono, fontSize: '0.8rem', textDecoration: 'none' }}>open ↗</a> : null}
+    </div>
+  );
+}
+
+/**
+ * The per-fact READING FOOTER: the consistent trailer of secondary details
+ * shown below any fact body — a quiet provenance line (type · when · via · by,
+ * plus a superseded flag), the neighbourhood chip row (the one exploration
+ * affordance worth having everywhere), and the actions (open, and edit when
+ * there's somewhere to edit). Tone-aware, so it reads pine-on-cream on the
+ * trailhead and amber-on-ink over the graph. The peek's own trailer (FactDetail)
+ * and this share the same primitives (Neighbourhood, actionStyle, SHEET_TONE),
+ * so a fact's secondary details never drift between surfaces.
+ */
+export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: ListEntry; tone?: Tone; authed?: boolean }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
+  const m = e._meta;
+  const open = factAction(e, 'open');
+  const edit = factAction(e, 'edit');
+  const system = e.key.startsWith('_');
+  const prov: string[] = [];
+  if (m?.type) prov.push(m.type);
+  const when = relTime(m?.updatedAt);
+  if (when) prov.push(when);
+  if (m?.via) prov.push('via ' + m.via);
+  if (m?.writer) prov.push('by ' + m.writer);
+  if (m?.superseded) prov.push('superseded');
+  return (
+    <div style={{ display: 'grid', gap: '0.55rem', marginTop: '0.3rem', paddingTop: '0.7rem', borderTop: `1px solid ${t.line}` }}>
+      {prov.length ? (
+        <div style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>{prov.join('  ·  ')}</div>
+      ) : null}
+      <Neighbourhood keyName={e.key} tone={tone} hideMembers={isAssembledContainer(e)} />
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Actions name their DESTINATION cell — "Open in @c15r/lit" — so the
+            jump isn't a bare arrow into the unknown (the managing cell is part
+            of the affordance, resolved from the handler's own cellRef). */}
+        {open ? <a href={localize(open.href)} style={actionStyle(t)}>Open{open.cell ? ` in ${open.cell}` : ''} ↗</a> : null}
+        {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a>
+          : authed && !system ? <button onClick={() => openFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
+          : null}
+      </div>
     </div>
   );
 }
@@ -496,17 +731,29 @@ export interface Edge {
 
 const FACT_DETAIL_EVENT = 'home:fact-detail';
 
-/** Open the progressive detail modal for a fact (or a bare {key}; hydrated by peek). */
-export function openFact(e: ListEntry): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry>(FACT_DETAIL_EVENT, { detail: e }));
+/** Open the progressive detail modal for a fact (or a bare {key}; hydrated by
+ *  peek). `anchor` scrolls an assembled container to the named member's
+ *  section once the body renders (the member→whole deep link). */
+export function openFact(e: ListEntry, anchor?: string): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry & { anchor?: string }>(FACT_DETAIL_EVENT, { detail: anchor ? { ...e, anchor } : e }));
 }
 
 const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
 
+/** Membership rels (mirror of the server's MEMBERSHIP_RELS) — a container
+ *  viewing surface suppresses these as backlinks: the members are already ON
+ *  the page as the assembled body, chip-listing them twice is noise. */
+const MEMBERSHIP_RELS_UI = new Set(['inView', 'inDoc', 'onBoard', 'memberOf']);
+
 /** A fact's one-hop neighbourhood — authored edges plus the derived backbone
- *  (instanceOf → its type, managedBy → its cell, inView → views). Derived edges
- *  render dashed/dim; every chip is itself a peek into that neighbour. */
-function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
+ *  (instanceOf → its type, managedBy → its cell, inView → views). Grouped by
+ *  relation and direction (links, then backlinks), so the row reads as
+ *  structure rather than a flat chip soup. Derived edges render dashed/dim;
+ *  every chip is itself a peek into that neighbour. `hideMembers` = the
+ *  surface already renders the members (an assembled doc) — drop the inbound
+ *  membership backlinks. */
+function Neighbourhood({ keyName, tone = 'dark', hideMembers = false }: { keyName: string; tone?: Tone; hideMembers?: boolean }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
   const [n, setN] = useState<{ outbound: Edge[]; inbound: Edge[] } | null>(null);
   const [err, setErr] = useState(false);
   useEffect(() => {
@@ -522,8 +769,8 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       live = false;
     };
   }, [keyName]);
-  if (err) return <span style={{ color: ink.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
-  if (!n) return <span style={{ color: ink.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
+  if (err) return <span style={{ color: t.dim, fontSize: '0.72rem' }}>No neighbourhood.</span>;
+  if (!n) return <span style={{ color: t.dim, fontSize: '0.72rem' }}>Loading neighbourhood…</span>;
   const chip = (ed: Edge, other: string, label: string): React.JSX.Element => (
     <button
       key={`${ed.from}-${ed.rel}-${ed.to}`}
@@ -531,8 +778,8 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       title={`${ed.from} ${ed.rel} ${ed.to}`}
       style={{
         fontSize: '0.66rem',
-        color: ed.derived ? ink.dim : ink.accent,
-        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${ink.line}`,
+        color: ed.derived ? t.dim : t.accent,
+        border: `1px ${ed.derived ? 'dashed' : 'solid'} ${t.line}`,
         borderRadius: 999,
         padding: '0.05rem 0.45rem',
         fontFamily: theme.mono,
@@ -544,14 +791,33 @@ function Neighbourhood({ keyName }: { keyName: string }): React.JSX.Element {
       {label}
     </button>
   );
-  const chips = [
-    ...n.outbound.map((ed) => chip(ed, ed.to, `${ed.rel}→${shortKey(ed.to)}`)),
-    ...n.inbound.map((ed) => chip(ed, ed.from, `${shortKey(ed.from)}→${ed.rel}`)),
-  ];
-  return chips.length ? (
-    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>{chips}</div>
-  ) : (
-    <span style={{ color: ink.dim, fontSize: '0.72rem' }}>No edges yet.</span>
+  // Group by (direction, rel): outbound first (this fact's own assertions),
+  // then backlinks. The rel lives in the GROUP header, so chips carry only
+  // their key — denser and scannable.
+  const inbound = hideMembers ? n.inbound.filter((ed) => !MEMBERSHIP_RELS_UI.has(ed.rel)) : n.inbound;
+  const groups = new Map<string, { label: string; items: Array<{ ed: Edge; other: string }> }>();
+  for (const ed of n.outbound) {
+    const gk = `out:${ed.rel}`;
+    const g = groups.get(gk) ?? { label: `${ed.rel} →`, items: [] };
+    g.items.push({ ed, other: ed.to });
+    groups.set(gk, g);
+  }
+  for (const ed of inbound) {
+    const gk = `in:${ed.rel}`;
+    const g = groups.get(gk) ?? { label: `← ${ed.rel}`, items: [] };
+    g.items.push({ ed, other: ed.from });
+    groups.set(gk, g);
+  }
+  if (!groups.size) return <span style={{ color: t.dim, fontSize: '0.72rem' }}>No edges yet.</span>;
+  return (
+    <div style={{ display: 'grid', gap: '0.35rem' }}>
+      {[...groups.entries()].map(([gk, g]) => (
+        <div key={gk} style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0, minWidth: '5.5em' }}>{g.label}</span>
+          {g.items.map(({ ed, other }) => chip(ed, other, shortKey(other)))}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -566,31 +832,32 @@ interface FormField {
   description?: string;
 }
 
-/** An ink action (peek sheet buttons/links) — amber outline, quiet fill. */
-const inkAction: React.CSSProperties = {
+/** A peek-sheet action (buttons/links) — accent outline, quiet fill. Tone-aware
+ *  so the paper sheet's actions read pine-on-cream, the ink sheet's amber-on-ink. */
+const actionStyle = (t: typeof SHEET_TONE[Tone]): React.CSSProperties => ({
   display: 'inline-block',
   padding: '0.4rem 0.9rem',
   minHeight: 38,
   boxSizing: 'border-box',
   borderRadius: 8,
-  border: `1px solid ${ink.accent}`,
+  border: `1px solid ${t.accent}`,
   background: 'none',
-  color: ink.accent,
+  color: t.accent,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   fontSize: '0.8rem',
   textDecoration: 'none',
-};
+});
 
-const editInput: React.CSSProperties = {
+const inputStyle = (t: typeof SHEET_TONE[Tone]): React.CSSProperties => ({
   width: '100%',
   boxSizing: 'border-box',
   padding: '0.4rem 0.5rem',
   fontSize: '0.8rem',
-  border: `1px solid ${ink.line}`,
+  border: `1px solid ${t.line}`,
   borderRadius: 6,
-  background: ink.panel,
-  color: ink.text,
-};
+  background: t.panel,
+  color: t.text,
+});
 
 /** A `$types[type].fields` entry's `type` (a loose vocabulary: string/number/
  *  boolean/markdown/ref/array/object) isn't JSON-Schema — adapt it to the
@@ -623,12 +890,15 @@ function FactEditor({
   fields,
   onSaved,
   onCancel,
+  tone = 'dark',
 }: {
   e: ListEntry;
   fields?: FormField[];
   onSaved: (entry: ListEntry, hints?: string[]) => void;
   onCancel: () => void;
+  tone?: Tone;
 }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
   const isStr = typeof e.value === 'string';
   const base = e.value && typeof e.value === 'object' && !Array.isArray(e.value) ? (e.value as Record<string, unknown>) : {};
   const schema = Array.isArray(fields) && fields.length > 0 ? fieldsToFormSchema(fields) : undefined;
@@ -675,7 +945,7 @@ function FactEditor({
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       {useForm ? (
-        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: ink.text, dim: ink.dim, border: ink.line, inputBg: ink.panel, accent: ink.accent, danger: ink.danger }} />
+        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }} />
       ) : (
         <>
           <textarea
@@ -683,15 +953,15 @@ function FactEditor({
             onChange={(ev) => setText(ev.target.value)}
             rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
             spellCheck={false}
-            style={{ ...editInput, padding: '0.55rem', fontFamily: theme.mono }}
+            style={{ ...inputStyle(t), padding: '0.55rem', fontFamily: theme.mono }}
           />
-          {!isStr ? <span style={{ color: ink.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
+          {!isStr ? <span style={{ color: t.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
         </>
       )}
-      {err ? <span style={{ color: ink.danger, fontSize: '0.78rem', fontFamily: theme.mono }}>{err}</span> : null}
+      {err ? <span style={{ color: t.danger, fontSize: '0.78rem', fontFamily: theme.mono }}>{err}</span> : null}
       <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button onClick={() => void save()} disabled={busy} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Saving…' : 'Save'}</button>
-        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${ink.line}`, borderRadius: 8, color: ink.dim, padding: '0.4rem 0.9rem', cursor: 'pointer', fontFamily: theme.mono, fontSize: '0.8rem' }}>Cancel</button>
+        <button onClick={() => void save()} disabled={busy} style={{ ...actionStyle(t), background: t.actionFill, cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Saving…' : 'Save'}</button>
+        <button onClick={onCancel} style={{ background: 'none', border: `1px solid ${t.line}`, borderRadius: 8, color: t.dim, padding: '0.4rem 0.9rem', cursor: 'pointer', fontFamily: theme.mono, fontSize: '0.8rem' }}>Cancel</button>
       </div>
     </div>
   );
@@ -700,15 +970,16 @@ function FactEditor({
 /** The generic in-place editor, usable OUTSIDE this module (the context
  *  panel's Edit action) — resolves the type's declared fields (ADR-0002
  *  shape.fields) exactly as FactDetail does. */
-export function InlineFactEditor({ e, onCancel, onSaved }: { e: ListEntry; onCancel: () => void; onSaved: (entry: ListEntry) => void }): React.JSX.Element {
+export function InlineFactEditor({ e, onCancel, onSaved, tone = 'dark' }: { e: ListEntry; onCancel: () => void; onSaved: (entry: ListEntry) => void; tone?: Tone }): React.JSX.Element {
   const fields = (declFor(e, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
-  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(entry) => onSaved(entry)} />;
+  return <FactEditor e={e} fields={fields} onCancel={onCancel} onSaved={(entry) => onSaved(entry)} tone={tone} />;
 }
 
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }): React.JSX.Element {
+export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(false);
   const [hints, setHints] = useState<string[] | null>(null);
@@ -725,14 +996,15 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
   const fields = (declFor(entry, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
-      <div style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
+      <div style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono, wordBreak: 'break-all' }}>
         {[meta?.type, entry.key].filter(Boolean).join(' · ')}
-        {meta?.tags?.length ? '  ·  ' + meta.tags.map((t) => '#' + t).join(' ') : ''}
+        {meta?.tags?.length ? '  ·  ' + meta.tags.map((tag) => '#' + tag).join(' ') : ''}
       </div>
       {editing ? (
         <FactEditor
           e={entry}
           fields={fields}
+          tone={tone}
           onCancel={() => setEditing(false)}
           onSaved={(savedEntry, h) => {
             setEntry(savedEntry);
@@ -743,27 +1015,27 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-            <FactBody e={entry} full />
+            <FactBody e={entry} full tone={tone} anchor={anchor} />
           </div>
           {hints?.length ? (
-            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: ink.panel }}>
-              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
+            <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${t.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: t.panel }}>
+              <span style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>suggestions</span>
               {hints.map((h, i) => (
-                <span key={i} style={{ fontSize: '0.76rem', color: ink.text }}>· {h}</span>
+                <span key={i} style={{ fontSize: '0.76rem', color: t.text }}>· {h}</span>
               ))}
             </div>
           ) : null}
           {!compact ? (
             <div style={{ display: 'grid', gap: '0.3rem' }}>
-              <span style={{ color: ink.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
-              <Neighbourhood keyName={entry.key} />
+              <span style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>neighbourhood</span>
+              <Neighbourhood keyName={entry.key} tone={tone} hideMembers={isAssembledContainer(entry)} />
             </div>
           ) : null}
           {!compact ? (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              {open ? <a href={open} style={inkAction}>Open ↗</a> : null}
-              {edit ? <a href={edit} style={inkAction}>Edit in cell ↗</a> : !system ? (
-                <button onClick={() => setEditing(true)} style={{ ...inkAction, background: 'rgba(245,196,83,0.08)', cursor: 'pointer' }}>Edit</button>
+              {open ? <a href={open} style={actionStyle(t)}>Open ↗</a> : null}
+              {edit ? <a href={edit} style={actionStyle(t)}>Edit in cell ↗</a> : !system ? (
+                <button onClick={() => setEditing(true)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
               ) : null}
             </div>
           ) : null}
@@ -775,25 +1047,147 @@ export function FactDetail({ e, compact }: { e: ListEntry; compact?: boolean }):
 
 /** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
  *  via peek, and renders the modal. Returns null when nothing is open. */
-export function FactDetailHost(): React.JSX.Element | null {
-  const [entry, setEntry] = useState<ListEntry | null>(null);
-  const activeKey = React.useRef<string | null>(null);
-  const close = (): void => {
-    activeKey.current = null;
-    setEntry(null);
+export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevealGround }: { tone?: Tone; onCurrent?: (key: string | null) => void; /** Fires when the stack opens/closes — the app minimizes the palette under it. */ onOpenChange?: (open: boolean) => void; /** Fires while the 1/1 sheet is being dragged toward ground — the Landing restores the REAL ground content behind it for the reveal. */ onRevealGround?: (revealing: boolean) => void } = {}): React.JSX.Element | null {
+  const t = SHEET_TONE[tone];
+  // A drill HISTORY with a cursor — not a plain stack. openFact pushes at the
+  // cursor (truncating any forward history); back moves the cursor DOWN and the
+  // current sheet slides into a "forward pile" peeking at the BOTTOM edge;
+  // forward (drag/tap the pile up) moves the cursor back UP. So back is
+  // non-destructive: what you stepped out of waits at the bottom to be pulled
+  // back in. × / scrim dismiss the whole thing.
+  // Each frame remembers the PAGE SCROLL it was read at (`scrollY`) — the
+  // docked landing stack reads by MAIN page scroll, so back/forward restore
+  // where you were in the frame you return to (owner: "remembered scrolls on
+  // pop"). The dark (graph) stack scrolls internally and ignores these.
+  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>; cursor: number }>({ frames: [], cursor: -1 });
+  const nextId = React.useRef(1);
+  const { frames, cursor } = hist;
+  const current = cursor >= 0 ? frames[cursor] : null;
+  const closeAll = (): void => setHist({ frames: [], cursor: -1 });
+  const saveScroll = (fr: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>, i: number): typeof fr => {
+    if (i < 0 || typeof window === 'undefined') return fr;
+    const next = fr.slice();
+    next[i] = { ...next[i], scrollY: window.scrollY };
+    return next;
   };
+  const back = (): void => setHist((h) => (h.cursor > 0 ? { frames: saveScroll(h.frames, h.cursor), cursor: h.cursor - 1 } : h));
+  const forward = (): void => setHist((h) => (h.cursor < h.frames.length - 1 ? { frames: saveScroll(h.frames, h.cursor), cursor: h.cursor + 1 } : h));
+  const [sheetH, setSheetH] = useState<number | undefined>(undefined);
+  const roRef = React.useRef<ResizeObserver | null>(null);
+  const [dragY, setDragY] = useState(0);   // front sheet drag-down (→ back)
+  const [pileY, setPileY] = useState(0);   // forward-pile drag-up  (→ forward)
+  // Selection sync (owner direction): the current fact IS the selection, so the
+  // graph re-orients to it behind the sheet. Push on every current-key change;
+  // never on close (closing leaves the graph on the last fact you read).
+  const onCurRef = React.useRef(onCurrent);
+  onCurRef.current = onCurrent;
+  const curKey = current?.entry.key ?? null;
+  useEffect(() => { if (curKey) onCurRef.current?.(curKey); }, [curKey]);
+  const isOpen = frames.length > 0;
+  const onOpenRef = React.useRef(onOpenChange);
+  onOpenRef.current = onOpenChange;
+  useEffect(() => { onOpenRef.current?.(isOpen); }, [isOpen]);
+  // 1/1 drag-toward-ground: tell the Landing to restore the REAL ground content
+  // behind the dragged sheet — the reveal shows what commit actually returns to.
+  const groundReveal = tone === 'light' && isOpen && cursor === 0 && dragY > 0;
+  const onRevealRef = React.useRef(onRevealGround);
+  onRevealRef.current = onRevealGround;
+  useEffect(() => { onRevealRef.current?.(groundReveal); }, [groundReveal]);
+  // THE DOCKED COMPOSITION (owner, landing): opening a peek INSTANTLY scrolls
+  // the page to the top so the canonical stack composition always holds — hero
+  // + live graph above, the ground sheet's lip, the peek docked just below it.
+  // The scroll position is REMEMBERED and instantly restored on close, so you
+  // land back exactly where you were reading — UNLESS you scrolled the ground
+  // while the peek was up (the background stays live now), in which case your
+  // new place wins and no restore happens. Both jumps are instant: the sheet
+  // rising/leaving masks them; a smooth scroll would be a visible double-move.
+  const isLight = tone === 'light';
+  const prevScroll = React.useRef<number | null>(null);
+  useEffect(() => {
+    if (!isLight || typeof window === 'undefined') return;
+    if (isOpen && prevScroll.current == null) {
+      prevScroll.current = window.scrollY;
+      window.scrollTo(0, 0);
+    } else if (!isOpen && prevScroll.current != null) {
+      if (window.scrollY <= 4) window.scrollTo(0, prevScroll.current); // skip if the reader moved mid-peek
+      prevScroll.current = null;
+    }
+  }, [isOpen, isLight]);
+  // Frame changes (push/back/forward) in the DOCKED stack: the page scroll is
+  // the reading position, so arriving at a frame restores where you were in it
+  // (a fresh push starts at the top — hero + lip + sheet head in view).
+  const curId = current?.id ?? null;
+  const curScrollRef = React.useRef<number | undefined>(undefined);
+  curScrollRef.current = current?.scrollY;
+  useEffect(() => {
+    if (!isLight || curId == null || typeof window === 'undefined') return;
+    window.scrollTo(0, curScrollRef.current ?? 0);
+  }, [curId, isLight]);
+
+  // Drag the front header DOWN → back(); a forward-pile lip UP (or a tap) →
+  // forward(). Both follow the finger and commit past ~80px.
+  // Live refs the once-created drag closures read: the cursor (to fork the
+  // commit — back() vs close-to-ground) and the front sheet's screen top at
+  // grab time (the 1/1 ground-reveal pins the sheet FIXED there so restoring
+  // the real ground content behind can't shove it down the document).
+  const cursorRef = React.useRef(cursor); cursorRef.current = cursor;
+  const sheetTopRef = React.useRef(0);
+  const dragBack = React.useCallback((e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    sheetTopRef.current = (e.currentTarget as HTMLElement).closest('section')?.getBoundingClientRect().top ?? 0;
+    const startY = e.clientY; let dy = 0;
+    const move = (me: PointerEvent): void => { dy = Math.max(0, me.clientY - startY); setDragY(dy); };
+    const up = (): void => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+      setDragY(0);
+      // Past the commit: pop a frame — or, at 1/1, COMMIT BACK TO GROUND
+      // (owner: the first sheet's drag-down closes the stack; it used to no-op).
+      if (dy > 80) { if (cursorRef.current > 0) back(); else closeAll(); }
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  }, []);
+  const dragForward = React.useCallback((e: React.PointerEvent) => {
+    const startY = e.clientY; let dy = 0; let moved = false;
+    const move = (me: PointerEvent): void => { dy = me.clientY - startY; if (Math.abs(dy) > 4) moved = true; setPileY(Math.min(0, dy)); };
+    const up = (): void => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+      setPileY(0); if (dy < -80 || !moved) forward(); // dragged up enough, or a tap
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  }, []);
+  const topRef = React.useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    if (!el || typeof ResizeObserver === 'undefined') { if (el) setSheetH(el.offsetHeight); return; }
+    const ro = new ResizeObserver(() => setSheetH(el.offsetHeight));
+    ro.observe(el); roRef.current = ro; setSheetH(el.offsetHeight);
+  }, []);
   useEffect(() => {
     const onOpen = (ev: Event): void => {
-      const detail = (ev as CustomEvent<ListEntry>).detail;
+      const detail = (ev as CustomEvent<ListEntry & { anchor?: string }>).detail;
       if (!detail?.key) return;
-      activeKey.current = detail.key;
-      setEntry(detail);
+      const { anchor, ...rest } = detail;
+      const entry = rest as ListEntry;
+      setHist((h) => {
+        // Re-opening the fact you're already on is a no-op.
+        if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) return h;
+        // A new path truncates any forward history (browser-nav semantics).
+        // The departing frame remembers its page scroll (docked-stack pop).
+        const kept = saveScroll(h.frames.slice(0, h.cursor + 1), h.cursor);
+        return { frames: [...kept, { id: nextId.current++, entry, anchor }], cursor: kept.length };
+      });
       if (detail.value === undefined) {
         const requestedKey = detail.key;
         mcpCall('read', 'workspace.peek', { key: requestedKey })
           .then((r) => {
             const f = r.value as { value?: unknown; _meta?: ListEntry['_meta'] } | null;
-            if (r.ok && f && activeKey.current === requestedKey) setEntry({ key: requestedKey, value: f.value, _meta: f._meta });
+            if (!r.ok || !f) return;
+            setHist((h) => {
+              const i = h.frames.findIndex((fr) => fr.entry.key === requestedKey && fr.entry.value === undefined);
+              if (i < 0) return h;
+              const next = h.frames.slice();
+              next[i] = { ...next[i], entry: { key: requestedKey, value: f.value, _meta: f._meta } };
+              return { ...h, frames: next };
+            });
           })
           .catch(() => undefined);
       }
@@ -802,57 +1196,231 @@ export function FactDetailHost(): React.JSX.Element | null {
     return () => window.removeEventListener(FACT_DETAIL_EVENT, onOpen as EventListener);
   }, []);
   useEffect(() => {
-    if (!entry) return;
-    const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === 'Escape') close();
-    };
+    if (cursor < 0) return;
+    const onKey = (ev: KeyboardEvent): void => { if (ev.key === 'Escape') { if (cursor > 0) back(); else closeAll(); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [entry]);
-  if (!entry) return null;
-  const title = `${typeIcon(entry) ? typeIcon(entry) + ' ' : ''}${factTitle(entry)}`;
-  // The peek is an INK bottom sheet — the same instrument language as the
-  // palette it was summoned from (it used to be the parchment Modal: a jarring
-  // theme flip mid-gesture — owner feedback 2026-07-10). Same width metric as
-  // the palette, so the two read as one system.
+  }, [cursor]);
+  if (cursor < 0) return null;
+  const LIP = 7;        // px each back-stack sheet's top edge peeks above the front
+  const MAX_LIPS = 3;   // capped so a deep stack stays tidy (all still mounted)
+  const PEEK = 30;      // px of a forward-pile sheet's top that shows at the bottom
+  const total = frames.length;
+
+  // ── LANDING (light): the DOCKED IN-FLOW stack ─────────────────────────────
+  // The sheet is DOCUMENT CONTENT, not a fixed box (owner): it renders into the
+  // Landing's #peek-dock slot just below the ground sheet's tip-lip, its content
+  // flows (no maxHeight, no inner scrollbox), and the PAGE's scroll height
+  // becomes the frame's content — reading is always a main page scroll, exactly
+  // like the ground content it replaces. Back-stack lips stack above the sheet
+  // in flow; the forward pile stays pinned to the viewport bottom. Per-frame
+  // scroll memory (see saveScroll) restores your place on back/forward/close.
+  if (isLight) {
+    const dock = typeof document !== 'undefined' ? document.getElementById('peek-dock') : null;
+    if (!dock || !current) return null;
+    const backCount = Math.min(cursor, MAX_LIPS);
+    const pileCount = frames.length - 1 - cursor;
+    const pileLips = Math.min(Math.max(pileCount - 1, 0), MAX_LIPS);
+    const pileGrow = Math.max(0, -pileY);
+    const stripH = PEEK + 10; // the pile strip's rest height
+    const prevFrame = cursor > 0 ? frames[cursor - 1] : null;
+    // EVERY frame keeps ONE stable <section> shell whose STYLE changes by role
+    // (current / pile-front / hidden) — same element type, same child shape —
+    // so React never remounts a frame's content across back/forward flips
+    // (owner: "it should already be present in the DOM", no reload).
+    return createPortal(
+      <div style={{ position: 'relative' }}>
+        {/* Back-stack lips — FULL-width vertical peeks (owner IMG_0386: the old
+            inset lips doubled the corner radii against the full-width sheet;
+            same-width layers nest their corners cleanly, like the ground tip). */}
+        {Array.from({ length: backCount }).map((_, k) => (
+          <div key={k} aria-hidden style={{ height: 9, margin: '0 0 -1px', borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg }} />
+        ))}
+        {/* Drag-back REVEAL (owner IMG_0387/0395): pulling the header down
+            uncovers what you're returning TO — a FULL sheet reaching the bottom
+            of the viewport (the previous frame's head, or the bare ground cream
+            at 1/1), never a floating strip over the night backdrop. */}
+        {dragY > 0 && !groundReveal ? (
+          <div aria-hidden style={{ position: 'absolute', left: 0, right: 0, top: backCount * 8, height: '100dvh', zIndex: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, color: t.text, overflow: 'hidden', padding: '0.9rem' }}>
+            {prevFrame ? (
+              <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', opacity: 0.7 }}>{`${typeIcon(prevFrame.entry) ? typeIcon(prevFrame.entry) + ' ' : ''}${factTitle(prevFrame.entry)}`}</strong>
+            ) : null}
+          </div>
+        ) : null}
+        {frames.map((frame, i) => {
+          const rel = i - cursor;
+          const isCur = rel === 0;
+          const isPileF = rel === 1;
+          const fEntry = frame.entry;
+          const fTitle = `${typeIcon(fEntry) ? typeIcon(fEntry) + ' ' : ''}${factTitle(fEntry)}`;
+          const sectionStyle: React.CSSProperties = isCur
+            ? groundReveal
+              ? {
+                  // 1/1 drag-toward-ground: the sheet PINS to its grab-time screen
+                  // position (fixed) while the Landing restores the real ground
+                  // content in the document behind it — the drag then slides the
+                  // sheet down over the very content a commit returns to.
+                  position: 'fixed', top: sheetTopRef.current, left: 0, right: 0, margin: '0 auto',
+                  width: 'min(780px, 100vw)', maxHeight: '100dvh', overflow: 'hidden',
+                  zIndex: 30, background: t.bg, color: t.text,
+                  borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+                  boxShadow: t.shadow,
+                  transform: `translateY(${dragY}px)`, transition: 'none',
+                }
+              : {
+                position: 'relative', zIndex: 1, background: t.bg, color: t.text,
+                borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+                boxShadow: t.shadow, minHeight: '60dvh',
+                transform: dragY ? `translateY(${dragY}px)` : undefined,
+                transition: dragY ? 'none' : 'transform 0.2s ease',
+                paddingBottom: pileCount > 0 ? `${stripH + pileLips * 7 + 20}px` : undefined,
+              }
+            : isPileF
+              ? {
+                  // The forward pile GROWS with the drag (owner: not a bar sliding
+                  // over the wrong text) — its own sheet, its own content, rising
+                  // until the release commits the advance. It sits ON TOP of the
+                  // pile (owner IMG_0395: "dragging up next, not last") — the
+                  // deeper lips peek BELOW it toward the viewport edge, so the
+                  // rising sheet clearly comes off the top of the waiting stack.
+                  position: 'fixed', bottom: pileLips * 7, left: 0, right: 0, margin: '0 auto',
+                  width: 'min(780px, 100vw)', height: stripH + pileGrow, maxHeight: '75dvh',
+                  overflow: 'hidden', zIndex: 40, background: t.bg, color: t.text,
+                  borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+                  boxShadow: t.shadow, transition: pileY ? 'none' : 'height 0.2s ease',
+                  cursor: 'pointer', userSelect: 'none', pointerEvents: 'auto',
+                }
+              : { display: 'none' };
+          return (
+            <section key={frame.id} aria-hidden={!isCur} style={sectionStyle}>
+              <div
+                onPointerDown={isCur ? dragBack : isPileF ? dragForward : undefined}
+                style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: isCur ? '0.9rem 0.9rem 0.6rem' : '0.55rem 0.9rem 0.45rem', borderBottom: isCur ? `1px solid ${t.line}` : undefined, touchAction: isCur || isPileF ? 'none' : undefined, userSelect: 'none', cursor: isCur ? 'grab' : isPileF ? 'pointer' : 'default' }}
+              >
+                {isCur ? <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} /> : null}
+                {isCur && cursor > 0 ? (
+                  <button onClick={() => back()} aria-label="back" title="Back" style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}>‹</button>
+                ) : null}
+                {isPileF ? <span aria-hidden style={{ color: t.accent, fontSize: '0.9rem', flexShrink: 0 }}>⌃</span> : null}
+                <strong style={{ fontFamily: theme.serif, fontSize: isCur ? '1.02rem' : '0.92rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{fTitle}</strong>
+                {isCur && total > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{cursor + 1}/{total}</span> : null}
+                {isCur ? (
+                  <button onClick={() => closeAll()} aria-label="close" style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}>×</button>
+                ) : null}
+              </div>
+              <div style={{ padding: isCur ? '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' : '0.45rem 0.9rem 0.9rem' }}>
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+              </div>
+            </section>
+          );
+        })}
+        {/* Pile TIP-STACKS (owner IMG_0395): the deeper waiting sheets peek
+            BELOW the strip toward the viewport edge — slightly inset (behind),
+            flush against it (no slits of page text between the layers) — so
+            the full-width strip on top clearly reads as "next". */}
+        {pileCount > 0 ? Array.from({ length: pileLips }).map((_, k) => {
+          const j = k + 1; // 1 = just under the strip, deeper follow
+          return (
+            <div key={k} aria-hidden style={{ position: 'fixed', bottom: (pileLips - j) * 7, left: 0, right: 0, margin: '0 auto', width: `min(${780 - j * 22}px, calc(100vw - ${j * 22}px))`, height: 9, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, zIndex: 39, pointerEvents: 'none' }} />
+          );
+        }) : null}
+      </div>,
+      dock,
+    );
+  }
+
+  // ── GRAPH (dark): the fixed floating stack above the minimized palette ────
+  // Internal scroll stays here — there is no document to flow into over the
+  // fixed canvas; the stack floats above the palette strip (SHEET_BOTTOM).
+  const SHEET_MAX = '60dvh';
+  const SHEET_BOTTOM = 132;
+  const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.58) : 480;
   return (
+    // NOT a modal (owner: "same mechanics, more cohesive, not so modal" — both
+    // tones): no dialog role, no full-viewport click-catcher, no outside-tap
+    // dismiss, no global gesture capture. The wrapper is inert (pointer-events
+    // none); only the SHEETS take input, so the world behind — the landing's
+    // scroll, the graph's spin — stays fully live while a peek is up. × / drag
+    // own dismissal; Esc still steps back/closes.
     <div
-      role="dialog"
-      aria-modal="true"
-      onClick={() => close()}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
+      role="complementary"
+      style={{ position: 'fixed', inset: 0, background: 'transparent', zIndex: 1000, pointerEvents: 'none' }}
     >
-      <div
-        onClick={(ev) => ev.stopPropagation()}
-        style={{
-          background: ink.bg,
-          color: ink.text,
-          width: 'min(720px, 100vw)',
-          maxHeight: '86dvh',
-          overflowY: 'auto',
-          overscrollBehavior: 'contain',
-          borderTopLeftRadius: 14,
-          borderTopRightRadius: 14,
-          border: `1px solid ${ink.line}`,
-          borderBottom: 'none',
-          boxShadow: '0 -12px 40px rgba(0,0,0,0.5)',
-          padding: '0.8rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom))',
-          display: 'grid',
-          gap: '0.7rem',
-          alignContent: 'start',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
-          <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{title}</strong>
-          <button
-            onClick={() => close()}
-            aria-label="close"
-            style={{ background: 'none', border: 'none', color: ink.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}
-          >
-            ×
-          </button>
-        </div>
-        <FactDetail e={entry} />
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
+        {frames.map((frame, i) => {
+          const rel = i - cursor; // 0 = front, <0 = back-stack (top lips), >0 = forward pile (bottom)
+          const isFront = rel === 0;
+          const isPileFront = rel === 1; // the re-advanceable one
+          const fEntry = frame.entry;
+          const fTitle = `${typeIcon(fEntry) ? typeIcon(fEntry) + ' ' : ''}${factTitle(fEntry)}`;
+          const h = sheetH ?? hFallback;
+          let translateY: number; let zIndex: number; let interactive: boolean;
+          if (rel === 0) { translateY = dragY; zIndex = 500; interactive = true; }
+          else if (rel < 0) { translateY = -Math.min(-rel, MAX_LIPS) * LIP; zIndex = 100 + i; interactive = false; }
+          else { translateY = (h - PEEK) + Math.min(rel - 1, MAX_LIPS) * LIP + (isPileFront ? pileY : 0); zIndex = 1000 + i; interactive = isPileFront; }
+          const dragging = (isFront && dragY > 0) || (isPileFront && pileY < 0);
+          return (
+            <div
+              key={frame.id}
+              ref={isFront ? topRef : undefined}
+              // The SHEET owns its gestures (the wrapper no longer captures the
+              // whole viewport): stop wheel/touch bubbling to the window
+              // listeners the landing (enter-the-sky) and the graph (zoom/curl)
+              // run, so scrolling to read never moves the world behind it —
+              // while everywhere OUTSIDE the sheet stays live.
+              onWheelCapture={(ev) => ev.stopPropagation()}
+              onTouchStartCapture={(ev) => ev.stopPropagation()}
+              onTouchMoveCapture={(ev) => ev.stopPropagation()}
+              aria-hidden={!isFront}
+              style={{
+                position: 'absolute',
+                bottom: SHEET_BOTTOM,
+                // CONTINUATION of the ground (owner): on the landing the sheet
+                // matches the content column's width and cream, wears only a
+                // hairline lip + a soft rise — a layer OF the content sheet, not
+                // a bordered card floating over it. Dark keeps its inked edge.
+                width: tone === 'light' ? 'min(780px, 100vw)' : 'min(720px, 100vw)',
+                ...(isFront ? { maxHeight: SHEET_MAX } : { height: sheetH ? `${sheetH}px` : `${hFallback}px`, maxHeight: SHEET_MAX }),
+                transform: `translateY(${translateY}px)`,
+                transition: dragging ? 'none' : 'transform 0.2s ease',
+                zIndex,
+                pointerEvents: interactive ? 'auto' : 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                borderTopLeftRadius: 14,
+                borderTopRightRadius: 14,
+                ...(tone === 'light'
+                  ? { border: 'none', borderTop: `1px solid ${t.line}` }
+                  : { border: `1px solid ${t.line}`, borderBottom: 'none' }),
+                background: t.bg,
+                color: t.text,
+                boxShadow: t.shadow,
+              }}
+            >
+              <div
+                onPointerDown={isFront ? dragBack : isPileFront ? dragForward : undefined}
+                title={isPileFront ? 'Forward' : undefined}
+                style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flexShrink: 0, padding: '0.9rem 0.9rem 0.6rem', borderBottom: `1px solid ${t.line}`, touchAction: interactive ? 'none' : undefined, userSelect: 'none', cursor: isFront ? 'grab' : isPileFront ? 'pointer' : 'default' }}
+              >
+                {/* Grab handle — front: drag down to go back; pile: drag/tap up to go forward. */}
+                {interactive ? <span aria-hidden style={{ position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)', width: 30, height: 3, borderRadius: 3, background: t.line }} /> : null}
+                {isFront && cursor > 0 ? (
+                  <button onClick={() => back()} aria-label="back" title="Back" style={{ background: 'none', border: 'none', color: t.accent, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0.2rem 0.35rem', flexShrink: 0 }}>‹</button>
+                ) : null}
+                {isPileFront ? <span aria-hidden style={{ color: t.accent, fontSize: '0.9rem', flexShrink: 0 }}>⌃</span> : null}
+                <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{fTitle}</strong>
+                {isFront && total > 1 ? <span style={{ color: t.dim, fontSize: '0.62rem', fontFamily: theme.mono, flexShrink: 0 }}>{cursor + 1}/{total}</span> : null}
+                {isFront ? (
+                  <button onClick={() => closeAll()} aria-label="close" style={{ background: 'none', border: 'none', color: t.dim, cursor: 'pointer', fontSize: '1.1rem', padding: '0.2rem 0.4rem', flexShrink: 0 }}>×</button>
+                ) : null}
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: `0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom)${isFront && cursor < total - 1 ? ` + ${PEEK}px` : ''})` }}>
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

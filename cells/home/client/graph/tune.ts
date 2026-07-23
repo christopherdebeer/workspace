@@ -9,13 +9,21 @@
  * Extracted from graph.tsx (decomposition, 2026-07-17) — the tuning surface is
  * data, not render logic, so it lives on its own.
  * ------------------------------------------------------------------------- */
+// PROMOTED OWNER TUNE (ADR-0047): these defaults ARE the owner's live
+// `_config/home.graph.tune` fact (rev 276, tuned 2026-07-20/21 on-device),
+// baked in so GUESTS see the tuned scene, not a stale code baseline — the guest
+// read path resolves the bare `_config/home.graph.tune` against the guest's own
+// empty slice and falls back here, so this object is what every unauthenticated
+// visitor renders. The tuner (?tune=1) still overrides these locally and the
+// owner's fact still wins when present; "the winning values sent back to be
+// hard-coded" is exactly this sync. When re-promoting, re-peek the fact and
+// update BOTH the numbers and any rationale-comment that cites a specific value.
 export const TUNE_DEFAULTS = {
-  // torch (the scene LIGHTING — owner re-grade 2026-07-12: coneIn/depthIn at 0
-  // means the full-brightness plateau starts AT the focal point itself — no
-  // graded falloff onset, angle/depth attenuation begin immediately. Floor
-  // lowered to 0.09 (was 0.2): the periphery goes darker before the torch
-  // picks it up, sharpening the beam's contrast against the rest.)
-  coneIn: 0, coneOut: 1.2, depthIn: 0, depthOut: 4, torchFloor: 0.09,
+  // torch (the scene LIGHTING). Owner tune: a graded onset — coneIn/depthIn lift
+  // off zero so the full-brightness plateau has a soft ramp into the focal
+  // point, and torchFloor at 0.2 keeps the periphery legibly lit rather than
+  // going near-black before the torch reaches it.
+  coneIn: 0.5, coneOut: 1.2, depthIn: 1.5, depthOut: 3.85, torchFloor: 0.2,
   // label admission (the SELECTOR) — decoupled from the lighting: labels need
   // a sharp instrument even when the light is flat, so admission ranks by its
   // own narrow cone. Owner re-grade 2026-07-12: labelConeOut widened to 1.2
@@ -28,65 +36,61 @@ export const TUNE_DEFAULTS = {
   // .md §10). Every tier spends from this, so "how many labels" is a single
   // number tuned to the coupled mind, not a scatter of per-tier caps.
   // 0 = viewport default (mobile 16 / desktop 26 — a few dozen).
-  focusBand: 0,
+  focusBand: 60,
   // Landmarks (register 1) reserve this FRACTION of the band; the rest is the
   // suggestion remainder. So the resting sky is "a few steady names + the
   // whispered candidates that fill the leftover budget."
-  landmarkFrac: 0.35,
-  beamOn: 0.85, beamOff: 0.2,
-  beamOpacity: 0.57, beamSizeMult: 0.3,
+  landmarkFrac: 0.8,
+  beamOn: 0.05, beamOff: 0.8,
+  beamOpacity: 0.28, beamSizeMult: 0.52,
   // SUGGESTIONS are a DIFFERENT VOICE, not a small focus chip (the beam's
   // original sin: catches wore result styling, so unrelated items read as
   // answers). beamPill 0 = pill-less whisper — a suggestion never carries the
   // committed-name occluder chip that Landmarks/Focus wear. beamPerCell caps
   // suggestions PER SCREEN TERRITORY so a dense cluster can't monopolise the
   // whisper and starve a sparse region (per-place broadcast, mirrors slices).
-  beamPill: 0, beamPerCell: 2,
+  beamPill: 1, beamPerCell: 5,
   // focus labels (owner re-grade 2026-07-12): hits headline (1.17), and
   // neighbours now hold FULL opacity near and far (1/1, was 0.41/0.81) —
   // size still grades the role, opacity no longer does.
   selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 1, nbrOpNear: 1,
-  labelFade: 4, // lerp rate: higher = snappier (owner re-grade 2026-07-12: was 1/SLOW, now snappy)
-  // nodes — neighbours barely lift (0.2): selection lights the ANCHOR, the
-  // neighbourhood whispers; the fan edges carry the structure.
-  nodeDim: 1.5, nbrBoost: 0.2, boostSizeGain: 1,
+  labelFade: 1, // lerp rate: higher = snappier; owner tune runs it slow/smooth.
+  // nodes — neighbours barely lift: selection lights the ANCHOR, the
+  // neighbourhood whispers; the fan edges carry the structure. nodeDim < 1 in
+  // the owner tune dims the resting field so the lit selection stands out more.
+  nodeDim: 0.79, nbrBoost: 0.24, boostSizeGain: 0,
   // SELECTION REACH: how many hops of neighbours a selection brightens (1 = just
   // the direct neighbours; 2 = neighbours-of-neighbours too). Capped internally
   // so a hub can't ignite the whole field. edgeLabelCap is the other half of the
   // fan — how many relation labels ride the selected node's edges at once (the
   // old hard-coded 4; a densely-linked node wants more).
-  neighborHops: 1, edgeLabelCap: 4,
+  neighborHops: 2, edgeLabelCap: 13,
   // Each ring of the selection fan is this fraction as bright as the one inside
   // it (0.5 = a 2-hop edge reads half a 1-hop spoke). Only matters when
   // neighborHops > 1.
   hopFalloff: 0.5,
-  // edges (owner re-grade 2026-07-12: brought back up from "all but erased" —
-  // the resting lattice now reads at rest, authored edges especially (0.24,
-  // was 0.035), with focus edges dialled back off full-alpha (0.76, was 1.0)
-  // since the resting mat itself now carries more of the structure).
-  edgeSimilar: 0.035, edgeMember: 0.06, edgeDerived: 0.06, edgeAuthored: 0.24,
-  focusEdgeAlpha: 0.76,
+  // edges — the resting lattice is kept faint (owner tune pulls authored edges
+  // back down to 0.075 and focus edges to 0.25) so lines earn ink mainly under
+  // focus and the sky stays calm at rest rather than reading as a dense mat.
+  edgeSimilar: 0.035, edgeMember: 0.055, edgeDerived: 0.055, edgeAuthored: 0.075,
+  focusEdgeAlpha: 0.25,
   // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
   // already fanning from a selection/hit) — direction is source→target, so
   // the animation reads as energy moving the way the edge actually points.
   // Resting edges stay static on purpose (the file's own standing rule:
   // "lines earn ink only under focus" — movement is the same kind of ink).
   // Dusk only: paper's printed-map metaphor has no motion to carry.
-  edgeFlowSpeed: 0.5, edgeFlowWidth: 0.35, edgeFlowGain: 1.4, edgeFlowCycles: 3,
-  // bloom — threshold restored to 0.6 (2026-07-12 regression fix): the
-  // 2026-07-12 owner re-grade set this to 0.05, which — combined with
-  // edgeAuthored's own bump to 0.24 that same pass and the corpus having
-  // grown substantially since (ADR-0081's backfill) — reintroduced the
-  // EXACT failure ensureComposer()'s own comment already documents: at a
-  // threshold this low, the dense core's additive edge/point SUM blooms in
-  // its entirety and clips to a white blob that swallows every label in it
-  // (confirmed live: the "dusk regression" screenshots this session). 0.6
-  // is the value that fixed it the first time — only genuinely bright
-  // points/edges bloom, not the whole resting wash.
-  bloomStrength: 1.06, bloomRadius: 0.43, bloomThreshold: 0.6, exposure: 0.7,
+  edgeFlowSpeed: 0.95, edgeFlowWidth: 0.33, edgeFlowGain: 1.1, edgeFlowCycles: 8,
+  // bloom — the owner tune runs a LOW-threshold / LOW-strength grade: threshold
+  // at 0 lets everything contribute a little glow, but strength is pulled right
+  // down (0.24, from ~1.06) and exposure to 0.4 so the additive sum never builds
+  // to the white-blob clip that a low threshold caused at full strength (the
+  // "dusk regression"). The two move together: if you raise bloomStrength back
+  // up, raise bloomThreshold with it or the dense core blows out again.
+  bloomStrength: 0.24, bloomRadius: 0, bloomThreshold: 0, exposure: 0.4,
   bloomMode: 'on' as 'auto' | 'on' | 'off',
   // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
-  starSpike: 0.55,
+  starSpike: 1,
   // scene mode: 'dusk' = the luminous dark field; 'paper' = a cartographic
   // star ATLAS — ink stars and fine linework on warm paper, bloom off.
   sceneMode: 'dusk' as 'dusk' | 'paper',
@@ -95,7 +99,7 @@ export const TUNE_DEFAULTS = {
   // stays level as you turn your head (the planetarium "which way is up" cue).
   // 0 = flat sceneBg (the old void); 1 = full gradient. Dark by design — never
   // blooms, never drowns a star.
-  atmosphere: 0.7,
+  atmosphere: 0.22,
   // FAR-SIDE occlusion (orrery / the re-curled ball): how hard the far hemisphere
   // is hidden behind the near cap. 0 = the shell is fully transparent (see every
   // back-side star through it); 1 = OPAQUE — nothing beyond the horizon rim is
@@ -110,15 +114,15 @@ export const TUNE_DEFAULTS = {
   // places (owner grade #4): captions many and STRONG (a star atlas names
   // its constellations), tight approach band; anchors as micro-print star
   // names — many, tiny, full-opacity (celestial-chart typography).
-  constCap: 32, constOpacity: 1, constNear: 0.5, constFar: 1.2,
-  anchorCap: 32, anchorOpacity: 1, anchorSizeMult: 0.1,
+  constCap: 6, constOpacity: 1, constNear: 0.2, constFar: 3.04,
+  anchorCap: 32, anchorOpacity: 0.52, anchorSizeMult: 0.56,
   // in-scene label furniture. The name's backing is a DEPTH-ONLY CLIP (owner
   // 2026-07-20: "the observed background / just clipping") — it writes depth
   // but no colour, knocking the busy cloud/edges/labels out of a tight box so
   // the calm sky shows through behind the outlined glyphs. No veil, no chip.
   // pillClip 1 = on, 0 = off (text then reads straight over whatever's behind).
   // labelOutline gives the glyphs their edge definition over the cleared sky.
-  pillClip: 1, labelOutline: 0.35,
+  pillClip: 0, labelOutline: 0.21,
   // LABEL SIZE is a FIXED SCREEN quantity (owner 2026-07-20: "labels should
   // have fixed size and only fade in/out"). Each label renders at exactly
   // labelPx × its role multiplier, regardless of depth or the node's own
@@ -139,7 +143,14 @@ export const TUNE_DEFAULTS = {
   // crossing the seam changes gears there). Both are multipliers on the shipped
   // pinch/wheel gains, so 1 = the current feel. dragMomentum is the glide's
   // per-frame friction: higher = the flung shell coasts longer (0.92 shipped).
-  zoomFov: 1, zoomCurl: 1, dragMomentum: 0.92,
+  zoomFov: 0.2, zoomCurl: 1, dragMomentum: 0.9,
+  // FIELD-COMPUTER GLASS (the palette/context sheet over the graph): the frosted
+  // pane's blur radius (px) and dark-fill opacity. Not scene render state — the
+  // Palette reads these on TUNE_EVENT and re-renders — so they're `live:'persist'`
+  // (a tuner change just saves, no graph re-grade). Lower opacity / higher blur =
+  // more of the graph shows through; raise opacity if text loses legibility over
+  // a bright patch.
+  glassBlur: 20, glassOpacity: 0.62,
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
 export const TUNE_LS = 'parc.home.tune';
@@ -169,6 +180,9 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
+  // the field-computer's frosted glass (Palette-side; read on TUNE_EVENT).
+  { key: 'glassBlur', group: 'glass', label: 'blur', min: 0, max: 40, step: 1, live: 'persist', quick: true },
+  { key: 'glassOpacity', group: 'glass', label: 'opacity', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   // 0 = meaning (semantic), 1 = authored-link force layout; the between morphs.
   { key: 'layoutMix', group: 'layout', label: 'meaning ↔ links', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   // zoom feel + momentum — read live in the input handlers / tick.

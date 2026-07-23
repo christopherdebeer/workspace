@@ -25,6 +25,9 @@ export interface KernelBridge {
   /** Keep the host-only `parc_session` cookie as fresh as the client token, so
    *  the next navigation's SSR resolves authed (see client/auth.ts). */
   refreshSessionCookie(): void;
+  /** Drop a DISPROVEN session locally (tokens + cookie mirror; no navigation,
+   *  no server call) so `isAuthed()` stops reporting a dead credential. */
+  localSignOut(): void;
 }
 
 const notInstalled = (): never => {
@@ -41,6 +44,7 @@ let impl: KernelBridge = {
   authFetch: async () => notInstalled(),
   isAuthed: () => false,
   refreshSessionCookie: () => {},
+  localSignOut: () => {},
   // Apex-form path by default; the server install overrides with the request
   // host, the client install with the kernel's `cellUrl`.
   cellUrl: (owner: string, name: string, rest = '') => `/@${owner}/${name}${rest}`,
@@ -57,4 +61,5 @@ export const completeLoginIfReturning = (): Promise<boolean> => impl.completeLog
 export const authFetch = (path: string, init?: RequestInit): Promise<Response> => impl.authFetch(path, init);
 export const isAuthed = (): boolean => impl.isAuthed();
 export const refreshSessionCookie = (): void => impl.refreshSessionCookie();
+export const localSignOut = (): void => impl.localSignOut();
 export const cellUrl = (owner: string, name: string, rest = ''): string => impl.cellUrl(owner, name, rest);

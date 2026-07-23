@@ -139,10 +139,17 @@ export async function fetchChangeHead(): Promise<number | null> {
  *  STREAM into the mounted scene via the append API. */
 export interface GraphMeta {
   coordMap: Record<string, number[]> | null;
+  /** Per-owner PUBLIC coordMaps (`<owner>/_home/embed2d.pub`, ADR-0092 Inc 2):
+   *  grant-folded `owner/key` nodes seat from THEIR owner's map — never from a
+   *  flat merged map (each owner's coords live in their own basis; see
+   *  graph/seats.ts). Null when no granting owner serves one. */
+  pubMaps: Record<string, Record<string, number[]>> | null;
   focusThreshold: number;
 }
+/** Cap on granting owners whose public layout we fetch — one peek each. */
+const PUB_MAP_OWNER_CAP = 12;
 export async function fetchGraphMeta(): Promise<GraphMeta> {
-  const [cfgRes, layoutRes, typoRes, shardsRes] = await Promise.all([
+  const [cfgRes, layoutRes, typoRes, shardsRes, sharedRes] = await Promise.all([
     mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
     mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
     mcpCall('read', 'workspace.peek', { key: '_config/typography' }).catch(() => null),
@@ -153,6 +160,10 @@ export async function fetchGraphMeta(): Promise<GraphMeta> {
       rankBy: 'recency',
       limit: 64,
     }).catch(() => null),
+    // The owners whose slices fold into this view (`receiving` is the
+    // applicable set — direct + public + group; for @guest that's every owner
+    // with public shares) — each may serve a public layout (ADR-0092).
+    mcpCall('read', 'workspace.shared', {}).catch(() => null),
   ]);
   const typoVal = (typoRes && typoRes.ok ? (typoRes.value as { value?: { groups?: Record<string, string> } } | null)?.value : null) ?? null;
   if (typoVal?.groups && typeof typoVal.groups === 'object') setTypeGroup(typoVal.groups);
@@ -175,7 +186,26 @@ export async function fetchGraphMeta(): Promise<GraphMeta> {
   } else if (layoutV?.coords && typeof layoutV.coords === 'object') {
     coordMap = layoutV.coords as Record<string, number[]>;
   }
-  return { coordMap, focusThreshold };
+  // Per-owner public layouts (ADR-0092 Inc 2): one peek per granting owner via
+  // peek's `owner/key` addressing (resolves through the grant fold — a viewer
+  // only ever receives an artifact a `public` grant covers). Misses and owners
+  // without one degrade silently to the golden-spiral fallback seat.
+  let pubMaps: Record<string, Record<string, number[]>> | null = null;
+  const receiving = (sharedRes && sharedRes.ok
+    ? (sharedRes.value as { receiving?: Array<{ owner?: string }> } | null)?.receiving
+    : null) ?? [];
+  const owners = [...new Set(receiving.map((g) => g.owner).filter((o): o is string => typeof o === 'string' && !!o))].slice(0, PUB_MAP_OWNER_CAP);
+  if (owners.length) {
+    const fetched = await Promise.all(owners.map(async (o) => {
+      const r = await mcpCall('read', 'workspace.peek', { key: `${o}/_home/embed2d.pub` }).catch(() => null);
+      const coords = r && r.ok ? (r.value as { value?: { coords?: Record<string, number[]> } } | null)?.value?.coords : null;
+      return [o, coords] as const;
+    }));
+    for (const [o, coords] of fetched) {
+      if (coords && typeof coords === 'object' && Object.keys(coords).length) (pubMaps ??= {})[o] = coords;
+    }
+  }
+  return { coordMap, pubMaps, focusThreshold };
 }
 
 /** Extract fact keys from an arbitrary console result (search/query/recall/
@@ -201,4 +231,13 @@ export function keysOfResult(value: unknown): string[] {
  *  raw material, not knowledge — a placement's geometry already surfaces as
  *  the el's `onBoard` edge (ADR-0046); showing the decoration fact too would
  *  scatter edgeless satellites across the graph. */
-export const isPlumbing = (e: ListEntry): boolean => e.key.startsWith('_') || (e._meta?.type ?? '') === 'canvas-placement';
+export const isPlumbing = (e: ListEntry): boolean => {
+  if (e.key.startsWith('_') || (e._meta?.type ?? '') === 'canvas-placement') return true;
+  // Grant-folded plumbing (ADR-0092): a foreign owner's reserved-namespace fact
+  // arrives keyed `owner/_…` — e.g. the shared `_home/embed2d.pub` layout
+  // artifact or a `_public/` reflection a public grant happens to cover. Same
+  // rule, one segment deeper. (An own key whose SECOND segment starts with `_`
+  // is caught too — acceptable: that spelling is reserved-namespace-shaped.)
+  const slash = e.key.indexOf('/');
+  return slash > 0 && e.key.charCodeAt(slash + 1) === 95 /* '_' */;
+};

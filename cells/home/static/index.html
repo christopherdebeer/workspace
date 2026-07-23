@@ -9,15 +9,53 @@
     html,body{margin:0;background:#f3edde}
     /* Rendered fact markdown (.fact-md) appears inside PANELS — sheet-scale
        headings, not document-scale (a peeked doc's H1 was 2em inside a 340px
-       scroll box). Code blocks scroll instead of stretching the panel. */
+       scroll box). Code blocks scroll instead of stretching the panel.
+
+       ONE ruleset, two palettes. Every colour is a custom property so the same
+       rules serve both the DARK surfaces (graph palette, bottom-sheet peek —
+       the default) and the LIGHT trailhead (`.fact-md.on-paper`, the selected
+       fact + landing doc on cream). Before this the dark gold/black values bled
+       onto the parchment: gold links at ~2:1 contrast, jet-black code plates,
+       and white table hairlines that simply vanished. Headings speak the park's
+       serif on both. */
+    .fact-md{
+      --md-link:#f5c453;              /* gold on ink */
+      --md-code-bg:rgba(0,0,0,.28);
+      --md-icode-bg:rgba(0,0,0,.22);
+      --md-rule:rgba(245,196,83,.45); /* blockquote bar + hr */
+      --md-hr:rgba(245,196,83,.25);
+      --md-border:rgba(255,255,255,.14);
+      --md-th-bg:rgba(0,0,0,.18);
+      --md-serif:'Iowan Old Style',Palatino,Georgia,'Times New Roman',serif;
+    }
+    .fact-md.on-paper{
+      --md-link:#2e5e43;              /* pine on paper */
+      --md-code-bg:rgba(51,46,35,.06);
+      --md-icode-bg:rgba(51,46,35,.08);
+      --md-rule:rgba(46,94,67,.4);
+      --md-hr:rgba(51,46,35,.16);
+      --md-border:rgba(51,46,35,.18);
+      --md-th-bg:rgba(51,46,35,.05);
+    }
+    .fact-md h1,.fact-md h2,.fact-md h3,.fact-md h4,.fact-md h5,.fact-md h6{font-family:var(--md-serif);font-weight:600}
     .fact-md h1{font-size:1.2em;margin:.5em 0 .3em}
     .fact-md h2{font-size:1.1em;margin:.5em 0 .25em}
     .fact-md h3,.fact-md h4{font-size:1em;margin:.4em 0 .2em}
+    .fact-md h1,.fact-md h2{line-height:1.25}
     .fact-md p{margin:.35em 0}
     .fact-md ul,.fact-md ol{margin:.35em 0;padding-left:1.3em}
-    .fact-md pre{overflow-x:auto;background:rgba(0,0,0,.28);padding:.5em .6em;border-radius:8px;font-size:.92em}
+    .fact-md li{margin:.15em 0}
+    .fact-md pre{overflow-x:auto;background:var(--md-code-bg);padding:.5em .6em;border-radius:8px;font-size:.92em}
     .fact-md code{overflow-wrap:anywhere}
-    .fact-md a{color:#f5c453}
+    .fact-md p code,.fact-md li code,.fact-md td code{background:var(--md-icode-bg);padding:.05em .3em;border-radius:4px;font-size:.92em}
+    .fact-md a{color:var(--md-link)}
+    .fact-md a:hover{text-decoration-style:solid}
+    .fact-md blockquote{margin:.5em 0;padding:.1em .9em;border-left:3px solid var(--md-rule);opacity:.9}
+    .fact-md hr{border:none;border-top:1px solid var(--md-hr);margin:1em 0}
+    .fact-md table{border-collapse:collapse;font-size:.92em}
+    .fact-md th,.fact-md td{border:1px solid var(--md-border);padding:.25em .55em;text-align:left}
+    .fact-md th{background:var(--md-th-bg)}
+    .fact-md img{border-radius:8px}
   </style>
 </head>
 <body>

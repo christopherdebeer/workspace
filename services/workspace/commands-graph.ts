@@ -2,7 +2,7 @@
  * Workspace command group (ADR-0044 Inc 5): links/edges/graph — link, unlink,
  * neighbors, links, graph, members (the Reference projection).
  */
-import { requireUser, type StateStore, type ObservedState } from '../../platform/runtime';
+import { requireUser, type StateStore, type ObservedState, type TypeRules } from '../../platform/runtime';
 import { type DepsBuilder, typeDeclsFor, typeRulesFor, affordancesForTypes, typesOf } from './shared';
 import { shapeEntryList, shapeEntryMap, scopeEdges, type ReadShape, type EdgeScopeInput } from './shape';
 import { applicableGrants, grantCovers, type GrantStore } from './grants';
@@ -37,6 +37,61 @@ async function grantedEdges(state: Pick<ObservedState, 'edges'>, viewer: string,
     }
   }
   return out;
+}
+
+/** The FULL-projection twin of {@link grantedEdges} (ADR-0092 follow-on): fold
+ *  each granting owner's whole graph projection — authored edges AND the
+ *  derived backbone (membership, instanceOf, …) AND the persisted `similarTo`
+ *  constellation — kept only where BOTH endpoints fall under the viewer's
+ *  grant patterns, re-prefixed `owner/key`. ADR-0091 folded only the
+ *  `derived:false` links framing, but the home graph reads THIS framing — so
+ *  a guest saw every public star and zero edges between them (validated live:
+ *  210 nodes, 0 edges). The both-endpoint rule keeps the boundary: an edge to
+ *  an uncovered key (a private fact, a `_types/` decl) never leaks its name. */
+async function grantedGraphEdges(
+  state: Pick<ObservedState, 'graph'>,
+  viewer: string,
+  grants: GrantStore,
+  typeRules: Record<string, TypeRules> | undefined,
+): Promise<Edge[]> {
+  const grantList = await applicableGrants(grants, viewer);
+  const byOwner = new Map<string, string[]>();
+  for (const g of grantList) {
+    if (g.owner === viewer) continue;
+    const pats = byOwner.get(g.owner) ?? [];
+    pats.push(g.key);
+    byOwner.set(g.owner, pats);
+  }
+  if (!byOwner.size) return [];
+  const covered = (pats: string[], key: string): boolean => pats.some((p) => grantCovers(p, key));
+  const out: Edge[] = [];
+  for (const [owner, pats] of byOwner) {
+    const g = await state.graph(owner, { typeRules });
+    for (const e of g.edges) {
+      if (covered(pats, e.from) && covered(pats, e.to)) out.push({ ...e, from: `${owner}/${e.from}`, to: `${owner}/${e.to}` });
+    }
+  }
+  return out;
+}
+
+/** Resolve an `owner/key`-spelled anchor (`around`) to the slice it lives in:
+ *  the viewer's own (self-folded spelling — the /r/<owner>/<key> canonical
+ *  address, ADR-0090) or a granting owner's, when a grant covers the bare key.
+ *  `pats: null` = self (full access, no coverage filter). Returns null when the
+ *  leading segment isn't a resolvable owner — the caller falls through to the
+ *  own-slice read untouched (an own key like `file/docs/x` never matches). */
+async function foldedAnchor(
+  grants: GrantStore,
+  viewer: string,
+  around: string,
+): Promise<{ owner: string; rest: string; pats: string[] | null } | null> {
+  const slash = around.indexOf('/');
+  if (slash <= 0) return null;
+  const owner = around.slice(0, slash);
+  const rest = around.slice(slash + 1);
+  if (owner === viewer) return { owner, rest, pats: null };
+  const pats = (await applicableGrants(grants, viewer)).filter((g) => g.owner === owner).map((g) => g.key);
+  return pats.some((p) => grantCovers(p, rest)) ? { owner, rest, pats } : null;
 }
 
 export interface LinkInput {
@@ -217,8 +272,25 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       // fell through to the WHOLE-graph projection or errored. Honor `key` as the
       // alias it structurally is — the same fact-scoped neighbourhood read.
       const around = input?.around ?? input?.key;
+      // A grant-folded anchor (`owner/key` — how folded reads key foreign facts,
+      // and the canonical /r/<owner>/<key> address) resolves against THAT
+      // owner's slice, results coverage-filtered and re-prefixed. Null for
+      // ordinary own keys — those paths are byte-identical to before.
+      const anchor = around ? await foldedAnchor(grants, scope, around) : null;
+      const anchorCovered = (key: string): boolean => !anchor?.pats || anchor.pats.some((p) => grantCovers(p, key));
       // around + membership → the `members` framing.
       if (around && input?.membership) {
+        if (anchor) {
+          const result = await state.members(anchor.owner, anchor.rest, { typeRules: await typeRulesFor(ctx) });
+          // Coverage on every emitted member (an uncovered member never leaks
+          // its key), re-prefixed so the caller's node keys line up.
+          const members = result.members
+            .filter((m) => anchorCovered(m.key))
+            .map((m) => ({ ...m, key: `${anchor.owner}/${m.key}` }));
+          const types = affordancesForTypes(typesOf(members), await typeDeclsFor(ctx));
+          const shaped = { ...result, key: around, members: shapeEntryList(members, input?.shape ?? 'card') };
+          return Object.keys(types).length ? { ...shaped, types } : shaped;
+        }
         const result = await state.members(scope, around, { typeRules: await typeRulesFor(ctx) });
         const types = affordancesForTypes(typesOf(result.members), await typeDeclsFor(ctx));
         const shaped = { ...result, members: shapeEntryList(result.members, input?.shape ?? 'card') };
@@ -237,6 +309,22 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
       }
       // around → the `neighbors` framing (key-scoped, index-backed).
       if (around) {
+        if (anchor) {
+          const r = await state.neighbors(anchor.owner, anchor.rest, { dir: input?.dir, rel: input?.rel, typeRules: await typeRulesFor(ctx) });
+          // Both-endpoint coverage (the far end of an edge to a private fact
+          // must never leak), re-prefix edges + entries to `owner/key`.
+          const fold = (es: typeof r.outbound): typeof r.outbound =>
+            es.filter((e) => anchorCovered(e.from) && anchorCovered(e.to))
+              .map((e) => ({ ...e, from: `${anchor.owner}/${e.from}`, to: `${anchor.owner}/${e.to}` }));
+          const entries: typeof r.entries = {};
+          for (const [k, v] of Object.entries(r.entries)) {
+            if (anchorCovered(k)) entries[`${anchor.owner}/${k}`] = v;
+          }
+          const result = { outbound: fold(r.outbound), inbound: fold(r.inbound), entries };
+          const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
+          const shaped = { ...result, entries: shapeEntryMap(result.entries, input?.shape ?? 'card') };
+          return Object.keys(types).length ? { ...shaped, types } : shaped;
+        }
         const result = await state.neighbors(scope, around, { dir: input?.dir, rel: input?.rel, typeRules: await typeRulesFor(ctx) });
         const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
         const shaped = { ...result, entries: shapeEntryMap(result.entries, input?.shape ?? 'card') };
@@ -257,10 +345,14 @@ export function createGraphCommands(build: DepsBuilder): Pick<WorkspaceCommands,
         logEdgeRead(ctx, 'edges(links)', scope, input, scoped, started);
         return scoped;
       }
-      // default → the full `graph` projection (authored + derived), scoped.
+      // default → the full `graph` projection (authored + derived), scoped —
+      // PLUS the grant fold (the framing the home graph reads: without it a
+      // guest saw every public star and zero edges between them).
       const started = Date.now();
-      const result = await state.graph(scope, { typeRules: await typeRulesFor(ctx) });
-      const scoped = scopeEdges(result.edges, edgeScope(input));
+      const typeRules = await typeRulesFor(ctx);
+      const result = await state.graph(scope, { typeRules });
+      const granted = await grantedGraphEdges(state, scope, grants, typeRules);
+      const scoped = scopeEdges(granted.length ? [...result.edges, ...granted] : result.edges, edgeScope(input));
       logEdgeRead(ctx, 'edges(graph)', scope, input, scoped, started);
       return scoped;
     },

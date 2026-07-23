@@ -1413,21 +1413,55 @@ async function describeCellTools(input: DescribeCellToolsInput | undefined, ctx:
  * *how* to open a fact, not *whether* you may. The gateway's `$types` serves
  * this merged under the caller's per-user `_types/` overrides.
  */
-async function describeTypes(_input: unknown, ctx: ServiceContext): Promise<{ types: Record<string, unknown> }> {
-  const env = loadForgeEnv();
-  const cells = await createRegistry(env.registryTable).listActive();
+/** Pure aggregation half of {@link describeTypes} (exported for tests).
+ *
+ *  Collision rule (ADR-0093 Inc 4): **first-declarer-wins, visibly.** Cells
+ *  aggregate oldest-first (registry `createdAt`, tie: cellId), and a type name
+ *  already declared is NOT overridden — the status quo (`out[type] = value`
+ *  over a cellId sort) was last-writer-wins, which let any newly deployed cell
+ *  silently hijack an established type's handlers (its `open` path, its
+ *  renderer) for every viewer: the same threat class as reserved usernames
+ *  (ADR-0091 §5). A losing declaration is recorded on the winner as
+ *  `conflicts: ["@owner/name", …]` so the collision is observable data, never
+ *  silent. Per-user `_types/` overrides (the existing gateway merge) remain
+ *  the personal escape hatch for a viewer who prefers the newcomer's handling. */
+export function aggregateTypes(
+  cells: Array<{ owner: string; name: string; cellId: string; createdAt: string; types?: Array<Record<string, unknown>> }>,
+): { types: Record<string, unknown>; conflicts: number } {
   const out: Record<string, unknown> = {};
-  for (const c of cells.sort((a, b) => a.cellId.localeCompare(b.cellId))) {
+  let conflicts = 0;
+  const ordered = [...cells].sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.cellId.localeCompare(b.cellId),
+  );
+  for (const c of ordered) {
     for (const decl of c.types ?? []) {
       const type = typeof decl.type === 'string' ? decl.type : '';
       if (!type || type.startsWith('_')) continue;
-      const value: Record<string, unknown> = { ...decl, manager: typeof decl.manager === 'string' ? decl.manager : cellAddress(c.owner, c.name) };
+      // The conflict annotation names the actual declaring CELL (registry
+      // identity), never the decl's self-declared `manager` — a hijacker must
+      // not get to choose how it appears in the audit trail.
+      const declaringCell = cellAddress(c.owner, c.name);
+      if (out[type]) {
+        const winner = out[type] as { conflicts?: string[] };
+        if (!winner.conflicts?.includes(declaringCell)) (winner.conflicts ??= []).push(declaringCell);
+        conflicts++;
+        continue;
+      }
+      const value: Record<string, unknown> = { ...decl, manager: typeof decl.manager === 'string' ? decl.manager : declaringCell };
       delete value.type;
       out[type] = value;
     }
   }
-  ctx.logger.info('type vocabulary aggregated', { cells: cells.length, types: Object.keys(out).length });
-  return { types: out };
+  return { types: out, conflicts };
+}
+
+async function describeTypes(_input: unknown, ctx: ServiceContext): Promise<{ types: Record<string, unknown> }> {
+  const env = loadForgeEnv();
+  const cells = await createRegistry(env.registryTable).listActive();
+  const { types, conflicts } = aggregateTypes(cells);
+  ctx.logger.info('type vocabulary aggregated', { cells: cells.length, types: Object.keys(types).length, conflicts });
+  if (conflicts) ctx.logger.warn('type vocabulary collisions — first declarer kept, losers annotated in `conflicts`', { conflicts });
+  return { types };
 }
 
 /**

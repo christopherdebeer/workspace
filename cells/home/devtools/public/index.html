@@ -12,6 +12,39 @@
        block that (and mask the very bug we're testing). */
     html, body { margin: 0; padding: 0; background: #1b1710; }
     body { color: #efe9dc; font-family: system-ui, sans-serif; }
+    /* Mirror of static/index.html .fact-md rules — keep in sync so the harness
+       renders markdown exactly as the deployed cell does (the harness serves
+       THIS shell, not static/index.html). */
+    .fact-md{
+      --md-link:#f5c453;--md-code-bg:rgba(0,0,0,.28);--md-icode-bg:rgba(0,0,0,.22);
+      --md-rule:rgba(245,196,83,.45);--md-hr:rgba(245,196,83,.25);
+      --md-border:rgba(255,255,255,.14);--md-th-bg:rgba(0,0,0,.18);
+      --md-serif:'Iowan Old Style',Palatino,Georgia,'Times New Roman',serif;
+    }
+    .fact-md.on-paper{
+      --md-link:#2e5e43;--md-code-bg:rgba(51,46,35,.06);--md-icode-bg:rgba(51,46,35,.08);
+      --md-rule:rgba(46,94,67,.4);--md-hr:rgba(51,46,35,.16);
+      --md-border:rgba(51,46,35,.18);--md-th-bg:rgba(51,46,35,.05);
+    }
+    .fact-md h1,.fact-md h2,.fact-md h3,.fact-md h4,.fact-md h5,.fact-md h6{font-family:var(--md-serif);font-weight:600}
+    .fact-md h1{font-size:1.2em;margin:.5em 0 .3em}
+    .fact-md h2{font-size:1.1em;margin:.5em 0 .25em}
+    .fact-md h3,.fact-md h4{font-size:1em;margin:.4em 0 .2em}
+    .fact-md h1,.fact-md h2{line-height:1.25}
+    .fact-md p{margin:.35em 0}
+    .fact-md ul,.fact-md ol{margin:.35em 0;padding-left:1.3em}
+    .fact-md li{margin:.15em 0}
+    .fact-md pre{overflow-x:auto;background:var(--md-code-bg);padding:.5em .6em;border-radius:8px;font-size:.92em}
+    .fact-md code{overflow-wrap:anywhere}
+    .fact-md p code,.fact-md li code,.fact-md td code{background:var(--md-icode-bg);padding:.05em .3em;border-radius:4px;font-size:.92em}
+    .fact-md a{color:var(--md-link)}
+    .fact-md a:hover{text-decoration-style:solid}
+    .fact-md blockquote{margin:.5em 0;padding:.1em .9em;border-left:3px solid var(--md-rule);opacity:.9}
+    .fact-md hr{border:none;border-top:1px solid var(--md-hr);margin:1em 0}
+    .fact-md table{border-collapse:collapse;font-size:.92em}
+    .fact-md th,.fact-md td{border:1px solid var(--md-border);padding:.25em .55em;text-align:left}
+    .fact-md th{background:var(--md-th-bg)}
+    .fact-md img{border-radius:8px}
   </style>
 </head>
 <body>

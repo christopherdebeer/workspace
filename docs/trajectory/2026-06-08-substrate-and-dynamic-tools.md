@@ -3,7 +3,7 @@
 > **Semi-ephemeral handoff doc.** Point a fresh session at this file to continue
 > without re-deriving. It records what shipped, what's live, and the exact next
 > step (a live end-to-end validation). Durable design lives in
-> [`substrate.md`](./substrate.md) and [`dynamic-cells.md`](./dynamic-cells.md) —
+> [`substrate.md`](../substrate.md) and [`dynamic-cells.md`](../dynamic-cells.md) —
 > this is the working log, safe to delete once its next-steps are done.
 
 - **Branch:** `claude/forge-dynamic-cell-e2e-qgVeI` (all work below merged to `main` and deployed)

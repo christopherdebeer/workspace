@@ -8,7 +8,7 @@ import * as React from 'react';
 import { Card, Heading, Badge, Button, theme } from '@parc/ui';
 import { localize, heroUrl, heroCutUrl, stripUrl, mcpCall, type Session } from './lib';
 import { primeViews, type ViewDef } from './views';
-import { FactReading, DocBody, type ListEntry } from './facts';
+import { FactReading, FactReadingFooter, DocBody, type ListEntry } from './facts';
 import type { GraphNode } from './graph';
 
 const { useState, useEffect } = React;
@@ -22,13 +22,18 @@ const { useState, useEffect } = React;
  *  key loads, the last entry stays on screen until the fetch resolves, so the
  *  ground never blanks mid-transition. */
 const peekCache = new Map<string, ListEntry>();
-function useFactPeek(key: string | null | undefined): ListEntry | null {
-  // Seed synchronously from cache so a re-visit paints immediately (no flash).
-  const [entry, setEntry] = useState<ListEntry | null>(() => (key ? peekCache.get(key) ?? null : null));
+function useFactPeek(key: string | null | undefined, seed?: ListEntry): ListEntry | null {
+  // Seed synchronously from cache — or the server's SSR-peeked entry (a
+  // /r/<key> deep link) — so the first paint shows the fact, no flash. The
+  // seed is per-request boot data, NEVER primed into the module cache from
+  // the server side (a Lambda-global cache would leak one caller's fact into
+  // another's render).
+  const [entry, setEntry] = useState<ListEntry | null>(() => (key ? peekCache.get(key) ?? (seed && seed.key === key ? seed : null) ?? null : null));
   useEffect(() => {
     if (!key) { setEntry(null); return; }
     const cached = peekCache.get(key);
     if (cached) { setEntry(cached); return; } // instant — no refetch, no flash
+    if (seed && seed.key === key) setEntry(seed); // SSR seed paints; live read still refreshes below
     // New key: keep showing whatever's on screen while the fetch runs (don't
     // blank to null); swap in the result when it lands.
     let live = true;
@@ -114,8 +119,8 @@ export const DEFAULT_SKY = 'linear-gradient(rgb(26, 39, 64) 0%, rgb(58, 74, 107)
 /** The hero band height — the graph + sky occupy only this on the landing, so
  *  the content below sits on solid ground (nothing live behind it). Kept in
  *  sync with the Hero section's minHeight. */
-export const HERO_VH = '66.67svh';
-export function SkyGradient({ fade = 1, heroOnly = false }: { fade?: number; heroOnly?: boolean }): React.JSX.Element {
+export const HERO_VH = '66.67svh'; // the hero band + sky-wash height (the GRAPH's rest height is 2/3 of this — see app.tsx)
+export function SkyGradient({ fade = 1, heroOnly = false, height, instant = false, transition }: { fade?: number; heroOnly?: boolean; height?: string; instant?: boolean; transition?: string }): React.JSX.Element {
   const g = (typeof window !== 'undefined' && (window as unknown as { __skyGradient?: string }).__skyGradient) || DEFAULT_SKY;
   return (
     <div
@@ -124,13 +129,25 @@ export function SkyGradient({ fade = 1, heroOnly = false }: { fade?: number; her
       style={{
         // On the landing the wash covers only the hero band (matches the graph);
         // entered, it's full-viewport (heroOnly=false) as the graph fills the page.
+        // `height` overrides both: during pull-to-enter it GROWS with the pull so
+        // the wash's horizon rides down with the descending landscape, and its
+        // opacity deepens toward the night graph. `instant` kills the transition
+        // while a pull is live so it tracks the finger (the deepen mustn't lag);
+        // `transition` overrides it for choreographed beats (the mirror exit).
         position: 'fixed', top: 0, left: 0, right: 0,
-        height: heroOnly ? HERO_VH : '100%',
+        height: height ?? (heroOnly ? HERO_VH : '100%'),
         zIndex: 1, pointerEvents: 'none',
         background: g,
         mixBlendMode: 'screen',
         opacity: fade,
-        transition: 'opacity 0.9s ease-in',
+        // FEATHERED bottom edge: the wash's hard cut showed as a two-tone line
+        // through the half-transparent arriving sheet during the mirror exit
+        // (screen-blend light above the edge, none below — owner IMG_0375).
+        // A soft ~15% fade-out blends it; at rest the opaque painting/sheet
+        // overlap the feather zone anyway, so nothing else changes.
+        maskImage: 'linear-gradient(to bottom, black 85%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(to bottom, black 85%, transparent 100%)',
+        transition: transition ?? (instant ? 'none' : 'opacity 0.9s ease-in'),
       }}
     />
   );
@@ -187,11 +204,42 @@ export function Wordmark({ light }: { light?: boolean }): React.JSX.Element {
   );
 }
 
+/**
+ * The persistent SITE FOOTER — wordmark + docs/agents nav. Rendered ONCE at the
+ * end of the Content section so every landing state (a selected fact, the
+ * landing doc, or the featured/pitch ground) ends on the same anchor, instead
+ * of the footer appearing only on some branches (the drift this consolidates).
+ * Landing-only: the immersive graph has the top wordmark + palette instead.
+ */
+function SiteFooter(): React.JSX.Element {
+  return (
+    <div style={{ pointerEvents: 'auto', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
+      <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
+      <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
+      <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
+    </div>
+  );
+}
+
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd, enterGrip, peekDocked }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
+  /** A docked peek stack (FactDetailHost, light) has taken the ground: the
+   *  Content section collapses to its TIP-LIP (still part of the composition)
+   *  and the stack renders into the #peek-dock slot just below it. */
+  peekDocked?: boolean;
+  /** The pull-to-explore GRIP on the content sheet's top edge (owner): drag it
+   *  DOWN to peel the overlay and grow the graph → enter. Enter lives here now,
+   *  not on a window over-scroll, so the graph itself is free for spin. `progress`
+   *  (0–1 toward the commit threshold) drives the grip's label + affordance. */
+  enterGrip?: {
+    onDown: (e: React.PointerEvent) => void;
+    onMove: (e: React.PointerEvent) => void;
+    onUp: () => void;
+    progress: number;
+  };
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
   authed?: boolean;
   /** Can walk into the sky even when signed out (a public @guest token is live) —
@@ -201,6 +249,14 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
    *  ground renders THIS doc's full body instead of the pitch/featured cards —
    *  the home page IS a fact, editable in lit. Configurable via _config/home-landing. */
   landingKey?: string;
+  /** SSR'd markdown for the landing doc (the public file mirror) — first paint
+   *  renders the doc itself; the live read then refreshes it in place. */
+  landingBody?: string;
+  /** SSR-seeded entry for a /r/<key> deep link (ADR-0090): the server peeked
+   *  the fact as the caller, so the head paints server-side — no peek flash. */
+  initialFact?: ListEntry;
+  /** SSR'd markdown body for the deep-linked doc (public file mirror). */
+  selectedMd?: string;
   /** When set, the ground below the horizon reads THAT fact instead of the pitch
    *  (a deep-linked star, or one still selected when you stepped back here). */
   selectedKey?: string | null;
@@ -228,7 +284,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
   const island: React.CSSProperties = { pointerEvents: 'auto' };
   // The SELECTED star (deep-link or stepped-back): its head reads over the hero
   // in place of the pitch, its body as paper on the ground below.
-  const peeked = useFactPeek(selectedKey);
+  const peeked = useFactPeek(selectedKey, initialFact);
   // Instant head: if the graph handed us the node, synthesize a head-only entry
   // whose value IS the graph's own label — factTitle→heuristicTitle returns that
   // string verbatim, so the hero head paints with NO round-trip. The peek
@@ -251,15 +307,22 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
     <div className="MainContent" style={{ position: 'relative', width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
       {/* ── HERO SCREEN (first viewport): painted valley + the pitch + CTA ── */}
       <section className="Hero" style={{
-        // ~2/3 viewport, not full-screen: the top of the content below sits
-        // clearly above the fold, so it's obvious there's more to scroll to.
-        position: 'relative', minHeight: '66.67svh',
+        // ~2/3 viewport (HERO_VH) — the painted hero + sky wash. The live GRAPH
+        // behind it is a smaller preview strip (2/3 of this, see app.tsx), so the
+        // stars sit in the sky band above the painted mountains, not the whole hero.
+        position: 'relative', minHeight: HERO_VH,
         display: 'grid', alignContent: 'end', justifyItems: 'center',
         padding: 'clamp(1rem, 3vw, 2rem)',
         // Lifted off the bottom now that supplementary content lives below the
         // hero — the pitch sits over the valley/treeline, not the frame edge.
         //paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10vh)',
         paddingBottom: 0,
+        // FADE OUT with the pull (owner): the painted day-hero dissolves toward
+        // the night graph growing behind it as you pull down — the day→night
+        // handoff made continuous, not just a commit-time flip. Tracks the finger
+        // while pulling; springs back at rest.
+        opacity: enterGrip ? 1 - 0.72 * enterGrip.progress : 1,
+        transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'opacity 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
         {/* Painted landscape, pinned to this first screen only */}
         <div className='HeroLandscape'style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}><HeroLandscape /></div>
@@ -297,51 +360,110 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             ) : null}
             <span style={{ color: theme.cream, opacity: 0.8, fontSize: '0.78rem', marginTop: authed ? '0.4rem' : 0, textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
               {authed
-                ? `Scroll up to enter the sky — scroll down to ${selectedKey ? 'read' : 'learn more'}.`
+                ? `Spin the sky to look around — pull the handle below to explore, or scroll to ${selectedKey ? 'read' : 'learn more'}.`
                 : canEnter
-                  ? 'Scroll up to explore the public sky — scroll down to read. Sign in to make it yours.'
+                  ? 'Spin the public sky to look around — pull the handle below to explore, or scroll to read. Sign in to make it yours.'
                   : 'New here? Sign-in with existing or register a passkey.'}
             </span>
             {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>
         </div>
-        {/* Scroll cue */}
-        <div aria-hidden style={{ position: 'absolute', bottom: '0.6rem', left: 0, right: 0, textAlign: 'center', color: theme.cream, opacity: 0.55, fontSize: '0.7rem', fontFamily: theme.mono }}>
-          ↓ more below
-        </div>
+        {/* No scroll cue here — the content sheet's own grip (just below) carries
+            the "pull down to explore" affordance, so a second ↓ would only muddy
+            it (drag-to-explore vs scroll-to-read are different gestures). */}
       </section>
 
       {/* ── CONTENT BELOW THE HERO ── OPAQUE ground: occludes the fixed graph +
-          sky gradient so neither leaks past the horizon into the content. */}
+          sky gradient so neither leaks past the horizon into the content. It's
+          shaped as a SHEET — rounded top edge, lifted over the hero horizon with
+          a soft top shadow — so a summoned peek (a second rounded sheet, same
+          14px radius + top shadow) reads as a growing STACK rising over it. */}
+      {peekDocked ? (
+        // A docked peek has taken the ground: the Content collapses to its bare
+        // TIP-LIP — the sheet's rounded edge stays in the composition (the peek
+        // stacks just below it, like the drill stack's own lips), but the body
+        // waits unrendered until the stack closes.
+        <section className="Content" aria-hidden style={{
+          position: 'relative', zIndex: 2, height: 14, overflow: 'hidden',
+          background: theme.bg, borderTopLeftRadius: 14, borderTopRightRadius: 14,
+          marginTop: '-2.6rem', boxShadow: '0 -12px 40px rgba(8,29,36,0.28)',
+          pointerEvents: 'none',
+        }} />
+      ) : (
       <section className="Content" style={{
         position: 'relative', zIndex: 2,
         display: 'grid', justifyItems: 'center',
-        padding: 'clamp(1.5rem, 5vw, 3.5rem) clamp(1rem, 3vw, 2rem)',
+        // Reduced top padding (owner): less dead space between the grip/sheet lip
+        // and the first content; sides + bottom keep their comfortable breathing.
+        padding: '0.7rem clamp(1rem, 3vw, 2rem) clamp(1.5rem, 5vw, 3.5rem)',
         gap: '1.4rem',
         flexGrow: 1,
         background: theme.bg, // opaque day paper — the ground below the horizon
+        borderTopLeftRadius: 14, borderTopRightRadius: 14,
+        marginTop: '-2.6rem', // overlap the hero more (owner: was -18px) — the lip sits deeper on the horizon
+        boxShadow: '0 -12px 40px rgba(8,29,36,0.28)', // the sheet's rising edge
         pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
+        // PARALLAX on pull (owner): the sheet drifts faster than the hero above it
+        // as you pull down — foreground depth. SATURATING curve p·(2−p): strong
+        // early drift (double the linear rate) that levels off at 30px, safely
+        // inside the sheet's 2.6rem hero overlap — so at the extreme of the pull
+        // the sheet never drifts beyond the hero background (owner). Tracks the
+        // finger while pulling (no transition), springs back at rest.
+        transform: enterGrip && enterGrip.progress > 0 ? `translateY(${(30 * enterGrip.progress * (2 - enterGrip.progress)).toFixed(1)}px)` : undefined,
+        transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'transform 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
+        {/* PULL-TO-EXPLORE GRIP (owner): the sheet's own handle, mirroring the
+            palette grip — pill only, no label (the hero copy carries the words).
+            A generous full-width hit strip (touchAction:none owns the vertical
+            gesture); the pill firms up as the pull nears the commit. Negative
+            bottom margin pulls the content up under it (little dead space). */}
+        {enterGrip && canEnter ? (
+          <div
+            onPointerDown={enterGrip.onDown}
+            onPointerMove={enterGrip.onMove}
+            onPointerUp={enterGrip.onUp}
+            onPointerCancel={enterGrip.onUp}
+            role="button"
+            aria-label="pull down to explore the graph"
+            style={{
+              justifySelf: 'stretch', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '0.5rem 0 0.55rem', marginTop: '-0.3rem', marginBottom: '-0.8rem',
+              cursor: 'grab', touchAction: 'none', userSelect: 'none',
+            }}
+          >
+            <span aria-hidden style={{ width: 40, height: 5, borderRadius: 999, background: theme.border, opacity: 0.5 + 0.5 * enterGrip.progress, transform: `scaleX(${1 + 0.3 * enterGrip.progress})` }} />
+          </div>
+        ) : null}
         {selectedKey ? (
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
-          // the head already reads in the hero above, so body-only here.
+          // the head already reads in the hero above, so body-only here, then the
+          // shared reading footer (provenance · relationships · actions) so the
+          // fact reads the same here as in the peek.
           <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
-            { reading ? <FactReading e={reading} tone="light" head={false} showBody /> : (
+            { reading ? (
+              <>
+                <FactReading e={reading} tone="light" head={false} showBody footer initialMd={selectedMd} />
+                <FactReadingFooter e={reading} tone="light" authed={!!authed} />
+              </>
+            ) : selectedMd ? (
+              // No peeked entry yet (an anonymous /r/<key> first paint — SSR
+              // reads run only for authed callers) but the server DID load the
+              // public doc body: render it now, server and client alike, so
+              // the deep link paints content instead of "reading…". The live
+              // peek still lands and upgrades to the full FactReading.
+              <DocBody e={{ key: selectedKey as string, value: {}, _meta: { type: 'doc', tags: [] } }} initialMd={selectedMd} tone="light" />
+            ) : (
               <span style={{ color: theme.dim, fontFamily: theme.mono, fontSize: '0.8rem' }}>reading…</span>
             )}
           </div>
         ) : landingEntry ? (
           // DEFAULT GROUND = the landing doc, full body as paper (blocks when
           // authed, the public file markdown when signed out). The home page is a
-          // fact, editable in lit — not a hardcoded pitch. Footer nav stays below.
+          // fact, editable in lit — not a hardcoded pitch. SiteFooter renders once
+          // at the Content bottom (below), for every branch.
           <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
             <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem', margin: '0 auto' }}>
-              <DocBody e={landingEntry} />
-            </div>
-            <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
-              <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
-              <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
-              <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
+              <DocBody e={landingEntry} initialMd={landingBody} tone="light" />
             </div>
           </div>
         ) : (
@@ -366,7 +488,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             <div style={{ ...signCard, ...island }}>
               <strong style={{ fontFamily: theme.serif, fontSize: '0.9rem', color: theme.text }}>A workspace that remembers</strong>
               <span style={{ color: theme.dim, fontSize: '0.82rem' }}>
-                Facts with provenance and history — nothing is lost, the important rises. What you save today is still legible in ten years.
+                Facts with provenance and history — nothing is lost, the important rises. What you save stays where you can find it.
               </span>
             </div>
             <div style={{ ...signCard, ...island }}>
@@ -397,16 +519,19 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           <p style={{ margin: 0, textAlign: 'center', color: theme.dim, opacity: 0.85, fontSize: '0.8rem', fontStyle: 'italic' }}>
             “A digital communal green space.” — the Visitor Centre, est. v1
           </p>
-
-          {/* Footer links — on the light paper ground now, so ink-on-paper */}
-          <div style={{ ...island, display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', paddingBottom: '1rem' }}>
-            <a href={localize('/@c15r/lit')} style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>docs →</a>
-            <span style={{ color: theme.dim, fontSize: '0.72rem' }}><Wordmark /> · a personal substrate</span>
-            <a href="https://parc.land/mcp" style={{ color: theme.accent, fontSize: '0.78rem', textDecoration: 'none' }}>agents →</a>
-          </div>
         </div>
         )}
+
+        {/* The persistent site footer — ONE copy, below whichever ground
+            rendered above (selected fact, landing doc, or pitch/featured). */}
+        <SiteFooter />
       </section>
+      )}
+      {/* The docked peek stack's PORTAL SLOT (FactDetailHost, light tone): the
+          stack renders HERE, in the document flow just below the ground's lip —
+          so reading a peek is a main page scroll, not an inner scrollbox. Empty
+          (zero-height) whenever no peek is docked. */}
+      <div id="peek-dock" style={{ position: 'relative', zIndex: 3, pointerEvents: 'auto', marginTop: peekDocked ? -6 : 0 }} />
     </div>
   );
 }

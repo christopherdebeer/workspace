@@ -4,7 +4,7 @@
  * origin-aware link localisation, and the painted-asset URLs.
  */
 import * as React from 'react';
-import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSessionCookie, cellUrl } from './bridge';
+import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSessionCookie, cellUrl, localSignOut } from './bridge';
 
 /**
  * Make an apex-style `/@owner/name<rest>` link origin-aware. Home now runs as a
@@ -14,6 +14,13 @@ import { login, logout, completeLoginIfReturning, authFetch, isAuthed, refreshSe
  */
 export function localize(href: string | null | undefined): string {
   if (!href) return href ?? '';
+  // `/r/<key>` is an APEX route (the ADR-0090 fact address; dispatch serves
+  // it) — it does not exist on a cell's own `*.on.parc.land` origin, where a
+  // relative href would 404 against the cell Lambda. Emit it apex-ABSOLUTE:
+  // origin-independent, so the SAME markup is navigable at the apex and on a
+  // cell subdomain, and server/client renders agree byte-for-byte (the server
+  // can't always know which host it's being viewed from).
+  if (href.startsWith('/r/')) return `https://parc.land${href}`;
   const m = href.match(/^\/@([^/]+)\/([^/?#]+)(.*)$/);
   return m ? cellUrl(decodeURIComponent(m[1]), decodeURIComponent(m[2]), m[3]) : href;
 }
@@ -60,11 +67,16 @@ let guestToken: string | null = null;
 export function setGuestToken(token: string | null | undefined): void {
   guestToken = token && typeof token === 'string' ? token : null;
 }
-/** The `/mcp` transport for DATA reads/acts: the session token when signed in,
- *  else the public `@guest` bearer if present, else the (token-less) authFetch
- *  path that 401s exactly as before. */
-async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response> {
-  if (isAuthed() || !guestToken) return timedAuthFetch('/mcp', init, timeoutMs);
+/** The kernel session has been DISPROVEN this page-life: its token drew a
+ *  definitive 401/403 from /mcp. `isAuthed()` is presence-of-token, not
+ *  validity — a stored access token whose refresh is gone/expired 401s forever
+ *  and the kernel never clears it (the daily "normal tab broken, incognito
+ *  fine" state: the dead credential shadows the injected guest token). Once
+ *  disproven, data reads go straight to the guest path; a real sign-in
+ *  navigates/reloads, which resets this. */
+let sessionDisproven = false;
+
+async function guestFetch(init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -76,6 +88,27 @@ async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response>
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The `/mcp` transport for DATA reads/acts: the session token when signed in,
+ *  else the public `@guest` bearer if present, else the (token-less) authFetch
+ *  path that 401s exactly as before. A definitive 401/403 on the session path
+ *  RETRIES ONCE as `@guest` and marks the session disproven — degrading to the
+ *  public view (guest reads are public-only by construction) instead of a page
+ *  of dead-token 401s. */
+async function mcpFetch(init: RequestInit, timeoutMs = 20000): Promise<Response> {
+  const authedPath = isAuthed() && !sessionDisproven;
+  if (!authedPath && guestToken) return guestFetch(init, timeoutMs);
+  const res = await timedAuthFetch('/mcp', init, timeoutMs);
+  if ((res.status === 401 || res.status === 403) && guestToken) {
+    sessionDisproven = true;
+    // Clear the dead credential everywhere (tokens + cookie mirror) — not just
+    // this page-life's flag — so isAuthed() stops lying and the next SSR boots
+    // honestly anonymous.
+    try { localSignOut(); } catch { /* bridge stub */ }
+    return guestFetch(init, timeoutMs);
+  }
+  return res;
 }
 
 function decodeContent(content: Array<{ type?: string; text?: string; [key: string]: unknown }> | undefined): unknown {
@@ -159,7 +192,12 @@ export function useAuth(initial?: Session): Session & { signIn: () => void; sign
           return;
         }
       }
-      // No client token, or whoami said 401/403: genuinely signed out.
+      // No client token, or whoami said 401/403: genuinely signed out. If a
+      // stored token got us here, it is DISPROVEN — clear it (tokens + cookie
+      // mirror) so data reads take the @guest path instead of riding a corpse.
+      if (isAuthed()) {
+        try { localSignOut(); } catch { /* bridge stub */ }
+      }
       if (live) setS({ ready: true, user: null, scopes: [], error });
     })();
     return () => {
