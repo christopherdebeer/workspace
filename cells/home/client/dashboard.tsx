@@ -380,12 +380,13 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         marginTop: '-2.6rem', // overlap the hero more (owner: was -18px) — the lip sits deeper on the horizon
         boxShadow: '0 -12px 40px rgba(8,29,36,0.28)', // the sheet's rising edge
         pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
-        // PARALLAX on pull (owner): the sheet drifts a little faster than the hero
-        // above it as you pull down — foreground depth. Kept moderate (owner: 34px
-        // read as extreme / drifting past the hero bg): the overlay itself already
-        // translates by the full pull; this adds only a whisper on top. Tracks the
+        // PARALLAX on pull (owner): the sheet drifts faster than the hero above it
+        // as you pull down — foreground depth. SATURATING curve p·(2−p): strong
+        // early drift (double the linear rate) that levels off at 30px, safely
+        // inside the sheet's 2.6rem hero overlap — so at the extreme of the pull
+        // the sheet never drifts beyond the hero background (owner). Tracks the
         // finger while pulling (no transition), springs back at rest.
-        transform: enterGrip && enterGrip.progress > 0 ? `translateY(${(enterGrip.progress * 20).toFixed(1)}px)` : undefined,
+        transform: enterGrip && enterGrip.progress > 0 ? `translateY(${(30 * enterGrip.progress * (2 - enterGrip.progress)).toFixed(1)}px)` : undefined,
         transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'transform 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
         {/* PULL-TO-EXPLORE GRIP (owner): the sheet's own handle, mirroring the
