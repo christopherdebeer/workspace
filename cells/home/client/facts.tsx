@@ -602,7 +602,10 @@ const READING_TONE = {
 // with the container/hairline/panel tokens the chrome needs.
 export type Tone = 'light' | 'dark';
 const SHEET_TONE = {
-  light: { bg: theme.panel, panel: '#fffef9', line: theme.border, text: theme.text, dim: theme.dim, accent: theme.accent, danger: theme.danger, actionFill: 'rgba(46,94,67,0.08)', scrim: 'rgba(8,29,36,0.32)', shadow: '0 -12px 40px rgba(8,29,36,0.3)' },
+  // light.bg = theme.bg (the GROUND's cream, not theme.panel): the landing peek
+  // reads as a continuation of the content sheet — a second cream shade made
+  // every stacked sheet look "two-toned" against the ground (owner).
+  light: { bg: theme.bg, panel: '#fffef9', line: theme.border, text: theme.text, dim: theme.dim, accent: theme.accent, danger: theme.danger, actionFill: 'rgba(46,94,67,0.08)', scrim: 'rgba(8,29,36,0.32)', shadow: '0 -10px 32px rgba(8,29,36,0.16)' },
   dark: { bg: ink.bg, panel: ink.panel, line: ink.line, text: ink.text, dim: ink.dim, accent: ink.accent, danger: ink.danger, actionFill: 'rgba(245,196,83,0.08)', scrim: 'rgba(0,0,0,0.55)', shadow: '0 -12px 40px rgba(0,0,0,0.5)' },
 } as const;
 
@@ -1148,17 +1151,15 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
   const hFallback = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.58) : 480;
   const total = frames.length;
   return (
+    // NOT a modal (owner: "same mechanics, more cohesive, not so modal" — both
+    // tones): no dialog role, no full-viewport click-catcher, no outside-tap
+    // dismiss, no global gesture capture. The wrapper is inert (pointer-events
+    // none); only the SHEETS take input, so the world behind — the landing's
+    // scroll, the graph's spin — stays fully live while a peek is up. × / drag
+    // own dismissal; Esc still steps back/closes.
     <div
-      role="dialog"
-      aria-modal="true"
-      onClick={() => closeAll()}
-      // The sheet OWNS its gestures: stop wheel/touch bubbling to the window
-      // listeners the landing (enter-the-sky) and the graph (zoom/curl) run,
-      // so scrolling to read inside the sheet never moves the world behind it.
-      onWheelCapture={(ev) => ev.stopPropagation()}
-      onTouchStartCapture={(ev) => ev.stopPropagation()}
-      onTouchMoveCapture={(ev) => ev.stopPropagation()}
-      style={{ position: 'fixed', inset: 0, background: 'transparent', zIndex: 1000 }}
+      role="complementary"
+      style={{ position: 'fixed', inset: 0, background: 'transparent', zIndex: 1000, pointerEvents: 'none' }}
     >
       <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
         {frames.map((frame, i) => {
@@ -1177,12 +1178,23 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
             <div
               key={frame.id}
               ref={isFront ? topRef : undefined}
-              onClick={(ev) => ev.stopPropagation()}
+              // The SHEET owns its gestures (the wrapper no longer captures the
+              // whole viewport): stop wheel/touch bubbling to the window
+              // listeners the landing (enter-the-sky) and the graph (zoom/curl)
+              // run, so scrolling to read never moves the world behind it —
+              // while everywhere OUTSIDE the sheet stays live.
+              onWheelCapture={(ev) => ev.stopPropagation()}
+              onTouchStartCapture={(ev) => ev.stopPropagation()}
+              onTouchMoveCapture={(ev) => ev.stopPropagation()}
               aria-hidden={!isFront}
               style={{
                 position: 'absolute',
                 bottom: 0,
-                width: 'min(720px, 100vw)',
+                // CONTINUATION of the ground (owner): on the landing the sheet
+                // matches the content column's width and cream, wears only a
+                // hairline lip + a soft rise — a layer OF the content sheet, not
+                // a bordered card floating over it. Dark keeps its inked edge.
+                width: tone === 'light' ? 'min(780px, 100vw)' : 'min(720px, 100vw)',
                 ...(isFront ? { maxHeight: SHEET_MAX } : { height: sheetH ? `${sheetH}px` : `${hFallback}px`, maxHeight: SHEET_MAX }),
                 transform: `translateY(${translateY}px)`,
                 transition: dragging ? 'none' : 'transform 0.2s ease',
@@ -1193,8 +1205,9 @@ export function FactDetailHost({ tone = 'dark', onCurrent }: { tone?: Tone; onCu
                 overflow: 'hidden',
                 borderTopLeftRadius: 14,
                 borderTopRightRadius: 14,
-                border: `1px solid ${t.line}`,
-                borderBottom: 'none',
+                ...(tone === 'light'
+                  ? { border: 'none', borderTop: `1px solid ${t.line}` }
+                  : { border: `1px solid ${t.line}`, borderBottom: 'none' }),
                 background: t.bg,
                 color: t.text,
                 boxShadow: t.shadow,

@@ -14,6 +14,7 @@
  * to the type's declared surface.
  */
 import * as React from 'react';
+import { theme } from '@parc/ui';
 import { Console } from './console';
 import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
@@ -37,7 +38,7 @@ interface NeighborRef { key: string; rel: string; entry: ListEntry }
 /** The selected fact's context: peeked content + its neighbourhood as chips +
  *  the verbs that can act on it (ADR-0049 — `$catalog {for}`; tapping one
  *  seeds the console). */
-function ContextPanel({ factKey, bodyOpen, setBodyOpen, onSelectKey, onClear, onCommand }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
+function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore, onSelectKey, onClear, onCommand }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; /** Minimized: a slim look-at strip (icon + title + ×) instead of the full panel. */ mini?: boolean; onRestore?: () => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
@@ -99,6 +100,27 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, onSelectKey, onClear, on
   // A chip whose label is an icon and an ellipsis says nothing — only
   // neighbours with a resolvable TITLE earn a chip.
   const namedNeighbors = neighbors.filter((n) => !!factTitle(n.entry));
+  if (mini) {
+    // MINIMIZED (owner: drag-down past the console collapses to tiny): a slim
+    // look-at strip — icon + one-line title + × — the fact stays SELECTED (the
+    // graph keeps looking at it) while the instrument gets out of the sky.
+    // Tap the strip (or drag up) to restore the full panel. Search input below
+    // stays (owner choice).
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: '0.3rem 0.7rem 0.4rem', borderBottom: `1px solid ${ink.line}` }}>
+        <button
+          onClick={onRestore}
+          title={factKey}
+          style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.45rem', background: 'none', border: 'none', color: ink.text, cursor: 'pointer', padding: '0.15rem 0', textAlign: 'left' }}
+        >
+          <span aria-hidden style={{ fontSize: '0.85rem', flexShrink: 0 }}>{typeIcon(e)}</span>
+          <span style={{ fontFamily: theme.serif, fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{factTitle(e)}</span>
+          <span aria-hidden style={{ color: ink.dim, fontSize: '0.7rem', flexShrink: 0 }}>▸</span>
+        </button>
+        <button style={{ ...chip, border: 'none', color: ink.dim, maxWidth: 'none', padding: '0.15rem 0.4rem' }} onClick={onClear} aria-label="clear selection">×</button>
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'grid', gap: '0.45rem', padding: '0.6rem 0.7rem', borderBottom: `1px solid ${ink.line}` }}>
       {/* TITLE FIRST (owner feedback #5/#3): the fact's name owns the top line at
@@ -231,6 +253,10 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   // the selection changes — a freshly-peeked fact opens collapsed (header only).
   const [bodyOpen, setBodyOpen] = useState(false);
   useEffect(() => { setBodyOpen(false); }, [selectedKey]);
+  // MINIMIZED palette (owner): the third down-rung. PERSISTS across selection
+  // changes — the point is watching the graph with the instrument out of the
+  // way, so tapping star to star keeps the slim look-at strip (title updates).
+  const [mini, setMini] = useState(false);
   // ADR-0049: a context-panel verb chip opens the console pre-searched to that
   // target (nonce so the same chip re-seeds after manual edits).
   const [seed, setSeed] = useState<{ q: string; n: number } | null>(null);
@@ -261,15 +287,17 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   // expands the peek body INLINE for a quick look without leaving.) Pull-DOWN
   // collapses the inline body, then the console.
   const expandStep = useCallback((): void => {
+    if (mini) { setMini(false); return; } //          minimized → restore the peek panel first
     if (selectedKey) { onExitCommit?.(); return; } // peeked → full fact view (leave the graph)
     if (!open) { setOpen(true); return; } //          no peek → open the console first
     onExitCommit?.(); //                              console already open → the top of the ladder is the exit
-  }, [selectedKey, open, onExitCommit]);
+  }, [mini, selectedKey, open, onExitCommit]);
   const collapseStep = useCallback((): void => {
     if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
     else if (open) setOpen(false); //                   ② the console
-    // else: already at the collapsed peek — do NOT dismiss (× owns that).
-  }, [selectedKey, bodyOpen, open]);
+    else if (selectedKey && !mini) setMini(true); //    ③ minimize to the look-at strip
+    // else: already minimized (or nothing peeked) — do NOT dismiss (× owns that).
+  }, [selectedKey, bodyOpen, open, mini]);
 
   // DRAG HANDLE: a touch-native way to walk the ladder. It lives on a dedicated
   // grip strip that OWNS the vertical gesture (touchAction:none), so dragging
@@ -289,14 +317,15 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   const onHandleMove = (e: React.PointerEvent): void => {
     if (dragStart.current == null) return;
     const dy = e.clientY - dragStart.current;
-    if (dy < 0 && (selectedKey || open) && onExitPull) {
+    if (dy < 0 && !mini && (selectedKey || open) && onExitPull) {
       // Upward at the TOP of the ladder = the MIRROR EXIT, tracked live: with a
       // fact peeked (commit to reading it) OR with the console already open (no
-      // peek needed to leave — owner). The app rewinds the enter transition by
-      // this pull. The palette itself doesn't ride the finger — it dissolves/
-      // settles via exitProgress (the motion belongs to the world, not the
-      // sheet); the token -1px drag just keeps the CSS transition off so the
-      // fade tracks frame-for-frame.
+      // peek needed to leave — owner). Minimized is BELOW the ladder top — its
+      // up-drag restores the panel instead (endDrag → expandStep). The app
+      // rewinds the enter transition by this pull. The palette itself doesn't
+      // ride the finger — it dissolves/settles via exitProgress (the motion
+      // belongs to the world, not the sheet); the token -1px drag just keeps
+      // the CSS transition off so the fade tracks frame-for-frame.
       setDrag(-1);
       onExitPull(-dy);
       return;
@@ -310,7 +339,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
     const dy = dragStart.current == null ? 0 : e.clientY - dragStart.current;
     dragStart.current = null;
     setDrag(0);
-    if (dy < 0 && (selectedKey || open) && onExitPull) {
+    if (dy < 0 && !mini && (selectedKey || open) && onExitPull) {
       // Release the exit gesture: past the commit → step back to the trailhead;
       // short → cancel, everything springs back to the graph.
       if (-dy >= EXIT_COMMIT) onExitCommit?.();
@@ -394,7 +423,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
-      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini} onRestore={() => setMini(false)} onSelectKey={onSelectKey} onClear={onClear} onCommand={onCommand} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
       <Console
