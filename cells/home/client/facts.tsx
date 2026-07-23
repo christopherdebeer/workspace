@@ -7,7 +7,7 @@
 import * as React from 'react';
 import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
-import { SafeMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
+import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -648,7 +648,9 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
       {head ? (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: compact ? '0.4rem' : '0.55rem', minWidth: 0 }}>
           { !onImage && <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span> }
-          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}>{factTitle(e)}</h2>
+          {/* Titles may be markdown (bold/italic/inline code/link) — render the
+              inline marks, not the raw `**…**`. Plain titles are unchanged. */}
+          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}><InlineMarkdown text={factTitle(e)} /></h2>
         </div>
       ) : null}
       {head && meta.length ? (

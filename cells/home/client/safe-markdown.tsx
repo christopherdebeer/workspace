@@ -237,6 +237,25 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
   });
 }
 
+/** Render ONE LINE of markdown INLINE — no block/`<p>` wrapping — for titles and
+ *  headlines, which may carry bold, italic, inline code, or a link. Newlines are
+ *  flattened to spaces (a title is a single line); falls back to plain text if
+ *  the inline lexer throws. Colour/size are inherited from the heading it sits
+ *  in — this only adds the emphasis marks, it never restyles the title. */
+export function InlineMarkdown({ text, base, onFactLink, factHref }: { text: string } & MdOpts): React.JSX.Element {
+  const src = String(text ?? '');
+  // No markdown metacharacters → skip the lexer entirely (the overwhelmingly
+  // common case, and byte-identical to a plain string).
+  if (!/[*_`~[\]]/.test(src)) return <>{src}</>;
+  let tokens: Token[] = [];
+  try {
+    tokens = marked.Lexer.lexInline(src.replace(/\s*\r?\n\s*/g, ' ')) as Token[];
+  } catch {
+    return <>{src}</>;
+  }
+  return <>{inline(tokens, 'inline', { base, onFactLink, factHref })}</>;
+}
+
 export function SafeMarkdown({ text, base, onFactLink, factHref, tone = 'light' }: { text: string } & MdOpts): React.JSX.Element {
   let tokens: Token[] = [];
   try {
