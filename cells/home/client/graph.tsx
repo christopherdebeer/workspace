@@ -100,13 +100,15 @@ interface GraphReach {
   paused: boolean;
 }
 
-function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, preview = false, heroHeight, heroSpring = false }: {
+function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vantageNonce, domeNonce = 0, preview = false, heroHeight, heroSpring = false }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   visible: number;
   onReach: (reach: GraphReach) => void;
   revealNonce: number;
   vantageNonce: number;
+  /** Bumped on exit-to-trailhead: glide the vantage back under the dome. */
+  domeNonce?: number;
   preview?: boolean;
   heroHeight?: string;
   /** Spring the host HEIGHT on change (release/rest); false while a pull is
@@ -127,6 +129,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
     setVisible: (f: number) => void;
     reveal: () => void;
     toggleVantage: () => void;
+    toDome: () => void;
   } | null>(null);
   const lastExternal = useRef<string | null>(null);
   // Loading UX: 'fast' = the first pages are still in flight, 'full' = the
@@ -1435,6 +1438,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // flat chart on the way. Selection, shell orientation, everything
           // else is untouched. (Deselecting is its own gesture: tap empty sky.)
           zoomZT = zoomZT > (Z_DOME + Z_BALL) / 2 ? Z_DOME : Z_BALL;
+        },
+        toDome: () => {
+          // Exit-to-trailhead (the mirror transition): glide the vantage back
+          // under the dome — the trailhead preview is planetarium-only, so the
+          // sky must re-curl around you as the valley returns. Eased by tick()
+          // like every zoom change; a no-op if already under the dome.
+          zoomZT = Math.min(zoomZT, Z_DOME);
         },
       };
 
@@ -3151,6 +3161,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
     api.current?.toggleVantage();
   }, [vantageNonce]);
 
+  const lastDomeNonce = useRef(domeNonce);
+  useEffect(() => {
+    if (domeNonce === lastDomeNonce.current) return;
+    lastDomeNonce.current = domeNonce;
+    api.current?.toDome();
+  }, [domeNonce]);
+
   return (
     <>
       {/* `host` is imperative-only territory below (innerHTML/appendChild
@@ -3161,16 +3178,18 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       {/* On the landing (heroHeight set) the host occupies only the hero band,
           so the graph is the sky above the fold and the content below is solid
           ground with nothing live behind it. Entered, it fills the viewport. */}
-      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden', transition: heroSpring ? 'height 0.4s cubic-bezier(.22,1,.36,1)' : 'none' }} />
+      <div ref={host} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: heroHeight ? 'auto' : 0, height: heroHeight ?? '100%', background: ink.sceneBg, overflow: 'hidden', transition: heroSpring ? 'height 0.55s cubic-bezier(.22,1,.36,1)' : 'none' }} />
     </>
   );
 }
 
-export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight, heroSpring = false }: {
+export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight, heroSpring = false, domeNonce = 0 }: {
   selectedKey: string | null;
   onSelect: (n: GraphNode | null) => void;
   /** Trailhead backdrop: gate zoom/curl (spin + tap-select stay live). */
   preview?: boolean;
+  /** Bumped on exit-to-trailhead: glide the vantage back under the dome. */
+  domeNonce?: number;
   /** When set (the landing), the graph host occupies only this height (the hero
    *  band) instead of the full viewport, so the content below is solid ground.
    *  During pull-to-enter it GROWS toward full so the commit finds it already
@@ -3259,6 +3278,7 @@ export function FullGraph({ selectedKey, onSelect, preview = false, heroHeight, 
         preview={preview}
         heroHeight={heroHeight}
         heroSpring={heroSpring}
+        domeNonce={domeNonce}
       />
       { !preview && <section aria-label="Graph controls" style={bar}>
         {/* FOCUS icon — tap toggles focus ↔ all, drag scrubs. The conic ring is a

@@ -207,7 +207,20 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, onSelectKey, onClear, on
   );
 }
 
-export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void; onExit?: () => void }): React.JSX.Element {
+export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull, onExitCommit, exitProgress = 0 }: {
+  authed: boolean;
+  selectedKey: string | null;
+  onSelectKey: (k: string) => void;
+  onClear: () => void;
+  /** MIRROR EXIT (gesture-tracked): live px of the upward grip drag while a fact
+   *  is peeked — the app rewinds the enter transition by it. 0 cancels. */
+  onExitPull?: (px: number) => void;
+  /** Commit the exit (drag past threshold released, or keyboard/discrete). */
+  onExitCommit?: () => void;
+  /** The app's exit progress (0–1) — fades the palette away as the trailhead
+   *  arrives, both during the gesture and through the settle beat. */
+  exitProgress?: number;
+}): React.JSX.Element {
   // `open` = the results sheet is expanded. The SEARCH INPUT is always visible
   // (it IS the bottom bar now — owner feedback: fix the input to the bottom and
   // let the sheet collapse while the query, selection, and graph highlights
@@ -240,15 +253,17 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
   }, []);
 
   // THE SHEET LADDER. Pull-UP on a PEEKED fact is a COMMIT to reading it: the
-  // graph leaves and the fact opens FULL on the trailhead (onExit) — expanding
-  // the peek and leaving the graph are the SAME motion (owner). The console is
-  // NOT in the exit path; with nothing peeked, pull-up just opens it (search).
-  // (The caret/title tap still expands the peek body INLINE for a quick look
-  // without leaving.) Pull-DOWN collapses the inline body, then the console.
+  // graph leaves and the fact opens FULL on the trailhead — expanding the peek
+  // and leaving the graph are the SAME motion (owner). The drag TRACKS the exit
+  // live (onExitPull, the mirror of pull-to-enter); keyboard/tap commits
+  // discretely (onExitCommit). The console is NOT in the exit path; with
+  // nothing peeked, pull-up just opens it (search). (The caret/title tap still
+  // expands the peek body INLINE for a quick look without leaving.) Pull-DOWN
+  // collapses the inline body, then the console.
   const expandStep = useCallback((): void => {
-    if (selectedKey) { onExit?.(); return; } // peeked → full fact view (leave the graph)
-    if (!open) setOpen(true); //                no peek → open the console
-  }, [selectedKey, open, onExit]);
+    if (selectedKey) { onExitCommit?.(); return; } // peeked → full fact view (leave the graph)
+    if (!open) setOpen(true); //                      no peek → open the console
+  }, [selectedKey, open, onExitCommit]);
   const collapseStep = useCallback((): void => {
     if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
     else if (open) setOpen(false); //                   ② the console
@@ -263,6 +278,9 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
   const [drag, setDrag] = useState(0);
   const dragStart = React.useRef<number | null>(null);
   const DRAG_THRESH = 44;
+  // The exit gesture commits at the SAME distance as pull-to-enter (140px) —
+  // the two transitions are mirrors, so their gestures weigh the same.
+  const EXIT_COMMIT = 140;
   const onHandleDown = (e: React.PointerEvent): void => {
     dragStart.current = e.clientY;
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
@@ -270,6 +288,17 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
   const onHandleMove = (e: React.PointerEvent): void => {
     if (dragStart.current == null) return;
     const dy = e.clientY - dragStart.current;
+    if (dy < 0 && selectedKey && onExitPull) {
+      // Upward with a fact peeked = the MIRROR EXIT, tracked live: the app
+      // rewinds the enter transition by this pull. The palette itself doesn't
+      // ride the finger — it dissolves/settles via exitProgress (the motion
+      // belongs to the world, not the sheet); the token -1px drag just keeps
+      // the CSS transition off so the fade tracks frame-for-frame.
+      setDrag(-1);
+      onExitPull(-dy);
+      return;
+    }
+    if (onExitPull) onExitPull(0); // crossed back below the start — cancel the exit
     // Downward rubber-bands the whole sheet; upward gives a small lift hint
     // (expansion grows the sheet, it doesn't slide it).
     setDrag(dy > 0 ? Math.min(dy, 160) : Math.max(dy, -60));
@@ -278,6 +307,13 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
     const dy = dragStart.current == null ? 0 : e.clientY - dragStart.current;
     dragStart.current = null;
     setDrag(0);
+    if (dy < 0 && selectedKey && onExitPull) {
+      // Release the exit gesture: past the commit → step back to the trailhead;
+      // short → cancel, everything springs back to the graph.
+      if (-dy >= EXIT_COMMIT) onExitCommit?.();
+      else onExitPull(0);
+      return;
+    }
     if (dy <= -DRAG_THRESH) expandStep();
     else if (dy >= DRAG_THRESH) collapseStep();
   };
@@ -321,8 +357,13 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: {
         boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
         overflow: 'hidden',
         color: ink.text,
-        transform: drag ? `translateY(${drag}px)` : undefined,
-        transition: drag ? 'none' : 'transform 0.18s ease',
+        // MIRROR EXIT: the palette dissolves and settles downward as the
+        // trailhead arrives (exitProgress 0→1) — tracked live during the
+        // gesture (no transition while dragging), eased through the settle.
+        opacity: 1 - exitProgress,
+        pointerEvents: exitProgress >= 0.7 ? 'none' : undefined,
+        transform: drag || exitProgress ? `translateY(${(drag + exitProgress * 24).toFixed(1)}px)` : undefined,
+        transition: drag ? 'none' : 'transform 0.18s ease, opacity 0.45s ease',
       }}
     >
       {/* The grip: drag up to expand, down to collapse/dismiss (see onHandleDown).

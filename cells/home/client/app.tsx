@@ -263,11 +263,59 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     setReturning(true);
     setReturnLit(false);
     setEntered(false);
+    setDomeNonce((n) => n + 1); // vantage glides back under the dome with the settle
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => requestAnimationFrame(() => setReturnLit(true)));
     } else {
       setReturnLit(true);
     }
+    setTimeout(() => { setReturning(false); setReturnLit(false); }, 620);
+  }, []);
+  // ── THE MIRROR EXIT (owner: "as refined as enter") ────────────────────────
+  // Exit is enter played backwards, and GESTURE-TRACKED like enter: pulling the
+  // palette grip UP (with a fact peeked) drives `exitPull` px live — the graph
+  // shrinks full→preview following the finger, the landing overlay fades in and
+  // slides up into place, the dusk-sky wash returns and un-deepens, the palette
+  // fades away, and the vantage glides back under the dome. Release past the
+  // commit finishes the settle; release early springs everything back to the
+  // graph. The wordmark tap plays the same choreography discretely (toLanding).
+  const [exitPull, setExitPull] = useState(0);
+  const exitPullRef = React.useRef(0); exitPullRef.current = exitPull;
+  const [domeNonce, setDomeNonce] = useState(0);
+  // A CANCELED exit (released short of the commit) must SPRING back, not pop:
+  // `exitGhost` keeps the half-arrived overlay/sky mounted for one more beat
+  // while their opacity/height transition back to the graph, then unmounts.
+  const [exitGhost, setExitGhost] = useState(false);
+  const ghostTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onExitPull = useCallback((px: number): void => {
+    const next = Math.max(0, Math.min(196, px)); // PULL_CAP mirror
+    const prev = exitPullRef.current;
+    if (prev === 0 && next > 0) {
+      // First movement of the gesture: start the vantage gliding home to the
+      // dome, so the sky is re-curling around you as the valley returns.
+      setDomeNonce((n) => n + 1);
+      if (ghostTimer.current) clearTimeout(ghostTimer.current);
+      setExitGhost(false);
+    }
+    if (prev > 0 && next === 0) {
+      setExitGhost(true);
+      if (ghostTimer.current) clearTimeout(ghostTimer.current);
+      ghostTimer.current = setTimeout(() => setExitGhost(false), 420);
+    }
+    setExitPull(next);
+  }, []);
+  // Commit from the gesture: the overlay is ALREADY partly arrived (mounted,
+  // opacity/transform mid-flight), so do NOT restart from the two-frame dark
+  // mount — flip straight into the lit `returning` settle; CSS transitions the
+  // rest of the way from current computed values. Same batch clears the pull.
+  const finishExitFromGesture = useCallback((): void => {
+    try { sessionStorage.removeItem('parc.home.entered'); } catch { /* private mode */ }
+    setPull(0);
+    setLeaving(false);
+    setReturning(true);
+    setReturnLit(true);
+    setExitPull(0);
+    setEntered(false);
     setTimeout(() => { setReturning(false); setReturnLit(false); }, 620);
   }, []);
   // ── PULL-TO-ENTER, cleanly separated from scroll ──────────────────────────
@@ -345,32 +393,59 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const GRAPH_REST_N = HERO_N * (2 / 3); // ≈ 44.44svh
   const GRAPH_REST = `${GRAPH_REST_N.toFixed(2)}svh`;
   const pullProgress = Math.min(1, pull / PULL_COMMIT);
-  const graphHeroHeight = entered
-    ? undefined
-    : leaving
-      ? '100svh'
-      : returning
-        ? (returnLit ? GRAPH_REST : '100svh') // exit: shrink full→preview strip
-        : pull > 0
-          ? `${(GRAPH_REST_N + (100 - GRAPH_REST_N) * pullProgress).toFixed(2)}svh` // LINEAR track
-          : GRAPH_REST;
-  const graphHeroSpring = pull === 0; // track the finger while pulling; spring at rest (incl. the return)
+  // The exit gesture's progress (0 = in the graph, 1 = trailhead arrived) and
+  // its "virtual pull" — the enter-pull position the exit is rewinding through,
+  // so every surface reuses its OWN enter formula, just run backwards.
+  const exitP = Math.min(1, exitPull / PULL_COMMIT);
+  const exitActive = entered && exitPull > 0;
+  const exitVirtualPull = (1 - exitP) * PULL_COMMIT;
+  const graphHeroHeight = exitActive
+    ? `${(GRAPH_REST_N + (100 - GRAPH_REST_N) * (1 - exitP)).toFixed(2)}svh` // the enter track, rewound
+    : entered
+      // Ghost beat after a canceled exit: an explicit 100svh (not '100%') so the
+      // height transition has an interpolable svh→svh pair to spring back over.
+      ? (exitGhost ? '100svh' : undefined)
+      : leaving
+        ? '100svh'
+        : returning
+          ? (returnLit ? GRAPH_REST : '100svh') // exit settle: shrink full→preview strip
+          : pull > 0
+            ? `${(GRAPH_REST_N + (100 - GRAPH_REST_N) * pullProgress).toFixed(2)}svh` // LINEAR track
+            : GRAPH_REST;
+  const graphHeroSpring = pull === 0 && exitPull === 0; // track the finger while pulling; spring at rest (incl. the settle)
   // The sky wash GROWS with the pull too (owner): its height rides down with the
   // descending landscape (which translates by `pull`), so the horizon stays put
   // against the painting, and its opacity DEEPENS toward the night graph as you
   // pull. `instant` while a live pull is on so the deepen tracks the finger; the
   // commit dissolve (`leaving`) then completes the fade with its own transition.
-  const skyHeroHeight = entered
-    ? undefined
-    : leaving
-      ? '100svh'
-      : returning
-        ? (returnLit ? HERO_VH : '100svh')
-        : pull > 0
-          ? `calc(${HERO_VH} + ${pull.toFixed(1)}px)`
-          : HERO_VH;
-  const skyFade = leaving ? 0 : returning ? (returnLit ? 1 : 0) : (1 - 0.55 * pullProgress);
-  const skyInstant = pull > 0 && !leaving && !returning;
+  // The exit runs the same formulas at the rewinding virtual pull, scaled by the
+  // gesture's own arrival (exitP) so the wash fades IN from the night.
+  const skyHeroHeight = exitActive
+    ? `calc(${HERO_VH} + ${exitVirtualPull.toFixed(1)}px)`
+    : entered
+      ? '100svh' // ghost beat — springing back toward the full night
+      : leaving
+        ? '100svh'
+        : returning
+          ? (returnLit ? HERO_VH : '100svh')
+          : pull > 0
+            ? `calc(${HERO_VH} + ${pull.toFixed(1)}px)`
+            : HERO_VH;
+  const skyFade = exitActive
+    ? exitP * (1 - 0.55 * (1 - exitP)) // arrive × the enter deepen, rewound
+    : entered
+      ? 0 // ghost beat — the wash fades back out to the night
+      : leaving ? 0 : returning ? (returnLit ? 1 : 0) : (1 - 0.55 * pullProgress);
+  const skyInstant = (pull > 0 || exitActive) && !leaving && !returning;
+  // The settle beat (returning) moves every surface on ONE clock so the mirror
+  // reads as a single motion: overlay opacity+transform, sky, and graph height
+  // all arrive together (the graph's own heroSpring transition is 0.55s too).
+  const SETTLE = '0.55s cubic-bezier(.22,1,.36,1)';
+  const skyTransition = returning
+    ? `opacity ${SETTLE}, height ${SETTLE}`
+    : entered && exitGhost && !exitActive
+      ? 'opacity 0.35s ease, height 0.35s ease' // the cancel spring-back
+      : undefined;
 
   if (!session.ready) return <Page>{null}</Page>;
 
@@ -390,6 +465,15 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // as the trailhead's starfield from the moment the page loads.
   return (
     <>
+      {/* NIGHT BACKDROP behind the graph host (owner: "the hero landscape needs a
+          back background"): the graph canvas is only the preview strip on the
+          landing, so when the painted hero fades during a pull its bottom edge
+          showed as a hard seam against the page. A hero-band strip of the SAME
+          night colour sits behind everything — the canvas edge lands on identical
+          ink and disappears. Behind the graph via DOM order (painted first). */}
+      {(!entered || returning || exitActive || exitGhost) && (
+        <div aria-hidden style={{ position: 'fixed', top: 0, left: 0, right: 0, height: HERO_VH, background: ink.sceneBg, pointerEvents: 'none' }} />
+      )}
       <GraphBoundary
         fallback={(err) => (
           <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: ink.sceneBg, color: ink.text, padding: '1rem' }}>
@@ -406,8 +490,25 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           </div>
         )}
       >
-        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={graphHeroHeight} heroSpring={graphHeroSpring} />
-        {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} onExit={() => { if (selectedKey) setGroundKey(selectedKey); toLanding(); }} />}
+        <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={graphHeroHeight} heroSpring={graphHeroSpring} domeNonce={domeNonce} />
+        {/* The palette stays mounted through the settle so it can FADE out with
+            the arriving trailhead (mirror of how it wasn't there before enter),
+            instead of popping away the instant `entered` flips. */}
+        {(entered || returning) && (
+          <Palette
+            authed={authed}
+            selectedKey={selectedKey}
+            onSelectKey={setSelectedKey}
+            onClear={() => setSelectedKey(null)}
+            exitProgress={returning ? 1 : exitP}
+            onExitPull={onExitPull}
+            onExitCommit={() => {
+              if (selectedKey) setGroundKey(selectedKey);
+              if (exitPullRef.current > 0) finishExitFromGesture();
+              else toLanding();
+            }}
+          />
+        )}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
             trailhead. Sign-out + session chrome only once entered. */}
@@ -455,7 +556,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {/* The dusk-sky wash sits DIRECTLY over the graph canvas (sibling, not
           inside the overlay) so mix-blend-mode:screen tints the dark sky while
           the live stars punch through. Fades to clear night as you enter. */}
-      {!entered && <SkyGradient fade={skyFade} height={skyHeroHeight} instant={skyInstant} />}
+      {(!entered || exitActive || exitGhost) && <SkyGradient fade={skyFade} height={skyHeroHeight} instant={skyInstant} transition={skyTransition} />}
       {/* The landing content flows in the NORMAL DOCUMENT — the BODY scrolls
           natively (hero → content below). iOS-robust: WebKit refuses to
           native-scroll a pointer-events:none overflow:auto container, so we don't
@@ -464,19 +565,46 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           HeroContent/Content/top-bar re-enable pointer events) — nothing `auto`
           sits between the hero and the graph. `pull` peels it DOWN on
           over-scroll-up; past commit it dissolves (day → night). */}
-      {!entered && (
+      {(!entered || exitActive || exitGhost) && (
         <div
           className='Landing'
           style={{
             position: 'relative',
             zIndex: 20,
             pointerEvents: 'none',
-            opacity: leaving ? 0 : returning ? (returnLit ? 1 : 0) : 1,
-            transform: pull ? `translateY(${pull}px)` : undefined,
-            transition: leaving ? 'opacity 0.9s ease-in' : returning ? 'opacity 0.45s ease-out' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
+            // The mirror exit: while the gesture is live the overlay ARRIVES —
+            // opacity fades in with exitP and it slides up the last ~90px into
+            // place (the peel, rewound). The `returning` settle then finishes on
+            // the shared SETTLE clock; CSS transitions pick up mid-flight values,
+            // so a gesture-commit never restarts from dark. A canceled gesture
+            // (entered, ghost beat) springs back out the way it came.
+            opacity: leaving ? 0 : returning ? (returnLit ? 1 : 0) : exitActive ? exitP : entered ? 0 : 1,
+            transform: pull
+              ? `translateY(${pull}px)`
+              : returning
+                ? (returnLit ? 'translateY(0px)' : 'translateY(90px)')
+                : exitActive
+                  ? `translateY(${((1 - exitP) * 90).toFixed(1)}px)`
+                  : entered
+                    ? 'translateY(90px)' // ghost — receding back down
+                    : undefined,
+            transition: leaving
+              ? 'opacity 0.9s ease-in'
+              : returning
+                ? `opacity ${SETTLE}, transform ${SETTLE}`
+                : exitActive || pull
+                  ? 'none'
+                  : entered
+                    ? 'opacity 0.35s ease, transform 0.35s ease' // the cancel spring-back
+                    : 'transform 0.35s cubic-bezier(.22,1,.36,1)',
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={groundKey} selectedNode={groundKey === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp, progress: Math.min(1, pull / PULL_COMMIT) }} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={exitActive && selectedKey ? selectedKey : groundKey} selectedNode={(exitActive && selectedKey ? selectedKey : groundKey) === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp,
+            // During the mirror exit the landing is REWINDING the enter pull, so
+            // its internal pull-driven styling (hero fade, sheet parallax, grip
+            // pill) runs at the virtual pull position — the painting brightens
+            // from dusk back to day as you arrive, parallax settling with it.
+            progress: exitActive ? (1 - exitP) : Math.min(1, pull / PULL_COMMIT) }} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits
@@ -489,6 +617,16 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           color: ink.accent, opacity: Math.min(1, pull / PULL_COMMIT), pointerEvents: 'none',
         }}>
           {pull >= PULL_COMMIT ? 'release to enter ↑' : 'keep pulling ↑'}
+        </div>
+      )}
+      {/* The mirror hint — same voice, same slot, for the exit gesture. */}
+      {exitActive && (
+        <div aria-hidden style={{
+          position: 'fixed', left: 0, right: 0, top: 'max(10px, env(safe-area-inset-top))',
+          zIndex: 21, textAlign: 'center', fontFamily: ink.mono, fontSize: '0.72rem',
+          color: ink.accent, opacity: exitP, pointerEvents: 'none',
+        }}>
+          {exitP >= 1 ? 'release to step back ↓' : 'keep pulling ↑'}
         </div>
       )}
       {/* The peek sheet takes the SUMMONING surface's tone: paper on the
