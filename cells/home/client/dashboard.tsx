@@ -140,6 +140,13 @@ export function SkyGradient({ fade = 1, heroOnly = false, height, instant = fals
         background: g,
         mixBlendMode: 'screen',
         opacity: fade,
+        // FEATHERED bottom edge: the wash's hard cut showed as a two-tone line
+        // through the half-transparent arriving sheet during the mirror exit
+        // (screen-blend light above the edge, none below — owner IMG_0375).
+        // A soft ~15% fade-out blends it; at rest the opaque painting/sheet
+        // overlap the feather zone anyway, so nothing else changes.
+        maskImage: 'linear-gradient(to bottom, black 85%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(to bottom, black 85%, transparent 100%)',
         transition: transition ?? (instant ? 'none' : 'opacity 0.9s ease-in'),
       }}
     />

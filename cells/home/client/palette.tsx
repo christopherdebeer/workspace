@@ -262,7 +262,8 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   // collapses the inline body, then the console.
   const expandStep = useCallback((): void => {
     if (selectedKey) { onExitCommit?.(); return; } // peeked → full fact view (leave the graph)
-    if (!open) setOpen(true); //                      no peek → open the console
+    if (!open) { setOpen(true); return; } //          no peek → open the console first
+    onExitCommit?.(); //                              console already open → the top of the ladder is the exit
   }, [selectedKey, open, onExitCommit]);
   const collapseStep = useCallback((): void => {
     if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
@@ -288,12 +289,14 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
   const onHandleMove = (e: React.PointerEvent): void => {
     if (dragStart.current == null) return;
     const dy = e.clientY - dragStart.current;
-    if (dy < 0 && selectedKey && onExitPull) {
-      // Upward with a fact peeked = the MIRROR EXIT, tracked live: the app
-      // rewinds the enter transition by this pull. The palette itself doesn't
-      // ride the finger — it dissolves/settles via exitProgress (the motion
-      // belongs to the world, not the sheet); the token -1px drag just keeps
-      // the CSS transition off so the fade tracks frame-for-frame.
+    if (dy < 0 && (selectedKey || open) && onExitPull) {
+      // Upward at the TOP of the ladder = the MIRROR EXIT, tracked live: with a
+      // fact peeked (commit to reading it) OR with the console already open (no
+      // peek needed to leave — owner). The app rewinds the enter transition by
+      // this pull. The palette itself doesn't ride the finger — it dissolves/
+      // settles via exitProgress (the motion belongs to the world, not the
+      // sheet); the token -1px drag just keeps the CSS transition off so the
+      // fade tracks frame-for-frame.
       setDrag(-1);
       onExitPull(-dy);
       return;
@@ -307,7 +310,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, onExitPull,
     const dy = dragStart.current == null ? 0 : e.clientY - dragStart.current;
     dragStart.current = null;
     setDrag(0);
-    if (dy < 0 && selectedKey && onExitPull) {
+    if (dy < 0 && (selectedKey || open) && onExitPull) {
       // Release the exit gesture: past the commit → step back to the trailhead;
       // short → cancel, everything springs back to the graph.
       if (-dy >= EXIT_COMMIT) onExitCommit?.();
