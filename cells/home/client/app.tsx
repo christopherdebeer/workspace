@@ -281,45 +281,44 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // Two clean modes, no tangle of graph-spin ⇄ scroll ⇄ zoom.
   const pullRef = React.useRef(0); pullRef.current = pull;
   const PULL_COMMIT = 140;                        // peel past this → enter
+  const PULL_CAP = PULL_COMMIT * 1.4;
+  // ENTER lives on the CONTENT-SHEET GRIP now (owner): a down-drag on the grip
+  // peels the overlay down and grows the graph — "pull down to explore". Because
+  // enter no longer rides a window over-scroll, a down-drag ON THE GRAPH just
+  // spins it — graph touches are free for spin/tap. (Desktop keeps the wheel-up
+  // shortcut below.) These handlers are handed to the Landing grip.
+  const gripY = React.useRef<number | null>(null);
+  const onGripDown = useCallback((e: React.PointerEvent): void => {
+    gripY.current = e.clientY;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
+  }, []);
+  const onGripMove = useCallback((e: React.PointerEvent): void => {
+    if (gripY.current == null) return;
+    const down = e.clientY - gripY.current; // >0 = dragging DOWN → pull down to explore
+    setPull(Math.max(0, Math.min(PULL_CAP, down * 0.9)));
+  }, [PULL_CAP]);
+  const onGripUp = useCallback((): void => {
+    if (gripY.current == null) return;
+    gripY.current = null;
+    if (pullRef.current >= PULL_COMMIT) enter();
+    else setPull(0); // CSS transition springs it back
+  }, [enter]);
   useEffect(() => {
     if (!canExplore || entered || leaving || returning) return;
-    // Body-scroll model: the page scrolls natively (window), so pull-to-enter
-    // reads window.scrollY and binds to window. Snap back to rest on (re)mount —
-    // a committed peel must not survive entering. Also reset the document scroll
-    // so the trailhead always opens at the top (hero), not mid-content.
+    // Snap back to rest on (re)mount — a committed peel must not survive
+    // entering — and reset the document scroll so the trailhead opens at the top.
     setPull(0);
     try { window.scrollTo(0, 0); } catch { /* SSR/none */ }
-    const CAP = PULL_COMMIT * 1.4;
     const atTop = (): boolean => window.scrollY <= 0;
-    let touchY: number | null = null;
-    let pulling = false;
     let wheelReset: ReturnType<typeof setTimeout> | null = null;
-    const release = (): void => {
-      pulling = false; touchY = null;
-      if (pullRef.current >= PULL_COMMIT) enter();
-      else setPull(0); // CSS transition springs it back
-    };
-    const onTouchStart = (e: TouchEvent): void => { touchY = e.touches[0]?.clientY ?? null; };
-    const onTouchMove = (e: TouchEvent): void => {
-      const y = e.touches[0]?.clientY;
-      if (touchY === null || y === undefined) return;
-      const down = y - touchY; // >0 = dragged DOWN from where the touch began
-      if (pulling || (atTop() && down > 4)) {
-        // Over-scroll UP at the top → peel the overlay down (into the sky). Take
-        // the gesture from native scroll so iOS doesn't rubber-band underneath.
-        pulling = true;
-        e.preventDefault();
-        const p = Math.max(0, Math.min(CAP, down * 0.8));
-        setPull(p);
-        if (p === 0) pulling = false; // relaxed back to the top → hand input back to scroll
-      }
-      // else: not at the top, or dragging up → NATIVE scroll handles it.
-    };
-    // Wheel: same one edge; everything else is native scroll (we don't touch it).
+    const release = (): void => { if (pullRef.current >= PULL_COMMIT) enter(); else setPull(0); };
+    // DESKTOP wheel keeps the over-scroll-up-to-enter shortcut. TOUCH enter has
+    // moved to the grip, so the graph's own drag (spin) is never stolen — no
+    // window touch handlers fight it any more.
     const onWheel = (e: WheelEvent): void => {
       if (atTop() && e.deltaY < 0) {
         e.preventDefault();
-        setPull((p) => Math.min(CAP, p - e.deltaY * 0.6));
+        setPull((p) => Math.min(PULL_CAP, p - e.deltaY * 0.6));
         if (wheelReset) clearTimeout(wheelReset);
         wheelReset = setTimeout(release, 160);
       } else if (pullRef.current > 0 && e.deltaY > 0) {
@@ -327,22 +326,12 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
         setPull((p) => Math.max(0, p - e.deltaY * 0.6));
       }
     };
-    // Body-scroll model: bind to WINDOW (the document scrolls), not an inner
-    // container. The pull-to-enter edge is over-scroll-UP at the document top.
-    window.addEventListener('touchstart', onTouchStart, { passive: true });
-    window.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('touchend', release, { passive: true });
-    window.addEventListener('touchcancel', release, { passive: true });
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => {
       if (wheelReset) clearTimeout(wheelReset);
-      window.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', release);
-      window.removeEventListener('touchcancel', release);
       window.removeEventListener('wheel', onWheel);
     };
-  }, [canExplore, entered, leaving, returning, enter]);
+  }, [canExplore, entered, leaving, returning, enter, PULL_CAP]);
 
   // Pull-to-enter GROWS the graph from the hero band toward full height, so a
   // commit finds it already full (no snap). Height eases out with the pull (an
@@ -466,7 +455,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             transition: leaving ? 'opacity 0.9s ease-in' : returning ? 'opacity 0.45s ease-out' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={groundKey} selectedNode={groundKey === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} />
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={groundKey} selectedNode={groundKey === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp, progress: Math.min(1, pull / PULL_COMMIT) }} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits

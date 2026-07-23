@@ -211,9 +211,19 @@ function SiteFooter(): React.JSX.Element {
 
 // ─── face 1: the trailhead (landing) ───────────────────────────────
 
-export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd }: {
+export function Landing({ session, onExplore, authed, canEnter, selectedKey, selectedNode, featured, landingKey, landingBody, initialFact, selectedMd, enterGrip }: {
   session: Session & { signIn: () => void };
   onExplore?: () => void;
+  /** The pull-to-explore GRIP on the content sheet's top edge (owner): drag it
+   *  DOWN to peel the overlay and grow the graph → enter. Enter lives here now,
+   *  not on a window over-scroll, so the graph itself is free for spin. `progress`
+   *  (0–1 toward the commit threshold) drives the grip's label + affordance. */
+  enterGrip?: {
+    onDown: (e: React.PointerEvent) => void;
+    onMove: (e: React.PointerEvent) => void;
+    onUp: () => void;
+    progress: number;
+  };
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
   authed?: boolean;
   /** Can walk into the sky even when signed out (a public @guest token is live) —
@@ -327,18 +337,17 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
             ) : null}
             <span style={{ color: theme.cream, opacity: 0.8, fontSize: '0.78rem', marginTop: authed ? '0.4rem' : 0, textShadow: '0 1px 6px rgba(8,29,36,0.55)' }}>
               {authed
-                ? `Scroll up to enter the sky — scroll down to ${selectedKey ? 'read' : 'learn more'}.`
+                ? `Spin the sky to look around — pull the handle below to explore, or scroll to ${selectedKey ? 'read' : 'learn more'}.`
                 : canEnter
-                  ? 'Scroll up to explore the public sky — scroll down to read. Sign in to make it yours.'
+                  ? 'Spin the public sky to look around — pull the handle below to explore, or scroll to read. Sign in to make it yours.'
                   : 'New here? Sign-in with existing or register a passkey.'}
             </span>
             {session.error ? <Badge tone="danger">{session.error}</Badge> : null}
           </div>
         </div>
-        {/* Scroll cue */}
-        <div aria-hidden style={{ position: 'absolute', bottom: '0.6rem', left: 0, right: 0, textAlign: 'center', color: theme.cream, opacity: 0.55, fontSize: '0.7rem', fontFamily: theme.mono }}>
-          ↓ more below
-        </div>
+        {/* No scroll cue here — the content sheet's own grip (just below) carries
+            the "pull down to explore" affordance, so a second ↓ would only muddy
+            it (drag-to-explore vs scroll-to-read are different gestures). */}
       </section>
 
       {/* ── CONTENT BELOW THE HERO ── OPAQUE ground: occludes the fixed graph +
@@ -358,6 +367,31 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         boxShadow: '0 -12px 40px rgba(8,29,36,0.28)', // the sheet's rising edge
         pointerEvents: 'auto', // solid ground: whole section interactive (nothing behind it)
       }}>
+        {/* PULL-TO-EXPLORE GRIP (owner): the sheet's own handle, mirroring the
+            palette grip. Drag it DOWN to peel the sheet and grow the graph — enter
+            lives here, so the graph above is free to spin. A generous full-width
+            hit strip (touchAction:none owns the vertical gesture); the pill + label
+            firm up as the pull nears the commit. */}
+        {enterGrip && canEnter ? (
+          <div
+            onPointerDown={enterGrip.onDown}
+            onPointerMove={enterGrip.onMove}
+            onPointerUp={enterGrip.onUp}
+            onPointerCancel={enterGrip.onUp}
+            role="button"
+            aria-label="pull down to explore the graph"
+            style={{
+              justifySelf: 'stretch', display: 'flex', flexDirection: 'column', alignItems: 'center',
+              gap: '0.4rem', padding: '0.5rem 0 0.9rem', marginTop: '-0.4rem', marginBottom: '0.2rem',
+              cursor: 'grab', touchAction: 'none', userSelect: 'none',
+            }}
+          >
+            <span aria-hidden style={{ width: 40, height: 5, borderRadius: 999, background: theme.border, opacity: 0.5 + 0.5 * enterGrip.progress, transform: `scaleX(${1 + 0.25 * enterGrip.progress})` }} />
+            <span style={{ fontFamily: theme.mono, fontSize: '0.72rem', color: theme.dim, opacity: 0.7 + 0.3 * enterGrip.progress }}>
+              {enterGrip.progress >= 1 ? 'release to explore ↓' : '↓ pull down to explore'}
+            </span>
+          </div>
+        ) : null}
         {selectedKey ? (
           // The selected star's BODY, as PAPER (flat ink-on-cream, not a card) —
           // the head already reads in the hero above, so body-only here, then the
