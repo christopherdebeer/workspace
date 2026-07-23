@@ -234,6 +234,13 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // overlay fades to 0 over ~0.9s (revealing the night graph beneath at full
   // strength), THEN unmounts. Not just an opacity pop — the sky washes away.
   const [leaving, setLeaving] = useState(false);
+  // `returning` drives the REVERSE dissolve (exit → trailhead): the graph shrinks
+  // full→hero and the landing overlay fades back IN over the same beat, instead
+  // of an instant swap. `returnLit` is the two-frame opacity/height TARGET flag —
+  // the overlay mounts at 0 / full, then flips to 1 / hero on the next paint so
+  // the transition actually animates rather than starting already-arrived.
+  const [returning, setReturning] = useState(false);
+  const [returnLit, setReturnLit] = useState(false);
   // How far the overlay is peeled DOWN on over-scroll-up (0 = rest). Declared up
   // here so toLanding can snap it back synchronously with the re-mount.
   const [pull, setPull] = useState(0);
@@ -250,7 +257,18 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     try { sessionStorage.removeItem('parc.home.entered'); } catch { /* private mode */ }
     setPull(0);
     setLeaving(false);
+    // Reverse dissolve: mount the overlay at opacity 0 with the graph still full,
+    // then (two rAFs later, once that start frame has painted) flip to lit + hero
+    // so the fade-in and the shrink actually animate. Clear the flags after.
+    setReturning(true);
+    setReturnLit(false);
     setEntered(false);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(() => setReturnLit(true)));
+    } else {
+      setReturnLit(true);
+    }
+    setTimeout(() => { setReturning(false); setReturnLit(false); }, 620);
   }, []);
   // ── PULL-TO-ENTER, cleanly separated from scroll ──────────────────────────
   // The trailhead scrolls NATIVELY (hero → content below) — no hijacked scroll,
@@ -264,7 +282,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const pullRef = React.useRef(0); pullRef.current = pull;
   const PULL_COMMIT = 140;                        // peel past this → enter
   useEffect(() => {
-    if (!canExplore || entered || leaving) return;
+    if (!canExplore || entered || leaving || returning) return;
     // Body-scroll model: the page scrolls natively (window), so pull-to-enter
     // reads window.scrollY and binds to window. Snap back to rest on (re)mount —
     // a committed peel must not survive entering. Also reset the document scroll
@@ -324,7 +342,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       window.removeEventListener('touchcancel', release);
       window.removeEventListener('wheel', onWheel);
     };
-  }, [canExplore, entered, leaving, enter]);
+  }, [canExplore, entered, leaving, returning, enter]);
 
   // Pull-to-enter GROWS the graph from the hero band toward full height, so a
   // commit finds it already full (no snap). Height eases out with the pull (an
@@ -337,10 +355,12 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     ? undefined
     : leaving
       ? '100svh'
-      : pull > 0
-        ? `${(HERO_N + (100 - HERO_N) * pullGrow).toFixed(2)}svh`
-        : HERO_VH;
-  const graphHeroSpring = pull === 0; // track the finger while pulling; spring at rest
+      : returning
+        ? (returnLit ? HERO_VH : '100svh') // exit: shrink full→hero (svh both ends → smooth)
+        : pull > 0
+          ? `${(HERO_N + (100 - HERO_N) * pullGrow).toFixed(2)}svh`
+          : HERO_VH;
+  const graphHeroSpring = pull === 0; // track the finger while pulling; spring at rest (incl. the return)
 
   if (!session.ready) return <Page>{null}</Page>;
 
@@ -377,7 +397,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
         )}
       >
         <FullGraph selectedKey={selectedKey} onSelect={selectByNode} preview={!entered} heroHeight={graphHeroHeight} heroSpring={graphHeroSpring} />
-        {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} />}
+        {entered && <Palette authed={authed} selectedKey={selectedKey} onSelectKey={setSelectedKey} onClear={() => setSelectedKey(null)} onExit={toLanding} />}
         {/* Persistent top bar: the wordmark sits top-left in BOTH the landing and
             the graph (consistent anchor). In the graph it's a link back to the
             trailhead. Sign-out + session chrome only once entered. */}
@@ -425,7 +445,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
       {/* The dusk-sky wash sits DIRECTLY over the graph canvas (sibling, not
           inside the overlay) so mix-blend-mode:screen tints the dark sky while
           the live stars punch through. Fades to clear night as you enter. */}
-      {!entered && <SkyGradient fade={leaving ? 0 : 1} heroOnly={!leaving} />}
+      {!entered && <SkyGradient fade={leaving ? 0 : returning ? (returnLit ? 1 : 0) : 1} heroOnly={!leaving} />}
       {/* The landing content flows in the NORMAL DOCUMENT — the BODY scrolls
           natively (hero → content below). iOS-robust: WebKit refuses to
           native-scroll a pointer-events:none overflow:auto container, so we don't
@@ -441,9 +461,9 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             position: 'relative',
             zIndex: 20,
             pointerEvents: 'none',
-            opacity: leaving ? 0 : 1,
+            opacity: leaving ? 0 : returning ? (returnLit ? 1 : 0) : 1,
             transform: pull ? `translateY(${pull}px)` : undefined,
-            transition: leaving ? 'opacity 0.9s ease-in' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
+            transition: leaving ? 'opacity 0.9s ease-in' : returning ? 'opacity 0.45s ease-out' : (pull ? 'none' : 'transform 0.35s cubic-bezier(.22,1,.36,1)'),
           }}
         >
           <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter selectedKey={groundKey} selectedNode={groundKey === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} />

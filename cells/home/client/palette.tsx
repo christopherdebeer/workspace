@@ -207,7 +207,7 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, onSelectKey, onClear, on
   );
 }
 
-export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void }): React.JSX.Element {
+export function Palette({ authed, selectedKey, onSelectKey, onClear, onExit }: { authed: boolean; selectedKey: string | null; onSelectKey: (k: string) => void; onClear: () => void; onExit?: () => void }): React.JSX.Element {
   // `open` = the results sheet is expanded. The SEARCH INPUT is always visible
   // (it IS the bottom bar now — owner feedback: fix the input to the bottom and
   // let the sheet collapse while the query, selection, and graph highlights
@@ -243,10 +243,13 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear }: { authed:
   // ordered ladder, not just the console. UP expands the fact body first, then
   // the console; DOWN collapses the fact body first, then the console; it
   // bottoms out at the collapsed peek (drag never dismisses — × does that).
+  // Past the TOP of the ladder (peek open + console open), one more pull-up
+  // leaves the graph entirely — the reverse of pull-to-enter (onExit).
   const expandStep = useCallback((): void => {
-    if (selectedKey && !bodyOpen) setBodyOpen(true); // ① the peek's body
-    else setOpen(true); //                              ② the console
-  }, [selectedKey, bodyOpen]);
+    if (selectedKey && !bodyOpen) { setBodyOpen(true); return; } // ① the peek's body
+    if (!open) { setOpen(true); return; } //                        ② the console
+    onExit?.(); //                                                  ③ fully expanded → exit the graph
+  }, [selectedKey, bodyOpen, open, onExit]);
   const collapseStep = useCallback((): void => {
     if (selectedKey && bodyOpen) setBodyOpen(false); // ① the peek's body, even if the console is open
     else if (open) setOpen(false); //                   ② the console
