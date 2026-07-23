@@ -1047,7 +1047,7 @@ export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry
 
 /** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
  *  via peek, and renders the modal. Returns null when nothing is open. */
-export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { tone?: Tone; onCurrent?: (key: string | null) => void; /** Fires when the stack opens/closes — the app minimizes the palette under it. */ onOpenChange?: (open: boolean) => void } = {}): React.JSX.Element | null {
+export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevealGround }: { tone?: Tone; onCurrent?: (key: string | null) => void; /** Fires when the stack opens/closes — the app minimizes the palette under it. */ onOpenChange?: (open: boolean) => void; /** Fires while the 1/1 sheet is being dragged toward ground — the Landing restores the REAL ground content behind it for the reveal. */ onRevealGround?: (revealing: boolean) => void } = {}): React.JSX.Element | null {
   const t = SHEET_TONE[tone];
   // A drill HISTORY with a cursor — not a plain stack. openFact pushes at the
   // cursor (truncating any forward history); back moves the cursor DOWN and the
@@ -1087,6 +1087,12 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
   const onOpenRef = React.useRef(onOpenChange);
   onOpenRef.current = onOpenChange;
   useEffect(() => { onOpenRef.current?.(isOpen); }, [isOpen]);
+  // 1/1 drag-toward-ground: tell the Landing to restore the REAL ground content
+  // behind the dragged sheet — the reveal shows what commit actually returns to.
+  const groundReveal = tone === 'light' && isOpen && cursor === 0 && dragY > 0;
+  const onRevealRef = React.useRef(onRevealGround);
+  onRevealRef.current = onRevealGround;
+  useEffect(() => { onRevealRef.current?.(groundReveal); }, [groundReveal]);
   // THE DOCKED COMPOSITION (owner, landing): opening a peek INSTANTLY scrolls
   // the page to the top so the canonical stack composition always holds — hero
   // + live graph above, the ground sheet's lip, the peek docked just below it.
@@ -1120,13 +1126,23 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
 
   // Drag the front header DOWN → back(); a forward-pile lip UP (or a tap) →
   // forward(). Both follow the finger and commit past ~80px.
+  // Live refs the once-created drag closures read: the cursor (to fork the
+  // commit — back() vs close-to-ground) and the front sheet's screen top at
+  // grab time (the 1/1 ground-reveal pins the sheet FIXED there so restoring
+  // the real ground content behind can't shove it down the document).
+  const cursorRef = React.useRef(cursor); cursorRef.current = cursor;
+  const sheetTopRef = React.useRef(0);
   const dragBack = React.useCallback((e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('button')) return;
+    sheetTopRef.current = (e.currentTarget as HTMLElement).closest('section')?.getBoundingClientRect().top ?? 0;
     const startY = e.clientY; let dy = 0;
     const move = (me: PointerEvent): void => { dy = Math.max(0, me.clientY - startY); setDragY(dy); };
     const up = (): void => {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
-      setDragY(0); if (dy > 80) back();
+      setDragY(0);
+      // Past the commit: pop a frame — or, at 1/1, COMMIT BACK TO GROUND
+      // (owner: the first sheet's drag-down closes the stack; it used to no-op).
+      if (dy > 80) { if (cursorRef.current > 0) back(); else closeAll(); }
     };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   }, []);
@@ -1224,7 +1240,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
             uncovers what you're returning TO — a FULL sheet reaching the bottom
             of the viewport (the previous frame's head, or the bare ground cream
             at 1/1), never a floating strip over the night backdrop. */}
-        {dragY > 0 ? (
+        {dragY > 0 && !groundReveal ? (
           <div aria-hidden style={{ position: 'absolute', left: 0, right: 0, top: backCount * 8, height: '100dvh', zIndex: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, border: `1px solid ${t.line}`, borderBottom: 'none', background: t.bg, color: t.text, overflow: 'hidden', padding: '0.9rem' }}>
             {prevFrame ? (
               <strong style={{ fontFamily: theme.serif, fontSize: '1.02rem', opacity: 0.7 }}>{`${typeIcon(prevFrame.entry) ? typeIcon(prevFrame.entry) + ' ' : ''}${factTitle(prevFrame.entry)}`}</strong>
@@ -1238,7 +1254,20 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange }: { ton
           const fEntry = frame.entry;
           const fTitle = `${typeIcon(fEntry) ? typeIcon(fEntry) + ' ' : ''}${factTitle(fEntry)}`;
           const sectionStyle: React.CSSProperties = isCur
-            ? {
+            ? groundReveal
+              ? {
+                  // 1/1 drag-toward-ground: the sheet PINS to its grab-time screen
+                  // position (fixed) while the Landing restores the real ground
+                  // content in the document behind it — the drag then slides the
+                  // sheet down over the very content a commit returns to.
+                  position: 'fixed', top: sheetTopRef.current, left: 0, right: 0, margin: '0 auto',
+                  width: 'min(780px, 100vw)', maxHeight: '100dvh', overflow: 'hidden',
+                  zIndex: 30, background: t.bg, color: t.text,
+                  borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
+                  boxShadow: t.shadow,
+                  transform: `translateY(${dragY}px)`, transition: 'none',
+                }
+              : {
                 position: 'relative', zIndex: 1, background: t.bg, color: t.text,
                 borderTopLeftRadius: 14, borderTopRightRadius: 14, borderTop: `1px solid ${t.line}`,
                 boxShadow: t.shadow, minHeight: '60dvh',

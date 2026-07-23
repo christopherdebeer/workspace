@@ -202,6 +202,9 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // A peek stack is up (FactDetailHost): the palette minimizes under it in the
   // graph (the dark stack floats above the slim strip instead of burying it).
   const [peekOpen, setPeekOpen] = useState(false);
+  // The 1/1 sheet is being dragged toward ground: restore the REAL ground
+  // content behind it (the docked Landing un-collapses for the reveal).
+  const [groundReveal, setGroundReveal] = useState(false);
   const selectByNode = useCallback((n: GraphNode | null) => {
     setSelectedNode(n);
     setSelectedKey(n?.key ?? null);
@@ -611,7 +614,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
                     : 'transform 0.35s cubic-bezier(.22,1,.36,1)',
           }}
         >
-          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter peekDocked={peekOpen && !entered} selectedKey={exitActive && selectedKey ? selectedKey : groundKey} selectedNode={(exitActive && selectedKey ? selectedKey : groundKey) === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp,
+          <Landing session={{ ...session, signIn: authed ? enter : session.signIn }} onExplore={enter} authed={authed} canEnter peekDocked={peekOpen && !entered && !groundReveal} selectedKey={exitActive && selectedKey ? selectedKey : groundKey} selectedNode={(exitActive && selectedKey ? selectedKey : groundKey) === selectedNode?.key ? selectedNode : null} featured={authed ? undefined : initial?.featured} landingKey={initial?.landingKey} landingBody={initial?.landingBody} initialFact={initial?.selectedFact as import('./facts').ListEntry | undefined} selectedMd={initial?.selectedMd} enterGrip={{ onDown: onGripDown, onMove: onGripMove, onUp: onGripUp,
             // During the mirror exit the landing is REWINDING the enter pull, so
             // its internal pull-driven styling (hero fade, sheet parallax, grip
             // pill) runs at the virtual pull position — the painting brightens
@@ -648,7 +651,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           IS the selection, so the graph re-orients to it behind the sheet and
           closing leaves you there. Folded `owner/key` sheet keys match the
           graph's folded node ids, so the pan lands. */}
-      <FactDetailHost tone={entered ? 'dark' : 'light'} onCurrent={(k) => { if (k) setSelectedKey(k); }} onOpenChange={setPeekOpen} />
+      <FactDetailHost tone={entered ? 'dark' : 'light'} onCurrent={(k) => { if (k) setSelectedKey(k); }} onOpenChange={setPeekOpen} onRevealGround={setGroundReveal} />
     </>
   );
 }
