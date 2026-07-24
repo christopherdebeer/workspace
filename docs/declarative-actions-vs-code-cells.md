@@ -129,7 +129,8 @@ revisions, provenance, supersede):
 
 1. **Actions/views become facts** in reserved keys of the workspace slice
    (`_actions/*`, `_views/*`) — registered via
-   `act("workspace.registerAction", …)`, no new storage, no deploy.
+   `act("workspace.declare", { kind: "action", def })` (ADR-0068; the original
+   `registerAction` spelling is retired), no new storage, no deploy.
 2. **The workspace cell grows the interpreter** — a port of `invoke.ts`'s
    semantics (guards, substitution, merge/increment/append, `ifRevision`/
    `ifVersion` via DynamoDB `ConditionExpression`, per-entry timers evaluated

@@ -29,6 +29,7 @@ import {
   enforceTypeRead,
 } from './shared';
 import { runTend } from './event-handlers';
+import { TOOL_DESCRIPTORS } from './descriptors';
 import type { WorkspaceCommands } from './handlers';
 
 /** Candidate-set size for a stated intent (ADR-0051): the vector top-K IS the
@@ -183,6 +184,35 @@ export interface RecallOverview {
 /** Cap on facts returned in full in an overview's `focus` block. */
 const OVERVIEW_FOCUS = 12;
 
+/** The verbs this service actually declares — the live vocabulary, read off the
+ *  same descriptor list `describeTools` serves the gateway. */
+const LIVE_VERBS = new Set(TOOL_DESCRIPTORS.map((d) => d.name));
+
+/**
+ * Orientation hints as (verbs, text) pairs rather than free prose.
+ *
+ * A hint is INSTRUCTION — a bare `recall()` is the most-read teaching surface in
+ * the system — so it must never name a verb the membrane no longer accepts.
+ * Hard-coded prose drifts: this list shipped `search({ text })` and
+ * `neighbors({ key })` long after ADR-0069/0071 retired both, so every agent that
+ * followed the hints got `capability_retired` (wave-7). Each hint now DECLARES
+ * the verbs it mentions; `liveHints()` drops any hint naming a verb that is not
+ * in the live descriptor set, and the jest gate fails on one — so retiring a verb
+ * silences its hint in prod and breaks the build in CI, instead of rotting.
+ */
+export const OVERVIEW_HINTS: ReadonlyArray<{ verbs: string[]; text: string }> = [
+  { verbs: ['recall'], text: 'This is a succinct overview (the default). For the whole shaped view: recall({ view: "full" }).' },
+  { verbs: ['query'], text: 'Drill by structure: query({ type | prefix | tag | contains }) — filtered + paged.' },
+  { verbs: ['query'], text: 'Drill by meaning: query({ text }) — semantic candidates across your slice.' },
+  { verbs: ['peek', 'edges'], text: 'One fact: peek({ key }); its links: edges({ around: key }); the graph: read("$graph").' },
+  { verbs: ['suggestions'], text: 'Connection candidates the index proposes: suggestions().' },
+];
+
+/** The hints whose every named verb is still live. */
+export function liveHints(hints: ReadonlyArray<{ verbs: string[]; text: string }> = OVERVIEW_HINTS): string[] {
+  return hints.filter((h) => h.verbs.every((v) => LIVE_VERBS.has(v))).map((h) => h.text);
+}
+
 /**
  * Distil the assembled, scored view into a broad+succinct orientation (ADR-0033) —
  * the default for a bare `recall()` so a context-less agent gets counts + the top
@@ -230,13 +260,7 @@ function buildOverview(
       byPrefix: topN(byPrefix, 12).map(({ k, count }) => ({ prefix: k, count })),
     },
     focus,
-    hints: [
-      'This is a succinct overview (the default). For the whole shaped view: recall({ view: "full" }).',
-      'Drill by structure: query({ type | prefix | tag | contains }) — filtered + paged.',
-      'Drill by meaning: search({ text }) — semantic candidates across your slice.',
-      'One fact: peek({ key }); its links: neighbors({ key }); the graph: read("$graph").',
-      'Connection candidates the index proposes: suggestions().',
-    ],
+    hints: liveHints(),
     ...(Object.keys(types).length ? { types } : {}),
   };
 }

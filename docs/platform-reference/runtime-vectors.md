@@ -2,7 +2,7 @@
 
 ## What this subsystem is
 
-This subsystem gives the parc.land substrate **meaning-based recall and semantic structure**. It is built on two small, pure interfaces — `Embedder` (text → vector) and `VectorStore` (k-NN index) — plus addressing/extraction helpers that are shared by four consumers: the live DynamoDB-stream indexer, the async `reindex` backfill, `workspace.search`, and the intent-lens relevance signal on `recall`/`query`.
+This subsystem gives the parc.land substrate **meaning-based recall and semantic structure**. It is built on two small, pure interfaces — `Embedder` (text → vector) and `VectorStore` (k-NN index) — plus addressing/extraction helpers that are shared by four consumers: the live DynamoDB-stream indexer, the async `reindex` backfill, the semantic read (`workspace.query({ text })` / `read({source:'vector'})`), and the intent-lens relevance signal on `recall`/`query`.
 
 Its defining constitutional stance (ADR-0030 Decision 1) is that **the vector index is "an index, not an authority."** The index only ever generates candidate KEYS; the caller re-reads each candidate authoritatively against the substrate (scope + grant + timer + supersession) before returning it. Nothing in this subsystem makes an access decision. Isolation is structural: one index per slice (`indexForScope`) mirrors the `STATE#<scope>` DynamoDB partition 1:1, and grant fan-out reuses recall's own-∪-grants-∪-public fold (ADR-0030 Decision 2).
 
@@ -12,7 +12,7 @@ The vector index is the **one artifact in the whole subsystem that does NOT redu
 
 The subsystem's coherence comes from deliberately **confining** that new primitive: every OUTPUT it produces is re-grounded in a core primitive.
 
-- `workspace.search` re-reads each candidate as a **Fact** and shapes the result through the **Projection** pipeline's R1 envelope.
+- The semantic read re-reads each candidate as a **Fact** and shapes the result through the **Projection** pipeline's R1 envelope.
 - Relevance becomes a term *inside* the 5-term salience **Projection** score (ADR-0051), not a second score.
 - Inferred `similarTo` kinship is written back as ordinary authored-style edge **Facts** (writer `platform/vectors`) so it feeds `centrality` and surfaces through the Reference projection with zero scorer change (ADR-0031).
 
@@ -20,7 +20,7 @@ So: a new index primitive at the edge, everything it produces reduced back to fa
 
 ### Live snapshot
 
-`workspace.edges` (ADR-0069) returns real `similarTo` edges stamped `writer:"platform/vectors"`, `strength:0.3`, and a `score` carrying the raw cosine (e.g. `_caps/@c15r/canvas.scene --similarTo--> doc:canvas-substrate-design` @ 0.513) — confirming both that `_caps/` capability facts ARE embedded (the `embeddableText` exception for ADR-0052) and that Titan cosines run compressed (scores cluster 0.33–0.75). The live `$catalog` still lists `workspace.search` alongside `recall`/`query` — a coherence gap vs ADR-0051's stated intent to retire it (see the search section).
+`workspace.edges` (ADR-0069) returns real `similarTo` edges stamped `writer:"platform/vectors"`, `strength:0.3`, and a `score` carrying the raw cosine (e.g. `_caps/@c15r/canvas.scene --similarTo--> doc:canvas-substrate-design` @ 0.513) — confirming both that `_caps/` capability facts ARE embedded (the `embeddableText` exception for ADR-0052) and that Titan cosines run compressed (scores cluster 0.33–0.75). (An earlier reading recorded `workspace.search` still in the live `$catalog`; it has since been retired on both sides — see §6.)
 
 ### Anchor files
 
@@ -213,7 +213,14 @@ export function vectorsFromEnv(env = process.env): { store: VectorStore; embedde
 
 ---
 
-## 6. workspace.search — semantic candidate generation + grant fan-out + authoritative re-read
+## 6. The semantic read — candidate generation + grant fan-out + authoritative re-read
+
+> **Naming (ADR-0051/0071, resolved).** This section describes the mechanism, which
+> is live and unchanged. The verb that fronts it is `workspace.query({ text })` (or
+> `read({ source:'vector' })`). The old `workspace.search` spelling is **retired** —
+> no command, no descriptor, tombstoned in the gateway's `RETIRED` map so the name
+> teaches its successor instead of vanishing.
+
 
 **What it does.** The semantic read verb: embed the query once, over-fetch `topK = limit*4` from the viewer's own slice index PLUS each applicable grant owner's index (grant-covered keys only, mirroring recall's fold), collapse each key to its best score, rank, then AUTHORITATIVELY RE-READ each candidate via `state.get(owner, key, identity)` — dropping superseded/unauthorized facts — before returning at most `limit`, wrapped in the ADR-0029 R1 `{entries, types}` envelope.
 
@@ -239,7 +246,11 @@ Type/tag map to in-index metadata filters (`commands-search.ts:353-355`), honour
 
 **Reduces to.** `projection` + `fact`. A `Projection.select` whose candidate SOURCE is the vector index instead of the store scan, followed by the standard authoritative Fact re-read and the same shape/present stage every read shares. The index accelerates select; fact + grant enforcement is unchanged.
 
-> ⚠ **Coherence — search vs `query({text})` catalog gap (from the capability audit).** ADR-0051 folds search into `query({text})` and marks `search` a deprecated alias slated to leave the catalog, but `commands-search.ts:330` still fully implements it and the live `$catalog` menu still lists `workspace.search`. The two coexist rather than search being retired. **Recommendation:** if ADR-0051's intent stands, remove `search` from the catalog and route callers to `query({text})`; otherwise update ADR-0051 to record that `search` remains a first-class verb.
+> ✅ **Resolved — the search/`query({text})` catalog gap is closed.** ADR-0051 folded
+> search into `query({ text })`; this file previously recorded the two coexisting
+> (`commands-search.ts` still implementing `search`, `$catalog` still listing it).
+> Neither holds: there is no `search` command, no `search` descriptor, and the
+> gateway tombstones the name. Callers reach the mechanism through `query({ text })`.
 
 > ⚠ **Coherence — live delete-timer leases leak into search (embed-orchestration · PARTIAL · high · conflicts).** The stream indexer drops every `timerEffect === 'delete'` fact (`handler.ts:106`). The reindex worker's embeddable filter checks only `!!e.text` (`commands-search.ts:764-766`) with no `timerEffect` gate, and `state.query`'s `isTimerLive` returns true for a still-live delete-timer fact (`state.ts:188`). So a full `reindex` re-embeds and wires `similarTo` over LIVE (unexpired) delete-timer leases/presence rows the stream path never admits. Search's authoritative re-read (`commands-search.ts:389`, via `state.get`) only nulls on `!isTimerLive`/superseded — it does NOT re-check `timerEffect === 'delete'` — so re-admitted live leases leak specifically into search (and `recall`'s `relevanceFor`), while `contested` (`:646-649`) and `suggestions` (`:518-522`) DO re-check and are protected. **Recommendation:** lift the delete-timer exclusion into a shared `shouldIndex(fact)` predicate (or extend `embeddableText` to take `timerEffect`) that both `vector-indexer/handler.ts` and `reindexChunk` call.
 

@@ -352,7 +352,7 @@ Reactions invoke *declared actions only* — bounded, auditable, slice-local wri
 Reactions only fire on first-party fact events. The EventBridge rule that delivers `workspace.fact.written` to the workspace function pins `source = 'workspace'`. Each dynamic cell's IAM policy pins `events:source = cell-<cellId>`, so a cell cannot forge a `workspace.fact.written`. Cell writes flow through the separate `substrate.write.requested` event (source `cell-*`, validated by the substrate-write handler), which after applying the fact emits a `workspace.fact.written` *as the workspace itself* — the single chokepoint where the reactor actually fires. The reactor handler does not need to re-check the source; the bus rule is the enforcement.
 
 ###### Two ways subscriptions are registered
-- **User vocabulary.** A caller invokes `workspace.registerSubscription` from their slice. Tagged with the caller's chosen tags; `via` defaults to `'registerSubscription'`.
+- **User vocabulary.** A caller invokes `workspace.declare({ kind: "subscription", def })` from their slice (ADR-0068; the old `registerSubscription` spelling is retired). Tagged with the caller's chosen tags; `via` defaults to `'registerSubscription'`.
 - **Cell-required vocabulary (organ path).** A cell emits `substrate.write.requested` with `key: '_subscriptions/<id>'`. The substrate-write handler resolves the cell's owner, attributes the writer to `@<owner>/<cellName>`, validates and registers the subscription, and tags it `cell-required`. This is the same "two kinds of seeding" rule that governs `_actions/*` and `_views/*` — versioned with the cell, refreshed on redeploy.
 
 ###### Reactor non-goals

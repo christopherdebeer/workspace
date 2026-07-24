@@ -143,8 +143,8 @@ export function buildContextualCatalog(
   types: Record<string, unknown>,
   subject: { key?; type?; meta?:{ type?; tags? } },
 ): { for, signals, types, capabilities, workspace, hint }; // :360
-const CORE_FACT_VERBS = new Set([  // :332
-  'workspace.peek','workspace.neighbors','workspace.members','workspace.link',
+const CORE_FACT_VERBS = new Set([  // :360 — ADR-0069: `edges` replaced neighbors/members
+  'workspace.peek','workspace.edges','workspace.link',
   'workspace.unlink','workspace.remember','workspace.supersede','workspace.share']);
 function managerCell(ref): string | null; // :345 — normalises 'c15r/machine' → '@c15r/machine'
 // typeSignals({ key, _meta }) from platform/ui/vocab
@@ -168,7 +168,7 @@ function managerCell(ref): string | null; // :345 — normalises 'c15r/machine' 
 
 **What it does.** Sentinel `read` targets that expose the substrate's model of itself as data.
 - `$types` (`buildTypes`, `:490`) merges the canonical global type vocabulary (`cells.describeTypes`) under the caller's per-user `_types/` slice overrides via the shared `buildTypeVocabulary` library (ADR-0044 Inc 2 — one resolver shared with cell SSR).
-- `$graph` forwards to `workspace.graph` (`:617`).
+- `$graph` forwards to `workspace.edges` with a skim page limit, then through the shared sentinel budget guard.
 - `$grants` forwards to `workspace.grants` (`:620`).
 - `$cells` forwards to `cells.contracts` (`:623`).
 - `platform.logs` (admin, gated on `platform:admin`) tails a tier-1 service's CloudWatch logs via `cells.platformLogs` (`:627-630`).
@@ -179,7 +179,10 @@ function managerCell(ref): string | null; // :345 — normalises 'c15r/machine' 
 async function buildTypes(ctx): Promise<{ types, hint }>; // :490 — buildTypeVocabulary(global.types, slice.entries)
 const TYPES='$types', GRAPH='$graph', GRANTS='$grants', CELLS='$cells', PLATFORM_LOGS='platform.logs'; // :59-63
 const PLATFORM_ADMIN_SCOPE = 'platform:admin'; // :65
-// in read(): GRAPH → workspace.graph; GRANTS → workspace.grants; CELLS → cells.contracts
+// in read(): GRAPH → workspace.edges({limit: GRAPH_SKIM_LIMIT}); GRANTS → workspace.grants; CELLS → cells.contracts
+// every sentinel result passes through guardSentinel(target, result, narrow)
+const FULL_BUDGET = 60_000; // delivered (indent-2) bytes — the shared self-model read budget
+function guardSentinel<T>(target: string, result: T, narrow: string): T; // fails loud with the way to narrow
 ```
 
 **Data model.** `$types` keys are bare type names → `{ icon, label, manager, handlers, fields?, present? }`. `$cells` → `{ cells:[{ address, name, owner, status, public, description, publishes[], backs[], substrate:{ ssrReads[], callerWrites[] } }], hint }`. `platform.logs` forwards `{ service }` to `cells.platformLogs` after `enforceScope(platform:admin)`.
@@ -189,9 +192,26 @@ const PLATFORM_ADMIN_SCOPE = 'platform:admin'; // :65
 - `platform.logs` is the only self-model surface gated by scope; the rest are scope-agnostic projections.
 - The merge is a shared library (`buildTypeVocabulary`), so `$types` is no longer wire-only — cell SSR uses the same resolver.
 
-> ⚠ **Coherence — `$graph` currently errors on the deployed instance (conflicts).** `read('$graph')` forwards to `workspace.graph` (`services/gateway/service.ts:617`), but `workspace.graph` is DEPRECATED (ADR-0069; the working unified form is `workspace.edges`) and errors "Unhandled" on the live instance while `$cells`/`$types`/`$grants` work. This is a real source↔deployment divergence: the gateway's third self-model surface is broken. Related, and higher-severity — see the coherence callout in §5b below: even the replacement (`workspace.edges` / bare `edges()`) shares an **unbounded-projection** footgun.
+> ✅ **Resolved (wave-7) — `$graph` no longer routes at the retired verb.** An earlier
+> reading of this file recorded `$graph` forwarding to `workspace.graph` and erroring
+> "Unhandled" live. That is no longer true on either side: the branch forwards to
+> `workspace.edges`, and a live probe returns a real projection. The `workspace.graph`
+> tombstone remains in the gateway's `RETIRED` map purely to teach its successor.
 
-> ⚠ **Coherence — `$graph` has no size guard (high, conflicts).** Unlike the `$catalog` `detail:full` branch (which has an `overBudget` guard, `service.ts:587-611`), the `$graph` branch (`service.ts:617`) returns `workspace.graph({})` with no limit. `graph`, `$graph`, bare `edges()`, and `links` all funnel through the same `state.graph`/`scopeEdges` path that returns ALL edges when `limit===undefined` (`services/workspace/shape.ts:162`; `commands-graph.ts:205-213,269-274,307`). The in-code ADR-0081 comment (`commands-graph.ts:279-283`) confirms the unbounded projection already caused a silent CloudFront 30 s / 6 MB failure in the home cell. **Fix:** give the whole-projection framing a default page limit (with `nextCursor`) so `$graph` and bare `edges()` are safe at corpus scale; the deprecation of `graph` is cosmetic — the operational break is the missing default bound, inherited by the ADR-0069 replacement. (The specific live figure "29018 edges" is a runtime observation, not verifiable from the repo; the argument does not depend on it.)
+> ✅ **Resolved (wave-7) — the sentinel budget is now shared.** The size guard was real
+> and reproduced: `read("$graph")` returned **208,915 delivered bytes** and blew the
+> caller's read cap, because the `overBudget` check lived *inside* the `$catalog`
+> `detail:"full"` branch and its siblings inherited nothing. `FULL_BUDGET` /
+> `overBudget` / `guardSentinel` are now module-scope in `services/gateway/service.ts`
+> and every sentinel (`$graph`, `$types`, `$grants`, `$cells`, `$catalog`) passes
+> through them; `$graph` additionally skims by default (`GRAPH_SKIM_LIMIT`, ADR-0033)
+> rather than asking for the service's 1000-edge page. Gated by
+> `tests/gateway-sentinels.test.ts`. **Still open below this layer:** `state.graph`/
+> `scopeEdges` returns ALL edges when `limit===undefined` (`services/workspace/shape.ts:162`;
+> `commands-graph.ts:205-213,269-274,307`), so a *direct* unbounded `workspace.edges({})`
+> is still a footgun for non-gateway callers — the ADR-0081 comment
+> (`commands-graph.ts:279-283`) records it already causing a silent CloudFront 30s/6MB
+> failure in the home cell. The membrane is bounded; the projection underneath is not.
 
 > ⚠ **Coherence — present-facet resolution is documented against a dead function (medium, mis-citation).** `platform-core.md:190,291` cites `resolvePresent` (`platform/runtime/present.ts:52`) and a call site at `service.ts:335-339` — but `service.ts:335-339` is the `CORE_FACT_VERBS` Set, unrelated to present, and `resolvePresent`/`resolveLabel` have **zero call sites** in `services/` or `cells/`. The gateway actually resolves the present facet at `service.ts:509` via `buildTypeVocabulary` → `resolveType` (`type-vocabulary.ts:42-49`, `type-schema.ts:175-189`), which attaches `resolved.present`. **The server present path genuinely converges** through `resolveType`/`buildTypeVocabulary` (gateway `$types`, workspace read/search/graph envelopes, cell SSR all use it) — the divergence is confined to client per-fact resolution and the orphaned `resolvePresent` name. **Fix:** update the docs/ADR-0012 to name `resolveType`'s present facet as the real present core, and either wire in or delete `resolvePresent`.
 
@@ -531,9 +551,14 @@ const DIM = Number(process.env.VECTOR_DIM ?? (process.env.VECTOR_EMBEDDER === 'b
 
 ## Gotchas / non-obvious behavior
 
-1. **The `$graph` self-model surface is broken on the live instance.** `read('$graph')` forwards to the DEPRECATED `workspace.graph` (`service.ts:617`), which errors "Unhandled" while `workspace.edges` (ADR-0069) is the working form. And even the replacement path has no size guard (unbounded projection — ADR-0081). `$cells`/`$types`/`$grants` work.
+1. **Every sentinel is budgeted, not just `$catalog`** (wave-7). `$graph` forwards to
+   `workspace.edges` with a skim limit and passes — like `$types`/`$grants`/`$cells` —
+   through the module-scope `guardSentinel`. Before this it forwarded unbounded and
+   returned 208,915 delivered bytes. The older "forwards to `workspace.graph` / errors
+   Unhandled" note in this file was stale on both halves. The unbounded projection
+   *below* the membrane (`state.graph`/`scopeEdges` with `limit===undefined`) is still open.
 
-2. **The `$catalog` full-dump budget is measured on the INDENTED payload** (`FULL_BUDGET = 60_000`, `overBudget` uses `JSON.stringify(r, null, 2)`, `service.ts:586-587`). The MCP layer pretty-prints (~1.5× compact), so a compact measure let `workspace` (~74 KB delivered) slip the guard and overflow anyway. Preserve the indented measurement if you touch this.
+2. **The self-model budget is measured on the INDENTED payload** (`FULL_BUDGET = 60_000`, `overBudget` uses `JSON.stringify(r, null, 2)`). The MCP layer pretty-prints (~1.5× compact), so a compact measure let `workspace` (~74 KB delivered) slip the guard and overflow anyway. Preserve the indented measurement if you touch this.
 
 3. **`as` is stripped in TWO slots** (top-level `input.as` and nested `input.input.as`, `service.ts:427-432`) and always removed before forwarding. Never let it reach a capability handler — no schema owns it, and leaking it grows every handler an accidental parameter. It must never gate authority.
 

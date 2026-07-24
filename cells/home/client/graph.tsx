@@ -10,7 +10,7 @@
  * is no longer loaded at all.
  *
  * Data: `workspace.query {rankBy:'salience'}` (no limit) loads the entire slice,
- * `workspace.graph` supplies the full Reference projection (authored + derived),
+ * `workspace.edges` supplies the full Reference projection (authored + derived),
  * filtered to edges among visible nodes. Node radius = salience score (degree
  * assist); node hue = type (stable hash). Edge grammar: authored solid,
  * `similarTo` the faint constellation, membership (onBoard/inDoc/inView —

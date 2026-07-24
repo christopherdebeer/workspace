@@ -80,7 +80,7 @@ async function focusDefaultFrame(): Promise<void> {
 }
 
 /** The tour controls for a frame: prev = inbound navNext, next = outbound.
- *  `workspace.neighbors` returns { outbound[], inbound[], entries:{key→fact} } —
+ *  `workspace.edges({around})` returns { outbound[], inbound[], entries:{key→fact} } —
  *  the neighbour map carries only the *other* ends, so the current frame's own
  *  label is read separately (peek). */
 async function renderTourBar(frameId: string): Promise<void> {

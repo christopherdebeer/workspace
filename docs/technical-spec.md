@@ -279,7 +279,7 @@ interface SsrManifest {
 }
 ```
 
-**Real example — `cells/home/ssr.json`:** declares 11 reads (`workspace.peek _home/layout`, `workspace.query`, `workspace.attention`, `workspace.views`, `workspace.links`, `workspace.changes`, `cells.describeTypes`, `cells.list`, `auth.tokens`, `workspace.shared`, `workspace.grantRequests`).
+**Real example — `cells/home/ssr.json`:** declares 11 reads (`workspace.peek _home/layout`, `workspace.query`, `workspace.attention`, `workspace.views`, `workspace.edges`, `workspace.changes`, `cells.describeTypes`, `cells.list`, `auth.tokens`, `workspace.shared`, `workspace.grantRequests`).
 
 **Real example — `cells/starter/ssr.json`:**
 
@@ -1028,7 +1028,7 @@ Reactions only fire on first-party fact events. The EventBridge rule that delive
 
 #### 4.8.5 Two ways subscriptions are registered
 
-- **User vocabulary.** A caller invokes `workspace.registerSubscription` from their slice. Tagged with the caller's chosen tags; `via` defaults to `'registerSubscription'`.
+- **User vocabulary.** A caller invokes `workspace.declare({ kind: "subscription", def })` from their slice (ADR-0068; the old `registerSubscription` spelling is retired). Tagged with the caller's chosen tags; `via` defaults to `'registerSubscription'`.
 - **Cell-required vocabulary (organ path).** A cell emits `substrate.write.requested` with `key: '_subscriptions/<id>'`. The substrate-write handler resolves the cell's owner, attributes the writer to `@<owner>/<cellName>`, validates and registers the subscription, and tags it `cell-required`. This is the same "two kinds of seeding" rule that governs `_actions/*` and `_views/*` — versioned with the cell, refreshed on redeploy.
 
 #### 4.8.6 Reactor non-goals

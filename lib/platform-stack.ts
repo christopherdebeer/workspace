@@ -149,7 +149,7 @@ export class PlatformStack extends cdk.Stack {
       // tripped the 15 s timeout, surfacing as gateway 502s. Lambda CPU scales with
       // memory; 1 GB (~4× CPU) brings a 4-fact batch to a couple seconds. 60 s
       // timeout gives margin for the daily tending pass over a large slice.
-      // Bumped again (2026-07-11, ADR-0081 migration aftermath): `workspace.graph`
+      // Bumped again (2026-07-11, ADR-0081 migration aftermath): the whole-projection edge read
       // computes the FULL derived edge projection server-side regardless of any
       // caller-side limit (unlike `query`, it has no cursor to page through) —
       // once the slice crossed a few thousand facts this alone started 502ing.
@@ -362,7 +362,7 @@ export class PlatformStack extends cdk.Stack {
       // resolveTarget/scope work. Raise to 512 MB / 60 s so a slow downstream batch
       // no longer surfaces as a CloudFront 502 (telemetry 2026-06-25).
       // Bumped again (2026-07-11, alongside the workspace 60s→120s bump for
-      // workspace.graph): must stay outlasting workspace's timeout or this
+      // the whole-projection edge read): must stay outlasting workspace's timeout or this
       // service becomes the new bottleneck at exactly the same failure mode.
       memorySize: 512,
       timeoutSeconds: 150,

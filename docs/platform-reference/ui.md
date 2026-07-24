@@ -445,7 +445,7 @@ Beyond the per-capability callouts, the snapshot confirms these ground-truth div
 - **home & home-next both ship live.** `$cells` = 17 cells; `home` (public, publishes 18 types) and `home-next` (public, publishes nothing) both with `ssrReads:['cells.describeTypes']`. home-next is a "security-hardened platform-face successor" (commit `696d805`) but is **not yet the default cell** (`DISPATCH_DEFAULT_CELL` deferred in both `index.ts`).
 - **home-next is half-migrated.** Its `client` mostly imports `@parc/ui` directly (`app.tsx`, `facts.tsx`, `console.tsx`) yet keeps its own `client/federated-host.ts`, and its dead `shared/` subtree + `shared.tsx` still exist.
 - **The home-next CSP hardening is an improvement the platform should absorb.** Canonical `SANDBOX_HOST_HTML` (federated-renderer.ts:184) has **no CSP meta and no `call`-arg validation**; the home-next fork adds `default-src 'none'; connect-src 'none'` (network-denied) + kind/target-length validation.
-- **`workspace.graph` errors live** (`'Unhandled'`) while `workspace.edges` (ADR-0069 unified Reference projection, `similarTo` edges via platform/vectors) works — the edge-shape seam signal called out in the manifest.
+- **`workspace.graph` is retired**, not broken (ADR-0069) — `workspace.edges` is the unified Reference projection (`similarTo` edges via platform/vectors). An earlier reading recorded `graph` erroring `'Unhandled'` live; the name now returns a `capability_retired` teaching error naming its successor.
 
 ---
 

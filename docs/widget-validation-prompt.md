@@ -32,7 +32,7 @@ host honours (ADR-0037). This is the single most important readout.
 4. Tap **show more** on a clamped card → expands in place. Tap a **+N more** → reveals the rest.
 
 ### C. Search (semantic) — ranking & nuance
-5. `read("workspace.search", { text: "progressive disclosure of the substrate", limit: 8 })` —
+5. `read("workspace.query", { text: "progressive disclosure of the substrate", limit: 8 })` —
    ranked cards each show a **similarity bar** + score (not a bare number). If the deployment
    has no vector backend, a **degraded hint** line should show. Verify ordering looks ranked.
 6. On a search result card, tap **↹ neighbours** — it must open the neighbours of the **correct
@@ -60,8 +60,9 @@ host honours (ADR-0037). This is the single most important readout.
 ### G. Graph mode
 12. On any list result (recall focus, a query, or a search), tap **"⊹ view as graph"** → a
     node-link **graph** (mermaid) of the result set's edges + one-hop neighbours. Tap ← to return.
-13. `read("$graph")` (or `read("workspace.graph")`) — the whole Reference graph as a diagram
-    (authored solid, derived dashed), capped with an "N of M" note.
+13. `read("$graph")` — the Reference graph as a diagram (authored solid, derived
+    dashed), capped with an "N of M" note. `$graph` is the SKIM (a bounded page);
+    `read("workspace.edges", { limit, cursor })` pages the whole projection.
 
 ### H. Inboxes & triage (the operational surfaces)
 14. `read("workspace.attention")` — triage: **stale / unlinked / dangling** counts + sections;

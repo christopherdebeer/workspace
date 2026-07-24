@@ -170,7 +170,10 @@ const RETIRED: Record<string, string> = {
   'workspace.search': 'workspace.query({ text })',
   'workspace.neighbors': 'workspace.edges({ around: key })',
   'workspace.links': 'workspace.edges({ derived: false })',
-  'workspace.graph': 'workspace.edges({}) — paged; also read("$graph")',
+  // Point at a BOUNDED successor. The bare projection is the largest read the
+  // membrane can serve, so routing a retired name at `read("$graph")` (as this
+  // entry did) handed callers a ~200KB payload as the recommended fix.
+  'workspace.graph': 'workspace.edges({ limit }) — paged, or workspace.edges({ around: key }) for one neighbourhood; read("$graph") is the skim',
   'workspace.members': 'workspace.edges({ around: key, membership: true })',
   'workspace.registerAction': 'workspace.declare({ kind: "action", def })',
   'workspace.invoke': 'workspace.evaluate({ kind: "action", id, params })',
@@ -550,6 +553,38 @@ function withRender(result: unknown, cap: Capability): unknown {
   return { ...(result as Record<string, unknown>), _render: { renderer: cap.ui.renderer, as: cap.ui.as ?? cap.target } };
 }
 
+/* ─── the self-model read budget ──────────────────────────────────────────────
+ * Measure the DELIVERED form: the MCP layer serializes results pretty-printed
+ * (indent 2), ~1.5× the compact size — a compact measure lets an over-cap result
+ * slip the guard and overflow anyway (wave-5 W6-A).
+ *
+ * This started life inside the `$catalog {detail:"full"}` branch and was never
+ * generalized, so the sibling sentinels inherited nothing: `read("$graph")`
+ * returned 208,915 delivered bytes and blew the caller's read cap with no
+ * guard and no advice (wave-7). Applying it to EVERY sentinel is the general
+ * fix the protocol's honesty rule asks for — the next sentinel added inherits
+ * the bound instead of re-learning it. */
+const FULL_BUDGET = 60_000;
+const deliveredBytes = (r: unknown): number => JSON.stringify(r, null, 2).length;
+const overBudget = (r: unknown): boolean => deliveredBytes(r) > FULL_BUDGET;
+
+/** Fail LOUD with the way to narrow, never a silent truncation (the F7/W3f
+ *  lesson). `narrow` names the finer-grained read for this surface. */
+function guardSentinel<T>(target: string, result: T, narrow: string): T {
+  if (!overBudget(result)) return result;
+  const kb = Math.round(deliveredBytes(result) / 1000);
+  throw new Error(
+    `read("${target}") is too large to return whole (${kb}KB over the ${FULL_BUDGET / 1000}KB read budget). ${narrow}`,
+  );
+}
+
+/** ADR-0033 progressive disclosure applied to the projection sentinel: a bare
+ *  `$graph` is a SKIM, like a bare `$catalog` is the grouped menu. `edges`'
+ *  own default page (1000) is a service-side bound, not a membrane-side one —
+ *  1000 hydrated edges is ~200KB delivered. Callers who want more page with
+ *  `workspace.edges({ limit, cursor })`, which is where paging belongs. */
+const GRAPH_SKIM_LIMIT = 200;
+
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   ctx = dispatchContext(input, ctx); // ADR-0086: `as` rides identity, never authority
   const target = (input?.target ?? '').trim();
@@ -600,15 +635,8 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
       // returns one cell's full schemas; an over-budget dump (whole OR a single
       // large cell — W6-A: workspace alone is ~80KB) fails LOUD with the way to
       // narrow, never a silent truncation (the F7/W3f lesson).
-      // Measure the DELIVERED form: the MCP layer serializes results
-      // pretty-printed (indent 2), which is ~1.5× the compact size — the
-      // workspace cell is 48.7KB compact but 73.7KB delivered, so a compact
-      // measure let it slip the guard and overflow anyway (W6-A follow-up:
-      // re-probe caught the guard firing on the whole dump but NOT on the one
-      // cell that overflows). Budget the indented bytes, comfortably under the
-      // read cap.
-      const FULL_BUDGET = 60_000; // bytes of the delivered (indented) payload
-      const overBudget = (r: unknown): boolean => JSON.stringify(r, null, 2).length > FULL_BUDGET;
+      // The budget + `overBudget` now live at module scope (see the self-model
+      // read budget above) so every sentinel is bounded, not just this one.
       if (opts?.cell) {
         const cell = String(opts.cell).trim();
         const scoped = caps.filter((c) => cellOf(c.target) === cell);
@@ -636,15 +664,30 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     }
     return summarizeCatalog(caps);
   }
-  if (target === TYPES) return buildTypes(ctx);
-  // $graph — the Reference projection (authored + derived), the self-model's third surface.
-  if (target === GRAPH) return ctx.serviceClient('workspace').command('edges', {});
+  if (target === TYPES) {
+    return guardSentinel(TYPES, await buildTypes(ctx), 'Narrow with read("$catalog", {forType:"<type>"}) for one type\'s affordances.');
+  }
+  // $graph — the Reference projection (authored + derived), the self-model's third
+  // surface. Skimmed by default (ADR-0033) and budgeted like every other sentinel:
+  // the unbounded form was 208KB and blew the caller's read cap (wave-7).
+  if (target === GRAPH) {
+    const graph = await ctx.serviceClient('workspace').command('edges', { limit: GRAPH_SKIM_LIMIT });
+    return guardSentinel(
+      GRAPH,
+      graph,
+      'Narrow with workspace.edges({ around:"<key>" }) for one neighbourhood, or page it with workspace.edges({ limit, cursor }).',
+    );
+  }
   // $grants — the authority self-model (ADR-0007), the self-model's fourth surface:
   // what the caller may see and do (scope · grant · partition).
-  if (target === GRANTS) return ctx.serviceClient('workspace').command('grants', {});
+  if (target === GRANTS) {
+    return guardSentinel(GRANTS, await ctx.serviceClient('workspace').command('grants', {}), 'Narrow with workspace.grants({ ... }).');
+  }
   // $cells — the Cell axis (ADR-0008): each accessible cell's contract — what it
   // publishes (types), backs (surfaces), and may touch (ssr/caller). The infra axis.
-  if (target === CELLS) return ctx.serviceClient('cells').command('contracts', {});
+  if (target === CELLS) {
+    return guardSentinel(CELLS, await ctx.serviceClient('cells').command('contracts', {}), 'Narrow with read("$cells") per cell via cells.contracts({ name }).');
+  }
   // platform.logs — admin diagnostics: tail a TIER-1 service's CloudWatch logs
   // (the analogue of cells.logs for gateway/dispatch/workspace/auth/cells/home).
   // Gated on platform:admin; the cells service resolves + redacts.

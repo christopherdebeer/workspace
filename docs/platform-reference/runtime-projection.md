@@ -37,12 +37,16 @@ from `cells.describeTypes`), and the graph read's failure mode reduces to
 
 Two live coherence signals ground the audit:
 
-> ⚠ **Coherence — `workspace.graph` errors "Unhandled".** The unbounded
-> whole-projection read (29,018 edges in c15r's scope) exceeds the CloudFront 30s
-> / Lambda 6MB ceiling. `scopeEdges` (`services/workspace/shape.ts:146`) bounds
-> response *size* after materialization, not compute — so paged `workspace.edges`
-> works while `workspace.graph` does not. **Recommendation:** streaming the state
-> layer, not paging, is the real fix (`shape.ts:140-145` says so explicitly).
+> ⚠ **Coherence — the whole-projection read is unbounded in compute.** The
+> `workspace.graph` verb that first exposed this is now retired (ADR-0069), but the
+> shape underneath it is unchanged: an unbounded whole-projection read (29,018 edges
+> in c15r's scope) exceeds the CloudFront 30s / Lambda 6MB ceiling. `scopeEdges`
+> (`services/workspace/shape.ts:146`) bounds response *size* after materialization,
+> not compute — so paged `workspace.edges` works and an unbounded one does not.
+> The gateway's `$graph` sentinel now passes a skim limit and a delivered-bytes
+> guard, which protects the membrane but not a direct caller.
+> **Recommendation:** streaming the state layer, not paging, is the real fix
+> (`shape.ts:140-145` says so explicitly).
 
 > ⚠ **Coherence — `resolvePresent` has no live caller.** The named ADR-0012
 > present stage (`platform/runtime/present.ts:52`) is only re-exported and
