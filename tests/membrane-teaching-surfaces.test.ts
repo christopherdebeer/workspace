@@ -57,7 +57,7 @@ describe('recall hints never teach a retired verb', () => {
       { verbs: ['neighbors'], text: 'its links: neighbors({ key })' },
       { verbs: ['peek', 'neighbors'], text: 'partly dead' },
     ];
-    expect(liveHints(withDead)).toEqual(['live one']);
+    expect(liveHints(undefined, withDead)).toEqual(['live one']);
   });
 
   it('teaches the ADR-0069/0071 successors', () => {

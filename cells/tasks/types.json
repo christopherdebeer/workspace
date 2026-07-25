@@ -2,45 +2,78 @@
   "types": [
     {
       "type": "goal",
-      "icon": "🎯",
+      "icon": "\ud83c\udfaf",
       "label": "value.title",
       "manager": "@c15r/tasks",
-      "note": "A project-related objective — the durable unit of long-range intent. Keyed `goal/<id>`. Its tasks are `task` facts nested under `task/<id>/…` whose keyEdges project a task —partOf→ goal edge, so the whole plan renders on the graph/canvas without the goal carrying an embedded list. Lifecycle: proposed → active → (done | blocked | dropped), reversible.",
+      "note": "A project-related objective \u2014 the durable unit of long-range intent. Keyed `goal/<id>`. Its tasks are `task` facts nested under `task/<id>/\u2026` whose keyEdges project a task \u2014partOf\u2192 goal edge, so the whole plan renders on the graph/canvas without the goal carrying an embedded list. Lifecycle: proposed \u2192 active \u2192 (done | blocked | dropped), reversible.",
       "schema": {
         "id": "string",
         "title": "string",
-        "detail": "string? — the objective in prose",
+        "detail": "string? \u2014 the objective in prose",
         "status": "'proposed' | 'active' | 'blocked' | 'done' | 'dropped'",
-        "project": "string? — a project fact key this goal advances, e.g. kb/proj_sol",
-        "createdAt": "string — ISO",
-        "updatedAt": "string — ISO"
+        "project": "string? \u2014 a project fact key this goal advances, e.g. kb/proj_sol",
+        "createdAt": "string \u2014 ISO",
+        "updatedAt": "string \u2014 ISO"
       },
       "handlers": {
-        "render": [{ "hint": "fields" }]
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      },
+      "ambient": {
+        "as": "goal",
+        "when": {
+          "status": [
+            "active"
+          ]
+        },
+        "label": "value.title",
+        "verb": "@c15r/tasks.list_goals"
       }
     },
     {
       "type": "task",
-      "icon": "☑️",
+      "icon": "\u2611\ufe0f",
       "label": "value.title",
       "manager": "@c15r/tasks",
-      "note": "A sub-unit of a goal, keyed `task/<goal>/<id>`. The key-encoded rule projects a task —partOf→ goal edge (ADR-0003/0016). Cross-task dependencies ride `value.dependsOn` (task keys); the cell's `next` tool resolves them to surface only actionable work. Lifecycle: todo → doing → (done | blocked | cancelled), reversible.",
+      "note": "A sub-unit of a goal, keyed `task/<goal>/<id>`. The key-encoded rule projects a task \u2014partOf\u2192 goal edge (ADR-0003/0016). Cross-task dependencies ride `value.dependsOn` (task keys); the cell's `next` tool resolves them to surface only actionable work. Lifecycle: todo \u2192 doing \u2192 (done | blocked | cancelled), reversible.",
       "schema": {
         "id": "string",
-        "goal": "string — the owning goal id",
+        "goal": "string \u2014 the owning goal id",
         "title": "string",
         "detail": "string?",
         "status": "'todo' | 'doing' | 'blocked' | 'done' | 'cancelled'",
-        "dependsOn": "string[]? — task keys this task waits on (all must be done)",
-        "createdAt": "string — ISO",
-        "updatedAt": "string — ISO"
+        "dependsOn": "string[]? \u2014 task keys this task waits on (all must be done)",
+        "createdAt": "string \u2014 ISO",
+        "updatedAt": "string \u2014 ISO"
       },
       "keyPattern": "task/{goal}/{id}",
       "keyEdges": [
-        { "from": "task/{goal}/{id}", "rel": "partOf", "to": "goal/{goal}" }
+        {
+          "from": "task/{goal}/{id}",
+          "rel": "partOf",
+          "to": "goal/{goal}"
+        }
       ],
       "handlers": {
-        "render": [{ "hint": "fields" }]
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      },
+      "ambient": {
+        "as": "work",
+        "when": {
+          "status": [
+            "todo",
+            "doing"
+          ]
+        },
+        "label": "value.title",
+        "verb": "@c15r/tasks.next"
       }
     }
   ]

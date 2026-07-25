@@ -233,7 +233,7 @@ function coreOf(base: string): string | null {
  *  including across namespaces: `decompose-run/<path>/40` vs `file/<path>.md`).
  *  Every judge that met these declined to ratify and had to re-derive why;
  *  say what the key structure implies instead. */
-function degeneracyOf(from: string, to: string): 'same-source' | 'contains' | undefined {
+export function degeneracyOf(from: string, to: string): 'same-source' | 'contains' | undefined {
   const a = keyBase(from);
   const b = keyBase(to);
   if (!a || !b) return undefined;
