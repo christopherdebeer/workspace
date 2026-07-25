@@ -873,14 +873,27 @@ const ACT_SCHEMA = {
 const tools: Record<string, McpToolDefinition> = {
   whoami: {
     title: 'Who am I',
-    description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
+    // The description IS the teaching surface (ADR-0033): it must say what the
+    // handler actually returns. It said "principal and granted scopes" — the
+    // identity-only text — for the whole life of ADR-0074 (posture) and ADR-0086
+    // (the ambient frame), so two accretions were invisible to every caller that
+    // read the advertisement instead of the code. Live probes then opened with
+    // whoami and reported it told them nothing (wave-7 W7-2): it does, it just
+    // never said so.
+    description:
+      'Orient: who you are on the parc.land substrate, what this session is FOR, and who else is here. Returns the authenticated principal + effective scopes, your adopted posture (the standing goal every workspace read resolves through — set with auth.adoptGoal), and the ambient frame of other embodied actors acting right now. Cheap and side-effect-free; the natural first call of a session. Then read("workspace.recall") for what is in the workspace.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
       properties: {
-        user: { type: 'string' },
-        scopes: { type: 'array' },
-        grant: { type: 'array' },
+        user: { type: 'string', description: 'The authenticated principal (slice owner), or "anonymous".' },
+        scopes: { type: 'array', description: "The session's EFFECTIVE focus — what is enforced right now." },
+        grant: { type: 'array', description: 'The token ceiling, surfaced only when it differs from `scopes` (i.e. the session has been narrowed or widened by incremental authorization).' },
+        actor: { type: 'string', description: 'Embodiment class (ADR-0022): a connected client is an `agent` acting on-behalf-of, and its attention weighs accordingly.' },
+        posture: {
+          type: 'object',
+          description: 'The adopted goal (ADR-0074): what this session is FOR. Every composed workspace read resolves through it — ranking only, never membership. Absent when nothing is adopted; set/clear with auth.adoptGoal / auth.dropGoal.',
+        },
         participants: {
           type: 'array',
           description: 'The ambient frame (ADR-0086): other embodied actors live on this substrate right now — each a `_presence/*` lease {participant, actor, lastTarget, lastSeen, until}. Absent when you are alone.',
@@ -969,11 +982,19 @@ export const handler = defineMcpService({
   // into the model's context at connect — discovery must not depend on a
   // client knowing what "read/act" means here.
   instructions:
+    // These three sentences are the whole membrane's first glance — they land in
+    // the model's context at connect, before any call. They used to offer three
+    // COEQUAL doors ("Know your goal? …", "Browsing instead? …", "To orient …")
+    // with no ordering, and the doors are not equal: probe waves measured
+    // intent-first at 3 calls-to-answer against 8 for catalog browsing (wave-7),
+    // and 9 vs 12 in wave-5, whose SWARM-G finding was exactly this — "browsing
+    // works, it just costs more calls … the catalog could nudge toward the intent
+    // query." So the opener is now ORDERED, not enumerated.
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
-    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument. Know your goal? read("workspace.query", {input:{text:"<goal>"}}) surfaces the relevant facts AND capabilities by meaning (ADR-0085) — the intent-first move. ' +
-    'Browsing instead? read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one full contract, {detail:"full"} for every schema). Targets look like workspace.query or @owner/cell.tool. ' +
-    'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered/paged; pass {text} for semantic ranking) or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
-    'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
+    'Three verbs: whoami (who you are + what this session is for + who else is here), read (observe), act (mutate). All capability lives in the `target` argument; targets look like workspace.query or @owner/cell.tool. ' +
+    'ORIENT IN THIS ORDER. 1) whoami — cheap, and it carries your adopted posture and the live ambient frame. 2) If you know what you are here to do, read("workspace.query", {input:{text:"<your goal in plain words>"}}) — it ranks the relevant facts AND the capabilities that serve that goal by meaning (ADR-0085). This is the cheapest route to a first useful answer; reach for it before browsing. 3) Only if you have no goal yet, read("workspace.recall") for a succinct overview of what is here (counts + top facts + drill hints). ' +
+    'Browsing the surface: read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one contract, {detail:"full", cell:"<name>"} for one cell\'s schemas); read("$types") is the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it. ' +
+    'Then narrow: workspace.query (filtered/paged, {text} for semantic ranking) · workspace.peek (one fact) · workspace.edges({around}) (its links) · recall({view:"full"}) (the whole shaped view).',
   tools,
   // ADR-0034: declare the MCP-Apps UI extension (spec 2026-01-26 nests it under
   // `capabilities.extensions` with the supported `mimeTypes`) + serve the `ui://`
