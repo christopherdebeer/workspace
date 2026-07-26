@@ -222,6 +222,17 @@ threshold is what a settled workspace looks like.
 - **It heals at tending cadence** (daily), so a type's bias lags a change in how
   the slice is used by up to a day. Fine for a bias; wrong for anything that
   needs to respond within a session.
+- **The non-circularity is first-order only, and the second order is real.** The
+  substrate does not touch on surface, so ranking cannot feed itself directly.
+  But a *reader* who follows the band and opens what it showed creates peeks on
+  exactly what the band promoted: band → human opens → peek → prior up → band.
+  Slower and weaker than a popularity metric, and damped by the deadband and the
+  1.0 ceiling — but present, and it showed up immediately. Hand-pinned at 0.7,
+  `doc` yielded a focus band of state and knowledge; measured, the learner put
+  `doc` at 0.91 and eight of twelve slots went back to documents. The learner is
+  not obviously wrong — the slice genuinely does open those documents — but part
+  of why it opens them is that they were surfaced. Nothing here distinguishes
+  "opened because it mattered" from "opened because it was on top."
 - **A type nobody ever peeks stays demoted even if it matters.** The floor (0.2)
   and the unpriored `relevance` path are the guard: it stays reachable, and the
   first peek starts pulling it back. But "important and never opened by key" is a
