@@ -68,6 +68,9 @@ export {
   INTENT_PRESET,
   SALIENCE_CONFIG_KEY,
   LENSES_CONFIG_KEY,
+  TYPE_BIAS_KEY,
+  learnTypePriors,
+  layerTypeBias,
   parseLensesConfig,
 } from './state';
 export { contentHash } from './content-hash';

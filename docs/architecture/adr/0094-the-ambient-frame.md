@@ -1,8 +1,9 @@
 # ADR-0094 — The ambient frame: orientation is a header, not a ranking
 
 - **Status:** Accepted 2026-07-25 — built, gated, deployed tier-1 + tier-2,
-  validated live. Filed from membrane probe wave 7 (`membrane-probes/wave-7`),
-  the first wave aimed at **surfacing** rather than boundary honesty.
+  validated live. Inc 1 (the learned type bias) built and gated the same day.
+  Filed from membrane probe wave 7 (`membrane-probes/wave-7`), the first wave
+  aimed at **surfacing** rather than boundary honesty.
 - **Depends on:** ADR-0033 (progressive disclosure — the overview-first default),
   ADR-0048 (altitude shaping), ADR-0050 (actor-classed touch counters — the
   anti-churn defence this ADR declines to invert), ADR-0051 (relevance; intent
@@ -113,22 +114,66 @@ projection per source, reusing `degeneracyOf` — the same predicate
 two surfaces cannot disagree about what "the same thing" means. (W3-F1:
 unanimous across four probe replicas in waves 1–3, unbuilt until now.)
 
-### 4. Type priors are the sanctioned instrument for "reference vs state"
+### 4. The type bias is LEARNED, and config is an override
 
 ADR-0085 asked for *"a lens, or a type-weight"* so tools surface when you ask
-"what can I do?" and stay out of "what do I know?". That instrument already
-exists — `_config/salience.typePriors`, a per-type multiplier on the ambient
-blend — and it was already demoting `doc-order`, `canvas-placement`, `log`.
+"what can I do?" and stay out of "what do I know?". The instrument exists —
+`_config/salience.typePriors`, a per-type multiplier on the ambient blend — and
+was already demoting `doc-order`, `canvas-placement`, `log`.
 
-Two gaps were closed as **config, not code**: `file: 0.6` had been orphaned when
-ADR-0081 retyped docs to `markdown`, and `doc`/`doc-block` never had a prior at
-all. Machinery types (`subscription`, `graph-layout*`, `decompose-*`,
-`public-share`) were added on the same principle.
+**But a hand-written map is the wrong shape for this, and tuning it live proved
+it.** Each round revealed the next type that had never been given a prior,
+because an undeclared type silently defaults to `1`: demoting the doc family
+exposed `subscription` and `graph-layout-*` underneath it, and demoting those
+exposed `public-share`. A knob whose failure mode is *silent* and whose
+maintenance is *manual* will drift, exactly like the retired-verb prose this
+same wave found. And a fixed table cannot express the thing that actually
+matters, which changes: **what this slice, now, bothers to open.**
 
-Crucially, `prior` multiplies the ambient terms and **not** `relevance` — so a
-demoted doc is unchanged under `query({text})`. This is precisely
-"reference, not state" semantics: docs stay fully findable by meaning, they
-simply stop winning an orientation read nobody aimed at them.
+So the bias is **learned from the slice's own record** and written to
+`_index/type-bias` by the daily tending pass. For each type:
+
+```
+rate(T) = (chosen(T) + K·globalRate) / (facts(T) + K)
+prior(T) = clamp(rate(T) / globalRate, 0.2, 1.25)
+```
+
+where `chosen` counts **deliberate reads only** — human + agent `read` touches.
+
+**The property that makes this safe is non-circularity, and it is a property of
+the substrate we already had.** Only `get`/`peek` and the explicit capability
+wire record a read touch; `recall`, `query`, `read` and `getMany` record nothing
+— *"rendering must not inflate salience"* (ADR-0050, restated in ADR-0055). So
+being surfaced raises a type's share of the **corpus**, the denominator, and
+never its share of deliberate reads. **A type that keeps winning the focus band
+and is never opened is demoted by winning it.** A popularity metric would have
+built the opposite: a Matthew effect on top of a `standing` term that already
+has one.
+
+Three deliberate asymmetries:
+
+- **Writes never count.** A cell flipping task statuses, or a layout shard
+  rewritten every deploy, must not thereby look wanted. Platform reads don't
+  count either — machinery reading machinery is not a choice.
+- **Pseudo-count smoothing, not a linear shrink.** A type is judged as if it also
+  carried `K` facts read at the slice average, so a three-fact type reads as
+  "about average" until it has the exposure to say otherwise. Without it a rare
+  type absorbing a few peeks computes a lift near 80 and pins the ceiling on
+  noise.
+- **Demotion is floored at 0.2; promotion is capped at 1.25.** Quieting what the
+  slice ignores is the job. Amplifying what it likes is not — that is the
+  ambient frame's job, and it does it without touching the ranking.
+
+`_config/salience` still layers **over** the learned map, merged per type. A
+human pin is absolute and does not discard what the slice learned about
+everything else. Correcting the learner is one write; so is deleting the
+correction.
+
+Crucially — and unchanged — `prior` multiplies the ambient terms and **not**
+`relevance`. A demoted type is untouched under `query({text})`. That is both the
+"reference, not state" semantics and the **recovery channel**: a wrongly-demoted
+type stays fully findable by meaning, and the peeks that follow feed straight
+back into its numerator.
 
 ### 5. An advertisement must describe its behaviour
 
@@ -160,9 +205,18 @@ threshold is what a settled workspace looks like.
 - **The corpus is not healed, only re-weighted.** `standing` counters were baked
   in at write time and keep their inflated values. The prior is a multiplier over
   the top; fixing the `docs-sync` writer class (below) is prospective only.
-- **Priors are hand-maintained.** A new machinery type appears un-demoted until
-  someone notices. A principled default (e.g. types whose manager is a platform
-  cell start low) would be better; not attempted here.
+- **The learner needs a warm slice.** With no deliberate read anywhere it returns
+  `{}` and ranking is exactly as before — correct, but it means a fresh slice
+  gets no help, and the hand-written pins are what carry it until the record
+  accumulates. The pins are now a *seed*, not a permanent fixture.
+- **It heals at tending cadence** (daily), so a type's bias lags a change in how
+  the slice is used by up to a day. Fine for a bias; wrong for anything that
+  needs to respond within a session.
+- **A type nobody ever peeks stays demoted even if it matters.** The floor (0.2)
+  and the unpriored `relevance` path are the guard: it stays reachable, and the
+  first peek starts pulling it back. But "important and never opened by key" is a
+  real category — a fact read only as part of a bulk view — and this measure
+  cannot see it.
 - **The frame is another thing on the hottest read.** Bounded by caps and
   omit-when-empty, but it is real bytes on every bare `recall()`.
 - **Postured sessions lose the digest cache.** The digest is per-slice and the
@@ -181,8 +235,18 @@ threshold is what a settled workspace looks like.
    degree. Real, but worth only ~0.015 of score; correctness fix, not a symptom
    fix.
 4. **The `standing` signal has no decay** (ADR-0079, proposed, unbuilt). Every
-   finding above is downstream of that.
-5. **The sentinels are still five separate reads** (`$catalog`/`$types`/`$graph`/
+   finding above is downstream of that. The learned bias is a *multiplier over* a
+   signal that only grows — it compensates, it does not correct. ADR-0079 remains
+   the real fix, and the same deliberate-read record this ADR introduces is the
+   evidence a decay term would want.
+5. **The same learning should reach the other fixed weights.** `recencyWeight`,
+   `standingWeight` and the rest are still constants tuned once against a 2026-06
+   corpus. A slice that is mostly reference wants a different blend from one that
+   is mostly in-flight work, and the read record can say which. Deliberately not
+   attempted here: the type prior is one multiplier with a floor and a ceiling,
+   and getting a self-tuning *blend* wrong changes ranking globally with no
+   obvious way to notice.
+6. **The sentinels are still five separate reads** (`$catalog`/`$types`/`$graph`/
    `$grants`/`$cells`, 71.5KB if you read them all; `$types` alone is 30.7KB).
    ADR-0085 Inc 5 already records the intent to collapse them into
    `query({type:…})`. Unbuilt, and the largest remaining piece of "the surface is

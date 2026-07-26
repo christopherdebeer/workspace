@@ -9,6 +9,8 @@ import {
   type Identity,
   type ObservedState,
   type StateStore,
+  TYPE_BIAS_KEY,
+  learnTypePriors,
   suggestionCandidates,
   inferIngestionType,
   type IngestionConfig,
@@ -52,6 +54,10 @@ export interface TendReport {
    *  is CHRONIC debt — the signal an Assess node needs to stop calling a frozen
    *  backlog "healthy". */
   delta?: { stale: number; unlinked: number; dangling: number; suggestions: number } | null;
+  /** What this pass re-learned about which TYPES the slice actually opens
+   *  (ADR-0094 Inc 1): how many types now carry a non-neutral prior, and the
+   *  five most demoted — the types occupying the corpus that nobody chooses. */
+  typeBias?: { types: number; sample: Record<string, number> };
 }
 
 /**
@@ -60,15 +66,69 @@ export interface TendReport {
  * a `tending/latest` audit fact, so every observer (home, boards, agents)
  * sees the substrate's health as state.
  */
+/**
+ * Re-learn `_index/type-bias` from the slice's own deliberate-read record
+ * (ADR-0094 Inc 1) and persist it. Best-effort: a failed learn must never fail
+ * the tending pass, and an absent bias just means today's ranking is yesterday's.
+ *
+ * Written through the RAW store like the recall digest — no seq, no trajectory,
+ * no touch. A derived index is not a fact the owner authored, and a bias that
+ * counted as attention would be measuring itself.
+ */
+async function relearnTypeBias(
+  scope: string,
+  store: Pick<StateStore, 'list' | 'get' | 'put'>,
+): Promise<{ types: number; sample: Record<string, number> } | null> {
+  try {
+    const records = await store.list(scope);
+    const typePriors = learnTypePriors(records);
+    if (!Object.keys(typePriors).length) return null;
+    const now = new Date().toISOString();
+    const prev = await store.get(scope, TYPE_BIAS_KEY);
+    await store.put({
+      scope,
+      key: TYPE_BIAS_KEY,
+      value: { typePriors, at: now, observedFacts: records.length },
+      revision: (prev?.revision ?? 0) + 1,
+      seq: prev?.seq ?? 0,
+      firstSeq: prev?.firstSeq ?? 0,
+      writer: 'platform/type-bias',
+      via: 'tend:type-bias',
+      createdAt: prev?.createdAt ?? now,
+      updatedAt: now,
+      writers: ['platform/type-bias'],
+      superseded: false,
+      supersededBy: null,
+      type: null,
+      tags: [],
+      timerExpiresAt: null,
+      timerEffect: null,
+    });
+    // The most-demoted few, for the audit trail — what the slice stopped choosing.
+    const sample = Object.fromEntries(
+      Object.entries(typePriors)
+        .sort((a, b) => a[1] - b[1])
+        .slice(0, 5),
+    );
+    return { types: Object.keys(typePriors).length, sample };
+  } catch {
+    return null;
+  }
+}
+
 export async function runTend(
   state: ObservedState,
   scope: string,
   ctx: ServiceContext,
   via: string,
   writer: { user?: string; scopes: string[] },
-  store?: Pick<StateStore, 'listEdges' | 'get'>,
+  store?: Pick<StateStore, 'listEdges' | 'get' | 'list' | 'put'>,
 ): Promise<TendReport> {
   const att = await state.attention(scope, { typeRules: await typeRulesFor(ctx) });
+  // Re-learn the per-type salience bias from what the slice actually opened
+  // (ADR-0094 Inc 1). Tending is already the "look at the whole slice" pass, so
+  // this is one extra fold over records it would otherwise scan for nothing.
+  const learned = store ? await relearnTypeBias(scope, store) : null;
   // ADR-0032: surface ratification candidates as part of standing health — the
   // inferred `similarTo` pairs a person/grant might want to promote to a typed edge.
   const candidates = store ? suggestionCandidates(await store.listEdges(scope)) : [];
@@ -88,6 +148,7 @@ export async function runTend(
     unlinkedSample: att.unlinked.slice(0, 5),
     danglingSample: att.dangling.slice(0, 3),
     suggestionsSample: candidates.slice(0, 5).map((c) => ({ from: c.from, to: c.to })),
+    ...(learned ? { typeBias: learned } : {}),
     previousAt: typeof prev?.at === 'string' ? prev.at : null,
     delta:
       prev && typeof prev.stale === 'number'
