@@ -34,8 +34,9 @@ describe('learnTypePriors — the bias the slice earns', () => {
       ...facts('task', 10, 40), // tiny, heavily opened
     ]);
     expect(priors['doc-block']).toBeLessThan(0.5);
-    // ...and the type that IS opened is not demoted.
-    expect(priors['task'] ?? 1).toBeGreaterThan(1);
+    // ...and the type that IS opened is left alone. Not promoted — the learner
+    // demotes only; "stays prominent" is 1.
+    expect(priors['task'] ?? 1).toBe(1);
   });
 
   it('IS NOT CIRCULAR: surfacing raises the denominator, never the numerator', () => {
@@ -65,14 +66,14 @@ describe('learnTypePriors — the bias the slice earns', () => {
     // Three facts and one peek, in a slice where reading is common: a raw ratio
     // would call this type wildly above average; smoothing calls it noise.
     const priors = learnTypePriors([...facts('note', 3, 1), ...facts('kb', 500, 500)]);
-    expect(priors['note'] ?? 1).toBeLessThan(1.1);
+    expect(priors['note'] ?? 1).toBeLessThanOrEqual(1);
     expect(priors['note'] ?? 1).toBeGreaterThan(0.9);
   });
 
   it('biases, never silences — a demoted type can always recover', () => {
     const priors = learnTypePriors([...facts('doc-block', 5000), ...facts('kb', 5, 200)]);
     expect(priors['doc-block']).toBeGreaterThanOrEqual(0.2);
-    expect(Math.max(...Object.values(priors))).toBeLessThanOrEqual(1.25);
+    expect(Math.max(...Object.values(priors))).toBeLessThanOrEqual(1);
   });
 
   it('stays neutral with no evidence at all — a cold slice ranks as it does today', () => {
@@ -106,5 +107,21 @@ describe('layerTypeBias — a human pin always wins, per type', () => {
     expect(layerTypeBias({ log: 0.4 }, null)).toEqual({ typePriors: { log: 0.4 } });
     expect(layerTypeBias(null, null)).toBeNull();
     expect(layerTypeBias({}, null)).toBeNull();
+  });
+});
+
+describe('the learner demotes only', () => {
+  it('never promotes, however hard a small type is fetched', () => {
+    // The live failure this rule exists for: a handful of layout shards that a
+    // rendering client re-fetches by key, wearing the owner's identity. Nothing
+    // bounds a programmatic fetch loop, so nothing may ride it upward.
+    const priors = learnTypePriors([
+      ...facts('graph-layout-shard', 16, 5000),
+      ...facts('doc-block', 3000, 10),
+    ]);
+    expect(priors['graph-layout-shard'] ?? 1).toBe(1);
+    expect(Object.values(priors).every((p) => p <= 1)).toBe(true);
+    // ...while the bulk type nobody opens is still demoted. Evaporation, not rank.
+    expect(priors['doc-block']).toBeLessThan(0.5);
   });
 });

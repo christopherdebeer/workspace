@@ -542,10 +542,9 @@ export interface TypeBiasOptions {
    *  one peek. Default 40. */
   confidenceK?: number;
   /** A learned prior is a bias, not a verdict: it can quiet a type but never
-   *  silence it, so a wrongly-demoted type stays reachable and can recover.
-   *  Promotion is capped tighter than demotion is floored — surfacing what the
-   *  slice ignores is the job; shouting about what it likes is not. */
+   *  silence it, so a wrongly-demoted type stays reachable and can recover. */
   minPrior?: number;
+  /** Default 1: the learner DEMOTES ONLY. See the note on `learnTypePriors`. */
   maxPrior?: number;
 }
 
@@ -577,6 +576,18 @@ const BIAS_DEADBAND = 0.05;
  * choice. Writes are excluded entirely — a type written constantly by a cell
  * (every `task` status flip, every layout shard) must not thereby look wanted.
  *
+ * **It demotes only** (`maxPrior` 1). The first live run promoted
+ * `graph-layout-shard`, `config` and `frame` to the ceiling — tiny types that a
+ * rendering client and a verification probe fetch BY KEY, over and over. Those
+ * are programmatic fetches wearing the owner's identity, and nothing bounds
+ * them: a client that polls a fact hard enough can promote its whole type. There
+ * is no such hazard on the demotion side, where the floor and the unpriored
+ * `relevance` path both guarantee recovery. So the asymmetry is structural, not
+ * a tuning choice — and it is what the source doctrine actually says:
+ * *"Actively reinforced vocabulary stays prominent. Abandoned vocabulary
+ * fades."* Stays prominent is 1. Fades is below it. This is an evaporation
+ * mechanism, not a popularity contest.
+ *
  * Pure and total: no I/O, no clock. Returns `{}` when there is no evidence at
  * all, so a cold slice ranks exactly as it does today.
  */
@@ -586,7 +597,7 @@ export function learnTypePriors(
 ): Record<string, number> {
   const K = opts?.confidenceK ?? 40;
   const min = opts?.minPrior ?? 0.2;
-  const max = opts?.maxPrior ?? 1.25;
+  const max = opts?.maxPrior ?? 1;
 
   const facts = new Map<string, number>();
   const chosen = new Map<string, number>();

@@ -135,7 +135,7 @@ So the bias is **learned from the slice's own record** and written to
 
 ```
 rate(T) = (chosen(T) + K·globalRate) / (facts(T) + K)
-prior(T) = clamp(rate(T) / globalRate, 0.2, 1.25)
+prior(T) = clamp(rate(T) / globalRate, 0.2, 1.0)
 ```
 
 where `chosen` counts **deliberate reads only** — human + agent `read` touches.
@@ -160,9 +160,19 @@ Three deliberate asymmetries:
   "about average" until it has the exposure to say otherwise. Without it a rare
   type absorbing a few peeks computes a lift near 80 and pins the ceiling on
   noise.
-- **Demotion is floored at 0.2; promotion is capped at 1.25.** Quieting what the
-  slice ignores is the job. Amplifying what it likes is not — that is the
-  ambient frame's job, and it does it without touching the ranking.
+- **It demotes only** — floored at 0.2, ceilinged at 1. The first live run
+  promoted `graph-layout-shard`, `config` and `frame` to the ceiling: tiny types
+  that a rendering client and a verification probe fetch *by key*, repeatedly.
+  Those are programmatic fetches wearing the owner's identity, and nothing
+  bounds them — a client that polls a fact hard enough promotes its whole type.
+  There is no symmetric hazard downward, where the floor and the unpriored
+  `relevance` path both guarantee recovery. So the asymmetry is structural, and
+  it is what the source doctrine says: *"Actively reinforced vocabulary stays
+  prominent. Abandoned vocabulary fades."* Stays prominent is 1. This is an
+  evaporation mechanism, not a popularity contest. (Cost: the first run also
+  promoted `capability` to the ceiling — agents really do peek `_caps/*` — which
+  was ADR-0085's wish granted by accident. Losing it is the right trade; that
+  belongs in ADR-0085's own capability lens, not as a side effect here.)
 
 `_config/salience` still layers **over** the learned map, merged per type. A
 human pin is absolute and does not discard what the slice learned about
