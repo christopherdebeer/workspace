@@ -194,6 +194,61 @@ and fails if any returned key is undeclared.
 
 ---
 
+### 6. A fact is indexed by what it SAYS, and applicability leads (Inc 2)
+
+Two findings, one mechanism.
+
+**A partial field match was silencing the remainder.** `embeddableText` collected
+the known text fields and fell back to the whole JSON *only if it found none* —
+so a fact carrying exactly one recognised field lost everything else. All 98
+`mental-model` facts are `{name, gloss, category, source}`; `name` was the only
+listed field, so every model in the Farnam latticework was indexed as its
+two-word **name** and its gloss was never in the vector index. Names of thinking
+tools resemble other names of thinking tools and nothing else, so the latticework
+wired into a closed clique — `model/availability-heuristic` had exactly one
+`similarTo` edge, to a sibling. ADR-0045's whole theory of operation ("inversion
+shows up next to a failure post-mortem") could not fire, because the mechanism it
+deliberately reused was indexing almost nothing. An audit found the same class on
+`task`/`goal` (lost `detail`), `machine` (lost `context`), `log`. **Having one
+recognised field was strictly worse than having none.**
+
+**And content cannot express applicability.** Cosine measures what a fact is
+*about*; a lens is never about the thing it applies to. Hanlon's razor is about
+malice and incompetence — you need it when *you are being uncharitable*, which
+its text never says. So types whose purpose is to be applied declare a
+`trigger` field, written as the reasoner's predicament, and it leads the embedded
+text. This is an Agent Skill's frontmatter `description` in substrate form: a
+cheap trigger separate from the payload. `docs/machine.md` §8 already borrowed
+the tiering for rails (`machine-rail.when` is verbatim *"Level-1 'when to use
+this branch' descriptor"*); Inc 2 gives it to the types that most need it —
+`mental-model.applies`, `protocol.when`, and `machine-rail.when` declared at last.
+
+`protocol` gained a schema at all. It was the only major type in `$types` with
+none: a Skill with the frontmatter deleted, no trigger, no code reading it, and
+the situation→protocol binding living in a hand-written key inside an
+off-substrate scheduler prompt.
+
+**Measured, before and after**, on seven queries phrased as a working engineer's
+predicament, run against the whole ~7,600-fact corpus with no type filter:
+
+| | before | after |
+|---|---:|---:|
+| any lens in the top 12 | 1/7 | **7/7** |
+| the *apt* lens | 1/7 | **6/7** |
+| best rank | 4 | **1** (six of seven) |
+| best relevance | 0.204 | **0.576** |
+
+The single before-hit was a near-verbatim restatement and still lost its own
+result set. After: *"our retries are making the outage worse and it will not
+settle down"* returns `model/feedback-loops` at rank 1; *"another config flag …
+one more thing to keep working forever"* returns `model/surface-area` at rank 1.
+Filtered and unfiltered relevance are identical (0.4152 vs 0.4146), so the
+embedding is doing the work, not the ranking. Models carrying `applies` score
+~0.40+; models without it top out near 0.20.
+
+Only 16 of 98 models are primed. The unprimed remainder is the control, and it
+behaves like the "before" column.
+
 ## Consequences
 
 **Measured, live, before → after** (bare `recall()`, 12 focus cards):
