@@ -17,6 +17,8 @@ import {
   selectNeighbors,
   similarConfig,
   refreshSimilarEdges,
+  reconcileInbound,
+  INBOUND_HORIZON,
   dropSimilarEdges,
   createObservedState,
   projectVector,
@@ -179,9 +181,15 @@ export async function handler(event: StreamEvent): Promise<void> {
         const now = new Date().toISOString();
         const existing = await edgeStore.listEdges(scope);
         for (let i = 0; i < puts.length; i++) {
-          const matches = await vectors.store.query(index, putVecs[i], { topK: sim.k + 1 });
+          // One wider k-NN serves both directions: `selectNeighbors` still slices to
+          // `sim.k` for the outbound set, while the tail gives `reconcileInbound` an
+          // evidentiary floor to judge inbound claims against (see INBOUND_HORIZON).
+          const matches = await vectors.store.query(index, putVecs[i], { topK: Math.max(sim.k + 1, INBOUND_HORIZON) });
           const neighbors = selectNeighbors(matches, puts[i].key, { k: sim.k, minScore: sim.minScore });
           await refreshSimilarEdges(edgeStore, scope, puts[i].key, neighbors, sim.strength, existing, now);
+          // A fact only reaches `puts` when its embeddable text CHANGED — which is
+          // exactly when every inbound `similarTo` claim about it became unverified.
+          await reconcileInbound(edgeStore, scope, puts[i].key, matches, sim.strength, existing);
         }
         for (const key of removes) await dropSimilarEdges(edgeStore, scope, key, existing);
       } catch (err) {

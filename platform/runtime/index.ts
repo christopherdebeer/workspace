@@ -116,7 +116,17 @@ export {
   MemoryVectorStore,
 } from './vectors';
 export type { Vector, VectorMetadata, VectorRecord, VectorFilter, VectorMatch, VectorStore, Embedder, SimilarConfig, IndexableFact } from './vectors';
-export { refreshSimilarEdges, dropSimilarEdges, authoredPairs, pairKey, suggestionCandidates, dropSimilarPair, RATIFY_LINK_TYPES } from './similar-edges';
+export {
+  refreshSimilarEdges,
+  reconcileInbound,
+  INBOUND_HORIZON,
+  dropSimilarEdges,
+  authoredPairs,
+  pairKey,
+  suggestionCandidates,
+  dropSimilarPair,
+  RATIFY_LINK_TYPES,
+} from './similar-edges';
 export type { EdgeIO, SuggestionCandidate, RatifyLinkType } from './similar-edges';
 export { pca, pcaWithBasis, pca2d, normalizeCoords, normalizeCoordsN, computeNormParams, applyNormParams, projectionFact, projectVector, LAYOUT_KEY, LAYOUT_SHARDS, layoutShardKey, layoutShardOf, projectionArtifacts, PUB_LAYOUT_KEY, publicPatternCovers, publicLayout } from './projection';
 export type { Projected, ProjectionFact, PcaBasis, NormParams, LayoutManifest, LayoutShard, PublicLayout } from './projection';

@@ -17,6 +17,8 @@ import {
   selectNeighbors,
   similarConfig,
   refreshSimilarEdges,
+  reconcileInbound,
+  INBOUND_HORIZON,
   authoredPairs,
   pairKey,
   suggestionCandidates,
@@ -751,9 +753,14 @@ async function reindexChunk(deps: WorkspaceDeps, scope: string, p: ReindexParams
     const existing = await store.listEdges(scope);
     const vecs = await vectors.embedder.embed(embeddable.map((e) => e.text)); // re-embed only to get the query vector (index already full)
     for (let i = 0; i < embeddable.length; i++) {
-      const matches = await vectors.store.query(index, vecs[i], { topK: sim.k + 1 });
+      // Widened for the inbound pass (see INBOUND_HORIZON); outbound still slices to sim.k.
+      const matches = await vectors.store.query(index, vecs[i], { topK: Math.max(sim.k + 1, INBOUND_HORIZON) });
       const neighbors = selectNeighbors(matches, embeddable[i].key, { k: sim.k, minScore: sim.minScore });
       await refreshSimilarEdges(store, scope, embeddable[i].key, neighbors, sim.strength, existing, now);
+      // The batch replay is where the accumulated stale-inbound debt actually gets
+      // paid off: `reindex` walks every fact, so every inbound claim is re-verified
+      // against fresh evidence exactly once per pass.
+      await reconcileInbound(store, scope, embeddable[i].key, matches, sim.strength, existing);
       edges += neighbors.length;
     }
   }
