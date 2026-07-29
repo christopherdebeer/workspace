@@ -15,9 +15,40 @@
 // the whole three tree out of the SSR bundle (bundling it OOMs the deployer).
 export const THREE_VER = '0.160.0';
 export const esmURL = (path: string): string => `https://esm.sh/${path}`;
+
+/**
+ * A runtime CDN import that survives a flap. esm.sh serves these six modules
+ * on demand and was measured (2026-07-29) FLAPPING — the same URL returning
+ * 200, then 503, then 200 inside a minute. One 503 on any of the six used to
+ * blank the whole graph ("3D renderer unavailable"), and worse, the old
+ * `threeMod ??= import(...).catch(() => null)` CACHED the failure: every later
+ * mount reused the null promise, so the sky stayed empty for the life of the
+ * page while the CDN had long recovered. Verified in the devtools harness:
+ * identical client + data renders the moment the imports succeed.
+ *
+ * Three bounded attempts with jittered backoff ride out a flap; a real outage
+ * still fails (and the callers' "renderer unavailable" path still shows), but
+ * the failure is no longer remembered — see the memo resets below.
+ */
+const retryImport = async (url: string, attempts = 3): Promise<any> => {
+  let lastErr: unknown;
+  for (let n = 0; n < attempts; n++) {
+    if (n > 0) await new Promise((r) => setTimeout(r, 350 * 2 ** n + Math.random() * 250));
+    try {
+      return await import(/* @vite-ignore */ url);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+};
+
 let threeMod: Promise<any> | null = null;
 export const loadThree = (): Promise<any> =>
-  (threeMod ??= import(/* @vite-ignore */ esmURL(`three@${THREE_VER}`)).catch(() => null));
+  (threeMod ??= retryImport(esmURL(`three@${THREE_VER}`)).catch(() => {
+    threeMod = null; // never cache a CDN failure — the next mount retries fresh
+    return null;
+  }));
 let addonsMod: Promise<any> | null = null;
 export const loadThreeAddons = (): Promise<any> =>
   (addonsMod ??= Promise.all([
@@ -25,15 +56,15 @@ export const loadThreeAddons = (): Promise<any> =>
     // camera-controls orbits a target in spherical coords and gimbals at the
     // poles — no good for standing at the centre and looking OUT — so it was
     // dropped rather than fought.
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/EffectComposer.js`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/RenderPass.js`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/UnrealBloomPass.js`)),
-    import(/* @vite-ignore */ esmURL(`three@${THREE_VER}/examples/jsm/renderers/CSS2DRenderer.js`)),
+    retryImport(esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/EffectComposer.js`)),
+    retryImport(esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/RenderPass.js`)),
+    retryImport(esmURL(`three@${THREE_VER}/examples/jsm/postprocessing/UnrealBloomPass.js`)),
+    retryImport(esmURL(`three@${THREE_VER}/examples/jsm/renderers/CSS2DRenderer.js`)),
     // SDF text (troika): node labels live IN the scene — they take the
     // camera's perspective (depth honesty for free), the tone mapping, and
     // the bloom, instead of floating on a DOM overlay. `deps` pins its
     // three to our version so the module graphs align.
-    import(/* @vite-ignore */ esmURL(`troika-three-text@0.49.1?deps=three@${THREE_VER}`)),
+    retryImport(esmURL(`troika-three-text@0.49.1?deps=three@${THREE_VER}`)),
   ])
     .then(([comp, rp, bloom, css, troika]) => ({
       EffectComposer: comp.EffectComposer,
@@ -43,7 +74,10 @@ export const loadThreeAddons = (): Promise<any> =>
       CSS2DObject: css.CSS2DObject,
       TroikaText: troika.Text,
     }))
-    .catch(() => null));
+    .catch(() => {
+      addonsMod = null; // same rule: a flap must not blank the graph forever
+      return null;
+    }));
 
 /** HSL (h∈[0,360], s,l∈[0,1]) → [r,g,b] in [0,1], for colour buffers. */
 export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
