@@ -254,6 +254,59 @@ conditions that depend on scope being the partition. It is the next real piece o
 it should be decided deliberately rather than hotfixed. Recorded here so the next session
 starts from the ceiling rather than rediscovering it through another symptom.
 
+## Two more defects, and the wall
+
+Following the stranded decompositions found two further real bugs.
+
+**No retry anywhere in the chain.** A chunk step that hits a transient fault returns an
+error, the reactor dead-letters it, the continuation baton lapses, and nothing above
+retries — the document is stranded permanently, recoverable only by editing its source.
+`gwCall` now retries with jittered backoff on faults that mean *the substrate was busy*
+(5xx/429, DynamoDB's throttle text arriving as a 200 with `isError`) and never on a 4xx,
+a validation error, or a read-budget error. Fixed at the shared kernel seam, so lit,
+consolidate, models and run all inherit it.
+
+**The depth cap measures edit count, not chain depth.** `event-handlers.ts` skips a
+reaction when the triggering fact's revision exceeds `maxDepth` (default 50). For a machine
+run that is right — revision *is* the transition count. For a source file it is *how many
+times the file has ever been written*, and docs-sync rewrites `file/docs/*.md` on every
+deploy. Past ~50 deploys the reaction dies silently: a CloudWatch warn, no dead-letter fact,
+no symptom but a document that quietly stops re-decomposing.
+
+The chunk subscription carried an explicit claim of immunity — "fresh run facts are written
+per step at distinct keys, each starting at revision 1". True of every cursor except the one
+that matters: `decompose-run/<slug>/0` is the *same key* on every re-sync, so it accrues a
+revision per sync and eventually crosses the cap, after which the chain can never start.
+
+Both caps lifted (neither reaction can self-trigger, so revision is simply the wrong
+metric). The proof: `_decompose/docs/architecture` had been frozen at 20/207 since 15:01
+*through two forced re-syncs*; with the cap lifted it restarted at 17:14. **The general
+defect is not fixed** — any subscription on a fact that gets rewritten in the ordinary
+course of business inherits the same silent death, and the only signal is a log line.
+
+### And then the wall, which I kept walking into
+
+After all four fixes, `docs/architecture` stalled again at 0/207, with a fresh throttle at
+17:21. The retry rides out a *momentary* blip. This is not momentary: it is ~60 documents
+re-decomposing at once against a table whose entire slice is **one partition**, capped at
+1,000 WCU. Client-side retry cannot buy capacity that does not exist.
+
+I triggered that stampede three times, each time with `force_docs_sync`, each time expecting
+the newest fix to absorb it. The fixes were all real and all necessary; none of them
+addressed the constraint that was actually binding, and re-running the full corpus into a hot
+partition made the live state worse each time while the code got better.
+
+**The recovery is paced, not forced.** A full-corpus re-ingest is a stampede by construction.
+Stranded documents should be restarted a handful at a time, letting each drain before the
+next — the lever needs a batch size and a delay, not just an on switch.
+
+**The fix is the partition key.** `pk = K.statePk(scope)` puts every fact and every edge of
+one owner in one partition. That is the floor under the 504s, under the throttling, under
+"per-put cost rises with slice size", and under every calibration constant in this document
+that kept going stale. It touches the storage contract, both GSI conventions, and the
+LeadingKeys IAM conditions — it is the next real piece of work and it should be designed,
+not hotfixed.
+
 ## The method note
 
 The audit numbers were all real, and the story they told was false. "15,482 pending against
