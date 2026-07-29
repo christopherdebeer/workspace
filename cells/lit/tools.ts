@@ -200,6 +200,17 @@ interface NeighborsResult { outbound?: Array<{ to: string; rel: string }> }
 // is more continuation steps, which is exactly what ADR-0083's chain is for.
 const INGEST_CHUNK = 10;
 
+/** Page size for the finish phase's decoration scan. `shape:"refs"` still
+ *  carries a `_meta` per entry (~400b), so this is the count that keeps one
+ *  page under the 60KB read budget with room to spare. */
+const ORDER_PAGE = 100;
+
+/** Ceiling on the decoration walk. The old single call asked for 500 because a
+ *  doc that had accumulated stale+live decorations from prior partial runs
+ *  needed more than 100 (measured 134, 2026-07-12) — that reasoning still holds,
+ *  it just has to be reached by paging rather than by one oversized read. */
+const ORDER_MAX = 2000;
+
 /** The FINISH phase: retire whatever a prior decomposition wrote that this
  *  version no longer wants (blocks + order decorations), then reconcile each
  *  block's authored edges. Bounded work — one query, then parallel per-key
@@ -213,14 +224,26 @@ async function finishDecompose(token: string, plan: ReturnType<typeof planDecomp
   // decorations only ever showed the first 100 to the retirement diff, so the
   // tail residue survived every convergent re-run (2026-07-12, live).
   //
-  // `shape:"refs"` because this reads NOTHING but `e.key` below. Without it the
-  // call shipped 500 whole facts to look at their keys — 203KB for a large doc,
-  // every byte of it discarded on the next line. That went unnoticed until the
-  // membrane started budgeting every read (2026-07-29): the finish phase then
-  // failed with "too large to return whole", stalling the very chain the edge-
-  // timeout fix had just unblocked, at cursor 460 of docs/technical-spec. The
-  // guard was right — this was always waste — and it named this exact remedy.
-  const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 500, shape: 'refs' }) as { entries?: QueryEntry[] })?.entries ?? [];
+  // This reads NOTHING but `e.key`, and getting there took two rounds against
+  // the read budget (2026-07-29). It first shipped 500 WHOLE facts — 203KB for a
+  // large doc, every byte discarded on the next line — and failed the budget at
+  // cursor 460 of docs/technical-spec. `shape:"refs"` drops the values, which
+  // was right and still not enough: refs keeps a `_meta` per entry, so 500 of
+  // them is ~211KB and docs/architecture failed exactly the same way at its
+  // finish step. There is no leaner shape than refs, so the size has to come off
+  // the COUNT: page it. The budget was never the problem — asking for 500 facts
+  // to read 500 strings was.
+  const existingOrder: QueryEntry[] = [];
+  for (let cursor: string | undefined; ; ) {
+    const page = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: ORDER_PAGE, shape: 'refs', ...(cursor ? { cursor } : {}) })) as
+      | { entries?: QueryEntry[]; nextCursor?: string }
+      | null;
+    existingOrder.push(...(page?.entries ?? []));
+    cursor = page?.nextCursor;
+    // Bounded: stop on exhaustion, and never walk further than a doc could
+    // plausibly have decorated (residue from prior partial runs included).
+    if (!cursor || existingOrder.length >= ORDER_MAX) break;
+  }
   const existingBlockKeys = existingOrder.map((e) => e.key.slice(orderPrefix.length));
   const retiredKeys = staleKeys(existingBlockKeys, plan.blocks.map((b) => b.key));
 
