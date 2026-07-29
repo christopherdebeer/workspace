@@ -531,10 +531,58 @@ export const SALIENCE_CONFIG_KEY = '_config/salience';
  * Where the LEARNED per-type bias lives — derived, platform-written, and layered
  * UNDER `_config/salience` so a human pin always wins (ADR-0094 Inc 1).
  *
- * `_index/*` is the derived namespace (`_index/overview` is the recall digest),
+ * `_index/*` is the derived namespace (`_index/overview` is the recall digest,
+ * `_index/ranking` the bare-query ranking digest),
  * distinct from `_config/*` which is what the owner asserts.
  */
 export const TYPE_BIAS_KEY = '_index/type-bias';
+
+/** Where a scope's bare-query ranking digest lives (see `query`'s hot path). */
+export const RANKING_KEY = '_index/ranking';
+/** How many ranked keys the digest keeps. A page past the cap goes cold — the
+ *  cap exists so the digest stays one comfortably-sized item (~1200 × ~55B ≈
+ *  65KB, well under the DynamoDB 400KB item limit) while covering ~30 pages of
+ *  a 40-entry paginated load, far beyond any real browse. */
+export const RANKING_CAP = 1200;
+/** Recompute past this age even at the same seq: recency decay drifts scores
+ *  and band membership slowly, and TTL reaps don't advance seq — an hour
+ *  bounds both drifts. Same tolerance as the recall digest. */
+export const RANKING_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** The ranking digest's stored shape (parallel arrays keep the item compact). */
+interface RankingDigest {
+  seq: number;
+  at: string;
+  /** The full ranked count — `total` for every warm page, even past the cap. */
+  total: number;
+  keys: string[];
+  degrees: number[];
+}
+
+/**
+ * Only a BARE salience query may touch the ranking digest — no filter, no lens,
+ * no intent, no explain: the exact question the cache answered. A top-N cache
+ * answering a differently-shaped question is how the grant fold starved
+ * `total`; eligibility is the guard against re-learning that lesson here.
+ * (`typeRules` stay eligible: they are derived from the scope's own `_types/*`
+ * facts, so a change to them advances seq and invalidates the digest.)
+ */
+export function isBareSalienceQuery(opts?: QueryOptions): boolean {
+  return (
+    !opts?.type &&
+    !opts?.tag &&
+    !opts?.tags?.length &&
+    !opts?.prefix &&
+    !opts?.contains &&
+    !opts?.keyFilter &&
+    !opts?.relevance &&
+    !opts?.lens &&
+    !opts?.salience &&
+    !opts?.explain &&
+    !opts?.includeSuperseded &&
+    (opts?.rankBy ?? 'salience') === 'salience'
+  );
+}
 
 export interface TypeBiasOptions {
   /** Facts of a type before its evidence is fully trusted. Below this the prior
@@ -1638,6 +1686,74 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     return layerTypeBias(learned, asserted);
   }
 
+  /** The scope's cached bare-query ranking, when seq-exact and fresh (see the
+   *  hot-path comment in `query`). Malformed or drifted → `null`, cold path. */
+  async function readRanking(scope: string): Promise<RankingDigest | null> {
+    try {
+      const [rec, head] = await Promise.all([store.get(scope, RANKING_KEY), store.currentSeq(scope)]);
+      const v = rec?.value as RankingDigest | undefined;
+      const fresh =
+        !!v &&
+        typeof v.seq === 'number' &&
+        typeof v.total === 'number' &&
+        Array.isArray(v.keys) &&
+        Array.isArray(v.degrees) &&
+        v.keys.length === v.degrees.length &&
+        v.seq === head &&
+        Date.now() - Date.parse(v.at) < RANKING_MAX_AGE_MS;
+      return fresh ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persist a bare query's ranking (ordered keys + per-key degree, capped) as
+   *  the scope's ranking digest — raw-store write (a cache is not a fact: no
+   *  seq advance, no trajectory, no reaction), best-effort like the recall
+   *  digest. Degree rides along because it is the one `wrap` input that needs
+   *  the full-partition reads; caching it is safe because any fact/edge write
+   *  advances seq and invalidates the whole digest. */
+  async function writeRanking(
+    scope: string,
+    head: number,
+    ranked: Array<{ key: string }>,
+    signals: Map<string, KeySignals>,
+  ): Promise<void> {
+    try {
+      const top = ranked.slice(0, RANKING_CAP);
+      const now = new Date().toISOString();
+      const prev = await store.get(scope, RANKING_KEY);
+      const value: RankingDigest = {
+        seq: head,
+        at: now,
+        total: ranked.length,
+        keys: top.map((e) => e.key),
+        degrees: top.map((e) => signals.get(e.key)?.degree ?? 0),
+      };
+      await store.put({
+        scope,
+        key: RANKING_KEY,
+        value,
+        revision: (prev?.revision ?? 0) + 1,
+        seq: head,
+        firstSeq: prev?.firstSeq ?? head,
+        writer: 'platform/digest',
+        via: 'query:ranking',
+        createdAt: prev?.createdAt ?? now,
+        updatedAt: now,
+        writers: ['platform/digest'],
+        superseded: false,
+        supersededBy: null,
+        type: null,
+        tags: [],
+        timerExpiresAt: null,
+        timerEffect: null,
+      });
+    } catch {
+      /* not cached this time — the next cold bare query retries */
+    }
+  }
+
   /** The derived per-type bias (`_index/type-bias`), sanitized through the same
    *  defensive filter as an asserted config — a derived fact is still a fact,
    *  and a corrupt one must never be able to break a read. */
@@ -1970,6 +2086,71 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
+      // ── the ranking digest: the bare-query hot path (paginated graph loads) ──
+      //
+      // A bare salience query — no filters, no lens, no intent — is what a
+      // paginated surface (the home graph) issues over and over with only the
+      // cursor changing. The cold path below costs TWO full-partition reads
+      // (every fact, then every edge for centrality) plus a full re-rank, PER
+      // PAGE, because the cursor is an offset into a fresh ranking. Twenty pages
+      // of forty entries re-read and re-scored an 8,600-fact slice twenty times.
+      //
+      // The recall digest (ADR-0050 move 4) already established the answer:
+      // seq-validate a cached computation against the scope's write head. Here
+      // the cached computation is the RANKING — the ordered keys plus each key's
+      // graph degree, which is the ONLY signal `wrap` needs that comes from the
+      // full-partition reads; every other input is on the page's own records.
+      // So a warm page is: one digest get + one seq get + the page's records by
+      // point-get — O(page), not O(slice) — and `wrap` recomputes the same meta
+      // it would have cold (recency live, degree from the digest, and the digest
+      // can never serve a stale degree because ANY write advances seq).
+      //
+      // Anything filtered or exotic (type/tag/prefix/contains/keyFilter/lens/
+      // relevance/explain/includeSuperseded/rankBy≠salience) takes the cold path
+      // unchanged — a top-N cache must never answer a differently-shaped
+      // question (that is how the grant fold starved `total`).
+      const bare = isBareSalienceQuery(opts);
+      const offset0 = opts?.cursor ? Math.max(0, Number.parseInt(opts.cursor, 10) || 0) : 0;
+      if (bare && opts?.limit !== undefined) {
+        const warm = await readRanking(scope);
+        if (warm) {
+          const end = offset0 + Math.max(0, opts.limit);
+          const complete = warm.keys.length >= warm.total;
+          if (offset0 >= warm.total) {
+            return { entries: [], count: 0, total: warm.total };
+          }
+          if (end <= warm.keys.length || complete) {
+            const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), undefined, undefined, await loadLensesConfig(scope));
+            const pageKeys = warm.keys.slice(offset0, end);
+            const degreeOf = new Map(pageKeys.map((k, i) => [k, warm.degrees[offset0 + i] ?? 0]));
+            // Point-gets, not a partition read. A key gone dead since the digest
+            // was written is impossible via a write (seq invalidates) but
+            // possible via a lapsed timer or TTL reap (no seq advance) — drop
+            // those defensively; the page shrinks by a hair rather than lies.
+            const recs = (await Promise.all(pageKeys.map((k) => store.get(scope, k)))).filter(
+              (r): r is StateRecord => !!r && !r.superseded && isTimerLive(r, nowMs),
+            );
+            const pageSignals = new Map(recs.map((r) => [r.key, { ...EMPTY_SIGNALS, degree: degreeOf.get(r.key) ?? 0 }]));
+            const entries = await Promise.all(
+              recs.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, pageSignals, sCall)) })),
+            );
+            // Cursor consumption counts RANKING SLOTS, not surviving entries, so
+            // a defensive drop can never re-serve the same slot.
+            const consumed = offset0 + pageKeys.length;
+            return {
+              entries,
+              count: entries.length,
+              total: warm.total,
+              ...(consumed < warm.total ? { nextCursor: String(consumed) } : {}),
+            };
+          }
+          // Fresh digest, but the page reaches past the cached cap → cold.
+        }
+      }
+      // Captured BEFORE the partition read, so a write racing the computation
+      // can only make the stored ranking conservatively stale, never wrongly
+      // fresh (the same ordering rule as the recall digest).
+      const rankingHead = bare && opts?.limit !== undefined ? await store.currentSeq(scope) : null;
       const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience, await loadLensesConfig(scope));
       const queryTypeRules = opts?.typeRules;
       // Type is index-served; tag/prefix filter the (bounded) candidate set.
@@ -1980,6 +2161,12 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       // candidates are a subset, so signals still need the whole graph.
       const signals = await signalsFor(scope, nowMs, sCall.windowMs, opts?.type ? undefined : records, queryTypeRules);
       const candidates = records.filter((rec) => {
+        // A cache is not content (recall's rule for its digest, applied to the
+        // whole `_index/` derived namespace): the ranking digest would otherwise
+        // surface as a pseudo-fact in the very queries it accelerates — a ~65KB
+        // value with no meaning to a reader. Explicitly prefixing into
+        // `_index/` still reaches them (inspection stays possible).
+        if (rec.key.startsWith('_index/') && !opts?.prefix?.startsWith('_index')) return false;
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
         // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
@@ -2011,6 +2198,12 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
             ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
             : b._meta.score - a._meta.score,
         );
+      }
+      // A cold bare page persists its ranking for the pages that follow it —
+      // best-effort and awaited (Lambda gives no post-return execution; a
+      // dropped write would just mean every page pays the cold cost again).
+      if (rankingHead !== null) {
+        await writeRanking(scope, rankingHead, ranked, signals);
       }
       // Cursor = a plain offset into the fresh ranking: best-effort resume,
       // honest about salience reordering between pages (no snapshot to leak).
