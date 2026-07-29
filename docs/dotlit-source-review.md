@@ -85,6 +85,63 @@ original. The honest scorecard:
    fact's value (one field, zero migration) would let the renderer fold and the toc
    derive from facts.
 
+
+## Deep-read addenda (full corpus: 286 files, ~5.6k JS + ~11.3k .lit lines)
+
+The first pass under-weighted four load-bearing mechanisms; a full read of the
+source *and* the `.lit` corpus (including all ~150 daily-log documents) surfaces
+them:
+
+**5. Tangle is real, and bidirectional.** Fences with a `filename` are written out
+as actual files — client-side on save (`App.jsx`: `isOutput` + filename + `extract
+!== 'false'` → `fs.writeFile`) and at generate time (`generate.js` extracts every
+codefile). The parser is literally authored this way: `sections-v3.js` and
+`cells-v3.js` exist as output cells in `testing/section_grouping.lit`, pseudocode
+spec above, shipped source below. The document authors the system that renders it.
+The substrate lit has *no tangle at all* — `docs-sync` flows files→facts, never
+facts→files. A `doc-block` fence naming a file writes nothing.
+
+**6. The capture pipeline is the substrate's own ancestry.** `checkforinput.js`
+turns a `?input=` query string into an append to today's daily note, committed to
+GitHub through the layered fs; daily notes link week/month/year rollups whose
+indexes are live `readdir` cells. This is `@c15r/input.capture`, a decade early —
+and the substrate's `inbox/arch-*` facts are these very diary entries imported:
+the duplicate-capture pairs at the head of today's suggestion queue ($1 Recognizer
+twice, feenk's Lepiter, "Anki and Notion in one") are dotlit log entries
+2021–2023, re-encountered as dedup work in the successor system.
+
+**7. Documents run their own maintenance.** `meta/files_and_links.lit` computes the
+unlinked-files report from `manifest.json` in a cell, output committed. That is
+`workspace.attention`'s "unlinked" report as a *document the owner edits*, rather
+than a platform read. The whole tending vocabulary has dotlit ancestors that were
+cells, not services.
+
+**8. Committed outputs are regression fixtures.** `parser.lit` executes
+`parseMeta` on a gnarly info-string and the attached output cell — committed in
+2021 — is the parse tree, byte-for-byte. The document is its own spec and its own
+test. (The substrate moved this into jest, `tests/lit-fence.test.ts` — sturdier,
+but the fixture no longer lives where the reader is. Worth noting: `fence.ts`
+also *fixed* a real dotlit bug — `metaToString` emits `< txt source.jsx`,
+injecting the default lang so parse∘serialize does not round-trip; the port does.)
+
+Two transpositions look deliberate and right from this distance: dotlit exposes
+the entire toolchain ambiently (`window.lit`: parser, fs, git, React, unist) to
+every cell, where the substrate gives cells a capability seam (`gwCall`, scoped
+tokens) — the trust boundary the original never needed alone; and dotlit's
+local/GitHub/static three-layer fs with its stat-diff conflict viewer (the
+"which copy am I editing" problem `local_remote_files.lit` documents at length)
+is answered in the substrate by revision/version/supersede provenance, which is
+simply a better answer.
+
+The diary also shows the intellectual pipeline runs *through* dotlit into the
+substrate: Licklider's man-computer symbiosis, Ink & Switch's Potluck/Embark
+("dynamic documents as personal software"), OOUX ("objects are the primary
+representations; actions comprise the tasks"), Webstrates' "distinction between
+application and document is blurred", vector databases (2022-11-07) — captured as
+bookmarks in .lit, realized as facts, salience, and capability vocabulary in
+parc.land. dotlit is not just an ancestor implementation; it is the substrate's
+reading list.
+
 ## Verdict
 
 "Naive/basic" is wrong for the *grammar and execution* story — `fence.ts` is the
@@ -92,5 +149,7 @@ best-specified artifact in either codebase, and substrate execution via `@c15r/r
 exceeds anything dotlit had. It is *fair* for the **document-as-process** story:
 dotlit's soul is that a document runs, writes its results into itself, and extends
 its own renderer; lit currently renders, embeds, and executes — but forgets. The
-persisted-output convention is the piece of dotlit's soul still missing, and it is
-small.
+persisted-output convention is the piece of dotlit's soul still missing — and after
+the full read, TANGLE joins it: the two together are what made a .lit document a
+place where systems get built, not just described. Both are conventions over
+mechanisms the substrate already has.
