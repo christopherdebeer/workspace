@@ -85,6 +85,81 @@ describe('coveredScanPrefixes', () => {
     expect(prefixes.some((pre) => 'kb/private-thing'.startsWith(pre))).toBe(false);
   });
 
+  // THE REGRESSION THIS BOUND EXISTS FOR. The first cut returned one scan per
+  // pattern. Each scan is a separate query against a partition holding the
+  // owner's whole slice, so on 19 public grants a guest graph went from 2 queries
+  // to 20 — and under throttling already in flight the read failed outright.
+  // A guest saw an EMPTY graph: strictly worse than the wrong `total` it replaced
+  // (measured live 2026-07-29 21:28).
+  describe('the scan bound', () => {
+    const nineteen = [
+      '_home/embed2d.pub',
+      'doc-block:docs/ancestor/sync/pressure-field/*',
+      'doc-block:docs/ancestor/sync/the-substrate-thesis/*',
+      'doc-block:docs/ancestor/sync/what-becomes-true/*',
+      'doc-block:docs/cognitive-substrate/*',
+      'doc-block:docs/guide/*',
+      'doc-block:docs/the-coupled-workspace/*',
+      'doc:docs/ancestor/sync/pressure-field',
+      'doc:docs/ancestor/sync/the-substrate-thesis',
+      'doc:docs/ancestor/sync/what-becomes-true',
+      'doc:docs/cognitive-substrate',
+      'doc:docs/guide/*',
+      'doc:docs/the-coupled-workspace',
+      'file/docs/ancestor/sync/pressure-field.md',
+      'file/docs/ancestor/sync/the-substrate-thesis.md',
+      'file/docs/ancestor/sync/what-becomes-true.md',
+      'file/docs/cognitive-substrate.md',
+      'file/docs/guide/*',
+      'file/docs/the-coupled-workspace.md',
+    ];
+
+    it('holds the live 19-grant set within budget', () => {
+      const scans = coveredScanPrefixes(nineteen);
+      expect(scans.length).toBeLessThanOrEqual(4);
+      expect(scans.length).toBeGreaterThan(0);
+    });
+
+    it('merging only ever WIDENS, so no covered key becomes unreachable', () => {
+      // The safety property. Merging replaces two prefixes with their common
+      // prefix — a superset — and `grantCovers` still filters, so over-scan is
+      // free but under-scan would silently hide facts the viewer may read.
+      const scans = coveredScanPrefixes(nineteen);
+      const keys = [
+        'doc-block:docs/guide/concepts/5',
+        'doc-block:docs/the-coupled-workspace/8',
+        'doc:docs/cognitive-substrate',
+        'file/docs/guide/index.md',
+        'file/docs/the-coupled-workspace.md',
+        '_home/embed2d.pub',
+      ];
+      for (const key of keys) {
+        expect(nineteen.some((p) => grantCovers(p, key))).toBe(true); // precondition
+        expect(scans.some((pre) => key.startsWith(pre))).toBe(true); // still reachable
+      }
+    });
+
+    it('respects an explicit budget, down to a single scan', () => {
+      expect(coveredScanPrefixes(nineteen, undefined, 2).length).toBeLessThanOrEqual(2);
+      expect(coveredScanPrefixes(nineteen, undefined, 1)).toHaveLength(1);
+      // A budget of 0 or less still yields one scan — never zero, which would
+      // return nothing at all for a viewer who is entitled to something.
+      expect(coveredScanPrefixes(nineteen, undefined, 0)).toHaveLength(1);
+    });
+
+    it('does not merge when already within budget', () => {
+      // Three unrelated families stay three scans — no needless widening.
+      const scans = coveredScanPrefixes(['kb/*', 'goal/*', 'note/*'], undefined, 4);
+      expect(scans.sort()).toEqual(['goal/', 'kb/', 'note/']);
+    });
+
+    it('a merge that reaches the empty prefix collapses to whole-slice', () => {
+      // Disjoint namespaces squeezed into one scan have no common prefix, so the
+      // only honest answer is the whole slice — still filtered by grantCovers.
+      expect(coveredScanPrefixes(['kb/*', 'zz/*'], undefined, 1)).toEqual(['']);
+    });
+  });
+
   it('the starvation case: low-salience covered facts get their own scan', () => {
     // The live shape — six doc-block families plus identity facts. Each family
     // becomes its own bounded scan, so a block at salience 0.13 is ranked against
@@ -98,9 +173,13 @@ describe('coveredScanPrefixes', () => {
       '_home/embed2d.pub',
     ];
     const prefixes = coveredScanPrefixes(live);
-    expect(prefixes).toHaveLength(6);
-    expect(prefixes).toContain('doc-block:docs/guide/');
-    // Crucially none of them is the whole slice — that was the starving scan.
+    // Within the scan budget, and every scan strictly narrower than the slice —
+    // the whole-slice scan is what starved these facts in the first place.
+    expect(prefixes.length).toBeLessThanOrEqual(4);
     expect(prefixes).not.toContain('');
+    // A block at salience 0.13 is now ranked inside a doc-block scan rather than
+    // against the owner's 8,000 higher-scoring facts.
+    expect(prefixes.some((p) => 'doc-block:docs/guide/concepts/5'.startsWith(p))).toBe(true);
+    expect(prefixes.every((p) => p.length > 0)).toBe(true);
   });
 });

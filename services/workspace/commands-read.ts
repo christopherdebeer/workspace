@@ -51,8 +51,20 @@ const INTENT_TOP_K = 200;
  * Redundant patterns are collapsed — a pattern already inside a broader prefix
  * adds a query and no facts. `''` means "whole slice" and, once present, is the
  * only scan needed.
+ *
+ * **Bounded by `maxScans`, and that bound is load-bearing.** Each scan is a
+ * separate query against a partition that holds an owner's entire slice, so the
+ * scan count multiplies the read cost of every granted request. The first cut of
+ * this returned one scan per pattern: on a slice with 19 public grants that made
+ * a guest graph load 20 queries instead of 2, and under the throttling that was
+ * already in flight the read failed outright — a guest saw an EMPTY graph, which
+ * is worse than the wrong `total` it replaced (measured live, 2026-07-29 21:28).
+ * When there are more patterns than scans, the closest pair is merged into their
+ * common prefix. Merging WIDENS a scan, which can never exclude a covered key —
+ * `grantCovers` still filters every result — so the bound trades a little
+ * over-scan for a read that stays cheap.
  */
-export function coveredScanPrefixes(patterns: string[], callerPrefix?: string): string[] {
+export function coveredScanPrefixes(patterns: string[], callerPrefix?: string, maxScans = 4): string[] {
   const cp = callerPrefix ?? '';
   const out: string[] = [];
   for (const p of patterns) {
@@ -64,7 +76,30 @@ export function coveredScanPrefixes(patterns: string[], callerPrefix?: string): 
   if (!out.length) return [];
   if (out.includes('')) return ['']; // whole slice subsumes every other scan
   const uniq = [...new Set(out)].sort();
-  return uniq.filter((p, i) => !uniq.some((q, j) => j !== i && p !== q && p.startsWith(q)));
+  let scans = uniq.filter((p, i) => !uniq.some((q, j) => j !== i && p !== q && p.startsWith(q)));
+  // Merge the closest pair until within budget. Sorted order puts the most
+  // similar prefixes adjacent, so the best merge is always a neighbouring pair.
+  while (scans.length > Math.max(1, maxScans)) {
+    let bestAt = 0;
+    let bestLen = -1;
+    for (let i = 0; i + 1 < scans.length; i++) {
+      const lcp = commonPrefix(scans[i], scans[i + 1]);
+      if (lcp.length > bestLen) { bestLen = lcp.length; bestAt = i; }
+    }
+    const merged = commonPrefix(scans[bestAt], scans[bestAt + 1]);
+    scans = [...scans.slice(0, bestAt), merged, ...scans.slice(bestAt + 2)];
+    // A merge can subsume other scans (and can reach ''), so re-collapse.
+    if (scans.includes('')) return [''];
+    scans = scans.filter((p, i) => !scans.some((q, j) => j !== i && p !== q && p.startsWith(q)));
+  }
+  return scans;
+}
+
+/** The longest common prefix of two strings. */
+function commonPrefix(a: string, b: string): string {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return a.slice(0, i);
 }
 
 /**
@@ -1040,13 +1075,28 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           // runs on the results, so coverage enforcement is unchanged — this
           // only stops the candidate generator from starving it.
           const scanPrefixes = coveredScanPrefixes(pats, qOpts.prefix);
-          const pages = await Promise.all(
+          // `allSettled`, not `all`: a granted read must DEGRADE, never blank.
+          // With `all`, one throttled scan rejected the whole query and the home
+          // graph rendered a failed read as an empty graph (2026-07-29 21:28) —
+          // strictly worse than returning the facts the other scans did fetch.
+          // A partial view is honest here; the alternative is nothing at all.
+          const settled = await Promise.allSettled(
             scanPrefixes.map((prefix) =>
               state.query(owner, { ...qOpts, relevance: oRel, ...(prefix ? { prefix } : {}), limit: FOLD_CAP }, ctx.identity),
             ),
           );
+          const failed = settled.filter((s) => s.status === 'rejected').length;
+          if (failed) {
+            ctx.logger.warn('grant fold: partial scan failure — returning what landed', {
+              owner,
+              scans: scanPrefixes.length,
+              failed,
+            });
+          }
           const seen = new Set<string>();
-          for (const fq of pages) {
+          for (const s of settled) {
+            if (s.status !== 'fulfilled') continue;
+            const fq = s.value;
             for (const e of fq.entries) {
               if (!pats.some((p) => grantCovers(p, e.key))) continue;
               if (seen.has(e.key)) continue; // the same fact can match two patterns
