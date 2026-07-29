@@ -1347,6 +1347,24 @@ export interface QueryOptions {
   tags?: string[];
   /** Only keys with this prefix. */
   prefix?: string;
+  /**
+   * An arbitrary key predicate, applied with `prefix`/`tag`/`contains` — BEFORE
+   * ranking, the page slice, and `total`.
+   *
+   * This exists for visibility folds. A caller assembling a granted view has a
+   * membership rule (`grantCovers` over a grant's patterns) that cannot be
+   * expressed as one prefix, and filtering AFTER the query means the page cap
+   * has already been spent on facts the viewer cannot see — so `total` counts
+   * survivors of a truncation rather than the covered set. Measured 2026-07-29:
+   * an unauthenticated home graph reported `20/20` against ~135 genuinely public
+   * facts, because 115 of them were `doc-block:*` at salience 0.12–0.14 and the
+   * owner's top 1200 of 8,600 facts never reached them.
+   *
+   * Kept as a predicate rather than a grant-shaped option so the platform stays
+   * ignorant of grant vocabulary — this layer knows keys, not authority. It is
+   * a FILTER only: it can never widen what the query would otherwise return.
+   */
+  keyFilter?: (key: string) => boolean;
   /** Ranking: read-time salience (default), last-write recency, or intent
    *  relevance (ADR-0085 Inc 3 — the default when a `relevance` map is present:
    *  an intent query is "which few entries matter for THIS goal", so cosine
@@ -1968,6 +1986,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         if (!matchesSelector(rec, { tag: opts?.tag, tags: opts?.tags, prefix: opts?.prefix })) return false;
         // Content search: find a fact by what's inside it (substring over value JSON).
         if (opts?.contains && !recordContains(rec, opts.contains)) return false;
+        // Visibility fold (see `keyFilter`): applied HERE so the cap and `total`
+        // are both computed over what the caller can actually see.
+        if (opts?.keyFilter && !opts.keyFilter(rec.key)) return false;
         return true;
       });
       const wrapped = await Promise.all(

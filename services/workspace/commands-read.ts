@@ -37,70 +37,6 @@ import type { WorkspaceCommands } from './handlers';
  *  bounded relevance pool; keys outside it score relevance 0. */
 const INTENT_TOP_K = 200;
 
-/**
- * The key prefixes to scan so a granted owner's page cap bounds the COVERED set
- * rather than their whole slice (the grant fold in `query`).
- *
- * Every grant pattern is one of three shapes (`grantCovers`): `*` (whole slice),
- * `prefix*`, or an exact key — and all three reduce to a prefix scan. An exact
- * key over-scans slightly (it also matches keys extending it); `grantCovers`
- * discards those, so the result is exact.
- *
- * `callerPrefix` is any `prefix` the caller already asked for; the two must both
- * hold, so the narrower wins and a disjoint pair is dropped (it cannot match).
- * Redundant patterns are collapsed — a pattern already inside a broader prefix
- * adds a query and no facts. `''` means "whole slice" and, once present, is the
- * only scan needed.
- *
- * **Bounded by `maxScans`, and that bound is load-bearing.** Each scan is a
- * separate query against a partition that holds an owner's entire slice, so the
- * scan count multiplies the read cost of every granted request. The first cut of
- * this returned one scan per pattern: on a slice with 19 public grants that made
- * a guest graph load 20 queries instead of 2, and under the throttling that was
- * already in flight the read failed outright — a guest saw an EMPTY graph, which
- * is worse than the wrong `total` it replaced (measured live, 2026-07-29 21:28).
- * When there are more patterns than scans, the closest pair is merged into their
- * common prefix. Merging WIDENS a scan, which can never exclude a covered key —
- * `grantCovers` still filters every result — so the bound trades a little
- * over-scan for a read that stays cheap.
- */
-export function coveredScanPrefixes(patterns: string[], callerPrefix?: string, maxScans = 4): string[] {
-  const cp = callerPrefix ?? '';
-  const out: string[] = [];
-  for (const p of patterns) {
-    const gp = p === WHOLE_SLICE ? '' : p.endsWith('*') ? p.slice(0, -1) : p;
-    // Both constraints must hold: keep the narrower, drop a disjoint pair.
-    if (gp.startsWith(cp)) out.push(gp);
-    else if (cp.startsWith(gp)) out.push(cp);
-  }
-  if (!out.length) return [];
-  if (out.includes('')) return ['']; // whole slice subsumes every other scan
-  const uniq = [...new Set(out)].sort();
-  let scans = uniq.filter((p, i) => !uniq.some((q, j) => j !== i && p !== q && p.startsWith(q)));
-  // Merge the closest pair until within budget. Sorted order puts the most
-  // similar prefixes adjacent, so the best merge is always a neighbouring pair.
-  while (scans.length > Math.max(1, maxScans)) {
-    let bestAt = 0;
-    let bestLen = -1;
-    for (let i = 0; i + 1 < scans.length; i++) {
-      const lcp = commonPrefix(scans[i], scans[i + 1]);
-      if (lcp.length > bestLen) { bestLen = lcp.length; bestAt = i; }
-    }
-    const merged = commonPrefix(scans[bestAt], scans[bestAt + 1]);
-    scans = [...scans.slice(0, bestAt), merged, ...scans.slice(bestAt + 2)];
-    // A merge can subsume other scans (and can reach ''), so re-collapse.
-    if (scans.includes('')) return [''];
-    scans = scans.filter((p, i) => !scans.some((q, j) => j !== i && p !== q && p.startsWith(q)));
-  }
-  return scans;
-}
-
-/** The longest common prefix of two strings. */
-function commonPrefix(a: string, b: string): string {
-  let i = 0;
-  while (i < a.length && i < b.length && a[i] === b[i]) i++;
-  return a.slice(0, i);
-}
 
 /**
  * Per-key relevance to a stated intent (ADR-0051): embed the text once, take the
@@ -1074,36 +1010,26 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
           // pattern makes FOLD_CAP bound the COVERED set. `grantCovers` still
           // runs on the results, so coverage enforcement is unchanged — this
           // only stops the candidate generator from starving it.
-          const scanPrefixes = coveredScanPrefixes(pats, qOpts.prefix);
-          // `allSettled`, not `all`: a granted read must DEGRADE, never blank.
-          // With `all`, one throttled scan rejected the whole query and the home
-          // graph rendered a failed read as an empty graph (2026-07-29 21:28) —
-          // strictly worse than returning the facts the other scans did fetch.
-          // A partial view is honest here; the alternative is nothing at all.
-          const settled = await Promise.allSettled(
-            scanPrefixes.map((prefix) =>
-              state.query(owner, { ...qOpts, relevance: oRel, ...(prefix ? { prefix } : {}), limit: FOLD_CAP }, ctx.identity),
-            ),
-          );
-          const failed = settled.filter((s) => s.status === 'rejected').length;
-          if (failed) {
-            ctx.logger.warn('grant fold: partial scan failure — returning what landed', {
-              owner,
-              scans: scanPrefixes.length,
-              failed,
-            });
-          }
-          const seen = new Set<string>();
-          for (const s of settled) {
-            if (s.status !== 'fulfilled') continue;
-            const fq = s.value;
-            for (const e of fq.entries) {
-              if (!pats.some((p) => grantCovers(p, e.key))) continue;
-              if (seen.has(e.key)) continue; // the same fact can match two patterns
-              seen.add(e.key);
-              merged.push({ ...e, key: `${owner}/${e.key}` });
-            }
-          }
+          // ONE query, with coverage pushed into its filter (`keyFilter`).
+          //
+          // Two earlier shapes of this were both wrong. The original filtered
+          // AFTER the query, so FOLD_CAP was spent on the owner's whole slice by
+          // salience and `total` counted the survivors — an unauthenticated home
+          // graph reported `20/20` against ~135 public facts, because 115 were
+          // `doc-block:*` at salience 0.12–0.14 and the top 1200 of 8,600 never
+          // reached them. My fix then fanned out one query PER GRANT PATTERN,
+          // which was worse: `state.query` reads the whole `KEY#` partition AND
+          // every edge for signals regardless of any prefix (the prefix is an
+          // in-memory filter, not a pushed-down key condition), so 19 patterns
+          // meant 19 full-partition reads. Under load that failed and guests got
+          // an EMPTY graph.
+          //
+          // `keyFilter` puts coverage where `prefix`/`tag` already live —
+          // upstream of the cap, the ranking, and `total`. Same DDB cost as the
+          // original single query; correct counts; ranked within the covered set.
+          const covered = (key: string): boolean => pats.some((p) => grantCovers(p, key));
+          const fq = await state.query(owner, { ...qOpts, relevance: oRel, keyFilter: covered, limit: FOLD_CAP }, ctx.identity);
+          for (const e of fq.entries) merged.push({ ...e, key: `${owner}/${e.key}` });
         }
         merged.sort((a, b) => rankVal(b) - rankVal(a));
         const offset = Number(cursor ?? 0) || 0;
