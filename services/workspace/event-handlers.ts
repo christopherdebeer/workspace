@@ -15,7 +15,7 @@ import {
   inferIngestionType,
   type IngestionConfig,
 } from '../../platform/runtime';
-import type { EventBridgeHandler } from '../../platform/runtime';
+import type { EventBridgeHandler, FactTimer } from '../../platform/runtime';
 import { createServiceClient } from '../../platform/runtime/service-client';
 import { createDeclarativeActions, ACTIONS_PREFIX, ActionInvokeError, type ActionDefinition } from './actions';
 import { createRegisteredViews, VIEWS_PREFIX, type ViewDefinition } from './views';
@@ -531,6 +531,20 @@ export function createSubstrateWriteHandler(build: DepsBuilder): EventBridgeHand
             via: typeof detail.via === 'string' ? detail.via : writerAddress,
             type: typeof detail.type === 'string' ? detail.type : undefined,
             tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
+            // A cell may declare its OWN coordination facts ephemeral. The
+            // delete-effect timer is how everything else on the substrate says
+            // "this is exhaust, not content" — it keeps the fact out of the
+            // vector index, drops any vector already under the key, prunes its
+            // inferred kinship, and excludes it from suggestions/contested. That
+            // whole chain was unreachable from a cell, because this path silently
+            // dropped `timer` while honouring `type`/`tags`/`via` (measured: 97
+            // live `decompose-run/*` continuation batons, each carrying a WHOLE
+            // document in `value.content`, embedded and edged like knowledge —
+            // one read centrality 0.63, out-scoring most real facts). Organs must
+            // be able to say a baton is a baton. Malformed timers are rejected by
+            // `resolveTimer` inside `put` and land in the catch below, like any
+            // other refused organ write.
+            timer: (detail.timer as FactTimer | undefined) ?? undefined,
           },
           identity,
         );

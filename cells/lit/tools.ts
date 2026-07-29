@@ -209,11 +209,37 @@ async function putStatus(slug: string, value: Record<string, unknown>): Promise<
   await emit({ key: `_decompose/${slug}`, value, type: 'decompose-status', tags: ['lit'], via: 'lit.decompose' });
 }
 
+/** How long a continuation baton stays alive. It exists only long enough for
+ *  the reactor to deliver it to the next `decomposeChunk`; the step then
+ *  supersedes it explicitly. The timer is the backstop for a chain that dies
+ *  mid-flight, and — more importantly — it is the DECLARATION that this fact is
+ *  exhaust. An hour is far beyond any real step and far short of durable. */
+const RUN_BATON_TTL_MS = 60 * 60 * 1000;
+
 /** Chain the next continuation step: a FRESH `decompose-run/<slug>/<cursor>`
  *  fact per step (each starts at revision 1, so the subscription's depth cap
  *  never accumulates across a doc's lifetime of re-syncs). The reaction on
  *  `type: decompose-run` delivers it back to decomposeChunk with a scoped
- *  per-run token — chaining THROUGH the substrate, the reindex shape. */
+ *  per-run token — chaining THROUGH the substrate, the reindex shape.
+ *
+ *  The baton CARRIES THE WHOLE DOCUMENT (`content`), because every step
+ *  re-plans deterministically from the same source the dispatch saw. That is
+ *  correct for the chain and disastrous for everything downstream of it: the
+ *  fact is a verbatim copy of the document it is decomposing, so it embeds
+ *  ~1.0 against the doc and every block the run produces, mints inferred
+ *  kinship to all of them, and draws centrality from those edges. Measured
+ *  2026-07-29: 97 live batons, ~11KB each, one at centrality 0.63 and salience
+ *  0.47 — a coordination artefact out-scoring real facts and competing for the
+ *  focus band, while its `decompose-run ↔ kb/<hash>` pairs sat in the
+ *  suggestion queue as connections to ratify.
+ *
+ *  The delete-effect timer is the substrate's existing, vocabulary-free way to
+ *  say "this is exhaust": `indexableText` refuses it, the indexer actively
+ *  drops any vector under the key, `dropSimilarEdges` prunes its kinship, and
+ *  `suggestions`/`contested` exclude it as ephemeral. The mechanism was already
+ *  end-to-end — organs simply could not reach it until the write path forwarded
+ *  `timer`. It must never be shorter than a step: the reactor has to deliver
+ *  this fact before it lapses. */
 async function emitRunStep(slug: string, path: string, content: string, cursor: number, total: number): Promise<void> {
   await emit({
     key: `decompose-run/${slug}/${cursor}`,
@@ -221,6 +247,7 @@ async function emitRunStep(slug: string, path: string, content: string, cursor: 
     type: 'decompose-run',
     tags: ['lit', 'decompose-run'],
     via: 'lit.decompose',
+    timer: { ms: RUN_BATON_TTL_MS, effect: 'delete' },
   });
 }
 
