@@ -45,6 +45,7 @@ describe('buildFrame — a header, never a payload', () => {
     };
     const frame = buildFrame(merged, { task: TASK_DECL })!;
     expect(frame.standing!.work.count).toBe(2); // done + cancelled excluded
+    expect(frame.standing!.work.basis).toBe('todo or doing'); // says what it counted
     expect(frame.standing!.work.verb).toBe('@c15r/tasks.next');
     // Highest-scoring first, carrying the declared label so the tease is readable.
     expect(frame.standing!.work.top).toEqual([
@@ -59,7 +60,12 @@ describe('buildFrame — a header, never a payload', () => {
     const frame = buildFrame(merged, { task: TASK_DECL, goal: GOAL_DECL })!;
     expect(frame.standing!.work.count).toBe(20);
     expect(frame.standing!.work.top).toHaveLength(3);
-    expect(frame.standing!.goal).toEqual({ count: 1, verb: '@c15r/tasks.list_goals', top: [{ key: 'goal/g', title: 'Consolidate' }] });
+    expect(frame.standing!.goal).toEqual({
+      count: 1,
+      basis: 'active',
+      verb: '@c15r/tasks.list_goals',
+      top: [{ key: 'goal/g', title: 'Consolidate' }],
+    });
   });
 
   it('is absent entirely when there is nothing to notice', () => {
@@ -127,11 +133,17 @@ describe('the focus band spends one slot per source (W3-F1)', () => {
     const res = (await cmds.recall({}, ctx)) as { focus: Record<string, Entry>; frame?: AmbientFrame; hints: string[] };
     expect(res.frame?.standing?.work).toEqual({
       count: 1,
+      basis: 'todo or doing',
       verb: '@c15r/tasks.next',
       top: [{ key: 'task/g/a', title: 'Do the thing' }],
     });
-    // ...and the hint tells the agent the verb that answers it authoritatively.
+    // The hint names the verb, states WHAT was counted, and does not claim the
+    // verb returns the same set — a probe caught the frame saying 3 where the
+    // verb returned 2 while the hint called it "the full list" (wave-8 W8-D-01).
     expect(res.hints[0]).toContain('@c15r/tasks.next');
     expect(res.hints[0]).toContain('1 standing work item');
+    expect(res.hints[0]).toContain('todo or doing');
+    expect(res.hints[0]).toContain('may be fewer');
+    expect(res.hints[0]).not.toContain('the full list');
   });
 });

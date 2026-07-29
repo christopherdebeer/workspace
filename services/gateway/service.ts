@@ -568,6 +568,27 @@ const FULL_BUDGET = 60_000;
 const deliveredBytes = (r: unknown): number => JSON.stringify(r, null, 2).length;
 const overBudget = (r: unknown): boolean => deliveredBytes(r) > FULL_BUDGET;
 
+/**
+ * How to narrow an over-budget read of `target`. The generic line is the floor;
+ * the named ones exist because the right narrowing differs per surface and an
+ * agent that has just been refused should not have to go and look it up.
+ */
+function narrowingFor(target: string): string {
+  switch (target) {
+    case 'workspace.recall':
+      return 'recall has no `limit` or `cursor` — the whole shaped view is all-or-nothing. Use the DEFAULT overview (omit `view`), which is the succinct orientation, then narrow with workspace.query({ type | prefix | tag | contains, limit }).';
+    case 'workspace.query':
+    case 'workspace.read':
+      return 'Pass a smaller `limit`, page with `cursor`, or `shape:"refs"` to drop values and keep only keys + `_meta`.';
+    case 'workspace.edges':
+      return 'Use { around: "<key>" } for one neighbourhood, a smaller `limit` on the projection framings, or `shape:"refs"`.';
+    case 'workspace.changes':
+      return 'Pass a smaller `limit`, or scope the feed with { scope: { prefixes, ops } }.';
+    default:
+      return 'Narrow the read — most reads take a `limit` and a `cursor`, and `shape:"refs"` drops values.';
+  }
+}
+
 /** Fail LOUD with the way to narrow, never a silent truncation (the F7/W3f
  *  lesson). `narrow` names the finer-grained read for this surface. */
 function guardSentinel<T>(target: string, result: T, narrow: string): T {
@@ -702,7 +723,15 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const check = enforceInput(target, input, cap.inputSchema);
   const out = await cap.forward(input?.input, ctx);
   await touchCapability(ctx, target, cap.kind);
-  return withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
+  // EVERY read is budgeted, not just the self-model sentinels (wave-8 W8-C-01).
+  // The guard was generalised to "every sentinel" and stopped exactly one step
+  // short of the largest read on the membrane: `recall({view:"full"})` returned
+  // 1,898,481 delivered bytes — unpaged, unguarded, and advertised by a hint a
+  // bare `recall()` emits unprompted. A response the client cannot receive is
+  // already a failure; refusing LOUD with the way to narrow beats spilling it to
+  // disk for the caller to re-parse. Reads only — refusing an `act` after the
+  // mutation landed would report failure for work that actually happened.
+  return guardSentinel(target, withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap), narrowingFor(target));
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {

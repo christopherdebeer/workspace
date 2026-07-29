@@ -194,7 +194,22 @@ export interface AmbientFrame {
   /** Standing wait-conditions, per type that DECLARES itself ambient in its
    *  `types.json`. Tier-1 never learns a cell's name: the vocabulary says what
    *  counts as pending, exactly as it says how to render or key a fact. */
-  standing?: Record<string, { count: number; verb?: string; top?: Array<{ key: string; title?: string }> }>;
+  standing?: Record<
+    string,
+    {
+      count: number;
+      /** WHAT `count` counted, in the type's own words (e.g. "todo or doing").
+       *  The frame counts everything standing; the `verb` may apply readiness or
+       *  dependency rules the frame cannot see, so the two legitimately differ —
+       *  and a probe caught the frame reporting 3 where the verb returned 2
+       *  while the hint called the verb's answer "the full list" (wave-8
+       *  W8-D-01). Saying what was counted is what makes the difference honest
+       *  instead of a silent loss. */
+      basis?: string;
+      verb?: string;
+      top?: Array<{ key: string; title?: string }>;
+    }
+  >;
 }
 
 export interface RecallOverview {
@@ -296,7 +311,10 @@ export function buildFrame(
     if (a) ambient.set(type, a);
   }
   if (ambient.size) {
-    const byClass = new Map<string, { count: number; verb?: string; hits: Array<{ key: string; title?: string; score: number }> }>();
+    const byClass = new Map<
+      string,
+      { count: number; verb?: string; basis?: string; hits: Array<{ key: string; title?: string; score: number }> }
+    >();
     for (const [key, e] of Object.entries(merged)) {
       const a = e._meta.type ? ambient.get(e._meta.type) : undefined;
       if (!a) continue;
@@ -305,6 +323,12 @@ export function buildFrame(
       const slot = byClass.get(a.as) ?? { count: 0, ...(a.verb ? { verb: a.verb } : {}), hits: [] };
       slot.count += 1;
       if (!slot.verb && a.verb) slot.verb = a.verb;
+      // Say what was counted, derived from the type's own `when` predicate — so
+      // a caller can see WHY the frame's number and the verb's may differ.
+      if (a.when) {
+        const stated = Object.values(a.when).flat().join(' or ');
+        slot.basis = slot.basis && slot.basis !== stated ? `${slot.basis} or ${stated}` : stated;
+      }
       slot.hits.push({ key, title: atPath(e.value, a.label), score: e._meta.score ?? 0 });
       byClass.set(a.as, slot);
     }
@@ -314,7 +338,12 @@ export function buildFrame(
         .sort((x, y) => y.score - x.score)
         .slice(0, FRAME_TOP)
         .map(({ key, title }) => ({ key, ...(title ? { title } : {}) }));
-      standing[cls] = { count: slot.count, ...(slot.verb ? { verb: slot.verb } : {}), ...(top.length ? { top } : {}) };
+      standing[cls] = {
+        count: slot.count,
+        ...(slot.basis ? { basis: slot.basis } : {}),
+        ...(slot.verb ? { verb: slot.verb } : {}),
+        ...(top.length ? { top } : {}),
+      };
     }
     if (Object.keys(standing).length) frame.standing = standing;
   }
@@ -355,7 +384,14 @@ export function liveHints(
 ): string[] {
   const out = hints.filter((h) => h.verbs.every((v) => LIVE_VERBS.has(v))).map((h) => h.text);
   for (const [cls, s] of Object.entries(frame?.standing ?? {})) {
-    if (s.verb) out.unshift(`You have ${s.count} standing ${cls} item${s.count === 1 ? '' : 's'} — see frame.standing.${cls}; the full list is read("${s.verb}").`);
+    if (!s.verb) continue;
+    // NOT "the full list" — the verb may apply readiness or dependency rules the
+    // frame's census cannot see, and claiming otherwise loses items silently
+    // (wave-8 W8-D-01: frame said 3, the verb returned 2).
+    const basis = s.basis ? ` (${s.basis})` : '';
+    out.unshift(
+      `You have ${s.count} standing ${cls} item${s.count === 1 ? '' : 's'}${basis} — see frame.standing.${cls}. read("${s.verb}") lists the ones actionable now, which may be fewer.`,
+    );
   }
   return out;
 }
