@@ -54,6 +54,38 @@ const WRONG_VERB_AS_ACT = 'invoke it with read, not act';
 const WRONG_VERB_AS_READ = 'invoke it with act, not read';
 
 /**
+ * Faults that mean "the substrate was busy", not "the call was wrong".
+ *
+ * These arrive by two routes and both must be caught: an HTTP status (the edge
+ * or the gateway shedding load) and a 200 carrying a tool `isError` whose text
+ * is DynamoDB's throttle message (a downstream capacity signal, surfaced
+ * verbatim). A 4xx is NEVER here — a malformed call retried is still malformed.
+ */
+const TRANSIENT = [
+  /gateway HTTP 5\d\d/,
+  /gateway HTTP 429/,
+  /Throughput exceeds the current capacity/i,
+  /ProvisionedThroughputExceeded/i,
+  /ThrottlingException/i,
+  /RequestLimitExceeded/i,
+  /ServiceUnavailable/i,
+  /TooManyRequests/i,
+];
+
+/** @param {string} message */
+const isTransient = (message) => TRANSIENT.some((p) => p.test(message));
+
+/** Backoff before attempt n (1-indexed), with full jitter so a fleet of cells
+ *  retrying the same throttled table does not re-synchronise into another spike. */
+const backoffMs = (n) => Math.round(Math.random() * Math.min(4000, 250 * 2 ** n));
+
+const RETRY_ATTEMPTS = 4;
+
+/** Real elapsed time. Injectable via `opts.sleepImpl` for the same reason
+ *  `fetchImpl` is: a test should not pay the backoff it is asserting on. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
  * @param {string} url @param {typeof fetch} fetchImpl @param {string} token
  * @param {'read'|'act'} verb @param {string} target @param {unknown} input
  * @returns {Promise<{ok: true, value: unknown} | {ok: false, error: string}>}
@@ -89,17 +121,37 @@ async function rpc(url, fetchImpl, token, verb, target, input) {
  * @param {string} token bearer (a minted, possibly postured, principal)
  * @param {string} target e.g. 'workspace.read' or '@owner/cell.tool'
  * @param {unknown} [input]
- * @param {{kind?: 'read'|'act', url?: string, fetchImpl?: typeof fetch}} [opts]
+ * @param {{kind?: 'read'|'act', url?: string, fetchImpl?: typeof fetch, sleepImpl?: (ms: number) => Promise<void>}} [opts]
  */
 export async function gwCall(token, target, input, opts) {
   const url = opts?.url ?? (typeof process !== 'undefined' ? process.env?.GATEWAY_MCP_URL : undefined) ?? GATEWAY_MCP_DEFAULT;
   const fetchImpl = opts?.fetchImpl ?? fetch;
+  const sleepImpl = opts?.sleepImpl ?? sleep;
   const verb = opts?.kind ?? toolVerb(target);
   let out = await rpc(url, fetchImpl, token, verb, target, input);
   // Self-heal a floor misclassification: the gateway's error names the right verb.
   if (!out.ok && !opts?.kind) {
     if (verb === 'act' && out.error.includes(WRONG_VERB_AS_ACT)) out = await rpc(url, fetchImpl, token, 'read', target, input);
     else if (verb === 'read' && out.error.includes(WRONG_VERB_AS_READ)) out = await rpc(url, fetchImpl, token, 'act', target, input);
+  }
+  // Ride out a busy substrate (see TRANSIENT). Without this, a momentary
+  // throttle is indistinguishable from a permanent failure to everything
+  // upstream — and for a cell driving a MULTI-STEP CHAIN through the
+  // substrate that is fatal, not merely noisy: the tool returns an error, the
+  // reaction reactor dead-letters it, the continuation baton lapses, and the
+  // chain is stranded forever with no retry anywhere above. Measured
+  // 2026-07-29: one throttling window left dozens of decompositions frozen
+  // mid-flight (`docs/architecture` at 20/207, `docs/machine` at 0/65), each
+  // recoverable only by editing its source file.
+  //
+  // Retrying an `act` is safe HERE because the substrate is key-addressed:
+  // `remember`/`ingest`/`link`/`supersede` at a given key are upserts, so a
+  // replayed write converges on the same fact and bumps a revision. That is a
+  // property of this substrate, not of retries in general — a non-idempotent
+  // target would need `kind`-style opt-out.
+  for (let attempt = 1; !out.ok && attempt <= RETRY_ATTEMPTS && isTransient(out.error); attempt++) {
+    await sleepImpl(backoffMs(attempt));
+    out = await rpc(url, fetchImpl, token, verb, target, input);
   }
   if (!out.ok) throw new GatewayError(out.error, target);
   return out.value;
