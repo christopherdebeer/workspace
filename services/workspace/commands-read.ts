@@ -38,6 +38,36 @@ import type { WorkspaceCommands } from './handlers';
 const INTENT_TOP_K = 200;
 
 /**
+ * The key prefixes to scan so a granted owner's page cap bounds the COVERED set
+ * rather than their whole slice (the grant fold in `query`).
+ *
+ * Every grant pattern is one of three shapes (`grantCovers`): `*` (whole slice),
+ * `prefix*`, or an exact key — and all three reduce to a prefix scan. An exact
+ * key over-scans slightly (it also matches keys extending it); `grantCovers`
+ * discards those, so the result is exact.
+ *
+ * `callerPrefix` is any `prefix` the caller already asked for; the two must both
+ * hold, so the narrower wins and a disjoint pair is dropped (it cannot match).
+ * Redundant patterns are collapsed — a pattern already inside a broader prefix
+ * adds a query and no facts. `''` means "whole slice" and, once present, is the
+ * only scan needed.
+ */
+export function coveredScanPrefixes(patterns: string[], callerPrefix?: string): string[] {
+  const cp = callerPrefix ?? '';
+  const out: string[] = [];
+  for (const p of patterns) {
+    const gp = p === WHOLE_SLICE ? '' : p.endsWith('*') ? p.slice(0, -1) : p;
+    // Both constraints must hold: keep the narrower, drop a disjoint pair.
+    if (gp.startsWith(cp)) out.push(gp);
+    else if (cp.startsWith(gp)) out.push(cp);
+  }
+  if (!out.length) return [];
+  if (out.includes('')) return ['']; // whole slice subsumes every other scan
+  const uniq = [...new Set(out)].sort();
+  return uniq.filter((p, i) => !uniq.some((q, j) => j !== i && p !== q && p.startsWith(q)));
+}
+
+/**
  * Per-key relevance to a stated intent (ADR-0051): embed the text once, take the
  * scope's vector index top-K as `{ key: cosine }`. `undefined` when no semantic
  * backend is configured — the read proceeds unweighted (the index is a candidate
@@ -986,8 +1016,44 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         const merged = own.entries.slice();
         for (const [owner, pats] of byOwner) {
           const oRel = text ? await relevanceFor(vectors, owner, text, pats) : undefined;
-          const fq = await state.query(owner, { ...qOpts, relevance: oRel, limit: FOLD_CAP }, ctx.identity);
-          for (const e of fq.entries) if (pats.some((p) => grantCovers(p, e.key))) merged.push({ ...e, key: `${owner}/${e.key}` });
+          // COVERAGE GOES INTO THE QUERY, not just the filter after it.
+          //
+          // This used to take the owner's top-FOLD_CAP by salience over their
+          // WHOLE slice and then drop what the viewer can't see. That is the
+          // same topK starvation `relevanceFor`'s `cover` argument was added to
+          // fix for the semantic path (see its docstring), left in place on the
+          // non-semantic one — and it is worse here, because the surviving count
+          // becomes the reported `total`.
+          //
+          // Measured 2026-07-29 on the c15r public slice: 19 public grants cover
+          // ~135 facts, of which 115 are `doc-block:*` sitting at salience
+          // 0.12–0.14. The owner's top 1200 of a 7,600-fact slice is all
+          // 0.2–0.8, so essentially NO block made the window: an unauthenticated
+          // home graph reported `20/20` — the handful of high-salience `doc:` and
+          // `file/` identity facts — while every block it was entitled to read
+          // was invisible. Selecting a node then pulled in more, because
+          // per-key reads never went through this fold.
+          //
+          // Every grant pattern is whole-slice, `prefix*`, or an exact key
+          // (`grantCovers`), so each reduces to a prefix scan. Querying per
+          // pattern makes FOLD_CAP bound the COVERED set. `grantCovers` still
+          // runs on the results, so coverage enforcement is unchanged — this
+          // only stops the candidate generator from starving it.
+          const scanPrefixes = coveredScanPrefixes(pats, qOpts.prefix);
+          const pages = await Promise.all(
+            scanPrefixes.map((prefix) =>
+              state.query(owner, { ...qOpts, relevance: oRel, ...(prefix ? { prefix } : {}), limit: FOLD_CAP }, ctx.identity),
+            ),
+          );
+          const seen = new Set<string>();
+          for (const fq of pages) {
+            for (const e of fq.entries) {
+              if (!pats.some((p) => grantCovers(p, e.key))) continue;
+              if (seen.has(e.key)) continue; // the same fact can match two patterns
+              seen.add(e.key);
+              merged.push({ ...e, key: `${owner}/${e.key}` });
+            }
+          }
         }
         merged.sort((a, b) => rankVal(b) - rankVal(a));
         const offset = Number(cursor ?? 0) || 0;
