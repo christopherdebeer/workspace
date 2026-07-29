@@ -188,7 +188,15 @@ async function finishDecompose(token: string, plan: ReturnType<typeof planDecomp
   // from prior partial runs: at 100, a doc that had accumulated 134 stale+live
   // decorations only ever showed the first 100 to the retirement diff, so the
   // tail residue survived every convergent re-run (2026-07-12, live).
-  const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 500 }) as { entries?: QueryEntry[] })?.entries ?? [];
+  //
+  // `shape:"refs"` because this reads NOTHING but `e.key` below. Without it the
+  // call shipped 500 whole facts to look at their keys — 203KB for a large doc,
+  // every byte of it discarded on the next line. That went unnoticed until the
+  // membrane started budgeting every read (2026-07-29): the finish phase then
+  // failed with "too large to return whole", stalling the very chain the edge-
+  // timeout fix had just unblocked, at cursor 460 of docs/technical-spec. The
+  // guard was right — this was always waste — and it named this exact remedy.
+  const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 500, shape: 'refs' }) as { entries?: QueryEntry[] })?.entries ?? [];
   const existingBlockKeys = existingOrder.map((e) => e.key.slice(orderPrefix.length));
   const retiredKeys = staleKeys(existingBlockKeys, plan.blocks.map((b) => b.key));
 
