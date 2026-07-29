@@ -307,6 +307,48 @@ that kept going stale. It touches the storage contract, both GSI conventions, an
 LeadingKeys IAM conditions — it is the next real piece of work and it should be designed,
 not hotfixed.
 
+## The recovery, paced — and what it retired
+
+With a token minted, recovery could be done properly instead of through the CI on-switch.
+`docs-sync` gained the pacing it lacked (`--only`, `--max`, `--delay`) and the whole thing
+was verified end to end on the largest stranded document:
+
+```
+node scripts/docs-sync.mjs --commit --force --only "docs/architecture.md" --no-share
+```
+
+`_decompose/docs/architecture`, frozen at 20/207 since 15:01 and untouched by two
+full-corpus forces, ran **0 → 207 → done** with **zero throttling errors**. Then three at
+once, same result. One document at a time is not slow — it is the only thing that works,
+and it works cleanly.
+
+Its finish report carried the number this whole document has been circling:
+
+```
+status: done · done: 207/207 · blocksRetired: 830
+```
+
+**830 stale doc-blocks retired for one document.** The finish phase is the organ that
+retires superseded content, and it is the last step of a chain that had not been able to
+complete. So the residue of every partial run since the pipeline broke had simply
+accumulated — invisibly, because a half-decomposed document looks exactly like a
+decomposed one until you count its blocks. "We accrue content but never maintain it" was
+not a philosophy problem. The maintenance step was unreachable.
+
+One more read-budget round happened on the way: `shape:"refs"` was right and still not
+enough, because refs keeps a `_meta` per entry and 500 of them is ~211KB. The scan now
+pages at 100. The budget was never the problem — asking for 500 facts to read 500 strings
+was, and the guard kept saying so until the call got honest.
+
+**Continuing the recovery** (~193 documents remain, each a few minutes):
+
+```
+node scripts/docs-sync.mjs --commit --force --max 3 --delay 5000 --no-share   # repeat
+```
+
+Verified safe at 3 concurrent chains. Do not raise it far without watching
+`_reaction-errors/lit-decompose-chunk` — the partition ceiling has not moved.
+
 ## The method note
 
 The audit numbers were all real, and the story they told was false. "15,482 pending against
