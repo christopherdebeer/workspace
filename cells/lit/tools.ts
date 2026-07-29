@@ -101,6 +101,21 @@ const LIT_SUBSCRIPTION = {
   label: 'ADR-0081: decompose a markdown source into doc/doc-block/doc-order + links',
   match: { type: 'markdown' },
   deliver: '@c15r/lit.decomposeMarkdown',
+  // The depth cap measures REVISION, and revision means different things for
+  // different facts. For a machine run it is the transition count, which is a
+  // real chain depth — that is what the bound was designed for. For a source
+  // file it is the number of times the file has ever been written, and
+  // docs-sync rewrites `file/docs/*.md` on every deploy. Past ~50 deploys of a
+  // doc, the default cap silently stops this reaction FOREVER: a CloudWatch
+  // warn, no dead-letter fact, no symptom except a document that quietly stops
+  // re-decomposing. Measured 2026-07-29: `file/docs/architecture.md` rewritten
+  // at 16:47:48, its `_decompose` status untouched since 15:01.
+  //
+  // This reaction cannot self-trigger — it reads a `markdown` fact and writes
+  // `doc:`/`doc-block:`/`_doc/`/`_decompose/` facts, never the file it reacted
+  // to — so there is no loop for a depth bound to cut. The cap stays finite as
+  // runaway insurance, but far above any plausible edit count.
+  maxDepth: 100_000,
   params: {
     path: '${value.path}',
     content: '${value.content}',
@@ -119,11 +134,20 @@ const LIT_CHUNK_SUBSCRIPTION = {
   label: 'ADR-0083: one bounded continuation step of an async markdown decomposition',
   match: { type: 'decompose-run' },
   deliver: '@c15r/lit.decomposeChunk',
-  // Fresh run facts are written per step at distinct keys (decompose-run/
-  // <slug>/<cursor>), each starting at revision 1 — a doc re-synced for
-  // years never walks into the depth cap the way a single rev-bumped key
-  // would. 50 is then pure runaway insurance.
-  maxDepth: 50,
+  // This previously read 50, on the reasoning that "fresh run facts are written
+  // per step at distinct keys, each starting at revision 1 — a doc re-synced for
+  // years never walks into the depth cap". That is true of every cursor EXCEPT
+  // the one that matters. `decompose-run/<slug>/0` is the same key every time a
+  // doc is re-synced, so it accrues a revision per sync and eventually crosses
+  // the cap — after which the chain can never START. Measured 2026-07-29:
+  // `decompose-run/docs/architecture/adr/0086-embodied-participants/0` at
+  // revision 13 and climbing, one per forced re-ingest.
+  //
+  // Like the markdown reaction above, this one cannot self-trigger into a loop:
+  // step N writes cursor N+1, a DIFFERENT key, and the walk is bounded by
+  // facts.length / INGEST_CHUNK. Revision is simply the wrong metric for its
+  // depth. Finite as runaway insurance, far above any plausible sync count.
+  maxDepth: 100_000,
   params: {
     path: '${value.path}',
     content: '${value.content}',
