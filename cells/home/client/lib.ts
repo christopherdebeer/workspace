@@ -227,13 +227,39 @@ export async function getJson(path: string, init?: RequestInit): Promise<{ statu
   return { status: res.status, body };
 }
 
+// ── transient-fault retry (reads only) ─────────────────────────────────────
+// DynamoDB throttling (the single-partition ceiling), gateway 5xx, and edge
+// hiccups all present as ONE-SHOT failures that the page then renders as
+// absence: the layout read dies → positions default; an entry page dies → the
+// graph looks empty or stalls. Reads are idempotent, so retry them with
+// jittered backoff — the same TRANSIENT discipline the kernel gateway-client
+// applies. Acts stay one-shot: a retried mutation could double-apply.
+const TRANSIENT = [/HTTP 5\d\d/, /HTTP 429/, /throughput/i, /throttl/i, /rate ?limit/i, /timed out/i, /failed to fetch|networkerror|load failed/i];
+const isTransientFailure = (value: unknown): boolean =>
+  typeof value === 'string' && TRANSIENT.some((re) => re.test(value));
+// Four attempts spread over ~7s of full-jitter backoff: a DynamoDB throttle
+// window is seconds long, so a 300ms-base retry burns its attempts inside the
+// same window and still fails. Matches the kernel gateway-client's pacing.
+const READ_RETRIES = 4;
+const retryDelayMs = (attempt: number): number => Math.round(500 * 2 ** attempt * (0.5 + Math.random() * 0.5));
+
 /**
  * Invoke a capability through the gateway's MCP endpoint, exactly as an agent
  * would: `tools/call` with name=read|act and `{ target, input }`. Returns the
  * tool's JSON result (or its error text). This is the one call the whole page
  * is built on — the human drives read/act the same way the agent does.
+ * Reads retry transient failures (throttling, 5xx) before reporting them.
  */
 export async function mcpCall(verb: 'read' | 'act', target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
+  let out = await mcpCallOnce(verb, target, input);
+  for (let attempt = 0; verb === 'read' && !out.ok && isTransientFailure(out.value) && attempt < READ_RETRIES; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+    out = await mcpCallOnce(verb, target, input);
+  }
+  return out;
+}
+
+async function mcpCallOnce(verb: 'read' | 'act', target: string, input?: unknown): Promise<{ ok: boolean; value: unknown }> {
   const requestId = nextRpcId();
   if (!target || target.length > 256) return { ok: false, value: 'invalid capability target' };
   try {

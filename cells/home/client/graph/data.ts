@@ -112,18 +112,37 @@ const EDGE_KEY_CHUNK = 20;
  * exceeded the budget, taking the graph's edges with it. Chunking bounds the
  * RESPONSE instead: fixed keys per request, concurrent, merged.
  */
+/** The membrane's budget refusal is DETERMINISTIC — retrying the same chunk
+ *  verbatim can never succeed. A dense chunk (hubs land together in salience
+ *  order) can exceed the estimate above, so on refusal SPLIT the chunk and
+ *  recurse; a single key still over budget is one hub's whole neighbourhood —
+ *  take it knowingly with `whole: true` rather than dropping its edges. */
+const BUDGET_REFUSED = /too large to return whole/;
+async function fetchEdgeChunk(chunk: string[]): Promise<{ edges: GEdge[]; total: number }> {
+  const r = await mcpCall('read', 'workspace.edges', { keys: chunk, derived: false, limit: LIVE_EDGE_CAPACITY });
+  if (r.ok) {
+    const page = r.value as { edges?: GEdge[]; total?: number } | null;
+    return { edges: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
+  }
+  if (typeof r.value === 'string' && BUDGET_REFUSED.test(r.value)) {
+    if (chunk.length === 1) {
+      const rw = await mcpCall('read', 'workspace.edges', { keys: chunk, derived: false, limit: LIVE_EDGE_CAPACITY, whole: true });
+      if (!rw.ok) return { edges: [], total: 0 };
+      const page = rw.value as { edges?: GEdge[]; total?: number } | null;
+      return { edges: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
+    }
+    const mid = Math.ceil(chunk.length / 2);
+    const [a, b] = await Promise.all([fetchEdgeChunk(chunk.slice(0, mid)), fetchEdgeChunk(chunk.slice(mid))]);
+    return { edges: [...a.edges, ...b.edges], total: a.total + b.total };
+  }
+  return { edges: [], total: 0 };
+}
+
 export async function fetchEdgesForKeys(keys: string[]): Promise<{ items: GEdge[]; total: number }> {
   if (!keys.length) return { items: [], total: 0 };
   const chunks: string[][] = [];
   for (let i = 0; i < keys.length; i += EDGE_KEY_CHUNK) chunks.push(keys.slice(i, i + EDGE_KEY_CHUNK));
-  const pages = await Promise.all(
-    chunks.map(async (chunk) => {
-      const r = await mcpCall('read', 'workspace.edges', { keys: chunk, derived: false, limit: LIVE_EDGE_CAPACITY });
-      if (!r.ok) return { edges: [] as GEdge[], total: 0 };
-      const page = r.value as { edges?: GEdge[]; total?: number } | null;
-      return { edges: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
-    }),
-  );
+  const pages = await Promise.all(chunks.map(fetchEdgeChunk));
   // A chunk boundary can surface the same edge twice (both endpoints in the key
   // set land in different chunks), so dedupe on the edge's identity triple.
   const seen = new Set<string>();
