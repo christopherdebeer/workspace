@@ -399,6 +399,39 @@ Warm page: ~44 point reads instead of two full partitions — about 50× fewer R
 re-rank. The partition ceiling still stands and still wants the sharding design; but the
 hot path no longer spends the whole partition to serve forty facts.
 
+
+## The evening: what the budget broke that mattered, and the shape of the fix
+
+Three user-visible reports against the home graph — empty on load, positions
+defaulting, loading far slower — and three different causes, none of them auth:
+
+**Empty on load was the CDN, not us.** The graph's 3D stack is six runtime imports
+from esm.sh, `.catch(() => null)`, no retry — and the `??=` memo *cached the
+failure* for the life of the page. esm.sh was measured flapping (200 → 503 → 200
+inside a minute, server-side). The devtools harness proved the converse: identical
+client + data renders the moment the imports succeed. Fixed: bounded jittered
+retries, memos reset on failure.
+
+**Positions defaulting was the budget refusing the layout.** `_home/embed2d` is
+~82KB (a PCA basis is two 1024-float rows); the shard query ~655KB. Both refused,
+both defensively caught, so refusal silently became "no coordinates". The fix is a
+principle, not a workaround: the budget protects the *caller* from a result it
+did not know would be huge — it is not an authority boundary — so the gateway now
+honors **`whole: true`**, the caller's informed consent, stripped at the membrane
+before any capability sees it, reads only, refusal message names it.
+
+**Slow loading was the serial pump.** Budget-sized pages (40) × a serial reveal
+loop = ~225 round trips where 40 used to do. The cursor is a numeric offset and
+`total` is known from page one, so the pump now fetches six pages concurrently
+per tick — the old throughput, budget-sized responses — and the burst lands on
+the ranking digest's warm path, so it costs less server-side than one cold page
+did this morning.
+
+The pattern across all three: a guard added for agents was inherited by a UI, and
+every failure it caused was *silent* because the UI catches defensively. The
+membrane lesson cuts both ways — refuse loud toward agents, but a UI that asks
+knowingly must be able to consent.
+
 ## The method note
 
 The audit numbers were all real, and the story they told was false. "15,482 pending against
