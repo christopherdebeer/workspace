@@ -154,11 +154,27 @@ interface QueryEntry { key: string; value?: unknown }
 interface NeighborsResult { outbound?: Array<{ to: string; rel: string }> }
 
 // workspace.ingest caps at 100 facts/call AND every gw() call crosses the
-// CloudFront-fronted /mcp gateway with its ~30s origin timeout, while
-// ingest writes facts sequentially at ~0.85s each. 20/chunk (~17s) leaves
-// real headroom — 30/chunk (~25.5s + overhead) ran RIGHT AT the ceiling
-// and slow chunks still 504'd (2026-07-12, third live iteration on this).
-const INGEST_CHUNK = 20;
+// CloudFront-fronted /mcp gateway, while ingest writes facts sequentially and
+// every put recomputes salience — so per-fact cost RISES WITH SLICE SIZE.
+//
+// That last part is why this constant kept losing. It was set to 20 (~17s) in
+// 2026-07-12 against a measured ~0.85s/fact, sized to leave headroom under what
+// the comment called a ~30s origin timeout. The budget was real; the per-fact
+// figure was not durable. The slice has since grown past 7,600 facts, the true
+// cost per put grew with it, and 20 quietly stopped fitting: measured
+// 2026-07-29, BOTH lit reactions were failing continuously on `gateway HTTP 504`
+// (`_reaction-errors/lit-decompose-chunk` at revision 507,
+// `lit-decompose-markdown` at 267), so every document too large for one chunk
+// had been stalling at `done: 0` with its continuation baton left live.
+//
+// Two changes, because either alone would just move the cliff: the edge now
+// actually waits 60s (it was defaulting to 30 in front of a 150s gateway — see
+// ORIGIN_READ_TIMEOUT in platform/infra/service-router.ts), and the batch comes
+// down to 10. Sizing a batch against a measured per-fact latency is what failed;
+// 10 is chosen to hold at several times the cost that broke 20, so slice growth
+// has to be large before this is worth revisiting. The cost of a smaller chunk
+// is more continuation steps, which is exactly what ADR-0083's chain is for.
+const INGEST_CHUNK = 10;
 
 /** The FINISH phase: retire whatever a prior decomposition wrote that this
  *  version no longer wants (blocks + order decorations), then reconcile each
