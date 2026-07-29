@@ -3047,17 +3047,46 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
 
       // Fetch ONE small page and append it — the map accretes a couple hundred
       // stars at a time. Returns true if there is more to chart.
+      // Pages per reveal tick, fetched CONCURRENTLY. The read budget forced the
+      // page down to 40 entries (a card page must fit 60KB), and a SERIAL pump
+      // at 40/tick made a full chart of an ~9k slice take minutes — the
+      // "loading is far slower" regression (2026-07-29). The cursor is a plain
+      // numeric offset and `total` is known from the first page, so every
+      // offset in a burst is knowable up front — which is exactly the
+      // concurrent shape this loader's own header comment always promised.
+      // 6 × 40 = 240 entries per tick keeps each RESPONSE inside the budget
+      // while restoring the old per-tick throughput (the 220-entry reveal).
+      const REVEAL_BURST = 6;
+      let revealFailStreak = 0;
       const revealOnce = async (): Promise<boolean> => {
         if (disposed || revealing || !nextCursor) return false;
         revealing = true;
         reportReach(true);
-        const cursor = nextCursor;
         try {
-          const page = await fetchEntryPage(cursor, REVEAL_ENTRY_LIMIT);
-          if (disposed || !page.ok) return false;
-          graphTotal = page.total || graphTotal;
-          nextCursor = page.nextCursor;
-          const fresh = page.items.filter((entry) => !!entry?.key);
+          const start = Number.parseInt(nextCursor, 10) || 0;
+          const offsets: number[] = [];
+          for (let i = 0; i < REVEAL_BURST; i++) {
+            const off = start + i * REVEAL_ENTRY_LIMIT;
+            if (graphTotal && off >= graphTotal) break;
+            offsets.push(off);
+          }
+          if (!offsets.length) { nextCursor = null; return false; }
+          const pages = await Promise.all(offsets.map((off) => fetchEntryPage(String(off), REVEAL_ENTRY_LIMIT)));
+          if (disposed) return false;
+          const okPages = pages.filter((p) => p.ok);
+          if (!okPages.length) {
+            // Nothing landed (throttle burst, offline) — back off; three dry
+            // ticks in a row parks the pump on the pause/resume button.
+            revealFailStreak++;
+            return revealFailStreak < 3;
+          }
+          revealFailStreak = 0;
+          graphTotal = okPages[okPages.length - 1].total || graphTotal;
+          // Advance past the burst only if every page landed; otherwise resume
+          // from the first failed offset so nothing is skipped silently.
+          const firstFail = pages.findIndex((p) => !p.ok);
+          nextCursor = firstFail === -1 ? pages[pages.length - 1].nextCursor : String(offsets[firstFail]);
+          const fresh = okPages.flatMap((p) => p.items).filter((entry) => !!entry?.key);
           stream.appendEntries(fresh);
           charted = Math.min(graphTotal, charted + fresh.length);
           setProgress({ got: charted, total: graphTotal });
@@ -3070,10 +3099,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         }
       };
       // The self-paced pump: after the fast orientation page, the rest fills in
-      // AUTOMATICALLY — small page, a breath for the GPU/DOM, next page — until
-      // the whole substrate is charted. No manual "+n" tap; the button is now a
-      // pause/resume for this trickle.
-      const REVEAL_GAP_MS = 140;
+      // AUTOMATICALLY — a concurrent burst, a breath for the GPU/DOM, next
+      // burst — until the whole substrate is charted. No manual "+n" tap; the
+      // button is now a pause/resume for this trickle.
+      const REVEAL_GAP_MS = 80;
       const pump = async (): Promise<void> => {
         if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
         if (disposed || autoPaused) { reportReach(false); return; }
