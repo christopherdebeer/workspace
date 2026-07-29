@@ -14,8 +14,22 @@
         "context": "string[]? — substrate keys a decision should read"
       },
       "handlers": {
-        "open": [{ "path": "/m/${id}" }],
-        "render": [{ "renderer": "ui://@c15r/machine/renderers/machine.js" }, { "renderer": "_renderers/machine" }, { "hint": "fields" }]
+        "open": [
+          {
+            "path": "/m/${id}"
+          }
+        ],
+        "render": [
+          {
+            "renderer": "ui://@c15r/machine/renderers/machine.js"
+          },
+          {
+            "renderer": "_renderers/machine"
+          },
+          {
+            "hint": "fields"
+          }
+        ]
       }
     },
     {
@@ -32,10 +46,18 @@
       },
       "keyPattern": "machine/{machine}/node/{node}",
       "keyEdges": [
-        { "from": "machine/{machine}/node/{node}", "rel": "inMachine", "to": "machine/{machine}" }
+        {
+          "from": "machine/{machine}/node/{node}",
+          "rel": "inMachine",
+          "to": "machine/{machine}"
+        }
       ],
       "handlers": {
-        "render": [{ "hint": "fields" }]
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
       }
     },
     {
@@ -43,7 +65,7 @@
       "icon": "🛤️",
       "label": "value.mode",
       "manager": "@c15r/machine",
-      "note": "An executable transition (rail) between two nodes, keyed `machine/<machine>/rail/<from>~<to>`. A CONTENT-BEARING edge: it carries the execution semantics (mode/condition/prompt/…) as fact fields, and its key-encoded rule (ADR-0003/0016) projects a node —rail→ node graph edge — the substrate's answer to 'edges with attributes' (first-class edges hold only rel+strength). This is ADR-0003 step 4 realised.",
+      "note": "An executable transition (rail) between two nodes, keyed `machine/<machine>/rail/<from>~<to>`. A CONTENT-BEARING edge: it carries the execution semantics (mode/condition/prompt/…) as fact fields, and its key-encoded rule (ADR-0003/0016) projects a node —rail→ node graph edge — the substrate's answer to 'edges with attributes' (first-class edges hold only rel+strength). This is ADR-0003 step 4 realised. `when` is the TRIGGER (docs/machine.md §8, borrowed from Agent Skills): the Level-1 'when to use this branch' descriptor a decider sees without the rail's full `prompt` body. Declaring it as `trigger` (ADR-0094 Inc 2) makes it lead the embedded text too, so a rail is retrievable by the SITUATION it handles and not only readable once you are already standing at its decision node.",
       "schema": {
         "machine": "string — the owning machine slug",
         "from": "string — source node name",
@@ -58,11 +80,20 @@
       },
       "keyPattern": "machine/{machine}/rail/{from}~{to}",
       "keyEdges": [
-        { "from": "machine/{machine}/node/{from}", "rel": "rail", "to": "machine/{machine}/node/{to}" }
+        {
+          "from": "machine/{machine}/node/{from}",
+          "rel": "rail",
+          "to": "machine/{machine}/node/{to}"
+        }
       ],
       "handlers": {
-        "render": [{ "hint": "fields" }]
-      }
+        "render": [
+          {
+            "hint": "fields"
+          }
+        ]
+      },
+      "trigger": "when"
     },
     {
       "type": "machine-run",
@@ -79,8 +110,19 @@
         "at": "string? — ISO time of the last transition"
       },
       "handlers": {
-        "open": [{ "path": "/r/${key}" }],
-        "render": [{ "renderer": "ui://@c15r/machine/renderers/machine-run.js" }, { "hint": "fields" }]
+        "open": [
+          {
+            "path": "/r/${key}"
+          }
+        ],
+        "render": [
+          {
+            "renderer": "ui://@c15r/machine/renderers/machine-run.js"
+          },
+          {
+            "hint": "fields"
+          }
+        ]
       }
     }
   ]

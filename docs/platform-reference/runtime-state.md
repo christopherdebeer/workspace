@@ -11,7 +11,7 @@ Two of the platform's core primitives are *born* here:
 
 The `cell` axis touches this subsystem through its runtime seams: `config.ts` surfaces the granted substrate-table binding (`SUBSTRATE_TABLE`, distinct from a cell's private `TABLE_NAME`), and `dynamo-state-store-v3.ts` is the on-cell realisation of the store (Node 20 ships AWS SDK v3 ambiently, not v2). `edge-http` does not appear in this subsystem.
 
-> A note on a live gap the deep read surfaced: `workspace.graph` errors "Unhandled" at the deployed edge-query seam while `workspace.edges` (ADR-0069 unified) works. The `graph()`/`edges()` methods here (`state.ts:1948`, `state.ts:1952`) are sound — the fault is in the surface routing above this floor, not in this subsystem.
+> A note on the edge-query seam above this floor: `workspace.graph` is retired (ADR-0069 — `workspace.edges` is the unified form); an earlier reading recorded it erroring "Unhandled" live, which was the pre-retirement symptom. The `graph()`/`edges()` methods here (`state.ts:1948`, `state.ts:1952`) are sound, but note they return ALL edges when `limit` is undefined — the bound lives in the callers, and the gateway's `$graph` sentinel now supplies one.
 
 ---
 

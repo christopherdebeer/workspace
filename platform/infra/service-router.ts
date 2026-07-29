@@ -8,6 +8,36 @@ import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { HttpServiceCell } from './http-service-cell';
 
 /**
+ * How long CloudFront waits for an origin response.
+ *
+ * CloudFront's default is **30 seconds**, and nothing set it — so every
+ * deliberate Lambda timeout increase behind this edge was invisible from
+ * outside it. The workspace cell was raised 15s → 60s → 120s and the gateway to
+ * 150s, each time to stop a slow batch surfacing as a 5xx, while the edge went
+ * on hanging up at 30. The caller sees `HTTP 504`, which reads like the origin
+ * died rather than like CloudFront stopped waiting for it.
+ *
+ * What that cost, measured 2026-07-29: `@c15r/lit`'s markdown ingestion calls
+ * back through this edge for `workspace.ingest`, and on a slice this size each
+ * put recomputes salience. Both reactions were failing continuously —
+ * `_reaction-errors/lit-decompose-chunk` at revision 507,
+ * `_reaction-errors/lit-decompose-markdown` at 267, both `gateway HTTP 504`,
+ * both still firing. Every document too large for one ingest chunk had been
+ * stalling at `done: 0` with its continuation baton left live. ADR-0083's
+ * chunking could not help: a chunk is still one synchronous call through a 30s
+ * edge.
+ *
+ * 60s is the ceiling CloudFront allows without a service-quota increase, so it
+ * is the most the edge can be told to wait; it still sits under the gateway's
+ * 150s and the workspace's 120s, which is the correct ordering (the edge should
+ * give up last, not first). Raising it is not the whole answer — a batch that
+ * needs more than a minute is too big, which is why `INGEST_CHUNK` came down
+ * alongside this — but a 30s edge in front of a 150s service is simply a
+ * misconfiguration.
+ */
+const ORIGIN_READ_TIMEOUT = cdk.Duration.seconds(60);
+
+/**
  * Lambda@Edge (origin-request) source. CloudFront OAC signs origin requests with
  * SigV4, but for an IAM-protected Function URL it does NOT hash the request body
  * for POST/PUT/PATCH — it expects an `x-amz-content-sha256` header, and Lambda
@@ -177,6 +207,7 @@ export class ServiceRouter extends Construct {
         cell,
         origins.FunctionUrlOrigin.withOriginAccessControl(cell.functionUrl, {
           originAccessControl: oac,
+          readTimeout: ORIGIN_READ_TIMEOUT,
         }),
       ]),
     );
@@ -296,6 +327,7 @@ export class ServiceRouter extends Construct {
     if (props.cellHostRouter && props.cellDomainNames?.length && props.cellCertificate) {
       const cellOrigin = origins.FunctionUrlOrigin.withOriginAccessControl(props.cellHostRouter.functionUrl, {
         originAccessControl: oac,
+        readTimeout: ORIGIN_READ_TIMEOUT,
       });
       const hostRewrite = new cloudfront.Function(this, 'CellHostRewrite', {
         code: cloudfront.FunctionCode.fromInline(CELL_HOST_REWRITE_SRC),

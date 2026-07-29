@@ -528,6 +528,124 @@ function resolveSalience(o?: SalienceOptions): ResolvedSalience {
 export const SALIENCE_CONFIG_KEY = '_config/salience';
 
 /**
+ * Where the LEARNED per-type bias lives — derived, platform-written, and layered
+ * UNDER `_config/salience` so a human pin always wins (ADR-0094 Inc 1).
+ *
+ * `_index/*` is the derived namespace (`_index/overview` is the recall digest),
+ * distinct from `_config/*` which is what the owner asserts.
+ */
+export const TYPE_BIAS_KEY = '_index/type-bias';
+
+export interface TypeBiasOptions {
+  /** Facts of a type before its evidence is fully trusted. Below this the prior
+   *  shrinks toward 1 — a type with three facts should not swing the ranking on
+   *  one peek. Default 40. */
+  confidenceK?: number;
+  /** A learned prior is a bias, not a verdict: it can quiet a type but never
+   *  silence it, so a wrongly-demoted type stays reachable and can recover. */
+  minPrior?: number;
+  /** Default 1: the learner DEMOTES ONLY. See the note on `learnTypePriors`. */
+  maxPrior?: number;
+}
+
+/** A learned prior within this of 1 is not worth recording — keeps the derived
+ *  map small and legible next to a hand-written one. */
+const BIAS_DEADBAND = 0.05;
+
+/**
+ * Learn a per-type salience prior from what the slice actually CHOOSES to read.
+ *
+ * The signal is deliberate reads per fact, relative to the slice average:
+ *
+ *     lift(T) = (chosen(T) / Σchosen) / (facts(T) / Σfacts)
+ *
+ * `chosen` counts human + agent READ touches only. That is the load-bearing
+ * detail, and it is what makes this non-circular: **being surfaced is not a
+ * touch.** `recall`/`query`/`read`/`getMany` record nothing (ADR-0050 via
+ * ADR-0055 — "rendering must not inflate salience"); only `get`/`peek` and the
+ * explicit capability wire do. So appearing in the focus band raises a type's
+ * DENOMINATOR (its share of the corpus) and never its numerator. A type that
+ * keeps winning the band and never gets opened is demoted BY winning it.
+ *
+ * That inverts the failure mode a naive "popularity" prior would have. It is
+ * `adaptive-salience.md`'s evaporation, stated as arithmetic: *"Views never
+ * referenced, actions never invoked, state keys never read — these are stale
+ * pheromone trails. Salience should track usage, not just existence."*
+ *
+ * Platform reads (`pr`) are excluded: machinery reading machinery is not a
+ * choice. Writes are excluded entirely — a type written constantly by a cell
+ * (every `task` status flip, every layout shard) must not thereby look wanted.
+ *
+ * **It demotes only** (`maxPrior` 1). The first live run promoted
+ * `graph-layout-shard`, `config` and `frame` to the ceiling — tiny types that a
+ * rendering client and a verification probe fetch BY KEY, over and over. Those
+ * are programmatic fetches wearing the owner's identity, and nothing bounds
+ * them: a client that polls a fact hard enough can promote its whole type. There
+ * is no such hazard on the demotion side, where the floor and the unpriored
+ * `relevance` path both guarantee recovery. So the asymmetry is structural, not
+ * a tuning choice — and it is what the source doctrine actually says:
+ * *"Actively reinforced vocabulary stays prominent. Abandoned vocabulary
+ * fades."* Stays prominent is 1. Fades is below it. This is an evaporation
+ * mechanism, not a popularity contest.
+ *
+ * Pure and total: no I/O, no clock. Returns `{}` when there is no evidence at
+ * all, so a cold slice ranks exactly as it does today.
+ */
+export function learnTypePriors(
+  records: ReadonlyArray<Pick<StateRecord, 'type' | 'touches' | 'superseded'>>,
+  opts?: TypeBiasOptions,
+): Record<string, number> {
+  const K = opts?.confidenceK ?? 40;
+  const min = opts?.minPrior ?? 0.2;
+  const max = opts?.maxPrior ?? 1;
+
+  const facts = new Map<string, number>();
+  const chosen = new Map<string, number>();
+  let totalFacts = 0;
+  let totalChosen = 0;
+  for (const r of records) {
+    if (r.superseded) continue;
+    const t = r.type ?? '';
+    // Deliberate reads only: a human or an agent asking for THIS fact by key.
+    const c = (r.touches?.hr ?? 0) + (r.touches?.ar ?? 0);
+    facts.set(t, (facts.get(t) ?? 0) + 1);
+    chosen.set(t, (chosen.get(t) ?? 0) + c);
+    totalFacts += 1;
+    totalChosen += c;
+  }
+  // No deliberate read anywhere: nothing has been chosen, so nothing is
+  // evidence. Stay neutral rather than inventing a ranking.
+  if (!totalFacts || !totalChosen) return {};
+
+  // Smooth with pseudo-counts rather than a linear shrink toward 1: a type is
+  // judged as if it also carried `K` facts drawn at the slice's own average
+  // rate. A type with three facts therefore reads as "mostly average" until it
+  // has the exposure to say otherwise, while a type with thousands is judged on
+  // its own record. This is the standard fix for a ratio over small denominators
+  // — without it, a 3-fact type that happens to absorb half the slice's peeks
+  // computes a lift near 80 and pins the ceiling on what is really noise.
+  const globalRate = totalChosen / totalFacts;
+  const out: Record<string, number> = {};
+  for (const [t, n] of facts) {
+    const rate = ((chosen.get(t) ?? 0) + K * globalRate) / (n + K);
+    const prior = Math.min(max, Math.max(min, rate / globalRate));
+    if (Math.abs(prior - 1) > BIAS_DEADBAND) out[t] = Math.round(prior * 100) / 100;
+  }
+  return out;
+}
+
+/** Layer a learned bias under an asserted config. `typePriors` merge per TYPE —
+ *  pinning one type must not discard everything the slice learned about the
+ *  others — and every other field is the owner's outright. */
+export function layerTypeBias(
+  learned: Record<string, number> | null | undefined,
+  asserted: Partial<SalienceOptions> | null | undefined,
+): Partial<SalienceOptions> | null {
+  if (!learned || !Object.keys(learned).length) return asserted ?? null;
+  return { ...(asserted ?? {}), typePriors: { ...learned, ...(asserted?.typePriors ?? {}) } };
+}
+
+/**
  * Reserved key for a scope's DECLARED lens presets (ADR-0078): a fact whose
  * value is `{ <name>: Partial<SalienceOptions> }` — e.g.
  * `{ review: { rewardWeight: 0.4, recencyWeight: 0.2 } }` — names a reusable
@@ -1488,14 +1606,32 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
   }
 
   async function loadSalienceConfig(scope: string): Promise<Partial<SalienceOptions> | null> {
-    let rec: StateRecord | null;
+    // Both reads are store-side (no touch, no seq): reading your own policy must
+    // not itself register as attention. Either may be absent; either may fail.
+    const [asserted, learned] = await Promise.all([
+      store
+        .get(scope, SALIENCE_CONFIG_KEY)
+        .then((rec) => (!rec || rec.superseded || !isTimerLive(rec, Date.now()) ? null : parseSalienceConfig(rec.value)))
+        .catch(() => null),
+      loadTypeBias(scope),
+    ]);
+    // defaults ← LEARNED bias ← asserted config. A human pin always wins, per
+    // type, so the owner can correct the learner without discarding it.
+    return layerTypeBias(learned, asserted);
+  }
+
+  /** The derived per-type bias (`_index/type-bias`), sanitized through the same
+   *  defensive filter as an asserted config — a derived fact is still a fact,
+   *  and a corrupt one must never be able to break a read. */
+  async function loadTypeBias(scope: string): Promise<Record<string, number> | null> {
     try {
-      rec = await store.get(scope, SALIENCE_CONFIG_KEY);
+      const rec = await store.get(scope, TYPE_BIAS_KEY);
+      if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
+      const parsed = parseSalienceConfig(rec.value);
+      return parsed?.typePriors ?? null;
     } catch {
       return null;
     }
-    if (!rec || rec.superseded || !isTimerLive(rec, Date.now())) return null;
-    return parseSalienceConfig(rec.value);
   }
 
   /** The per-call base: a scope's config layered over the instance defaults, sitting

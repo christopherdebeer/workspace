@@ -114,7 +114,7 @@ async function loadDoc(docId: string, projection: 'narrative' | 'salience'): Pro
   const docFact = await fetchFact(`doc:${docId}`);
   if (!docFact) return null;
   const meta = docFact.value as DocValue;
-  // Membership + order + content + presentation in ONE read (workspace.members,
+  // Membership + order + content + presentation in ONE read (workspace.edges{membership},
   // ADR-0005/0014 row 2): each extensional member carries its placing decoration's
   // {seq, fold}, so lit no longer re-scans `_doc/<id>/` + fetches each fact itself.
   const res = await read<{ members: Array<{ key: string; value: unknown; _meta?: { score?: number }; placement?: { seq?: number; fold?: boolean } }> }>(

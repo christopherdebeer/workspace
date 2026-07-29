@@ -170,7 +170,10 @@ const RETIRED: Record<string, string> = {
   'workspace.search': 'workspace.query({ text })',
   'workspace.neighbors': 'workspace.edges({ around: key })',
   'workspace.links': 'workspace.edges({ derived: false })',
-  'workspace.graph': 'workspace.edges({}) — paged; also read("$graph")',
+  // Point at a BOUNDED successor. The bare projection is the largest read the
+  // membrane can serve, so routing a retired name at `read("$graph")` (as this
+  // entry did) handed callers a ~200KB payload as the recommended fix.
+  'workspace.graph': 'workspace.edges({ limit }) — paged, or workspace.edges({ around: key }) for one neighbourhood; read("$graph") is the skim',
   'workspace.members': 'workspace.edges({ around: key, membership: true })',
   'workspace.registerAction': 'workspace.declare({ kind: "action", def })',
   'workspace.invoke': 'workspace.evaluate({ kind: "action", id, params })',
@@ -550,6 +553,59 @@ function withRender(result: unknown, cap: Capability): unknown {
   return { ...(result as Record<string, unknown>), _render: { renderer: cap.ui.renderer, as: cap.ui.as ?? cap.target } };
 }
 
+/* ─── the self-model read budget ──────────────────────────────────────────────
+ * Measure the DELIVERED form: the MCP layer serializes results pretty-printed
+ * (indent 2), ~1.5× the compact size — a compact measure lets an over-cap result
+ * slip the guard and overflow anyway (wave-5 W6-A).
+ *
+ * This started life inside the `$catalog {detail:"full"}` branch and was never
+ * generalized, so the sibling sentinels inherited nothing: `read("$graph")`
+ * returned 208,915 delivered bytes and blew the caller's read cap with no
+ * guard and no advice (wave-7). Applying it to EVERY sentinel is the general
+ * fix the protocol's honesty rule asks for — the next sentinel added inherits
+ * the bound instead of re-learning it. */
+const FULL_BUDGET = 60_000;
+const deliveredBytes = (r: unknown): number => JSON.stringify(r, null, 2).length;
+const overBudget = (r: unknown): boolean => deliveredBytes(r) > FULL_BUDGET;
+
+/**
+ * How to narrow an over-budget read of `target`. The generic line is the floor;
+ * the named ones exist because the right narrowing differs per surface and an
+ * agent that has just been refused should not have to go and look it up.
+ */
+function narrowingFor(target: string): string {
+  switch (target) {
+    case 'workspace.recall':
+      return 'recall has no `limit` or `cursor` — the whole shaped view is all-or-nothing. Use the DEFAULT overview (omit `view`), which is the succinct orientation, then narrow with workspace.query({ type | prefix | tag | contains, limit }).';
+    case 'workspace.query':
+    case 'workspace.read':
+      return 'Pass a smaller `limit`, page with `cursor`, or `shape:"refs"` to drop values and keep only keys + `_meta`.';
+    case 'workspace.edges':
+      return 'Use { around: "<key>" } for one neighbourhood, a smaller `limit` on the projection framings, or `shape:"refs"`.';
+    case 'workspace.changes':
+      return 'Pass a smaller `limit`, or scope the feed with { scope: { prefixes, ops } }.';
+    default:
+      return 'Narrow the read — most reads take a `limit` and a `cursor`, and `shape:"refs"` drops values.';
+  }
+}
+
+/** Fail LOUD with the way to narrow, never a silent truncation (the F7/W3f
+ *  lesson). `narrow` names the finer-grained read for this surface. */
+function guardSentinel<T>(target: string, result: T, narrow: string): T {
+  if (!overBudget(result)) return result;
+  const kb = Math.round(deliveredBytes(result) / 1000);
+  throw new Error(
+    `read("${target}") is too large to return whole (${kb}KB over the ${FULL_BUDGET / 1000}KB read budget). ${narrow}`,
+  );
+}
+
+/** ADR-0033 progressive disclosure applied to the projection sentinel: a bare
+ *  `$graph` is a SKIM, like a bare `$catalog` is the grouped menu. `edges`'
+ *  own default page (1000) is a service-side bound, not a membrane-side one —
+ *  1000 hydrated edges is ~200KB delivered. Callers who want more page with
+ *  `workspace.edges({ limit, cursor })`, which is where paging belongs. */
+const GRAPH_SKIM_LIMIT = 200;
+
 async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
   ctx = dispatchContext(input, ctx); // ADR-0086: `as` rides identity, never authority
   const target = (input?.target ?? '').trim();
@@ -600,15 +656,8 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
       // returns one cell's full schemas; an over-budget dump (whole OR a single
       // large cell — W6-A: workspace alone is ~80KB) fails LOUD with the way to
       // narrow, never a silent truncation (the F7/W3f lesson).
-      // Measure the DELIVERED form: the MCP layer serializes results
-      // pretty-printed (indent 2), which is ~1.5× the compact size — the
-      // workspace cell is 48.7KB compact but 73.7KB delivered, so a compact
-      // measure let it slip the guard and overflow anyway (W6-A follow-up:
-      // re-probe caught the guard firing on the whole dump but NOT on the one
-      // cell that overflows). Budget the indented bytes, comfortably under the
-      // read cap.
-      const FULL_BUDGET = 60_000; // bytes of the delivered (indented) payload
-      const overBudget = (r: unknown): boolean => JSON.stringify(r, null, 2).length > FULL_BUDGET;
+      // The budget + `overBudget` now live at module scope (see the self-model
+      // read budget above) so every sentinel is bounded, not just this one.
       if (opts?.cell) {
         const cell = String(opts.cell).trim();
         const scoped = caps.filter((c) => cellOf(c.target) === cell);
@@ -636,15 +685,30 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
     }
     return summarizeCatalog(caps);
   }
-  if (target === TYPES) return buildTypes(ctx);
-  // $graph — the Reference projection (authored + derived), the self-model's third surface.
-  if (target === GRAPH) return ctx.serviceClient('workspace').command('edges', {});
+  if (target === TYPES) {
+    return guardSentinel(TYPES, await buildTypes(ctx), 'Narrow with read("$catalog", {forType:"<type>"}) for one type\'s affordances.');
+  }
+  // $graph — the Reference projection (authored + derived), the self-model's third
+  // surface. Skimmed by default (ADR-0033) and budgeted like every other sentinel:
+  // the unbounded form was 208KB and blew the caller's read cap (wave-7).
+  if (target === GRAPH) {
+    const graph = await ctx.serviceClient('workspace').command('edges', { limit: GRAPH_SKIM_LIMIT });
+    return guardSentinel(
+      GRAPH,
+      graph,
+      'Narrow with workspace.edges({ around:"<key>" }) for one neighbourhood, or page it with workspace.edges({ limit, cursor }).',
+    );
+  }
   // $grants — the authority self-model (ADR-0007), the self-model's fourth surface:
   // what the caller may see and do (scope · grant · partition).
-  if (target === GRANTS) return ctx.serviceClient('workspace').command('grants', {});
+  if (target === GRANTS) {
+    return guardSentinel(GRANTS, await ctx.serviceClient('workspace').command('grants', {}), 'Narrow with workspace.grants({ ... }).');
+  }
   // $cells — the Cell axis (ADR-0008): each accessible cell's contract — what it
   // publishes (types), backs (surfaces), and may touch (ssr/caller). The infra axis.
-  if (target === CELLS) return ctx.serviceClient('cells').command('contracts', {});
+  if (target === CELLS) {
+    return guardSentinel(CELLS, await ctx.serviceClient('cells').command('contracts', {}), 'Narrow with read("$cells") per cell via cells.contracts({ name }).');
+  }
   // platform.logs — admin diagnostics: tail a TIER-1 service's CloudWatch logs
   // (the analogue of cells.logs for gateway/dispatch/workspace/auth/cells/home).
   // Gated on platform:admin; the cells service resolves + redacts.
@@ -659,7 +723,15 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   const check = enforceInput(target, input, cap.inputSchema);
   const out = await cap.forward(input?.input, ctx);
   await touchCapability(ctx, target, cap.kind);
-  return withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
+  // EVERY read is budgeted, not just the self-model sentinels (wave-8 W8-C-01).
+  // The guard was generalised to "every sentinel" and stopped exactly one step
+  // short of the largest read on the membrane: `recall({view:"full"})` returned
+  // 1,898,481 delivered bytes — unpaged, unguarded, and advertised by a hint a
+  // bare `recall()` emits unprompted. A response the client cannot receive is
+  // already a failure; refusing LOUD with the way to narrow beats spilling it to
+  // disk for the caller to re-parse. Reads only — refusing an `act` after the
+  // mutation landed would report failure for work that actually happened.
+  return guardSentinel(target, withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap), narrowingFor(target));
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {
@@ -830,14 +902,27 @@ const ACT_SCHEMA = {
 const tools: Record<string, McpToolDefinition> = {
   whoami: {
     title: 'Who am I',
-    description: 'Return the authenticated principal and granted scopes on the parc.land substrate.',
+    // The description IS the teaching surface (ADR-0033): it must say what the
+    // handler actually returns. It said "principal and granted scopes" — the
+    // identity-only text — for the whole life of ADR-0074 (posture) and ADR-0086
+    // (the ambient frame), so two accretions were invisible to every caller that
+    // read the advertisement instead of the code. Live probes then opened with
+    // whoami and reported it told them nothing (wave-7 W7-2): it does, it just
+    // never said so.
+    description:
+      'Orient: who you are on the parc.land substrate, what this session is FOR, and who else is here. Returns the authenticated principal + effective scopes, your adopted posture (the standing goal every workspace read resolves through — set with auth.adoptGoal), and the ambient frame of other embodied actors acting right now. Cheap and side-effect-free; the natural first call of a session. Then read("workspace.recall") for what is in the workspace.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
       properties: {
-        user: { type: 'string' },
-        scopes: { type: 'array' },
-        grant: { type: 'array' },
+        user: { type: 'string', description: 'The authenticated principal (slice owner), or "anonymous".' },
+        scopes: { type: 'array', description: "The session's EFFECTIVE focus — what is enforced right now." },
+        grant: { type: 'array', description: 'The token ceiling, surfaced only when it differs from `scopes` (i.e. the session has been narrowed or widened by incremental authorization).' },
+        actor: { type: 'string', description: 'Embodiment class (ADR-0022): a connected client is an `agent` acting on-behalf-of, and its attention weighs accordingly.' },
+        posture: {
+          type: 'object',
+          description: 'The adopted goal (ADR-0074): what this session is FOR. Every composed workspace read resolves through it — ranking only, never membership. Absent when nothing is adopted; set/clear with auth.adoptGoal / auth.dropGoal.',
+        },
         participants: {
           type: 'array',
           description: 'The ambient frame (ADR-0086): other embodied actors live on this substrate right now — each a `_presence/*` lease {participant, actor, lastTarget, lastSeen, until}. Absent when you are alone.',
@@ -926,11 +1011,19 @@ export const handler = defineMcpService({
   // into the model's context at connect — discovery must not depend on a
   // client knowing what "read/act" means here.
   instructions:
+    // These three sentences are the whole membrane's first glance — they land in
+    // the model's context at connect, before any call. They used to offer three
+    // COEQUAL doors ("Know your goal? …", "Browsing instead? …", "To orient …")
+    // with no ordering, and the doors are not equal: probe waves measured
+    // intent-first at 3 calls-to-answer against 8 for catalog browsing (wave-7),
+    // and 9 vs 12 in wave-5, whose SWARM-G finding was exactly this — "browsing
+    // works, it just costs more calls … the catalog could nudge toward the intent
+    // query." So the opener is now ORDERED, not enumerated.
     'The parc.land substrate: a personal productivity workspace of facts `{value, _meta}` with provenance, salience, links, declared actions/views, and deployable cells. ' +
-    'Three verbs: whoami (identity), read (observe), act (mutate). All capability lives in the `target` argument. Know your goal? read("workspace.query", {input:{text:"<goal>"}}) surfaces the relevant facts AND capabilities by meaning (ADR-0085) — the intent-first move. ' +
-    'Browsing instead? read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one full contract, {detail:"full"} for every schema). Targets look like workspace.query or @owner/cell.tool. ' +
-    'To orient in your data, read("workspace.recall") returns a succinct overview (counts + top facts + drill hints) by default — then narrow with workspace.query (filtered/paged; pass {text} for semantic ranking) or workspace.peek (one fact); recall({view:"full"}) is the whole shaped view. ' +
-    'read("$types") returns the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it.',
+    'Three verbs: whoami (who you are + what this session is for + who else is here), read (observe), act (mutate). All capability lives in the `target` argument; targets look like workspace.query or @owner/cell.tool. ' +
+    'ORIENT IN THIS ORDER. 1) whoami — cheap, and it carries your adopted posture and the live ambient frame. 2) If you know what you are here to do, read("workspace.query", {input:{text:"<your goal in plain words>"}}) — it ranks the relevant facts AND the capabilities that serve that goal by meaning (ADR-0085). This is the cheapest route to a first useful answer; reach for it before browsing. 3) Only if you have no goal yet, read("workspace.recall") for a succinct overview of what is here (counts + top facts + drill hints). ' +
+    'Browsing the surface: read("$catalog") is the grouped one-line menu ({resolve:"<target>"} for one contract, {detail:"full", cell:"<name>"} for one cell\'s schemas); read("$types") is the type vocabulary — how to open/edit/render a fact of a given type, and which cell manages it. ' +
+    'Then narrow: workspace.query (filtered/paged, {text} for semantic ranking) · workspace.peek (one fact) · workspace.edges({around}) (its links) · recall({view:"full"}) (the whole shaped view).',
   tools,
   // ADR-0034: declare the MCP-Apps UI extension (spec 2026-01-26 nests it under
   // `capabilities.extensions` with the supported `mimeTypes`) + serve the `ui://`

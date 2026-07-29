@@ -29,7 +29,7 @@ export interface GEdge {
 //
 // Every paged read's FIRST page already reports `total` — once known, every
 // remaining page's offset is knowable up front (both `workspace.query` and
-// `workspace.graph` use a plain numeric-offset cursor), so the rest fetch
+// `workspace.edges` use a plain numeric-offset cursor), so the rest fetch
 // CONCURRENTLY (bounded).
 //
 // STREAMING (2026-07-12, owner: "far more incremental… instead of two

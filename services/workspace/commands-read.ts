@@ -29,6 +29,8 @@ import {
   enforceTypeRead,
 } from './shared';
 import { runTend } from './event-handlers';
+import { degeneracyOf } from './commands-search';
+import { TOOL_DESCRIPTORS } from './descriptors';
 import type { WorkspaceCommands } from './handlers';
 
 /** Candidate-set size for a stated intent (ADR-0051): the vector top-K IS the
@@ -163,6 +165,53 @@ function keyPrefix(key: string): string {
   return cut === undefined ? key : key.slice(0, cut);
 }
 
+/**
+ * The ambient frame (ADR-0084 Open #4, ADR-0086 Inc 2) — what you should NOTICE,
+ * beside what you asked for.
+ *
+ * `adaptive-salience.md`: *"The substrate's capacity to direct attention toward
+ * what matters, including things the participant doesn't know to ask about …
+ * The environment should manage attention, not just comply with requests."*
+ *
+ * Why a HEADER and not the focus band: the focus band ranks the whole slice on
+ * one blended score, and in a docs-heavy corpus durable prose wins it — a live
+ * measurement found 10 of 12 focus cards were `doc`/`markdown`. Open work is not
+ * *more salient* than an essay; it is a **standing wait-condition**, a different
+ * kind of thing. ADR-0084 already ruled on where those belong: *"Parked driven
+ * runs are standing wait-conditions and belong in every driver's perception"* —
+ * "scoped to a frame header instead of a payload." So this adds a frame; it does
+ * NOT re-rank, and it withholds nothing (`adaptive-salience.md`: *"adds
+ * metadata; it does not withhold data"*).
+ *
+ * Size discipline, inherited from `livePresence()`: a few thin rows, never a
+ * roster dump; every block omitted when empty; never fails the read it decorates.
+ */
+export interface AmbientFrame {
+  /** What this session is FOR (ADR-0074's silent bias, made visible). */
+  posture?: { goal?: string; lens?: string };
+  /** Who else is acting right now (ADR-0086) — thin rows off `_presence/*`. */
+  participants?: Array<{ participant: string; actor?: string; lastTarget?: string }>;
+  /** Standing wait-conditions, per type that DECLARES itself ambient in its
+   *  `types.json`. Tier-1 never learns a cell's name: the vocabulary says what
+   *  counts as pending, exactly as it says how to render or key a fact. */
+  standing?: Record<
+    string,
+    {
+      count: number;
+      /** WHAT `count` counted, in the type's own words (e.g. "todo or doing").
+       *  The frame counts everything standing; the `verb` may apply readiness or
+       *  dependency rules the frame cannot see, so the two legitimately differ —
+       *  and a probe caught the frame reporting 3 where the verb returned 2
+       *  while the hint called the verb's answer "the full list" (wave-8
+       *  W8-D-01). Saying what was counted is what makes the difference honest
+       *  instead of a silent loss. */
+      basis?: string;
+      verb?: string;
+      top?: Array<{ key: string; title?: string }>;
+    }
+  >;
+}
+
 export interface RecallOverview {
   /** A broad, succinct orientation over the assembled view (ADR-0033). */
   overview: {
@@ -173,6 +222,8 @@ export interface RecallOverview {
     byType: Array<{ type: string | null; count: number }>;
     byPrefix: Array<{ prefix: string; count: number }>;
   };
+  /** What to NOTICE — posture, peers, and standing work. Omitted when empty. */
+  frame?: AmbientFrame;
   /** The top facts by salience, in full — the entry points worth reading now. */
   focus: Record<string, Entry>;
   /** How to dig deeper — this is progressive disclosure, not the whole view. */
@@ -182,6 +233,168 @@ export interface RecallOverview {
 
 /** Cap on facts returned in full in an overview's `focus` block. */
 const OVERVIEW_FOCUS = 12;
+/** Frame caps — a header, not a payload. */
+const FRAME_PEERS = 6;
+const FRAME_TOP = 3;
+
+/** A type's `ambient` declaration, when it carries one. */
+interface AmbientDecl {
+  /** The class this type contributes to, e.g. `"work"`. */
+  as: string;
+  /** Field→allowed-values predicate over `value`; all listed fields must match. */
+  when?: Record<string, string[]>;
+  /** Dotted path to a human label on `value` (e.g. `value.title`). */
+  label?: string;
+  /** The verb that answers this class authoritatively — the frame only points. */
+  verb?: string;
+}
+
+function ambientDecl(decl: Record<string, unknown> | undefined): AmbientDecl | null {
+  const a = decl?.ambient as Record<string, unknown> | undefined;
+  if (!a || typeof a !== 'object' || typeof a.as !== 'string' || !a.as.trim()) return null;
+  const when: Record<string, string[]> = {};
+  if (a.when && typeof a.when === 'object') {
+    for (const [k, v] of Object.entries(a.when as Record<string, unknown>)) {
+      if (Array.isArray(v)) when[k] = v.map(String);
+    }
+  }
+  return {
+    as: a.as.trim(),
+    ...(Object.keys(when).length ? { when } : {}),
+    ...(typeof a.label === 'string' ? { label: a.label } : {}),
+    ...(typeof a.verb === 'string' ? { verb: a.verb } : {}),
+  };
+}
+
+/** Read a `value.x.y` path off an entry, tolerantly. */
+function atPath(value: unknown, path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  let cur: unknown = { value };
+  for (const seg of path.split('.')) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return typeof cur === 'string' && cur.trim() ? cur.trim() : undefined;
+}
+
+/**
+ * Assemble the frame from facts ALREADY in hand — `merged` is the whole scored
+ * slice, so counting costs no extra round trip (the co-sizing discipline applies
+ * to latency as well as bytes).
+ */
+export function buildFrame(
+  merged: Record<string, Entry>,
+  decls: Record<string, Record<string, unknown>>,
+  posture?: { goal?: string; lens?: string } | null,
+): AmbientFrame | undefined {
+  const frame: AmbientFrame = {};
+  if (posture?.goal || posture?.lens) {
+    frame.posture = { ...(posture.goal ? { goal: posture.goal } : {}), ...(posture.lens ? { lens: posture.lens } : {}) };
+  }
+
+  // Peers: `_presence/*` leases. Liveness is the timer — a lapsed lease is
+  // already gone at read, so presence needs no filtering here (ADR-0086).
+  const peers: NonNullable<AmbientFrame['participants']> = [];
+  for (const [key, e] of Object.entries(merged)) {
+    if (!key.startsWith('_presence/') || peers.length >= FRAME_PEERS) continue;
+    const v = (e.value ?? {}) as { participant?: string; actor?: string; lastTarget?: string };
+    const participant = v.participant || key.slice('_presence/'.length);
+    if (!participant) continue;
+    peers.push({ participant, ...(v.actor ? { actor: v.actor } : {}), ...(v.lastTarget ? { lastTarget: v.lastTarget } : {}) });
+  }
+  if (peers.length) frame.participants = peers;
+
+  // Standing work, by declared ambient class.
+  const ambient = new Map<string, AmbientDecl>();
+  for (const [type, decl] of Object.entries(decls)) {
+    const a = ambientDecl(decl);
+    if (a) ambient.set(type, a);
+  }
+  if (ambient.size) {
+    const byClass = new Map<
+      string,
+      { count: number; verb?: string; basis?: string; hits: Array<{ key: string; title?: string; score: number }> }
+    >();
+    for (const [key, e] of Object.entries(merged)) {
+      const a = e._meta.type ? ambient.get(e._meta.type) : undefined;
+      if (!a) continue;
+      const v = (e.value ?? {}) as Record<string, unknown>;
+      if (a.when && !Object.entries(a.when).every(([f, allowed]) => allowed.includes(String(v[f])))) continue;
+      const slot = byClass.get(a.as) ?? { count: 0, ...(a.verb ? { verb: a.verb } : {}), hits: [] };
+      slot.count += 1;
+      if (!slot.verb && a.verb) slot.verb = a.verb;
+      // Say what was counted, derived from the type's own `when` predicate — so
+      // a caller can see WHY the frame's number and the verb's may differ.
+      if (a.when) {
+        const stated = Object.values(a.when).flat().join(' or ');
+        slot.basis = slot.basis && slot.basis !== stated ? `${slot.basis} or ${stated}` : stated;
+      }
+      slot.hits.push({ key, title: atPath(e.value, a.label), score: e._meta.score ?? 0 });
+      byClass.set(a.as, slot);
+    }
+    const standing: NonNullable<AmbientFrame['standing']> = {};
+    for (const [cls, slot] of byClass) {
+      const top = slot.hits
+        .sort((x, y) => y.score - x.score)
+        .slice(0, FRAME_TOP)
+        .map(({ key, title }) => ({ key, ...(title ? { title } : {}) }));
+      standing[cls] = {
+        count: slot.count,
+        ...(slot.basis ? { basis: slot.basis } : {}),
+        ...(slot.verb ? { verb: slot.verb } : {}),
+        ...(top.length ? { top } : {}),
+      };
+    }
+    if (Object.keys(standing).length) frame.standing = standing;
+  }
+
+  return Object.keys(frame).length ? frame : undefined;
+}
+
+/** The verbs this service actually declares — the live vocabulary, read off the
+ *  same descriptor list `describeTools` serves the gateway. */
+const LIVE_VERBS = new Set(TOOL_DESCRIPTORS.map((d) => d.name));
+
+/**
+ * Orientation hints as (verbs, text) pairs rather than free prose.
+ *
+ * A hint is INSTRUCTION — a bare `recall()` is the most-read teaching surface in
+ * the system — so it must never name a verb the membrane no longer accepts.
+ * Hard-coded prose drifts: this list shipped `search({ text })` and
+ * `neighbors({ key })` long after ADR-0069/0071 retired both, so every agent that
+ * followed the hints got `capability_retired` (wave-7). Each hint now DECLARES
+ * the verbs it mentions; `liveHints()` drops any hint naming a verb that is not
+ * in the live descriptor set, and the jest gate fails on one — so retiring a verb
+ * silences its hint in prod and breaks the build in CI, instead of rotting.
+ */
+export const OVERVIEW_HINTS: ReadonlyArray<{ verbs: string[]; text: string }> = [
+  { verbs: ['recall'], text: 'This is a succinct overview (the default). For the whole shaped view: recall({ view: "full" }).' },
+  { verbs: ['query'], text: 'Drill by structure: query({ type | prefix | tag | contains }) — filtered + paged.' },
+  { verbs: ['query'], text: 'Drill by meaning: query({ text }) — semantic candidates across your slice.' },
+  { verbs: ['peek', 'edges'], text: 'One fact: peek({ key }); its links: edges({ around: key }); the graph: read("$graph").' },
+  { verbs: ['suggestions'], text: 'Connection candidates the index proposes: suggestions().' },
+];
+
+/** The hints whose every named verb is still live, plus — when the frame carries
+ *  standing work — a pointer to the verb that answers it authoritatively. The
+ *  frame teases a count; the hint says how to get the list. */
+export function liveHints(
+  frame?: AmbientFrame,
+  hints: ReadonlyArray<{ verbs: string[]; text: string }> = OVERVIEW_HINTS,
+): string[] {
+  const out = hints.filter((h) => h.verbs.every((v) => LIVE_VERBS.has(v))).map((h) => h.text);
+  for (const [cls, s] of Object.entries(frame?.standing ?? {})) {
+    if (!s.verb) continue;
+    // NOT "the full list" — the verb may apply readiness or dependency rules the
+    // frame's census cannot see, and claiming otherwise loses items silently
+    // (wave-8 W8-D-01: frame said 3, the verb returned 2).
+    const basis = s.basis ? ` (${s.basis})` : '';
+    out.unshift(
+      `You have ${s.count} standing ${cls} item${s.count === 1 ? '' : 's'}${basis} — see frame.standing.${cls}. read("${s.verb}") lists the ones actionable now, which may be fewer.`,
+    );
+  }
+  return out;
+}
 
 /**
  * Distil the assembled, scored view into a broad+succinct orientation (ADR-0033) —
@@ -195,6 +408,7 @@ function buildOverview(
   granted: number,
   decls: Record<string, Record<string, unknown>>,
   focusShape: ReadShape = 'card',
+  posture?: { goal?: string; lens?: string } | null,
 ): RecallOverview {
   const entries = Object.entries(merged);
   const byType = new Map<string | null, number>();
@@ -205,9 +419,26 @@ function buildOverview(
   }
   const topN = <K,>(m: Map<K, number>, n: number): Array<{ count: number; k: K }> =>
     [...m.entries()].map(([k, count]) => ({ k, count })).sort((a, b) => b.count - a.count).slice(0, n);
-  const focusEntries = entries
-    .sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))
-    .slice(0, OVERVIEW_FOCUS);
+  // ONE SLOT PER SOURCE (W3-F1 — unanimous across four probe replicas across
+  // waves 1–3, never implemented until now). A decomposed document exists as
+  // `doc:X`, `file/X.md`, and N `doc-block:X/i` facts; they are near-identical by
+  // construction and score within ~0.05 of each other, so a single freshly-synced
+  // doc used to sweep several of the twelve slots (measured: 3 sibling blocks of
+  // one README plus a doc+file pair of another, i.e. 5 of 12 spent on 2 sources).
+  // The focus band is the ignition threshold — spending it on the same thing
+  // three times is exactly the flooding the co-sizing principle warns against.
+  // `degeneracyOf` is the SAME predicate `suggestions()` already uses to refuse
+  // ratifying a block against its own parent — it knows `doc:docs/x`,
+  // `file/docs/x.md` and `doc-block:docs/x/3` are one source across three
+  // namespaces. Reused here rather than reimplemented, so the two surfaces can
+  // never disagree about what "the same thing" means. Bounded: at most
+  // OVERVIEW_FOCUS comparisons per candidate, and the scan stops once full.
+  const focusEntries: Array<[string, Entry]> = [];
+  for (const pair of entries.sort((a, b) => (b[1]._meta.score ?? 0) - (a[1]._meta.score ?? 0))) {
+    if (focusEntries.length >= OVERVIEW_FOCUS) break;
+    if (focusEntries.some(([seen]) => degeneracyOf(seen, pair[0]))) continue;
+    focusEntries.push(pair);
+  }
   // Shape the focus band for orientation (ADR-0048): the overview is a "what do
   // I have?" skim, so each top fact carries key + type + salience + a value
   // preview — NOT its whole body (a long ADR/doc could be ~10KB, and its
@@ -221,6 +452,14 @@ function buildOverview(
   const focus: Record<string, Entry> = {};
   for (const [k, e] of focusEntries) focus[k] = shapeFocus(e);
   const types = affordancesForTypes(typesOf(focus), decls);
+  // Best-effort: the frame is decoration, and must never fail the read it
+  // decorates (the `livePresence()` contract, applied on this side too).
+  let frame: AmbientFrame | undefined;
+  try {
+    frame = buildFrame(merged, decls, posture);
+  } catch {
+    frame = undefined;
+  }
   return {
     overview: {
       total: entries.length,
@@ -229,14 +468,9 @@ function buildOverview(
       byType: topN(byType, 15).map(({ k, count }) => ({ type: k, count })),
       byPrefix: topN(byPrefix, 12).map(({ k, count }) => ({ prefix: k, count })),
     },
+    ...(frame ? { frame } : {}),
     focus,
-    hints: [
-      'This is a succinct overview (the default). For the whole shaped view: recall({ view: "full" }).',
-      'Drill by structure: query({ type | prefix | tag | contains }) — filtered + paged.',
-      'Drill by meaning: search({ text }) — semantic candidates across your slice.',
-      'One fact: peek({ key }); its links: neighbors({ key }); the graph: read("$graph").',
-      'Connection candidates the index proposes: suggestions().',
-    ],
+    hints: liveHints(frame),
     ...(Object.keys(types).length ? { types } : {}),
   };
 }
@@ -517,7 +751,13 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       // full fold (grant writes don't advance the viewer's seq). An explicit
       // `shape` also disqualifies it: the cached digest is built at the default
       // (card) focus tier, so `recall({shape:"full"|"refs"})` must recompute.
-      const bare = !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience && !input?.shape;
+      // An adopted POSTURE also disqualifies it: the digest is a per-SLICE cache
+      // and the ambient frame echoes the principal's own posture (ADR-0084 Open
+      // #4), so caching it would serve one session's goal to the next. Postured
+      // sessions are the rare case; correctness beats the cache hit.
+      const posture = (ctx.identity.posture ?? null) as { goal?: string; lens?: string } | null;
+      const bare =
+        !askedFull && !text && !lens && !explain && !includeSuperseded && !input?.salience && !input?.shape && !posture;
       const grantList = await applicableGrants(grants, viewer);
       const foreign = grantList.some((g) => g.owner !== viewer);
       let digestHead: number | undefined;
@@ -580,7 +820,7 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
       if (!askedFull) {
         const c = shaped._shaping.counts;
         const granted = Object.keys(merged).length - Object.keys(own.entries).length + (own.entries[DIGEST_KEY] ? 1 : 0);
-        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls, input?.shape ?? 'card');
+        const overview = buildOverview(merged, { focus: c.focus, peripheral: c.peripheral, elided: c.elided }, granted, decls, input?.shape ?? 'card', posture);
         if (text) {
           overview.hints.unshift(
             relevance

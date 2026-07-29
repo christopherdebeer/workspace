@@ -15,6 +15,9 @@ import { cellJobs, JOB_CHUNK } from '../cells/kernel/static/cell-jobs.js';
 
 type FetchCall = { verb: string; target: string; input: unknown; auth: string };
 
+/** Backoff is real time; a test asserting on retry counts should not pay it. */
+const NO_SLEEP = async (): Promise<void> => {};
+
 /** A stub gateway: scripted responses keyed by call order. */
 function stubGateway(script: Array<(call: FetchCall) => { status?: number; error?: string; isError?: boolean; text?: string }>) {
   const calls: FetchCall[] = [];
@@ -60,7 +63,8 @@ describe('ADR-0076 — gateway-client', () => {
       GatewayError,
     );
     const http = stubGateway([() => ({ status: 502 })]);
-    await expect(gwCall('t', 'workspace.peek', { key: 'x' }, { fetchImpl: http.fetchImpl, url: 'u' })).rejects.toThrow(
+    // 502 is transient — retried with backoff, so inject a no-op sleep (see gateway-client).
+    await expect(gwCall('t', 'workspace.peek', { key: 'x' }, { fetchImpl: http.fetchImpl, url: 'u', sleepImpl: NO_SLEEP })).rejects.toThrow(
       /gateway HTTP 502/,
     );
   });
@@ -114,6 +118,53 @@ describe('ADR-0076 — gateway-client', () => {
     expect(out[1]).toEqual({ error: 'boom' });
     expect(out[5]).toEqual({ t: 'f.read' });
     expect(peak).toBeLessThanOrEqual(2);
+  });
+
+  // A cell driving a MULTI-STEP CHAIN through the substrate cannot treat "busy"
+  // as "failed": the tool returns an error, the reaction reactor dead-letters
+  // it, the continuation baton lapses, and nothing above retries — the chain is
+  // stranded permanently. Measured 2026-07-29: one DynamoDB throttling window
+  // froze dozens of decompositions mid-flight (docs/architecture at 20/207,
+  // docs/machine at 0/65), each recoverable only by editing its source file.
+  describe('transient-fault retry', () => {
+    it('rides out a DynamoDB throttle arriving as a 200 + isError, and returns the eventual value', async () => {
+      const throttle = 'Throughput exceeds the current capacity of your table or index. DynamoDB is automatically scaling';
+      const gw = stubGateway([
+        () => ({ error: throttle }),
+        () => ({ error: throttle }),
+        () => ({ text: JSON.stringify({ ingested: 10 }) }),
+      ]);
+      expect(await gwCall('t', 'workspace.ingest', { facts: [] }, { fetchImpl: gw.fetchImpl, url: 'u', sleepImpl: NO_SLEEP })).toEqual({ ingested: 10 });
+      expect(gw.calls).toHaveLength(3);
+    });
+
+    it('rides out a 5xx from the edge or gateway', async () => {
+      const gw = stubGateway([() => ({ status: 504 }), () => ({ text: JSON.stringify({ ok: true }) })]);
+      expect(await gwCall('t', 'workspace.query', { limit: 1 }, { fetchImpl: gw.fetchImpl, url: 'u', sleepImpl: NO_SLEEP })).toEqual({ ok: true });
+      expect(gw.calls).toHaveLength(2);
+    });
+
+    it('never retries a 4xx or a validation error — a malformed call retried is still malformed', async () => {
+      const gw = stubGateway([() => ({ error: 'Missing required scope: write:workspace' })]);
+      await expect(gwCall('t', 'workspace.remember', { key: 'x' }, { fetchImpl: gw.fetchImpl, url: 'u' })).rejects.toThrow(GatewayError);
+      expect(gw.calls).toHaveLength(1);
+
+      const budget = stubGateway([() => ({ error: 'read("workspace.query") is too large to return whole (203KB over the 60KB read budget)' })]);
+      await expect(gwCall('t', 'workspace.query', {}, { fetchImpl: budget.fetchImpl, url: 'u' })).rejects.toThrow(GatewayError);
+      expect(budget.calls).toHaveLength(1);
+
+      const client = stubGateway([() => ({ status: 400 })]);
+      await expect(gwCall('t', 'workspace.remember', {}, { fetchImpl: client.fetchImpl, url: 'u' })).rejects.toThrow(GatewayError);
+      expect(client.calls).toHaveLength(1);
+    });
+
+    it('gives up bounded, and surfaces the original fault verbatim', async () => {
+      const gw = stubGateway([() => ({ status: 503 })]);
+      await expect(gwCall('t', 'workspace.query', {}, { fetchImpl: gw.fetchImpl, url: 'u', sleepImpl: NO_SLEEP })).rejects.toThrow('gateway HTTP 503');
+      // One initial attempt + a bounded number of retries — never unbounded.
+      expect(gw.calls.length).toBeGreaterThan(1);
+      expect(gw.calls.length).toBeLessThanOrEqual(6);
+    });
   });
 });
 

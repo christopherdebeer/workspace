@@ -73,7 +73,7 @@ interface EdgeItem { from: string; rel: string; to: string }
 
 /** Outbound edges FROM a key (`platform/infra/substrate-table.ts`'s key layout:
  *  `sk=EDGE#<from>|<rel>|<to>`, a contiguous prefix scan). Server-side mirror of
- *  `workspace.neighbors`'s `outbound` — direct DDB, same table the cell already
+ *  `workspace.edges({around})`'s `outbound` — direct DDB, same table the cell already
  *  reads facts from, no MCP round trip needed for SSR. */
 async function edgesFrom(from: string): Promise<EdgeItem[]> {
   const r = await ddb().send(
@@ -87,7 +87,7 @@ async function edgesFrom(from: string): Promise<EdgeItem[]> {
 }
 
 /** Inbound edges TO a key, via the `gsi-in` index (`gsi1pk=IN#<scope>#<to>`) —
- *  the substrate's one inbound-edge index, same one `workspace.neighbors` reads. */
+ *  the substrate's one inbound-edge index, same one `workspace.edges` reads. */
 async function edgesTo(to: string): Promise<EdgeItem[]> {
   const r = await ddb().send(
     new Query({

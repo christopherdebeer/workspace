@@ -2,7 +2,7 @@
   "types": [
     {
       "type": "knowledge",
-      "icon": "\ud83e\udde0",
+      "icon": "🧠",
       "manager": "@c15r/home",
       "note": "A durable note/fact in the personal knowledge base. Opens in the home peek modal; no bespoke editor, so it edits generically.",
       "handlers": {
@@ -15,7 +15,7 @@
     },
     {
       "type": "decision",
-      "icon": "\u2696\ufe0f",
+      "icon": "⚖️",
       "manager": "@c15r/home",
       "note": "A recorded decision (what was chosen and why).",
       "handlers": {
@@ -28,7 +28,7 @@
     },
     {
       "type": "project",
-      "icon": "\ud83d\udce6",
+      "icon": "📦",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -40,7 +40,7 @@
     },
     {
       "type": "question",
-      "icon": "\u2753",
+      "icon": "❓",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -52,7 +52,7 @@
     },
     {
       "type": "concept",
-      "icon": "\ud83d\udca1",
+      "icon": "💡",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -64,7 +64,7 @@
     },
     {
       "type": "pattern",
-      "icon": "\ud83e\udde9",
+      "icon": "🧩",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -76,7 +76,7 @@
     },
     {
       "type": "protocol",
-      "icon": "\ud83d\udcd0",
+      "icon": "📐",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -84,11 +84,46 @@
             "hint": "markdown"
           }
         ]
-      }
+      },
+      "label": "value.title",
+      "trigger": "when",
+      "note": "A reusable body of instructions an agent follows (`protocol/tending`, `protocol/membrane-probes`). This is the substrate's Agent Skill: `when` is the frontmatter description — the situation that calls for it — and `content` is the body. Before ADR-0094 Inc 2 a protocol was a Skill with the frontmatter deleted: no schema, no trigger, and the binding from situation to protocol lived in a hand-written key inside an off-substrate scheduler prompt. `when` leads the embedded text so an agent in the matching situation can FIND the protocol instead of having to be told its key.",
+      "schema": {
+        "title": "string — the protocol name",
+        "when": "string? — the situation that calls for this protocol (the trigger; leads the embedding)",
+        "version": "string? — bump when the body changes materially",
+        "content": "string — the protocol body, markdown"
+      },
+      "fields": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "the protocol name"
+        },
+        {
+          "name": "when",
+          "type": "string",
+          "required": false,
+          "description": "the situation that calls for this protocol"
+        },
+        {
+          "name": "version",
+          "type": "string",
+          "required": false,
+          "description": "bump when the body changes materially"
+        },
+        {
+          "name": "content",
+          "type": "string",
+          "required": true,
+          "description": "the protocol body, markdown"
+        }
+      ]
     },
     {
       "type": "source",
-      "icon": "\ud83d\udd17",
+      "icon": "🔗",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -100,7 +135,7 @@
     },
     {
       "type": "reading",
-      "icon": "\ud83d\udcd6",
+      "icon": "📖",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -112,7 +147,7 @@
     },
     {
       "type": "prompt",
-      "icon": "\ud83d\udcac",
+      "icon": "💬",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -124,7 +159,7 @@
     },
     {
       "type": "todo",
-      "icon": "\u2611\ufe0f",
+      "icon": "☑️",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -136,7 +171,7 @@
     },
     {
       "type": "bug",
-      "icon": "\ud83d\udc1e",
+      "icon": "🐞",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -148,7 +183,7 @@
     },
     {
       "type": "fixed",
-      "icon": "\u2705",
+      "icon": "✅",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -160,7 +195,7 @@
     },
     {
       "type": "shipped",
-      "icon": "\ud83d\ude80",
+      "icon": "🚀",
       "manager": "@c15r/home",
       "handlers": {
         "render": [
@@ -172,19 +207,19 @@
     },
     {
       "type": "file",
-      "icon": "\ud83d\udcc4",
+      "icon": "📄",
       "label": "value.path",
       "manager": "@c15r/home",
-      "note": "A file as a fact (ADR-0027): a thin pointer to a source/doc/S3 object \u2014 never a copy of the bytes. Keyed `file/<path>`. Small text (docs) stores `content` inline so query `contains` is full-text over it; binary/large objects carry `s3Key`/`url` instead. The public docs corpus (file/docs/*) is upserted by scripts/docs-sync.mjs and shared read-only to all.",
+      "note": "A file as a fact (ADR-0027): a thin pointer to a source/doc/S3 object — never a copy of the bytes. Keyed `file/<path>`. Small text (docs) stores `content` inline so query `contains` is full-text over it; binary/large objects carry `s3Key`/`url` instead. The public docs corpus (file/docs/*) is upserted by scripts/docs-sync.mjs and shared read-only to all.",
       "schema": {
-        "path": "string \u2014 the file's logical path (e.g. docs/machine.md)",
-        "contentType": "string \u2014 MIME type (e.g. text/markdown)",
-        "bytes": "number \u2014 size in bytes",
-        "sha": "string \u2014 content hash (change detection / integrity)",
-        "content": "string? \u2014 inline body, small text only",
-        "s3Key": "string? \u2014 S3 access handle for large/binary objects",
-        "url": "string? \u2014 public URL when servable",
-        "source": "string \u2014 provenance (docs-sync | s3:PutObject | cells:deployed)"
+        "path": "string — the file's logical path (e.g. docs/machine.md)",
+        "contentType": "string — MIME type (e.g. text/markdown)",
+        "bytes": "number — size in bytes",
+        "sha": "string — content hash (change detection / integrity)",
+        "content": "string? — inline body, small text only",
+        "s3Key": "string? — S3 access handle for large/binary objects",
+        "url": "string? — public URL when servable",
+        "source": "string — provenance (docs-sync | s3:PutObject | cells:deployed)"
       },
       "handlers": {
         "render": [
@@ -196,15 +231,16 @@
     },
     {
       "type": "mental-model",
-      "icon": "\ud83e\udded",
+      "icon": "🧭",
       "label": "value.name",
       "manager": "@c15r/home",
-      "note": "One mental model of the latticework (ADR-0045): a named, simplified explanation of how something works, held as ONE fact per model (keyed model/<slug>) so the vector index embeds each individually and inferred similarTo edges (ADR-0030/0031/0032) surface the right model as a LENS beside otherwise-unlinked facts \u2014 the latticework as live graph structure, not a list inside a reading blob. `source` refs the reading it was extracted from (projects a `from` edge).",
+      "note": "One mental model of the latticework (ADR-0045): a named, simplified explanation of how something works, held as ONE fact per model (keyed model/<slug>) so the vector index embeds each individually and inferred similarTo edges (ADR-0030/0031/0032) surface the right model as a LENS beside otherwise-unlinked facts — the latticework as live graph structure, not a list inside a reading blob. `source` refs the reading it was extracted from (projects a `from` edge). The `applies` field is the TRIGGER (ADR-0094 Inc 2), and it is the field that makes a lens findable: write it as the reasoner's PREDICAMENT, not the model's content — \"you are reading bad intent into behaviour incompetence would explain\", not \"about malice and stupidity\". Cosine similarity measures what a fact is ABOUT, and a lens is never about the thing it applies to; that is why the latticework clustered with itself for a month. `applies` leads the embedded text, so a situational query retrieves the model its content would never match. This is an Agent Skill's `description` in substrate form — cheap trigger, payload (`gloss`) on peek.",
       "schema": {
-        "name": "string \u2014 the model's canonical name",
-        "gloss": "string \u2014 one-line explanation of the model",
-        "category": "string \u2014 latticework discipline (general-thinking-tools | physics-chemistry-biology | systems | numeracy | microeconomics | art | \u2026)",
-        "source": "ref? \u2014 the reading this model was extracted from"
+        "name": "string — the model's canonical name",
+        "applies": "string? — WHEN this lens bites, in the language of the reasoner's situation (the trigger; leads the embedding)",
+        "gloss": "string — one-line explanation of the model",
+        "category": "string — latticework discipline (general-thinking-tools | physics-chemistry-biology | systems | numeracy | microeconomics | art | …)",
+        "source": "ref? — the reading this model was extracted from"
       },
       "fields": [
         {
@@ -212,6 +248,12 @@
           "type": "string",
           "required": true,
           "description": "the model's canonical name"
+        },
+        {
+          "name": "applies",
+          "type": "string",
+          "required": false,
+          "description": "when this lens bites — the reasoner's situation, not the model's topic"
         },
         {
           "name": "gloss",
@@ -239,19 +281,20 @@
             "hint": "fields"
           }
         ]
-      }
+      },
+      "trigger": "applies"
     },
     {
       "type": "collection",
-      "icon": "\ud83d\uddc2\ufe0f",
+      "icon": "🗂️",
       "manager": "@c15r/home",
-      "note": "ADR-0057: the ONE collections family \u2014 a fact that names members (value.members: [keys]) or a query (value.query, the view shape). Presentation facets (group/frame/board) say how it shows up; promotions are facet additions, never rewrites. Members resolve via workspace.edges({around, membership:true}): declared members[] \u222a inbound membership edges (memberOf/inDoc/onBoard/inView), declared array order as seq.",
+      "note": "ADR-0057: the ONE collections family — a fact that names members (value.members: [keys]) or a query (value.query, the view shape). Presentation facets (group/frame/board) say how it shows up; promotions are facet additions, never rewrites. Members resolve via workspace.edges({around, membership:true}): declared members[] ∪ inbound membership edges (memberOf/inDoc/onBoard/inView), declared array order as seq.",
       "keyPattern": "collection:{id}",
       "schema": {
-        "label": "string? \u2014 the collection's display name",
-        "members": "string[]? \u2014 declared member fact keys, in order",
-        "query": "object? \u2014 intensional membership (the _views/ query shape)",
-        "facets": "object? \u2014 { group?, frame?, board? } presentation facets"
+        "label": "string? — the collection's display name",
+        "members": "string[]? — declared member fact keys, in order",
+        "query": "object? — intensional membership (the _views/ query shape)",
+        "facets": "object? — { group?, frame?, board? } presentation facets"
       },
       "handlers": {
         "render": [
@@ -263,7 +306,7 @@
     },
     {
       "type": "collection-membership",
-      "icon": "\ud83d\udcce",
+      "icon": "📎",
       "manager": "@c15r/home",
       "note": "ADR-0057: an edge-with-properties placing a fact IN a collection (the same ADR-0016 shape as canvas-placement and lit's doc-order). Keyed _collection/<coll>/<memberKey>; the key rule projects `<memberKey> memberOf collection:<coll>`. seq/fold ride the membership, never the member.",
       "keyPattern": "_collection/{coll}/{member}",
@@ -275,8 +318,8 @@
         }
       ],
       "schema": {
-        "seq": "number? \u2014 order within the collection",
-        "fold": "boolean? \u2014 presentation fold state"
+        "seq": "number? — order within the collection",
+        "fold": "boolean? — presentation fold state"
       },
       "handlers": {
         "render": [

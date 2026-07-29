@@ -17,6 +17,14 @@
  *                                                     e.g. after re-registering a dropped
  *                                                     subscription, ADR-0081)
  *
+ * Pacing — for recovery, `--force` alone is a stampede (see PACING below):
+ *   --only <substr>   only files whose key contains this (one doc, one tree)
+ *   --max <n>         stop after n DOCUMENTS this run (each starts a chain)
+ *   --delay <ms>      sleep between ingest batches
+ *
+ *   node scripts/docs-sync.mjs --commit --force --max 5 --delay 3000 --no-share
+ *     → restart five stranded decompositions, spaced; re-run to continue
+ *
  * Auth (only needed with --commit): PARC_TOKEN env, or a device-flow token JSON
  * at /tmp/parc-token.json (same convention as cell-sync.mjs). Re-runnable: keys
  * are deterministic, so a second run just bumps revisions; `sha` is stored for
@@ -67,6 +75,36 @@ const flags = process.argv.slice(2);
 const COMMIT = flags.includes('--commit');
 const SHARE = !flags.includes('--no-share');
 const FORCE = flags.includes('--force');
+
+/** Value of `--name <v>`, or undefined. */
+const flagValue = (name) => {
+  const i = flags.indexOf(name);
+  return i >= 0 ? flags[i + 1] : undefined;
+};
+
+/**
+ * PACING (2026-07-29). Ingesting a `file/docs/*.md` fact is cheap; what it
+ * TRIGGERS is not. Each one fires the `lit-decompose-markdown` reaction, which
+ * fans out into a chain writing hundreds of doc-block facts. Re-ingesting the
+ * whole corpus therefore starts ~60 chains at once — and since every fact and
+ * edge of one owner shares a single DynamoDB partition (`pk = statePk(scope)`,
+ * hard-capped at 1,000 WCU regardless of on-demand billing), that is a
+ * stampede against a hot partition, not a throughput problem that scales away.
+ *
+ * Observed three times over: `--force` saturated the table, chunk steps failed
+ * on throttling, and because a dead-lettered reaction is never retried, each
+ * storm left documents stranded mid-chain — the run made things worse, not
+ * better. Client-side retry (see cells/kernel/static/gateway-client.js) absorbs
+ * a momentary blip; it cannot buy capacity that does not exist.
+ *
+ * So recovery is PACED, not forced: take a few documents, let their chains
+ * drain, take a few more. `--only` selects, `--max` bounds the run, `--delay`
+ * spaces the batches within it.
+ */
+const ONLY = flagValue('--only');
+const MAX = Number(flagValue('--max') ?? NaN);
+const DELAY_MS = Number(flagValue('--delay') ?? 0);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function tokenFile() {
   try {
@@ -192,13 +230,20 @@ async function liveShas() {
 }
 
 let facts = allFacts;
+if (ONLY) facts = facts.filter((f) => f.key.includes(ONLY));
 if (COMMIT && !FORCE) {
   const live = await liveShas();
-  if (live) facts = allFacts.filter((f) => live.get(f.key) !== f.value.sha);
+  if (live) facts = facts.filter((f) => live.get(f.key) !== f.value.sha);
 }
+// The bound is on DOCUMENTS, because each one starts a decomposition chain.
+const selected = facts.length;
+if (Number.isFinite(MAX) && MAX > 0) facts = facts.slice(0, MAX);
 
 const totalBytes = facts.reduce((n, f) => n + f.value.bytes, 0);
 console.log(`docs-sync: ${allFacts.length} markdown files, ${facts.length} new/changed to ingest (${(totalBytes / 1024).toFixed(1)} KiB inline)`);
+// Never let a cap read as "that was all of them" — a silent truncation looks
+// exactly like a completed recovery.
+if (facts.length < selected) console.log(`  (capped by --max ${MAX}: ${selected - facts.length} more still pending — re-run to continue)`);
 for (const f of facts) console.log(`  ${f.key}  (${f.value.bytes}b${f.tags.includes('adr') ? ', adr' : ''})`);
 
 if (!COMMIT) {
@@ -229,7 +274,10 @@ if (cur.length) batches.push(cur);
 
 let ingested = 0;
 const failedKeys = [];
+let firstBatch = true;
 for (const slice of batches) {
+  if (!firstBatch && DELAY_MS > 0) await sleep(DELAY_MS);
+  firstBatch = false;
   try {
     const res = await call('act', 'workspace.ingest', { via: 'docs-sync', facts: slice });
     ingested += res.ingested ?? 0;

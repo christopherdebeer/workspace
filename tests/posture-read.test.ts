@@ -176,7 +176,17 @@ describe('ADR-0074 — read() resolves through the principal', () => {
     const postured = ctxFor({ goal: 'contraction wave' });
     const result = (await cmds.read(undefined, postured)) as Record<string, unknown>;
     expect(result.overview).toBeDefined(); // still recall's overview, goal-conditioned
-    expect(result).toEqual(await cmds.recall({ text: 'contraction wave' }, bare));
+    // Parameter-for-parameter identical to spelling the goal out by hand — the
+    // posture supplies what the call didn't say, and nothing else.
+    const spelledOut = (await cmds.recall({ text: 'contraction wave' }, bare)) as Record<string, unknown>;
+    const { frame, ...rest } = result;
+    const { frame: bareFrame, ...bareRest } = spelledOut;
+    expect(rest).toEqual(bareRest);
+    // ...with ONE deliberate difference: the ambient frame ECHOES the posture
+    // (ADR-0084 Open #4 — "the resolved posture, ADR-0074's silent bias made
+    // visible"). A hand-passed `text` is not a posture, so the bare read has none.
+    expect(frame).toEqual({ posture: { goal: 'contraction wave' } });
+    expect(bareFrame).toBeUndefined();
   });
 
   it('default-inert: a posture-free identity is byte-identical to the presets', async () => {

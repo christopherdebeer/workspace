@@ -82,14 +82,67 @@ export function indexForScope(scope: string, dim?: number): string {
 
 // ── text extraction ─────────────────────────────────────────────────
 
-const TEXT_FIELDS = ['title', 'name', 'text', 'content', 'summary', 'description', 'body', 'value', 'path'];
+/**
+ * Fields that carry meaning, in the order they contribute to the embedding.
+ *
+ * `applies`/`when` lead deliberately. A field whose job is to say **when this
+ * fact is relevant** is the strongest retrieval signal a fact has — it is the
+ * substrate's equivalent of an Agent Skill's `description`, the cheap trigger
+ * that answers "should I load this?" separately from the payload that answers
+ * "what does it say?" (`docs/machine.md` §8 already borrowed the tiering for
+ * machine rails; `machine-rail.when` is literally "Level-1 'when to use this
+ * branch' descriptor"). Content tells you what a thing IS; applicability tells
+ * you when it BITES, and cosine similarity over content cannot infer the latter.
+ */
+const TEXT_FIELDS = [
+  // applicability — the trigger
+  'applies',
+  'when',
+  // identity + one-liners
+  'title',
+  'name',
+  'summary',
+  'gloss',
+  'description',
+  // the payload
+  'text',
+  'content',
+  'body',
+  'detail',
+  'note',
+  'prompt',
+  'value',
+  'path',
+];
 const MAX_EMBED_CHARS = 8000;
+/** A string long enough, and broken up enough, to be prose rather than a handle. */
+const PROSE_MIN_CHARS = 24;
+/** Never sweep these in as prose — high-entropy handles that only add noise. */
+const NEVER_EMBED = new Set(['id', 'key', 'sha', 's3Key', 'url', 'href', 'version', 'writer', 'via', 'scope']);
+
+/** Prose, as opposed to an identifier: long enough and containing whitespace.
+ *  `"b8de1247a375626a..."` and `"docs/architecture/adr/0094.md"` are not prose;
+ *  `"ask 'and then what?' of a decision's consequences"` is. */
+const isProse = (v: unknown): v is string => typeof v === 'string' && v.length >= PROSE_MIN_CHARS && /\s/.test(v);
 
 /** The text to embed for a fact, or `null` when there's nothing worth embedding.
  *  Skips `_`-prefixed plumbing facts (ADR-0030 Decision 4) — EXCEPT `_caps/`
  *  capability facts (ADR-0052), which exist precisely to be found by meaning
- *  (goal-conditioned recall matching an intent to a tool). Prefers a `file`'s
- *  inline `content`, then well-known textual fields, then a bounded JSON fallback. */
+ *  (goal-conditioned recall matching an intent to a tool).
+ *
+ *  A PARTIAL MATCH USED TO SILENCE THE REMAINDER. The old rule collected the
+ *  known fields and, only if it found none, fell back to the whole JSON — so a
+ *  fact carrying exactly one known field had everything else dropped. Measured
+ *  live: all 98 `mental-model` facts embed as `{name, gloss, category, source}`,
+ *  and because `name` was the only listed field, each model was indexed as its
+ *  two-word NAME alone — "Second-Order Thinking" — with its gloss never in the
+ *  index at all. The latticework consequently clustered with itself and reached
+ *  nothing (ADR-0045's "lens beside the work" never fired). `task` and `goal`
+ *  lost their `detail`, `machine` its `context`, `log` everything but its title.
+ *
+ *  So: known fields first, in meaning order, then a sweep of any other field
+ *  that reads like prose. Having one recognised field can no longer cost a fact
+ *  the rest of its content. */
 export function embeddableText(key: string, value: unknown): string | null {
   if (key.startsWith('_') && !key.startsWith('_caps/')) return null;
   let text: string | null = null;
@@ -98,7 +151,19 @@ export function embeddableText(key: string, value: unknown): string | null {
   } else if (value && typeof value === 'object' && !Array.isArray(value)) {
     const o = value as Record<string, unknown>;
     const parts: string[] = [];
-    for (const f of TEXT_FIELDS) if (typeof o[f] === 'string' && o[f]) parts.push(o[f] as string);
+    const taken = new Set<string>();
+    for (const f of TEXT_FIELDS) {
+      if (typeof o[f] === 'string' && o[f]) {
+        parts.push(o[f] as string);
+        taken.add(f);
+      }
+    }
+    // The sweep: everything else the fact says in prose. Bounded by the char cap
+    // below, and by `isProse` — identifiers, hashes and paths stay out.
+    for (const [f, v] of Object.entries(o)) {
+      if (taken.has(f) || NEVER_EMBED.has(f) || !isProse(v)) continue;
+      parts.push(v);
+    }
     text = parts.length ? parts.join('\n') : safeJson(o);
   } else if (value != null) {
     text = safeJson(value);

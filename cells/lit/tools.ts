@@ -101,6 +101,21 @@ const LIT_SUBSCRIPTION = {
   label: 'ADR-0081: decompose a markdown source into doc/doc-block/doc-order + links',
   match: { type: 'markdown' },
   deliver: '@c15r/lit.decomposeMarkdown',
+  // The depth cap measures REVISION, and revision means different things for
+  // different facts. For a machine run it is the transition count, which is a
+  // real chain depth — that is what the bound was designed for. For a source
+  // file it is the number of times the file has ever been written, and
+  // docs-sync rewrites `file/docs/*.md` on every deploy. Past ~50 deploys of a
+  // doc, the default cap silently stops this reaction FOREVER: a CloudWatch
+  // warn, no dead-letter fact, no symptom except a document that quietly stops
+  // re-decomposing. Measured 2026-07-29: `file/docs/architecture.md` rewritten
+  // at 16:47:48, its `_decompose` status untouched since 15:01.
+  //
+  // This reaction cannot self-trigger — it reads a `markdown` fact and writes
+  // `doc:`/`doc-block:`/`_doc/`/`_decompose/` facts, never the file it reacted
+  // to — so there is no loop for a depth bound to cut. The cap stays finite as
+  // runaway insurance, but far above any plausible edit count.
+  maxDepth: 100_000,
   params: {
     path: '${value.path}',
     content: '${value.content}',
@@ -119,11 +134,20 @@ const LIT_CHUNK_SUBSCRIPTION = {
   label: 'ADR-0083: one bounded continuation step of an async markdown decomposition',
   match: { type: 'decompose-run' },
   deliver: '@c15r/lit.decomposeChunk',
-  // Fresh run facts are written per step at distinct keys (decompose-run/
-  // <slug>/<cursor>), each starting at revision 1 — a doc re-synced for
-  // years never walks into the depth cap the way a single rev-bumped key
-  // would. 50 is then pure runaway insurance.
-  maxDepth: 50,
+  // This previously read 50, on the reasoning that "fresh run facts are written
+  // per step at distinct keys, each starting at revision 1 — a doc re-synced for
+  // years never walks into the depth cap". That is true of every cursor EXCEPT
+  // the one that matters. `decompose-run/<slug>/0` is the same key every time a
+  // doc is re-synced, so it accrues a revision per sync and eventually crosses
+  // the cap — after which the chain can never START. Measured 2026-07-29:
+  // `decompose-run/docs/architecture/adr/0086-embodied-participants/0` at
+  // revision 13 and climbing, one per forced re-ingest.
+  //
+  // Like the markdown reaction above, this one cannot self-trigger into a loop:
+  // step N writes cursor N+1, a DIFFERENT key, and the walk is bounded by
+  // facts.length / INGEST_CHUNK. Revision is simply the wrong metric for its
+  // depth. Finite as runaway insurance, far above any plausible sync count.
+  maxDepth: 100_000,
   params: {
     path: '${value.path}',
     content: '${value.content}',
@@ -154,11 +178,38 @@ interface QueryEntry { key: string; value?: unknown }
 interface NeighborsResult { outbound?: Array<{ to: string; rel: string }> }
 
 // workspace.ingest caps at 100 facts/call AND every gw() call crosses the
-// CloudFront-fronted /mcp gateway with its ~30s origin timeout, while
-// ingest writes facts sequentially at ~0.85s each. 20/chunk (~17s) leaves
-// real headroom — 30/chunk (~25.5s + overhead) ran RIGHT AT the ceiling
-// and slow chunks still 504'd (2026-07-12, third live iteration on this).
-const INGEST_CHUNK = 20;
+// CloudFront-fronted /mcp gateway, while ingest writes facts sequentially and
+// every put recomputes salience — so per-fact cost RISES WITH SLICE SIZE.
+//
+// That last part is why this constant kept losing. It was set to 20 (~17s) in
+// 2026-07-12 against a measured ~0.85s/fact, sized to leave headroom under what
+// the comment called a ~30s origin timeout. The budget was real; the per-fact
+// figure was not durable. The slice has since grown past 7,600 facts, the true
+// cost per put grew with it, and 20 quietly stopped fitting: measured
+// 2026-07-29, BOTH lit reactions were failing continuously on `gateway HTTP 504`
+// (`_reaction-errors/lit-decompose-chunk` at revision 507,
+// `lit-decompose-markdown` at 267), so every document too large for one chunk
+// had been stalling at `done: 0` with its continuation baton left live.
+//
+// Two changes, because either alone would just move the cliff: the edge now
+// actually waits 60s (it was defaulting to 30 in front of a 150s gateway — see
+// ORIGIN_READ_TIMEOUT in platform/infra/service-router.ts), and the batch comes
+// down to 10. Sizing a batch against a measured per-fact latency is what failed;
+// 10 is chosen to hold at several times the cost that broke 20, so slice growth
+// has to be large before this is worth revisiting. The cost of a smaller chunk
+// is more continuation steps, which is exactly what ADR-0083's chain is for.
+const INGEST_CHUNK = 10;
+
+/** Page size for the finish phase's decoration scan. `shape:"refs"` still
+ *  carries a `_meta` per entry (~400b), so this is the count that keeps one
+ *  page under the 60KB read budget with room to spare. */
+const ORDER_PAGE = 100;
+
+/** Ceiling on the decoration walk. The old single call asked for 500 because a
+ *  doc that had accumulated stale+live decorations from prior partial runs
+ *  needed more than 100 (measured 134, 2026-07-12) — that reasoning still holds,
+ *  it just has to be reached by paging rather than by one oversized read. */
+const ORDER_MAX = 2000;
 
 /** The FINISH phase: retire whatever a prior decomposition wrote that this
  *  version no longer wants (blocks + order decorations), then reconcile each
@@ -172,7 +223,27 @@ async function finishDecompose(token: string, plan: ReturnType<typeof planDecomp
   // from prior partial runs: at 100, a doc that had accumulated 134 stale+live
   // decorations only ever showed the first 100 to the retirement diff, so the
   // tail residue survived every convergent re-run (2026-07-12, live).
-  const existingOrder = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: 500 }) as { entries?: QueryEntry[] })?.entries ?? [];
+  //
+  // This reads NOTHING but `e.key`, and getting there took two rounds against
+  // the read budget (2026-07-29). It first shipped 500 WHOLE facts — 203KB for a
+  // large doc, every byte discarded on the next line — and failed the budget at
+  // cursor 460 of docs/technical-spec. `shape:"refs"` drops the values, which
+  // was right and still not enough: refs keeps a `_meta` per entry, so 500 of
+  // them is ~211KB and docs/architecture failed exactly the same way at its
+  // finish step. There is no leaner shape than refs, so the size has to come off
+  // the COUNT: page it. The budget was never the problem — asking for 500 facts
+  // to read 500 strings was.
+  const existingOrder: QueryEntry[] = [];
+  for (let cursor: string | undefined; ; ) {
+    const page = (await gw(token, 'workspace.query', { prefix: orderPrefix, limit: ORDER_PAGE, shape: 'refs', ...(cursor ? { cursor } : {}) })) as
+      | { entries?: QueryEntry[]; nextCursor?: string }
+      | null;
+    existingOrder.push(...(page?.entries ?? []));
+    cursor = page?.nextCursor;
+    // Bounded: stop on exhaustion, and never walk further than a doc could
+    // plausibly have decorated (residue from prior partial runs included).
+    if (!cursor || existingOrder.length >= ORDER_MAX) break;
+  }
   const existingBlockKeys = existingOrder.map((e) => e.key.slice(orderPrefix.length));
   const retiredKeys = staleKeys(existingBlockKeys, plan.blocks.map((b) => b.key));
 
@@ -209,11 +280,37 @@ async function putStatus(slug: string, value: Record<string, unknown>): Promise<
   await emit({ key: `_decompose/${slug}`, value, type: 'decompose-status', tags: ['lit'], via: 'lit.decompose' });
 }
 
+/** How long a continuation baton stays alive. It exists only long enough for
+ *  the reactor to deliver it to the next `decomposeChunk`; the step then
+ *  supersedes it explicitly. The timer is the backstop for a chain that dies
+ *  mid-flight, and — more importantly — it is the DECLARATION that this fact is
+ *  exhaust. An hour is far beyond any real step and far short of durable. */
+const RUN_BATON_TTL_MS = 60 * 60 * 1000;
+
 /** Chain the next continuation step: a FRESH `decompose-run/<slug>/<cursor>`
  *  fact per step (each starts at revision 1, so the subscription's depth cap
  *  never accumulates across a doc's lifetime of re-syncs). The reaction on
  *  `type: decompose-run` delivers it back to decomposeChunk with a scoped
- *  per-run token — chaining THROUGH the substrate, the reindex shape. */
+ *  per-run token — chaining THROUGH the substrate, the reindex shape.
+ *
+ *  The baton CARRIES THE WHOLE DOCUMENT (`content`), because every step
+ *  re-plans deterministically from the same source the dispatch saw. That is
+ *  correct for the chain and disastrous for everything downstream of it: the
+ *  fact is a verbatim copy of the document it is decomposing, so it embeds
+ *  ~1.0 against the doc and every block the run produces, mints inferred
+ *  kinship to all of them, and draws centrality from those edges. Measured
+ *  2026-07-29: 97 live batons, ~11KB each, one at centrality 0.63 and salience
+ *  0.47 — a coordination artefact out-scoring real facts and competing for the
+ *  focus band, while its `decompose-run ↔ kb/<hash>` pairs sat in the
+ *  suggestion queue as connections to ratify.
+ *
+ *  The delete-effect timer is the substrate's existing, vocabulary-free way to
+ *  say "this is exhaust": `indexableText` refuses it, the indexer actively
+ *  drops any vector under the key, `dropSimilarEdges` prunes its kinship, and
+ *  `suggestions`/`contested` exclude it as ephemeral. The mechanism was already
+ *  end-to-end — organs simply could not reach it until the write path forwarded
+ *  `timer`. It must never be shorter than a step: the reactor has to deliver
+ *  this fact before it lapses. */
 async function emitRunStep(slug: string, path: string, content: string, cursor: number, total: number): Promise<void> {
   await emit({
     key: `decompose-run/${slug}/${cursor}`,
@@ -221,6 +318,7 @@ async function emitRunStep(slug: string, path: string, content: string, cursor: 
     type: 'decompose-run',
     tags: ['lit', 'decompose-run'],
     via: 'lit.decompose',
+    timer: { ms: RUN_BATON_TTL_MS, effect: 'delete' },
   });
 }
 
