@@ -112,6 +112,43 @@ embeddable text changed — exactly the moment its inbound claims became unverif
 batch `reindex` replay, which walks every fact and so pays off the accumulated debt in one
 pass.
 
+## What it measured
+
+A scoped `reindex` over the 46 facts of one document proved it on the known case before
+anything ran wide. Block 4's inbound edges went 9 → 5: both 0.99997 claims deleted, along
+with four other cross-document strays — none of whose peers were in the reindexed prefix,
+so nothing but the inbound pass could have removed them. Its two genuine code siblings were
+kept, with their original `createdAt`. One outbound score was corrected 0.5556 → 0.5154 by
+the same pass running on the peer.
+
+Then the full slice: 4,803 facts re-embedded, 3,027 skipped, 23,969 edges wired.
+
+**The count barely moved. The contents changed completely.**
+
+| | before | after |
+|---|---|---|
+| `genuineOnly` candidates | 9,916 | 8,920 |
+| genuine connections in the top 12 | **0** | all of them |
+
+A 10% drop is the least interesting number here. What matters is that the head of the
+queue stopped being a lie. Before, every one of the top twelve was a mechanical artefact.
+After, the head is: five pairs of **duplicate `inbox/*` captures** — the same web page
+saved twice on different days, which is real supersede work — one pair of documents sharing
+a near-identical section, and two `decompose-run` ↔ `kb` pairs.
+
+Clearing the staleness also exposed a second, smaller defect it had been masking. With the
+noise gone, four of the top eight were `el:blk:*` and `el:doc:*` — a fact beside its own
+projection. `keyBase` stripped exactly one leading `namespace:`, and colon namespaces stack,
+so `el:blk:X` reduced to `blk:X` while `blk:X` reduced to `X`. Fixed; those pairs are now
+correctly classed `same-source`.
+
+**Still open, and named rather than fixed:** `decompose-run/<path>/0` sits beside the
+`kb/<hash>` fact it produced at ~0.97, and no edge connects them — so `authoredPairs`
+cannot exclude the pair and no key heuristic can see it, because one key is a path and the
+other a content hash. The ingest organ records what it ran and what it made, and links
+neither to the other. That is a provenance gap, not a similarity gap, and it wants a
+`produced` edge at the decompose seam.
+
 ## The method note
 
 The audit numbers were all real, and the story they told was false. "15,482 pending against
