@@ -14,6 +14,21 @@ on:
       - 'package.json'
       - 'tsconfig.json'
   workflow_dispatch:
+    inputs:
+      force_docs_sync:
+        # docs-sync skips a doc whose sha is unchanged, so a decomposition that
+        # died mid-chain never gets re-triggered — its source is identical, so
+        # nothing re-writes the `markdown` fact the reaction watches. That is
+        # normally the right default (re-ingesting ~60 unchanged docs per deploy
+        # would bump 60 revisions and pollute the trajectory), but it leaves no
+        # way to recover a stranded backlog. On 2026-07-29 a broken edge timeout
+        # stalled every large doc at `done: 0`; fixing it unblocked the chain but
+        # the already-stranded runs stayed stranded, because their bytes had not
+        # changed. This is the lever for that: re-ingest everything, re-trigger
+        # every decomposition. Use it after fixing an ingest-path defect.
+        description: 'Re-ingest every doc regardless of sha (recovers decompositions stranded mid-chain)'
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -129,4 +144,4 @@ jobs:
             echo "PARC_TOKEN secret not set — skipping docs-sync (mint one: act auth.mintToken {scope:'read:workspace write:workspace', label:'docs-sync-ci'})"
             exit 0
           fi
-          node scripts/docs-sync.mjs --commit
+          node scripts/docs-sync.mjs --commit ${{ inputs.force_docs_sync && '--force' || '' }}
