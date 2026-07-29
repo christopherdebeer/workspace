@@ -208,6 +208,52 @@ backlog draining looks like on an on-demand table, and it should settle as the q
 clears — but it is a prediction, not a measurement, and it wants watching. If throttling
 persists after the backlog drains, the capacity story is a real one and not transient.
 
+## Checking the prediction, and the floor underneath it
+
+I predicted the throttling was a backlog draining and would settle. Half right, and the
+other half was mine.
+
+**The throttling did settle** — the markdown dead-letter froze at 14:09 and stopped. But
+the chunk error moved to a new failure at 14:38:
+
+```
+decompose-run/docs/technical-spec/460
+read("workspace.query") is too large to return whole (203KB over the 60KB read budget)
+```
+
+That is the read budget guard from `c7c15c6`, mine, now blocking lit's own finish phase.
+`finishDecompose` queried 500 whole facts and used nothing but `e.key` — 203KB shipped and
+discarded on the next line. The guard was right, this was always waste, and its message
+named the remedy: `shape:"refs"`. Fixed. Note the cursor: **460**, at `INGEST_CHUNK` 10 —
+46 completed steps. `_decompose/docs/technical-spec` reached **`done: 453, total: 453`**,
+from `done: 0` that morning. The pipeline genuinely works now.
+
+**Then I made it worse.** Documents that reached the finish phase during the broken window
+stayed stranded, because docs-sync skips unchanged shas and nothing re-writes the `markdown`
+fact the reaction watches. So I added a `force_docs_sync` lever and pulled it — triggering a
+full re-ingest of the whole corpus onto a table that had *just* been throttling. Predictably,
+it saturated again. The lever is right and worth having; firing it immediately, at full
+corpus width, without capacity headroom, was not.
+
+**And underneath all of it is one line of schema.** The substrate table is
+`PAY_PER_REQUEST`, and every fact and every edge for one owner is written under
+`pk = K.statePk(scope)` — **a single partition key per slice**. DynamoDB's per-partition
+ceiling is 1,000 WCU / 3,000 RCU and on-demand scales the *table*, not a partition. The
+error text says so outright: *"check if you have a hot key."*
+
+That is the floor beneath every symptom in this document. It is why per-put cost rises with
+slice size, why `INGEST_CHUNK` kept losing its calibration, why ingest was slow enough for a
+30s edge to cut it off, and why the backlog cannot simply be pushed through faster. Raising
+the edge timeout and shrinking the batch make the pipeline correct; they do not raise the
+ceiling. One owner's whole substrate is one partition, and the c15r slice is past 7,600
+facts and 24,000 edges.
+
+This is not a fix to make in passing — sharding the partition key touches the storage
+contract, every GSI convention (`IN#<scope>#…`, `TYPE#<scope>#…`), and the LeadingKeys IAM
+conditions that depend on scope being the partition. It is the next real piece of work, and
+it should be decided deliberately rather than hotfixed. Recorded here so the next session
+starts from the ceiling rather than rediscovering it through another symptom.
+
 ## The method note
 
 The audit numbers were all real, and the story they told was false. "15,482 pending against
