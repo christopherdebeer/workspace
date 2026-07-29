@@ -206,14 +206,22 @@ export interface SuggestionEntry extends SuggestionCandidate {
   leasedUntil?: string | null;
 }
 /** A key reduced to the SOURCE it derives from (W3b): lowercase, colon
- *  namespace off (`doc-block:docs/x/4` → `docs/x/4`), file extension off
+ *  namespaces off (`doc-block:docs/x/4` → `docs/x/4`), file extension off
  *  (`file/docs/x.md` → `file/docs/x`), trailing numeric fragment segments off
  *  (`docs/x/4` → `docs/x`). Conservative on `/`-namespaces (only extensions and
- *  numeric tails are stripped) so `goal/123` and `note/123` stay distinct. */
+ *  numeric tails are stripped) so `goal/123` and `note/123` stay distinct.
+ *
+ *  Colon namespaces STACK, and only one used to come off. A fact projected
+ *  twice wears both — `el:blk:mq9nt1ig` beside its own `blk:mq9nt1ig` — and
+ *  reduced to `blk:mq9nt1ig` vs `mq9nt1ig`, which do not match, so the pair read
+ *  as a genuine connection. Measured after the 2026-07-29 reindex: with stale
+ *  kinship cleared, four of the top eight `genuineOnly` candidates were exactly
+ *  this shape (`el:blk:*`, `el:doc:holistic-review`) at ~0.99997 — one fact
+ *  beside its own projection, which is precisely what `same-source` names. */
 function keyBase(key: string): string {
   return key
     .toLowerCase()
-    .replace(/^[a-z][\w.-]*:/, '')
+    .replace(/^([a-z][\w.-]*:)+/, '')
     .replace(/\.[a-z0-9]{1,8}$/, '')
     .replace(/(\/\d+)+$/, '');
 }
