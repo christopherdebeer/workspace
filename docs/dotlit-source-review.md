@@ -1,0 +1,96 @@
+# dotlit, read at the source — counterposed with `cells/lit`
+
+*2026-07-29 · reviewed from a fresh clone of `dotlitdev/dotlit` (v1.9.8, head `c977537`),
+against `cells/lit` as deployed today. The question asked: is the substrate lit
+naive/basic relative to the original?*
+
+## What dotlit actually is
+
+Strip the webpack-era tooling away and dotlit is four small, sharp ideas over the
+unified/remark ecosystem (~1,200 lines of parser+renderer core):
+
+**1. The fence info-string is a shell command line.** `codeblocks.js` parses every
+fence as `[>] lang [filename|uri] !directive… attr=val… #tag… [< source] [> output]`.
+That is not styling metadata — it is **process syntax**: `< file` is stdin
+(transclusion), `> img out.svg` is stdout piped into a *persisted* output cell
+(`>img out.svg attached=true updated=<ts>` appears in the document after a run), and a
+leading `>` marks a cell as *being* someone's output. The document is a process
+graph whose wiring is written in the fences, and the results are committed back
+into the text — the repo's own history is literally `Edited src/testing/log/….lit`
+commits where runs wrote their outputs home.
+
+**2. Sections and cells are a structural AST pass, not a split.** `sections-v3.js`
+builds a *stack* of nested sections by heading depth (a real tree, `processSection`
+callback per completed section); `cells()` then groups the nodes of each section:
+a code block opens a cell, an `attached=true` code block *joins the previous cell*
+(the run-output pairing), prose accretes. Cells carry source *positions* — the
+editor and renderer address the same bytes.
+
+**3. The document extends itself.** `extractPlugins.js` walks the AST for
+` ```js !plugin type=viewer` fences and *compiles them* (commonjs `_compile` on
+node, `data:` URI ESM import in the browser). Plugin types: `parser`, `renderer`,
+`transformer`, `viewer`, `onsave`, `onload`, `onselect`, `menu`, `modal`, `data`,
+`setting` — the whole pipeline is open for extension *from inside a document*.
+`index.lit` itself installs a CORS proxy plugin inline. This is the "meta
+programming over its own AST" claim, and it is real.
+
+**4. The graph is computed at generate time, globally.** `cli/generate.js` builds a
+manifest over *all* files: every wiki-link, markdown link, transclusion source and
+code reference becomes a `backlinks[]` entry on the target — including entries for
+files that *don't exist* (`exists: false`, the red-link). Backlinks, link counts,
+sizes and titles ship with each rendered page.
+
+Also worth naming: the wiki-link resolver (`links.js`) is deliberately loose —
+`[[Name]]` fans out to `name.lit`, `name/index.lit`, `name.md` candidates; slugs are
+lower-cased/underscored; a link is classified external/absolute/fragment/relative
+and *decorated*, never dropped.
+
+## What `cells/lit` took, and what it changed
+
+The substrate lit is **not** a naive port; it is a deliberate re-basing of the same
+ideas on a different storage substrate, and in a few places it is *ahead* of the
+original. The honest scorecard:
+
+| dotlit concept | substrate `cells/lit` today | verdict |
+|---|---|---|
+| fence meta-grammar | `fence.ts` — full grammar ported *and typed*, incl. recursive `< source` / `> output`, escaped spaces, `unknowns[]`, plus a round-tripping serializer (`fenceToString`) the original's `metaToString` almost-but-not-quite was. Pinned by tests (ADR-0059). | **faithful, better-engineered** |
+| sections + cells | `blocks.ts:splitCells` — flat split: heading opens a prose cell, fences stand alone, heading-only cells fold forward. No section *tree*, no nesting, no positions. | **simplified — deliberately** (facts are the structure; `_doc/<slug>/<key>={seq}` decorations carry order; the vector-noise-driven heading-fold is a substrate-native concern dotlit never had) |
+| transclusion `< src` | ADR-0061 ladder in `client/main.tsx`: `< factKey` renders the *fact*, `ui://` resources resolve over `/mcp`, red-links style in. Server-side: a sourced fence stays a placeholder (classification only, nothing executes at SSR). | **transposed**: dotlit transcludes *files*; lit transcludes *facts* — the right move on a substrate |
+| output cells `> out` | Parsed, chip-rendered (`⤷ output`), and derived cells exist (`>toc`, `>search` — the query *is* the content). But **no write-back**: a repl fence's output goes to the DOM and (via `onAgentOutput`/`placeOutput` hooks) can be placed, yet there is no `attached=true` persisted-output convention in facts. | **the real gap** — see below |
+| executable cells | wired to the *platform*: ```` ```run/js/repl ```` fences reach `@c15r/run.exec` / `@c15r/models` — real server-side execution with substrate access, far beyond dotlit's in-page blob-URL eval. | **ahead** (dotlit executes in-page; lit executes *in the workspace*) |
+| plugins-from-the-document | nothing equivalent. Viewers come from `_types/*` declarations and `@c15r/viewers`; extension is *substrate vocabulary*, not document-embedded code. | **diverged on purpose** — and the substrate's answer (declared types/actions/renderers as facts) is structurally the same idea with a trust boundary; document-embedded executable plugins are exactly what ADR-0041's sandbox correction exists to prevent |
+| backlinks manifest | edges: `related` (wiki) + `references` (relative md) authored per *block* at decompose time; inbound = `workspace.edges` gsi. Red-links: ADR-0061 §1b marks stubs. No global "exists:false" manifest, but the graph is *live*, not generate-time. | **transposed and mostly ahead** (a DB beats a build artifact), with one loss: dotlit records backlinks *from code references and transclusions*, lit's edges only come from links in prose |
+| positions / one-text round-trip | dotlit cells know their byte range in the source; lit blocks are the source of truth and the "document" is an assembled view. | **inverted by design** (ADR-0093 assemble; the file mirror `file/docs/*.md` is the byte-faithful artifact) |
+
+## The three things worth stealing next
+
+1. **The persisted output cell (`attached=true`).** This is dotlit's most alive idea
+   and the one lit parses but does not *honor*: a run's output written back as a
+   sibling fact (`doc-block` with `isOutput`, keyed to its producer, `updated=<ts>`),
+   so a document accumulates its own results and re-runs supersede them. Everything
+   needed already exists — fence `output` meta, `placeOutput` hook, supersede,
+   provenance (`via`, `writer`). It is one convention away, and it would make lit
+   documents *runbooks with memory*, which is dotlit's whole thesis.
+
+2. **Code-reference edges.** dotlit's backlink manifest counts `< ./file.js`
+   transclusions and fence `filename`s as links. lit's decompose only extracts prose
+   links; a fence that transcludes `< kb/x` or names a file authors **no edge**. One
+   more extractor in `planDecomposition` (parse fences with `parseFenceMeta`, emit
+   `references`/`transcludes` edges) closes it — and those edges feed centrality,
+   which this session demonstrated is the salience signal that matters.
+
+3. **The section tree, cheaply.** Not the full nested AST — but `splitCells` throws
+   away heading *depth*, so an assembled doc can't fold sections and the `>toc`
+   derived cell re-scrapes the DOM for structure. Recording `depth` on the block
+   fact's value (one field, zero migration) would let the renderer fold and the toc
+   derive from facts.
+
+## Verdict
+
+"Naive/basic" is wrong for the *grammar and execution* story — `fence.ts` is the
+best-specified artifact in either codebase, and substrate execution via `@c15r/run`
+exceeds anything dotlit had. It is *fair* for the **document-as-process** story:
+dotlit's soul is that a document runs, writes its results into itself, and extends
+its own renderer; lit currently renders, embeds, and executes — but forgets. The
+persisted-output convention is the piece of dotlit's soul still missing, and it is
+small.

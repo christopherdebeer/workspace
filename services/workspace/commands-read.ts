@@ -1033,7 +1033,11 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         }
         merged.sort((a, b) => rankVal(b) - rankVal(a));
         const offset = Number(cursor ?? 0) || 0;
-        result = { ...own, entries: merged.slice(offset, offset + limit), total: merged.length, nextCursor: offset + limit < merged.length ? String(offset + limit) : undefined };
+        const foldPage = merged.slice(offset, offset + limit);
+        // `count` explicitly: the `...own` spread otherwise carries the OWN
+        // slice's count — for a guest that is 0, shipped beside 40 entries
+        // (measured live 2026-07-29 22:3x, first page after the total fix).
+        result = { ...own, entries: foldPage, count: foldPage.length, total: merged.length, nextCursor: offset + limit < merged.length ? String(offset + limit) : undefined };
       }
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));
