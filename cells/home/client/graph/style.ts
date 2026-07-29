@@ -34,11 +34,16 @@ export const typeGroup = (t: string | null): string => (t && TYPE_GROUP[t]) || '
 // SDF font files for the in-scene labels (troika needs real font URLs —
 // .woff, not woff2). One face per group; weight/emphasis is carried by
 // size, colour, and opacity (the role grade), not by extra font files.
+// SELF-HOSTED (2026-07-29): mirrored from the pinned @fontsource packages
+// into the home cell's public data space (build-vendor.mjs downloads,
+// upload-home-vendor.mjs pushes) — the graph's last third-party runtime
+// fetches after the three stack moved off esm.sh, same flap exposure.
+const FONT_BASE = 'https://parc.land/@c15r/home/_data/c15r/public/vendor/fonts';
 export const FONT_BY_GROUP: Record<string, string> = {
-  act: 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.1.0/files/ibm-plex-sans-latin-600-normal.woff',
-  doc: 'https://cdn.jsdelivr.net/npm/@fontsource/source-serif-4@5.1.0/files/source-serif-4-latin-400-italic.woff',
-  kb: 'https://cdn.jsdelivr.net/npm/@fontsource/source-serif-4@5.1.0/files/source-serif-4-latin-400-normal.woff',
-  mono: 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.1.0/files/ibm-plex-mono-latin-500-normal.woff',
+  act: `${FONT_BASE}/ibm-plex-sans-5.1.0/ibm-plex-sans-latin-600-normal.woff`,
+  doc: `${FONT_BASE}/source-serif-4-5.1.0/source-serif-4-latin-400-italic.woff`,
+  kb: `${FONT_BASE}/source-serif-4-5.1.0/source-serif-4-latin-400-normal.woff`,
+  mono: `${FONT_BASE}/ibm-plex-mono-5.1.0/ibm-plex-mono-latin-500-normal.woff`,
 };
 // FACT LABELS speak in ONE voice now: a fact's TYPE is carried by the star's
 // hue (nodeColor) and a small leading type-dot on the label, NOT by the
@@ -46,8 +51,8 @@ export const FONT_BY_GROUP: Record<string, string> = {
 // humanist sans for every fact name (upright), with an italic cut reserved for
 // the suggestion whisper (the one kind that wants a different voice). Places
 // stay serif (FONT_BY_GROUP.kb) — sans facts vs serif places is the split.
-export const LABEL_FONT = 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.1.0/files/ibm-plex-sans-latin-500-normal.woff';
-export const LABEL_FONT_ITALIC = 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.1.0/files/ibm-plex-sans-latin-400-italic.woff';
+export const LABEL_FONT = `${FONT_BASE}/ibm-plex-sans-5.1.0/ibm-plex-sans-latin-500-normal.woff`;
+export const LABEL_FONT_ITALIC = `${FONT_BASE}/ibm-plex-sans-5.1.0/ibm-plex-sans-latin-400-italic.woff`;
 // Knockout halo: thin text must survive sitting over a bloom core.
 export const LABEL_HALO = 'text-shadow:0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
 

@@ -45,7 +45,7 @@ import { ink } from './ink';
 import { TUNE, TUNE_DEFAULTS, TUNE_LS, TUNE_SCHEMA, TUNE_EVENT, TUNE_RESET_EVENT, tuneEnabled } from './graph/tune';
 import { readHashState, writeHashState } from './urlstate';
 import {
-  loadThree, loadThreeAddons, esmURL, hslToRgb, hexToRgb, paperInkFor,
+  loadThree, loadThreeAddons, loadTuneGUI, hslToRgb, hexToRgb, paperInkFor,
   makeStarTexture, makeStippleTexture, makeRingTexture,
 } from './graph/scene';
 import {
@@ -2584,14 +2584,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       window.addEventListener(TUNE_RESET_EVENT, onTuneReset);
 
       // ── the ?tune=1 lil-gui panel (sticky; ?tune=0 clears): a fixed on-screen
-      // instrument over the SAME TUNE_SCHEMA the palette panel renders. Loads
-      // from esm.sh like the rest of the 3D stack and only mounts behind the
-      // flag. `copy values` puts the current JSON on the clipboard for
-      // hard-coding; `paste`/`reset` drop a grade back into the live instrument.
+      // instrument over the SAME TUNE_SCHEMA the palette panel renders. Rides
+      // the self-hosted vendor bundle (esm.sh only as fallback) and only
+      // mounts behind the flag. `copy values` puts the current JSON on the
+      // clipboard for hard-coding; `paste`/`reset` drop a grade back in.
       if (tuneEnabled()) {
-        void import(/* @vite-ignore */ esmURL('lil-gui@0.19.2')).then((m: any) => {
-          if (disposed) return;
-          const GUI = m.default ?? m.GUI;
+        void loadTuneGUI().then((GUI: any) => {
+          if (disposed || !GUI) return;
           gui = new GUI({ title: 'graph tune' });
           gui.domElement.style.cssText = 'position:fixed;top:164px;right:8px;z-index:60;max-height:calc(100dvh - 176px);overflow-y:auto';
           // Every knob comes from the one schema — no per-folder hand-wiring to

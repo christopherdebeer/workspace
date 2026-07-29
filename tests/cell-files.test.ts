@@ -354,6 +354,10 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect(got.ok).toBe(true);
     expect(got.result!.statusCode).toBe(200);
     expect(got.result!.headers['content-type']).toBe('image/png');
+    // Public blobs are anonymous-readable by construction, so the CORS grant
+    // discloses nothing — and a module import() of a vendored script blob
+    // (home's three bundle) from a cell-subdomain origin requires it.
+    expect(got.result!.headers['access-control-allow-origin']).toBe('*');
     expect(got.result!.isBase64Encoded).toBe(true);
     expect(Buffer.from(got.result!.body, 'base64').equals(png)).toBe(true);
 

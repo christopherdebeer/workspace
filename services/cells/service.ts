@@ -496,7 +496,16 @@ async function callCell(input: CallCellInput, ctx: ServiceContext): Promise<unkn
       if (!obj) return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'not found' };
       return {
         statusCode: 200,
-        headers: { 'content-type': obj.contentType, 'cache-control': 'public, max-age=31536000, immutable' },
+        headers: {
+          'content-type': obj.contentType,
+          'cache-control': 'public, max-age=31536000, immutable',
+          // Public blobs are anonymous-readable by construction, so a CORS
+          // grant discloses nothing — and a module `import()` of a vendored
+          // script blob (e.g. home's three bundle) from a cell-subdomain
+          // origin REQUIRES it: <img>/<video> tolerate opaque cross-origin
+          // responses, ES modules do not.
+          'access-control-allow-origin': '*',
+        },
         body: method === 'HEAD' ? '' : obj.body.toString('base64'),
         isBase64Encoded: method !== 'HEAD',
       };

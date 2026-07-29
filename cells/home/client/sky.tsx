@@ -9,7 +9,7 @@
  */
 import * as React from 'react';
 import { ink } from './ink';
-import { loadThree, esmURL, makeStarTexture } from './graph/scene';
+import { loadThree, makeStarTexture } from './graph/scene';
 import { TUNE } from './graph/tune';
 
 const { useEffect, useRef } = React;
