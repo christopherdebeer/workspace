@@ -225,12 +225,15 @@ uniform sampler2D uCloud;
 uniform float uAmt;
 ${NOISE_GLSL}
 void main(){
-  vec3 ground = vec3(0.012, 0.011, 0.017);
+  vec3 ground = vec3(0.014, 0.013, 0.020);
   vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
   // fbm landform: the same density reads as coast/relief, not an airbrush blob.
   float relief = 0.65 + 0.5 * fbm(vCanon * 7.0);
-  float wisp = smoothstep(0.45, 0.8, fbm(vCanon * 3.1 + 4.2));
-  vec3 col = ground + cloud * 1.9 * relief + vec3(0.020, 0.030, 0.052) * wisp;
+  // The base wisp keeps an EMPTY hemisphere legible as a surface (owner
+  // IMG_0503 — the guest slice's quiet side went to featureless void):
+  // wider band, a touch brighter, still far under any real cluster.
+  float wisp = smoothstep(0.35, 0.75, fbm(vCanon * 3.1 + 4.2));
+  vec3 col = ground + cloud * 1.9 * relief + vec3(0.028, 0.038, 0.064) * wisp;
   gl_FragColor = vec4(col, uAmt);
 }`;
 

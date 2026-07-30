@@ -3040,29 +3040,51 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           for (const n of active) {
             const [r, gg, b] = hslToRgb(hueOf(n.type ?? ''), 0.55, 0.5);
             const u = (Math.atan2(n.cdz, n.cdx) / (Math.PI * 2) + 0.5) * cw;
-            const v = (Math.acos(Math.max(-1, Math.min(1, n.cdy))) / Math.PI) * ch;
+            const polar = Math.acos(Math.max(-1, Math.min(1, n.cdy)));
+            const v = (polar / Math.PI) * ch;
+            // Equirect stretches longitudes toward the poles: a splat there
+            // must smear across MANY u-columns or it paints as a wedge (the
+            // pole-fan artifact, owner IMG_0500/0501). Horizontal radius
+            // scales by 1/sin(polar), clamped so the true pole doesn't
+            // explode; the wrap-draws below carry it across the seam.
+            const stretch = Math.min(6, 1 / Math.max(0.16, Math.sin(polar)));
+            const rx = rad * stretch;
             const fill = (ux: number): void => {
-              const grad = g.createRadialGradient(ux, v, 0, ux, v, rad);
+              g.save();
+              g.translate(ux, v);
+              g.scale(stretch, 1);
+              const grad = g.createRadialGradient(0, 0, 0, 0, 0, rad);
               grad.addColorStop(0, `rgba(${(r * 255) | 0},${(gg * 255) | 0},${(b * 255) | 0},${alpha})`);
               grad.addColorStop(1, 'rgba(0,0,0,0)');
               g.fillStyle = grad;
-              g.fillRect(ux - rad, v - rad, rad * 2, rad * 2);
+              g.fillRect(-rad, -rad, rad * 2, rad * 2);
+              g.restore();
             };
             fill(u);
             // The equirect seam wraps: a splat near either edge paints again
-            // one width over so the dome shows no cut line.
-            if (u < rad) fill(u + cw);
-            else if (u > cw - rad) fill(u - cw);
+            // one width over so the globe shows no cut line.
+            if (u < rx) fill(u + cw);
+            else if (u > cw - rx) fill(u - cw);
           }
-          // Soften into nebulosity. ctx.filter is ignored by some engines —
-          // the splats are already radial gradients, so the fallback is just
-          // a crisper cloud, not a broken one.
+          // Soften into nebulosity — WRAP-AWARE: blur on a 3×-wide strip
+          // (the source tiled thrice) and crop the middle, so the blur pulls
+          // real neighbours across the u seam instead of black (the hard
+          // diagonal line across the globe, owner IMG_0500). ctx.filter is
+          // ignored by some engines — the splats are already soft gradients,
+          // so the fallback is a crisper cloud, not a broken one.
+          const wide = document.createElement('canvas');
+          wide.width = cw * 3; wide.height = ch;
+          const wg = wide.getContext('2d');
+          if (!wg) return;
+          wg.filter = 'blur(9px)';
+          wg.drawImage(cv, 0, 0);
+          wg.drawImage(cv, cw, 0);
+          wg.drawImage(cv, cw * 2, 0);
           const out = document.createElement('canvas');
           out.width = cw; out.height = ch;
           const og = out.getContext('2d');
           if (!og) return;
-          og.filter = 'blur(9px)';
-          og.drawImage(cv, 0, 0);
+          og.drawImage(wide, cw, 0, cw, ch, 0, 0, cw, ch);
           const tex = new THREE.CanvasTexture(out);
           tex.wrapS = THREE.RepeatWrapping;
           tex.colorSpace = THREE.NoColorSpace;
