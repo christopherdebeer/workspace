@@ -403,6 +403,14 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const GRAPH_REST_N = HERO_N * (2 / 3); // ≈ 44.44svh
   const GRAPH_REST = `${GRAPH_REST_N.toFixed(2)}svh`;
   const pullProgress = Math.min(1, pull / PULL_COMMIT);
+  // Past the commit the pull keeps travelling to PULL_CAP — spend that
+  // overshoot COMPLETING the day→night fades: at the extreme of the pull the
+  // hero, the sky wash, and the content sheet reach FULLY transparent (owner
+  // 2026-07-29 — the fades floored at 0.28/0.45/1.0 and the last 40% of
+  // travel did nothing). Saturating curve q·(2−q) — the sheet-parallax idiom —
+  // so the finish arrives gently, not as a linear ramp into the stop.
+  const overPull = Math.max(0, (pull - PULL_COMMIT) / (PULL_CAP - PULL_COMMIT));
+  const overFade = overPull * (2 - overPull);
   // The exit gesture's progress (0 = in the graph, 1 = trailhead arrived) and
   // its "virtual pull" — the enter-pull position the exit is rewinding through,
   // so every surface reuses its OWN enter formula, just run backwards.
@@ -445,7 +453,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     ? exitP * (1 - 0.55 * (1 - exitP)) // arrive × the enter deepen, rewound
     : entered
       ? 0 // ghost beat — the wash fades back out to the night
-      : leaving ? 0 : returning ? (returnLit ? 1 : 0) : (1 - 0.55 * pullProgress);
+      : leaving ? 0 : returning ? (returnLit ? 1 : 0) : (1 - 0.55 * pullProgress) * (1 - overFade);
   const skyInstant = (pull > 0 || exitActive) && !leaving && !returning;
   // The settle beat (returning) moves every surface on ONE clock so the mirror
   // reads as a single motion: overlay opacity+transform, sky, and graph height
@@ -619,7 +627,10 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
             // its internal pull-driven styling (hero fade, sheet parallax, grip
             // pill) runs at the virtual pull position — the painting brightens
             // from dusk back to day as you arrive, parallax settling with it.
-            progress: exitActive ? (1 - exitP) : Math.min(1, pull / PULL_COMMIT) }} />
+            // `over` is the commit→cap overshoot that finishes the fades to 0;
+            // the exit rewinds from inside the commit so it is always 0 there.
+            progress: exitActive ? (1 - exitP) : Math.min(1, pull / PULL_COMMIT),
+            over: exitActive ? 0 : overFade }} />
         </div>
       )}
       {/* Release-to-enter hint — a SIBLING pinned to the viewport top, so it sits
