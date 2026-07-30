@@ -47,6 +47,7 @@ import { readHashState, writeHashState } from './urlstate';
 import {
   loadThree, loadThreeAddons, loadTuneGUI, hslToRgb, hexToRgb, paperInkFor,
   makeStarTexture, makeStippleTexture, makeRingTexture,
+  SKY_VERT, SKY_FRAG, makeBlackTexture,
 } from './graph/scene';
 import {
   hueOf, TYPE_SERIF, FONT_BY_GROUP, LABEL_FONT, LABEL_HALO,
@@ -435,22 +436,26 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // head, the planetarium cue for which way is up. Drawn first, depth-test
       // off, so the additive stars glow straight over it; dark by construction
       // so it never blooms or drowns them. Paper mode hides it (print is flat).
-      const skyUniforms = { uAtmo: { value: TUNE.atmosphere }, uBase: { value: new THREE.Color(PAL.bg) } };
+      // Shader shared with sky.tsx via scene.ts (SKY_VERT/SKY_FRAG) — the
+      // gradient plus the deep-sky layers: fbm nebulae, the galactic band,
+      // and the data-driven cluster clouds (built at finishStream below).
+      const skyUniforms = {
+        uAtmo: { value: TUNE.atmosphere },
+        uNebula: { value: TUNE.nebula },
+        uBase: { value: new THREE.Color(PAL.bg) },
+        uCloud: { value: makeBlackTexture(THREE) },
+        uCloudAmt: { value: 0 },
+      };
+      // Cluster-cloud state, declared HERE because the layout pass (which
+      // reads cloudBuilt for the curl fade) runs during setup, long before
+      // the builder itself is defined further down.
+      let cloudBuilt = 0; // 0 until the texture exists — gates uCloudAmt
+      let cloudTimer: ReturnType<typeof setTimeout> | null = null;
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
         uniforms: skyUniforms,
-        vertexShader:
-          'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-        fragmentShader:
-          'varying vec3 vDir; uniform float uAtmo; uniform vec3 uBase;' +
-          'void main(){ float up = clamp(vDir.y, -1.0, 1.0);' +
-          ' vec3 zenith = vec3(0.020, 0.023, 0.043);' +   // deep, faintly indigo overhead
-          ' vec3 horizon = vec3(0.115, 0.086, 0.058);' +  // warm dusk band at the equator
-          ' vec3 nadir = vec3(0.015, 0.013, 0.012);' +    // near-black underfoot
-          ' vec3 col = up >= 0.0 ? mix(horizon, zenith, smoothstep(0.0, 1.0, up)) : mix(horizon, nadir, smoothstep(0.0, 1.0, -up));' +
-          ' col += vec3(0.16, 0.10, 0.045) * exp(-abs(up) * 5.5);' + // amber airglow hugging the horizon
-          ' col = mix(uBase, col, uAtmo);' +
-          ' gl_FragColor = vec4(col, 1.0); }',
+        vertexShader: SKY_VERT,
+        fragmentShader: SKY_FRAG,
       });
       const skyDome = new THREE.Mesh(new THREE.SphereGeometry(SHELL * 8, 32, 24), skyMat);
       skyDome.frustumCulled = false;
@@ -2418,6 +2423,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // around you, gone by the time it has unfurled flat (a chart has no
         // airglow). Rides the curvature.
         skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, curlS);
+        // Deep sky rides the same curl: nebulae and cluster clouds belong to
+        // the night dome, not the flat chart.
+        skyUniforms.uNebula.value = TUNE.nebula * Math.max(0, curlS);
+        skyUniforms.uCloudAmt.value = cloudBuilt * Math.max(0, curlS);
         // Far-side fade: only the re-curled ball (s<0) has a back. Keyed on gaze
         // depth (−z): near pole ≈SHELL, equator ≈2·SHELL, far pole ≈3·SHELL (at
         // s=−1). Additive glow reads through the shell even at 40%, so we kill
@@ -2821,6 +2830,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (added) {
           frameBody();
           drainPendingEdges();
+          // The cluster clouds accrete WITH the stream (debounced) — waiting
+          // for finishStream would keep the sky cloudless for the minutes a
+          // full chart takes. Each rebuild reads every live seat, so a burst
+          // of pages coalesces into one ~50ms pass.
+          if (cloudTimer) clearTimeout(cloudTimer);
+          cloudTimer = setTimeout(() => { cloudTimer = null; buildClusterClouds(); }, 1600);
         }
       };
       const appendEdges = (items: GEdge[]): void => {
@@ -2941,9 +2956,68 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           pulledNeighbours.delete(key); // a failed pull may retry on re-select
         }
       };
+      // ── the CLUSTER CLOUDS: the slice's own nebulae ─────────────────────
+      // Splat every node's CANONICAL seat (unit dir — stable across the
+      // dome↔chart morph) into a low-res equirect canvas, tinted by its type
+      // hue, blur the lot, and hand it to the dome shader as uCloud. Dense
+      // regions accumulate into soft type-coloured glows — the sky's clouds
+      // ARE the substrate's density, not decoration. Built once at stream
+      // settle (~50ms for the full slice); brightness is budgeted by node
+      // count so a dense slice doesn't white out.
+      const buildClusterClouds = (): void => {
+        if (disposed) return; // a debounced rebuild can outlive the scene
+        try {
+          const active = nodes.filter((n: any) => !n.deleted && Number.isFinite(n.cdx));
+          if (active.length < 8) return;
+          const cw = 512, ch = 256;
+          const cv = document.createElement('canvas');
+          cv.width = cw; cv.height = ch;
+          const g = cv.getContext('2d');
+          if (!g) return;
+          g.fillStyle = '#000';
+          g.fillRect(0, 0, cw, ch);
+          g.globalCompositeOperation = 'lighter';
+          const alpha = Math.min(0.08, 26 / active.length);
+          const rad = 26;
+          for (const n of active) {
+            const [r, gg, b] = hslToRgb(hueOf(n.type ?? ''), 0.55, 0.5);
+            const u = (Math.atan2(n.cdz, n.cdx) / (Math.PI * 2) + 0.5) * cw;
+            const v = (Math.acos(Math.max(-1, Math.min(1, n.cdy))) / Math.PI) * ch;
+            const fill = (ux: number): void => {
+              const grad = g.createRadialGradient(ux, v, 0, ux, v, rad);
+              grad.addColorStop(0, `rgba(${(r * 255) | 0},${(gg * 255) | 0},${(b * 255) | 0},${alpha})`);
+              grad.addColorStop(1, 'rgba(0,0,0,0)');
+              g.fillStyle = grad;
+              g.fillRect(ux - rad, v - rad, rad * 2, rad * 2);
+            };
+            fill(u);
+            // The equirect seam wraps: a splat near either edge paints again
+            // one width over so the dome shows no cut line.
+            if (u < rad) fill(u + cw);
+            else if (u > cw - rad) fill(u - cw);
+          }
+          // Soften into nebulosity. ctx.filter is ignored by some engines —
+          // the splats are already radial gradients, so the fallback is just
+          // a crisper cloud, not a broken one.
+          const out = document.createElement('canvas');
+          out.width = cw; out.height = ch;
+          const og = out.getContext('2d');
+          if (!og) return;
+          og.filter = 'blur(9px)';
+          og.drawImage(cv, 0, 0);
+          const tex = new THREE.CanvasTexture(out);
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.colorSpace = THREE.NoColorSpace;
+          const old = skyUniforms.uCloud.value;
+          skyUniforms.uCloud.value = tex;
+          cloudBuilt = 0.5; // shader-side gain: the texture is additive-bright already
+          if (old?.dispose) old.dispose();
+        } catch { /* the sky stays gradient-only — never fail the stream on decoration */ }
+      };
       const finishStream = (): void => {
         pendingEdges.length = 0;
         computePlaces();
+        buildClusterClouds();
         applyNodeAlpha();
         applyEdgeColor();
         syncBeamLabels();

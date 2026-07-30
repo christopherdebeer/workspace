@@ -122,6 +122,73 @@ export const loadTuneGUI = (): Promise<any> =>
     s?.addons?.GUI
       ?? retryImport(esmURL('lil-gui@0.19.2')).then((m: any) => m.default ?? m.GUI).catch(() => null));
 
+// ── the SKY DOME shader (one source — graph.tsx and sky.tsx both mount it) ──
+// A night sky is not a flat void, and not a bare gradient either. Three layers,
+// each subtle, all dark by construction so additive stars glow over them:
+//   1. the ATMOSPHERE — elevation gradient + amber airglow at the horizon
+//      (the original dome), scaled by uAtmo;
+//   2. DEEP SKY — domain-warped fbm nebulae in two hue families (indigo-teal
+//      and rose-madder, the Hubble palette dimmed to dusk) plus a tilted
+//      galactic band with a dust lane, scaled by uNebula;
+//   3. the CLUSTER CLOUDS — an equirect texture splatted from the slice's own
+//      node seats and type hues (built in graph.tsx at stream-settle), so the
+//      substrate's real clusters read as their own faint nebulae. uCloudAmt
+//      is 0 until the texture exists; sky.tsx leaves it 0 (no data there).
+export const SKY_VERT =
+  'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+export const SKY_FRAG = `
+varying vec3 vDir;
+uniform float uAtmo;
+uniform float uNebula;
+uniform vec3 uBase;
+uniform sampler2D uCloud;
+uniform float uCloudAmt;
+float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float noise(vec3 x){
+  vec3 i = floor(x); vec3 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash(i),                 hash(i + vec3(1,0,0)), f.x),
+                 mix(hash(i + vec3(0,1,0)),   hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)),   hash(i + vec3(1,0,1)), f.x),
+                 mix(hash(i + vec3(0,1,1)),   hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p){ float v = 0.0; float a = 0.5; for (int i = 0; i < 4; i++){ v += a * noise(p); p *= 2.03; a *= 0.55; } return v; }
+void main(){
+  float up = clamp(vDir.y, -1.0, 1.0);
+  vec3 zenith = vec3(0.020, 0.023, 0.043);
+  vec3 horizon = vec3(0.115, 0.086, 0.058);
+  vec3 nadir = vec3(0.015, 0.013, 0.012);
+  vec3 col = up >= 0.0 ? mix(horizon, zenith, smoothstep(0.0, 1.0, up)) : mix(horizon, nadir, smoothstep(0.0, 1.0, -up));
+  col += vec3(0.16, 0.10, 0.045) * exp(-abs(up) * 5.5);
+  col = mix(uBase, col, uAtmo);
+  // deep sky: warp the field once, then read cloud density from the warped
+  // coordinate — fbm(p + fbm(p)) is what turns smooth noise into wisps.
+  vec3 w = vDir * 2.6;
+  vec3 q = w + 1.6 * vec3(fbm(w + 5.2), fbm(w + 1.3), fbm(w + 9.7));
+  float wisp = smoothstep(0.42, 0.78, fbm(q));
+  float huemix = smoothstep(0.35, 0.65, fbm(vDir * 1.1 + 3.7));
+  vec3 neb = mix(vec3(0.030, 0.075, 0.140), vec3(0.120, 0.045, 0.110), huemix) * wisp;
+  // the galactic band: density falls off with distance from a tilted great
+  // circle; a dark dust lane and fine grain keep it from reading as a stripe.
+  float d = dot(vDir, normalize(vec3(0.38, 0.82, 0.42)));
+  float band = exp(-d * d * 18.0);
+  float lane = 1.0 - 0.75 * smoothstep(0.50, 0.72, fbm(vDir * 5.0 + 11.0));
+  float grain = 0.65 + 0.35 * fbm(vDir * 8.0 + 23.0);
+  vec3 milk = vec3(0.105, 0.085, 0.060) * band * lane * grain;
+  col += (neb + milk) * uNebula;
+  vec2 cuv = vec2(atan(vDir.z, vDir.x) / 6.2831853 + 0.5, acos(clamp(vDir.y, -1.0, 1.0)) / 3.14159265);
+  col += texture2D(uCloud, cuv).rgb * uCloudAmt;
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+/** A 1×1 black placeholder for uCloud so the sampler is always bound —
+ *  sky.tsx uses it permanently, graph.tsx until the cluster clouds build. */
+export function makeBlackTexture(THREE: any): any {
+  const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /** HSL (h∈[0,360], s,l∈[0,1]) → [r,g,b] in [0,1], for colour buffers. */
 export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   h /= 360;

@@ -100,6 +100,10 @@ export const TUNE_DEFAULTS = {
   // 0 = flat sceneBg (the old void); 1 = full gradient. Dark by design — never
   // blooms, never drowns a star.
   atmosphere: 0.22,
+  // Deep-sky amount: the fbm nebulae + galactic band + cluster clouds in the
+  // dome shader (scene.ts SKY_FRAG). Same discipline as atmosphere — dark by
+  // construction, rides the curl fade, hidden entirely in paper mode.
+  nebula: 0.55,
   // FAR-SIDE occlusion (orrery / the re-curled ball): how hard the far hemisphere
   // is hidden behind the near cap. 0 = the shell is fully transparent (see every
   // back-side star through it); 1 = OPAQUE — nothing beyond the horizon rim is
@@ -179,6 +183,7 @@ export interface TuneControl {
 export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
+  { key: 'nebula', group: 'scene', label: 'nebula', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
   // the field-computer's frosted glass (Palette-side; read on TUNE_EVENT).
   { key: 'glassBlur', group: 'glass', label: 'blur', min: 0, max: 40, step: 1, live: 'persist', quick: true },
