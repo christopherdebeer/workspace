@@ -463,6 +463,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // but positioned consistently with terrain") — the same cluster map
         // the terrain reads, black until it builds (baseline decoration).
         uCloud: { value: makeBlackTexture(THREE) },
+        uNebKey: { value: new THREE.Vector4(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData) },
       };
       // The sun's canonical home (set over the data centroid at cloud build).
       const sunCanon = new THREE.Vector3(0, 0, 1);
@@ -472,6 +473,21 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // the builder itself is defined further down.
       let cloudBuilt = 0; // 0 until the texture exists — gates uCloudAmt
       let cloudTimer: ReturnType<typeof setTimeout> | null = null;
+      let seatTimer: ReturnType<typeof setTimeout> | null = null;
+      let seatLevers = { spread: TUNE.projSpread, lat: TUNE.projLat };
+      let splatLevers = { rad: TUNE.splatRad, gain: TUNE.splatGain, blur: TUNE.splatBlur };
+      /** Re-chart every mapped node through toDir under the CURRENT projection
+       *  levers, re-blend seats, refresh the arcs, and rebuild the terrain —
+       *  the projection knobs' rebuild path. */
+      const reseatAll = (): void => {
+        for (const n of nodes) {
+          if (!n.mapped || !n.coord) continue;
+          const d = toDir(n.coord, 0);
+          n.sdx = d[0]; n.sdy = d[1]; n.sdz = d[2];
+        }
+        applySeatBlend(); // recomputes cdx + refreshes edge seats + layoutDirty
+        buildClusterClouds();
+      };
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
         uniforms: skyUniforms,
@@ -502,6 +518,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uCloud: { value: makeBlackTexture(THREE) },
         uAmt: { value: 0 },
         uSun: { value: new THREE.Vector3(0, 0, 1) },
+        uLand: { value: new THREE.Vector4(TUNE.landCut, TUNE.landBand, TUNE.coastAmp, TUNE.terrainGain) },
+        uShade: { value: new THREE.Vector2(TUNE.reliefGain, TUNE.nightFloor) },
       };
       const terrainMat = new THREE.ShaderMaterial({
         uniforms: terrainUniforms,
@@ -838,10 +856,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           uOrreryDim: { value: 0 },
           uShellQ: { value: new THREE.Vector4(0, 0, 0, 1) },
           uCurl: { value: -1 },
+          uArcLift: { value: 0 },
         },
         vertexShader:
           'attribute float t; attribute vec3 aSeatA; attribute vec3 aSeatB; attribute vec2 aRad; attribute vec3 color; attribute float boost; attribute float deriv;' +
-          'varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl; uniform float uArcLift;' +
           TORCH_GLSL +
           'vec3 qrot(vec4 q, vec3 v){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }' +
           // The GREAT-CIRCLE arc: interpolate the endpoints' canonical seats
@@ -854,6 +873,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           'void main(){' +
           ' vec3 d = normalize(mix(aSeatA, aSeatB, t));' +
           ' float r0 = mix(aRad.x, aRad.y, t);' +
+          // FLIGHT-PATH lift (owner): the arc rises off the surface toward its
+          // midpoint, higher for longer routes (× angular length). Orrery-only
+          // via the JS-side uArcLift = TUNE.arcLift * inOrrery.
+          ' float ang = acos(clamp(dot(normalize(aSeatA), normalize(aSeatB)), -1.0, 1.0));' +
+          ' r0 *= 1.0 + uArcLift * sin(3.14159265 * t) * ang;' +
           ' vec3 w = qrot(uShellQ, d);' +
           ' float ca = clamp(-w.z, -1.0, 1.0);' +
           ' float alpha = acos(ca);' +
@@ -2543,15 +2567,32 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // continuous): soft cloud dome overhead inside, the same substance
         // firming into terrain as the globe is held. Opacity ramps 0.45→1
         // across the range instead of draining to zero at the flat chart.
-        terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * (0.45 + 0.55 * inOrrery) : 0;
+        terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7 * TUNE.terrainAmt) * (0.45 + 0.55 * inOrrery) : 0;
         terrain.visible = !isPaper() && cloudBuilt > 0;
         // The SUN: shell-fixed over the data centroid (spin moves the
         // terminator) blended toward the viewer (the visible hemisphere
-        // stays mostly lit) — owner amendment 2026-07-31.
-        sunWorld.copy(sunCanon).applyQuaternion(shellQ).multiplyScalar(0.6);
-        sunWorld.z += 0.75;
+        // stays mostly lit) — weights on the tuner (sunShell / sunView).
+        sunWorld.copy(sunCanon).applyQuaternion(shellQ).multiplyScalar(TUNE.sunShell);
+        sunWorld.z += TUNE.sunView;
         sunWorld.normalize();
         terrainUniforms.uSun.value.copy(sunWorld);
+        // Live levers → uniforms (all cheap; the tuner writes TUNE directly).
+        terrainUniforms.uLand.value.set(TUNE.landCut, TUNE.landBand, TUNE.coastAmp, TUNE.terrainGain);
+        terrainUniforms.uShade.value.set(TUNE.reliefGain, TUNE.nightFloor);
+        skyUniforms.uNebKey.value.set(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData);
+        eMat.uniforms.uArcLift.value = TUNE.arcLift * inOrrery;
+        // Levers that require a REBUILD (reseat or re-splat) — watched here so
+        // any tuner wiring works; debounced against slider scrubbing.
+        if (TUNE.projSpread !== seatLevers.spread || TUNE.projLat !== seatLevers.lat) {
+          seatLevers = { spread: TUNE.projSpread, lat: TUNE.projLat };
+          if (seatTimer) clearTimeout(seatTimer);
+          seatTimer = setTimeout(() => { seatTimer = null; reseatAll(); }, 350);
+        }
+        if (TUNE.splatRad !== splatLevers.rad || TUNE.splatGain !== splatLevers.gain || TUNE.splatBlur !== splatLevers.blur) {
+          splatLevers = { rad: TUNE.splatRad, gain: TUNE.splatGain, blur: TUNE.splatBlur };
+          if (cloudTimer) clearTimeout(cloudTimer);
+          cloudTimer = setTimeout(() => { cloudTimer = null; buildClusterClouds(); }, 400);
+        }
         // The torch is a STANDING-INSIDE phenomenon (a beam you aim at the
         // sky). Held as a globe, it left off-axis stars at the 0.2 floor —
         // legible against black, invisible over the lit terrain (owner
@@ -2957,6 +2998,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // grant-folded `owner/key` seats from THAT owner's public map.
           const seatCoord = lookupCoord(n.id, coordMap, pubMaps);
           n.mapped = !!(seatCoord && Number.isFinite(seatCoord[0]));
+          n.coord = seatCoord ?? null;
           [n.sdx, n.sdy, n.sdz] = toDir(seatCoord, i);
           n.ldx = n.sdx; n.ldy = n.sdy; n.ldz = n.sdz;
           n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz;
@@ -3127,8 +3169,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           g.globalCompositeOperation = 'lighter';
           // √-budget: 1/count starved sparse-but-real clusters at 8k charted;
           // √ keeps single splats faint while letting true clusters saturate.
-          const alpha = Math.min(0.09, 1.5 / Math.sqrt(active.length));
-          const rad = 26;
+          const alpha = Math.min(0.09, TUNE.splatGain / Math.sqrt(active.length));
+          const rad = Math.max(4, TUNE.splatRad);
           for (const n of active) {
             const [r, gg, b] = hslToRgb(hueOf(n.type ?? ''), 0.55, 0.5);
             const u = (Math.atan2(n.cdz, n.cdx) / (Math.PI * 2) + 0.5) * cw;
@@ -3168,7 +3210,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           wide.width = cw * 3; wide.height = ch;
           const wg = wide.getContext('2d');
           if (!wg) return;
-          wg.filter = 'blur(9px)';
+          wg.filter = `blur(${Math.max(0, TUNE.splatBlur)}px)`;
           wg.drawImage(cv, 0, 0);
           wg.drawImage(cv, cw, 0);
           wg.drawImage(cv, cw * 2, 0);

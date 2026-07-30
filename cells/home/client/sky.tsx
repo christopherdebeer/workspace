@@ -41,6 +41,7 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
         uNebula: { value: TUNE.nebula * 0.5 },
         uBase: { value: new THREE.Color(ink.sceneBg) },
         uCloud: { value: makeBlackTexture(THREE) }, // no data — baseline decoration only
+        uNebKey: { value: new THREE.Vector4(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData) },
       };
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,

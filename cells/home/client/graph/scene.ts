@@ -158,6 +158,7 @@ uniform float uAtmo;
 uniform float uNebula;
 uniform vec3 uBase;
 uniform sampler2D uCloud;
+uniform vec4 uNebKey; // (wisp base, wisp data gain, band base, band data gain)
 ${NOISE_GLSL}
 void main(){
   float up = clamp(vDir.y, -1.0, 1.0);
@@ -188,7 +189,7 @@ void main(){
   // rides shellQ, so registration with the node seats is automatic. A small
   // baseline keeps the landing dome (no data) quietly decorated.
   float dataK = dot(texture2D(uCloud, equirect(vDir)).rgb, vec3(1.0));
-  col += (neb * (0.22 + 2.2 * dataK) + milk * (0.25 + 1.6 * dataK)) * uNebula;
+  col += (neb * (uNebKey.x + uNebKey.y * dataK) + milk * (uNebKey.z + uNebKey.w * dataK)) * uNebula;
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -237,13 +238,15 @@ uniform sampler2D uCloud;
 uniform float uAmt;
 uniform float uCurl;
 uniform vec3 uSun;
+uniform vec4 uLand;  // (land cut, coast width, coast noise amp, land brightness)
+uniform vec2 uShade; // (relief gain, night floor)
 ${NOISE_GLSL}
 void main(){
   vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
   float d = max(cloud.r, max(cloud.g, cloud.b));
   // fractal coastline: the land threshold wanders with noise
   float coast = fbm(vCanon * 9.0 + 1.7);
-  float land = smoothstep(0.045 + 0.05 * coast, 0.10 + 0.05 * coast, d);
+  float land = smoothstep(uLand.x + uLand.z * coast, uLand.x + uLand.y + uLand.z * coast, d);
   float highland = smoothstep(0.16, 0.34, d);
   // relief: directional fbm difference = slope shading under the sun.
   // uSun is world-space: shell-fixed over the data centroid, biased toward
@@ -252,20 +255,20 @@ void main(){
   vec3 sun = uSun;
   float h1 = fbm(vCanon * 13.0 + 7.3);
   float h2 = fbm(vCanon * 13.0 + 7.3 + sun * 0.09);
-  float slope = clamp(0.5 + (h1 - h2) * 5.0, 0.0, 1.0);
+  float slope = clamp(0.5 + (h1 - h2) * uShade.x, 0.0, 1.0);
   // the sea: dark ground with a faint wisp so an empty quarter stays a surface
   float wisp = smoothstep(0.35, 0.75, fbm(vCanon * 3.1 + 4.2));
   vec3 sea = vec3(0.013, 0.014, 0.022) + vec3(0.020, 0.030, 0.052) * wisp;
   // land keeps the cluster's type hue; brightness from density + relief
   vec3 hue = cloud / max(d, 1e-4);
-  vec3 landCol = hue * (0.045 + 0.32 * d + 0.10 * highland) * (0.55 + 0.75 * slope);
+  vec3 landCol = hue * (0.045 + 0.32 * d + 0.10 * highland) * (0.55 + 0.75 * slope) * uLand.w;
   // ONE substance, two dressings (owner: the curl transition must be
   // continuous): inside the dome the same surface reads as soft nebular
   // cloud overhead; held as a globe it reads as land/sea under a sun. The
   // blend rides the curl, so nothing teleports between vantages.
   float o = smoothstep(0.1, 0.8, clamp(-uCurl, 0.0, 1.0));
   vec3 soft = cloud * 1.5 + vec3(0.018, 0.026, 0.046) * wisp;
-  float day = mix(1.0, 0.45 + 0.55 * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun)), o);
+  float day = mix(1.0, uShade.y + (1.0 - uShade.y) * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun)), o);
   vec3 col = mix(soft, mix(sea, landCol, land), o) * day;
   gl_FragColor = vec4(col, uAmt);
 }`;

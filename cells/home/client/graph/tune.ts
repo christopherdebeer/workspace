@@ -108,6 +108,29 @@ export const TUNE_DEFAULTS = {
   // dome shader (scene.ts SKY_FRAG). Same discipline as atmosphere — dark by
   // construction, rides the curl fade, hidden entirely in paper mode.
   nebula: 0.55,
+  // ── the deep-sky/terrain ALGORITHMIC levers (owner 2026-07-31: "expose far
+  // more of the key levers") — every constant that shapes where and how the
+  // data paints the sky/globe, tunable live. Groups: projection (where seats
+  // land), terrain (how density becomes land), nebula keying (how the dome
+  // wisps follow the data).
+  // projection: 0 = linear lon=x·π (the raw PCA chart), 1 = histogram-
+  // equalized (the slice spread over the whole globe). projLat scales the
+  // latitude range (1 = poles).
+  projSpread: 1, projLat: 0.92,
+  // terrain texture build: splat radius (px on the 512-wide atlas), the
+  // brightness budget (alpha = splatGain/√count), and the blur.
+  splatRad: 26, splatGain: 1.5, splatBlur: 9,
+  // terrain shading: land threshold (cut..cut+band over density), fractal
+  // coast amplitude, relief gain, land brightness, night-side floor, and the
+  // sun mix (viewer-bias vs shell-fixed — spin moves the terminator by the
+  // shell share).
+  terrainAmt: 1, landCut: 0.045, landBand: 0.055, coastAmp: 0.05,
+  reliefGain: 5, terrainGain: 1, nightFloor: 0.45, sunView: 0.75, sunShell: 0.6,
+  // nebula keying: baseline (no-data decoration) + data gain for the wisps
+  // and the galactic band.
+  nebBase: 0.22, nebData: 2.2, bandBase: 0.25, bandData: 1.6,
+  // orrery edges: flight-path lift at the arc midpoint (× angular length).
+  arcLift: 0.06,
   // FAR-SIDE occlusion (orrery / the re-curled ball): how hard the far hemisphere
   // is hidden behind the near cap. 0 = the shell is fully transparent (see every
   // back-side star through it); 1 = OPAQUE — nothing beyond the horizon rim is
@@ -188,6 +211,25 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'nebula', group: 'scene', label: 'nebula', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
+  { key: 'projSpread', group: 'projection', label: 'equalize', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'projLat', group: 'projection', label: 'lat range', min: 0.4, max: 1, step: 0.02, live: 'persist' },
+  { key: 'splatRad', group: 'terrain', label: 'splat radius', min: 6, max: 64, step: 1, live: 'persist' },
+  { key: 'splatGain', group: 'terrain', label: 'splat gain', min: 0.2, max: 5, step: 0.1, live: 'persist' },
+  { key: 'splatBlur', group: 'terrain', label: 'blur', min: 0, max: 24, step: 1, live: 'persist' },
+  { key: 'terrainAmt', group: 'terrain', label: 'opacity', min: 0, max: 2, step: 0.05, live: 'persist', quick: true },
+  { key: 'landCut', group: 'terrain', label: 'land cut', min: 0, max: 0.2, step: 0.005, live: 'persist' },
+  { key: 'landBand', group: 'terrain', label: 'coast width', min: 0.01, max: 0.2, step: 0.005, live: 'persist' },
+  { key: 'coastAmp', group: 'terrain', label: 'coast noise', min: 0, max: 0.15, step: 0.005, live: 'persist' },
+  { key: 'reliefGain', group: 'terrain', label: 'relief', min: 0, max: 12, step: 0.5, live: 'persist' },
+  { key: 'terrainGain', group: 'terrain', label: 'land bright', min: 0.2, max: 3, step: 0.05, live: 'persist' },
+  { key: 'nightFloor', group: 'terrain', label: 'night floor', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'sunView', group: 'terrain', label: 'sun: viewer', min: 0, max: 1.5, step: 0.05, live: 'persist' },
+  { key: 'sunShell', group: 'terrain', label: 'sun: shell', min: 0, max: 1.5, step: 0.05, live: 'persist' },
+  { key: 'nebBase', group: 'nebula', label: 'wisp base', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'nebData', group: 'nebula', label: 'wisp data', min: 0, max: 5, step: 0.1, live: 'persist' },
+  { key: 'bandBase', group: 'nebula', label: 'band base', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'bandData', group: 'nebula', label: 'band data', min: 0, max: 4, step: 0.1, live: 'persist' },
+  { key: 'arcLift', group: 'edges', label: 'arc lift', min: 0, max: 0.25, step: 0.01, live: 'persist' },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
   // the field-computer's frosted glass (Palette-side; read on TUNE_EVENT).
   { key: 'glassBlur', group: 'glass', label: 'blur', min: 0, max: 40, step: 1, live: 'persist', quick: true },
