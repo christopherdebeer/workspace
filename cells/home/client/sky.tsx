@@ -42,7 +42,6 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
         uBase: { value: new THREE.Color(ink.sceneBg) },
         uCloud: { value: makeBlackTexture(THREE) },
         uCloudAmt: { value: 0 },
-        uShellQInv: { value: new THREE.Vector4(0, 0, 0, 1) }, // no data, no spin
       };
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,

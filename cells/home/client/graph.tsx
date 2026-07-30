@@ -244,6 +244,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           if (t <= 0.001) { n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz; }
           else [n.cdx, n.cdy, n.cdz] = nlerpDir(n.sdx, n.sdy, n.sdz, n.ldx, n.ldy, n.ldz, t);
         }
+        refreshEdgeSeats(); // the arcs read canonical seats — move with them
         layoutDirty = true;
       };
       // Which edges pull in the AUTHORED layout: authored assertions hardest,
@@ -445,10 +446,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uBase: { value: new THREE.Color(PAL.bg) },
         uCloud: { value: makeBlackTexture(THREE) },
         uCloudAmt: { value: 0 },
-        // Inverse shell rotation — registers the dome's cluster clouds to the
-        // node seats however the sky has been spun (clouds are the data's
-        // shadow, so they live in canonical space, not world space).
-        uShellQInv: { value: new THREE.Vector4(0, 0, 0, 1) },
       };
       // Cluster-cloud state, declared HERE because the layout pass (which
       // reads cloudBuilt for the curl fade) runs during setup, long before
@@ -474,7 +471,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const terrainUniforms = {
         uShellQ: { value: new THREE.Vector4(0, 0, 0, 1) },
         uCurl: { value: -1 },
-        uR0: { value: SHELL * 0.985 },
+        // The curl morph maps every radius through the SAME view rays with
+        // distance ∝ radius — so SMALLER radius renders IN FRONT (salient
+        // nodes, seated 0.92·SHELL, float nearest; captions, centroid radii,
+        // nearer still). The ground therefore takes the LARGEST radius: at
+        // 1.04·SHELL it sits behind every star, label, caption, and arc
+        // (IMG_0507's buried labels were the 0.985 surface sitting in front
+        // of every seat deeper than it).
+        uR0: { value: SHELL * 1.04 },
         uCloud: { value: skyUniforms.uCloud.value },
         uAmt: { value: 0 },
       };
@@ -673,11 +677,22 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
 
       // ── edges: additive LineSegments (alpha premultiplied into the colours;
       // capacity-allocated, appended as edge pages stream in) ──
-      const eposBuf = new Float32Array(caps.capE * 6);
-      const ecolBuf = new Float32Array(caps.capE * 6);
-      // Direction, source(0)→target(1) — the flow pulse (below) travels along
-      // increasing t, so a fan edge visibly moves the way it actually points.
-      const eflowBuf = new Float32Array(caps.capE * 2);
+      // Edges are INSTANCED ARCS now (owner 2026-07-30: "edges need to be
+      // drawn as great circles so they are visible in both planetarium and
+      // orrery vantages"): one instance per edge carrying its endpoints'
+      // CANONICAL seats, a shared t-parameterised strip, and the curl morph
+      // done in the vertex shader — the arc follows the shell's surface in
+      // every vantage (great circle on the dome, great circle on the globe,
+      // straight line on the flat chart), and the per-frame JS edge reseat
+      // is gone entirely (the GPU morphs; morphLayout no longer touches
+      // edges). Per-edge attrs, not per-vertex: 30k edges ≈ 1.6MB.
+      const ARC_SEG = 12;
+      const eSeatABuf = new Float32Array(caps.capE * 3);
+      const eSeatBBuf = new Float32Array(caps.capE * 3);
+      const eRadBuf = new Float32Array(caps.capE * 2);
+      const ecolBuf = new Float32Array(caps.capE * 3);
+      // Direction is carried by the strip's own `t` (0 = source, 1 = target) —
+      // the flow pulse travels along increasing t, the way the edge points.
       const edgeRGB: Array<[number, number, number]> = [];
       // Lower than the 2D strokes: additive One/One means overlapping edges SUM,
       // so hubs would otherwise clip to a white hairball. Depth-fade (in the
@@ -697,8 +712,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // the selected node, or joins two search hits — the structure the user
       // asked the graph about, visible even off the beam axis. A hit's whole
       // degree does NOT boost (that would re-paint the hairball).
-      const eboostBuf = new Float32Array(caps.capE * 2);
-      const ederivBuf = new Float32Array(caps.capE * 2);
+      const eboostBuf = new Float32Array(caps.capE);
+      const ederivBuf = new Float32Array(caps.capE);
       // The HOP LEVEL of a focus edge (1 = the star's own spokes, 2 = a link out
       // in the second ring, …); 0 = not part of the fan. The accent fan is the
       // whole selected NEIGHBOURHOOD, not just the star's spokes: an edge is in it
@@ -760,25 +775,31 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             r = al; g = al; b = al;
             al = 1;
           }
-          ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
-          ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
-          eboostBuf[i * 2] = bo; eboostBuf[i * 2 + 1] = bo;
+          ecolBuf[i * 3] = r * al; ecolBuf[i * 3 + 1] = g * al; ecolBuf[i * 3 + 2] = b * al;
+          eboostBuf[i] = bo;
           // Derived flag rides its own attribute so the orrery can quiet the
-          // similarity fuzz per-vertex without rebaking colours per frame.
-          const dv = links[i].derived ? 1 : 0;
-          ederivBuf[i * 2] = dv; ederivBuf[i * 2 + 1] = dv;
+          // similarity fuzz per-instance without rebaking colours per frame.
+          ederivBuf[i] = links[i].derived ? 1 : 0;
         }
         (egeo.attributes.color as any).needsUpdate = true;
         (egeo.attributes.boost as any).needsUpdate = true;
         (egeo.attributes.deriv as any).needsUpdate = true;
       };
-      const egeo = new THREE.BufferGeometry();
-      egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
-      egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
-      egeo.setAttribute('boost', new THREE.BufferAttribute(eboostBuf, 1));
-      egeo.setAttribute('deriv', new THREE.BufferAttribute(ederivBuf, 1));
-      egeo.setAttribute('flow', new THREE.BufferAttribute(eflowBuf, 1));
-      egeo.setDrawRange(0, 0); // grows as edge pages stream in (2 vertices/segment)
+      const egeo = new THREE.InstancedBufferGeometry();
+      // The shared strip: ARC_SEG+1 points at t = 0..1. `position` is a dummy
+      // (the vertex shader derives the real position from the instance seats);
+      // it exists because the renderer sizes the draw from it.
+      const arcT = new Float32Array(ARC_SEG + 1);
+      for (let i = 0; i <= ARC_SEG; i++) arcT[i] = i / ARC_SEG;
+      egeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((ARC_SEG + 1) * 3), 3));
+      egeo.setAttribute('t', new THREE.BufferAttribute(arcT, 1));
+      egeo.setAttribute('aSeatA', new THREE.InstancedBufferAttribute(eSeatABuf, 3));
+      egeo.setAttribute('aSeatB', new THREE.InstancedBufferAttribute(eSeatBBuf, 3));
+      egeo.setAttribute('aRad', new THREE.InstancedBufferAttribute(eRadBuf, 2));
+      egeo.setAttribute('color', new THREE.InstancedBufferAttribute(ecolBuf, 3));
+      egeo.setAttribute('boost', new THREE.InstancedBufferAttribute(eboostBuf, 1));
+      egeo.setAttribute('deriv', new THREE.InstancedBufferAttribute(ederivBuf, 1));
+      egeo.instanceCount = 0; // grows as edge pages stream in
       // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
       // point cloud — otherwise they stay full-bright at every depth and flatten
       // the atmosphere. Per-vertex colour already carries the focus/selection
@@ -794,16 +815,35 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           uFlowGain: { value: TUNE.edgeFlowGain },
           uFlowCycles: { value: TUNE.edgeFlowCycles },
           uOrreryDim: { value: 0 },
+          uShellQ: { value: new THREE.Vector4(0, 0, 0, 1) },
+          uCurl: { value: -1 },
         },
         vertexShader:
-          'attribute vec3 color; attribute float boost; attribute float deriv; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim;' +
+          'attribute float t; attribute vec3 aSeatA; attribute vec3 aSeatB; attribute vec2 aRad; attribute vec3 color; attribute float boost; attribute float deriv;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl;' +
           TORCH_GLSL +
-          // Paper skips the torch, same as the points: linework on a printed
-          // map doesn't dim by camera aim — its weight hierarchy is carried
-          // entirely by the per-rel alphas applyEdgeColor already grades.
-          // The orrery dim quiets DERIVED edges only (deriv attr), and never
-          // a focus fan (boost) — deliberate reading keeps full strength.
-          'void main(){ float lit = (uPaper > 0.5 ? 1.0 : max(torch(position), boost) * farFade(position)) * (1.0 - uOrreryDim * deriv * (1.0 - boost)); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          'vec3 qrot(vec4 q, vec3 v){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }' +
+          // The GREAT-CIRCLE arc: interpolate the endpoints' canonical seats
+          // on the sphere (normalized mix traces the geodesic path), then run
+          // the SAME curl transform the nodes ride (curlPos's GLSL mirror) —
+          // the edge hugs the shell in every vantage: an arc across the dome,
+          // an arc over the globe's surface, a straight line on the chart.
+          // Paper skips the torch, same as the points; the orrery dim quiets
+          // DERIVED edges only, never a focus fan (boost).
+          'void main(){' +
+          ' vec3 d = normalize(mix(aSeatA, aSeatB, t));' +
+          ' float r0 = mix(aRad.x, aRad.y, t);' +
+          ' vec3 w = qrot(uShellQ, d);' +
+          ' float ca = clamp(-w.z, -1.0, 1.0);' +
+          ' float alpha = acos(ca);' +
+          ' float sa = sqrt(max(0.0, 1.0 - ca * ca));' +
+          ' vec2 u = sa > 1e-6 ? w.xy / sa : vec2(1.0, 0.0);' +
+          ' float s = uCurl; float rho; float zeta;' +
+          ' if (abs(s) < 1e-3) { rho = alpha; zeta = 1.0; } else { rho = sin(s * alpha) / s; zeta = 1.0 - (1.0 - cos(s * alpha)) / s; }' +
+          ' vec3 pos = vec3(r0 * rho * u.x, r0 * rho * u.y, -r0 * zeta);' +
+          ' float lit = (uPaper > 0.5 ? 1.0 : max(torch(pos), boost) * farFade(pos)) * (1.0 - uOrreryDim * deriv * (1.0 - boost));' +
+          ' vColor = color * lit; vBoost = boost; vFlow = t;' +
+          ' gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }',
         fragmentShader:
           'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
           'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
@@ -833,7 +873,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         blendSrc: THREE.OneFactor,
         blendDst: THREE.OneFactor,
       });
-      const lineSegs = new THREE.LineSegments(egeo, eMat);
+      const lineSegs = new THREE.Line(egeo, eMat); // instanced line STRIPS — one arc per instance
       lineSegs.frustumCulled = false;
       scene.add(lineSegs);
       applyEdgeColor();
@@ -1146,14 +1186,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           curlPos(n.cdx, n.cdy, n.cdz, n.cr0, n);
           posBuf[i * 3] = n.x; posBuf[i * 3 + 1] = n.y; posBuf[i * 3 + 2] = n.z;
         }
-        for (let i = 0; i < links.length; i++) {
-          const a = nodeById.get(idOf(links[i].source)), b = nodeById.get(idOf(links[i].target));
-          if (!a || !b) continue;
-          eposBuf[i * 6] = a.x; eposBuf[i * 6 + 1] = a.y; eposBuf[i * 6 + 2] = a.z;
-          eposBuf[i * 6 + 3] = b.x; eposBuf[i * 6 + 4] = b.y; eposBuf[i * 6 + 5] = b.z;
-        }
         (geo.attributes.position as any).needsUpdate = true;
-        (egeo.attributes.position as any).needsUpdate = true;
+        // Edges morph on the GPU (instanced arcs read canonical seats +
+        // uShellQ/uCurl) — no JS reseat.
         for (const [id, st] of labelObjs) {
           const n = nodeById.get(id);
           if (n) st.grp.position.set(n.x, n.y, n.z);
@@ -2477,13 +2512,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // no horizon).
         const inDome = Math.max(0, curlS), inOrrery = Math.max(0, -curlS);
         skyUniforms.uAtmo.value = TUNE.atmosphere * inDome;
-        skyUniforms.uNebula.value = TUNE.nebula * (inDome + 0.85 * inOrrery);
+        skyUniforms.uNebula.value = TUNE.nebula * inDome;
         skyUniforms.uCloudAmt.value = cloudBuilt * inDome;
-        // Register the dome's clouds to the node seats under the current spin.
-        skyUniforms.uShellQInv.value.set(-shellQ.x, -shellQ.y, -shellQ.z, shellQ.w);
-        // The terrain rides the same shell state as the nodes.
+        // The terrain and the edge arcs ride the same shell state as the nodes.
         terrainUniforms.uShellQ.value.set(shellQ.x, shellQ.y, shellQ.z, shellQ.w);
         terrainUniforms.uCurl.value = curlS;
+        eMat.uniforms.uShellQ.value.set(shellQ.x, shellQ.y, shellQ.z, shellQ.w);
+        eMat.uniforms.uCurl.value = curlS;
         terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * inOrrery : 0;
         terrain.visible = !isPaper() && inOrrery > 0.02 && cloudBuilt > 0;
         // The orrery quiets DERIVED edges (the similarity fuzz) so the
@@ -2758,17 +2793,27 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         links.push(l);
         linkIds.add(id);
         edgeRGB.push(hexToRgb(edgeStyle(e).stroke));
-        const ai = idx.get(e.from)!, bi = idx.get(e.to)!;
-        eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
-        eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
-        eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1;
         a.deg++; b.deg++;
         return true;
       };
+      /** (Re)write every edge's canonical seat attrs from its endpoints —
+       *  after new edges land, and whenever node seats MOVE (seat blend,
+       *  score-driven radius updates). 30k × 8 floats: trivial. */
+      const refreshEdgeSeats = (): void => {
+        for (let i = 0; i < links.length; i++) {
+          const a = nodeById.get(idOf(links[i].source)), b = nodeById.get(idOf(links[i].target));
+          if (!a || !b) continue;
+          eSeatABuf[i * 3] = a.cdx; eSeatABuf[i * 3 + 1] = a.cdy; eSeatABuf[i * 3 + 2] = a.cdz;
+          eSeatBBuf[i * 3] = b.cdx; eSeatBBuf[i * 3 + 1] = b.cdy; eSeatBBuf[i * 3 + 2] = b.cdz;
+          eRadBuf[i * 2] = a.cr0; eRadBuf[i * 2 + 1] = b.cr0;
+        }
+        (egeo.attributes.aSeatA as any).needsUpdate = true;
+        (egeo.attributes.aSeatB as any).needsUpdate = true;
+        (egeo.attributes.aRad as any).needsUpdate = true;
+      };
       const commitEdges = (): void => {
-        egeo.setDrawRange(0, links.length * 2);
-        (egeo.attributes.position as any).needsUpdate = true;
-        (egeo.attributes.flow as any).needsUpdate = true;
+        egeo.instanceCount = links.length;
+        refreshEdgeSeats();
         refreshSizes();
         (geo.attributes.size as any).needsUpdate = true;
         applyEdgeColor();
@@ -2778,11 +2823,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         edgeRGB.length = 0;
         for (let i = 0; i < links.length; i++) {
           const l = links[i];
-          const ai = idx.get(idOf(l.source)), bi = idx.get(idOf(l.target));
-          if (ai === undefined || bi === undefined) continue;
-          eposBuf[i * 6] = posBuf[ai * 3]; eposBuf[i * 6 + 1] = posBuf[ai * 3 + 1]; eposBuf[i * 6 + 2] = posBuf[ai * 3 + 2];
-          eposBuf[i * 6 + 3] = posBuf[bi * 3]; eposBuf[i * 6 + 4] = posBuf[bi * 3 + 1]; eposBuf[i * 6 + 5] = posBuf[bi * 3 + 2];
-          eflowBuf[i * 2] = 0; eflowBuf[i * 2 + 1] = 1;
           edgeRGB.push(hexToRgb(edgeStyle({ from: idOf(l.source), rel: l.rel, to: idOf(l.target), derived: l.derived }).stroke));
           const a = nodeById.get(idOf(l.source)), b = nodeById.get(idOf(l.target));
           if (a) a.deg++;
@@ -2892,6 +2932,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         }
         if (!changed) return;
         refreshNodes();
+        refreshEdgeSeats(); // score updates can move seats (seatRadius)
         if (added) {
           frameBody();
           drainPendingEdges();

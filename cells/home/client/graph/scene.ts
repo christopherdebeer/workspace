@@ -159,7 +159,6 @@ uniform float uNebula;
 uniform vec3 uBase;
 uniform sampler2D uCloud;
 uniform float uCloudAmt;
-uniform vec4 uShellQInv;
 ${NOISE_GLSL}
 void main(){
   float up = clamp(vDir.y, -1.0, 1.0);
@@ -184,10 +183,10 @@ void main(){
   float grain = 0.65 + 0.35 * fbm(vDir * 8.0 + 23.0);
   vec3 milk = vec3(0.105, 0.085, 0.060) * band * lane * grain;
   col += (neb + milk) * uNebula;
-  // The cluster clouds are the DATA's shadow, so they live in canonical
-  // (shell) space — the inverse shell rotation registers the dome texel to
-  // the node seats however the sky has been spun.
-  col += texture2D(uCloud, equirect(qrot(uShellQInv, vDir))).rgb * uCloudAmt;
+  // vDir is LOCAL — the dome mesh itself rides the shell rotation
+  // (morphLayout copies shellQ onto it), so local sampling is already
+  // registered to the node seats under any spin.
+  col += texture2D(uCloud, equirect(vDir)).rgb * uCloudAmt;
   gl_FragColor = vec4(col, 1.0);
 }`;
 
