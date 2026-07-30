@@ -237,17 +237,21 @@ export function hexToRgb(hex: string): [number, number, number] {
 /** The point sprite: a STAR — tight bright core, steep falloff, and four
  *  diffraction spikes whose strength rides `spike` (0 = the old soft disc).
  *  Bloom (threshold ~0 in the owner's grade) supplies the halo. */
-export function makeStarTexture(THREE: any, spike: number): any {
+export function makeStarTexture(THREE: any, spike: number, halo = 1): any {
   const s = 96;
   const cv = document.createElement('canvas');
   cv.width = cv.height = s;
   const g = cv.getContext('2d')!;
   const c = s / 2;
   // Core: hotter and tighter than the old disc — a star, not a blob.
+  // `halo` grades the baked soft falloff (the knobless glow source when bloom
+  // is off): 1 = the original soft star, 0 = tight core + spikes only — the
+  // mid-stop alpha scales down and the falloff truncates toward the core.
   const core = g.createRadialGradient(c, c, 0, c, c, c);
   core.addColorStop(0, 'rgba(255,255,255,1)');
   core.addColorStop(0.18, 'rgba(255,255,255,0.9)');
-  core.addColorStop(0.42, `rgba(255,255,255,${0.35 - 0.15 * spike})`);
+  core.addColorStop(0.42, `rgba(255,255,255,${(0.35 - 0.15 * spike) * halo})`);
+  core.addColorStop(Math.min(1, 0.5 + 0.5 * halo), 'rgba(255,255,255,0)');
   core.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = core;
   g.fillRect(0, 0, s, s);

@@ -484,7 +484,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       el.appendChild(labelRenderer.domElement);
 
       // ── the point cloud (one draw call, additive glow, per-point size) ──
-      let disc = makeStarTexture(THREE, TUNE.starSpike);
+      let disc = makeStarTexture(THREE, TUNE.starSpike, TUNE.starHalo);
       let stipple = makeStippleTexture(THREE, TUNE.starSpike); // paper's crisp ink star (mode-swapped in applyMode)
       const geo = new THREE.BufferGeometry();
       // `boost` lets a FOCUS point (selection / neighbour / search hit) bypass
@@ -662,6 +662,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // asked the graph about, visible even off the beam axis. A hit's whole
       // degree does NOT boost (that would re-paint the hairball).
       const eboostBuf = new Float32Array(caps.capE * 2);
+      const ederivBuf = new Float32Array(caps.capE * 2);
       // The HOP LEVEL of a focus edge (1 = the star's own spokes, 2 = a link out
       // in the second ring, …); 0 = not part of the fan. The accent fan is the
       // whole selected NEIGHBOURHOOD, not just the star's spokes: an edge is in it
@@ -726,14 +727,20 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           ecolBuf[i * 6] = r * al; ecolBuf[i * 6 + 1] = g * al; ecolBuf[i * 6 + 2] = b * al;
           ecolBuf[i * 6 + 3] = r * al; ecolBuf[i * 6 + 4] = g * al; ecolBuf[i * 6 + 5] = b * al;
           eboostBuf[i * 2] = bo; eboostBuf[i * 2 + 1] = bo;
+          // Derived flag rides its own attribute so the orrery can quiet the
+          // similarity fuzz per-vertex without rebaking colours per frame.
+          const dv = links[i].derived ? 1 : 0;
+          ederivBuf[i * 2] = dv; ederivBuf[i * 2 + 1] = dv;
         }
         (egeo.attributes.color as any).needsUpdate = true;
         (egeo.attributes.boost as any).needsUpdate = true;
+        (egeo.attributes.deriv as any).needsUpdate = true;
       };
       const egeo = new THREE.BufferGeometry();
       egeo.setAttribute('position', new THREE.BufferAttribute(eposBuf, 3));
       egeo.setAttribute('color', new THREE.BufferAttribute(ecolBuf, 3));
       egeo.setAttribute('boost', new THREE.BufferAttribute(eboostBuf, 1));
+      egeo.setAttribute('deriv', new THREE.BufferAttribute(ederivBuf, 1));
       egeo.setAttribute('flow', new THREE.BufferAttribute(eflowBuf, 1));
       egeo.setDrawRange(0, 0); // grows as edge pages stream in (2 vertices/segment)
       // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
@@ -750,14 +757,17 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           uFlowWidth: { value: TUNE.edgeFlowWidth },
           uFlowGain: { value: TUNE.edgeFlowGain },
           uFlowCycles: { value: TUNE.edgeFlowCycles },
+          uOrreryDim: { value: 0 },
         },
         vertexShader:
-          'attribute vec3 color; attribute float boost; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper;' +
+          'attribute vec3 color; attribute float boost; attribute float deriv; attribute float flow; varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim;' +
           TORCH_GLSL +
           // Paper skips the torch, same as the points: linework on a printed
           // map doesn't dim by camera aim — its weight hierarchy is carried
           // entirely by the per-rel alphas applyEdgeColor already grades.
-          'void main(){ float lit = uPaper > 0.5 ? 1.0 : max(torch(position), boost) * farFade(position); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
+          // The orrery dim quiets DERIVED edges only (deriv attr), and never
+          // a focus fan (boost) — deliberate reading keeps full strength.
+          'void main(){ float lit = (uPaper > 0.5 ? 1.0 : max(torch(position), boost) * farFade(position)) * (1.0 - uOrreryDim * deriv * (1.0 - boost)); vColor = color * lit; vBoost = boost; vFlow = flow; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv; }',
         fragmentShader:
           'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
           'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
@@ -2422,11 +2432,19 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // The atmosphere belongs to the DOME: full when the sky is curled
         // around you, gone by the time it has unfurled flat (a chart has no
         // airglow). Rides the curvature.
-        skyUniforms.uAtmo.value = TUNE.atmosphere * Math.max(0, curlS);
-        // Deep sky rides the same curl: nebulae and cluster clouds belong to
-        // the night dome, not the flat chart.
-        skyUniforms.uNebula.value = TUNE.nebula * Math.max(0, curlS);
-        skyUniforms.uCloudAmt.value = cloudBuilt * Math.max(0, curlS);
+        // Inside the dome (curl > 0) all three sky layers ride the curl; the
+        // ORRERY (curl < 0, the held globe) gets the deep sky back — from
+        // outside, the nebulae and the type-tinted cluster clouds ARE the
+        // atlas ground the regions read against — but never the atmosphere
+        // (airglow is a from-inside phenomenon; a held globe has no horizon).
+        const inDome = Math.max(0, curlS), inOrrery = Math.max(0, -curlS);
+        skyUniforms.uAtmo.value = TUNE.atmosphere * inDome;
+        skyUniforms.uNebula.value = TUNE.nebula * (inDome + 0.85 * inOrrery);
+        skyUniforms.uCloudAmt.value = cloudBuilt * (inDome + 1.3 * inOrrery);
+        // The orrery quiets DERIVED edges (the similarity fuzz) so the
+        // authored skeleton reads at planet distance; a selection's focus fan
+        // (boost) keeps full strength — deliberate reading is never dimmed.
+        eMat.uniforms.uOrreryDim.value = 0.75 * inOrrery;
         // Far-side fade: only the re-curled ball (s<0) has a back. Keyed on gaze
         // depth (−z): near pole ≈SHELL, equator ≈2·SHELL, far pole ≈3·SHELL (at
         // s=−1). Additive glow reads through the shell even at 40%, so we kill
@@ -2500,10 +2518,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         saveTimer = setTimeout(() => { void saveTuneConfig({ ...TUNE }); }, 700);
       };
       let lastSpike = TUNE.starSpike;
+      let lastHalo = TUNE.starHalo;
       const refresh = (): void => {
-            if (TUNE.starSpike !== lastSpike) {
+            if (TUNE.starSpike !== lastSpike || TUNE.starHalo !== lastHalo) {
               lastSpike = TUNE.starSpike;
-              const t = makeStarTexture(THREE, TUNE.starSpike);
+              lastHalo = TUNE.starHalo;
+              const t = makeStarTexture(THREE, TUNE.starSpike, TUNE.starHalo);
               disc.dispose?.();
               disc = t;
               const st2 = makeStippleTexture(THREE, TUNE.starSpike);

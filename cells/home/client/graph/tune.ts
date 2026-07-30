@@ -91,6 +91,10 @@ export const TUNE_DEFAULTS = {
   bloomMode: 'on' as 'auto' | 'on' | 'off',
   // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
   starSpike: 1,
+  // The star sprite's BAKED halo (the residual glow when bloom is off and the
+  // sky is dialed to zero): 1 = the soft star, 0 = tight core + spikes only.
+  // Dusk only — paper's stipple is already a hard ink shape.
+  starHalo: 1,
   // scene mode: 'dusk' = the luminous dark field; 'paper' = a cartographic
   // star ATLAS — ink stars and fine linework on warm paper, bloom off.
   sceneMode: 'dusk' as 'dusk' | 'paper',
@@ -224,6 +228,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'hopFalloff', group: 'nodes', label: 'hop falloff', min: 0.1, max: 1 },
   { key: 'boostSizeGain', group: 'nodes', min: 0, max: 1.5 },
   { key: 'starSpike', group: 'nodes', min: 0, max: 1 },
+  { key: 'starHalo', group: 'nodes', label: 'star halo', min: 0, max: 1 },
   { key: 'edgeSimilar', group: 'edges', min: 0, max: 0.3, step: 0.005 },
   { key: 'edgeMember', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeDerived', group: 'edges', min: 0, max: 0.5, step: 0.005 },

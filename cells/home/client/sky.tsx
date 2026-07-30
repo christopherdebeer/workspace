@@ -73,7 +73,7 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
       const starGeo = new THREE.BufferGeometry();
       starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       starGeo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-      const starTex = makeStarTexture(THREE, TUNE.starSpike);
+      const starTex = makeStarTexture(THREE, TUNE.starSpike, TUNE.starHalo);
       const starMat = new THREE.PointsMaterial({
         map: starTex,
         size: 2.8,
