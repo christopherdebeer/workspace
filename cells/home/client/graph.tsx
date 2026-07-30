@@ -2537,6 +2537,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // across the range instead of draining to zero at the flat chart.
         terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * (0.45 + 0.55 * inOrrery) : 0;
         terrain.visible = !isPaper() && cloudBuilt > 0;
+        // The torch is a STANDING-INSIDE phenomenon (a beam you aim at the
+        // sky). Held as a globe, it left off-axis stars at the 0.2 floor —
+        // legible against black, invisible over the lit terrain (owner
+        // IMG_0511: the continent face read starless). The atlas is evenly
+        // lit: the floor rises toward 0.85 with the curl.
+        torchUniforms.uFloor.value = TUNE.torchFloor + (0.85 - TUNE.torchFloor) * inOrrery;
         // The orrery quiets DERIVED edges (the similarity fuzz) so the
         // authored skeleton reads at planet distance; a selection's focus fan
         // (boost) keeps full strength — deliberate reading is never dimmed.
