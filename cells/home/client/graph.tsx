@@ -216,8 +216,23 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
        *  A node with no embedding (uncharted) gets a stable golden-spiral seat
        *  by index, so it still lands on the sphere rather than collapsing to 0. */
       const toDir = (c: number[] | undefined, i: number): [number, number, number] => {
-        const len = c ? Math.hypot(c[0] ?? 0, c[1] ?? 0, c[2] ?? 0) : 0;
-        if (c && len > 1e-6) return [(c[0] ?? 0) / len, (c[1] ?? 0) / len, (c[2] ?? 0) / len];
+        // MAP PROJECTION, not normalization (owner 2026-07-30 "semantic
+        // positioning seems broken"): the old dir-of-vector mapping kept only
+        // the coord's DIRECTION, and PCA coords crowd the origin — most
+        // content sits near the semantic mean, and normalizing a near-origin
+        // point explodes it to an arbitrary direction. The dense middle of
+        // meaning-space sprayed uniformly over the sphere (scatter, no
+        // clusters). Instead the meaning PLANE becomes the globe's chart:
+        // PCA x → longitude, y → latitude — locality-preserving everywhere,
+        // no origin collapse, and the terrain's continents become real
+        // geography of the slice.
+        if (c && Number.isFinite(c[0]) && Number.isFinite(c[1])) {
+          const cx = Math.max(-1, Math.min(1, c[0] ?? 0));
+          const cy = Math.max(-1, Math.min(1, c[1] ?? 0));
+          const lon = cx * Math.PI;
+          const lat = cy * (Math.PI / 2) * 0.92; // shy of the poles (equirect pinch)
+          return [Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)];
+        }
         const t = ((i % 997) + 0.5) / 997; // pseudo-uniform latitude
         const y = 1 - 2 * t;
         const rr = Math.sqrt(Math.max(0, 1 - y * y));
@@ -444,8 +459,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uAtmo: { value: TUNE.atmosphere },
         uNebula: { value: TUNE.nebula },
         uBase: { value: new THREE.Color(PAL.bg) },
-        uCloud: { value: makeBlackTexture(THREE) },
-        uCloudAmt: { value: 0 },
       };
       // Cluster-cloud state, declared HERE because the layout pass (which
       // reads cloudBuilt for the curl fade) runs during setup, long before
@@ -479,7 +492,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // (IMG_0507's buried labels were the 0.985 surface sitting in front
         // of every seat deeper than it).
         uR0: { value: SHELL * 1.04 },
-        uCloud: { value: skyUniforms.uCloud.value },
+        uCloud: { value: makeBlackTexture(THREE) },
         uAmt: { value: 0 },
       };
       const terrainMat = new THREE.ShaderMaterial({
@@ -2513,14 +2526,17 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const inDome = Math.max(0, curlS), inOrrery = Math.max(0, -curlS);
         skyUniforms.uAtmo.value = TUNE.atmosphere * inDome;
         skyUniforms.uNebula.value = TUNE.nebula * inDome;
-        skyUniforms.uCloudAmt.value = cloudBuilt * inDome;
         // The terrain and the edge arcs ride the same shell state as the nodes.
         terrainUniforms.uShellQ.value.set(shellQ.x, shellQ.y, shellQ.z, shellQ.w);
         terrainUniforms.uCurl.value = curlS;
         eMat.uniforms.uShellQ.value.set(shellQ.x, shellQ.y, shellQ.z, shellQ.w);
         eMat.uniforms.uCurl.value = curlS;
-        terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * inOrrery : 0;
-        terrain.visible = !isPaper() && inOrrery > 0.02 && cloudBuilt > 0;
+        // ONE surface through the whole curl (owner: the transition must be
+        // continuous): soft cloud dome overhead inside, the same substance
+        // firming into terrain as the globe is held. Opacity ramps 0.45→1
+        // across the range instead of draining to zero at the flat chart.
+        terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * (0.45 + 0.55 * inOrrery) : 0;
+        terrain.visible = !isPaper() && cloudBuilt > 0;
         // The orrery quiets DERIVED edges (the similarity fuzz) so the
         // authored skeleton reads at planet distance; a selection's focus fan
         // (boost) keeps full strength — deliberate reading is never dimmed.
@@ -3136,9 +3152,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const tex = new THREE.CanvasTexture(out);
           tex.wrapS = THREE.RepeatWrapping;
           tex.colorSpace = THREE.NoColorSpace;
-          const old = skyUniforms.uCloud.value;
-          skyUniforms.uCloud.value = tex;
-          terrainUniforms.uCloud.value = tex; // the globe's surface shares the one texture
+          const old = terrainUniforms.uCloud.value;
+          terrainUniforms.uCloud.value = tex;
           cloudBuilt = 0.5; // shader-side gain: the texture is additive-bright already
           if (old?.dispose) old.dispose();
         } catch { /* the sky stays gradient-only — never fail the stream on decoration */ }

@@ -157,8 +157,6 @@ varying vec3 vDir;
 uniform float uAtmo;
 uniform float uNebula;
 uniform vec3 uBase;
-uniform sampler2D uCloud;
-uniform float uCloudAmt;
 ${NOISE_GLSL}
 void main(){
   float up = clamp(vDir.y, -1.0, 1.0);
@@ -183,10 +181,6 @@ void main(){
   float grain = 0.65 + 0.35 * fbm(vDir * 8.0 + 23.0);
   vec3 milk = vec3(0.105, 0.085, 0.060) * band * lane * grain;
   col += (neb + milk) * uNebula;
-  // vDir is LOCAL — the dome mesh itself rides the shell rotation
-  // (morphLayout copies shellQ onto it), so local sampling is already
-  // registered to the node seats under any spin.
-  col += texture2D(uCloud, equirect(vDir)).rgb * uCloudAmt;
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -233,6 +227,7 @@ varying vec3 vCanon;
 varying vec3 vNorm;
 uniform sampler2D uCloud;
 uniform float uAmt;
+uniform float uCurl;
 ${NOISE_GLSL}
 void main(){
   vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
@@ -252,10 +247,15 @@ void main(){
   // land keeps the cluster's type hue; brightness from density + relief
   vec3 hue = cloud / max(d, 1e-4);
   vec3 landCol = hue * (0.045 + 0.32 * d + 0.10 * highland) * (0.55 + 0.75 * slope);
-  vec3 col = mix(sea, landCol, land);
-  // the terminator: night falls to a floor, never to void
-  float day = 0.30 + 0.70 * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun));
-  gl_FragColor = vec4(col * day, uAmt);
+  // ONE substance, two dressings (owner: the curl transition must be
+  // continuous): inside the dome the same surface reads as soft nebular
+  // cloud overhead; held as a globe it reads as land/sea under a sun. The
+  // blend rides the curl, so nothing teleports between vantages.
+  float o = smoothstep(0.1, 0.8, clamp(-uCurl, 0.0, 1.0));
+  vec3 soft = cloud * 1.5 + vec3(0.018, 0.026, 0.046) * wisp;
+  float day = mix(1.0, 0.30 + 0.70 * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun)), o);
+  vec3 col = mix(soft, mix(sea, landCol, land), o) * day;
+  gl_FragColor = vec4(col, uAmt);
 }`;
 
 /** A 1×1 black placeholder for uCloud so the sampler is always bound —
