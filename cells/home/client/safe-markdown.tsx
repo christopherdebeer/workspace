@@ -206,8 +206,11 @@ function blocks(tokens: Token[] | undefined, key = 'b', o: MdOpts = {}): React.R
           <Tag key={k} start={t.ordered && Number.isFinite(t.start) ? Number(t.start) : undefined}>
             {(t.items ?? []).map((it: Token, j: number) => (
               // Task items hide the bullet (the checkbox IS the marker).
-              <li key={`${k}:${j}`} style={typeof it.task === 'boolean' ? { listStyle: 'none', marginLeft: '-1.1em' } : undefined}>
-                {typeof it.task === 'boolean' ? <input type="checkbox" checked={!!it.checked} readOnly aria-label="task status" style={{ verticalAlign: 'baseline', marginRight: '0.45em' }} /> : null}
+              // `task === true` ONLY: marked sets `task: false` on every
+              // ordinary list item, so the old `typeof === 'boolean'` gate put
+              // a checkbox on every bullet in the corpus.
+              <li key={`${k}:${j}`} style={it.task === true ? { listStyle: 'none', marginLeft: '-1.1em' } : undefined}>
+                {it.task === true ? <input type="checkbox" checked={!!it.checked} readOnly aria-label="task status" style={{ verticalAlign: 'baseline', marginRight: '0.45em' }} /> : null}
                 {itemContent(it.tokens, `${k}:${j}`) ?? inline(it.tokens, `${k}:${j}`, o) ?? String(it.text ?? '')}
               </li>
             ))}
