@@ -136,13 +136,9 @@ export const loadTuneGUI = (): Promise<any> =>
 //      is 0 until the texture exists; sky.tsx leaves it 0 (no data there).
 export const SKY_VERT =
   'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
-export const SKY_FRAG = `
-varying vec3 vDir;
-uniform float uAtmo;
-uniform float uNebula;
-uniform vec3 uBase;
-uniform sampler2D uCloud;
-uniform float uCloudAmt;
+/** Shared GLSL: value noise + fbm + quaternion rotate — the sky dome and the
+ *  orrery terrain both build on these. */
+export const NOISE_GLSL = `
 float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float noise(vec3 x){
   vec3 i = floor(x); vec3 f = fract(x);
@@ -153,6 +149,18 @@ float noise(vec3 x){
                  mix(hash(i + vec3(0,1,1)),   hash(i + vec3(1,1,1)), f.x), f.y), f.z);
 }
 float fbm(vec3 p){ float v = 0.0; float a = 0.5; for (int i = 0; i < 4; i++){ v += a * noise(p); p *= 2.03; a *= 0.55; } return v; }
+vec3 qrot(vec4 q, vec3 v){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+vec2 equirect(vec3 d){ return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265); }
+`;
+export const SKY_FRAG = `
+varying vec3 vDir;
+uniform float uAtmo;
+uniform float uNebula;
+uniform vec3 uBase;
+uniform sampler2D uCloud;
+uniform float uCloudAmt;
+uniform vec4 uShellQInv;
+${NOISE_GLSL}
 void main(){
   float up = clamp(vDir.y, -1.0, 1.0);
   vec3 zenith = vec3(0.020, 0.023, 0.043);
@@ -176,9 +184,54 @@ void main(){
   float grain = 0.65 + 0.35 * fbm(vDir * 8.0 + 23.0);
   vec3 milk = vec3(0.105, 0.085, 0.060) * band * lane * grain;
   col += (neb + milk) * uNebula;
-  vec2 cuv = vec2(atan(vDir.z, vDir.x) / 6.2831853 + 0.5, acos(clamp(vDir.y, -1.0, 1.0)) / 3.14159265);
-  col += texture2D(uCloud, cuv).rgb * uCloudAmt;
+  // The cluster clouds are the DATA's shadow, so they live in canonical
+  // (shell) space — the inverse shell rotation registers the dome texel to
+  // the node seats however the sky has been spun.
+  col += texture2D(uCloud, equirect(qrot(uShellQInv, vDir))).rgb * uCloudAmt;
   gl_FragColor = vec4(col, 1.0);
+}`;
+
+// ── the ORRERY TERRAIN: the cluster clouds as the held globe's surface ──────
+// A unit sphere whose vertices are CANONICAL directions, morphed in the
+// vertex shader by the exact curl transform the nodes use (graph.tsx
+// curlPos) — so the surface bends with the stars through dome ↔ chart ↔ ball
+// and, at full curl, IS the ball: radius uR0, centred (0,0,−2·uR0). The
+// fragment paints the type-tinted cluster clouds as continents over a dark
+// ground, textured with fbm so density reads as landform, not blobs. The
+// mesh only shows in the orrery (opacity ∝ −curl, driven by graph.tsx).
+export const TERRAIN_VERT = `
+varying vec3 vCanon;
+uniform vec4 uShellQ;
+uniform float uCurl;
+uniform float uR0;
+vec3 qrot(vec4 q, vec3 v){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+void main(){
+  vCanon = normalize(position);
+  vec3 w = qrot(uShellQ, vCanon);
+  float ca = clamp(-w.z, -1.0, 1.0);
+  float alpha = acos(ca);
+  float sa = sqrt(max(0.0, 1.0 - ca * ca));
+  vec2 u = sa > 1e-6 ? w.xy / sa : vec2(1.0, 0.0);
+  float s = uCurl;
+  float rho; float zeta;
+  if (abs(s) < 1e-3) { rho = alpha; zeta = 1.0; }
+  else { rho = sin(s * alpha) / s; zeta = 1.0 - (1.0 - cos(s * alpha)) / s; }
+  vec3 pos = vec3(uR0 * rho * u.x, uR0 * rho * u.y, -uR0 * zeta);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}`;
+export const TERRAIN_FRAG = `
+varying vec3 vCanon;
+uniform sampler2D uCloud;
+uniform float uAmt;
+${NOISE_GLSL}
+void main(){
+  vec3 ground = vec3(0.012, 0.011, 0.017);
+  vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
+  // fbm landform: the same density reads as coast/relief, not an airbrush blob.
+  float relief = 0.65 + 0.5 * fbm(vCanon * 7.0);
+  float wisp = smoothstep(0.45, 0.8, fbm(vCanon * 3.1 + 4.2));
+  vec3 col = ground + cloud * 1.9 * relief + vec3(0.020, 0.030, 0.052) * wisp;
+  gl_FragColor = vec4(col, uAmt);
 }`;
 
 /** A 1×1 black placeholder for uCloud so the sampler is always bound —

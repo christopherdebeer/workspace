@@ -47,7 +47,7 @@ import { readHashState, writeHashState } from './urlstate';
 import {
   loadThree, loadThreeAddons, loadTuneGUI, hslToRgb, hexToRgb, paperInkFor,
   makeStarTexture, makeStippleTexture, makeRingTexture,
-  SKY_VERT, SKY_FRAG, makeBlackTexture,
+  SKY_VERT, SKY_FRAG, TERRAIN_VERT, TERRAIN_FRAG, makeBlackTexture,
 } from './graph/scene';
 import {
   hueOf, TYPE_SERIF, FONT_BY_GROUP, LABEL_FONT, LABEL_HALO,
@@ -445,6 +445,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uBase: { value: new THREE.Color(PAL.bg) },
         uCloud: { value: makeBlackTexture(THREE) },
         uCloudAmt: { value: 0 },
+        // Inverse shell rotation — registers the dome's cluster clouds to the
+        // node seats however the sky has been spun (clouds are the data's
+        // shadow, so they live in canonical space, not world space).
+        uShellQInv: { value: new THREE.Vector4(0, 0, 0, 1) },
       };
       // Cluster-cloud state, declared HERE because the layout pass (which
       // reads cloudBuilt for the curl fade) runs during setup, long before
@@ -462,6 +466,31 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       skyDome.renderOrder = -1;
       skyDome.visible = !isPaper();
       scene.add(skyDome);
+      // ── the ORRERY TERRAIN: the cluster clouds as the held globe's surface ──
+      // A unit sphere morphed by the SAME curl transform the nodes ride
+      // (TERRAIN_VERT mirrors curlPos), sitting a hair under the star shell so
+      // the stars read as lights above their own ground. Orrery-only: opacity
+      // and visibility ride −curl in the frame update below.
+      const terrainUniforms = {
+        uShellQ: { value: new THREE.Vector4(0, 0, 0, 1) },
+        uCurl: { value: -1 },
+        uR0: { value: SHELL * 0.985 },
+        uCloud: { value: skyUniforms.uCloud.value },
+        uAmt: { value: 0 },
+      };
+      const terrainMat = new THREE.ShaderMaterial({
+        uniforms: terrainUniforms,
+        vertexShader: TERRAIN_VERT,
+        fragmentShader: TERRAIN_FRAG,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide, // the morph turns the sphere inside-out mid-curl
+      });
+      const terrain = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), terrainMat);
+      terrain.frustumCulled = false;
+      terrain.renderOrder = -0.5; // over the sky dome, under the stars/edges
+      terrain.visible = false;
+      scene.add(terrain);
       const camera = new THREE.PerspectiveCamera(55, W / H, 1, 8000);
       camera.position.set(0, 0, SPREAD * 2.15);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -2432,15 +2461,24 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // The atmosphere belongs to the DOME: full when the sky is curled
         // around you, gone by the time it has unfurled flat (a chart has no
         // airglow). Rides the curvature.
-        // Inside the dome (curl > 0) all three sky layers ride the curl; the
-        // ORRERY (curl < 0, the held globe) gets the deep sky back — from
-        // outside, the nebulae and the type-tinted cluster clouds ARE the
-        // atlas ground the regions read against — but never the atmosphere
-        // (airglow is a from-inside phenomenon; a held globe has no horizon).
+        // Inside the dome (curl > 0) all three sky layers ride the curl. The
+        // ORRERY (curl < 0, the held globe) reads differently: the cluster
+        // clouds leave the backdrop and become the globe's TERRAIN — painted
+        // on the curled shell itself, spinning with it — while the world-fixed
+        // deep-sky nebulae stay behind as backdrop. The atmosphere is
+        // inside-only (airglow is a from-inside phenomenon; a held globe has
+        // no horizon).
         const inDome = Math.max(0, curlS), inOrrery = Math.max(0, -curlS);
         skyUniforms.uAtmo.value = TUNE.atmosphere * inDome;
         skyUniforms.uNebula.value = TUNE.nebula * (inDome + 0.85 * inOrrery);
-        skyUniforms.uCloudAmt.value = cloudBuilt * (inDome + 1.3 * inOrrery);
+        skyUniforms.uCloudAmt.value = cloudBuilt * inDome;
+        // Register the dome's clouds to the node seats under the current spin.
+        skyUniforms.uShellQInv.value.set(-shellQ.x, -shellQ.y, -shellQ.z, shellQ.w);
+        // The terrain rides the same shell state as the nodes.
+        terrainUniforms.uShellQ.value.set(shellQ.x, shellQ.y, shellQ.z, shellQ.w);
+        terrainUniforms.uCurl.value = curlS;
+        terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * inOrrery : 0;
+        terrain.visible = !isPaper() && inOrrery > 0.02 && cloudBuilt > 0;
         // The orrery quiets DERIVED edges (the similarity fuzz) so the
         // authored skeleton reads at planet distance; a selection's focus fan
         // (boost) keeps full strength — deliberate reading is never dimmed.
@@ -3030,6 +3068,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           tex.colorSpace = THREE.NoColorSpace;
           const old = skyUniforms.uCloud.value;
           skyUniforms.uCloud.value = tex;
+          terrainUniforms.uCloud.value = tex; // the globe's surface shares the one texture
           cloudBuilt = 0.5; // shader-side gain: the texture is additive-bright already
           if (old?.dispose) old.dispose();
         } catch { /* the sky stays gradient-only — never fail the stream on decoration */ }
