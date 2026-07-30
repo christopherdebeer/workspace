@@ -459,7 +459,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uAtmo: { value: TUNE.atmosphere },
         uNebula: { value: TUNE.nebula },
         uBase: { value: new THREE.Color(PAL.bg) },
+        // The nebulae POSITION off the data (owner: "stylistically distinct
+        // but positioned consistently with terrain") — the same cluster map
+        // the terrain reads, black until it builds (baseline decoration).
+        uCloud: { value: makeBlackTexture(THREE) },
       };
+      // The sun's canonical home (set over the data centroid at cloud build).
+      const sunCanon = new THREE.Vector3(0, 0, 1);
+      const sunWorld = new THREE.Vector3(0, 0, 1);
       // Cluster-cloud state, declared HERE because the layout pass (which
       // reads cloudBuilt for the curl fade) runs during setup, long before
       // the builder itself is defined further down.
@@ -494,6 +501,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uR0: { value: SHELL * 1.04 },
         uCloud: { value: makeBlackTexture(THREE) },
         uAmt: { value: 0 },
+        uSun: { value: new THREE.Vector3(0, 0, 1) },
       };
       const terrainMat = new THREE.ShaderMaterial({
         uniforms: terrainUniforms,
@@ -2537,6 +2545,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // across the range instead of draining to zero at the flat chart.
         terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7) * (0.45 + 0.55 * inOrrery) : 0;
         terrain.visible = !isPaper() && cloudBuilt > 0;
+        // The SUN: shell-fixed over the data centroid (spin moves the
+        // terminator) blended toward the viewer (the visible hemisphere
+        // stays mostly lit) — owner amendment 2026-07-31.
+        sunWorld.copy(sunCanon).applyQuaternion(shellQ).multiplyScalar(0.6);
+        sunWorld.z += 0.75;
+        sunWorld.normalize();
+        terrainUniforms.uSun.value.copy(sunWorld);
         // The torch is a STANDING-INSIDE phenomenon (a beam you aim at the
         // sky). Held as a globe, it left off-axis stars at the 0.2 floor —
         // legible against black, invisible over the lit terrain (owner
@@ -2940,7 +2955,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // (a new star sits by meaning until an authored layout re-places it).
           // Owner-scoped lookup (ADR-0092 Inc 1): own atlas exact-first, else a
           // grant-folded `owner/key` seats from THAT owner's public map.
-          [n.sdx, n.sdy, n.sdz] = toDir(lookupCoord(n.id, coordMap, pubMaps), i);
+          const seatCoord = lookupCoord(n.id, coordMap, pubMaps);
+          n.mapped = !!(seatCoord && Number.isFinite(seatCoord[0]));
+          [n.sdx, n.sdy, n.sdz] = toDir(seatCoord, i);
           n.ldx = n.sdx; n.ldy = n.sdy; n.ldz = n.sdz;
           n.cdx = n.sdx; n.cdy = n.sdy; n.cdz = n.sdz;
           n.cr0 = seatRadius(n.score);
@@ -3095,7 +3112,10 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const buildClusterClouds = (): void => {
         if (disposed) return; // a debounced rebuild can outlive the scene
         try {
-          const active = nodes.filter((n: any) => !n.deleted && Number.isFinite(n.cdx));
+          // Only MAPPED nodes paint land (owner: fallback-seated facts were
+          // splatting arbitrary golden-spiral positions — ocean stars now
+          // honestly mean "unmapped", land means meaning).
+          const active = nodes.filter((n: any) => !n.deleted && n.mapped && Number.isFinite(n.cdx));
           if (active.length < 8) return;
           const cw = 512, ch = 256;
           const cv = document.createElement('canvas');
@@ -3105,7 +3125,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           g.fillStyle = '#000';
           g.fillRect(0, 0, cw, ch);
           g.globalCompositeOperation = 'lighter';
-          const alpha = Math.min(0.08, 26 / active.length);
+          // √-budget: 1/count starved sparse-but-real clusters at 8k charted;
+          // √ keeps single splats faint while letting true clusters saturate.
+          const alpha = Math.min(0.09, 1.5 / Math.sqrt(active.length));
           const rad = 26;
           for (const n of active) {
             const [r, gg, b] = hslToRgb(hueOf(n.type ?? ''), 0.55, 0.5);
@@ -3158,8 +3180,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const tex = new THREE.CanvasTexture(out);
           tex.wrapS = THREE.RepeatWrapping;
           tex.colorSpace = THREE.NoColorSpace;
+          // The sun's home: over the data's centroid, so noon sits on the
+          // populated face and night mostly on the sparse side.
+          let sx = 0, sy = 0, sz = 0;
+          for (const n of active) { sx += n.cdx; sy += n.cdy; sz += n.cdz; }
+          const sl = Math.hypot(sx, sy, sz);
+          if (sl > 1e-3) sunCanon.set(sx / sl, sy / sl, sz / sl);
           const old = terrainUniforms.uCloud.value;
           terrainUniforms.uCloud.value = tex;
+          skyUniforms.uCloud.value = tex; // the dome nebulae key off the same map
           cloudBuilt = 0.5; // shader-side gain: the texture is additive-bright already
           if (old?.dispose) old.dispose();
         } catch { /* the sky stays gradient-only — never fail the stream on decoration */ }

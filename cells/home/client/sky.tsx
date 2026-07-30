@@ -9,7 +9,7 @@
  */
 import * as React from 'react';
 import { ink } from './ink';
-import { loadThree, makeStarTexture, SKY_VERT, SKY_FRAG } from './graph/scene';
+import { loadThree, makeStarTexture, SKY_VERT, SKY_FRAG, makeBlackTexture } from './graph/scene';
 import { TUNE } from './graph/tune';
 
 const { useEffect, useRef } = React;
@@ -40,6 +40,7 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
         uAtmo: { value: TUNE.atmosphere * 0.5 },
         uNebula: { value: TUNE.nebula * 0.5 },
         uBase: { value: new THREE.Color(ink.sceneBg) },
+        uCloud: { value: makeBlackTexture(THREE) }, // no data — baseline decoration only
       };
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,

@@ -157,6 +157,7 @@ varying vec3 vDir;
 uniform float uAtmo;
 uniform float uNebula;
 uniform vec3 uBase;
+uniform sampler2D uCloud;
 ${NOISE_GLSL}
 void main(){
   float up = clamp(vDir.y, -1.0, 1.0);
@@ -180,7 +181,14 @@ void main(){
   float lane = 1.0 - 0.75 * smoothstep(0.50, 0.72, fbm(vDir * 5.0 + 11.0));
   float grain = 0.65 + 0.35 * fbm(vDir * 8.0 + 23.0);
   vec3 milk = vec3(0.105, 0.085, 0.060) * band * lane * grain;
-  col += (neb + milk) * uNebula;
+  // Position the deep sky off the DATA (owner: stylistically distinct,
+  // positionally consistent): the same cluster map the terrain reads keys
+  // the nebula amplitude — wisps bloom over the slice's real regions, the
+  // band survives only where content is. vDir is LOCAL and the dome mesh
+  // rides shellQ, so registration with the node seats is automatic. A small
+  // baseline keeps the landing dome (no data) quietly decorated.
+  float dataK = dot(texture2D(uCloud, equirect(vDir)).rgb, vec3(1.0));
+  col += (neb * (0.22 + 2.2 * dataK) + milk * (0.25 + 1.6 * dataK)) * uNebula;
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -228,6 +236,7 @@ varying vec3 vNorm;
 uniform sampler2D uCloud;
 uniform float uAmt;
 uniform float uCurl;
+uniform vec3 uSun;
 ${NOISE_GLSL}
 void main(){
   vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
@@ -236,8 +245,11 @@ void main(){
   float coast = fbm(vCanon * 9.0 + 1.7);
   float land = smoothstep(0.045 + 0.05 * coast, 0.10 + 0.05 * coast, d);
   float highland = smoothstep(0.16, 0.34, d);
-  // relief: directional fbm difference = slope shading under the sun
-  vec3 sun = normalize(vec3(-0.55, 0.40, 0.72));
+  // relief: directional fbm difference = slope shading under the sun.
+  // uSun is world-space: shell-fixed over the data centroid, biased toward
+  // the viewer (graph.tsx) — the terminator moves with spin, the visible
+  // face stays mostly lit.
+  vec3 sun = uSun;
   float h1 = fbm(vCanon * 13.0 + 7.3);
   float h2 = fbm(vCanon * 13.0 + 7.3 + sun * 0.09);
   float slope = clamp(0.5 + (h1 - h2) * 5.0, 0.0, 1.0);
@@ -253,7 +265,7 @@ void main(){
   // blend rides the curl, so nothing teleports between vantages.
   float o = smoothstep(0.1, 0.8, clamp(-uCurl, 0.0, 1.0));
   vec3 soft = cloud * 1.5 + vec3(0.018, 0.026, 0.046) * wisp;
-  float day = mix(1.0, 0.30 + 0.70 * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun)), o);
+  float day = mix(1.0, 0.45 + 0.55 * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun)), o);
   vec3 col = mix(soft, mix(sea, landCol, land), o) * day;
   gl_FragColor = vec4(col, uAmt);
 }`;
