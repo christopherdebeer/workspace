@@ -142,6 +142,21 @@ bookmarks in .lit, realized as facts, salience, and capability vocabulary in
 parc.land. dotlit is not just an ancestor implementation; it is the substrate's
 reading list.
 
+## Revisited (2026-07-30): the one-renderer lesson
+
+The scorecard above missed a structural point. dotlit has one renderer,
+because the document system is the app — reader and editor cannot drift
+apart. parc split the face (home) from the manager (lit), which was right
+for the trust boundary, and then grew a second markdown renderer in home,
+which wasn't. The two have already drifted (the task-checkbox bug lived only
+in home's copy; lit fences render on the apex as dead code blocks —
+violating dotlit's own backward-compat intent that a basic viewer "should
+still render correctly for the reader").
+
+Add to the worth-stealing list: **the single renderer**. The plan for
+recovering it is in [home-hosts-lit](home-hosts-lit.md) — one shared core in
+`@parc/ui`, both cells host it, the live fence ladder stays with lit.
+
 ## Verdict
 
 "Naive/basic" is wrong for the *grammar and execution* story — `fence.ts` is the
