@@ -201,6 +201,7 @@ void main(){
 // mesh only shows in the orrery (opacity ∝ −curl, driven by graph.tsx).
 export const TERRAIN_VERT = `
 varying vec3 vCanon;
+varying vec3 vNorm;
 uniform vec4 uShellQ;
 uniform float uCurl;
 uniform float uR0;
@@ -217,24 +218,45 @@ void main(){
   if (abs(s) < 1e-3) { rho = alpha; zeta = 1.0; }
   else { rho = sin(s * alpha) / s; zeta = 1.0 - (1.0 - cos(s * alpha)) / s; }
   vec3 pos = vec3(uR0 * rho * u.x, uR0 * rho * u.y, -uR0 * zeta);
+  // The ball's outward normal (exact at full curl, where the surface is a
+  // sphere of radius uR0 centred (0,0,-2·uR0)) — the terminator reads off it.
+  vNorm = (pos - vec3(0.0, 0.0, -2.0 * uR0)) / uR0;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }`;
+// Terrain, not airbrush (owner IMG_0505 "doesn't feel like terrain yet"):
+// the cluster density is THRESHOLDED into land against a dark sea, the
+// coastline wanders with fbm (fractal edge, not a contour line), land gets
+// slope shading from a directional fbm difference under a fixed sun, and the
+// whole ball carries a terminator — the lit limb and night side that made
+// IMG_0502 accidentally read right.
 export const TERRAIN_FRAG = `
 varying vec3 vCanon;
+varying vec3 vNorm;
 uniform sampler2D uCloud;
 uniform float uAmt;
 ${NOISE_GLSL}
 void main(){
-  vec3 ground = vec3(0.014, 0.013, 0.020);
   vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
-  // fbm landform: the same density reads as coast/relief, not an airbrush blob.
-  float relief = 0.65 + 0.5 * fbm(vCanon * 7.0);
-  // The base wisp keeps an EMPTY hemisphere legible as a surface (owner
-  // IMG_0503 — the guest slice's quiet side went to featureless void):
-  // wider band, a touch brighter, still far under any real cluster.
+  float d = max(cloud.r, max(cloud.g, cloud.b));
+  // fractal coastline: the land threshold wanders with noise
+  float coast = fbm(vCanon * 9.0 + 1.7);
+  float land = smoothstep(0.045 + 0.05 * coast, 0.10 + 0.05 * coast, d);
+  float highland = smoothstep(0.16, 0.34, d);
+  // relief: directional fbm difference = slope shading under the sun
+  vec3 sun = normalize(vec3(-0.55, 0.40, 0.72));
+  float h1 = fbm(vCanon * 13.0 + 7.3);
+  float h2 = fbm(vCanon * 13.0 + 7.3 + sun * 0.09);
+  float slope = clamp(0.5 + (h1 - h2) * 5.0, 0.0, 1.0);
+  // the sea: dark ground with a faint wisp so an empty quarter stays a surface
   float wisp = smoothstep(0.35, 0.75, fbm(vCanon * 3.1 + 4.2));
-  vec3 col = ground + cloud * 1.9 * relief + vec3(0.028, 0.038, 0.064) * wisp;
-  gl_FragColor = vec4(col, uAmt);
+  vec3 sea = vec3(0.013, 0.014, 0.022) + vec3(0.020, 0.030, 0.052) * wisp;
+  // land keeps the cluster's type hue; brightness from density + relief
+  vec3 hue = cloud / max(d, 1e-4);
+  vec3 landCol = hue * (0.045 + 0.32 * d + 0.10 * highland) * (0.55 + 0.75 * slope);
+  vec3 col = mix(sea, landCol, land);
+  // the terminator: night falls to a floor, never to void
+  float day = 0.30 + 0.70 * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun));
+  gl_FragColor = vec4(col * day, uAmt);
 }`;
 
 /** A 1×1 black placeholder for uCloud so the sampler is always bound —

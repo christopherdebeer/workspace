@@ -483,7 +483,14 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         vertexShader: TERRAIN_VERT,
         fragmentShader: TERRAIN_FRAG,
         transparent: true,
-        depthWrite: false,
+        // depthWrite ON: without it the sphere's triangles composite in
+        // geometry order, and on half the globe the far surface painted OVER
+        // the near one — the diagonal divide where one side read as surface
+        // and the other as the inside of the far side (owner IMG_0505). With
+        // depth, the near surface always wins, and the ball becomes a SOLID
+        // world: far-side stars set behind the terrain instead of bleeding
+        // through it.
+        depthWrite: true,
         side: THREE.DoubleSide, // the morph turns the sphere inside-out mid-curl
       });
       const terrain = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), terrainMat);
