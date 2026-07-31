@@ -3111,12 +3111,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (added) {
           frameBody();
           drainPendingEdges();
-          // The cluster clouds accrete WITH the stream (debounced) — waiting
-          // for finishStream would keep the sky cloudless for the minutes a
-          // full chart takes. Each rebuild reads every live seat, so a burst
-          // of pages coalesces into one ~50ms pass.
-          if (cloudTimer) clearTimeout(cloudTimer);
-          cloudTimer = setTimeout(() => { cloudTimer = null; buildClusterClouds(); }, 1600);
+          // The cluster clouds accrete WITH the stream — THROTTLED, not
+          // trailing-debounced. The old clearTimeout-per-batch reset meant the
+          // timer only fired after a 1.6s quiet gap, and pages arrive faster
+          // than that for the whole charting run — so the first terrain paint
+          // waited for finishStream anyway (owner: "takes ages"). A standing
+          // timer fires every ~1.5s regardless of page cadence; mid-stream
+          // passes run half-res (~12ms), finishStream's full-res pass is
+          // unchanged.
+          if (!cloudTimer) cloudTimer = setTimeout(() => { cloudTimer = null; buildClusterClouds(true); }, 1500);
         }
       };
       const appendEdges = (items: GEdge[]): void => {
@@ -3245,15 +3248,21 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // ARE the substrate's density, not decoration. Built once at stream
       // settle (~50ms for the full slice); brightness is budgeted by node
       // count so a dense slice doesn't white out.
-      const buildClusterClouds = (): void => {
+      /** preview = the mid-stream pass: half-resolution (~4× cheaper, ~12ms)
+       *  so the globe greens up while pages are still landing. The final
+       *  finishStream / lever pass runs full-res — completed quality is
+       *  untouched, only the wait to FIRST terrain changes. */
+      const buildClusterClouds = (preview = false): void => {
         if (disposed) return; // a debounced rebuild can outlive the scene
+        if (!preview && cloudTimer) { clearTimeout(cloudTimer); cloudTimer = null; } // a full build supersedes any queued preview
         try {
           // Only MAPPED nodes paint land (owner: fallback-seated facts were
           // splatting arbitrary golden-spiral positions — ocean stars now
           // honestly mean "unmapped", land means meaning).
           const active = nodes.filter((n: any) => !n.deleted && n.mapped && Number.isFinite(n.cdx));
           if (active.length < 8) return;
-          const cw = 512, ch = 256;
+          const res = preview ? 0.5 : 1;
+          const cw = 512 * res, ch = 256 * res;
           const cv = document.createElement('canvas');
           cv.width = cw; cv.height = ch;
           const g = cv.getContext('2d');
@@ -3264,7 +3273,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // √-budget: 1/count starved sparse-but-real clusters at 8k charted;
           // √ keeps single splats faint while letting true clusters saturate.
           const alpha = Math.min(0.09, TUNE.splatGain / Math.sqrt(active.length));
-          const rad = Math.max(4, TUNE.splatRad);
+          const rad = Math.max(4 * res, TUNE.splatRad * res); // px radius tracks the canvas scale
           for (const n of active) {
             const [r, gg, b] = hslToRgb(hueOf(n.type ?? ''), 0.55, 0.5);
             const u = (Math.atan2(n.cdz, n.cdx) / (Math.PI * 2) + 0.5) * cw;
@@ -3304,7 +3313,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           wide.width = cw * 3; wide.height = ch;
           const wg = wide.getContext('2d');
           if (!wg) return;
-          wg.filter = `blur(${Math.max(0, TUNE.splatBlur)}px)`;
+          wg.filter = `blur(${Math.max(0, TUNE.splatBlur * res)}px)`;
           wg.drawImage(cv, 0, 0);
           wg.drawImage(cv, cw, 0);
           wg.drawImage(cv, cw * 2, 0);
