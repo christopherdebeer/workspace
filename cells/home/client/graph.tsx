@@ -746,7 +746,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // straight line on the flat chart), and the per-frame JS edge reseat
       // is gone entirely (the GPU morphs; morphLayout no longer touches
       // edges). Per-edge attrs, not per-vertex: 30k edges ≈ 1.6MB.
-      const ARC_SEG = 12;
+      const ARC_SEG = 32;
       const eSeatABuf = new Float32Array(caps.capE * 3);
       const eSeatBBuf = new Float32Array(caps.capE * 3);
       const eRadBuf = new Float32Array(caps.capE * 2);
@@ -878,10 +878,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           uShellQ: { value: new THREE.Vector4(0, 0, 0, 1) },
           uCurl: { value: -1 },
           uArcLift: { value: 0 },
+          uBallR: { value: SHELL },
         },
         vertexShader:
           'attribute float t; attribute vec3 aSeatA; attribute vec3 aSeatB; attribute vec2 aRad; attribute vec3 color; attribute float boost; attribute float deriv;' +
-          'varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl; uniform float uArcLift;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl; uniform float uArcLift; uniform float uBallR;' +
           TORCH_GLSL +
           'vec3 qrot(vec4 q, vec3 v){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }' +
           // The GREAT-CIRCLE arc: interpolate the endpoints' canonical seats
@@ -894,13 +895,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           'void main(){' +
           ' vec3 d = normalize(mix(aSeatA, aSeatB, t));' +
           ' float r0 = mix(aRad.x, aRad.y, t);' +
-          // FLIGHT-PATH lift (owner): the arc rises off the surface toward its
-          // midpoint, higher for longer routes (× angular length). Orrery-only
-          // via the JS-side uArcLift = TUNE.arcLift * inOrrery. SMALLER radius
-          // is TOWARD the viewer in the curl morph (distance ∝ radius along
-          // every view ray — the terrain-seating lesson), so lift SUBTRACTS.
           ' float ang = acos(clamp(dot(normalize(aSeatA), normalize(aSeatB)), -1.0, 1.0));' +
-          ' r0 *= 1.0 - uArcLift * sin(3.14159265 * t) * ang;' +
           ' vec3 w = qrot(uShellQ, d);' +
           ' float ca = clamp(-w.z, -1.0, 1.0);' +
           ' float alpha = acos(ca);' +
@@ -909,6 +904,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           ' float s = uCurl; float rho; float zeta;' +
           ' if (abs(s) < 1e-3) { rho = alpha; zeta = 1.0; } else { rho = sin(s * alpha) / s; zeta = 1.0 - (1.0 - cos(s * alpha)) / s; }' +
           ' vec3 pos = vec3(r0 * rho * u.x, r0 * rho * u.y, -r0 * zeta);' +
+          // FLIGHT-PATH lift (owner 2026-07-31 round 2): push the arc
+          // RADIALLY OUTWARD from the held ball's centre — the earlier
+          // radius-scaling moved points ALONG the view ray (toward the
+          // camera), which is invisible across the face and zero at the
+          // limb. Height at the midpoint = arcLift × angular length ×
+          // shell radius; orrery-only via the JS-side uArcLift scale.
+          ' if (uArcLift > 0.0001) {' +
+          '   vec3 ballC = vec3(0.0, 0.0, -2.0 * uBallR);' +
+          '   pos += normalize(pos - ballC) * (uArcLift * sin(3.14159265 * t) * ang * uBallR);' +
+          ' }' +
           ' float lit = (uPaper > 0.5 ? 1.0 : max(torch(pos), boost) * farFade(pos)) * (1.0 - uOrreryDim * deriv * (1.0 - boost));' +
           ' vColor = color * lit; vBoost = boost; vFlow = t;' +
           ' gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }',

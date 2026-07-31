@@ -232,7 +232,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'nebData', group: 'nebula', label: 'wisp data', min: 0, max: 5, step: 0.1, live: 'persist' },
   { key: 'bandBase', group: 'nebula', label: 'band base', min: 0, max: 1, step: 0.02, live: 'persist' },
   { key: 'bandData', group: 'nebula', label: 'band data', min: 0, max: 4, step: 0.1, live: 'persist' },
-  { key: 'arcLift', group: 'edges', label: 'arc lift', min: 0, max: 0.25, step: 0.01, live: 'persist' },
+  { key: 'arcLift', group: 'edges', label: 'arc lift', min: 0, max: 0.4, step: 0.01, live: 'persist' },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
   // the field-computer's frosted glass (Palette-side; read on TUNE_EVENT).
   { key: 'glassBlur', group: 'glass', label: 'blur', min: 0, max: 40, step: 1, live: 'persist', quick: true },
