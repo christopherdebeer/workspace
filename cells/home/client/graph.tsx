@@ -215,22 +215,40 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
        *  transform (see the camera block): the shell morphs, the seat is fixed.
        *  A node with no embedding (uncharted) gets a stable golden-spiral seat
        *  by index, so it still lands on the sphere rather than collapsing to 0. */
+      // MAP PROJECTION with histogram equalization: PCA coords are mean-
+      // centred, so the raw linear chart (lon = x·π) crowds one hemisphere.
+      // Each axis maps through its empirical CDF (built once per mount from
+      // every coord the client holds); TUNE.projSpread blends raw (0) ↔
+      // equalized (1) and TUNE.projLat scales the latitude range — the
+      // projection knobs' whole purpose.
+      const cdfX: number[] = [], cdfY: number[] = [];
+      {
+        const pushCdf = (m?: Record<string, number[]> | null): void => {
+          for (const cc of Object.values(m ?? {})) {
+            if (Number.isFinite(cc?.[0]) && Number.isFinite(cc?.[1])) { cdfX.push(cc[0]); cdfY.push(cc[1]); }
+          }
+        };
+        pushCdf(coordMap);
+        for (const m of Object.values(pubMaps ?? {})) pushCdf(m as Record<string, number[]>);
+        cdfX.sort((a, b) => a - b);
+        cdfY.sort((a, b) => a - b);
+      }
+      const cdfRank = (arr: number[], v: number): number => {
+        let lo = 0, hi = arr.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < v) lo = mid + 1; else hi = mid; }
+        return arr.length > 1 ? lo / (arr.length - 1) : 0.5;
+      };
       const toDir = (c: number[] | undefined, i: number): [number, number, number] => {
-        // MAP PROJECTION, not normalization (owner 2026-07-30 "semantic
-        // positioning seems broken"): the old dir-of-vector mapping kept only
-        // the coord's DIRECTION, and PCA coords crowd the origin — most
-        // content sits near the semantic mean, and normalizing a near-origin
-        // point explodes it to an arbitrary direction. The dense middle of
-        // meaning-space sprayed uniformly over the sphere (scatter, no
-        // clusters). Instead the meaning PLANE becomes the globe's chart:
-        // PCA x → longitude, y → latitude — locality-preserving everywhere,
-        // no origin collapse, and the terrain's continents become real
-        // geography of the slice.
         if (c && Number.isFinite(c[0]) && Number.isFinite(c[1])) {
-          const cx = Math.max(-1, Math.min(1, c[0] ?? 0));
-          const cy = Math.max(-1, Math.min(1, c[1] ?? 0));
-          const lon = cx * Math.PI;
-          const lat = cy * (Math.PI / 2) * 0.92; // shy of the poles (equirect pinch)
+          const t = Math.max(0, Math.min(1, TUNE.projSpread));
+          const lx = Math.max(-1, Math.min(1, c[0] ?? 0));
+          const ly = Math.max(-1, Math.min(1, c[1] ?? 0));
+          const fx = cdfX.length >= 8 ? (Math.max(0, Math.min(1, cdfRank(cdfX, c[0]))) - 0.5) * 2 : lx;
+          const fy = cdfY.length >= 8 ? (Math.max(0, Math.min(1, cdfRank(cdfY, c[1]))) - 0.5) * 2 : ly;
+          const lon = (lx + (fx - lx) * t) * Math.PI;
+          const latEq = Math.asin(Math.max(-0.999, Math.min(0.999, fy)));
+          const latLin = ly * (Math.PI / 2);
+          const lat = (latLin + (latEq - latLin) * t) * TUNE.projLat;
           return [Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)];
         }
         const t = ((i % 997) + 0.5) / 997; // pseudo-uniform latitude
@@ -479,6 +497,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       /** Re-chart every mapped node through toDir under the CURRENT projection
        *  levers, re-blend seats, refresh the arcs, and rebuild the terrain —
        *  the projection knobs' rebuild path. */
+      // Harness/console introspection: sample seats, force the rebuild paths.
+      try { (window as any).__parcGraph = { nodes, reseatAll: () => reseatAll(), rebuildClouds: () => buildClusterClouds(), chart: (c: number[]) => toDir(c, 0), cdfLen: () => cdfX.length }; } catch { /* SSR */ }
       const reseatAll = (): void => {
         for (const n of nodes) {
           if (!n.mapped || !n.coord) continue;
@@ -520,6 +540,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         uSun: { value: new THREE.Vector3(0, 0, 1) },
         uLand: { value: new THREE.Vector4(TUNE.landCut, TUNE.landBand, TUNE.coastAmp, TUNE.terrainGain) },
         uShade: { value: new THREE.Vector2(TUNE.reliefGain, TUNE.nightFloor) },
+        uGain: { value: 1 },
       };
       const terrainMat = new THREE.ShaderMaterial({
         uniforms: terrainUniforms,
@@ -875,9 +896,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           ' float r0 = mix(aRad.x, aRad.y, t);' +
           // FLIGHT-PATH lift (owner): the arc rises off the surface toward its
           // midpoint, higher for longer routes (× angular length). Orrery-only
-          // via the JS-side uArcLift = TUNE.arcLift * inOrrery.
+          // via the JS-side uArcLift = TUNE.arcLift * inOrrery. SMALLER radius
+          // is TOWARD the viewer in the curl morph (distance ∝ radius along
+          // every view ray — the terrain-seating lesson), so lift SUBTRACTS.
           ' float ang = acos(clamp(dot(normalize(aSeatA), normalize(aSeatB)), -1.0, 1.0));' +
-          ' r0 *= 1.0 + uArcLift * sin(3.14159265 * t) * ang;' +
+          ' r0 *= 1.0 - uArcLift * sin(3.14159265 * t) * ang;' +
           ' vec3 w = qrot(uShellQ, d);' +
           ' float ca = clamp(-w.z, -1.0, 1.0);' +
           ' float alpha = acos(ca);' +
@@ -2567,7 +2590,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // continuous): soft cloud dome overhead inside, the same substance
         // firming into terrain as the globe is held. Opacity ramps 0.45→1
         // across the range instead of draining to zero at the flat chart.
-        terrainUniforms.uAmt.value = cloudBuilt > 0 ? Math.min(1, TUNE.nebula * 1.7 * TUNE.terrainAmt) * (0.45 + 0.55 * inOrrery) : 0;
+        // Alpha is GEOMETRY-driven only: 1.0 at the held ball, else the far
+        // hemisphere ghosts through the near face (owner: "terrain through
+        // the sphere"). Brightness lives in uGain (colour), not alpha.
+        terrainUniforms.uAmt.value = cloudBuilt > 0 ? 0.45 + 0.55 * inOrrery : 0;
+        terrainUniforms.uGain.value = Math.max(0, Math.min(2, TUNE.nebula * 1.7 * TUNE.terrainAmt));
         terrain.visible = !isPaper() && cloudBuilt > 0;
         // The SUN: shell-fixed over the data centroid (spin moves the
         // terminator) blended toward the viewer (the visible hemisphere

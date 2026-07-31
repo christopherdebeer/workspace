@@ -240,6 +240,7 @@ uniform float uCurl;
 uniform vec3 uSun;
 uniform vec4 uLand;  // (land cut, coast width, coast noise amp, land brightness)
 uniform vec2 uShade; // (relief gain, night floor)
+uniform float uGain; // overall brightness — alpha stays geometric (ghosting)
 ${NOISE_GLSL}
 void main(){
   vec3 cloud = texture2D(uCloud, equirect(vCanon)).rgb;
@@ -269,7 +270,12 @@ void main(){
   float o = smoothstep(0.1, 0.8, clamp(-uCurl, 0.0, 1.0));
   vec3 soft = cloud * 1.5 + vec3(0.018, 0.026, 0.046) * wisp;
   float day = mix(1.0, uShade.y + (1.0 - uShade.y) * smoothstep(-0.25, 0.55, dot(normalize(vNorm), sun)), o);
-  vec3 col = mix(soft, mix(sea, landCol, land), o) * day;
+  // SHALLOWS: any mapped presence tints the sea faintly, so an isolated
+  // fact's star stands over glow, not void, even when its splat can't
+  // cross the land threshold.
+  float shallow = smoothstep(0.003, 0.018, d);
+  vec3 seaLit = sea + hue * (0.018 + 0.020 * slope) * shallow;
+  vec3 col = mix(soft, mix(seaLit, landCol, land), o) * day * uGain;
   gl_FragColor = vec4(col, uAmt);
 }`;
 

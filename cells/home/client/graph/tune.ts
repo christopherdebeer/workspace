@@ -184,6 +184,9 @@ export const TUNE_DEFAULTS = {
   glassBlur: 20, glassOpacity: 0.62,
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
+// Console/harness handle: `__parcTune.projSpread = 0` etc — the frame loop
+// watches the rebuild-required levers, so direct writes take effect live.
+try { (globalThis as any).__parcTune = TUNE; } catch { /* SSR */ }
 export const TUNE_LS = 'parc.home.tune';
 
 // ── ONE declarative control list (the tuning surface as DATA) ───────────────
