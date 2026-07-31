@@ -3,7 +3,11 @@
 An inventory of every kind of text the graph renders, where each is
 implemented, and a re-evaluation now that the orrery is a solid terrain
 globe, the curl is continuous, and edge arcs lift off the surface.
-Research doc — no changes shipped with it.
+Research doc — no changes shipped with it. (Follow-up, same day:
+re-evaluation items 1–4 and the italic half of 7 landed — relation labels
+are in-scene troika seated on their arcs, admission gates on far-fade,
+and the `orreryPill` knob engages the clip over terrain. Sections below
+describe the pre-change state where they touch system 2.)
 
 ## The systems
 

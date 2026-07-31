@@ -33,7 +33,7 @@
  * THE CURL (a fixed camera; the shell morphs): one zoom axis runs telescope →
  * planetarium dome → flat planisphere chart → held globe, by bending the
  * shell's own curvature (sphere-unroll, arc lengths preserved); drag rotates
- * the shell with momentum, turn-to-face slerps it, and CSS2D labels are lit
+ * the shell with momentum, turn-to-face slerps it, and in-scene labels are lit
  * by the beam (plus the selection/highlight set, always).
  */
 import * as React from 'react';
@@ -186,7 +186,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         el.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;opacity:.6;font:13px ui-monospace,monospace">3D renderer unavailable (offline?)</div>';
         return null;
       }
-      const { EffectComposer, RenderPass, UnrealBloomPass, CSS2DRenderer, CSS2DObject, TroikaText } = addons;
+      const { EffectComposer, RenderPass, UnrealBloomPass, TroikaText } = addons;
       // Live, appendable model state — grown in place by the append API.
       const nodes: any[] = [];
       const links: any[] = [];
@@ -578,11 +578,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       el.innerHTML = '';
       el.appendChild(renderer.domElement);
 
-      const labelRenderer = new CSS2DRenderer();
-      labelRenderer.setSize(W, H);
-      labelRenderer.domElement.style.cssText = 'position:absolute;inset:0;pointer-events:none;user-select:none;-webkit-user-select:none';
-      el.appendChild(labelRenderer.domElement);
-
       // ── the point cloud (one draw call, additive glow, per-point size) ──
       let disc = makeStarTexture(THREE, TUNE.starSpike, TUNE.starHalo);
       let stipple = makeStippleTexture(THREE, TUNE.starSpike); // paper's crisp ink star (mode-swapped in applyMode)
@@ -951,7 +946,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       scene.add(lineSegs);
       applyEdgeColor();
 
-      // ── labels (CSS2D) — a role-typed pool with a FADE lifecycle. Roles:
+      // ── labels — a role-typed pool with a FADE lifecycle. Roles:
       // 'sel' (the anchor), 'hit' (a search result), 'nbr' (a selection
       // neighbour), 'beam' (the torch's SUGGESTION — the sweep-to-reveal
       // affordance). The beam had two sins (owner feedback): binary DOM
@@ -1193,6 +1188,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       let zoomZ = Z_BALL, zoomZT = Z_BALL;      // arrival opens on the held globe
       let lastZoomHash = Z_BALL;                // last zoom written to the URL (view-state)
       let curlS = -1;                           // curvature, derived from zoomZ
+      const inOrreryNow = (): number => Math.max(0, -curlS); // how held-globe the vantage is
       const shellQ = new THREE.Quaternion();    // the shell's orientation
       let shellQT: any = null;                  // eased turn-to-face target
       const lastRotWritten = new THREE.Quaternion(); // last orientation put in the URL
@@ -1247,6 +1243,28 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         out.x = r0 * rho * ux;
         out.y = r0 * rho * uy;
         out.z = -r0 * zeta;
+      };
+      // The JS twin of the edge vertex shader's arc: geodesic mix of the
+      // endpoints' canonical seats through the same curl, plus the same
+      // radial flight-path lift. Anything that must sit ON a drawn edge
+      // (the relation labels) evaluates this — lerping the world chord put
+      // the label off the arc exactly at the midpoint, where lift peaks.
+      const arcMixV = new THREE.Vector3();
+      const arcLiftV = new THREE.Vector3();
+      const arcPointAt = (a: any, b: any, t: number, out: { x: number; y: number; z: number }): void => {
+        arcMixV.set(
+          a.cdx + (b.cdx - a.cdx) * t,
+          a.cdy + (b.cdy - a.cdy) * t,
+          a.cdz + (b.cdz - a.cdz) * t,
+        ).normalize();
+        curlPos(arcMixV.x, arcMixV.y, arcMixV.z, a.cr0 + (b.cr0 - a.cr0) * t, out);
+        const lift = eMat.uniforms.uArcLift.value;
+        if (lift > 0.0001) {
+          const ang = Math.acos(Math.max(-1, Math.min(1, a.cdx * b.cdx + a.cdy * b.cdy + a.cdz * b.cdz)));
+          arcLiftV.set(out.x, out.y, out.z + 2 * SHELL).normalize();
+          const amt = lift * Math.sin(Math.PI * t) * ang * SHELL;
+          out.x += arcLiftV.x * amt; out.y += arcLiftV.y * amt; out.z += arcLiftV.z * amt;
+        }
       };
       // Re-seat EVERYTHING from canonical seats at the current shell state:
       // nodes → posBuf, edge endpoints, labels, captions, the selection ring.
@@ -1546,6 +1564,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // "second tap" gesture still lives on the label/dot. Only if no label is
         // hit does the NEAREST on-screen node (finger-sized, far-side-penalised)
         // win; then the padded slop rects; then empty space deselects.
+        // Relation chips first: small, deliberate, and they used to catch the
+        // tap at the DOM layer before the canvas ever saw it. A relation is a
+        // door — travel to the far fact and look at it.
+        const eT = edgeLabelAt(e.clientX, e.clientY);
+        if (eT) { api.current?.select(eT, true); return; }
         const lidT = labelAt(e.clientX, e.clientY, false);
         if (lidT) { tapNode(lidT); return; }
         const cT = constellationAt(e.clientX, e.clientY, false);
@@ -1712,13 +1735,19 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           : (sy - h / 2 < 92 ||
             sy + h / 2 > H - 142 ||
             (sx + w / 2 > W - 292 && sy - h / 2 < 168));
-      // TERTIARY layer: the selection fan's REL labels, at edge midpoints —
+      // TERTIARY layer: the selection fan's REL labels, riding their arcs —
       // what each connection IS, not just that it exists. Selection-only
       // (search-hit pairs stay unlabelled), capped, and an edge must be long
       // enough on screen for a word to sit on it. Fixed small size and dim
       // colour: these support the neighbourhood, they never compete with it.
-      const edgeLabelObjs = new Map<number, any>();
+      // In-scene troika now (the last CSS2D holdout): they seat on the SAME
+      // curled+lifted arc the shader draws (arcPointAt), so they far-fade,
+      // far-clip, tone-map and depth-test like every other label — a far-side
+      // relation no longer floats over the solid globe.
+      interface EdgeLabelState { grp: any; text: any; farKey: string; relLen: number }
+      const edgeLabelObjs = new Map<number, EdgeLabelState>();
       let edgeLabelSel: string | null = null;
+      const relPx = (): number => TUNE.labelPx * 0.5; // ≈ the old mono 8.5px at labelPx 17
       const syncEdgeLabels = (): void => {
         // A relation label is oriented to the CURRENT selection (its arrow, text
         // and tap-target-far-node). The traversed edge survives across a
@@ -1727,7 +1756,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // Rebuild the whole set when the selection changes.
         if (edgeLabelSel !== selKey) {
           edgeLabelSel = selKey;
-          for (const [, obj] of edgeLabelObjs) { scene.remove(obj); obj.element.remove?.(); }
+          for (const [, st] of edgeLabelObjs) { scene.remove(st.grp); st.text.dispose?.(); }
           edgeLabelObjs.clear();
         }
         const want = new Set<number>();
@@ -1760,54 +1789,64 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             added++;
           }
         }
-        for (const [i, obj] of edgeLabelObjs) {
+        for (const [i, st] of edgeLabelObjs) {
           if (!want.has(i)) {
-            scene.remove(obj);
-            obj.element.remove?.();
+            scene.remove(st.grp);
+            st.text.dispose?.();
             edgeLabelObjs.delete(i);
           }
         }
         for (const i of want) {
           if (edgeLabelObjs.has(i)) continue;
           const l = links[i];
-          const div = document.createElement('div');
           // Direction relative to the selected fact: → points away (the sel is
-          // the source), ← points back (the sel is the target).
+          // the source), ← points back (the sel is the target). Tapping the
+          // chip travels to the far fact (edgeLabelAt in the tap handler — a
+          // relation is a door).
           const outgoing = idOf(l.source) === selKey;
-          div.textContent = outgoing ? `${l.rel} →` : `← ${l.rel}`;
-          // TAPPABLE: a relation is a door — tapping it travels to the fact at
-          // the OTHER end of the edge and looks at it. pointer-events:auto so
-          // the chip catches the tap; a real hit target padded for fingers.
-          div.style.cssText = `font:500 8.5px ui-monospace,monospace;color:${PAL.rel};white-space:nowrap;pointer-events:auto;cursor:pointer;user-select:none;opacity:0.9;padding:6px 8px;margin:-6px -8px`;
-          const farKey = outgoing ? idOf(l.target) : idOf(l.source);
-          div.addEventListener('click', (ev) => { ev.stopPropagation(); api.current?.select(farKey, true); });
-          const obj = new CSS2DObject(div);
-          scene.add(obj);
-          edgeLabelObjs.set(i, obj);
+          const grp = new THREE.Group();
+          const text = new TroikaText();
+          text.text = outgoing ? `${l.rel} →` : `← ${l.rel}`;
+          text.font = FONT_BY_GROUP.mono; // the instrument voice — relations are machinery
+          text.fontSize = 8; // nominal world size; positionEdgeLabels scales to relPx on screen
+          text.anchorX = 'center';
+          text.anchorY = 'middle';
+          text.color = PAL.rel;
+          text.outlineColor = PAL.outline;
+          text.outlineWidth = `${Math.round(TUNE.labelOutline * 100)}%`;
+          text.fillOpacity = 0;
+          text.outlineOpacity = 0;
+          text.renderOrder = 9;
+          text.sync();
+          grp.add(text);
+          scene.add(grp);
+          edgeLabelObjs.set(i, { grp, text, farKey: outgoing ? idOf(l.target) : idOf(l.source), relLen: l.rel.length + 2 });
         }
         positionEdgeLabels();
       };
-      // Keep each selected edge's relation WITHIN THE VIEWPORT (owner): the
-      // label rides the visible span of its edge, so when the neighbour is off
-      // screen the verb is pulled just inside the margin, still tethered by the
-      // line, instead of vanishing with its far star. Runs every frame (≤4).
-      const EL_V = new THREE.Vector3();
-      // Each endpoint's clip-w (positive camera-space depth). A SCREEN-space
-      // fraction along the edge only maps back to the right WORLD-space t through
-      // these: world-lerping by a screen fraction lands OFF the screen midpoint
-      // once the two ends sit at different depths — the zoomed-in drift.
-      const ELW_V = new THREE.Vector3();
-      const depthW = (n: any): number => { ELW_V.set(n.x, n.y, n.z).applyMatrix4(camera.matrixWorldInverse); return -ELW_V.z; };
-      const clipSpan = (sx: number, sy: number, fx: number, fy: number, xmin: number, ymin: number, xmax: number, ymax: number): [number, number] | null => {
-        const dx = fx - sx, dy = fy - sy;
-        const p = [-dx, dx, -dy, dy], q = [sx - xmin, xmax - sx, sy - ymin, ymax - sy];
-        let t0 = 0, t1 = 1;
-        for (let k = 0; k < 4; k++) {
-          if (p[k] === 0) { if (q[k] < 0) return null; }
-          else { const r = q[k] / p[k]; if (p[k] < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; } }
+      // Tap target: a visible relation chip's projected rect, finger-padded —
+      // the door the CSS2D click handler used to be.
+      const edgeLabelAt = (cx: number, cy: number): string | null => {
+        for (const [, st] of edgeLabelObjs) {
+          if (!st.grp.visible || st.text.fillOpacity < 0.15) continue;
+          const [sx, sy, sz] = screenXY(st.grp.position);
+          if (sz > 1) continue;
+          const w = Math.max(44, st.relLen * relPx() * 0.62 + 16);
+          const h = Math.max(30, relPx() * 1.4 + 12);
+          if (Math.abs(cx - sx) < w / 2 && Math.abs(cy - sy) < h / 2) return st.farKey;
         }
-        return [t0, t1];
+        return null;
       };
+      // Keep each selected edge's relation ON ITS ARC and inside the viewport:
+      // sample the drawn arc (arcPointAt — the same curl+lift the shader
+      // applies), find the longest on-screen run, and seat the chip at its
+      // midpoint, walking outward along the arc when that slot is taken. The
+      // old straight-chord placement drifted off the edge once arcLift bent it
+      // — worst at the midpoint, exactly where the chip sits. Runs every
+      // frame (≤ edgeLabelCap labels × EL_SEG samples).
+      const EL_SEG = 16; // placement samples — coarse is fine, the chip snaps to a sample
+      const elPts: Array<{ x: number; y: number; z: number }> = Array.from({ length: EL_SEG + 1 }, () => ({ x: 0, y: 0, z: 0 }));
+      const elScr: Array<[number, number, number]> = Array.from({ length: EL_SEG + 1 }, () => [0, 0, 0]);
       const placedRects: Array<[number, number, number, number]> = []; // x,y,halfW,halfH
       const positionEdgeLabels = (): void => {
         if (!edgeLabelObjs.size) return;
@@ -1822,61 +1861,58 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         placedRects.length = 0;
         // Stable iteration (Map insertion order) so a slot doesn't swap owners
         // frame to frame — a placed label stays put as the camera moves.
-        for (const [i, obj] of edgeLabelObjs) {
+        for (const [i, st] of edgeLabelObjs) {
           const l = links[i];
-          const selN = l && nodeById.get(selKey ?? '');
-          const farN = l && nodeById.get(idOf(l.source) === selKey ? idOf(l.target) : idOf(l.source));
-          if (!selN || !farN) { obj.visible = false; continue; }
-          const [sx, sy, ssz] = screenXY(selN);
-          const [fx, fy, fsz] = screenXY(farN);
-          if (ssz > 1) { obj.visible = false; continue; } // anchor end behind camera
-          // The visible SCREEN span of the edge as fractions [s0,s1] along the
-          // straight screen segment sel→far. A projected line is a line, so
-          // interpolating IN SCREEN SPACE is exact; perspective only bit the old
-          // world-lerp (which is why the midpoint drifted when zoomed).
-          let s0 = 0, s1 = 1;
-          if (fsz > 1) { s0 = 0; s1 = 0.28; } // neighbour behind camera — hug the selected end
-          else {
-            const span = clipSpan(sx, sy, fx, fy, mX, mTop, W - mX, H - mBot);
-            if (!span) { obj.visible = false; continue; } // edge fully off-screen
-            [s0, s1] = span;
+          const aN = l && nodeById.get(idOf(l.source));
+          const bN = l && nodeById.get(idOf(l.target));
+          if (!aN || !bN) { st.grp.visible = false; continue; }
+          // Sample source→target — the drawn instance's own parameterisation.
+          for (let k = 0; k <= EL_SEG; k++) {
+            arcPointAt(aN, bN, k / EL_SEG, elPts[k]);
+            const [sx, sy, sz] = screenXY(elPts[k]);
+            elScr[k][0] = sx; elScr[k][1] = sy; elScr[k][2] = sz;
           }
-          // Label box half-extents in screen px (rel + arrow, mono 8.5px).
-          const halfW = (l.rel.length + 2) * 2.6 + 8, halfH = 9;
-          const sax = fx - sx, say = fy - sy;
-          const screenAt = (s: number): [number, number] => [sx + sax * s, sy + say * s];
+          const on = (k: number): boolean =>
+            elScr[k][2] <= 1 && elScr[k][0] >= mX && elScr[k][0] <= W - mX && elScr[k][1] >= mTop && elScr[k][1] <= H - mBot;
+          // Longest contiguous on-screen run = the visible span of the arc.
+          let runA = -1, runB = -1, curA = -1;
+          for (let k = 0; k <= EL_SEG + 1; k++) {
+            if (k <= EL_SEG && on(k)) { if (curA < 0) curA = k; }
+            else if (curA >= 0) { if (k - 1 - curA > runB - runA) { runA = curA; runB = k - 1; } curA = -1; }
+          }
+          if (runA < 0) { st.grp.visible = false; continue; } // arc fully off-screen
+          // Chip box half-extents in screen px (rel + arrow, mono relPx).
+          const halfW = st.relLen * relPx() * 0.31 + 8, halfH = relPx() * 1.06;
           const hits = (x: number, y: number): boolean =>
             placedRects.some(([px, py, pw, ph]) => Math.abs(px - x) < pw + halfW && Math.abs(py - y) < ph + halfH);
-          // Ideal spot: the MIDPOINT of the visible span. If it's taken, WALK
-          // OUTWARD along the line (staying within [s0,s1], hence on-screen) to
-          // the nearest free slot — utilise the empty line rather than drop the
-          // label or let it stack.
-          const smid = (s0 + s1) / 2;
-          let chosen = smid;
-          const [mxp, myp] = screenAt(smid);
-          if (hits(mxp, myp)) {
-            const reach = (s1 - s0) / 2;
-            const STEPS = 10;
-            let done = false;
-            for (let k = 1; k <= STEPS && !done; k++) {
-              for (const dir of [1, -1]) {
-                const s = smid + dir * (k / STEPS) * reach;
-                if (s < s0 || s > s1) continue;
-                const [x, y] = screenAt(s);
-                if (!hits(x, y)) { chosen = s; done = true; break; }
-              }
+          const mid = Math.round((runA + runB) / 2);
+          let chosen = -1;
+          for (let d = 0; d <= runB - runA && chosen < 0; d++) {
+            for (const dir of [1, -1]) {
+              const k = mid + dir * d;
+              if (k < runA || k > runB) continue;
+              if (!hits(elScr[k][0], elScr[k][1])) { chosen = k; break; }
             }
           }
-          obj.visible = true; // best-effort slot; never dropped for crowding
-          const [cx, cy] = screenAt(chosen);
-          placedRects.push([cx, cy, halfW, halfH]);
-          // SCREEN fraction → WORLD t (perspective-correct via the endpoint depths)
-          // so the label lands at the screen point we chose, not a drifting lerp.
-          const wA = depthW(selN), wB = depthW(farN);
-          const t = (fsz > 1 || wA <= 0 || wB <= 0)
-            ? Math.min(chosen, 0.28) // degenerate depth — hug the selected end
-            : (chosen / wB) / ((1 - chosen) / wA + chosen / wB);
-          obj.position.copy(EL_V.set(selN.x, selN.y, selN.z)).lerp(EL_V.set(farN.x, farN.y, farN.z), Math.max(0, Math.min(1, t)));
+          if (chosen < 0) chosen = mid; // best-effort slot; never dropped for crowding
+          // A relation is a place on the shell now: it far-fades and far-clips
+          // with the scene, so a chip on the back of the globe recedes with its
+          // edge instead of reading through the near face.
+          const pt = elPts[chosen];
+          let fade = 0.9 * farFadeAt(pt);
+          const elClipZ = torchUniforms.uFarClip.value;
+          if (elClipZ > 0.5 && -pt.z > elClipZ) fade = 0;
+          if (fade < 0.1) { st.grp.visible = false; continue; }
+          st.grp.visible = true;
+          placedRects.push([elScr[chosen][0], elScr[chosen][1], halfW, halfH]);
+          st.grp.position.set(pt.x, pt.y, pt.z);
+          st.grp.quaternion.copy(camera.quaternion); // billboard
+          // Fixed screen size (relPx) via the true fov-aware projection, like
+          // every other label.
+          const fsPx = st.text.fontSize * pxPerWorld(st.grp.position);
+          st.grp.scale.setScalar(fsPx > 0.01 ? relPx() / fsPx : 1);
+          st.text.fillOpacity = fade;
+          st.text.outlineOpacity = fade;
         }
       };
 
@@ -2149,7 +2185,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           c.text.outlineOpacity = c.cur;
           // Same depth-clip occluder as the labels: the caption clears a patch
           // of sky behind itself once it is substantially present.
-          c.pill.visible = TUNE.pillClip > 0 && c.cur > 0.45;
+          c.pill.visible = (TUNE.pillClip > 0 || (TUNE.orreryPill > 0.5 && inOrreryNow() > 0.6)) && c.cur > 0.45;
         }
       };
       // Breadcrumb — "where am I": selecting a fact names its neighbourhood in
@@ -2192,7 +2228,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           c.text.outlineColor = PAL.outline;
           c.text.outlineWidth = paper ? '14%' : '4%'; // see addConstellation
         }
-        for (const [, o] of edgeLabelObjs) (o.element as HTMLElement).style.color = PAL.rel;
+        for (const [, o] of edgeLabelObjs) { o.text.color = PAL.rel; o.text.outlineColor = PAL.outline; }
         crumb.style.color = PAL.capComp;
         // The DOM crumb's baked-in dusk halo is a black smudge on paper.
         crumb.style.textShadow = paper ? 'none' : '0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
@@ -2351,6 +2387,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const takenCell = new Set<number>();
           const tryAnchor = (n: any): void => {
             if (landmarksShown >= anchorCap || !n || !isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || !placeworthy(n.label)) return;
+            // In the orrery the far side is IN FRONT of the camera, not behind
+            // it — a far-side node passes the sz>1 check, wins a grid cell, and
+            // then renders at ~0 (far-fade) or is hard-culled (uFarClip). Gate
+            // admission on the fade so budget slots go to names that show.
+            if (farFadeAt(n) < 0.35) return;
             const [sx, sy, sz] = screenXY(n);
             if (sz > 1 || sx < 0 || sx > W || sy < 0 || sy > H) return;
             const cell = Math.min(2, Math.floor((sy / H) * 3)) * 3 + Math.min(2, Math.floor((sx / W) * 3));
@@ -2384,6 +2425,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const lit: Array<[string, number]> = [];
         for (const n of nodes) {
           if (!isVis(n) || want.has(n.id) || hoverSuppressed(n.id) || (n.id === hoverKey && hoverLabelKey !== hoverKey)) continue;
+          if (farFadeAt(n) < 0.35) continue; // same far-side gate as landmarks
           const t = labelTorchNode(n);
           if (t > TUNE.beamOn || (labelObjs.has(n.id) && t > TUNE.beamOff)) {
             lit.push([n.id, t + (labelObjs.get(n.id)?.role === 'beam' ? 0.2 : 0)]);
@@ -2421,6 +2463,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // differentiating by multiplier, colour, and opacity.
       const updateLabels = (dt: number): void => {
         const k = Math.min(1, dt * TUNE.labelFade); // ~150ms to settle — a fade, not a pop
+        // The label grade was tuned against a dark dusk sky; the orrery floor
+        // is lit terrain. Engage the depth-clip pill as the globe is held
+        // (orreryPill knob) even when the resting tune leaves it off — names
+        // get their clean patch of sky back over the bright land.
+        const pillOn = TUNE.pillClip > 0 || (TUNE.orreryPill > 0.5 && inOrreryNow() > 0.6);
         for (const [id, st] of labelObjs) {
           const n = nodeById.get(id);
           st.grp.quaternion.copy(camera.quaternion); // billboard
@@ -2507,7 +2554,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // the sky doesn't flicker with half-formed knock-outs. SUGGESTIONS
           // clip only when beamPill is on: a whisper normally carries no
           // committed-name clearing, the register differentiator.
-          const clip = TUNE.pillClip > 0 && (st.role !== 'beam' || TUNE.beamPill > 0.5);
+          const clip = pillOn && (st.role !== 'beam' || TUNE.beamPill > 0.5);
           st.pill.visible = clip && st.cur > 0.45;
           // FIXED SCREEN SIZE: scale the world-unit glyph so it lands at exactly
           // labelPx × role-mult on screen — via the TRUE perspective (pxPerWorld,
@@ -2676,7 +2723,6 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           ensureComposer();
           composer.render();
         } else renderer.render(scene, camera);
-        labelRenderer.render(scene, camera);
       };
       tick();
 
@@ -2685,7 +2731,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (!w || !h) return;
         W = w; H = h;
         camera.aspect = W / H; camera.updateProjectionMatrix();
-        renderer.setSize(W, H); labelRenderer.setSize(W, H); composer?.setSize(W, H);
+        renderer.setSize(W, H); composer?.setSize(W, H);
         ptMat.uniforms.uScale.value = H / 2;
       };
       // Flag only — the actual realloc is drained at the top of tick() so it
@@ -2872,7 +2918,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         if (hoverLabelTimer) clearTimeout(hoverLabelTimer);
         for (const [, st] of labelObjs) { st.text.dispose?.(); st.pill.material.dispose?.(); }
         pillGeo.dispose();
-        for (const [, o] of edgeLabelObjs) o.element.remove?.();
+        for (const [, o] of edgeLabelObjs) o.text.dispose?.();
         for (const c of constellations) { c.text.dispose?.(); c.pill.material.dispose?.(); }
         if (crumbTimer) clearTimeout(crumbTimer);
         crumb.remove();
@@ -3546,7 +3592,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
   return (
     <>
       {/* `host` is imperative-only territory below (innerHTML/appendChild
-          straight to the DOM node for the three.js canvas + CSS2D labels) —
+          straight to the DOM node for the three.js canvas + breadcrumb) —
           React must never render children into it, or the two reconcilers
           fight over the same subtree. No loading pill: the graph-controls bar
           already reports charting state (owner, 5fe59d7). */}

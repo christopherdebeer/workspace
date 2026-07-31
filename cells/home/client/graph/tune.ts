@@ -153,7 +153,10 @@ export const TUNE_DEFAULTS = {
   // the calm sky shows through behind the outlined glyphs. No veil, no chip.
   // pillClip 1 = on, 0 = off (text then reads straight over whatever's behind).
   // labelOutline gives the glyphs their edge definition over the cleared sky.
-  pillClip: 0, labelOutline: 0.21,
+  // orreryPill engages the clip in the ORRERY regardless of pillClip — the
+  // dusk sky the resting tune was graded against becomes lit terrain there,
+  // and names need their clean patch back over the bright land.
+  pillClip: 0, labelOutline: 0.21, orreryPill: 1,
   // LABEL SIZE is a FIXED SCREEN quantity (owner 2026-07-20: "labels should
   // have fixed size and only fade in/out"). Each label renders at exactly
   // labelPx × its role multiplier, regardless of depth or the node's own
@@ -265,6 +268,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'nbrOpNear', group: 'labels', min: 0.3, max: 1 },
   { key: 'labelFade', group: 'labels', min: 1, max: 20, step: 0.5 },
   { key: 'pillClip', group: 'labels', min: 0, max: 1, step: 1 },
+  { key: 'orreryPill', group: 'labels', label: 'orrery pill', min: 0, max: 1, step: 1 },
   { key: 'labelOutline', group: 'labels', min: 0, max: 0.35, step: 0.005 },
   { key: 'labelPx', group: 'labels', min: 6, max: 40, step: 1, quick: true },
   { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3, quick: true },
