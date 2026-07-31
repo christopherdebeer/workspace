@@ -21,6 +21,7 @@ import { Palette } from './palette';
 import { SkyBackdrop } from './sky';
 import { setTypeDecls, loadTypeDecls, FactDetailHost } from './facts';
 import { readHashState, writeHashState } from './urlstate';
+import { TUNE, TUNE_EVENT } from './graph/tune';
 import { ink } from './ink';
 
 // The public surface: index.ts (SSR) and main.tsx (hydration) import from here.
@@ -156,7 +157,30 @@ export interface Boot {
   selectedMd?: string;
 }
 
+/** The palette's frosted-glass recipe, shared by the top-bar session buttons
+ *  (owner: one glass, one tune). Re-rendered on TUNE_EVENT so the tuner's
+ *  glassBlur/glassOpacity drive these live too. */
+function useGlassStyle(): React.CSSProperties {
+  const [, bump] = React.useState(0);
+  React.useEffect(() => {
+    const onTune = (e: Event): void => {
+      const k = (e as CustomEvent).detail?.key as string | undefined;
+      if (!k || k === 'glassBlur' || k === 'glassOpacity') bump((v) => v + 1);
+    };
+    window.addEventListener(TUNE_EVENT, onTune);
+    return () => window.removeEventListener(TUNE_EVENT, onTune);
+  }, []);
+  return {
+    background: `rgba(24,21,17,${TUNE.glassOpacity})`,
+    color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8,
+    padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem',
+    backdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
+    WebkitBackdropFilter: `blur(${TUNE.glassBlur}px) saturate(1.4)`,
+  };
+}
+
 export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
+  const glassBtn = useGlassStyle();
   // Seed exactly once for hydration, then refresh the shared vocabulary from
   // live substrate state so newly published type declarations appear promptly.
   const seededTypes = React.useRef(false);
@@ -556,7 +580,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
               <button
                 onClick={() => { try { sessionStorage.removeItem('parc.home.entered'); } catch {} session.signOut(); }}
                 title={`signed in as ${session.user}`}
-                style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
+                style={glassBtn}
               >
                 sign out
               </button>
@@ -566,7 +590,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
               <button
                 onClick={() => session.signIn()}
                 title="Sign in or register a passkey"
-                style={{ background: 'rgba(10,12,12,0.72)', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.35rem 0.65rem', cursor: 'pointer', fontFamily: ink.mono, fontSize: '0.7rem', backdropFilter: 'blur(8px)' }}
+                style={glassBtn}
               >
                 sign in
               </button>
