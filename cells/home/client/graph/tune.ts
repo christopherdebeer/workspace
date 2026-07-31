@@ -87,6 +87,13 @@ export const TUNE_DEFAULTS = {
   // focus and the sky stays calm at rest rather than reading as a dense mat.
   edgeSimilar: 0.035, edgeMember: 0.055, edgeDerived: 0.055, edgeAuthored: 0.075,
   focusEdgeAlpha: 0.25,
+  // DASH grammar for the ambient mat (the 2D chart's dashed member/derived
+  // strokes, finally in the arc shader): duty 1 = solid, lower = the lit
+  // fraction of each dash cycle. Per class — authored / member / derived —
+  // and the focus fan always draws solid. dashFreq = dash cycles per full
+  // turn of great circle, so dash length is a world quantity (≈ 2πR/freq),
+  // not a per-edge fraction.
+  dashFreq: 40, dashAuthored: 1, dashMember: 1, dashDerived: 1,
   // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
   // already fanning from a selection/hit) — direction is source→target, so
   // the animation reads as energy moving the way the edge actually points.
@@ -171,6 +178,12 @@ export const TUNE_DEFAULTS = {
   // dusk sky the resting tune was graded against becomes lit terrain there,
   // and names need their clean patch back over the bright land.
   pillClip: 0, labelOutline: 0.21, orreryPill: 1,
+  // The whole-field grade for NODE labels (the rel chips have their own):
+  // labelOpacity multiplies every role's target; labelTone mixes the cream
+  // voice (neighbours + suggestions) from dim warm-grey (0) to full text
+  // cream (1). Selection gold, hit cyan, and landmark grey keep their
+  // semantic inks — tone grades the body voice, not the signals.
+  labelOpacity: 1, labelTone: 1,
   // LABEL SIZE is a FIXED SCREEN quantity (owner 2026-07-20: "labels should
   // have fixed size and only fade in/out"). Each label renders at exactly
   // labelPx × its role multiplier, regardless of depth or the node's own
@@ -284,6 +297,8 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'nbrOpNear', group: 'labels', min: 0.3, max: 1 },
   { key: 'labelFade', group: 'labels', min: 1, max: 20, step: 0.5 },
   { key: 'labelGrace', group: 'labels', label: 'stickiness', min: 0, max: 20, step: 1 },
+  { key: 'labelOpacity', group: 'labels', label: 'opacity', min: 0.1, max: 1, step: 0.02 },
+  { key: 'labelTone', group: 'labels', label: 'tone', min: 0, max: 1, step: 0.02 },
   { key: 'pillClip', group: 'labels', min: 0, max: 1, step: 1 },
   { key: 'orreryPill', group: 'labels', label: 'orrery pill', min: 0, max: 1, step: 1 },
   { key: 'labelOutline', group: 'labels', min: 0, max: 0.35, step: 0.005 },
@@ -299,6 +314,10 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'edgeMember', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeDerived', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeAuthored', group: 'edges', min: 0, max: 1, step: 0.005 },
+  { key: 'dashFreq', group: 'edges', label: 'dash scale', min: 5, max: 120, step: 1 },
+  { key: 'dashAuthored', group: 'edges', label: 'authored dash', min: 0.15, max: 1, step: 0.01 },
+  { key: 'dashMember', group: 'edges', label: 'member dash', min: 0.15, max: 1, step: 0.01 },
+  { key: 'dashDerived', group: 'edges', label: 'derived dash', min: 0.15, max: 1, step: 0.01 },
   { key: 'focusEdgeAlpha', group: 'edges', min: 0, max: 1 },
   { key: 'edgeLabelCap', group: 'edges', label: 'rel labels', min: 0, max: 16, step: 1 },
   { key: 'relOpacity', group: 'edges', label: 'rel opacity', min: 0.2, max: 1, step: 0.02 },

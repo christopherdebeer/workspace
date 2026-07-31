@@ -769,6 +769,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // degree does NOT boost (that would re-paint the hairball).
       const eboostBuf = new Float32Array(caps.capE);
       const ederivBuf = new Float32Array(caps.capE);
+      // Edge CLASS for the dash grammar: 0 = authored, 1 = member, 2 = derived
+      // (similarTo never enters the scene — addEdge drops it).
+      const eClsBuf = new Float32Array(caps.capE);
       // The HOP LEVEL of a focus edge (1 = the star's own spokes, 2 = a link out
       // in the second ring, …); 0 = not part of the fan. The accent fan is the
       // whole selected NEIGHBOURHOOD, not just the star's spokes: an edge is in it
@@ -835,10 +838,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // Derived flag rides its own attribute so the orrery can quiet the
           // similarity fuzz per-instance without rebaking colours per frame.
           ederivBuf[i] = links[i].derived ? 1 : 0;
+          eClsBuf[i] = MEMBER_RELS.has(l.rel) ? 1 : l.derived ? 2 : 0;
         }
         (egeo.attributes.color as any).needsUpdate = true;
         (egeo.attributes.boost as any).needsUpdate = true;
         (egeo.attributes.deriv as any).needsUpdate = true;
+        (egeo.attributes.aCls as any).needsUpdate = true;
       };
       const egeo = new THREE.InstancedBufferGeometry();
       // The shared strip: ARC_SEG+1 points at t = 0..1. `position` is a dummy
@@ -854,6 +859,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       egeo.setAttribute('color', new THREE.InstancedBufferAttribute(ecolBuf, 3));
       egeo.setAttribute('boost', new THREE.InstancedBufferAttribute(eboostBuf, 1));
       egeo.setAttribute('deriv', new THREE.InstancedBufferAttribute(ederivBuf, 1));
+      egeo.setAttribute('aCls', new THREE.InstancedBufferAttribute(eClsBuf, 1));
       egeo.instanceCount = 0; // grows as edge pages stream in
       // A shader (not LineBasicMaterial) so edges get the SAME depth-fade as the
       // point cloud — otherwise they stay full-bright at every depth and flatten
@@ -874,10 +880,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           uCurl: { value: -1 },
           uArcLift: { value: 0 },
           uBallR: { value: SHELL },
+          uDashFreq: { value: TUNE.dashFreq },
+          uDashDuty: { value: new THREE.Vector3(TUNE.dashAuthored, TUNE.dashMember, TUNE.dashDerived) },
         },
         vertexShader:
-          'attribute float t; attribute vec3 aSeatA; attribute vec3 aSeatB; attribute vec2 aRad; attribute vec3 color; attribute float boost; attribute float deriv;' +
-          'varying vec3 vColor; varying float vBoost; varying float vFlow; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl; uniform float uArcLift; uniform float uBallR;' +
+          'attribute float t; attribute vec3 aSeatA; attribute vec3 aSeatB; attribute vec2 aRad; attribute vec3 color; attribute float boost; attribute float deriv; attribute float aCls;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow; varying float vCls; varying float vAng; uniform float uPaper; uniform float uOrreryDim; uniform vec4 uShellQ; uniform float uCurl; uniform float uArcLift; uniform float uBallR;' +
           TORCH_GLSL +
           'vec3 qrot(vec4 q, vec3 v){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }' +
           // The GREAT-CIRCLE arc: interpolate the endpoints' canonical seats
@@ -910,11 +918,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           '   pos += normalize(pos - ballC) * (uArcLift * sin(3.14159265 * t) * ang * uBallR);' +
           ' }' +
           ' float lit = (uPaper > 0.5 ? 1.0 : max(torch(pos), boost) * farFade(pos)) * (1.0 - uOrreryDim * deriv * (1.0 - boost));' +
-          ' vColor = color * lit; vBoost = boost; vFlow = t;' +
+          ' vColor = color * lit; vBoost = boost; vFlow = t; vCls = aCls; vAng = ang;' +
           ' gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }',
         fragmentShader:
-          'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles;' +
-          'varying vec3 vColor; varying float vBoost; varying float vFlow;' +
+          'uniform float uPaper; uniform vec3 uInk; uniform float uTime; uniform float uFlowSpeed; uniform float uFlowWidth; uniform float uFlowGain; uniform float uFlowCycles; uniform float uDashFreq; uniform vec3 uDashDuty;' +
+          'varying vec3 vColor; varying float vBoost; varying float vFlow; varying float vCls; varying float vAng;' +
           // Flow: a soft travelling pulse along FOCUS edges only (vBoost>0 —
           // the ones already fanning from a selection/hit), source(flow=0)→
           // target(flow=1), so the animation reads as energy moving the way
@@ -922,6 +930,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // metaphor has no motion to carry (matches applyMode's own dusk/
           // paper split for everything else in this shader).
           'void main(){' +
+          // The dash grammar (the 2D chart's dashed member/derived strokes,
+          // in-shader): phase runs in RADIANS OF ARC (vFlow·vAng) so a dash
+          // is a world length, not a per-edge fraction. The focus fan always
+          // draws solid — dashing is the ambient mat's vocabulary.
+          ' float duty = vCls < 0.5 ? uDashDuty.x : (vCls < 1.5 ? uDashDuty.y : uDashDuty.z);' +
+          ' if (duty < 0.995 && vBoost < 0.5 && fract(vFlow * vAng * uDashFreq * 0.159155) > duty) discard;' +
           ' vec3 col = vColor;' +
           ' if (uPaper < 0.5 && vBoost > 0.5) {' +
           '   float p = fract(vFlow * uFlowCycles - uTime * uFlowSpeed);' +
@@ -983,6 +997,15 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         fit: () => void;
       }
       const labelObjs = new Map<string, LabelState>();
+      // Text never depth-tests (owner IMG_0527: the terrain sphere clipped
+      // glyphs mid-word at the limb — a label whose billboard dips below the
+      // horizon lost its far half to the depth buffer). Far-side occlusion is
+      // handled honestly in JS (farFadeAt + the uFarClip hard cull), so the
+      // depth test only ever ATE legible near-side text. The pill still writes
+      // depth — its knockout works on the cloud, not on text.
+      const noDepthTest = (text: any): void => {
+        try { if (text.material) { text.material.depthTest = false; text.material.depthWrite = false; } } catch { /* troika internals moved */ }
+      };
       const roleMult = (role: LabelRole): number =>
         role === 'sel' ? TUNE.selSizeMult
         : role === 'hover' ? TUNE.hitSizeMult
@@ -1066,6 +1089,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         text.fillOpacity = 0;
         text.outlineOpacity = 0;
         text.renderOrder = 9;
+        noDepthTest(text);
         const pill = new THREE.Mesh(pillGeo, mkPillMat());
         pill.visible = false;
         pill.renderOrder = -1; // depth-writing occluder — draws before the cloud
@@ -1826,6 +1850,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           text.fillOpacity = 0;
           text.outlineOpacity = 0;
           text.renderOrder = 9;
+          noDepthTest(text);
           text.sync();
           grp.add(text);
           scene.add(grp);
@@ -2011,6 +2036,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         text.fillOpacity = 0;
         text.outlineOpacity = 0;
         text.renderOrder = 9;
+        noDepthTest(text);
         const pill = new THREE.Mesh(pillGeo, mkPillMat());
         pill.visible = false;
         pill.renderOrder = -1;
@@ -2155,7 +2181,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // caption out and hands over to the fact names.
             const zoomMag = Math.tan(camera.fov * Math.PI / 360) / Math.tan(FOV_WIDE * Math.PI / 360);
             const camD = camPos.distanceTo(constV.set(c.ax, c.ay, c.az)) * zoomMag;
-            target = TUNE.constOpacity * smoothstep(c.r * TUNE.constNear, c.r * TUNE.constFar, camD);
+            // Order-guarded band: sliders can cross (the owner's tune fact had
+            // constNear 1.88 > constFar 1.52), and an inverted smoothstep
+            // silently zeroed EVERY caption at EVERY vantage — "what happened
+            // to the all-caps names". min/max keeps the band a band.
+            const bandLo = c.r * Math.min(TUNE.constNear, TUNE.constFar);
+            const bandHi = c.r * Math.max(TUNE.constNear, TUNE.constFar);
+            target = TUNE.constOpacity * smoothstep(bandLo, bandHi, camD);
             // A REGION is a place on the shell, so it fades and clips on the far
             // side exactly like its stars and labels — a caption on the back of
             // the held globe shouldn't read through the near face. (Mirrors the
@@ -2477,6 +2509,19 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       // the exact px = world·(H/2)/camD relation the CSS layer used to compute
       // per frame, so depth honesty is structural, not simulated. Roles keep
       // differentiating by multiplier, colour, and opacity.
+      // The cream voice's ink, graded by labelTone (dim ↔ text) — cached, the
+      // mix only recomputes when the knob or palette moves.
+      const toneCA = new THREE.Color(), toneCB = new THREE.Color();
+      let toneKey = '';
+      let toneHex = '';
+      const creamTone = (): string => {
+        const key = `${TUNE.labelTone}|${PAL.text}`;
+        if (key !== toneKey) {
+          toneKey = key;
+          toneHex = '#' + toneCA.set(PAL.dim).lerp(toneCB.set(PAL.text), TUNE.labelTone).getHexString();
+        }
+        return toneHex;
+      };
       const updateLabels = (dt: number): void => {
         const k = Math.min(1, dt * TUNE.labelFade); // ~150ms to settle — a fade, not a pop
         // The label grade was tuned against a dark dusk sky; the orrery floor
@@ -2491,7 +2536,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           const nodePx = rad(n) * 2.4 * (H / 2) / camD; // node's on-screen diameter
           const torch = labelTorchAt(st.grp.position);
           let target: number;
-          let color = PAL.text;
+          let color = creamTone(); // nbr + beam speak in the toned cream; signal roles reassign below
           const t = Math.max(0, Math.min(1, (nodePx - 6) / 22)); // 0 = far, 1 = near
           if (st.role === 'sel') {
             // Selection: the one loud name — full accent gold, + the ring.
@@ -2522,6 +2567,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // no cliff where labels used to pop.
             target = TUNE.beamOpacity * smoothstep(TUNE.beamOff, 0.95, torch);
           }
+          // The whole-field dial: every role scales together (sel stays the
+          // relative loudest); the rel chips carry their own relOpacity.
+          target *= TUNE.labelOpacity;
           // Paper mode has no additive glow to carry a fractional alpha — the
           // SAME 0.57 ceiling that reads as a soft dusk glow reads as flat gray
           // ink on paper (2026-07-12 owner report: "muddy grey" labels, edges
@@ -2676,6 +2724,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         terrainUniforms.uShade.value.set(TUNE.reliefGain, TUNE.nightFloor);
         skyUniforms.uNebKey.value.set(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData);
         eMat.uniforms.uArcLift.value = TUNE.arcLift * inOrrery;
+        eMat.uniforms.uDashFreq.value = TUNE.dashFreq;
+        eMat.uniforms.uDashDuty.value.set(TUNE.dashAuthored, TUNE.dashMember, TUNE.dashDerived);
         // Levers that require a REBUILD (reseat or re-splat) — watched here so
         // any tuner wiring works; debounced against slider scrubbing.
         if (TUNE.projSpread !== seatLevers.spread || TUNE.projLat !== seatLevers.lat) {
