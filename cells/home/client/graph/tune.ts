@@ -55,6 +55,13 @@ export const TUNE_DEFAULTS = {
   // size still grades the role, opacity no longer does.
   selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 1, nbrOpNear: 1,
   labelFade: 1, // lerp rate: higher = snappier; owner tune runs it slow/smooth.
+  // Stickiness: how many losing syncs (≈5 frames each) a standing label
+  // survives before it starts dying — the anti-flicker grace at the beam
+  // edge and collision boundaries.
+  labelGrace: 8,
+  // Focus-register caps (desktop values; mobile derives ~2/3): how many
+  // search hits and selection neighbours may spend from the name budget.
+  hitCap: 9, nbrCap: 5,
   // nodes — neighbours barely lift: selection lights the ANCHOR, the
   // neighbourhood whispers; the fan edges carry the structure. nodeDim < 1 in
   // the owner tune dims the resting field so the lit selection stands out more.
@@ -65,6 +72,12 @@ export const TUNE_DEFAULTS = {
   // fan — how many relation labels ride the selected node's edges at once (the
   // old hard-coded 4; a densely-linked node wants more).
   neighborHops: 2, edgeLabelCap: 13,
+  // The relation chips' own grade (owner 2026-07-31: "tertiary labels are a
+  // little too dim"). relOpacity is the chip's ceiling before far-fade;
+  // relTone mixes the dim PAL.rel grey toward full text cream (0 = the old
+  // whisper, 1 = as loud as a fact name); relSizeMult grades labelPx the way
+  // the role mults do (0.5 ≈ the old mono 8.5px at labelPx 17).
+  relOpacity: 1, relTone: 0.35, relSizeMult: 0.5,
   // Each ring of the selection fan is this fraction as bright as the one inside
   // it (0.5 = a 2-hop edge reads half a 1-hop spoke). Only matters when
   // neighborHops > 1.
@@ -146,6 +159,7 @@ export const TUNE_DEFAULTS = {
   // its constellations), tight approach band; anchors as micro-print star
   // names — many, tiny, full-opacity (celestial-chart typography).
   constCap: 6, constOpacity: 1, constNear: 0.2, constFar: 3.04,
+  constSizeMult: 0.82, // caption px as a fraction of labelPx (caps+tracking carry the weight)
   anchorCap: 32, anchorOpacity: 0.52, anchorSizeMult: 0.56,
   // in-scene label furniture. The name's backing is a DEPTH-ONLY CLIP (owner
   // 2026-07-20: "the observed background / just clipping") — it writes depth
@@ -254,6 +268,8 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'focusBand', group: 'name budget', min: 0, max: 60, step: 1 },
   { key: 'landmarkFrac', group: 'name budget', min: 0, max: 0.8, step: 0.05 },
   { key: 'beamPerCell', group: 'name budget', min: 1, max: 5, step: 1 },
+  { key: 'hitCap', group: 'name budget', label: 'hit cap', min: 0, max: 20, step: 1 },
+  { key: 'nbrCap', group: 'name budget', label: 'neighbour cap', min: 0, max: 12, step: 1 },
   { key: 'beamPill', group: 'name budget', min: 0, max: 1 },
   { key: 'labelConeIn', group: 'beam', min: 0.02, max: 0.5 },
   { key: 'labelConeOut', group: 'beam', min: 0.1, max: 1.2 },
@@ -267,6 +283,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'nbrOpFar', group: 'labels', min: 0.1, max: 1 },
   { key: 'nbrOpNear', group: 'labels', min: 0.3, max: 1 },
   { key: 'labelFade', group: 'labels', min: 1, max: 20, step: 0.5 },
+  { key: 'labelGrace', group: 'labels', label: 'stickiness', min: 0, max: 20, step: 1 },
   { key: 'pillClip', group: 'labels', min: 0, max: 1, step: 1 },
   { key: 'orreryPill', group: 'labels', label: 'orrery pill', min: 0, max: 1, step: 1 },
   { key: 'labelOutline', group: 'labels', min: 0, max: 0.35, step: 0.005 },
@@ -284,12 +301,16 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'edgeAuthored', group: 'edges', min: 0, max: 1, step: 0.005 },
   { key: 'focusEdgeAlpha', group: 'edges', min: 0, max: 1 },
   { key: 'edgeLabelCap', group: 'edges', label: 'rel labels', min: 0, max: 16, step: 1 },
+  { key: 'relOpacity', group: 'edges', label: 'rel opacity', min: 0.2, max: 1, step: 0.02 },
+  { key: 'relTone', group: 'edges', label: 'rel tone', min: 0, max: 1, step: 0.02 },
+  { key: 'relSizeMult', group: 'edges', label: 'rel size', min: 0.3, max: 1.2, step: 0.02 },
   { key: 'edgeFlowSpeed', group: 'edges', min: 0, max: 2, step: 0.05 },
   { key: 'edgeFlowWidth', group: 'edges', min: 0.05, max: 0.5, step: 0.01 },
   { key: 'edgeFlowGain', group: 'edges', min: 0, max: 3, step: 0.05 },
   { key: 'edgeFlowCycles', group: 'edges', min: 1, max: 8, step: 1 },
   { key: 'constCap', group: 'places', min: 0, max: 32, step: 1 },
   { key: 'constOpacity', group: 'places', min: 0, max: 1 },
+  { key: 'constSizeMult', group: 'places', label: 'caption size', min: 0.4, max: 1.5, step: 0.02 },
   { key: 'constNear', group: 'places', min: 0.2, max: 2.5 },
   { key: 'constFar', group: 'places', min: 0.6, max: 5 },
   { key: 'anchorCap', group: 'places', min: 0, max: 32, step: 1 },

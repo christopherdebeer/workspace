@@ -498,7 +498,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
        *  levers, re-blend seats, refresh the arcs, and rebuild the terrain —
        *  the projection knobs' rebuild path. */
       // Harness/console introspection: sample seats, force the rebuild paths.
-      try { (window as any).__parcGraph = { nodes, reseatAll: () => reseatAll(), rebuildClouds: () => buildClusterClouds(), chart: (c: number[]) => toDir(c, 0), cdfLen: () => cdfX.length }; } catch { /* SSR */ }
+      try { (window as any).__parcGraph = { nodes, reseatAll: () => reseatAll(), rebuildClouds: () => buildClusterClouds(), chart: (c: number[]) => toDir(c, 0), cdfLen: () => cdfX.length, select: (k: string | null, fly = false) => api.current?.select(k, fly) }; } catch { /* SSR */ }
       const reseatAll = (): void => {
         for (const n of nodes) {
           if (!n.mapped || !n.coord) continue;
@@ -1091,7 +1091,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
        *  pop — and only after a GRACE of consecutive losses (stickiness): a
        *  label that loses one sync's collision contest or slips just past the
        *  beam edge keeps its place instead of flickering. */
-      const LABEL_GRACE = 8; // syncs ≈ 0.7s at the 5-frame sync cadence
+      const labelGrace = (): number => TUNE.labelGrace; // syncs ≈ 0.09s each at the 5-frame cadence
       const reconcileLabels = (want: Map<string, LabelWant>): void => {
         for (const [id, st] of labelObjs) {
           const w = want.get(id);
@@ -1112,9 +1112,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             // Hover-only labels do not inherit the ambient 0.7s grace: that
             // grace is useful for map labels during orbit, but makes tooltips
             // trail behind the pointer.
-            st.miss = LABEL_GRACE + 1;
+            st.miss = labelGrace() + 1;
             st.dying = true;
-          } else if (++st.miss > LABEL_GRACE) st.dying = true;
+          } else if (++st.miss > labelGrace()) st.dying = true;
         }
         for (const [id, w] of want) {
           if (labelObjs.has(id)) continue;
@@ -1747,7 +1747,16 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       interface EdgeLabelState { grp: any; text: any; farKey: string; relLen: number }
       const edgeLabelObjs = new Map<number, EdgeLabelState>();
       let edgeLabelSel: string | null = null;
-      const relPx = (): number => TUNE.labelPx * 0.5; // ≈ the old mono 8.5px at labelPx 17
+      const relPx = (): number => TUNE.labelPx * TUNE.relSizeMult; // 0.5 ≈ the old mono 8.5px at labelPx 17
+      // The chip's ink: PAL.rel graded toward full text cream by relTone —
+      // recomputed when the knob or the palette moves, applied to standing
+      // chips in positionEdgeLabels (new chips take it at birth).
+      const relColA = new THREE.Color(), relColB = new THREE.Color();
+      let relToneApplied = -1;
+      const relColor = (): string => {
+        relColA.set(PAL.rel).lerp(relColB.set(PAL.text), TUNE.relTone);
+        return '#' + relColA.getHexString();
+      };
       const syncEdgeLabels = (): void => {
         // A relation label is oriented to the CURRENT selection (its arrow, text
         // and tap-target-far-node). The traversed edge survives across a
@@ -1811,7 +1820,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           text.fontSize = 8; // nominal world size; positionEdgeLabels scales to relPx on screen
           text.anchorX = 'center';
           text.anchorY = 'middle';
-          text.color = PAL.rel;
+          text.color = relColor();
           text.outlineColor = PAL.outline;
           text.outlineWidth = `${Math.round(TUNE.labelOutline * 100)}%`;
           text.fillOpacity = 0;
@@ -1850,6 +1859,11 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const placedRects: Array<[number, number, number, number]> = []; // x,y,halfW,halfH
       const positionEdgeLabels = (): void => {
         if (!edgeLabelObjs.size) return;
+        if (relToneApplied !== TUNE.relTone) {
+          relToneApplied = TUNE.relTone;
+          const c = relColor();
+          for (const [, o] of edgeLabelObjs) o.text.color = c;
+        }
         // Viewport margins reserve the CHROME THAT EXISTS. Entered: the header
         // bar (100) and the palette (150). Preview (the trailhead strip): only
         // the wordmark up top and nothing below — the old entered margins ate
@@ -1899,7 +1913,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // with the scene, so a chip on the back of the globe recedes with its
           // edge instead of reading through the near face.
           const pt = elPts[chosen];
-          let fade = 0.9 * farFadeAt(pt);
+          let fade = TUNE.relOpacity * farFadeAt(pt);
           const elClipZ = torchUniforms.uFarClip.value;
           if (elClipZ > 0.5 && -pt.z > elClipZ) fade = 0;
           if (fade < 0.1) { st.grp.visible = false; continue; }
@@ -2152,7 +2166,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
             if (target > 0.02) {
               // Captions render at a FIXED screen size (below), so the declutter
               // box uses that size, not a depth-projected one.
-              const fontPx = TUNE.labelPx * 0.82;
+              const fontPx = TUNE.labelPx * TUNE.constSizeMult;
               constV.set(c.ax, c.ay, c.az).project(camera);
               if (constV.z > 1) target = 0;
               else {
@@ -2179,7 +2193,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           // distance. A hair under the fact-label size (owner: "all-caps
           // captions too large") — the caps + tracking give them their weight.
           const curPx = c.fs * pxPerWorld(constV.set(c.ax, c.ay, c.az));
-          const targetPx = TUNE.labelPx * 0.82;
+          const targetPx = TUNE.labelPx * TUNE.constSizeMult;
           c.grp.scale.setScalar(curPx > 0.01 ? targetPx / curPx : 1);
           c.text.fillOpacity = c.cur;
           c.text.outlineOpacity = c.cur;
@@ -2228,7 +2242,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           c.text.outlineColor = PAL.outline;
           c.text.outlineWidth = paper ? '14%' : '4%'; // see addConstellation
         }
-        for (const [, o] of edgeLabelObjs) { o.text.color = PAL.rel; o.text.outlineColor = PAL.outline; }
+        relToneApplied = -1; // palette moved — positionEdgeLabels re-inks the chips
+        for (const [, o] of edgeLabelObjs) o.text.outlineColor = PAL.outline;
         crumb.style.color = PAL.capComp;
         // The DOM crumb's baked-in dusk halo is a black smudge on paper.
         crumb.style.textShadow = paper ? 'none' : '0 1px 3px #000,0 -1px 3px #000,1px 0 3px #000,-1px 0 3px #000,0 0 2px #000';
@@ -2309,8 +2324,9 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         const focusBand = TUNE.focusBand > 0 ? TUNE.focusBand : (mobile ? 14 : 22);
         // Register 2 (Focus/ignition): the selection's structure OWNS the band
         // when a question is active — sel + its top neighbours + search hits.
-        const neighbourCap = mobile ? 3 : 5;
-        const hitCap = mobile ? 6 : 9;
+        // Tuned as desktop values; mobile derives ~2/3 of each.
+        const neighbourCap = mobile ? Math.max(2, Math.round(TUNE.nbrCap * 0.6)) : TUNE.nbrCap;
+        const hitCap = mobile ? Math.max(3, Math.round(TUNE.hitCap * 0.67)) : TUNE.hitCap;
         // Register 1 (Landmarks/orientation): a persistent, grid-distributed
         // slice of the band — the steady "north" the resting sky keeps.
         const anchorCap = Math.min(TUNE.anchorCap, Math.max(2, Math.round(focusBand * TUNE.landmarkFrac)));
