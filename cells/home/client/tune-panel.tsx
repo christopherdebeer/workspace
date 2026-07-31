@@ -48,7 +48,7 @@ function Row({ ctl, value, onChange, onFocusKnob, focused = false }: {
         <select
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
-          style={{ marginLeft: 'auto', background: ink.bg, color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 6, fontSize: '0.74rem', padding: '0.15rem 0.35rem', fontFamily: ink.mono }}
+          style={{ marginLeft: 'auto', background: 'transparent', color: ink.text, border: `1px solid ${ink.line}`, borderRadius: 6, fontSize: '0.74rem', padding: '0.15rem 0.35rem', fontFamily: ink.mono }}
         >
           {ctl.options.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
@@ -102,7 +102,7 @@ export function TunePanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   const focusedCtl = focusKey ? TUNE_SCHEMA.find((c) => c.key === focusKey) : null;
   if (focusedCtl) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.25rem 0.6rem', background: ink.bg }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.25rem 0.1rem' }}>
         <button
           onClick={() => setFocusKey(null)}
           aria-label="back to all knobs"
@@ -118,13 +118,13 @@ export function TunePanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   }
   const rows = section === QUICK ? TUNE_SCHEMA.filter((c) => c.quick) : TUNE_SCHEMA.filter((c) => c.group === section);
   return (
-    <div style={{ display: 'grid', gap: '0.1rem', border: `1px solid ${ink.line}`, borderRadius: 8, padding: '0.4rem 0.6rem 0.55rem', background: ink.bg }}>
+    <div style={{ display: 'grid', gap: '0.1rem', padding: '0.15rem 0.1rem 0.3rem' }}>
       <header style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', paddingBottom: '0.3rem' }}>
         <select
           value={section}
           onChange={(e) => setSection(e.target.value)}
           aria-label="tune section"
-          style={{ background: ink.bg, color: ink.accent, border: `1px solid ${ink.line}`, borderRadius: 6, fontSize: '0.74rem', padding: '0.18rem 0.4rem', fontFamily: ink.mono }}
+          style={{ background: 'transparent', color: ink.accent, border: `1px solid ${ink.line}`, borderRadius: 6, fontSize: '0.74rem', padding: '0.18rem 0.4rem', fontFamily: ink.mono }}
         >
           <option value={QUICK}>quick</option>
           {TUNE_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
