@@ -87,6 +87,13 @@ export const TUNE_DEFAULTS = {
   // focus and the sky stays calm at rest rather than reading as a dense mat.
   edgeSimilar: 0.035, edgeMember: 0.055, edgeDerived: 0.055, edgeAuthored: 0.075,
   focusEdgeAlpha: 0.25,
+  // FILM GRAIN on the dome (scene.ts SKY_FRAG): animated screen-space noise
+  // whose amplitude rides the sky's own light (atmosphere lift + nebulae), so
+  // the flat background never sizzles and the orrery (dome layers at zero)
+  // stays clean. grainAmt = strength; grainScale = fineness (1 = per device
+  // px, lower = chunkier); grainSpeed = re-rolls per second (0 = frozen
+  // tooth, like a print).
+  grainAmt: 0.35, grainScale: 1, grainSpeed: 12,
   // DASH grammar for the ambient mat (the 2D chart's dashed member/derived
   // strokes, finally in the arc shader): duty 1 = solid, lower = the lit
   // fraction of each dash cycle. Per class — authored / member / derived —
@@ -244,6 +251,9 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
   { key: 'nebula', group: 'scene', label: 'nebula', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
+  { key: 'grainAmt', group: 'scene', label: 'grain', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'grainScale', group: 'scene', label: 'grain size', min: 0.15, max: 1, step: 0.05, live: 'persist' },
+  { key: 'grainSpeed', group: 'scene', label: 'grain speed', min: 0, max: 24, step: 1, live: 'persist' },
   { key: 'projSpread', group: 'projection', label: 'equalize', min: 0, max: 1, step: 0.02, live: 'persist' },
   { key: 'projLat', group: 'projection', label: 'lat range', min: 0.4, max: 1, step: 0.02, live: 'persist' },
   { key: 'splatRad', group: 'terrain', label: 'splat radius', min: 6, max: 64, step: 1, live: 'persist' },

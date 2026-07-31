@@ -42,6 +42,8 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
         uBase: { value: new THREE.Color(ink.sceneBg) },
         uCloud: { value: makeBlackTexture(THREE) }, // no data — baseline decoration only
         uNebKey: { value: new THREE.Vector4(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData) },
+        uGrain: { value: new THREE.Vector3(TUNE.grainAmt, TUNE.grainScale, TUNE.grainSpeed) },
+        uTime: { value: 0 },
       };
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
@@ -104,11 +106,14 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
 
       // Gentle slow rotation for life
       let yaw = 0;
+      const t0 = performance.now();
       const tick = (): void => {
         if (disposed) return;
         yaw += 0.00012;
         camera.position.set(0, 0, 0);
         camera.lookAt(Math.sin(yaw) * SHELL, SHELL * 0.5, -Math.cos(yaw) * SHELL);
+        skyUniforms.uTime.value = (performance.now() - t0) / 1000; // drives the film grain
+        skyUniforms.uGrain.value.set(TUNE.grainAmt, TUNE.grainScale, TUNE.grainSpeed);
         renderer.render(scene, camera);
         raf = requestAnimationFrame(tick);
       };

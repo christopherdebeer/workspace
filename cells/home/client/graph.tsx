@@ -482,6 +482,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // the terrain reads, black until it builds (baseline decoration).
         uCloud: { value: makeBlackTexture(THREE) },
         uNebKey: { value: new THREE.Vector4(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData) },
+        uGrain: { value: new THREE.Vector3(TUNE.grainAmt, TUNE.grainScale, TUNE.grainSpeed) },
+        uTime: { value: 0 },
       };
       // The sun's canonical home (set over the data centroid at cloud build).
       const sunCanon = new THREE.Vector3(0, 0, 1);
@@ -2723,6 +2725,8 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         terrainUniforms.uLand.value.set(TUNE.landCut, TUNE.landBand, TUNE.coastAmp, TUNE.terrainGain);
         terrainUniforms.uShade.value.set(TUNE.reliefGain, TUNE.nightFloor);
         skyUniforms.uNebKey.value.set(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData);
+        skyUniforms.uGrain.value.set(TUNE.grainAmt, TUNE.grainScale, TUNE.grainSpeed);
+        skyUniforms.uTime.value = clock.elapsedTime;
         eMat.uniforms.uArcLift.value = TUNE.arcLift * inOrrery;
         eMat.uniforms.uDashFreq.value = TUNE.dashFreq;
         eMat.uniforms.uDashDuty.value.set(TUNE.dashAuthored, TUNE.dashMember, TUNE.dashDerived);

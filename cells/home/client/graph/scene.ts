@@ -159,6 +159,8 @@ uniform float uNebula;
 uniform vec3 uBase;
 uniform sampler2D uCloud;
 uniform vec4 uNebKey; // (wisp base, wisp data gain, band base, band data gain)
+uniform vec3 uGrain;  // (amount, cell scale in device px, re-roll Hz — 0 freezes)
+uniform float uTime;
 ${NOISE_GLSL}
 void main(){
   float up = clamp(vDir.y, -1.0, 1.0);
@@ -190,6 +192,17 @@ void main(){
   // baseline keeps the landing dome (no data) quietly decorated.
   float dataK = dot(texture2D(uCloud, equirect(vDir)).rgb, vec3(1.0));
   col += (neb * (uNebKey.x + uNebKey.y * dataK) + milk * (uNebKey.z + uNebKey.w * dataK)) * uNebula;
+  // FILM GRAIN (owner 2026-07-31): animated screen-space noise that rides the
+  // dome's OWN light — amplitude keys off how far the pixel has risen above
+  // the flat base, so the atmosphere gradient and nebulae shimmer like stock
+  // while the plain background (and the orrery, where the dome layers are
+  // dialled to zero) stays clean. Hash re-rolls at uGrain.z Hz; 0 freezes the
+  // grain into tooth, like a print.
+  if (uGrain.x > 0.001) {
+    float g = hash(vec3(floor(gl_FragCoord.xy * uGrain.y), floor(uTime * uGrain.z)));
+    float glow = dot(abs(col - uBase), vec3(1.0));
+    col += (g - 0.5) * uGrain.x * glow;
+  }
   gl_FragColor = vec4(col, 1.0);
 }`;
 
