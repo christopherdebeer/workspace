@@ -91,8 +91,10 @@ export const TUNE_DEFAULTS = {
   // whose amplitude rides the sky's own light (atmosphere lift + nebulae), so
   // the flat background never sizzles and the orrery (dome layers at zero)
   // stays clean. grainAmt = strength; grainScale = fineness (1 = per device
-  // px, lower = chunkier); grainSpeed = re-rolls per second (0 = frozen
-  // tooth, like a print).
+  // px, lower = chunkier); grainSpeed = re-rolls per second — AND the anchor:
+  // 0 freezes the grain into print tooth ANCHORED TO THE SKY (pans with the
+  // wisps, magnified by the telescope), any speed above keeps film grain in
+  // the lens (screen-space, constant pixel pitch).
   grainAmt: 0.35, grainScale: 1, grainSpeed: 12,
   // DASH grammar for the ambient mat (the 2D chart's dashed member/derived
   // strokes, finally in the arc shader): duty 1 = solid, lower = the lit
@@ -300,8 +302,10 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'beamOff', group: 'beam', min: 0.02, max: 0.8 },
   { key: 'beamOpacity', group: 'beam', min: 0, max: 1 },
   { key: 'beamSizeMult', group: 'beam', min: 0.3, max: 1.5 },
-  { key: 'selSizeMult', group: 'labels', min: 0.8, max: 2.5 },
-  { key: 'hitSizeMult', group: 'labels', min: 0.8, max: 2.5 },
+  // Floors below the defaults (owner 2026-08-01: "sel label too big, can't
+  // find a dial" — the old min 0.8 WAS the default, the dial only went up).
+  { key: 'selSizeMult', group: 'labels', min: 0.4, max: 2.5 },
+  { key: 'hitSizeMult', group: 'labels', min: 0.4, max: 2.5 },
   { key: 'nbrSizeMult', group: 'labels', min: 0.6, max: 2 },
   { key: 'nbrOpFar', group: 'labels', min: 0.1, max: 1 },
   { key: 'nbrOpNear', group: 'labels', min: 0.3, max: 1 },

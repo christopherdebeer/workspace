@@ -192,14 +192,24 @@ void main(){
   // baseline keeps the landing dome (no data) quietly decorated.
   float dataK = dot(texture2D(uCloud, equirect(vDir)).rgb, vec3(1.0));
   col += (neb * (uNebKey.x + uNebKey.y * dataK) + milk * (uNebKey.z + uNebKey.w * dataK)) * uNebula;
-  // FILM GRAIN (owner 2026-07-31): animated screen-space noise that rides the
-  // dome's OWN light — amplitude keys off how far the pixel has risen above
-  // the flat base, so the atmosphere gradient and nebulae shimmer like stock
-  // while the plain background (and the orrery, where the dome layers are
-  // dialled to zero) stays clean. Hash re-rolls at uGrain.z Hz; 0 freezes the
-  // grain into tooth, like a print.
+  // FILM GRAIN (owner 2026-07-31): noise that rides the dome's OWN light —
+  // amplitude keys off how far the pixel has risen above the flat base, so
+  // the atmosphere gradient and nebulae shimmer while the plain background
+  // (and the orrery, where the dome layers are dialled to zero) stays clean.
+  // The ANCHOR follows the speed dial (owner 2026-08-01): animated grain
+  // (speed > 0) lives in the LENS — screen-space, re-rolled at uGrain.z Hz,
+  // like stock — while frozen grain (speed 0) is print TOOTH, anchored to the
+  // sky direction so panning carries it with the wisps instead of sliding
+  // the sky under a dirty window. Sky cells are angular (~1/(700·scale) rad),
+  // so the telescope magnifies them — physically consistent for paper.
   if (uGrain.x > 0.001) {
-    float g = hash(vec3(floor(gl_FragCoord.xy * uGrain.y), floor(uTime * uGrain.z)));
+    // Frozen tooth uses SMOOTH value noise, not hash cells — under the
+    // telescope's magnification hard cells read as checkerboard; noise
+    // magnifies into soft mottle, like paper. (×1.6 restores the contrast
+    // interpolation averages away.)
+    float g = uGrain.z < 0.5
+      ? 0.5 + (noise(vDir * (700.0 * uGrain.y)) - 0.5) * 1.6
+      : hash(vec3(floor(gl_FragCoord.xy * uGrain.y), floor(uTime * uGrain.z)));
     float glow = dot(abs(col - uBase), vec3(1.0));
     col += (g - 0.5) * uGrain.x * glow;
   }
