@@ -197,44 +197,47 @@ const allFacts = [...walk(DOCS_ROOT)]
   .map((p) => fileFactFromDoc(relative(DOCS_ROOT, p), readFileSync(p, 'utf8')))
   .sort((a, b) => a.key.localeCompare(b.key));
 
-/** Change detection (ADR-0045 — docs-sync now runs on EVERY deploy, so blindly
- *  re-ingesting ~60 unchanged docs would bump ~60 revisions per deploy and
- *  pollute the trajectory with phantom activity). Read the live corpus's shas
- *  and ingest only new/changed files. Best-effort: if the read fails, fall
- *  through to the full (idempotent) ingest rather than skip the sync. */
+/** Change detection (ADR-0045; REBUILT 2026-08-01, cost review). The original
+ *  read the whole corpus back through `workspace.query {type:'markdown'}` to
+ *  compare shas — 202 docs WITH their bodies inline, ~1.9MB, which blows the
+ *  gateway's 60KB read budget. The catch called that "transient" and fell back
+ *  to FULL INGEST — so every deploy re-ingested and re-decomposed all ~200
+ *  docs, throttled the hot partition, and burned ~55M RCUs an hour. The
+ *  recurring storm was the change detector failing at its own job.
+ *
+ *  Now the shas live in ONE dedicated manifest fact (`_docs/sync-manifest`,
+ *  ~20KB, `_`-prefixed so it never reacts/indexes/announces) — one peek to
+ *  read, one write to update. And the fallback FAILS CLOSED: if the manifest
+ *  read errors, we skip the sync loudly rather than storm; an ABSENT manifest
+ *  (first run / bootstrap) is the one case that full-ingests, which then
+ *  writes the manifest and never storms again. */
+const MANIFEST_KEY = '_docs/sync-manifest';
 async function liveShas() {
-  const shas = new Map();
   try {
-    let cursor;
-    do {
-      const res = await call('read', 'workspace.query', { type: 'markdown', prefix: KEY_PREFIX, limit: 100, ...(cursor ? { cursor } : {}) });
-      for (const e of res.entries ?? []) if (e?.key && e.value?.sha) shas.set(e.key, e.value.sha);
-      cursor = res.nextCursor;
-    } while (cursor);
+    const res = await call('read', 'workspace.peek', { key: MANIFEST_KEY });
+    const v = res && typeof res === 'object' ? (res.value ?? null) : null;
+    const shas = v && typeof v.shas === 'object' && v.shas ? v.shas : null;
+    return shas ? new Map(Object.entries(shas)) : null; // null → bootstrap full ingest
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    // A SCOPE/auth failure is not "transient" — falling through would re-ingest
-    // AND re-decompose all ~194 docs (a slow, revision-polluting storm) purely
-    // because the token can't read. Bail hard so a scope mishap can't trigger a
-    // mass re-sync; the fix is a token with `read:workspace` (docs-sync needs
-    // both read + write), not a full ingest.
-    if (/scope_denied|invalid_token|unauthor/i.test(msg)) {
-      console.error(`\n  ✗ change-detection read failed on auth/scope: ${msg}`);
-      console.error(`  docs-sync needs a token with BOTH read:workspace AND write:workspace.`);
-      process.exit(1);
-    }
-    console.warn(`  ! live sha read failed transiently (${msg}) — falling back to full ingest`);
-    return null;
+    if (/not.?found|no such|absent/i.test(msg)) return null; // missing fact → bootstrap
+    // FAIL CLOSED: a failed change-detection read must never trigger a mass
+    // re-sync (that "recovery" was the storm). The corpus waits for the next
+    // deploy; if this persists, check the token (needs read: + write:workspace).
+    console.error(`\n  ✗ change-detection manifest read failed: ${msg}`);
+    console.error(`  Skipping docs-sync rather than full-ingesting ~200 docs. Fix the read and re-run.`);
+    process.exit(1);
   }
-  return shas;
 }
 
 let facts = allFacts;
 if (ONLY) facts = facts.filter((f) => f.key.includes(ONLY));
-if (COMMIT && !FORCE) {
-  const live = await liveShas();
-  if (live) facts = facts.filter((f) => live.get(f.key) !== f.value.sha);
-}
+// The manifest is read even under --force: the post-ingest manifest write
+// merges prior shas for anything that fails to land, so a crashed run retries
+// exactly its failures next time instead of the world.
+let live = null;
+if (COMMIT) live = await liveShas();
+if (COMMIT && !FORCE && live) facts = facts.filter((f) => live.get(f.key) !== f.value.sha);
 // The bound is on DOCUMENTS, because each one starts a decomposition chain.
 const selected = facts.length;
 if (Number.isFinite(MAX) && MAX > 0) facts = facts.slice(0, MAX);
@@ -281,7 +284,12 @@ for (const slice of batches) {
   try {
     const res = await call('act', 'workspace.ingest', { via: 'docs-sync', facts: slice });
     ingested += res.ingested ?? 0;
-    if (res.errors?.length) for (const e of res.errors) console.error('  ! ingest error', e.key, e.error);
+    if (res.errors?.length) {
+      for (const e of res.errors) {
+        console.error('  ! ingest error', e.key, e.error);
+        if (e.key) failedKeys.push(e.key); // a per-key failure must stay "changed" in the manifest
+      }
+    }
   } catch (err) {
     // A batch may fail (transient gateway) even after retries — keep going; the
     // run is idempotent, so the missed keys land on a re-run.
@@ -296,17 +304,50 @@ if (failedKeys.length) {
   for (const k of failedKeys) console.error(`  ${k}`);
 }
 
+// Persist the sha manifest: a doc that LANDED records its fresh sha; anything
+// that failed (or wasn't attempted) keeps its prior sha — so the next run's
+// change detection retries exactly the misses, never the world. Best-effort
+// with one retry: a lost manifest only costs one bootstrap full-ingest.
+{
+  const failed = new Set(failedKeys);
+  const attempted = new Set(facts.map((f) => f.key));
+  const shasOut = {};
+  for (const f of allFacts) {
+    if (attempted.has(f.key) && !failed.has(f.key)) shasOut[f.key] = f.value.sha;
+    else if (live?.has(f.key)) shasOut[f.key] = live.get(f.key);
+  }
+  const manifestValue = { shas: shasOut, at: new Date().toISOString(), docs: Object.keys(shasOut).length };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await call('act', 'workspace.remember', { key: MANIFEST_KEY, value: manifestValue });
+      console.log(`✓ sync manifest updated (${manifestValue.docs} shas)`);
+      break;
+    } catch (err) {
+      if (attempt === 1) console.error(`  ! manifest write failed (${(err && err.message) || err}) — next run will bootstrap-ingest`);
+      else await sleep(2000);
+    }
+  }
+}
+
 if (SHARE) {
   // Re-assert the CURATED public grants (idempotent — a re-share just refreshes
   // the grant). Deliberately does NOT touch the blanket `file/docs/*` grant, and
   // never UNSHARES: retracting a previously-public doc is an explicit owner act
   // (workspace.unshare), not a side effect of sync — so removing a base here
   // stops future publishing but won't silently revoke live access.
+  // Best-effort (2026-08-01): a throttled share must not exit-1 the step —
+  // tonight's storm died HERE after 127 ingests, stranding the manifest state.
   const patterns = publicSharePatterns();
+  let shared = 0;
   for (const key of patterns) {
-    await call('act', 'workspace.share', { key, to: 'public', mode: 'read' });
+    try {
+      await call('act', 'workspace.share', { key, to: 'public', mode: 'read' });
+      shared++;
+    } catch (err) {
+      console.error(`  ! share failed for ${key}: ${(err && err.message) || err}`);
+    }
   }
-  console.log(`✓ re-asserted ${patterns.length} curated public grants (guide + vision docs)`);
+  console.log(`✓ re-asserted ${shared}/${patterns.length} curated public grants (guide + vision docs)`);
 }
 console.log(`✓ docs corpus: ${ingested}/${facts.length} file facts upserted${failedKeys.length ? ` (${failedKeys.length} to retry)` : ''}`);
 
