@@ -285,6 +285,24 @@ export class PlatformStack extends cdk.Stack {
         bisectBatchOnError: true,
       }),
     );
+    // EVENT-DRIVEN WAIT WAKES (2026-08-01 cost review): the fanout already
+    // holds every stream record's full image, so it can see a machine run
+    // enter `waiting` with zero extra reads and mint a ONE-SHOT EventBridge
+    // Scheduler entry that fires machine.tick.requested at the deadline —
+    // queue-triggered check-ins instead of a continuous poll. The schedule
+    // targets the platform bus (never the Lambda directly: a bus ARN is not
+    // self-referential, and the route below is the one consumer).
+    const waitSchedulerRole = new iam.Role(this, 'MachineWaitSchedulerRole', {
+      assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+    });
+    eventBus.grantPutEvents(waitSchedulerRole);
+    factFanout.addEnvironment('MACHINE_WAIT_SCHEDULER_ROLE_ARN', waitSchedulerRole.roleArn);
+    factFanout.addEnvironment('MACHINE_WAIT_EVENT_BUS_ARN', eventBus.bus.eventBusArn);
+    factFanout.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['scheduler:CreateSchedule', 'scheduler:UpdateSchedule'], resources: ['*'] }),
+    );
+    factFanout.addToRolePolicy(new iam.PolicyStatement({ actions: ['iam:PassRole'], resources: [waitSchedulerRole.roleArn] }));
+    eventBus.routeTo('MachineWaitWakeRoute', workspace.fn, ['machine.tick.requested'], 'platform.machine-tick');
 
     // The organ-to-reef write path: dynamic cells (source IAM-pinned to their
     // cell-<id>) emit substrate.write.requested; the workspace applies the
@@ -330,11 +348,16 @@ export class PlatformStack extends cdk.Stack {
         }),
       ],
     });
-    // The machine tick: a 1-minute schedule resumes machine runs whose `wait`-rail
-    // deadline has passed (the autonomous half of the wait primitive — ADR §13).
-    // The handler bumps each due waiting run to `running`, re-firing its step sub.
+    // The machine tick, demoted to an HOURLY safety net + reaper (2026-08-01
+    // cost review): the old 1-minute cron read every machine-run fact 43k
+    // times a month — ~$16/mo of DynamoDB, the entire idle floor — to guard
+    // waits that fire a few times a day. Precision wakes are EVENT-DRIVEN now:
+    // the fact fanout creates a one-shot EventBridge Scheduler entry the
+    // moment a run enters `waiting` (see MachineWaitSchedulerRole below), so
+    // this cron only catches leaked runs (the reaper) and any wake a schedule
+    // failed to deliver.
     new awsevents.Rule(this, 'MachineTickSchedule', {
-      schedule: awsevents.Schedule.rate(cdk.Duration.minutes(1)),
+      schedule: awsevents.Schedule.rate(cdk.Duration.hours(1)),
       targets: [
         new eventTargets.LambdaFunction(workspace.fn, {
           event: awsevents.RuleTargetInput.fromObject({

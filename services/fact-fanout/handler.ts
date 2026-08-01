@@ -53,6 +53,8 @@ interface FactItem {
   key?: string;
   revision?: number;
   superseded?: boolean;
+  type?: string | null;
+  value?: unknown;
 }
 
 export interface FactWrittenDetail {
@@ -82,9 +84,84 @@ export function planFactEvents(event: StreamEvent): FactWrittenDetail[] {
   return out;
 }
 
+/** A machine run entering `waiting` — the trigger for a one-shot wake. */
+export interface WaitWake {
+  scope: string;
+  key: string;
+  waitUntil: string;
+}
+
+/** Pure: the wait-wake schedules a stream batch implies (2026-08-01 cost
+ *  review). The fanout holds each record's full image, so seeing a run enter
+ *  `waiting` costs no extra read — this is what lets the machine tick be
+ *  queue-triggered instead of a minutely poll. */
+export function planWaitWakes(event: StreamEvent): WaitWake[] {
+  const out: WaitWake[] = [];
+  for (const r of event.Records ?? []) {
+    if (r.eventName === 'REMOVE') continue;
+    const img = r.dynamodb?.NewImage ? (unmarshall(r.dynamodb.NewImage as DynamoDB.DocumentClient.AttributeMap) as FactItem) : null;
+    if (!img || typeof img.sk !== 'string' || !img.sk.startsWith('KEY#')) continue;
+    if (img.type !== 'machine-run' || img.superseded) continue;
+    if (typeof img.scope !== 'string' || typeof img.key !== 'string') continue;
+    const v = img.value as { status?: string; waitUntil?: string } | null | undefined;
+    if (!v || v.status !== 'waiting' || typeof v.waitUntil !== 'string') continue;
+    if (!Number.isFinite(Date.parse(v.waitUntil))) continue;
+    out.push({ scope: img.scope, key: img.key, waitUntil: v.waitUntil });
+  }
+  return out;
+}
+
+/** Mint one-shot EventBridge Scheduler entries for this batch's waits. The
+ *  schedule fires `machine.tick.requested` onto the platform bus at the
+ *  deadline (+5s so the stepper sees an elapsed wait) and deletes itself.
+ *  Idempotent per run (name = hash of scope|key; a re-entered wait updates in
+ *  place). Best-effort: a scheduling failure must never poison the stream
+ *  batch — the hourly tick cron is the safety net that still catches it. */
+async function scheduleWaitWakes(wakes: WaitWake[]): Promise<void> {
+  const roleArn = process.env.MACHINE_WAIT_SCHEDULER_ROLE_ARN;
+  const busArn = process.env.MACHINE_WAIT_EVENT_BUS_ARN;
+  if (!roleArn || !busArn || !wakes.length) return;
+  const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = await import('@aws-sdk/client-scheduler');
+  const { createHash } = await import('node:crypto');
+  const client = new SchedulerClient({});
+  for (const w of wakes) {
+    // Fire just past the deadline; clamp an already-elapsed wait to the near
+    // future (Scheduler rejects at() expressions in the past).
+    const at = new Date(Math.max(Date.parse(w.waitUntil) + 5_000, Date.now() + 15_000));
+    const schedule = {
+      Name: `machine-wait-${createHash('sha1').update(`${w.scope}|${w.key}`).digest('hex').slice(0, 16)}`,
+      ScheduleExpression: `at(${at.toISOString().slice(0, 19)})`,
+      FlexibleTimeWindow: { Mode: 'OFF' as const },
+      ActionAfterCompletion: 'DELETE' as const,
+      Target: {
+        Arn: busArn,
+        RoleArn: roleArn,
+        // For a bus target, Input is the event DETAIL — the same shape the
+        // tick cron sends, so createMachineTickHandler works unchanged.
+        EventBridgeParameters: { DetailType: 'machine.tick.requested', Source: 'platform.machine-tick' },
+        Input: JSON.stringify({ scopes: [w.scope] }),
+      },
+    };
+    try {
+      await client.send(new CreateScheduleCommand(schedule));
+    } catch (err) {
+      if ((err as { name?: string }).name === 'ConflictException') {
+        try {
+          await client.send(new UpdateScheduleCommand(schedule));
+        } catch (err2) {
+          console.warn('wait-wake schedule update failed (hourly tick will catch it)', { key: w.key, error: (err2 as Error).message });
+        }
+      } else {
+        console.warn('wait-wake schedule failed (hourly tick will catch it)', { key: w.key, error: (err as Error).message });
+      }
+    }
+  }
+}
+
 export async function handler(event: StreamEvent): Promise<void> {
   const busName = process.env.EVENT_BUS_NAME;
   if (!busName) return; // bus not configured → no-op (safe)
+  await scheduleWaitWakes(planWaitWakes(event));
   const events = createEvents({ source: 'workspace', busName });
   for (const detail of planFactEvents(event)) {
     await events.emit('workspace.fact.written', { ...detail });
