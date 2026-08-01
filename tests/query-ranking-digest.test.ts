@@ -9,8 +9,10 @@
  * so warm pages are point-gets over just the page's records.
  *
  * The contract under test: a warm page is INDISTINGUISHABLE from the cold page
- * it replaces, invalidation is exact (any write), and every filtered or exotic
- * query bypasses the digest — a top-N cache must never answer a
+ * it replaces, invalidation is BOUNDED-STALE (a write invalidates at the next
+ * grace-window boundary, not instantly — 2026-08-01 cost review: seq-exact
+ * invalidation made every write burst re-rank the world), and every filtered
+ * or exotic query bypasses the digest — a top-N cache must never answer a
  * differently-shaped question (the grant fold's `total` starvation was exactly
  * a cache-shaped candidate set answering the wrong question).
  */
@@ -58,10 +60,21 @@ describe('the ranking digest', () => {
     }
   });
 
-  it('any write invalidates: a new fact appears on the next page-1 read', async () => {
-    const { state } = await seed();
+  it('bounded staleness (2026-08-01 cost review): within the grace window a write serves the stale ranking; past it, the write appears', async () => {
+    const { store, state } = await seed();
     await state.query('o', { limit: 5 }, ID); // digest written
     await state.put({ scope: 'o', key: 'kb/fresh', value: { title: 'fresh' }, type: 'knowledge' }, ID);
+    // WITHIN the grace window the digest still serves — a write burst costs at
+    // most one cold re-rank per window, and the map lags by seconds. The fresh
+    // fact is deliberately absent here (the documented trade).
+    const during = await state.query('o', { limit: 100 }, ID);
+    expect(during.entries.map((e) => e.key)).not.toContain('kb/fresh');
+    expect(during.total).toBe(25);
+    // Age the digest past the grace window (raw-store rewrite of `at`): the
+    // seq mismatch now invalidates, the cold path re-ranks, the write appears.
+    const dig = (await store.get('o', RANKING_KEY))!;
+    const aged = { ...(dig.value as Record<string, unknown>), at: new Date(Date.now() - 46_000).toISOString() };
+    await store.put({ ...dig, value: aged });
     const after = await state.query('o', { limit: 100 }, ID);
     expect(after.entries.map((e) => e.key)).toContain('kb/fresh');
     expect(after.total).toBe(26);

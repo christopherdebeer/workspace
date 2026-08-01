@@ -62,58 +62,41 @@ jobs:
       - name: Bootstrap CDK (us-east-1)
         run: npm run cdk -- bootstrap --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
 
-      - name: Bootstrap CDK (eu-west-2)
-        run: CDK_DEFAULT_REGION=eu-west-2 npm run cdk -- bootstrap aws://018159942401/eu-west-2 --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
-
-      - name: Prepare workspace instance for deploy
+      # One-time retirement (2026-08-01 cost review): the eu-west-2 Tailscale
+      # dev box was unused and its idle EBS cost ~$13/mo. Snapshot the data
+      # volume (cheap insurance — delete the snapshot when confident), delete
+      # the stack (terminates the instance + its root volume), then delete the
+      # RETAINed data volume. Idempotent: a no-op once the stack is gone.
+      # Remove this step in a later cleanup pass.
+      - name: Retire the workspace EC2 stack
+        continue-on-error: true
         run: |
-          INSTANCE_ID=$(aws cloudformation describe-stacks \
-            --stack-name WorkspaceEc2Stack \
-            --region eu-west-2 \
-            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
-            --output text 2>/dev/null) || true
-
-          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
-            echo "No existing workspace instance found — first deploy."
+          REGION=eu-west-2
+          if ! aws cloudformation describe-stacks --stack-name WorkspaceEc2Stack --region $REGION >/dev/null 2>&1; then
+            echo "WorkspaceEc2Stack already gone - nothing to retire."
             exit 0
           fi
-
-          STATE=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region eu-west-2 \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text 2>/dev/null) || true
-
-          echo "Instance $INSTANCE_ID is $STATE"
-
-          # Stop if running (triggers graceful shutdown service)
-          if [ "$STATE" = "running" ]; then
-            echo "Stopping instance..."
-            aws ec2 stop-instances --instance-ids "$INSTANCE_ID" --region eu-west-2
-            aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" --region eu-west-2
-            echo "Instance stopped."
-          fi
-
-          # Detach data volume (stopping doesn't detach EBS volumes)
-          VOLUME_ID=$(aws cloudformation describe-stacks \
-            --stack-name WorkspaceEc2Stack \
-            --region eu-west-2 \
-            --query "Stacks[0].Outputs[?OutputKey=='DataVolumeId'].OutputValue" \
-            --output text 2>/dev/null) || true
-
+          VOLUME_ID=$(aws cloudformation describe-stacks --stack-name WorkspaceEc2Stack --region $REGION \
+            --query "Stacks[0].Outputs[?OutputKey=='DataVolumeId'].OutputValue" --output text 2>/dev/null) || true
           if [ -n "$VOLUME_ID" ] && [ "$VOLUME_ID" != "None" ]; then
-            echo "Detaching volume $VOLUME_ID..."
-            aws ec2 detach-volume --volume-id "$VOLUME_ID" --region eu-west-2 2>/dev/null || true
-            for i in $(seq 1 30); do
-              VOL_STATE=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region eu-west-2 \
-                --query 'Volumes[0].State' --output text 2>/dev/null) || true
-              if [ "$VOL_STATE" = "available" ]; then
-                echo "Volume detached."
-                break
-              fi
-              sleep 2
-            done
+            echo "Final snapshot of $VOLUME_ID before retirement..."
+            aws ec2 create-snapshot --volume-id "$VOLUME_ID" --region $REGION \
+              --description "workspace-ec2 final snapshot before retirement (2026-08-01 cost review)" \
+              --tag-specifications 'ResourceType=snapshot,Tags=[{Key=Name,Value=workspace-ec2-final}]' || true
           fi
+          echo "Deleting WorkspaceEc2Stack..."
+          aws cloudformation delete-stack --stack-name WorkspaceEc2Stack --region $REGION
+          aws cloudformation wait stack-delete-complete --stack-name WorkspaceEc2Stack --region $REGION || true
+          if [ -n "$VOLUME_ID" ] && [ "$VOLUME_ID" != "None" ]; then
+            echo "Deleting retained data volume $VOLUME_ID..."
+            for i in $(seq 1 36); do
+              STATE=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region $REGION --query 'Volumes[0].State' --output text 2>/dev/null) || break
+              [ "$STATE" = "available" ] && break
+              sleep 5
+            done
+            aws ec2 delete-volume --volume-id "$VOLUME_ID" --region $REGION || true
+          fi
+          echo "Retired."
 
       - name: Deploy CDK
         env:
@@ -144,4 +127,4 @@ jobs:
             echo "PARC_TOKEN secret not set — skipping docs-sync (mint one: act auth.mintToken {scope:'read:workspace write:workspace', label:'docs-sync-ci'})"
             exit 0
           fi
-          node scripts/docs-sync.mjs --commit ${{ inputs.force_docs_sync && '--force' || '' }}
+          node scripts/docs-sync.mjs --commit --delay 3000 ${{ inputs.force_docs_sync && '--force' || '' }}

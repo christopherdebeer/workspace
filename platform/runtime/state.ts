@@ -548,6 +548,12 @@ export const RANKING_CAP = 1200;
  *  and band membership slowly, and TTL reaps don't advance seq — an hour
  *  bounds both drifts. Same tolerance as the recall digest. */
 export const RANKING_MAX_AGE_MS = 60 * 60 * 1000;
+/** Bounded staleness under churn (2026-08-01 cost review): a digest whose seq
+ *  is behind head still serves if younger than this — so a write burst costs
+ *  at most one cold full-partition re-rank per grace window instead of one
+ *  per write. The map lags fresh writes by ≤ this; ranking is presentation,
+ *  not truth, and every fact read hydrates by point-get regardless. */
+export const RANKING_STALE_GRACE_MS = 45 * 1000;
 
 /** The ranking digest's stored shape (parallel arrays keep the item compact). */
 interface RankingDigest {
@@ -1686,21 +1692,31 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     return layerTypeBias(learned, asserted);
   }
 
-  /** The scope's cached bare-query ranking, when seq-exact and fresh (see the
-   *  hot-path comment in `query`). Malformed or drifted → `null`, cold path. */
+  /** The scope's cached bare-query ranking (see the hot-path comment in
+   *  `query`). Served when seq-exact — OR when merely SECONDS stale (bounded
+   *  staleness, 2026-08-01 cost review): the old seq-exact-only rule meant a
+   *  WRITE BURST (docs-sync chains, a tuner drag, a cell push) invalidated the
+   *  digest on every write, sending every concurrent page query cold — two
+   *  full-partition reads each, thousands of times per burst (the Jul 29-30
+   *  storm re-ranked its way to ~900M RRUs). A star map does not need
+   *  write-level freshness: during churn we serve a ranking up to
+   *  {@link RANKING_STALE_GRACE_MS} old and let AT MOST one cold recompute per
+   *  grace window absorb the drift. Malformed or genuinely stale → `null`,
+   *  cold path. */
   async function readRanking(scope: string): Promise<RankingDigest | null> {
     try {
       const [rec, head] = await Promise.all([store.get(scope, RANKING_KEY), store.currentSeq(scope)]);
       const v = rec?.value as RankingDigest | undefined;
-      const fresh =
+      const shaped =
         !!v &&
         typeof v.seq === 'number' &&
         typeof v.total === 'number' &&
         Array.isArray(v.keys) &&
         Array.isArray(v.degrees) &&
         v.keys.length === v.degrees.length &&
-        v.seq === head &&
         Date.now() - Date.parse(v.at) < RANKING_MAX_AGE_MS;
+      if (!shaped) return null;
+      const fresh = v.seq === head || Date.now() - Date.parse(v.at) < RANKING_STALE_GRACE_MS;
       return fresh ? v : null;
     } catch {
       return null;
@@ -1711,8 +1727,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
    *  the scope's ranking digest — raw-store write (a cache is not a fact: no
    *  seq advance, no trajectory, no reaction), best-effort like the recall
    *  digest. Degree rides along because it is the one `wrap` input that needs
-   *  the full-partition reads; caching it is safe because any fact/edge write
-   *  advances seq and invalidates the whole digest. */
+   *  the full-partition reads; a write invalidates the digest at the next
+   *  grace-window boundary (see readRanking's bounded staleness), so a cached
+   *  degree is never more than seconds behind. */
   async function writeRanking(
     scope: string,
     head: number,
