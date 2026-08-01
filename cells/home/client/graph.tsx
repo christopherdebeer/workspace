@@ -149,6 +149,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
     let onResult: ((ev: Event) => void) | null = null;
     let cleanup: (() => void) | null = null;
     let changeTimer: number | null = null;
+    let pollGateCleanup: (() => void) | null = null;
     let changePolling = false;
 
     // Progressive mount (2026-07-11 follow-up to the query/edges pagination
@@ -3613,8 +3614,34 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
           changePolling = false;
         }
       };
+      // POLL GATING (2026-08-01 cost review): the change poll ran every 12s
+      // for as long as the tab lived — a hidden or abandoned tab polled the
+      // membrane forever (gateway + workspace Lambda + a capability touch per
+      // poll, ~7k dispatches per tab-day). Poll only while the tab is VISIBLE
+      // and the human has interacted in the last 5 minutes; `sinceSeq`
+      // persists across the pause, so waking fires one catch-up poll and no
+      // change is ever missed — the feed resumes where it left off.
+      const POLL_IDLE_MS = 5 * 60_000;
+      let lastInteraction = Date.now();
+      const notePollActivity = (): void => { lastInteraction = Date.now(); };
+      const pollGateOpen = (): boolean =>
+        (typeof document === 'undefined' || document.visibilityState === 'visible') &&
+        Date.now() - lastInteraction < POLL_IDLE_MS;
+      const onPollVisibility = (): void => {
+        if (document.visibilityState === 'visible') { notePollActivity(); void pollChanges(); }
+      };
+      window.addEventListener('pointerdown', notePollActivity, { passive: true });
+      window.addEventListener('wheel', notePollActivity, { passive: true });
+      window.addEventListener('keydown', notePollActivity, { passive: true });
+      document.addEventListener('visibilitychange', onPollVisibility);
+      pollGateCleanup = () => {
+        window.removeEventListener('pointerdown', notePollActivity);
+        window.removeEventListener('wheel', notePollActivity);
+        window.removeEventListener('keydown', notePollActivity);
+        document.removeEventListener('visibilitychange', onPollVisibility);
+      };
       void pollChanges();
-      changeTimer = window.setInterval(() => { void pollChanges(); }, CHANGE_POLL_MS);
+      changeTimer = window.setInterval(() => { if (pollGateOpen()) void pollChanges(); }, CHANGE_POLL_MS);
     })().catch((err) => {
       (window.reportError ?? console.error)(err);
       // A rejected fetch/setup left the scene host empty — a blank page reads as
@@ -3630,6 +3657,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
     return () => {
       disposed = true;
       if (changeTimer !== null) clearInterval(changeTimer);
+      pollGateCleanup?.();
       if (raf) cancelAnimationFrame(raf);
       ro?.disconnect();
       if (onResult) window.removeEventListener(CONSOLE_RESULT_EVENT, onResult);

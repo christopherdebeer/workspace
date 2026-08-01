@@ -65,9 +65,11 @@ const projection = createProjection(read as (t: string, i?: unknown) => Promise<
     };
   },
   apply: (events) => applyBoardEvents(events),
-  // Adaptive cadence: 6s while the human is here, 30s once they've been idle
-  // a couple of minutes — an untouched board must not poll at edit speed.
-  intervalMs: () => (Date.now() - lastActivity < 120_000 ? 6000 : 30_000),
+  // Adaptive cadence: 6s while the human is here, 60s once they've been idle
+  // a couple of minutes — an untouched board must not poll at edit speed
+  // (2026-08-01 cost review: idle stretched 30s → 60s; hidden tabs already
+  // read nothing — the kernel projection skips the pump on document.hidden).
+  intervalMs: () => (Date.now() - lastActivity < 120_000 ? 6000 : 60_000),
 });
 projection.subscribe(() => {
   const cc = typeof window !== 'undefined' ? (window as { CC?: any }).CC : undefined;

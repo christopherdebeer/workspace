@@ -91,7 +91,11 @@ export function registerSubstrateTypes(): void {
       sizeToElement(el, host);
       void hydrate(host);
       if (!inertEmbed()) (host as any)._timer = setInterval(() => {
-        // No refetch while culled off-screen — the timer outlives the paint.
+        // No refetch while the TAB is hidden (2026-08-01 cost review: each
+        // hydrate is a workspace.evaluate — the seconds-long, read-heavy verb
+        // — and a backgrounded board re-ran it per tile per minute forever)…
+        if (typeof document !== 'undefined' && document.hidden) return;
+        // …or while culled off-screen — the timer outlives the paint.
         if ((host.closest('.canvas-element') as HTMLElement | null)?.style.contentVisibility === 'hidden') return;
         void hydrate(host);
       }, REFRESH_MS);

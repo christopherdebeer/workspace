@@ -94,5 +94,10 @@ export function startSalience(canvasId: string): void {
 
   setTimeout(apply, 1500);
   setInterval(apply, APPLY_MS);
-  setInterval(refresh, REFRESH_MS);
+  // Refresh is a NETWORK read — gate it on visibility (2026-08-01 cost
+  // review: a hidden tab re-queried the board's salience every 90s forever;
+  // `apply` above is purely local and keeps its cadence).
+  setInterval(() => {
+    if (typeof document === 'undefined' || !document.hidden) void refresh();
+  }, REFRESH_MS);
 }
