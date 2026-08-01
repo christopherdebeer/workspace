@@ -1,5 +1,25 @@
 # July 2026 AWS bill: root cause and fix plan
 
+> **Measured update (2026-08-01, via the new `workspace.metrics` verb).**
+> The read curve settles it: **~900M of the month's 1.29B RRUs (70%) landed
+> in one ~48h window, July 29–30** — the vendor-mirror + lit-decomposition
+> backfill (643M + 256M RCU/day, against a ~5.5M/day resting baseline and
+> 32–47M on active dev days). Lambda matches: the workspace function burned
+> **152 hours of compute in that single day** (549M ms; 128,619
+> invocations at ~4.3s each) out of 245h across the whole fortnight; the
+> gateway 149M ms, lit 94M ms, the indexer 50M ms / 20k invocations the
+> same day. So the bill is dominated by ONE ingestion chain-reaction, not
+> a steady leak — but the amplification it exposes (per-write: 3 stream
+> consumers + reaction + digest invalidation forcing every concurrent
+> query cold + indexer `listEdges` + projection read-patch-write) is
+> structural and will reprice every future bulk ingest the same way.
+> Demoted: the anonymous-SSR hypothesis — the home cell's Lambda totalled
+> just 1.3M ms in 14 days; at current traffic SSR is noise. Priorities
+> below re-ranked accordingly: bound the ingestion amplification first,
+> digest-vs-irrelevant-writes second (the active-day cost), SSR caching
+> demoted to hygiene. Baseline burn at rest ≈ $21/mo of DynamoDB — the
+> resting system is fine.
+
 $256.10 for July (pre-tax $213.40 + VAT), up ~9× month over month. For a
 personal workspace this should be $20–50. This doc decomposes the bill,
 traces each line to code, and orders the fixes.
