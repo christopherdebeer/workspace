@@ -1151,4 +1151,59 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       },
     },
   },
+  {
+    name: 'metrics',
+    description:
+      "Read the platform's own CloudWatch metrics — the infra-side sibling of `athena` (that sees what the substrate did; this sees what the infra spent doing it: DynamoDB consumed capacity, Lambda invocations/duration, etc). ADMIN ONLY (platform:*). Discovery: `list: {namespace}` enumerates metrics + dimension sets (e.g. namespace 'AWS/DynamoDB'). Fetch: `queries: [{namespace, metricName, dimensions, stat, period}]` (≤10) over `hours` (≤336) returns timestamped series with sums. Read-only by construction.",
+    scope: 'platform:*',
+    kind: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        list: {
+          type: 'object',
+          properties: { namespace: { type: 'string' }, metricName: { type: 'string' } },
+          required: ['namespace'],
+          additionalProperties: false,
+        },
+        queries: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              namespace: { type: 'string' },
+              metricName: { type: 'string' },
+              dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+              stat: { type: 'string', description: 'Sum | Average | Maximum | Minimum | SampleCount | p99 … (default Sum)' },
+              period: { type: 'number', description: 'seconds, min 60 (default 3600)' },
+              label: { type: 'string' },
+            },
+            required: ['namespace', 'metricName'],
+            additionalProperties: false,
+          },
+        },
+        hours: { type: 'number', description: 'lookback window, 1–336 (default 24)' },
+      },
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: {
+        series: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string' },
+              timestamps: { type: 'array', items: { type: 'string' } },
+              values: { type: 'array', items: { type: 'number' } },
+              sum: { type: 'number' },
+            },
+          },
+        },
+        metrics: { type: 'array', items: { type: 'object' } },
+        window: { type: 'object' },
+      },
+    },
+  },
 ];

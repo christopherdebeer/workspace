@@ -242,6 +242,13 @@ export class PlatformStack extends cdk.Stack {
     analytics.grantPutRecords(archiver);
     // The admin-gated `workspace.athena` SQL surface reads the lake via Athena.
     analytics.grantQuery(workspace.fn);
+    // The admin-gated `workspace.metrics` surface reads the platform's own
+    // CloudWatch metrics (docs/cost-review-2026-07.md: the bill review had no
+    // eye on infra consumption from inside the membrane). Read-only actions;
+    // CloudWatch metrics APIs are account-scoped, hence resources: ['*'].
+    workspace.fn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'], resources: ['*'] }),
+    );
     archiver.addEventSource(
       new DynamoEventSource(substrate.table, {
         startingPosition: lambda.StartingPosition.LATEST, // archive from now forward
