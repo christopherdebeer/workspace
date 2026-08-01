@@ -324,7 +324,7 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'edgeMember', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeDerived', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeAuthored', group: 'edges', min: 0, max: 1, step: 0.005 },
-  { key: 'dashFreq', group: 'edges', label: 'dash scale', min: 5, max: 120, step: 1 },
+  { key: 'dashFreq', group: 'edges', label: 'dash scale', min: 5, max: 360, step: 1 },
   { key: 'dashAuthored', group: 'edges', label: 'authored dash', min: 0.15, max: 1, step: 0.01 },
   { key: 'dashMember', group: 'edges', label: 'member dash', min: 0.15, max: 1, step: 0.01 },
   { key: 'dashDerived', group: 'edges', label: 'derived dash', min: 0.15, max: 1, step: 0.01 },
