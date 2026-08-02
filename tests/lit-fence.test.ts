@@ -3,7 +3,7 @@
  * whole, with a faithful serializer. The worked example is pinned VERBATIM
  * from dotlit `src/parser/parser.lit:60-104` — the upstream spec's own test.
  */
-import { parseFenceMeta, fenceToString, fenceTagsOf } from '../cells/lit/fence';
+import { parseFenceMeta, fenceToString, fenceTagsOf } from '../platform/ui/fence';
 
 describe('parseFenceMeta — the full dotlit grammar', () => {
   it('parses the pinned dotlit spec example (parser.lit)', () => {

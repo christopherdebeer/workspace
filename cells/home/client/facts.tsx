@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
 import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
+import { ViewerBody } from './viewers';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -200,7 +201,7 @@ function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone
       if (!md) return null;
       // Fact links ([[wiki]]s) in any markdown body open in place, with an
       // origin-aware href for new-tab (`/r/` exists only at the apex).
-      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     case 'image': {
       const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
@@ -279,38 +280,9 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
   );
 }
 
-// ─── the shared PURE VIEWERS (@c15r/viewers) ───────────────────────
-// json tree / csv table / mermaid / style — one validated implementation, the
-// same module canvas re-exports and lit's fences import. Home consumes it the
-// same way (dynamic import of the cell's ESM face), rather than re-hand-rolling
-// a JSON dump — so a structured/undeclared fact reads as a real tree, not a
-// raw stringify. Lazy + cached: the ~18KB module loads only when a viewer is
-// actually needed (never on the SSR path — this mounts in an effect).
-const VIEWERS_URL = 'https://parc.land/@c15r/viewers/app.js';
-type ViewersModule = { renderFence: (host: HTMLElement, lang: string, code: string) => boolean };
-let viewersMod: Promise<ViewersModule> | null = null;
-const loadViewers = (): Promise<ViewersModule> =>
-  (viewersMod ??= import(/* @vite-ignore */ VIEWERS_URL) as Promise<ViewersModule>);
-
-/** Mount a pure viewer (json/csv/mermaid/style) for a string body, via the
- *  shared @c15r/viewers module. Imperative host (like the graph): React owns
- *  the wrapper, the viewer owns the inner DOM. Degrades to a <pre> if the
- *  module can't load (offline) so content is never lost. */
-function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.Element {
-  const host = React.useRef<HTMLDivElement | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    const el = host.current;
-    if (!el) return;
-    let live = true;
-    loadViewers()
-      .then((v) => { if (live && el) v.renderFence(el, lang, code); })
-      .catch(() => { if (live) setFailed(true); });
-    return () => { live = false; if (el) el.innerHTML = ''; };
-  }, [lang, code]);
-  if (failed) return <pre style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '0.8rem' }}>{code}</pre>;
-  return <div ref={host} style={{ maxWidth: '100%', overflow: 'auto' }} />;
-}
+// The shared PURE VIEWERS (@c15r/viewers) now live in `./viewers`, so a FENCE
+// and a whole-fact `render` hint reach the same implementation (see that
+// module's header, and docs/home-hosts-lit.md).
 
 /**
  * A WHOLE doc, assembled from its blocks. A `doc` fact holds only {title,summary}
@@ -421,7 +393,9 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: List
   // THIS doc's corpus directory, and fact links open in place via the peek
   // modal — docs are navigable on home, not just readable.
   const mdBase = dm ? `docs/${dm[2]}`.replace(/\/[^/]*$/, '') : undefined;
-  const onFactLink = (k: string): void => openFact({ key: k });
+  // `[[key#member]]` (ADR-0061) opens the target scrolled to that member —
+  // the same anchor the member banner's "part of" jump uses.
+  const onFactLink = (k: string, frag?: string): void => openFact({ key: k }, frag);
   // Origin-aware fact hrefs: `/r/<key>` exists only at the apex, so localize
   // (→ apex-absolute) keeps new-tab/middle-click navigable when home is
   // served from its own cell subdomain.
@@ -525,7 +499,7 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark', initia
       return (
         <div style={{ display: 'grid' }}>
           <MemberContext e={e} tagPrefix={memberTagPrefix} tone={tone} />
-          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
+          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
         </div>
       );
     }
@@ -561,7 +535,7 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark', initia
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     // A structured value with no declared viewer reads as a collapsible JSON

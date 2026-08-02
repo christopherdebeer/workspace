@@ -56,6 +56,36 @@
     .fact-md th,.fact-md td{border:1px solid var(--md-border);padding:.25em .55em;text-align:left}
     .fact-md th{background:var(--md-th-bg)}
     .fact-md img{border-radius:8px}
+
+    /* — fences as DECLARATIONS (ADR-0059/0063, docs/home-hosts-lit.md) —
+       The fence line is the block's vocabulary (viewer=, repl=, !directive,
+       #tag, < in, > out), so it is drawn, not dropped. Same class names and
+       shapes lit emits, tone-aware here because home reads on ink AND paper:
+       one stylesheet vocabulary, two grounds. */
+    .fact-md .fence,.fact-md .md-fence{margin:.6em 0}
+    .fact-md .fence-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin:0 0 .3em;font:600 .68em ui-monospace,SFMono-Regular,Menlo,monospace}
+    .fact-md .fchip{
+      border-left:3px solid var(--md-rule);
+      background:var(--md-icode-bg);
+      color:inherit;opacity:.85;
+      padding:.1em .45em;border-radius:0 4px 4px 0;white-space:nowrap;
+    }
+    .fact-md .fchip.fc-lang{opacity:1;font-weight:700}
+    .fact-md .fchip.fc-out{border-left-color:var(--md-link);opacity:1}
+    .fact-md .fchip.fc-error{border-left-color:#b5523c}
+    .fact-md .fchip.fc-link a{text-decoration:none;color:var(--md-link)}
+    .fact-md .fence-chips+pre{margin-top:0}
+    /* An output cell is something a run PRODUCED — dashed plate, so it reads
+       as accreted rather than authored. */
+    .fact-md .fence-output>pre{border:1px dashed var(--md-border)}
+    /* ```md renders AS markdown; a directive makes it a callout (dotlit's
+       admonitions, verified against lit's styling_and_themes). */
+    .fact-md .md-fence{border-left:2px solid var(--md-border);padding-left:.9em}
+    .fact-md .md-fence[class*=dir-]{border:1px solid var(--md-border);border-left-width:4px;border-radius:8px;padding:.55em .9em}
+    .fact-md .md-fence.dir-warn{border-left-color:#c78a1d}
+    .fact-md .md-fence.dir-error{border-left-color:#b5523c}
+    .fact-md .md-fence.dir-info{border-left-color:#3b6ea5}
+    .fact-md .md-fence.dir-success,.fact-md .md-fence.dir-note{border-left-color:var(--md-link)}
   </style>
 </head>
 <body>
