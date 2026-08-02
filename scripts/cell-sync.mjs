@@ -129,7 +129,10 @@ if (cmd === 'pull') {
   for (const f of local) {
     if (!f.match(/\.(ts|tsx|js|mjs)$/)) continue;
     const src = readFileSync(join(localRoot, f), 'utf8');
-    for (const m of src.matchAll(/vendor\/([\w-]+\.js)/g)) referenced.add(m[1]);
+    // Only the IMPORT SPECIFIER form (`./vendor/<module>.js`) names a kernel-SDK
+    // module — a bare `vendor/…` substring can be part of an unrelated URL
+    // (home's self-hosted three bundle lives at …/public/vendor/….js).
+    for (const m of src.matchAll(/\.\/vendor\/([\w-]+\.js)/g)) referenced.add(m[1]);
   }
   for (const mod of referenced) {
     const content = readFileSync(join(sdkRoot, mod), 'utf8');

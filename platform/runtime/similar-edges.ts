@@ -47,9 +47,10 @@ export function authoredPairs(existing: EdgeRecord[]): Set<string> {
  * Reconcile `key`'s outbound `similarTo` edges to exactly the neighbours *not already
  * connected by an authored edge* (delete stale, add new) — idempotent, so re-indexing a
  * fact whose neighbours shifted self-heals, and a neighbour that later gains a real edge
- * has its redundant kinship pruned on the next pass. `existing` is the scope's full edge
- * list (read once per batch); `nowIso` stamps new edges (callers pass a timestamp — keeps
- * this pure of the clock).
+ * has its redundant kinship pruned on the next pass. `existing` is the edge set TOUCHING
+ * `key` (both directions — per-key queries since the 2026-08-01 cost review; a full scope
+ * list also works, it's a superset); `nowIso` stamps new edges (callers pass a timestamp —
+ * keeps this pure of the clock).
  */
 export async function refreshSimilarEdges(
   io: EdgeIO,

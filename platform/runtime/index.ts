@@ -53,6 +53,7 @@ export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manife
 export {
   createObservedState,
   createMemoryStateStore,
+  reconcileDegrees,
   computeScore,
   extractTypeRules,
   deriveBackboneEdges,
@@ -69,6 +70,10 @@ export {
   SALIENCE_CONFIG_KEY,
   LENSES_CONFIG_KEY,
   TYPE_BIAS_KEY,
+  RANKING_KEY,
+  RANKING_CAP,
+  RANKING_MAX_AGE_MS,
+  isBareSalienceQuery,
   learnTypePriors,
   layerTypeBias,
   parseLensesConfig,

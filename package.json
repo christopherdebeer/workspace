@@ -18,8 +18,10 @@
   "dependencies": {
     "@aws-sdk/client-athena": "^3.1078.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1075.0",
+    "@aws-sdk/client-cloudwatch": "^3.1078.0",
     "@aws-sdk/client-dynamodb": "^3.1078.0",
     "@aws-sdk/client-s3vectors": "^3.1075.0",
+    "@aws-sdk/client-scheduler": "^3.1078.0",
     "@aws-sdk/lib-dynamodb": "^3.1078.0",
     "@marcbachmann/cel-js": "^7.6.1",
     "@simplewebauthn/server": "^13.3.1",

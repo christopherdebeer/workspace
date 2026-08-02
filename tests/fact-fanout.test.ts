@@ -84,3 +84,35 @@ describe('planFactEvents — stream batch → fact.written announcements', () =>
     expect(events).toEqual([{ scope: 'alice', key: 'old/1', revision: 3 }]);
   });
 });
+
+describe('planWaitWakes — stream batch → one-shot wait-wake schedules (2026-08-01 cost review)', () => {
+  const { planWaitWakes } = jest.requireActual<typeof import('../services/fact-fanout/handler')>('../services/fact-fanout/handler');
+
+  it('plans a wake for a machine-run entering `waiting` with a parseable deadline', () => {
+    const wakes = planWaitWakes({
+      Records: [
+        {
+          eventName: 'MODIFY',
+          dynamodb: {
+            NewImage: M(fact('alice', 'machine/tending/run/r1', { type: 'machine-run', revision: 4, value: { status: 'waiting', waitUntil: '2026-08-02T09:00:00.000Z' } })),
+            OldImage: M(fact('alice', 'machine/tending/run/r1', { type: 'machine-run', revision: 3, value: { status: 'running' } })),
+          },
+        },
+      ],
+    });
+    expect(wakes).toEqual([{ scope: 'alice', key: 'machine/tending/run/r1', waitUntil: '2026-08-02T09:00:00.000Z' }]);
+  });
+
+  it('ignores non-machine-run facts, non-waiting statuses, retirements, reaps, and unparseable deadlines', () => {
+    const wakes = planWaitWakes({
+      Records: [
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'note/1', { revision: 1, value: { status: 'waiting', waitUntil: '2026-08-02T09:00:00Z' } })) } },
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'machine/x/run/r2', { type: 'machine-run', revision: 1, value: { status: 'running' } })) } },
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'machine/x/run/r3', { type: 'machine-run', revision: 1, superseded: true, value: { status: 'waiting', waitUntil: '2026-08-02T09:00:00Z' } })) } },
+        { eventName: 'REMOVE', dynamodb: { OldImage: M(fact('alice', 'machine/x/run/r4', { type: 'machine-run', revision: 1, value: { status: 'waiting', waitUntil: '2026-08-02T09:00:00Z' } })) } },
+        { eventName: 'INSERT', dynamodb: { NewImage: M(fact('alice', 'machine/x/run/r5', { type: 'machine-run', revision: 1, value: { status: 'waiting', waitUntil: 'not-a-date' } })) } },
+      ],
+    });
+    expect(wakes).toEqual([]);
+  });
+});

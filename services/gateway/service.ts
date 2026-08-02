@@ -595,7 +595,7 @@ function guardSentinel<T>(target: string, result: T, narrow: string): T {
   if (!overBudget(result)) return result;
   const kb = Math.round(deliveredBytes(result) / 1000);
   throw new Error(
-    `read("${target}") is too large to return whole (${kb}KB over the ${FULL_BUDGET / 1000}KB read budget). ${narrow}`,
+    `read("${target}") is too large to return whole (${kb}KB over the ${FULL_BUDGET / 1000}KB read budget). ${narrow} Or pass {whole: true} to accept the full result knowingly.`,
   );
 }
 
@@ -720,8 +720,24 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   if (!cap) throw retiredError(target) ?? new Error(`Unknown capability: ${target}. Use read("${CATALOG}") to list what's available.`);
   if (cap.kind !== 'read') throw new Error(`"${target}" may mutate — invoke it with act, not read.`);
   if (cap.scope) enforceScope(ctx, target, cap.scope, cap.scopeFamily);
-  const check = enforceInput(target, input, cap.inputSchema);
-  const out = await cap.forward(input?.input, ctx);
+  // `whole: true` — the caller's INFORMED CONSENT to an over-budget result.
+  //
+  // The budget protects the CALLER (an agent's context window, a UI's payload
+  // ceiling) from a result it did not know would be huge; it is not an
+  // authority boundary. Some facts are legitimately large and irreducible —
+  // the semantic layout's root (`_home/embed2d`, ~82KB: a PCA basis is two
+  // 1024-float rows) and its shard pages — and refusing them broke the home
+  // graph's positioning: every layout fetch is defensively caught, so the
+  // refusal silently became "no coordinates" and the sky seated at defaults
+  // (2026-07-29). A caller that ASKS for the whole thing has, by asking,
+  // done exactly what the loud refusal exists to make it do. Membrane-level
+  // parameter: stripped here, never forwarded (capabilities would warn on an
+  // unknown key), reads only.
+  const rawInput = input?.input as Record<string, unknown> | undefined;
+  const wantsWhole = rawInput?.whole === true;
+  const fwdInput = wantsWhole ? (({ whole: _whole, ...rest }) => rest)(rawInput!) : input?.input;
+  const check = enforceInput(target, { ...input, input: fwdInput }, cap.inputSchema);
+  const out = await cap.forward(fwdInput, ctx);
   await touchCapability(ctx, target, cap.kind);
   // EVERY read is budgeted, not just the self-model sentinels (wave-8 W8-C-01).
   // The guard was generalised to "every sentinel" and stopped exactly one step
@@ -731,7 +747,8 @@ async function read(input: DispatchInput, ctx: ServiceContext): Promise<unknown>
   // already a failure; refusing LOUD with the way to narrow beats spilling it to
   // disk for the caller to re-parse. Reads only — refusing an `act` after the
   // mutation landed would report failure for work that actually happened.
-  return guardSentinel(target, withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap), narrowingFor(target));
+  const shaped = withRender(withInputWarnings(out, check.ignored, target, cap.inputSchema), cap);
+  return wantsWhole ? shaped : guardSentinel(target, shaped, narrowingFor(target));
 }
 
 async function act(input: DispatchInput, ctx: ServiceContext): Promise<unknown> {

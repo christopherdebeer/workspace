@@ -55,6 +55,13 @@ export const TUNE_DEFAULTS = {
   // size still grades the role, opacity no longer does.
   selSizeMult: 0.8, hitSizeMult: 1.17, nbrSizeMult: 0.6, nbrOpFar: 1, nbrOpNear: 1,
   labelFade: 1, // lerp rate: higher = snappier; owner tune runs it slow/smooth.
+  // Stickiness: how many losing syncs (≈5 frames each) a standing label
+  // survives before it starts dying — the anti-flicker grace at the beam
+  // edge and collision boundaries.
+  labelGrace: 8,
+  // Focus-register caps (desktop values; mobile derives ~2/3): how many
+  // search hits and selection neighbours may spend from the name budget.
+  hitCap: 9, nbrCap: 5,
   // nodes — neighbours barely lift: selection lights the ANCHOR, the
   // neighbourhood whispers; the fan edges carry the structure. nodeDim < 1 in
   // the owner tune dims the resting field so the lit selection stands out more.
@@ -65,6 +72,12 @@ export const TUNE_DEFAULTS = {
   // fan — how many relation labels ride the selected node's edges at once (the
   // old hard-coded 4; a densely-linked node wants more).
   neighborHops: 2, edgeLabelCap: 13,
+  // The relation chips' own grade (owner 2026-07-31: "tertiary labels are a
+  // little too dim"). relOpacity is the chip's ceiling before far-fade;
+  // relTone mixes the dim PAL.rel grey toward full text cream (0 = the old
+  // whisper, 1 = as loud as a fact name); relSizeMult grades labelPx the way
+  // the role mults do (0.5 ≈ the old mono 8.5px at labelPx 17).
+  relOpacity: 1, relTone: 0.35, relSizeMult: 0.5,
   // Each ring of the selection fan is this fraction as bright as the one inside
   // it (0.5 = a 2-hop edge reads half a 1-hop spoke). Only matters when
   // neighborHops > 1.
@@ -74,6 +87,22 @@ export const TUNE_DEFAULTS = {
   // focus and the sky stays calm at rest rather than reading as a dense mat.
   edgeSimilar: 0.035, edgeMember: 0.055, edgeDerived: 0.055, edgeAuthored: 0.075,
   focusEdgeAlpha: 0.25,
+  // FILM GRAIN on the dome (scene.ts SKY_FRAG): animated screen-space noise
+  // whose amplitude rides the sky's own light (atmosphere lift + nebulae), so
+  // the flat background never sizzles and the orrery (dome layers at zero)
+  // stays clean. grainAmt = strength; grainScale = fineness (1 = per device
+  // px, lower = chunkier); grainSpeed = re-rolls per second — AND the anchor:
+  // 0 freezes the grain into print tooth ANCHORED TO THE SKY (pans with the
+  // wisps, magnified by the telescope), any speed above keeps film grain in
+  // the lens (screen-space, constant pixel pitch).
+  grainAmt: 0.35, grainScale: 1, grainSpeed: 12,
+  // DASH grammar for the ambient mat (the 2D chart's dashed member/derived
+  // strokes, finally in the arc shader): duty 1 = solid, lower = the lit
+  // fraction of each dash cycle. Per class — authored / member / derived —
+  // and the focus fan always draws solid. dashFreq = dash cycles per full
+  // turn of great circle, so dash length is a world quantity (≈ 2πR/freq),
+  // not a per-edge fraction.
+  dashFreq: 40, dashAuthored: 1, dashMember: 1, dashDerived: 1,
   // flow (2026-07-12): a travelling pulse along FOCUS edges only (the ones
   // already fanning from a selection/hit) — direction is source→target, so
   // the animation reads as energy moving the way the edge actually points.
@@ -91,6 +120,10 @@ export const TUNE_DEFAULTS = {
   bloomMode: 'on' as 'auto' | 'on' | 'off',
   // star render: 0 = soft disc, 1 = bright core + strong diffraction spikes.
   starSpike: 1,
+  // The star sprite's BAKED halo (the residual glow when bloom is off and the
+  // sky is dialed to zero): 1 = the soft star, 0 = tight core + spikes only.
+  // Dusk only — paper's stipple is already a hard ink shape.
+  starHalo: 1,
   // scene mode: 'dusk' = the luminous dark field; 'paper' = a cartographic
   // star ATLAS — ink stars and fine linework on warm paper, bloom off.
   sceneMode: 'dusk' as 'dusk' | 'paper',
@@ -100,6 +133,33 @@ export const TUNE_DEFAULTS = {
   // 0 = flat sceneBg (the old void); 1 = full gradient. Dark by design — never
   // blooms, never drowns a star.
   atmosphere: 0.22,
+  // Deep-sky amount: the fbm nebulae + galactic band + cluster clouds in the
+  // dome shader (scene.ts SKY_FRAG). Same discipline as atmosphere — dark by
+  // construction, rides the curl fade, hidden entirely in paper mode.
+  nebula: 0.55,
+  // ── the deep-sky/terrain ALGORITHMIC levers (owner 2026-07-31: "expose far
+  // more of the key levers") — every constant that shapes where and how the
+  // data paints the sky/globe, tunable live. Groups: projection (where seats
+  // land), terrain (how density becomes land), nebula keying (how the dome
+  // wisps follow the data).
+  // projection: 0 = linear lon=x·π (the raw PCA chart), 1 = histogram-
+  // equalized (the slice spread over the whole globe). projLat scales the
+  // latitude range (1 = poles).
+  projSpread: 1, projLat: 0.92,
+  // terrain texture build: splat radius (px on the 512-wide atlas), the
+  // brightness budget (alpha = splatGain/√count), and the blur.
+  splatRad: 26, splatGain: 1.5, splatBlur: 9,
+  // terrain shading: land threshold (cut..cut+band over density), fractal
+  // coast amplitude, relief gain, land brightness, night-side floor, and the
+  // sun mix (viewer-bias vs shell-fixed — spin moves the terminator by the
+  // shell share).
+  terrainAmt: 1, landCut: 0.045, landBand: 0.055, coastAmp: 0.05,
+  reliefGain: 5, terrainGain: 1, nightFloor: 0.45, sunView: 0.75, sunShell: 0.6,
+  // nebula keying: baseline (no-data decoration) + data gain for the wisps
+  // and the galactic band.
+  nebBase: 0.22, nebData: 2.2, bandBase: 0.25, bandData: 1.6,
+  // orrery edges: flight-path lift at the arc midpoint (× angular length).
+  arcLift: 0.06,
   // FAR-SIDE occlusion (orrery / the re-curled ball): how hard the far hemisphere
   // is hidden behind the near cap. 0 = the shell is fully transparent (see every
   // back-side star through it); 1 = OPAQUE — nothing beyond the horizon rim is
@@ -115,6 +175,7 @@ export const TUNE_DEFAULTS = {
   // its constellations), tight approach band; anchors as micro-print star
   // names — many, tiny, full-opacity (celestial-chart typography).
   constCap: 6, constOpacity: 1, constNear: 0.2, constFar: 3.04,
+  constSizeMult: 0.82, // caption px as a fraction of labelPx (caps+tracking carry the weight)
   anchorCap: 32, anchorOpacity: 0.52, anchorSizeMult: 0.56,
   // in-scene label furniture. The name's backing is a DEPTH-ONLY CLIP (owner
   // 2026-07-20: "the observed background / just clipping") — it writes depth
@@ -122,7 +183,16 @@ export const TUNE_DEFAULTS = {
   // the calm sky shows through behind the outlined glyphs. No veil, no chip.
   // pillClip 1 = on, 0 = off (text then reads straight over whatever's behind).
   // labelOutline gives the glyphs their edge definition over the cleared sky.
-  pillClip: 0, labelOutline: 0.21,
+  // orreryPill engages the clip in the ORRERY regardless of pillClip — the
+  // dusk sky the resting tune was graded against becomes lit terrain there,
+  // and names need their clean patch back over the bright land.
+  pillClip: 0, labelOutline: 0.21, orreryPill: 1,
+  // The whole-field grade for NODE labels (the rel chips have their own):
+  // labelOpacity multiplies every role's target; labelTone mixes the cream
+  // voice (neighbours + suggestions) from dim warm-grey (0) to full text
+  // cream (1). Selection gold, hit cyan, and landmark grey keep their
+  // semantic inks — tone grades the body voice, not the signals.
+  labelOpacity: 1, labelTone: 1,
   // LABEL SIZE is a FIXED SCREEN quantity (owner 2026-07-20: "labels should
   // have fixed size and only fade in/out"). Each label renders at exactly
   // labelPx × its role multiplier, regardless of depth or the node's own
@@ -153,6 +223,9 @@ export const TUNE_DEFAULTS = {
   glassBlur: 20, glassOpacity: 0.62,
 };
 export const TUNE: typeof TUNE_DEFAULTS = { ...TUNE_DEFAULTS };
+// Console/harness handle: `__parcTune.projSpread = 0` etc — the frame loop
+// watches the rebuild-required levers, so direct writes take effect live.
+try { (globalThis as any).__parcTune = TUNE; } catch { /* SSR */ }
 export const TUNE_LS = 'parc.home.tune';
 
 // ── ONE declarative control list (the tuning surface as DATA) ───────────────
@@ -179,6 +252,29 @@ export interface TuneControl {
 export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'sceneMode', group: 'scene', label: 'scene', options: ['dusk', 'paper'] },
   { key: 'atmosphere', group: 'scene', label: 'atmosphere', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
+  { key: 'nebula', group: 'scene', label: 'nebula', min: 0, max: 1, step: 0.02, live: 'persist', quick: true },
+  { key: 'grainAmt', group: 'scene', label: 'grain', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'grainScale', group: 'scene', label: 'grain size', min: 0.15, max: 1, step: 0.05, live: 'persist' },
+  { key: 'grainSpeed', group: 'scene', label: 'grain speed', min: 0, max: 24, step: 1, live: 'persist' },
+  { key: 'projSpread', group: 'projection', label: 'equalize', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'projLat', group: 'projection', label: 'lat range', min: 0.4, max: 1, step: 0.02, live: 'persist' },
+  { key: 'splatRad', group: 'terrain', label: 'splat radius', min: 6, max: 64, step: 1, live: 'persist' },
+  { key: 'splatGain', group: 'terrain', label: 'splat gain', min: 0.2, max: 5, step: 0.1, live: 'persist' },
+  { key: 'splatBlur', group: 'terrain', label: 'blur', min: 0, max: 24, step: 1, live: 'persist' },
+  { key: 'terrainAmt', group: 'terrain', label: 'opacity', min: 0, max: 2, step: 0.05, live: 'persist', quick: true },
+  { key: 'landCut', group: 'terrain', label: 'land cut', min: 0, max: 0.2, step: 0.005, live: 'persist' },
+  { key: 'landBand', group: 'terrain', label: 'coast width', min: 0.01, max: 0.2, step: 0.005, live: 'persist' },
+  { key: 'coastAmp', group: 'terrain', label: 'coast noise', min: 0, max: 0.15, step: 0.005, live: 'persist' },
+  { key: 'reliefGain', group: 'terrain', label: 'relief', min: 0, max: 12, step: 0.5, live: 'persist' },
+  { key: 'terrainGain', group: 'terrain', label: 'land bright', min: 0.2, max: 3, step: 0.05, live: 'persist' },
+  { key: 'nightFloor', group: 'terrain', label: 'night floor', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'sunView', group: 'terrain', label: 'sun: viewer', min: 0, max: 1.5, step: 0.05, live: 'persist' },
+  { key: 'sunShell', group: 'terrain', label: 'sun: shell', min: 0, max: 1.5, step: 0.05, live: 'persist' },
+  { key: 'nebBase', group: 'nebula', label: 'wisp base', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'nebData', group: 'nebula', label: 'wisp data', min: 0, max: 5, step: 0.1, live: 'persist' },
+  { key: 'bandBase', group: 'nebula', label: 'band base', min: 0, max: 1, step: 0.02, live: 'persist' },
+  { key: 'bandData', group: 'nebula', label: 'band data', min: 0, max: 4, step: 0.1, live: 'persist' },
+  { key: 'arcLift', group: 'edges', label: 'arc lift', min: 0, max: 0.4, step: 0.01, live: 'persist' },
   { key: 'farOcclude', group: 'scene', label: 'far occlude', min: 0, max: 1, step: 0.02, live: 'persist' },
   // the field-computer's frosted glass (Palette-side; read on TUNE_EVENT).
   { key: 'glassBlur', group: 'glass', label: 'blur', min: 0, max: 40, step: 1, live: 'persist', quick: true },
@@ -197,6 +293,8 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'focusBand', group: 'name budget', min: 0, max: 60, step: 1 },
   { key: 'landmarkFrac', group: 'name budget', min: 0, max: 0.8, step: 0.05 },
   { key: 'beamPerCell', group: 'name budget', min: 1, max: 5, step: 1 },
+  { key: 'hitCap', group: 'name budget', label: 'hit cap', min: 0, max: 20, step: 1 },
+  { key: 'nbrCap', group: 'name budget', label: 'neighbour cap', min: 0, max: 12, step: 1 },
   { key: 'beamPill', group: 'name budget', min: 0, max: 1 },
   { key: 'labelConeIn', group: 'beam', min: 0.02, max: 0.5 },
   { key: 'labelConeOut', group: 'beam', min: 0.1, max: 1.2 },
@@ -204,13 +302,19 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'beamOff', group: 'beam', min: 0.02, max: 0.8 },
   { key: 'beamOpacity', group: 'beam', min: 0, max: 1 },
   { key: 'beamSizeMult', group: 'beam', min: 0.3, max: 1.5 },
-  { key: 'selSizeMult', group: 'labels', min: 0.8, max: 2.5 },
-  { key: 'hitSizeMult', group: 'labels', min: 0.8, max: 2.5 },
+  // Floors below the defaults (owner 2026-08-01: "sel label too big, can't
+  // find a dial" — the old min 0.8 WAS the default, the dial only went up).
+  { key: 'selSizeMult', group: 'labels', min: 0.4, max: 2.5 },
+  { key: 'hitSizeMult', group: 'labels', min: 0.4, max: 2.5 },
   { key: 'nbrSizeMult', group: 'labels', min: 0.6, max: 2 },
   { key: 'nbrOpFar', group: 'labels', min: 0.1, max: 1 },
   { key: 'nbrOpNear', group: 'labels', min: 0.3, max: 1 },
   { key: 'labelFade', group: 'labels', min: 1, max: 20, step: 0.5 },
+  { key: 'labelGrace', group: 'labels', label: 'stickiness', min: 0, max: 20, step: 1 },
+  { key: 'labelOpacity', group: 'labels', label: 'opacity', min: 0.1, max: 1, step: 0.02 },
+  { key: 'labelTone', group: 'labels', label: 'tone', min: 0, max: 1, step: 0.02 },
   { key: 'pillClip', group: 'labels', min: 0, max: 1, step: 1 },
+  { key: 'orreryPill', group: 'labels', label: 'orrery pill', min: 0, max: 1, step: 1 },
   { key: 'labelOutline', group: 'labels', min: 0, max: 0.35, step: 0.005 },
   { key: 'labelPx', group: 'labels', min: 6, max: 40, step: 1, quick: true },
   { key: 'nodeDim', group: 'nodes', min: 0.1, max: 3, quick: true },
@@ -219,18 +323,27 @@ export const TUNE_SCHEMA: readonly TuneControl[] = [
   { key: 'hopFalloff', group: 'nodes', label: 'hop falloff', min: 0.1, max: 1 },
   { key: 'boostSizeGain', group: 'nodes', min: 0, max: 1.5 },
   { key: 'starSpike', group: 'nodes', min: 0, max: 1 },
+  { key: 'starHalo', group: 'nodes', label: 'star halo', min: 0, max: 1 },
   { key: 'edgeSimilar', group: 'edges', min: 0, max: 0.3, step: 0.005 },
   { key: 'edgeMember', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeDerived', group: 'edges', min: 0, max: 0.5, step: 0.005 },
   { key: 'edgeAuthored', group: 'edges', min: 0, max: 1, step: 0.005 },
+  { key: 'dashFreq', group: 'edges', label: 'dash scale', min: 5, max: 360, step: 1 },
+  { key: 'dashAuthored', group: 'edges', label: 'authored dash', min: 0.15, max: 1, step: 0.01 },
+  { key: 'dashMember', group: 'edges', label: 'member dash', min: 0.15, max: 1, step: 0.01 },
+  { key: 'dashDerived', group: 'edges', label: 'derived dash', min: 0.15, max: 1, step: 0.01 },
   { key: 'focusEdgeAlpha', group: 'edges', min: 0, max: 1 },
   { key: 'edgeLabelCap', group: 'edges', label: 'rel labels', min: 0, max: 16, step: 1 },
+  { key: 'relOpacity', group: 'edges', label: 'rel opacity', min: 0.2, max: 1, step: 0.02 },
+  { key: 'relTone', group: 'edges', label: 'rel tone', min: 0, max: 1, step: 0.02 },
+  { key: 'relSizeMult', group: 'edges', label: 'rel size', min: 0.3, max: 1.2, step: 0.02 },
   { key: 'edgeFlowSpeed', group: 'edges', min: 0, max: 2, step: 0.05 },
   { key: 'edgeFlowWidth', group: 'edges', min: 0.05, max: 0.5, step: 0.01 },
   { key: 'edgeFlowGain', group: 'edges', min: 0, max: 3, step: 0.05 },
   { key: 'edgeFlowCycles', group: 'edges', min: 1, max: 8, step: 1 },
   { key: 'constCap', group: 'places', min: 0, max: 32, step: 1 },
   { key: 'constOpacity', group: 'places', min: 0, max: 1 },
+  { key: 'constSizeMult', group: 'places', label: 'caption size', min: 0.4, max: 1.5, step: 0.02 },
   { key: 'constNear', group: 'places', min: 0.2, max: 2.5 },
   { key: 'constFar', group: 'places', min: 0.6, max: 5 },
   { key: 'anchorCap', group: 'places', min: 0, max: 32, step: 1 },

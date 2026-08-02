@@ -9,7 +9,7 @@
  */
 import * as React from 'react';
 import { ink } from './ink';
-import { loadThree, esmURL, makeStarTexture } from './graph/scene';
+import { loadThree, makeStarTexture, SKY_VERT, SKY_FRAG, makeBlackTexture } from './graph/scene';
 import { TUNE } from './graph/tune';
 
 const { useEffect, useRef } = React;
@@ -32,24 +32,24 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(ink.sceneBg);
 
-      // ── Sky dome (identical to graph.tsx) ──
-      // Reduced atmosphere (the hero painting provides the warm horizon glow)
-      const skyUniforms = { uAtmo: { value: TUNE.atmosphere * 0.5 }, uBase: { value: new THREE.Color(ink.sceneBg) } };
+      // ── Sky dome (SKY_VERT/SKY_FRAG — the one shader, shared with graph.tsx) ──
+      // Reduced atmosphere (the hero painting provides the warm horizon glow);
+      // the deep-sky nebulae run at half strength behind the painting, and the
+      // data-driven cluster clouds stay off — the decorative dome has no data.
+      const skyUniforms = {
+        uAtmo: { value: TUNE.atmosphere * 0.5 },
+        uNebula: { value: TUNE.nebula * 0.5 },
+        uBase: { value: new THREE.Color(ink.sceneBg) },
+        uCloud: { value: makeBlackTexture(THREE) }, // no data — baseline decoration only
+        uNebKey: { value: new THREE.Vector4(TUNE.nebBase, TUNE.nebData, TUNE.bandBase, TUNE.bandData) },
+        uGrain: { value: new THREE.Vector3(TUNE.grainAmt, TUNE.grainScale, TUNE.grainSpeed) },
+        uTime: { value: 0 },
+      };
       const skyMat = new THREE.ShaderMaterial({
         side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
         uniforms: skyUniforms,
-        vertexShader:
-          'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-        fragmentShader:
-          'varying vec3 vDir; uniform float uAtmo; uniform vec3 uBase;' +
-          'void main(){ float up = clamp(vDir.y, -1.0, 1.0);' +
-          ' vec3 zenith = vec3(0.020, 0.023, 0.043);' +
-          ' vec3 horizon = vec3(0.115, 0.086, 0.058);' +
-          ' vec3 nadir = vec3(0.015, 0.013, 0.012);' +
-          ' vec3 col = up >= 0.0 ? mix(horizon, zenith, smoothstep(0.0, 1.0, up)) : mix(horizon, nadir, smoothstep(0.0, 1.0, -up));' +
-          ' col += vec3(0.16, 0.10, 0.045) * exp(-abs(up) * 5.5);' +
-          ' col = mix(uBase, col, uAtmo);' +
-          ' gl_FragColor = vec4(col, 1.0); }',
+        vertexShader: SKY_VERT,
+        fragmentShader: SKY_FRAG,
       });
       const skyDome = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 24), skyMat);
       skyDome.frustumCulled = false;
@@ -75,7 +75,7 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
       const starGeo = new THREE.BufferGeometry();
       starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       starGeo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-      const starTex = makeStarTexture(THREE, TUNE.starSpike);
+      const starTex = makeStarTexture(THREE, TUNE.starSpike, TUNE.starHalo);
       const starMat = new THREE.PointsMaterial({
         map: starTex,
         size: 2.8,
@@ -106,11 +106,14 @@ export function SkyBackdrop({ heroHeight }: { heroHeight?: string }): React.JSX.
 
       // Gentle slow rotation for life
       let yaw = 0;
+      const t0 = performance.now();
       const tick = (): void => {
         if (disposed) return;
         yaw += 0.00012;
         camera.position.set(0, 0, 0);
         camera.lookAt(Math.sin(yaw) * SHELL, SHELL * 0.5, -Math.cos(yaw) * SHELL);
+        skyUniforms.uTime.value = (performance.now() - t0) / 1000; // drives the film grain
+        skyUniforms.uGrain.value.set(TUNE.grainAmt, TUNE.grainScale, TUNE.grainSpeed);
         renderer.render(scene, camera);
         raf = requestAnimationFrame(tick);
       };

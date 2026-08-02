@@ -84,6 +84,34 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
     return items;
   }
 
+  /** ADD ±delta to both endpoints' denormalized weighted degree (`degW`,
+   *  2026-08-02 cost review; self-loop counts once — buildSignals parity).
+   *  Conditional on the fact existing, so a dangling endpoint never mints a
+   *  ghost item; the tend reconciler counts it in when the fact appears.
+   *  Best-effort: a failed bump is drift the reconciler repairs, never a
+   *  failed edge write. */
+  async function bumpDegree(scope: string, from: string, to: string, delta: number): Promise<void> {
+    const bump = async (key: string): Promise<void> => {
+      try {
+        await doc.send(
+          new lib.UpdateCommand({
+            TableName: tableName,
+            Key: { pk: K.statePk(scope), sk: K.factSk(key) },
+            UpdateExpression: 'ADD degW :d',
+            ConditionExpression: 'attribute_exists(pk)',
+            ExpressionAttributeValues: { ':d': delta },
+          }),
+        );
+      } catch (err) {
+        if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') {
+          console.warn('degW bump failed (tend reconciles)', { key, error: (err as Error).message });
+        }
+      }
+    };
+    await bump(from);
+    if (to !== from) await bump(to);
+  }
+
   return {
     async nextSeq(scope: string): Promise<number> {
       const res = await doc.send(
@@ -157,7 +185,7 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
     },
 
     async putEdge(edge: EdgeRecord): Promise<void> {
-      await doc.send(
+      const res = await doc.send(
         new lib.PutCommand({
           TableName: tableName,
           Item: stripUndefined({
@@ -167,12 +195,47 @@ export function createDynamoStateStoreV3(tableName: string): StateStore {
             gsi1sk: K.inSk(edge.rel, edge.from),
             ...edge,
           }),
+          // ALL_OLD is the double-count guard: the similarTo reconciler
+          // re-puts existing edges to refresh scores — the degree delta is
+          // new-strength − old-strength (0 for a same-strength rewrite),
+          // never a blind +1.
+          ReturnValues: 'ALL_OLD',
         }),
       );
+      const oldRaw = res.Attributes?.strength;
+      const oldW = res.Attributes ? (oldRaw == null ? 1 : Number(oldRaw) || 0) : 0;
+      const delta = (edge.strength ?? 1) - oldW;
+      if (delta) await bumpDegree(edge.scope, edge.from, edge.to, delta);
     },
 
     async deleteEdge(scope, from, rel, to): Promise<void> {
-      await doc.send(new lib.DeleteCommand({ TableName: tableName, Key: { pk: K.statePk(scope), sk: K.edgeSk(from, rel, to) } }));
+      const res = await doc.send(
+        new lib.DeleteCommand({
+          TableName: tableName,
+          Key: { pk: K.statePk(scope), sk: K.edgeSk(from, rel, to) },
+          ReturnValues: 'ALL_OLD',
+        }),
+      );
+      if (res.Attributes) {
+        const w = res.Attributes.strength == null ? 1 : Number(res.Attributes.strength) || 0;
+        if (w) await bumpDegree(scope, from, to, -w);
+      }
+    },
+
+    async setDegree(scope: string, key: string, degW: number): Promise<void> {
+      try {
+        await doc.send(
+          new lib.UpdateCommand({
+            TableName: tableName,
+            Key: { pk: K.statePk(scope), sk: K.factSk(key) },
+            UpdateExpression: 'SET degW = :d',
+            ConditionExpression: 'attribute_exists(pk)',
+            ExpressionAttributeValues: { ':d': degW },
+          }),
+        );
+      } catch (err) {
+        if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') throw err;
+      }
     },
 
     async edgesFrom(scope, from, rel?): Promise<EdgeRecord[]> {

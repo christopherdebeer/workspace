@@ -40,11 +40,31 @@ export interface GEdge {
 // first, the periphery fills in); a seq/trajectory-replay ordering — the map
 // drawing itself in the order the knowledge accreted — needs a one-line
 // server rankBy:'seq' and is noted as a follow-up toggle.
-export const INITIAL_ENTRY_LIMIT = 800;
-// The fill-in after the fast orientation page trickles in SMALL pages, added
-// as they arrive (see the auto-reveal pump in graph.tsx) — the map accretes
-// continuously rather than jumping a whole 800-fact block on a manual tap.
-export const REVEAL_ENTRY_LIMIT = 220;
+// SIZED TO THE READ BUDGET (2026-07-29). Every read through the membrane is
+// capped at 60KB, and these pages are `shape:'card'` — a value preview per
+// entry, which the scene needs because node labels come from value fields
+// (`factTitle` → `titleOf`), so `refs` is not an option here.
+//
+// Measured on the c15r slice: card ≈ 1.16KB/entry, refs ≈ 0.34KB/entry. So the
+// old 800 was 931KB — fifteen times the budget — and the graph's FIRST read
+// failed outright:
+//
+//   read("workspace.query") is too large to return whole (931KB over the 60KB
+//   read budget)
+//
+// 800 was chosen when the constraint was a request TIMEOUT ("large enough to
+// keep round trips few"), and that reasoning inverted when the constraint became
+// response SIZE. 40 × 1.16KB ≈ 46KB leaves real headroom for a slice whose
+// per-entry previews grow. This costs round trips and the design already pays
+// them gladly: the first page reports `total`, the rest fetch CONCURRENTLY, and
+// `onPage` streams each one into the scene as it lands — so more, smaller pages
+// is the shape this loader already wanted.
+export const INITIAL_ENTRY_LIMIT = 40;
+// The fill-in after the fast orientation page trickles in as they arrive (see
+// the auto-reveal pump in graph.tsx) — the map accretes continuously. Same
+// budget arithmetic; there is no reason for the reveal page to exceed the
+// initial one.
+export const REVEAL_ENTRY_LIMIT = 40;
 export const LIVE_NODE_HEADROOM = 256;
 export const LIVE_EDGE_CAPACITY = 30000;
 export const CHANGE_POLL_MS = 12000;
@@ -72,16 +92,70 @@ export async function fetchEntryPage(cursor?: string | null, limit = INITIAL_ENT
   };
 }
 
+/** Keys per `workspace.edges` request. Measured on the c15r slice: ~6.4 edges
+ *  per key at ~225b each, so ~1.45KB/key — 20 keys ≈ 29KB, comfortably inside
+ *  the 60KB read budget with room for a densely-linked node. `LIVE_EDGE_CAPACITY`
+ *  stays as the per-request edge ceiling; it was never the binding constraint,
+ *  the KEY COUNT is (800 nodes in one call would have been ~1.16MB).
+ *
+ *  Server-side, `edges({keys, derived:false})` now answers each chunk with
+ *  per-key narrow index queries (2 per key), NOT a full edge-partition read —
+ *  so chunking bounds response size only; it no longer multiplies read cost. */
+const EDGE_KEY_CHUNK = 20;
+
+/**
+ * Edges for a set of node keys, chunked to fit the read budget.
+ *
+ * This used to pass every key in one request with `limit: 30000`. That limit
+ * bounds edges, not response size, and the response scales with the key set —
+ * so as the scene accreted nodes the call grew without bound and eventually
+ * exceeded the budget, taking the graph's edges with it. Chunking bounds the
+ * RESPONSE instead: fixed keys per request, concurrent, merged.
+ */
+/** The membrane's budget refusal is DETERMINISTIC — retrying the same chunk
+ *  verbatim can never succeed. A dense chunk (hubs land together in salience
+ *  order) can exceed the estimate above, so on refusal SPLIT the chunk and
+ *  recurse; a single key still over budget is one hub's whole neighbourhood —
+ *  take it knowingly with `whole: true` rather than dropping its edges. */
+const BUDGET_REFUSED = /too large to return whole/;
+async function fetchEdgeChunk(chunk: string[]): Promise<{ edges: GEdge[]; total: number }> {
+  const r = await mcpCall('read', 'workspace.edges', { keys: chunk, derived: false, limit: LIVE_EDGE_CAPACITY });
+  if (r.ok) {
+    const page = r.value as { edges?: GEdge[]; total?: number } | null;
+    return { edges: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
+  }
+  if (typeof r.value === 'string' && BUDGET_REFUSED.test(r.value)) {
+    if (chunk.length === 1) {
+      const rw = await mcpCall('read', 'workspace.edges', { keys: chunk, derived: false, limit: LIVE_EDGE_CAPACITY, whole: true });
+      if (!rw.ok) return { edges: [], total: 0 };
+      const page = rw.value as { edges?: GEdge[]; total?: number } | null;
+      return { edges: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
+    }
+    const mid = Math.ceil(chunk.length / 2);
+    const [a, b] = await Promise.all([fetchEdgeChunk(chunk.slice(0, mid)), fetchEdgeChunk(chunk.slice(mid))]);
+    return { edges: [...a.edges, ...b.edges], total: a.total + b.total };
+  }
+  return { edges: [], total: 0 };
+}
+
 export async function fetchEdgesForKeys(keys: string[]): Promise<{ items: GEdge[]; total: number }> {
   if (!keys.length) return { items: [], total: 0 };
-  const r = await mcpCall('read', 'workspace.edges', {
-    keys,
-    derived: false,
-    limit: LIVE_EDGE_CAPACITY,
-  });
-  if (!r.ok) return { items: [], total: 0 };
-  const page = r.value as { edges?: GEdge[]; total?: number } | null;
-  return { items: page?.edges ?? [], total: page?.total ?? page?.edges?.length ?? 0 };
+  const chunks: string[][] = [];
+  for (let i = 0; i < keys.length; i += EDGE_KEY_CHUNK) chunks.push(keys.slice(i, i + EDGE_KEY_CHUNK));
+  const pages = await Promise.all(chunks.map(fetchEdgeChunk));
+  // A chunk boundary can surface the same edge twice (both endpoints in the key
+  // set land in different chunks), so dedupe on the edge's identity triple.
+  const seen = new Set<string>();
+  const items: GEdge[] = [];
+  for (const p of pages) {
+    for (const e of p.edges) {
+      const id = `${e.from}${e.rel}${e.to}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push(e);
+    }
+  }
+  return { items, total: items.length };
 }
 
 // ── graph tuning as a CONFIG FACT (ADR-0078 `_config/*` namespace) ──────────
@@ -149,9 +223,17 @@ export interface GraphMeta {
 /** Cap on granting owners whose public layout we fetch — one peek each. */
 const PUB_MAP_OWNER_CAP = 12;
 export async function fetchGraphMeta(): Promise<GraphMeta> {
+  // `whole: true` on the layout reads (the membrane's informed-consent escape
+  // hatch): the read budget refuses over-60KB results, and the layout is
+  // legitimately large — the root fact alone is ~82KB (a PCA basis is two
+  // 1024-float rows) and the shard query ~655KB on the measured slice. These
+  // fetches are all defensively caught, so the refusal silently became "no
+  // coordinate map" and EVERY star seated at the default ring (2026-07-29,
+  // positions-defaulting regression). The UI knows exactly what it is asking
+  // for; consent is the point of the flag.
   const [cfgRes, layoutRes, typoRes, shardsRes, sharedRes] = await Promise.all([
     mcpCall('read', 'workspace.peek', { key: '_config/salience' }).catch(() => null),
-    mcpCall('read', 'workspace.peek', { key: '_home/embed2d' }).catch(() => null),
+    mcpCall('read', 'workspace.peek', { key: '_home/embed2d', whole: true }).catch(() => null),
     mcpCall('read', 'workspace.peek', { key: '_config/typography' }).catch(() => null),
     // One prefix query replaces a fan-out of 16 individual shard peeks.
     mcpCall('read', 'workspace.query', {
@@ -159,6 +241,7 @@ export async function fetchGraphMeta(): Promise<GraphMeta> {
       shape: 'full',
       rankBy: 'recency',
       limit: 64,
+      whole: true,
     }).catch(() => null),
     // The owners whose slices fold into this view (`receiving` is the
     // applicable set — direct + public + group; for @guest that's every owner

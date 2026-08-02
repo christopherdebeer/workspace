@@ -243,6 +243,13 @@ export interface StateRecord {
    */
   seedReads?: number;
   seedWrites?: number;
+  /** Denormalized WEIGHTED degree (ADR-0009 semantics: Σ strength of authored
+   *  edges touching this key; 2026-08-02 cost review). Maintained atomically
+   *  by `putEdge`/`deleteEdge` (ADD ±strength on both endpoints), preserved
+   *  across rewrites by `state.put`, and reconciled against the edge items by
+   *  the tend pass — the edge items stay the source of truth, this is the
+   *  cache that lets ranking stop reading every edge in the scope. */
+  degW?: number;
   /**
    * Earned salience (ADR-0070): a persisted per-fact number in [0,1], the
    * seventh score signal. Written when work involving this fact demonstrably
@@ -404,6 +411,10 @@ export interface StateStore {
   listByType(scope: string, type: string): Promise<StateRecord[]>;
   putEdge(edge: EdgeRecord): Promise<void>;
   deleteEdge(scope: string, from: string, rel: string, to: string): Promise<void>;
+  /** Set a fact's denormalized weighted degree outright — the tend
+   *  reconciler's repair primitive (and the one-time backfill). Raw-store:
+   *  no seq, no trajectory, no touch. */
+  setDegree(scope: string, key: string, degW: number): Promise<void>;
   /** Outbound edges of `from` (optionally one `rel`). */
   edgesFrom(scope: string, from: string, rel?: string): Promise<EdgeRecord[]>;
   /** Inbound edges of `to` (optionally one `rel`) — the inbound index. */
@@ -531,10 +542,64 @@ export const SALIENCE_CONFIG_KEY = '_config/salience';
  * Where the LEARNED per-type bias lives — derived, platform-written, and layered
  * UNDER `_config/salience` so a human pin always wins (ADR-0094 Inc 1).
  *
- * `_index/*` is the derived namespace (`_index/overview` is the recall digest),
+ * `_index/*` is the derived namespace (`_index/overview` is the recall digest,
+ * `_index/ranking` the bare-query ranking digest),
  * distinct from `_config/*` which is what the owner asserts.
  */
 export const TYPE_BIAS_KEY = '_index/type-bias';
+
+/** Where a scope's bare-query ranking digest lives (see `query`'s hot path). */
+export const RANKING_KEY = '_index/ranking';
+/** How many ranked keys the digest keeps. A page past the cap goes cold — the
+ *  cap exists so the digest stays one comfortably-sized item (~1200 × ~55B ≈
+ *  65KB, well under the DynamoDB 400KB item limit) while covering ~30 pages of
+ *  a 40-entry paginated load, far beyond any real browse. */
+export const RANKING_CAP = 1200;
+/** Recompute past this age even at the same seq: recency decay drifts scores
+ *  and band membership slowly, and TTL reaps don't advance seq — an hour
+ *  bounds both drifts. Same tolerance as the recall digest. */
+export const RANKING_MAX_AGE_MS = 60 * 60 * 1000;
+/** Bounded staleness under churn (2026-08-01 cost review): a digest whose seq
+ *  is behind head still serves if younger than this — so a write burst costs
+ *  at most one cold full-partition re-rank per grace window instead of one
+ *  per write. The map lags fresh writes by ≤ this; ranking is presentation,
+ *  not truth, and every fact read hydrates by point-get regardless. */
+export const RANKING_STALE_GRACE_MS = 45 * 1000;
+
+/** The ranking digest's stored shape (parallel arrays keep the item compact). */
+interface RankingDigest {
+  seq: number;
+  at: string;
+  /** The full ranked count — `total` for every warm page, even past the cap. */
+  total: number;
+  keys: string[];
+  degrees: number[];
+}
+
+/**
+ * Only a BARE salience query may touch the ranking digest — no filter, no lens,
+ * no intent, no explain: the exact question the cache answered. A top-N cache
+ * answering a differently-shaped question is how the grant fold starved
+ * `total`; eligibility is the guard against re-learning that lesson here.
+ * (`typeRules` stay eligible: they are derived from the scope's own `_types/*`
+ * facts, so a change to them advances seq and invalidates the digest.)
+ */
+export function isBareSalienceQuery(opts?: QueryOptions): boolean {
+  return (
+    !opts?.type &&
+    !opts?.tag &&
+    !opts?.tags?.length &&
+    !opts?.prefix &&
+    !opts?.contains &&
+    !opts?.keyFilter &&
+    !opts?.relevance &&
+    !opts?.lens &&
+    !opts?.salience &&
+    !opts?.explain &&
+    !opts?.includeSuperseded &&
+    (opts?.rankBy ?? 'salience') === 'salience'
+  );
+}
 
 export interface TypeBiasOptions {
   /** Facts of a type before its evidence is fully trusted. Below this the prior
@@ -1347,6 +1412,24 @@ export interface QueryOptions {
   tags?: string[];
   /** Only keys with this prefix. */
   prefix?: string;
+  /**
+   * An arbitrary key predicate, applied with `prefix`/`tag`/`contains` — BEFORE
+   * ranking, the page slice, and `total`.
+   *
+   * This exists for visibility folds. A caller assembling a granted view has a
+   * membership rule (`grantCovers` over a grant's patterns) that cannot be
+   * expressed as one prefix, and filtering AFTER the query means the page cap
+   * has already been spent on facts the viewer cannot see — so `total` counts
+   * survivors of a truncation rather than the covered set. Measured 2026-07-29:
+   * an unauthenticated home graph reported `20/20` against ~135 genuinely public
+   * facts, because 115 of them were `doc-block:*` at salience 0.12–0.14 and the
+   * owner's top 1200 of 8,600 facts never reached them.
+   *
+   * Kept as a predicate rather than a grant-shaped option so the platform stays
+   * ignorant of grant vocabulary — this layer knows keys, not authority. It is
+   * a FILTER only: it can never widen what the query would otherwise return.
+   */
+  keyFilter?: (key: string) => boolean;
   /** Ranking: read-time salience (default), last-write recency, or intent
    *  relevance (ADR-0085 Inc 3 — the default when a `relevance` map is present:
    *  an intent query is "which few entries matter for THIS goal", so cosine
@@ -1408,6 +1491,12 @@ export interface NeighborsOptions {
   /** Resolved per-type Reference rules (managedBy + embedded + key-encoded), so a
    *  type's derived edges show up in traversal. Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
+  /** false = AUTHORED-ONLY fast path (2026-08-02 cost review): skip the
+   *  derived backbone, whose computation needs a full partition read to
+   *  answer a one-key question — the lit decompose finish pass paid that
+   *  read PER BLOCK. Two targeted edge queries + point-get hydration;
+   *  neighbour scores lose only their centrality term. */
+  derived?: boolean;
 }
 
 export interface NeighborsResult {
@@ -1580,13 +1669,22 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     records?: StateRecord[],
     typeRules?: Record<string, TypeRules>,
   ): Promise<Map<string, KeySignals>> {
-    const [edges, recs] = await Promise.all([
-      store.listEdges(scope),
-      records ? Promise.resolve(records) : store.list(scope),
-    ]);
-    // Centrality counts the derived backbone alongside authored edges, so a
-    // typed-but-unlinked fact earns a structural floor instead of scoring zero.
-    return buildSignals([], [...edges, ...deriveBackboneEdges(recs, typeRules)], nowMs, windowMs);
+    // AUTHORED degree comes off the records themselves now (`degW`, the
+    // denormalized weighted counter — 2026-08-02 cost review): `listEdges`
+    // read every edge row in the scope on every ranked read, and the ONLY
+    // thing it fed was this fold. The derived backbone still computes from
+    // the records in hand (pure CPU). Callers pass the records they already
+    // read — a subset (type/prefix candidates) yields subset-honest signals,
+    // which is the deal that lets those paths skip whole-partition reads.
+    const recs = records ?? (await store.list(scope));
+    const m = buildSignals([], deriveBackboneEdges(recs, typeRules), nowMs, windowMs);
+    for (const r of recs) {
+      if (!r.degW) continue;
+      const v = m.get(r.key);
+      if (v) v.degree += r.degW;
+      else m.set(r.key, { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: r.degW });
+    }
+    return m;
   }
 
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
@@ -1618,6 +1716,85 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     // defaults ← LEARNED bias ← asserted config. A human pin always wins, per
     // type, so the owner can correct the learner without discarding it.
     return layerTypeBias(learned, asserted);
+  }
+
+  /** The scope's cached bare-query ranking (see the hot-path comment in
+   *  `query`). Served when seq-exact — OR when merely SECONDS stale (bounded
+   *  staleness, 2026-08-01 cost review): the old seq-exact-only rule meant a
+   *  WRITE BURST (docs-sync chains, a tuner drag, a cell push) invalidated the
+   *  digest on every write, sending every concurrent page query cold — two
+   *  full-partition reads each, thousands of times per burst (the Jul 29-30
+   *  storm re-ranked its way to ~900M RRUs). A star map does not need
+   *  write-level freshness: during churn we serve a ranking up to
+   *  {@link RANKING_STALE_GRACE_MS} old and let AT MOST one cold recompute per
+   *  grace window absorb the drift. Malformed or genuinely stale → `null`,
+   *  cold path. */
+  async function readRanking(scope: string): Promise<RankingDigest | null> {
+    try {
+      const [rec, head] = await Promise.all([store.get(scope, RANKING_KEY), store.currentSeq(scope)]);
+      const v = rec?.value as RankingDigest | undefined;
+      const shaped =
+        !!v &&
+        typeof v.seq === 'number' &&
+        typeof v.total === 'number' &&
+        Array.isArray(v.keys) &&
+        Array.isArray(v.degrees) &&
+        v.keys.length === v.degrees.length &&
+        Date.now() - Date.parse(v.at) < RANKING_MAX_AGE_MS;
+      if (!shaped) return null;
+      const fresh = v.seq === head || Date.now() - Date.parse(v.at) < RANKING_STALE_GRACE_MS;
+      return fresh ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persist a bare query's ranking (ordered keys + per-key degree, capped) as
+   *  the scope's ranking digest — raw-store write (a cache is not a fact: no
+   *  seq advance, no trajectory, no reaction), best-effort like the recall
+   *  digest. Degree rides along because it is the one `wrap` input that needs
+   *  the full-partition reads; a write invalidates the digest at the next
+   *  grace-window boundary (see readRanking's bounded staleness), so a cached
+   *  degree is never more than seconds behind. */
+  async function writeRanking(
+    scope: string,
+    head: number,
+    ranked: Array<{ key: string }>,
+    signals: Map<string, KeySignals>,
+  ): Promise<void> {
+    try {
+      const top = ranked.slice(0, RANKING_CAP);
+      const now = new Date().toISOString();
+      const prev = await store.get(scope, RANKING_KEY);
+      const value: RankingDigest = {
+        seq: head,
+        at: now,
+        total: ranked.length,
+        keys: top.map((e) => e.key),
+        degrees: top.map((e) => signals.get(e.key)?.degree ?? 0),
+      };
+      await store.put({
+        scope,
+        key: RANKING_KEY,
+        value,
+        revision: (prev?.revision ?? 0) + 1,
+        seq: head,
+        firstSeq: prev?.firstSeq ?? head,
+        writer: 'platform/digest',
+        via: 'query:ranking',
+        createdAt: prev?.createdAt ?? now,
+        updatedAt: now,
+        writers: ['platform/digest'],
+        superseded: false,
+        supersededBy: null,
+        type: null,
+        tags: [],
+        timerExpiresAt: null,
+        timerEffect: null,
+      });
+    } catch {
+      /* not cached this time — the next cold bare query retries */
+    }
   }
 
   /** The derived per-type bias (`_index/type-bias`), sanitized through the same
@@ -1864,6 +2041,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
           ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
           : {}),
+        // Denormalized weighted degree: a rewrite must not wipe the counter
+        // (put replaces the item wholesale) — carried like the import seeds.
+        ...(prev?.degW !== undefined ? { degW: prev.degW } : {}),
         // Earned salience (ADR-0070): set/replace when supplied, else preserved —
         // the same carry rule as the import seeds. Clamped: a reward is a signal
         // in [0,1], not an unbounded boost.
@@ -1952,22 +2132,104 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
 
     async query(scope: string, opts?: QueryOptions, _identity?: Identity): Promise<QueryResult> {
       const nowMs = Date.now();
+      // ── the ranking digest: the bare-query hot path (paginated graph loads) ──
+      //
+      // A bare salience query — no filters, no lens, no intent — is what a
+      // paginated surface (the home graph) issues over and over with only the
+      // cursor changing. The cold path below costs TWO full-partition reads
+      // (every fact, then every edge for centrality) plus a full re-rank, PER
+      // PAGE, because the cursor is an offset into a fresh ranking. Twenty pages
+      // of forty entries re-read and re-scored an 8,600-fact slice twenty times.
+      //
+      // The recall digest (ADR-0050 move 4) already established the answer:
+      // seq-validate a cached computation against the scope's write head. Here
+      // the cached computation is the RANKING — the ordered keys plus each key's
+      // graph degree, which is the ONLY signal `wrap` needs that comes from the
+      // full-partition reads; every other input is on the page's own records.
+      // So a warm page is: one digest get + one seq get + the page's records by
+      // point-get — O(page), not O(slice) — and `wrap` recomputes the same meta
+      // it would have cold (recency live, degree from the digest, and the digest
+      // can never serve a stale degree because ANY write advances seq).
+      //
+      // Anything filtered or exotic (type/tag/prefix/contains/keyFilter/lens/
+      // relevance/explain/includeSuperseded/rankBy≠salience) takes the cold path
+      // unchanged — a top-N cache must never answer a differently-shaped
+      // question (that is how the grant fold starved `total`).
+      const bare = isBareSalienceQuery(opts);
+      const offset0 = opts?.cursor ? Math.max(0, Number.parseInt(opts.cursor, 10) || 0) : 0;
+      if (bare && opts?.limit !== undefined) {
+        const warm = await readRanking(scope);
+        if (warm) {
+          const end = offset0 + Math.max(0, opts.limit);
+          const complete = warm.keys.length >= warm.total;
+          if (offset0 >= warm.total) {
+            return { entries: [], count: 0, total: warm.total };
+          }
+          if (end <= warm.keys.length || complete) {
+            const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), undefined, undefined, await loadLensesConfig(scope));
+            const pageKeys = warm.keys.slice(offset0, end);
+            const degreeOf = new Map(pageKeys.map((k, i) => [k, warm.degrees[offset0 + i] ?? 0]));
+            // Point-gets, not a partition read. A key gone dead since the digest
+            // was written is impossible via a write (seq invalidates) but
+            // possible via a lapsed timer or TTL reap (no seq advance) — drop
+            // those defensively; the page shrinks by a hair rather than lies.
+            const recs = (await Promise.all(pageKeys.map((k) => store.get(scope, k)))).filter(
+              (r): r is StateRecord => !!r && !r.superseded && isTimerLive(r, nowMs),
+            );
+            const pageSignals = new Map(recs.map((r) => [r.key, { ...EMPTY_SIGNALS, degree: degreeOf.get(r.key) ?? 0 }]));
+            const entries = await Promise.all(
+              recs.map(async (rec) => ({ key: rec.key, ...(await wrap(rec, nowMs, pageSignals, sCall)) })),
+            );
+            // Cursor consumption counts RANKING SLOTS, not surviving entries, so
+            // a defensive drop can never re-serve the same slot.
+            const consumed = offset0 + pageKeys.length;
+            return {
+              entries,
+              count: entries.length,
+              total: warm.total,
+              ...(consumed < warm.total ? { nextCursor: String(consumed) } : {}),
+            };
+          }
+          // Fresh digest, but the page reaches past the cached cap → cold.
+        }
+      }
+      // Captured BEFORE the partition read, so a write racing the computation
+      // can only make the stored ranking conservatively stale, never wrongly
+      // fresh (the same ordering rule as the recall digest).
+      const rankingHead = bare && opts?.limit !== undefined ? await store.currentSeq(scope) : null;
       const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience, await loadLensesConfig(scope));
       const queryTypeRules = opts?.typeRules;
-      // Type is index-served; tag/prefix filter the (bounded) candidate set.
-      const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      // Reuse the full-partition read for signals when there's no type filter —
-      // otherwise `signalsFor` issues a SECOND `store.list(scope)` (a duplicate
-      // multi-page DDB scan, ~half the query's latency). With a type filter the
-      // candidates are a subset, so signals still need the whole graph.
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, opts?.type ? undefined : records, queryTypeRules);
+      // Type is index-served; PREFIX pushes down to the store (2026-08-02 cost
+      // review: the store always supported begins_with on the sort key, but
+      // query never passed it — every prefix-scoped read, e.g. the lit
+      // decompose order loop, paid a FULL partition read per page). tag/
+      // contains still filter the candidate set in memory.
+      const records = opts?.type
+        ? await store.listByType(scope, opts.type)
+        : await store.list(scope, opts?.prefix || undefined);
+      // Signals fold over exactly the records this query read — authored
+      // degree rides each record (`degW`), the derived backbone computes in
+      // memory, and no path pays a partition read it didn't already need.
+      // Type/prefix candidates get subset-honest derived contributions (their
+      // own backbone edges; cross-subset inbound derived links don't count) —
+      // the documented trade that keeps filtered reads O(candidates).
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, queryTypeRules);
       const candidates = records.filter((rec) => {
+        // A cache is not content (recall's rule for its digest, applied to the
+        // whole `_index/` derived namespace): the ranking digest would otherwise
+        // surface as a pseudo-fact in the very queries it accelerates — a ~65KB
+        // value with no meaning to a reader. Explicitly prefixing into
+        // `_index/` still reaches them (inspection stays possible).
+        if (rec.key.startsWith('_index/') && !opts?.prefix?.startsWith('_index')) return false;
         if (rec.superseded && !opts?.includeSuperseded) return false;
         if (!isTimerLive(rec, nowMs)) return false;
         // type is index-served (listByType); tag/prefix via the shared predicate (ADR-0011).
         if (!matchesSelector(rec, { tag: opts?.tag, tags: opts?.tags, prefix: opts?.prefix })) return false;
         // Content search: find a fact by what's inside it (substring over value JSON).
         if (opts?.contains && !recordContains(rec, opts.contains)) return false;
+        // Visibility fold (see `keyFilter`): applied HERE so the cap and `total`
+        // are both computed over what the caller can actually see.
+        if (opts?.keyFilter && !opts.keyFilter(rec.key)) return false;
         return true;
       });
       const wrapped = await Promise.all(
@@ -1990,6 +2252,12 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
             ? Date.parse(b._meta.updatedAt) - Date.parse(a._meta.updatedAt)
             : b._meta.score - a._meta.score,
         );
+      }
+      // A cold bare page persists its ranking for the pages that follow it —
+      // best-effort and awaited (Lambda gives no post-return execution; a
+      // dropped write would just mean every page pays the cold cost again).
+      if (rankingHead !== null) {
+        await writeRanking(scope, rankingHead, ranked, signals);
       }
       // Cursor = a plain offset into the fresh ranking: best-effort resume,
       // honest about salience reordering between pages (no snapshot to leak).
@@ -2058,16 +2326,23 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const nowMs = Date.now();
       // Honor the scope's `_config/salience` so neighbor scores match recall (ADR-0006).
       const sCall = baseSalience(await loadSalienceConfig(scope));
+      // derived:false = the authored-only fast path (see NeighborsOptions):
+      // no partition read, no backbone, degree-0 scores on the entries.
+      const wantDerived = opts?.derived !== false;
       const [authoredOut, authoredIn, records] = await Promise.all([
         dir !== 'in' ? store.edgesFrom(scope, key, opts?.rel) : Promise.resolve([]),
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
-        store.list(scope),
+        wantDerived ? store.list(scope) : Promise.resolve([] as StateRecord[]),
       ]);
       // The derived backbone is one hop too: a fact's type/cell/renderer/views.
-      const derived = deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel);
+      const derived = wantDerived ? deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel) : [];
       const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
       const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
+      // Fast path scores still carry authored degree — it rides the
+      // point-got records (degW); only the derived-backbone term is skipped.
+      const signals = wantDerived
+        ? await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules)
+        : new Map<string, KeySignals>();
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
@@ -2076,7 +2351,13 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
         const rec = byKey.get(nk) ?? (await store.get(scope, nk));
-        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals, sCall);
+        if (rec && isTimerLive(rec, nowMs)) {
+          // Fast path: the point-got record carries its own authored degree.
+          if (!wantDerived && rec.degW) {
+            signals.set(nk, { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: rec.degW });
+          }
+          entries[nk] = await wrap(rec, nowMs, signals, sCall);
+        }
       }
       return { outbound, inbound, entries };
     },
@@ -2339,6 +2620,14 @@ export function createMemoryStateStore(): StateStore {
   const seqByScope = new Map<string, number>();
   const k = (scope: string, key: string): string => `${scope} ${key}`;
   const ek = (scope: string, from: string, rel: string, to: string): string => `${scope} ${from}|${rel}|${to}`;
+  // Denormalized weighted degree (see StateRecord.degW): only existing facts
+  // count — a dangling endpoint never mints a ghost record.
+  const bumpDeg = (scope: string, from: string, to: string, delta: number): void => {
+    for (const key of to === from ? [from] : [from, to]) {
+      const rec = records.get(k(scope, key));
+      if (rec) rec.degW = (rec.degW ?? 0) + delta;
+    }
+  };
 
   return {
     async nextSeq(scope: string): Promise<number> {
@@ -2373,10 +2662,21 @@ export function createMemoryStateStore(): StateStore {
         .map((r) => ({ ...r, writers: [...r.writers], tags: [...r.tags] }));
     },
     async putEdge(edge: EdgeRecord): Promise<void> {
+      // Mirror the dynamo store's degW maintenance (ALL_OLD semantics): the
+      // delta is new-strength − old-strength, bumped on both live endpoints.
+      const prior = edges.get(ek(edge.scope, edge.from, edge.rel, edge.to));
+      const delta = (edge.strength ?? 1) - (prior ? prior.strength ?? 1 : 0);
       edges.set(ek(edge.scope, edge.from, edge.rel, edge.to), { ...edge });
+      if (delta) bumpDeg(edge.scope, edge.from, edge.to, delta);
     },
     async deleteEdge(scope, from, rel, to): Promise<void> {
+      const prior = edges.get(ek(scope, from, rel, to));
       edges.delete(ek(scope, from, rel, to));
+      if (prior) bumpDeg(scope, from, to, -(prior.strength ?? 1));
+    },
+    async setDegree(scope: string, key: string, degW: number): Promise<void> {
+      const rec = records.get(k(scope, key));
+      if (rec) rec.degW = degW;
     },
     async edgesFrom(scope, from, rel?): Promise<EdgeRecord[]> {
       return [...edges.values()].filter((e) => e.scope === scope && e.from === from && (!rel || e.rel === rel)).map((e) => ({ ...e }));
@@ -2400,4 +2700,33 @@ export function createMemoryStateStore(): StateStore {
       r.window = bumpWindow(r.window, actor, op, bucket);
     },
   };
+}
+
+/** Reconcile every fact's denormalized weighted degree (`degW`) against the
+ *  edge items — the tend-pass repair for the counter the stores maintain
+ *  inline (2026-08-02 cost review). The edge items stay the source of truth;
+ *  this is also the one-time backfill (first run patches every fact that has
+ *  edges). One partition read + one edge read per run, patches only where the
+ *  counter drifted (dangling endpoints later created, missed bumps, direct
+ *  raw-store writes). */
+export async function reconcileDegrees(
+  store: Pick<StateStore, 'list' | 'listEdges' | 'setDegree'>,
+  scope: string,
+): Promise<{ patched: number; facts: number; edges: number }> {
+  const [records, edges] = await Promise.all([store.list(scope), store.listEdges(scope)]);
+  const want = new Map<string, number>();
+  for (const e of edges) {
+    const w = e.strength ?? 1;
+    want.set(e.from, (want.get(e.from) ?? 0) + w);
+    if (e.to !== e.from) want.set(e.to, (want.get(e.to) ?? 0) + w);
+  }
+  let patched = 0;
+  for (const r of records) {
+    const target = want.get(r.key) ?? 0;
+    if (Math.abs((r.degW ?? 0) - target) > 1e-9 && !(target === 0 && r.degW === undefined)) {
+      await store.setDegree(scope, r.key, target);
+      patched++;
+    }
+  }
+  return { patched, facts: records.length, edges: edges.length };
 }

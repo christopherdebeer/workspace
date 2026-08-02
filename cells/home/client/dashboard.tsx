@@ -239,6 +239,10 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
     onMove: (e: React.PointerEvent) => void;
     onUp: () => void;
     progress: number;
+    /** Commit→cap overshoot (0–1, pre-eased): finishes the day-side fades to
+     *  FULLY transparent at the extreme of the pull — hero and content sheet
+     *  alike — so the night graph stands alone before release. */
+    over?: number;
   };
   /** Signed in: the CTA walks into the graph instead of starting WebAuthn. */
   authed?: boolean;
@@ -320,8 +324,9 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         // FADE OUT with the pull (owner): the painted day-hero dissolves toward
         // the night graph growing behind it as you pull down — the day→night
         // handoff made continuous, not just a commit-time flip. Tracks the finger
-        // while pulling; springs back at rest.
-        opacity: enterGrip ? 1 - 0.72 * enterGrip.progress : 1,
+        // while pulling; springs back at rest. The commit→cap overshoot (`over`)
+        // finishes the fade to 0 — at the extreme of the pull the day is GONE.
+        opacity: enterGrip ? (1 - 0.72 * enterGrip.progress) * (1 - (enterGrip.over ?? 0)) : 1,
         transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'opacity 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
         {/* Painted landscape, pinned to this first screen only */}
@@ -410,7 +415,12 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
         // the sheet never drifts beyond the hero background (owner). Tracks the
         // finger while pulling (no transition), springs back at rest.
         transform: enterGrip && enterGrip.progress > 0 ? `translateY(${(30 * enterGrip.progress * (2 - enterGrip.progress)).toFixed(1)}px)` : undefined,
-        transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'transform 0.4s cubic-bezier(.22,1,.36,1)',
+        // The sheet is the day's GROUND — opaque through the commit (content
+        // stays readable while deciding), then the overshoot fades it out with
+        // the hero so the extreme of the pull shows ONLY the night graph. The
+        // grip stays live through pointer capture even at opacity 0.
+        opacity: enterGrip ? 1 - (enterGrip.over ?? 0) : 1,
+        transition: enterGrip && enterGrip.progress > 0 ? 'none' : 'transform 0.4s cubic-bezier(.22,1,.36,1), opacity 0.4s cubic-bezier(.22,1,.36,1)',
       }}>
         {/* PULL-TO-EXPLORE GRIP (owner): the sheet's own handle, mirroring the
             palette grip — pill only, no label (the hero copy carries the words).

@@ -349,6 +349,89 @@ node scripts/docs-sync.mjs --commit --force --max 3 --delay 5000 --no-share   # 
 Verified safe at 3 concurrent chains. Do not raise it far without watching
 `_reaction-errors/lit-decompose-chunk` — the partition ceiling has not moved.
 
+## The architecture round: stop paying O(slice) per page
+
+The home-graph investigation ended in three layered findings, each one level under the
+last, and the deepest one reframed the whole day.
+
+**The graph broke because its reads were sized for a dead constraint.** Its first read —
+`query{shape:'card', limit:800}` — was 931KB against the 60KB budget. The 800 was chosen
+when the binding constraint was a request *timeout*; when the constraint became response
+*size*, the number quietly inverted from optimization to failure. Pages are 40 now, and the
+loader already streamed pages concurrently, so the design wanted small pages all along.
+
+**The guest's `20/20` was `total` lying, not pagination.** The grant fold capped the
+owner's slice by salience *before* filtering by coverage, so `total` counted the survivors
+of a truncation. ~135 public facts, 115 of them blocks at salience 0.12–0.14, invisible
+behind the owner's top 1200. Coverage now rides *inside* the query
+(`QueryOptions.keyFilter`, beside `prefix`/`tag`, upstream of the cap and `total`) — after
+a wrong intermediate fix fanned out one query per grant pattern and blanked the guest graph
+entirely under load. Which forced the real question:
+
+**Why is one query so expensive that nineteen of them is an outage?** Because they are
+already DDB Queries, never Scans — and it doesn't matter. `state.query` reads the whole
+`KEY#` partition and the whole `EDGE#` partition (centrality) on every call; `prefix` is an
+in-memory filter, not a pushed-down key condition. And the paginated cursor is an offset
+into a *fresh* ranking, so every page pays both partitions again. The home graph's twenty
+pages re-read and re-scored the slice twenty times. `edges({keys})` had the same disease —
+whole edge partition per call — which my response-size chunking then *multiplied*.
+
+Two structural fixes, both riding patterns the codebase had already established:
+
+- **The ranking digest.** The recall digest's seq-validated-cache pattern, applied to the
+  bare salience ranking. The insight that makes it small: `wrap` needs exactly one input
+  from the full-partition reads — graph degree. So the digest is ordered keys + degrees
+  (capped 1200, ~65KB), and a warm page is point-gets over just the page's records with
+  meta recomputed exactly (recency live, degree cached, staleness impossible because any
+  write — `link` included — advances seq). Strict eligibility: only the bare query touches
+  it; every filtered question goes cold, because a top-N cache answering a
+  differently-shaped question is precisely the `total` bug. And a rule the test design
+  itself surfaced: **a cache is not content** — `_index/*` is now excluded from query
+  results unless explicitly prefixed into, or the digest would surface as a 65KB
+  pseudo-fact in the very queries it accelerates.
+
+- **Per-key edge queries.** The store always knew how to answer narrowly — `edgesFrom` is
+  a `begins_with` on the main partition, `edgesTo` is the inbound GSI. `edges({keys})` now
+  issues 2 narrow queries per key (folded keys against the granting owner's partition,
+  under the same both-endpoint coverage rule) instead of reading 24k rows per chunk.
+
+Warm page: ~44 point reads instead of two full partitions — about 50× fewer RCU, no
+re-rank. The partition ceiling still stands and still wants the sharding design; but the
+hot path no longer spends the whole partition to serve forty facts.
+
+
+## The evening: what the budget broke that mattered, and the shape of the fix
+
+Three user-visible reports against the home graph — empty on load, positions
+defaulting, loading far slower — and three different causes, none of them auth:
+
+**Empty on load was the CDN, not us.** The graph's 3D stack is six runtime imports
+from esm.sh, `.catch(() => null)`, no retry — and the `??=` memo *cached the
+failure* for the life of the page. esm.sh was measured flapping (200 → 503 → 200
+inside a minute, server-side). The devtools harness proved the converse: identical
+client + data renders the moment the imports succeed. Fixed: bounded jittered
+retries, memos reset on failure.
+
+**Positions defaulting was the budget refusing the layout.** `_home/embed2d` is
+~82KB (a PCA basis is two 1024-float rows); the shard query ~655KB. Both refused,
+both defensively caught, so refusal silently became "no coordinates". The fix is a
+principle, not a workaround: the budget protects the *caller* from a result it
+did not know would be huge — it is not an authority boundary — so the gateway now
+honors **`whole: true`**, the caller's informed consent, stripped at the membrane
+before any capability sees it, reads only, refusal message names it.
+
+**Slow loading was the serial pump.** Budget-sized pages (40) × a serial reveal
+loop = ~225 round trips where 40 used to do. The cursor is a numeric offset and
+`total` is known from page one, so the pump now fetches six pages concurrently
+per tick — the old throughput, budget-sized responses — and the burst lands on
+the ranking digest's warm path, so it costs less server-side than one cold page
+did this morning.
+
+The pattern across all three: a guard added for agents was inherited by a UI, and
+every failure it caused was *silent* because the UI catches defensively. The
+membrane lesson cuts both ways — refuse loud toward agents, but a UI that asks
+knowingly must be able to consent.
+
 ## The method note
 
 The audit numbers were all real, and the story they told was false. "15,482 pending against

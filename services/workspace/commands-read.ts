@@ -37,6 +37,7 @@ import type { WorkspaceCommands } from './handlers';
  *  bounded relevance pool; keys outside it score relevance 0. */
 const INTENT_TOP_K = 200;
 
+
 /**
  * Per-key relevance to a stated intent (ADR-0051): embed the text once, take the
  * scope's vector index top-K as `{ key: cosine }`. `undefined` when no semantic
@@ -986,12 +987,57 @@ export function createReadCommands(build: DepsBuilder): Pick<WorkspaceCommands, 
         const merged = own.entries.slice();
         for (const [owner, pats] of byOwner) {
           const oRel = text ? await relevanceFor(vectors, owner, text, pats) : undefined;
-          const fq = await state.query(owner, { ...qOpts, relevance: oRel, limit: FOLD_CAP }, ctx.identity);
-          for (const e of fq.entries) if (pats.some((p) => grantCovers(p, e.key))) merged.push({ ...e, key: `${owner}/${e.key}` });
+          // COVERAGE GOES INTO THE QUERY, not just the filter after it.
+          //
+          // This used to take the owner's top-FOLD_CAP by salience over their
+          // WHOLE slice and then drop what the viewer can't see. That is the
+          // same topK starvation `relevanceFor`'s `cover` argument was added to
+          // fix for the semantic path (see its docstring), left in place on the
+          // non-semantic one — and it is worse here, because the surviving count
+          // becomes the reported `total`.
+          //
+          // Measured 2026-07-29 on the c15r public slice: 19 public grants cover
+          // ~135 facts, of which 115 are `doc-block:*` sitting at salience
+          // 0.12–0.14. The owner's top 1200 of a 7,600-fact slice is all
+          // 0.2–0.8, so essentially NO block made the window: an unauthenticated
+          // home graph reported `20/20` — the handful of high-salience `doc:` and
+          // `file/` identity facts — while every block it was entitled to read
+          // was invisible. Selecting a node then pulled in more, because
+          // per-key reads never went through this fold.
+          //
+          // Every grant pattern is whole-slice, `prefix*`, or an exact key
+          // (`grantCovers`), so each reduces to a prefix scan. Querying per
+          // pattern makes FOLD_CAP bound the COVERED set. `grantCovers` still
+          // runs on the results, so coverage enforcement is unchanged — this
+          // only stops the candidate generator from starving it.
+          // ONE query, with coverage pushed into its filter (`keyFilter`).
+          //
+          // Two earlier shapes of this were both wrong. The original filtered
+          // AFTER the query, so FOLD_CAP was spent on the owner's whole slice by
+          // salience and `total` counted the survivors — an unauthenticated home
+          // graph reported `20/20` against ~135 public facts, because 115 were
+          // `doc-block:*` at salience 0.12–0.14 and the top 1200 of 8,600 never
+          // reached them. My fix then fanned out one query PER GRANT PATTERN,
+          // which was worse: `state.query` reads the whole `KEY#` partition AND
+          // every edge for signals regardless of any prefix (the prefix is an
+          // in-memory filter, not a pushed-down key condition), so 19 patterns
+          // meant 19 full-partition reads. Under load that failed and guests got
+          // an EMPTY graph.
+          //
+          // `keyFilter` puts coverage where `prefix`/`tag` already live —
+          // upstream of the cap, the ranking, and `total`. Same DDB cost as the
+          // original single query; correct counts; ranked within the covered set.
+          const covered = (key: string): boolean => pats.some((p) => grantCovers(p, key));
+          const fq = await state.query(owner, { ...qOpts, relevance: oRel, keyFilter: covered, limit: FOLD_CAP }, ctx.identity);
+          for (const e of fq.entries) merged.push({ ...e, key: `${owner}/${e.key}` });
         }
         merged.sort((a, b) => rankVal(b) - rankVal(a));
         const offset = Number(cursor ?? 0) || 0;
-        result = { ...own, entries: merged.slice(offset, offset + limit), total: merged.length, nextCursor: offset + limit < merged.length ? String(offset + limit) : undefined };
+        const foldPage = merged.slice(offset, offset + limit);
+        // `count` explicitly: the `...own` spread otherwise carries the OWN
+        // slice's count — for a guest that is 0, shipped beside 40 entries
+        // (measured live 2026-07-29 22:3x, first page after the total fix).
+        result = { ...own, entries: foldPage, count: foldPage.length, total: merged.length, nextCursor: offset + limit < merged.length ? String(offset + limit) : undefined };
       }
       // R1 (ADR-0029): inline what the agent can DO with each returned type.
       const types = affordancesForTypes(typesOf(result.entries), await typeDeclsFor(ctx));

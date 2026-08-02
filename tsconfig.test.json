@@ -2,7 +2,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["node", "jest"],
-    "isolatedModules": true
+    "isolatedModules": true,
+    // Client .tsx under test (e.g. safe-markdown's task-list gate) — classic
+    // runtime matches the client bundles; server code never reaches this.
+    "jsx": "react"
   },
-  "include": ["tests", "platform", "services"]
+  "include": ["tests", "platform", "services", "cells/home/client"]
 }

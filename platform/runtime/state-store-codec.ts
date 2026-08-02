@@ -102,6 +102,9 @@ export function itemToRecord(item: Item): StateRecord {
     timerEffect: (item.timerEffect as StateRecord['timerEffect']) ?? null,
     ...(item.seedReads !== undefined ? { seedReads: num(item.seedReads) } : {}),
     ...(item.seedWrites !== undefined ? { seedWrites: num(item.seedWrites) } : {}),
+    // Denormalized weighted degree (2026-08-02 cost review) — maintained by
+    // putEdge/deleteEdge, reconciled by tend; absent = 0 (or never counted).
+    ...(item.degW !== undefined ? { degW: num(item.degW) } : {}),
     // Earned salience (ADR-0070) — absent on facts that never earned one.
     ...(item.reward !== undefined ? { reward: num(item.reward) } : {}),
     ...itemToTouches(item),

@@ -216,6 +216,8 @@ describe('workspace sharing / view layer', () => {
         'views', 'deleteView', 'tend',
         'subscriptions', 'deleteSubscription',
         'requestGrant', 'grantRequests', 'approveGrant', 'denyGrant', 'athena',
+        // The infra-side sibling of athena: CloudWatch metrics, admin-only.
+        'metrics',
         // ADR-0068 (C1) declaration surface + ADR-0069 (C3) edge query — the retired
         // aliases (search/neighbors/links/graph/members/register*/invoke/view) are
         // GONE from the membrane; the gateway tombstones teach their successors.
@@ -237,7 +239,7 @@ describe('workspace sharing / view layer', () => {
       tools.every((t) =>
         t.name === 'tend' || t.name === 'reindex' || t.name === 'project' || t.name === 'pruneSimilar'
           ? t.scope === 'workspace:admin'
-          : t.name === 'athena'
+          : t.name === 'athena' || t.name === 'metrics'
             ? t.scope === 'platform:*'
             : t.scope === (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
       ),
@@ -246,6 +248,7 @@ describe('workspace sharing / view layer', () => {
     expect(tools.find((t) => t.name === 'reindex')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'pruneSimilar')!.scope).toBe('workspace:admin');
     expect(tools.find((t) => t.name === 'athena')!.scope).toBe('platform:*');
+    expect(tools.find((t) => t.name === 'metrics')!.scope).toBe('platform:*');
     expect(tools.find((t) => t.name === 'recall')!.scope).toBe('read:workspace');
     expect(tools.find((t) => t.name === 'remember')!.scope).toBe('write:workspace');
     // Every tool ships a JSON Schema the gateway can surface to clients.

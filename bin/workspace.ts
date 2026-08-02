@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 import { InlineLambdaStack } from '../lib/inline-lambda-stack';
-import { WorkspaceEc2Stack } from '../lib/workspace-ec2-stack';
 import { PlatformStack } from '../lib/platform-stack';
 
 const app = new cdk.App();
@@ -32,9 +31,8 @@ new PlatformStack(app, platformStackId, {
     region: 'us-east-1',
   },
 });
-new WorkspaceEc2Stack(app, 'WorkspaceEc2Stack', {
-  env: {
-    account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: 'eu-west-2',
-  },
-});
+// (Retired 2026-08-01: WorkspaceEc2Stack — the eu-west-2 Tailscale dev box.
+// Unused, and its idle EBS was ~$13/mo (July cost review). The deploy
+// workflow's one-time "Retire the workspace EC2 stack" step snapshots the
+// data volume, deletes the CloudFormation stack, and removes the RETAINed
+// volume; the step is idempotent and a no-op once the stack is gone.)

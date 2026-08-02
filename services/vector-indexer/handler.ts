@@ -179,8 +179,26 @@ export async function handler(event: StreamEvent): Promise<void> {
     if (edgeStore && (puts.length || removes.size)) {
       try {
         const now = new Date().toISOString();
-        const existing = await edgeStore.listEdges(scope);
+        // PER-KEY edge reads (2026-08-01 cost review): the whole-scope
+        // `listEdges` here read every edge row (~30k, ~10MB) per stream batch
+        // — one of the amplifiers that turned the Jul 29 backfill into 900M
+        // RRUs. Every consumer below only inspects edges TOUCHING the key
+        // being reconciled (authoredPairs for key↔neighbour pairs, `mine`
+        // outbound, inbound claims, drops), so two targeted queries — the
+        // partition prefix outbound, gsi-in inbound — replace the partition
+        // read at a few rows each.
+        const edgesTouching = async (key: string) => {
+          const [out, inn] = await Promise.all([edgeStore.edgesFrom(scope, key), edgeStore.edgesTo(scope, key)]);
+          const seen = new Set<string>();
+          return [...out, ...inn].filter((e) => {
+            const id = `${e.from}|${e.rel}|${e.to}`;
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+        };
         for (let i = 0; i < puts.length; i++) {
+          const existing = await edgesTouching(puts[i].key);
           // One wider k-NN serves both directions: `selectNeighbors` still slices to
           // `sim.k` for the outbound set, while the tail gives `reconcileInbound` an
           // evidentiary floor to judge inbound claims against (see INBOUND_HORIZON).
@@ -191,7 +209,7 @@ export async function handler(event: StreamEvent): Promise<void> {
           // exactly when every inbound `similarTo` claim about it became unverified.
           await reconcileInbound(edgeStore, scope, puts[i].key, matches, sim.strength, existing);
         }
-        for (const key of removes) await dropSimilarEdges(edgeStore, scope, key, existing);
+        for (const key of removes) await dropSimilarEdges(edgeStore, scope, key, await edgesTouching(key));
       } catch (err) {
         console.warn('vector-indexer similarTo edge pass failed (vectors indexed)', { scope, error: (err as Error).message });
       }

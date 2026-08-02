@@ -99,6 +99,7 @@ import {
 import { type TendReport } from './event-handlers';
 import { type ToolDescriptor, TOOL_DESCRIPTORS } from './descriptors';
 import { createAthenaCommand, type AthenaInput, type AthenaResult } from './commands-athena';
+import { createMetricsCommand, type MetricsInput, type MetricsResult } from './commands-metrics';
 
 // ADR-0044 Inc 5: handlers.ts is now the composition/re-export seam. The command
 // groups live in per-group modules; every pre-split import path keeps working.
@@ -163,6 +164,7 @@ export interface WorkspaceCommands extends Record<string, RegisteredCommand> {
   approveGrant: CommandHandler<ApproveGrantInput, { approved: true; resource: string; grantee: string }>;
   denyGrant: CommandHandler<DenyGrantInput, { denied: true; resource: string; grantee: string }>;
   athena: CommandHandler<AthenaInput | undefined, AthenaResult>;
+  metrics: CommandHandler<MetricsInput | undefined, MetricsResult>;
   describeTools: CommandHandler<undefined, { tools: ToolDescriptor[] }>;
 }
 
@@ -177,6 +179,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     ...createSharingCommands(build),
     // The admin-gated Athena SQL surface over the analytics lake (platform:*).
     ...createAthenaCommand(),
+    ...createMetricsCommand(),
 
     // How the `/mcp` gateway discovers this cell's tools (mirrors forge.describeTools).
     // Verb scopes (docs/capability-consent.md): a tool with no explicit scope is
