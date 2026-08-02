@@ -6,9 +6,9 @@
  */
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, bodyText, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema, CodeEditor, type FactKeyCompletion } from '@parc/ui';
 import { ink } from './ink';
-import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
+import { SafeMarkdown, InlineMarkdown, ViewerBody, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -183,11 +183,9 @@ function strField(v: unknown, keys: string[]): string | undefined {
   }
   return undefined;
 }
-/** The markdown/text body of a fact value (string, or its content-ish field). */
-function bodyText(v: unknown): string {
-  if (typeof v === 'string') return v;
-  return strField(v, ['content', 'body', 'text', 'description', 'note', 'md', 'markdown']) ?? '';
-}
+// The markdown/text body of a fact value comes from the SHARED `bodyText`
+// (@parc/ui render-hints) — home's local copy had drifted (it omitted `claim`'s
+// `statement` field, so a claim read differently here than on the card).
 
 /** Render a fact body by a built-in `hint` kind. SSR-safe: deterministic, no
  *  browser globals. Returns null when there's nothing to draw (caller falls back). */
@@ -200,7 +198,7 @@ function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone
       if (!md) return null;
       // Fact links ([[wiki]]s) in any markdown body open in place, with an
       // origin-aware href for new-tab (`/r/` exists only at the apex).
-      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     case 'image': {
       const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
@@ -279,38 +277,9 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
   );
 }
 
-// ─── the shared PURE VIEWERS (@c15r/viewers) ───────────────────────
-// json tree / csv table / mermaid / style — one validated implementation, the
-// same module canvas re-exports and lit's fences import. Home consumes it the
-// same way (dynamic import of the cell's ESM face), rather than re-hand-rolling
-// a JSON dump — so a structured/undeclared fact reads as a real tree, not a
-// raw stringify. Lazy + cached: the ~18KB module loads only when a viewer is
-// actually needed (never on the SSR path — this mounts in an effect).
-const VIEWERS_URL = 'https://parc.land/@c15r/viewers/app.js';
-type ViewersModule = { renderFence: (host: HTMLElement, lang: string, code: string) => boolean };
-let viewersMod: Promise<ViewersModule> | null = null;
-const loadViewers = (): Promise<ViewersModule> =>
-  (viewersMod ??= import(/* @vite-ignore */ VIEWERS_URL) as Promise<ViewersModule>);
-
-/** Mount a pure viewer (json/csv/mermaid/style) for a string body, via the
- *  shared @c15r/viewers module. Imperative host (like the graph): React owns
- *  the wrapper, the viewer owns the inner DOM. Degrades to a <pre> if the
- *  module can't load (offline) so content is never lost. */
-function ViewerBody({ lang, code }: { lang: string; code: string }): React.JSX.Element {
-  const host = React.useRef<HTMLDivElement | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    const el = host.current;
-    if (!el) return;
-    let live = true;
-    loadViewers()
-      .then((v) => { if (live && el) v.renderFence(el, lang, code); })
-      .catch(() => { if (live) setFailed(true); });
-    return () => { live = false; if (el) el.innerHTML = ''; };
-  }, [lang, code]);
-  if (failed) return <pre style={{ maxWidth: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '0.8rem' }}>{code}</pre>;
-  return <div ref={host} style={{ maxWidth: '100%', overflow: 'auto' }} />;
-}
+// ViewerBody (the shared @c15r/viewers pure viewers) now lives in
+// safe-markdown.tsx beside the fence hook that mounts it inside markdown —
+// imported above; consumed here for hint bodies and the undeclared-JSON floor.
 
 /**
  * A WHOLE doc, assembled from its blocks. A `doc` fact holds only {title,summary}
@@ -421,7 +390,9 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: List
   // THIS doc's corpus directory, and fact links open in place via the peek
   // modal — docs are navigable on home, not just readable.
   const mdBase = dm ? `docs/${dm[2]}`.replace(/\/[^/]*$/, '') : undefined;
-  const onFactLink = (k: string): void => openFact({ key: k });
+  // `[[key#member]]` fragments carry through as the peek's anchor — the
+  // member→whole deep link works from inside any rendered body.
+  const onFactLink = (k: string, frag?: string): void => openFact({ key: k }, frag);
   // Origin-aware fact hrefs: `/r/<key>` exists only at the apex, so localize
   // (→ apex-absolute) keeps new-tab/middle-click navigable when home is
   // served from its own cell subdomain.
@@ -525,7 +496,7 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark', initia
       return (
         <div style={{ display: 'grid' }}>
           <MemberContext e={e} tagPrefix={memberTagPrefix} tone={tone} />
-          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
+          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
         </div>
       );
     }
@@ -561,7 +532,7 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark', initia
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k) => openFact({ key: k })} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     // A structured value with no declared viewer reads as a collapsible JSON
@@ -708,7 +679,7 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
             of the affordance, resolved from the handler's own cellRef). */}
         {open ? <a href={localize(open.href)} style={actionStyle(t)}>Open{open.cell ? ` in ${open.cell}` : ''} ↗</a> : null}
         {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a>
-          : authed && !system ? <button onClick={() => openFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
+          : authed && !system ? <button onClick={() => editFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
           : null}
       </div>
     </div>
@@ -736,6 +707,13 @@ const FACT_DETAIL_EVENT = 'home:fact-detail';
  *  section once the body renders (the member→whole deep link). */
 export function openFact(e: ListEntry, anchor?: string): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry & { anchor?: string }>(FACT_DETAIL_EVENT, { detail: anchor ? { ...e, anchor } : e }));
+}
+
+/** Open a fact's peek WITH THE EDITOR already up — the one-tap in-place edit
+ *  from any reading surface (the old flow opened the peek, then needed a
+ *  second Edit tap inside it). */
+export function editFact(e: ListEntry): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry & { edit?: boolean }>(FACT_DETAIL_EVENT, { detail: { ...e, edit: true } }));
 }
 
 const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
@@ -878,12 +856,24 @@ function fieldsToFormSchema(fields: FormField[]): FormFieldSchema {
   return { type: 'object', properties, required };
 }
 
+/** `[[` completions for the editor: semantic-rank the fragment over the
+ *  workspace (the same query an agent would make) and offer fact keys with
+ *  their display titles. System rows (`_…`) are never offered. */
+async function completeFactKeys(q: string): Promise<FactKeyCompletion[]> {
+  const r = await mcpCall('read', 'workspace.query', q.trim() ? { text: q.trim() } : {});
+  if (!r.ok) return [];
+  const entries = ((r.value as { entries?: ListEntry[] } | null)?.entries ?? []).filter((e) => e?.key && !e.key.startsWith('_'));
+  return entries.slice(0, 12).map((e) => ({ key: e.key, title: factTitle(e) }));
+}
+
 /**
  * Generic editor (ADR-0002). When the type declares `fields`, render a **form**
  * via the shared `SchemaForm` floor (ADR-0041 Inc 2/4) — one form renderer for
  * tool args, type-create, and fact-edit alike. Otherwise fall back to text
  * (string value) / raw JSON. `workspace.remember`'s advisory `hints` flow back
- * via `onSaved`.
+ * via `onSaved`. Long/markdown text edits in the shared @parc/ui CodeEditor
+ * (CodeMirror 6, textarea floor) with `[[` fact-key completions — the
+ * in-place editing ergonomics pass.
  */
 function FactEditor({
   e,
@@ -945,15 +935,25 @@ function FactEditor({
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       {useForm ? (
-        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }} />
+        <SchemaForm
+          schema={schema}
+          value={form}
+          onChange={setForm}
+          palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }}
+          longText={({ value: v, onChange: set }) => (
+            <CodeEditor value={v} onChange={(next) => set(next)} language="markdown" minRows={5} onSave={() => void save()} completeFactKeys={completeFactKeys} />
+          )}
+        />
       ) : (
         <>
-          <textarea
+          <CodeEditor
             value={text}
-            onChange={(ev) => setText(ev.target.value)}
-            rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
-            spellCheck={false}
-            style={{ ...inputStyle(t), padding: '0.55rem', fontFamily: theme.mono }}
+            onChange={setText}
+            language={isStr ? 'markdown' : 'json'}
+            minRows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
+            onSave={() => void save()}
+            completeFactKeys={isStr ? completeFactKeys : undefined}
+            style={{ ...inputStyle(t), padding: '0 0.4rem' }}
           />
           {!isStr ? <span style={{ color: t.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
         </>
@@ -978,16 +978,18 @@ export function InlineFactEditor({ e, onCancel, onSaved, tone = 'dark' }: { e: L
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string }): React.JSX.Element {
+export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = false }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string; /** Open with the editor already up (the one-tap edit path — see `editFact`). */ startEditing?: boolean }): React.JSX.Element {
   const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry>(e);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(startEditing && e.value !== undefined);
   const [hints, setHints] = useState<string[] | null>(null);
   useEffect(() => {
     setEntry(e);
-    setEditing(false);
+    // The edit intent waits for a hydrated value — editing a bare {key} frame
+    // before its peek returns would open the editor on emptiness.
+    setEditing(startEditing && e.value !== undefined);
     setHints(null);
-  }, [e]);
+  }, [e, startEditing]);
   const open = factHref(entry);
   const edit = factEdit(entry);
   const meta = entry._meta;
@@ -1059,12 +1061,12 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
   // docked landing stack reads by MAIN page scroll, so back/forward restore
   // where you were in the frame you return to (owner: "remembered scrolls on
   // pop"). The dark (graph) stack scrolls internally and ignores these.
-  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>; cursor: number }>({ frames: [], cursor: -1 });
+  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string; edit?: boolean; scrollY?: number }>; cursor: number }>({ frames: [], cursor: -1 });
   const nextId = React.useRef(1);
   const { frames, cursor } = hist;
   const current = cursor >= 0 ? frames[cursor] : null;
   const closeAll = (): void => setHist({ frames: [], cursor: -1 });
-  const saveScroll = (fr: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>, i: number): typeof fr => {
+  const saveScroll = (fr: Array<{ id: number; entry: ListEntry; anchor?: string; edit?: boolean; scrollY?: number }>, i: number): typeof fr => {
     if (i < 0 || typeof window === 'undefined') return fr;
     const next = fr.slice();
     next[i] = { ...next[i], scrollY: window.scrollY };
@@ -1163,17 +1165,23 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
   }, []);
   useEffect(() => {
     const onOpen = (ev: Event): void => {
-      const detail = (ev as CustomEvent<ListEntry & { anchor?: string }>).detail;
+      const detail = (ev as CustomEvent<ListEntry & { anchor?: string; edit?: boolean }>).detail;
       if (!detail?.key) return;
-      const { anchor, ...rest } = detail;
+      const { anchor, edit, ...rest } = detail;
       const entry = rest as ListEntry;
       setHist((h) => {
-        // Re-opening the fact you're already on is a no-op.
-        if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) return h;
+        // Re-opening the fact you're already on is a no-op — unless it arrives
+        // with the edit intent (the footer's one-tap Edit on the open fact).
+        if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) {
+          if (!edit || h.frames[h.cursor].edit) return h;
+          const next = h.frames.slice();
+          next[h.cursor] = { ...next[h.cursor], edit: true };
+          return { ...h, frames: next };
+        }
         // A new path truncates any forward history (browser-nav semantics).
         // The departing frame remembers its page scroll (docked-stack pop).
         const kept = saveScroll(h.frames.slice(0, h.cursor + 1), h.cursor);
-        return { frames: [...kept, { id: nextId.current++, entry, anchor }], cursor: kept.length };
+        return { frames: [...kept, { id: nextId.current++, entry, anchor, edit }], cursor: kept.length };
       });
       if (detail.value === undefined) {
         const requestedKey = detail.key;
@@ -1309,7 +1317,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 ) : null}
               </div>
               <div style={{ padding: isCur ? '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' : '0.45rem 0.9rem 0.9rem' }}>
-                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.edit} />
               </div>
             </section>
           );
@@ -1416,7 +1424,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 ) : null}
               </div>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: `0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom)${isFront && cursor < total - 1 ? ` + ${PEEK}px` : ''})` }}>
-                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.edit} />
               </div>
             </div>
           );

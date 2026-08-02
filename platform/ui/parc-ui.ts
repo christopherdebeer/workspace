@@ -17,6 +17,9 @@
  */
 export * from './render-hints';
 export * from './wiki-link';
+export * from './fence';
+export * from './safe-markdown';
+export * from './code-editor';
 export * from './vocab';
 export * from './present';
 export * from './federated-renderer';
