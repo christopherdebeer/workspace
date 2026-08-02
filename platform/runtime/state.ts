@@ -243,6 +243,13 @@ export interface StateRecord {
    */
   seedReads?: number;
   seedWrites?: number;
+  /** Denormalized WEIGHTED degree (ADR-0009 semantics: Σ strength of authored
+   *  edges touching this key; 2026-08-02 cost review). Maintained atomically
+   *  by `putEdge`/`deleteEdge` (ADD ±strength on both endpoints), preserved
+   *  across rewrites by `state.put`, and reconciled against the edge items by
+   *  the tend pass — the edge items stay the source of truth, this is the
+   *  cache that lets ranking stop reading every edge in the scope. */
+  degW?: number;
   /**
    * Earned salience (ADR-0070): a persisted per-fact number in [0,1], the
    * seventh score signal. Written when work involving this fact demonstrably
@@ -404,6 +411,10 @@ export interface StateStore {
   listByType(scope: string, type: string): Promise<StateRecord[]>;
   putEdge(edge: EdgeRecord): Promise<void>;
   deleteEdge(scope: string, from: string, rel: string, to: string): Promise<void>;
+  /** Set a fact's denormalized weighted degree outright — the tend
+   *  reconciler's repair primitive (and the one-time backfill). Raw-store:
+   *  no seq, no trajectory, no touch. */
+  setDegree(scope: string, key: string, degW: number): Promise<void>;
   /** Outbound edges of `from` (optionally one `rel`). */
   edgesFrom(scope: string, from: string, rel?: string): Promise<EdgeRecord[]>;
   /** Inbound edges of `to` (optionally one `rel`) — the inbound index. */
@@ -1658,13 +1669,22 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
     records?: StateRecord[],
     typeRules?: Record<string, TypeRules>,
   ): Promise<Map<string, KeySignals>> {
-    const [edges, recs] = await Promise.all([
-      store.listEdges(scope),
-      records ? Promise.resolve(records) : store.list(scope),
-    ]);
-    // Centrality counts the derived backbone alongside authored edges, so a
-    // typed-but-unlinked fact earns a structural floor instead of scoring zero.
-    return buildSignals([], [...edges, ...deriveBackboneEdges(recs, typeRules)], nowMs, windowMs);
+    // AUTHORED degree comes off the records themselves now (`degW`, the
+    // denormalized weighted counter — 2026-08-02 cost review): `listEdges`
+    // read every edge row in the scope on every ranked read, and the ONLY
+    // thing it fed was this fold. The derived backbone still computes from
+    // the records in hand (pure CPU). Callers pass the records they already
+    // read — a subset (type/prefix candidates) yields subset-honest signals,
+    // which is the deal that lets those paths skip whole-partition reads.
+    const recs = records ?? (await store.list(scope));
+    const m = buildSignals([], deriveBackboneEdges(recs, typeRules), nowMs, windowMs);
+    for (const r of recs) {
+      if (!r.degW) continue;
+      const v = m.get(r.key);
+      if (v) v.degree += r.degW;
+      else m.set(r.key, { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: r.degW });
+    }
+    return m;
   }
 
   /** Load a scope's `_config/salience` policy (best-effort: a missing, retired, or
@@ -2021,6 +2041,9 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
         ...(input.import?.seedWrites !== undefined || prev?.seedWrites !== undefined
           ? { seedWrites: input.import?.seedWrites ?? prev?.seedWrites }
           : {}),
+        // Denormalized weighted degree: a rewrite must not wipe the counter
+        // (put replaces the item wholesale) — carried like the import seeds.
+        ...(prev?.degW !== undefined ? { degW: prev.degW } : {}),
         // Earned salience (ADR-0070): set/replace when supplied, else preserved —
         // the same carry rule as the import seeds. Clamped: a reward is a signal
         // in [0,1], not an unbounded boost.
@@ -2184,17 +2207,13 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const records = opts?.type
         ? await store.listByType(scope, opts.type)
         : await store.list(scope, opts?.prefix || undefined);
-      // Signals: reuse the partition read when it was genuinely whole (no
-      // type, no prefix). A PREFIX-scoped listing takes degree-0 signals
-      // instead — centrality is a whole-graph quantity, and paying a
-      // whole-graph read to rank a prefix slice was the cost defect; the
-      // recency/touch terms live on each record and are unaffected. (Type
-      // queries keep honest centrality: signalsFor does its own reads.)
-      const signals = opts?.type
-        ? await signalsFor(scope, nowMs, sCall.windowMs, undefined, queryTypeRules)
-        : opts?.prefix
-          ? new Map<string, KeySignals>()
-          : await signalsFor(scope, nowMs, sCall.windowMs, records, queryTypeRules);
+      // Signals fold over exactly the records this query read — authored
+      // degree rides each record (`degW`), the derived backbone computes in
+      // memory, and no path pays a partition read it didn't already need.
+      // Type/prefix candidates get subset-honest derived contributions (their
+      // own backbone edges; cross-subset inbound derived links don't count) —
+      // the documented trade that keeps filtered reads O(candidates).
+      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, queryTypeRules);
       const candidates = records.filter((rec) => {
         // A cache is not content (recall's rule for its digest, applied to the
         // whole `_index/` derived namespace): the ranking digest would otherwise
@@ -2319,6 +2338,8 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const derived = wantDerived ? deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel) : [];
       const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
       const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
+      // Fast path scores still carry authored degree — it rides the
+      // point-got records (degW); only the derived-backbone term is skipped.
       const signals = wantDerived
         ? await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules)
         : new Map<string, KeySignals>();
@@ -2330,7 +2351,13 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const entries: Record<string, Entry> = {};
       for (const nk of neighborKeys) {
         const rec = byKey.get(nk) ?? (await store.get(scope, nk));
-        if (rec && isTimerLive(rec, nowMs)) entries[nk] = await wrap(rec, nowMs, signals, sCall);
+        if (rec && isTimerLive(rec, nowMs)) {
+          // Fast path: the point-got record carries its own authored degree.
+          if (!wantDerived && rec.degW) {
+            signals.set(nk, { windowReads: 0, windowWrites: 0, lifetimeReads: 0, lifetimeWrites: 0, degree: rec.degW });
+          }
+          entries[nk] = await wrap(rec, nowMs, signals, sCall);
+        }
       }
       return { outbound, inbound, entries };
     },
@@ -2593,6 +2620,14 @@ export function createMemoryStateStore(): StateStore {
   const seqByScope = new Map<string, number>();
   const k = (scope: string, key: string): string => `${scope} ${key}`;
   const ek = (scope: string, from: string, rel: string, to: string): string => `${scope} ${from}|${rel}|${to}`;
+  // Denormalized weighted degree (see StateRecord.degW): only existing facts
+  // count — a dangling endpoint never mints a ghost record.
+  const bumpDeg = (scope: string, from: string, to: string, delta: number): void => {
+    for (const key of to === from ? [from] : [from, to]) {
+      const rec = records.get(k(scope, key));
+      if (rec) rec.degW = (rec.degW ?? 0) + delta;
+    }
+  };
 
   return {
     async nextSeq(scope: string): Promise<number> {
@@ -2627,10 +2662,21 @@ export function createMemoryStateStore(): StateStore {
         .map((r) => ({ ...r, writers: [...r.writers], tags: [...r.tags] }));
     },
     async putEdge(edge: EdgeRecord): Promise<void> {
+      // Mirror the dynamo store's degW maintenance (ALL_OLD semantics): the
+      // delta is new-strength − old-strength, bumped on both live endpoints.
+      const prior = edges.get(ek(edge.scope, edge.from, edge.rel, edge.to));
+      const delta = (edge.strength ?? 1) - (prior ? prior.strength ?? 1 : 0);
       edges.set(ek(edge.scope, edge.from, edge.rel, edge.to), { ...edge });
+      if (delta) bumpDeg(edge.scope, edge.from, edge.to, delta);
     },
     async deleteEdge(scope, from, rel, to): Promise<void> {
+      const prior = edges.get(ek(scope, from, rel, to));
       edges.delete(ek(scope, from, rel, to));
+      if (prior) bumpDeg(scope, from, to, -(prior.strength ?? 1));
+    },
+    async setDegree(scope: string, key: string, degW: number): Promise<void> {
+      const rec = records.get(k(scope, key));
+      if (rec) rec.degW = degW;
     },
     async edgesFrom(scope, from, rel?): Promise<EdgeRecord[]> {
       return [...edges.values()].filter((e) => e.scope === scope && e.from === from && (!rel || e.rel === rel)).map((e) => ({ ...e }));
@@ -2654,4 +2700,33 @@ export function createMemoryStateStore(): StateStore {
       r.window = bumpWindow(r.window, actor, op, bucket);
     },
   };
+}
+
+/** Reconcile every fact's denormalized weighted degree (`degW`) against the
+ *  edge items — the tend-pass repair for the counter the stores maintain
+ *  inline (2026-08-02 cost review). The edge items stay the source of truth;
+ *  this is also the one-time backfill (first run patches every fact that has
+ *  edges). One partition read + one edge read per run, patches only where the
+ *  counter drifted (dangling endpoints later created, missed bumps, direct
+ *  raw-store writes). */
+export async function reconcileDegrees(
+  store: Pick<StateStore, 'list' | 'listEdges' | 'setDegree'>,
+  scope: string,
+): Promise<{ patched: number; facts: number; edges: number }> {
+  const [records, edges] = await Promise.all([store.list(scope), store.listEdges(scope)]);
+  const want = new Map<string, number>();
+  for (const e of edges) {
+    const w = e.strength ?? 1;
+    want.set(e.from, (want.get(e.from) ?? 0) + w);
+    if (e.to !== e.from) want.set(e.to, (want.get(e.to) ?? 0) + w);
+  }
+  let patched = 0;
+  for (const r of records) {
+    const target = want.get(r.key) ?? 0;
+    if (Math.abs((r.degW ?? 0) - target) > 1e-9 && !(target === 0 && r.degW === undefined)) {
+      await store.setDegree(scope, r.key, target);
+      patched++;
+    }
+  }
+  return { patched, facts: records.length, edges: edges.length };
 }

@@ -11,6 +11,7 @@ import {
   type StateStore,
   TYPE_BIAS_KEY,
   learnTypePriors,
+  reconcileDegrees,
   suggestionCandidates,
   inferIngestionType,
   type IngestionConfig,
@@ -58,6 +59,9 @@ export interface TendReport {
    *  (ADR-0094 Inc 1): how many types now carry a non-neutral prior, and the
    *  five most demoted — the types occupying the corpus that nobody chooses. */
   typeBias?: { types: number; sample: Record<string, number> };
+  /** Degree-counter reconcile (2026-08-02): how many facts' `degW` drifted
+   *  from the edge items and were patched this pass. */
+  degrees?: { patched: number; facts: number; edges: number };
 }
 
 /**
@@ -125,6 +129,18 @@ export async function runTend(
   store?: Pick<StateStore, 'listEdges' | 'get' | 'list' | 'put'>,
 ): Promise<TendReport> {
   const att = await state.attention(scope, { typeRules: await typeRulesFor(ctx) });
+  // Reconcile the denormalized weighted-degree counters against the edge
+  // items (2026-08-02 cost review) — the daily repair for the cache that let
+  // ranked reads stop scanning every edge. Best-effort like the type-bias
+  // learner; also the one-time backfill on its first run.
+  let degrees: { patched: number; facts: number; edges: number } | null = null;
+  if (store && 'setDegree' in store) {
+    try {
+      degrees = await reconcileDegrees(store as Pick<StateStore, 'list' | 'listEdges' | 'setDegree'>, scope);
+    } catch (err) {
+      ctx.logger.warn('degree reconcile failed', { scope, error: (err as Error).message });
+    }
+  }
   // Re-learn the per-type salience bias from what the slice actually opened
   // (ADR-0094 Inc 1). Tending is already the "look at the whole slice" pass, so
   // this is one extra fold over records it would otherwise scan for nothing.
@@ -149,6 +165,7 @@ export async function runTend(
     danglingSample: att.dangling.slice(0, 3),
     suggestionsSample: candidates.slice(0, 5).map((c) => ({ from: c.from, to: c.to })),
     ...(learned ? { typeBias: learned } : {}),
+    ...(degrees ? { degrees } : {}),
     previousAt: typeof prev?.at === 'string' ? prev.at : null,
     delta:
       prev && typeof prev.stale === 'number'

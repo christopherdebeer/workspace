@@ -53,6 +53,7 @@ export type { ServiceManifest, ServiceRegistry, ManifestEvents } from '../manife
 export {
   createObservedState,
   createMemoryStateStore,
+  reconcileDegrees,
   computeScore,
   extractTypeRules,
   deriveBackboneEdges,
